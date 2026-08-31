@@ -72,6 +72,66 @@ name: node-repo module pack
 # A caller that ships neither scripts/affected-modules.py nor scripts/project-closure.py is simply
 # not narrowable: the scope script says FULL and says why. Nothing to opt into, nothing to skip.
 #
+# ─────────────────── Which compiler builds a module (`build`) ───────────────────
+# 🚨 "we want to use memex build plugin and not dotnet build" (maintainer, 2026-08-31).
+#
+# A module does not run against a source tree and it does not run against a feed: it is loaded into
+# the platform IMAGE and bound by the assemblies in there. So the honest compiler is that image's
+# own — `memex build project`, whose work is `mw-plugin-test build-project` INSIDE the pinned image
+# (MeshWeaver#2850). This lane runs the container form directly, because CI has already pulled and
+# digest-pinned the image; going through the `memex` CLI would add an SDK build in order to remove
+# one.
+#
+# It is DECLARED PER ENTRY, and it is deliberately not yet the default:
+#
+#     {"package":"Import","module":"MeshWeaver.Import",
+#      "project":"src/MeshWeaver.Import/MeshWeaver.Import.csproj",
+#      "build":"container","accept":"targets"}
+#
+# #2850's own sweep over all 54 non-test projects in MeshWeaver.Plugins/src compiled 12 green. The
+# rest need what a RUNTIME image does not carry: SDK source generators (15 — they live in the SDK),
+# Razor/Blazor (15 — the image ships none of the three Razor assemblies), `<Protobuf>` (3),
+# additional libraries (5), portal hosts (3). A blanket swap would therefore break most bundles, so
+# the split is deliberate, per module, visible, and expected to SHRINK — `verify` prints the count
+# every run for exactly that reason.
+#
+# 🚨 THERE IS NO FALLBACK BETWEEN THE TWO, and that is the point. A lane that tries the container
+# and quietly drops back to the SDK makes "the container built it" and "the SDK built it"
+# indistinguishable in a green log. A declared mode that cannot run FAILS; an unknown mode FAILS.
+# The mode is printed by the build step, written into the built marker and the receipt, and
+# summarised by `verify`.
+#
+# What the container path needs from the caller:
+#   * `platform-image` + `platform-image-digest` — the image IS the reference set, so an entry that
+#     asks for `container` without them fails RED rather than building against anything else.
+#   * the `acr-username`/`acr-password` secrets, to pull it.
+#   * `accept` for every construct the evaluator refuses. MeshWeaver.Plugins' own
+#     `src/Directory.Build.props` carries a `<Target>` (the AssemblyVersion contract check), so its
+#     entries need at least `"accept": "targets"`.
+#
+# What it deliberately does NOT support:
+#   * `--extra-refs`. An "additional library" is one the image does not carry; with no deps.json to
+#     derive a private closure from, bundling it would be guesswork and NOT bundling it would land a
+#     module that faults at first use (the 2026-08-19/20 outage). build-project refuses such a
+#     PackageReference BY NAME, which is the right answer: that module stays on the `sdk` path.
+#   * `--deps-closure`, for the same reason there is nothing to derive it from. The container
+#     bundle's closure is complete BY CONSTRUCTION — every reference resolved from the image the
+#     bundle lands into — and the bundle inspection ASSERTS that claim by refusing any
+#     non-MeshWeaver assembly in a container-built bundle.
+#
+# 🚨 PRECONDITIONS BEFORE ANY ENTRY MAY DECLARE `container` — both are checked at runtime, loudly,
+# but they are cheaper to read here:
+#   1. The PINNED image must carry the `build-project` verb (MeshWeaver#2850 merged AND an image
+#      built from it AND `platform-image-digest` moved to that image). Before that, the container
+#      run exits non-zero on an unknown argument.
+#   2. `build-project` must stamp the project's <AssemblyVersion>. It runs no MSBuild targets, so
+#      the SDK's GenerateAssemblyInfo does not happen and Roslyn's default identity is emitted —
+#      shipping 0.0.0.0 into a 3.0.0.0 process is MeshWeaver#143 exactly: it does not fail at build,
+#      it fails at runtime binding, in another repo, naming a version nobody wrote down. The build
+#      step compares the emitted identity against the one the builder itself read out of the image
+#      and FAILS on drift, so this cannot ship silently — but until the builder honours the
+#      property, that check is what a `container` entry will hit.
+#
 # Republishing is SAFE to repeat, which is why the schedule may simply publish rather than
 # first proving something changed: the registry is keyed by `{package}@{version}` from
 # `manifest.lock`, so a rebuild of an unchanged version overwrites the same slot with equivalent
@@ -87,6 +147,15 @@ on:
           JSON array of {package, module, project}: the Store package id, the module's entry
           assembly name, and the csproj to build. e.g.
           [{"package":"SocialMedia","module":"MeshWeaver.Social","project":"src/MeshWeaver.Social/MeshWeaver.Social.csproj"}]
+
+
+          Two OPTIONAL fields choose the COMPILER, per entry (see "Which compiler builds a module"
+          below): `"build": "container"` compiles with `memex build project` inside the pinned
+          platform image — no .NET SDK, no NuGet restore, no platform source checkout — and
+          `"accept": "targets embedded-resource"` acknowledges, one by one, the MSBuild constructs
+          that builder deliberately refuses to reproduce silently. Omitted, `build` is `sdk`: today's
+          `dotnet build` + `dotnet publish` on the runner. There is no third value and no fallback
+          between them.
         required: true
         type: string
       platform-ref:
@@ -413,50 +482,223 @@ jobs:
           n=${#dlls[@]}
           [ "$n" -gt 50 ] || { echo "::error::the image's /app yielded $n assemblies — not a platform image"; exit 1; }
           echo "platform refs: $n assemblies from ${IMAGE_NOTAG}@${DIGEST}"
-      - name: Build the module (Release, warnings-as-errors)
+      # ══════════ THE COMPILER — the CONTAINER or the SDK, and the log says WHICH ══════════
+      # 🚨 "we want to use memex build plugin and not dotnet build" (maintainer, 2026-08-31). A
+      # module does not run against a source tree and it does not run against a feed: it is loaded
+      # into the platform IMAGE and bound by the assemblies in there. So the honest compiler is
+      # that image's own — `memex build project`, whose work is `mw-plugin-test build-project`
+      # INSIDE the pinned image: no .NET SDK, no NuGet restore, no platform source checkout. The
+      # `docker run … --entrypoint /app/mw-plugin-test … build-project` below IS that verb; the
+      # `memex` half is only the trip into the container, and CI has already pinned the image by
+      # digest, so reaching for the tool would add an SDK build to remove one.
+      #
+      # 🚨 IT IS NOT YET A BLANKET SWAP, AND PRETENDING OTHERWISE WOULD BREAK MOST BUNDLES. The
+      # builder's own sweep over all 54 non-test projects in MeshWeaver.Plugins/src compiled 12
+      # green (MeshWeaver#2850); the rest need what a RUNTIME image does not carry — SDK source
+      # generators (15), Razor/Blazor (15), `<Protobuf>` (3), additional libraries (5), portal
+      # hosts (3). So the compiler is chosen PER ENTRY and DECLARED by the caller
+      # (`"build": "container"`), never guessed.
+      #
+      # 🚨 AND NEVER A FALLBACK. A lane that tries the container and quietly drops back to the SDK
+      # makes "the container built it" and "the SDK built it" indistinguishable in a green log —
+      # the one thing a gate in this family may not do. A declared mode that cannot run FAILS.
+      #
+      # ONE step, not two `if:`-guarded ones: two guards can BOTH skip, and a skipped step renders
+      # with the same tick as a passed one. This step always runs, always prints the compiler it
+      # used, records it in the receipt, and refuses a mode it does not know.
+      - name: Build the module — and say which compiler produced it
+        id: build
         env:
+          MODE: ${{ matrix.entry.build || 'sdk' }}
+          ACCEPT: ${{ matrix.entry.accept || '' }}
+          PROJECT: ${{ matrix.entry.project }}
+          MODULE: ${{ matrix.entry.module }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          IMAGE: ${{ inputs.platform-image }}
+          DIGEST: ${{ inputs.platform-image-digest }}
+          ACR_USERNAME: ${{ secrets.acr-username }}
+          ACR_PASSWORD: ${{ secrets.acr-password }}
           REFS: ${{ inputs.platform-image-digest != '' && format('{0}/platform-refs', runner.temp) || '' }}
-        run: >
-          dotnet build "${{ matrix.entry.project }}" -c Release -warnaserror
-          -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
-          -p:Version=${{ steps.identity.outputs.version }}
-          ${REFS:+-p:MeshWeaverRefs=$REFS}
-
-      # Publish materializes the module's PACKAGE dependencies beside the entry DLL — the SDK's
-      # own answer to the runtime closure (framework-trimmed packages excluded, everything else
-      # included), which the pack step's --deps-closure derivation selects from. A
-      # -p:CopyLocalLockFileAssemblies=true build was tried first and copied NOTHING on the CI
-      # SDK while copying everything on a dev machine (2026-08-20, 12/14 jobs) — publish does not
-      # depend on that flag at all.
-      # 🚨 The SAME reference set as the build: --no-build re-evaluates the project, and without
-      # -p:MeshWeaverRefs the platform ProjectReferences the build had dropped come back — publish
-      # then copies their outputs, which were never built ("MSB3030: Could not copy
-      # meshweaver/src/MeshWeaver.Graph/bin/Release/net10.0/MeshWeaver.Graph.dll", Plugins #940).
-      - name: Publish the module (the closure the pack selects from)
-        env:
-          REFS: ${{ inputs.platform-image-digest != '' && format('{0}/platform-refs', runner.temp) || '' }}
-        run: >
-          dotnet publish "${{ matrix.entry.project }}" -c Release --no-build
-          -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
-          -p:Version=${{ steps.identity.outputs.version }}
-          ${REFS:+-p:MeshWeaverRefs=$REFS}
+        run: |
+          set -euo pipefail
+          # The closure arguments are written HERE and read by the pack step, so the compiler that
+          # ran is the one that says what rides: the SDK path derives the private closure from the
+          # deps.json only it produces (--deps-closure), the container path names the module-owned
+          # siblings it actually emitted (--with). One producer, one reader, no re-derivation.
+          packargs="$RUNNER_TEMP/pack-args"
+          : > "$packargs"
+          case "$MODE" in
+            sdk)
+              compiler="dotnet SDK on the runner"
+              echo "compiler: dotnet SDK $(dotnet --version) on the runner — the LEGACY path"
+              echo "🚧 $MODULE has not been converted to \`memex build project\` yet. Declare"
+              echo "🚧 \`\"build\": \"container\"\` on its \`modules:\` entry once it compiles against the image."
+              dotnet build "$PROJECT" -c Release -warnaserror \
+                -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" \
+                -p:Version="$VERSION" \
+                ${REFS:+-p:MeshWeaverRefs=$REFS}
+              # Publish materializes the module's PACKAGE dependencies beside the entry DLL — the
+              # SDK's own answer to the runtime closure (framework-trimmed packages excluded,
+              # everything else included), which --deps-closure selects from. A
+              # -p:CopyLocalLockFileAssemblies=true build was tried first and copied NOTHING on the
+              # CI SDK while copying everything on a dev machine (2026-08-20, 12/14 jobs) — publish
+              # does not depend on that flag at all.
+              # 🚨 The SAME reference set as the build: --no-build re-evaluates the project, and
+              # without -p:MeshWeaverRefs the platform ProjectReferences the build had dropped come
+              # back — publish then copies their outputs, which were never built ("MSB3030: Could
+              # not copy meshweaver/src/MeshWeaver.Graph/bin/Release/net10.0/MeshWeaver.Graph.dll",
+              # Plugins #940).
+              dotnet publish "$PROJECT" -c Release --no-build \
+                -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" \
+                -p:Version="$VERSION" \
+                ${REFS:+-p:MeshWeaverRefs=$REFS}
+              packdir="$GITHUB_WORKSPACE/$(dirname "$PROJECT")/bin/Release/net10.0/publish"
+              printf '%s\n' --deps-closure >> "$packargs"
+              ;;
+            container)
+              compiler="memex build project (in the platform image)"
+              # The container IS the reference set, so a run that cannot name one has nothing to
+              # build against — and there is deliberately no local-SDK fallback to slide into.
+              if [ -z "$IMAGE" ] || [ -z "$DIGEST" ]; then
+                echo "::error::matrix entry '$MODULE' declares build=container, but platform-image / platform-image-digest are not both set. The image IS the reference set for that path; there is nothing to compile against and deliberately no local-SDK fallback."
+                exit 1
+              fi
+              if [ -z "${ACR_USERNAME:-}" ] || [ -z "${ACR_PASSWORD:-}" ]; then
+                echo "::error::build=container needs the acr-username/acr-password secrets to pull $IMAGE — without them the builder image cannot be fetched, and a build that cannot start must not look like one that skipped."
+                exit 1
+              fi
+              # Strip a TAG only — a colon after the last slash. `${IMAGE%%:*}` would also eat a
+              # registry port and `${IMAGE%:*}` would eat the path when there is no tag.
+              case "${IMAGE##*/}" in *:*) IMAGE_NOTAG="${IMAGE%:*}" ;; *) IMAGE_NOTAG="$IMAGE" ;; esac
+              pinned="${IMAGE_NOTAG}@${DIGEST}"
+              echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+              # 🚨 --platform linux/amd64 ALWAYS, for the same reason the refs extraction pins it:
+              # framework identities are per-architecture and the bundles are sealed under the x64
+              # identity the portals run. Pulled here rather than relying on the refs step above,
+              # which does not run on a platform-refs cache HIT.
+              docker pull --platform linux/amd64 "$pinned"
+              out="$RUNNER_TEMP/module-build"
+              rm -rf "$out"; mkdir -p "$out"; chmod 777 "$out"
+              accepts=()
+              for construct in $ACCEPT; do accepts+=(--accept "$construct"); done
+              echo "compiler: CONTAINER — memex build project ⇒ mw-plugin-test build-project inside $pinned"
+              echo "compiler: no .NET SDK, no NuGet restore, no platform source checkout; every reference comes from that image's /app"
+              [ ${#accepts[@]} -eq 0 ] || echo "compiler: acknowledged constructs — $ACCEPT"
+              log="$RUNNER_TEMP/build-project-$MODULE.log"
+              # 🚨 NO --extra-refs, ever, on this lane. An additional library is one the image does
+              # not carry, and a bundle whose closure cannot be derived (there is no deps.json here)
+              # would then land a module that faults at first use — the 2026-08-19/20 outage. The
+              # builder REFUSES such a PackageReference by name, which is exactly the answer wanted:
+              # that module stays on the SDK path until the image carries what it needs.
+              docker run --rm --init --platform linux/amd64 \
+                -v "$GITHUB_WORKSPACE:/repo:ro" \
+                -v "$out:/out" \
+                --entrypoint /app/mw-plugin-test "$pinned" \
+                build-project "/repo/$PROJECT" --output /out ${accepts[@]+"${accepts[@]}"} 2>&1 | tee "$log"
+              # build-project emits <output>/<AssemblyName>/, so the module folder IS the pack input.
+              packdir="$out/$MODULE"
+              if [ ! -f "$packdir/$MODULE.dll" ]; then
+                echo "::error::the container build produced no $MODULE.dll under $packdir. A build that emitted nothing must never reach the packer."
+                exit 1
+              fi
+              # The in-root ProjectReferences the builder compiled from source land in sibling
+              # folders. MODULE-OWNED ones (source in this repo's src/, nowhere in /app) MUST ride —
+              # not riding is the fault. Image-shipped ones (src/platform-shipped.txt) must NOT: a
+              # same-identity duplicate beside /app's copy. The set comes from the SAME script the
+              # packer and the bundle inspection use, so the three cannot disagree.
+              own="$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src")"
+              shopt -s nullglob
+              for dir in "$out"/*/; do
+                name="$(basename "$dir")"
+                if [ "$name" = "$MODULE" ]; then continue; fi
+                case "$name" in
+                  MeshWeaver.*) ;;
+                  *)
+                    echo "::error::the container build emitted '$name' beside $MODULE. Only MeshWeaver.* siblings can be classified as platform-carried or module-owned, so this lane cannot decide whether it must ride — build $MODULE on the sdk path until it can."
+                    exit 1
+                    ;;
+                esac
+                if printf '%s' ";$own;" | grep -qF ";$name;"; then
+                  cp "$dir/$name.dll" "$packdir/"
+                  if [ -f "$dir/$name.pdb" ]; then cp "$dir/$name.pdb" "$packdir/"; fi
+                  printf '%s\n%s\n' --with "$name.dll" >> "$packargs"
+                  echo "closure: $name.dll RIDES — module-owned (its source is in this repo's src/, so it is nowhere in the image's /app)"
+                else
+                  echo "closure: $name.dll does NOT ride — the image ships it (src/platform-shipped.txt); bundling it would land a same-identity duplicate beside /app's copy"
+                fi
+              done
+              # 🚨 WHY THERE IS NO --deps-closure HERE, stated every run so nobody reads its absence
+              # as an oversight. That flag derives the module's private closure from the deps.json
+              # the SDK emits, and there is no SDK on this path. The closure is complete BY
+              # CONSTRUCTION instead: build-project refuses BY NAME every PackageReference the image
+              # does not supply, and this lane passes no --extra-refs — so every assembly the module
+              # binds is one the image it lands into already carries.
+              echo "closure: NO --deps-closure on the container path — there is no SDK deps.json to derive one from."
+              echo "closure: complete BY CONSTRUCTION instead — the builder refuses BY NAME any PackageReference the image does not supply, and this lane passes no --extra-refs, so every assembly $MODULE binds is one the image it lands into already carries."
+              # 🚨 THE BINDING IDENTITY, CHECKED. AssemblyVersion is emitted by the SDK's
+              # GenerateAssemblyInfo target, and build-project runs no targets — so a module built
+              # here carries whatever Roslyn defaulted to unless the builder learns to stamp it.
+              # Shipping 0.0.0.0 into a 3.0.0.0 process is MeshWeaver#143 exactly: it does not fail
+              # at build, it fails at runtime binding, in another repo, as a FileNotFoundException
+              # naming a version nobody wrote down. The expected value is the one the builder itself
+              # read out of the image, so this cannot drift from what the portals run.
+              platform_version="$(sed -n 's/.*platform AssemblyVersion \([0-9][0-9.]*\).*/\1/p' "$log" | head -1)"
+              if [ -z "$platform_version" ]; then
+                echo "::error::could not read 'platform AssemblyVersion' out of the builder's log ($log). The binding-identity check cannot run, and a check that quietly does not run reads exactly like one that passed."
+                exit 1
+              fi
+              printf '%s\n' 'Console.WriteLine(System.Reflection.AssemblyName.GetAssemblyName(args[0]).Version);' > "$RUNNER_TEMP/asmver.cs"
+              module_version="$(DOTNET_NOLOGO=1 dotnet run "$RUNNER_TEMP/asmver.cs" -- "$packdir/$MODULE.dll" | tail -1)"
+              if [ "$module_version" != "$platform_version" ]; then
+                echo "::error::binding identity drift: $MODULE.dll was emitted as AssemblyVersion $module_version, but every MeshWeaver.* assembly in $pinned carries $platform_version. These load into the same process and are bound BY platform assemblies, so a mismatch is a runtime FileNotFoundException, not a build error (MeshWeaver#143). build-project runs no MSBuild targets, so it does not honour <AssemblyVersion> — this module cannot use the container path until it does."
+                exit 1
+              fi
+              echo "identity: $MODULE.dll AssemblyVersion $module_version == the image's $platform_version"
+              ;;
+            *)
+              echo "::error::matrix entry '$MODULE' declares build='$MODE'. The only values are 'container' (memex build project, inside the pinned platform image) and 'sdk' (dotnet build on the runner — the default). A typo must not silently pick either one."
+              exit 1
+              ;;
+          esac
+          echo "compiler=$MODE" >> "$GITHUB_OUTPUT"
+          echo "packdir=$packdir" >> "$GITHUB_OUTPUT"
+          {
+            echo "### \`$MODULE\` — compiled by **$compiler**"
+            echo
+            echo "- mode: \`$MODE\` (\`container\` = memex build project inside the pinned image; \`sdk\` = dotnet build on the runner)"
+            echo "- pack input: \`$packdir\`"
+            echo "- closure args: \`$( (tr '\n' ' ' < "$packargs") || true )\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build the module-pack tool
         run: dotnet build meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release
 
       - name: Pack the module bundle
         env:
-          PROJECT: ${{ matrix.entry.project }}
-        run: >
-          dotnet run --project meshweaver/src/MeshWeaver.Plugin.Build -c Release --no-build --
-          module-pack "$GITHUB_WORKSPACE/$(dirname "$PROJECT")/bin/Release/net10.0/publish"
-          --deps-closure
-          --module-name "${{ matrix.entry.module }}"
-          --plugin "${{ matrix.entry.package }}"
-          --package-version "${{ steps.identity.outputs.version }}"
-          --min-mesh-version "${{ steps.identity.outputs.floor }}"
-          --own-platform "$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src")"
-          --out "$RUNNER_TEMP/bundles"
+          PACKDIR: ${{ steps.build.outputs.packdir }}
+          COMPILER: ${{ steps.build.outputs.compiler }}
+          PACKAGE: ${{ matrix.entry.package }}
+          MODULE: ${{ matrix.entry.module }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          FLOOR: ${{ steps.identity.outputs.floor }}
+        run: |
+          set -euo pipefail
+          # 🚨 The closure flags come from the COMPILER THAT RAN, written to a file by the step
+          # above rather than re-derived here — the SDK path derives the private closure from its
+          # own deps.json (--deps-closure), the container path names the module-owned siblings it
+          # emitted (--with). Re-deriving here would be a second opinion about what ships.
+          closure=()
+          while IFS= read -r flag; do closure+=("$flag"); done < "$RUNNER_TEMP/pack-args"
+          echo "packing $MODULE from $PACKDIR (compiler: $COMPILER); closure flags: ${closure[*]:-<none>}"
+          dotnet run --project meshweaver/src/MeshWeaver.Plugin.Build -c Release --no-build -- \
+            module-pack "$PACKDIR" \
+            ${closure[@]+"${closure[@]}"} \
+            --module-name "$MODULE" \
+            --plugin "$PACKAGE" \
+            --package-version "$VERSION" \
+            --min-mesh-version "$FLOOR" \
+            --own-platform "$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src")" \
+            --out "$RUNNER_TEMP/bundles"
 
       # A bundle that PACKED is not yet a bundle that LANDS: assert the closure and the manifest a
       # consumer's landing gate will read, loudly, instead of trusting the packer's exit code.
@@ -467,6 +709,7 @@ jobs:
           MODULE: ${{ matrix.entry.module }}
           VERSION: ${{ steps.identity.outputs.version }}
           FLOOR: ${{ steps.identity.outputs.floor }}
+          COMPILER: ${{ steps.build.outputs.compiler }}
         run: |
           set -euo pipefail
           bundle="$RUNNER_TEMP/bundles/MeshWeaver.Plugin.$PACKAGE.$VERSION.module.nupkg"
@@ -501,6 +744,20 @@ jobs:
              | length == 0' \
             "$manifest" > /dev/null \
             || { echo "::error::bundle carries platform (MeshWeaver.*) assemblies beside the module"; exit 1; }
+          # 🚨 The container path's closure claim, ASSERTED rather than asserted-in-prose. It packs
+          # no --deps-closure because there is no SDK deps.json to derive one from; what makes that
+          # sound is that build-project resolved every reference from the image's /app (it refuses
+          # by name any PackageReference the image does not supply, and this lane passes no
+          # --extra-refs). A NON-MeshWeaver assembly in such a bundle would contradict exactly that
+          # — it could only have come from somewhere this lane cannot account for — so it is a
+          # refusal, not a curiosity. The SDK path is untouched: its private closure legitimately
+          # carries package assemblies.
+          if [ "$COMPILER" = "container" ]; then
+            jq -e '[.module.assemblies[] | select(startswith("MeshWeaver.") | not)] | length == 0' \
+              "$manifest" > /dev/null \
+              || { echo "::error::the container-built bundle carries a non-MeshWeaver assembly, which contradicts the reason it needs no --deps-closure: every reference was supposed to resolve from the image's /app"; exit 1; }
+            echo "container path: closure is entry + module-owned MeshWeaver siblings only, as derived"
+          fi
           echo "path=$bundle" >> "$GITHUB_OUTPUT"
           echo "bundle OK:"; jq . "$manifest"
 
@@ -523,7 +780,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/built"
           jq -n --arg p "${{ matrix.entry.package }}" --arg m "${{ matrix.entry.module }}" \
                 --arg v "${{ steps.identity.outputs.version }}" \
-             '{package:$p, module:$m, version:$v}' \
+                --arg c "${{ steps.build.outputs.compiler }}" \
+             '{package:$p, module:$m, version:$v, compiler:$c}' \
              > "$RUNNER_TEMP/built/${{ matrix.entry.module }}.json"
       - name: Upload the built marker
         uses: actions/upload-artifact@v7
@@ -647,8 +905,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/receipts"
           jq -n --arg p "${{ matrix.entry.package }}" --arg m "${{ matrix.entry.module }}" \
                 --arg v "${{ steps.identity.outputs.version }}" \
+                --arg c "${{ steps.build.outputs.compiler }}" \
                 --argjson pub '${{ inputs.publish }}' \
-             '{package:$p, module:$m, version:$v, published:$pub}' \
+             '{package:$p, module:$m, version:$v, compiler:$c, published:$pub}' \
              > "$RUNNER_TEMP/receipts/${{ matrix.entry.module }}.json"
           cat "$RUNNER_TEMP/receipts/${{ matrix.entry.module }}.json"
       - name: Upload the receipt
@@ -745,3 +1004,48 @@ jobs:
             --declared "$DECLARED" \
             --built "$RUNNER_TEMP/built" \
             --github-output "$GITHUB_OUTPUT"
+
+      # ─────────── WHICH COMPILER BUILT WHAT — a NUMBER, on every run ───────────
+      # 🚨 The split between `memex build project` (the container: no SDK, no NuGet, the image's own
+      # assemblies) and the legacy `dotnet build` is meant to SHRINK, and a split nobody counts is a
+      # split that becomes permanent. So it is reported every run, from the receipts the verifier
+      # just accounted for, filtered to THIS call's declared matrix (artifacts are run-wide). It is
+      # a report, never a gate: `if: always()` so a red verifier does not also hide the number.
+      - name: Report the compiler split
+        if: always()
+        # A REPORT, not a gate: it must never be the reason this required context goes red, and it
+        # must still print when the verifier above failed.
+        continue-on-error: true
+        env:
+          DECLARED: ${{ inputs.modules }}
+        run: |
+          set -euo pipefail
+          mine="$(jq -r '[.[].module] | @json' <<< "$DECLARED")"
+          shopt -s nullglob
+          receipts=("$RUNNER_TEMP"/receipts/*.json)
+          if [ ${#receipts[@]} -eq 0 ]; then
+            echo "no receipts to read — the pack job produced none, which the verifier above judges."
+            exit 0
+          fi
+          split="$(jq -s --argjson mine "$mine" -r '
+              [ .[] | select(.module as $m | $mine | index($m)) ]
+              | (map(select(.compiler == "container")) | length) as $c
+              | (length) as $n
+              | "\($c) of \($n)"' "${receipts[@]}")"
+          containers="$(jq -s --argjson mine "$mine" -r '
+              [ .[] | select((.module as $m | $mine | index($m)) and .compiler == "container") | .module ]
+              | sort | join(", ")' "${receipts[@]}")"
+          legacy="$(jq -s --argjson mine "$mine" -r '
+              [ .[] | select((.module as $m | $mine | index($m)) and .compiler != "container") | .module ]
+              | sort | join(", ")' "${receipts[@]}")"
+          echo "compiler split: $split module bundle(s) built by \`memex build project\` in the platform image"
+          echo "  container: ${containers:-<none>}"
+          echo "  dotnet SDK: ${legacy:-<none>}"
+          {
+            echo "### Compiler split"
+            echo
+            echo "**$split** built by \`memex build project\` (inside the pinned platform image — no SDK, no NuGet restore)."
+            echo
+            echo "- container: ${containers:-_none yet_}"
+            echo "- dotnet SDK (legacy): ${legacy:-_none_}"
+          } >> "$GITHUB_STEP_SUMMARY"
