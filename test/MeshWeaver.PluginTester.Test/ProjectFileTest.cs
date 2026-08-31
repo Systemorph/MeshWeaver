@@ -304,8 +304,17 @@ public class ProjectFileTest : IDisposable
             .Which.Message.Should().Contain("Choose");
     }
 
+    /// <summary>
+    /// An <c>&lt;EmbeddedResource&gt;</c> is EMBEDDED now, under the manifest name the SDK would
+    /// have given it — this used to be a named refusal, and the refusal is gone because the naming
+    /// rules were established by measurement rather than left to a guess
+    /// (<see cref="ManifestResourceNames"/>, <c>EmbeddedResourceTest</c>).
+    ///
+    /// <para>The blanket <c>--accept embedded-resource</c> survives as the escape hatch, and it now
+    /// SAYS what it dropped instead of leaving an assembly quietly short of a resource.</para>
+    /// </summary>
     [Fact]
-    public void AnEmbeddedResourceFailsUntilAcknowledged_BecauseTheAssemblyWouldDiffer()
+    public void AnEmbeddedResourceIsResolvedToItsSdkManifestName_AndTheBlanketAcceptStillSkipsItLoudly()
     {
         var project = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
@@ -316,11 +325,17 @@ public class ProjectFileTest : IDisposable
         Write("App/One.cs", "class One;");
         Write("App/Data.txt", "payload");
 
-        Action act = () => ProjectFile.Load(project);
-        act.Should().Throw<ProjectFile.UnsupportedConstructException>()
-            .Which.Message.Should().Contain("embedded-resource");
+        var model = ProjectFile.Load(project);
+        model.CompileItems.Should().HaveCount(1);
+        // RootNamespace defaults to the PROJECT name, and a root-level file has no directory part.
+        model.EmbeddedResources.Should().ContainSingle()
+            .Which.ManifestName.Should().Be("App.Data.txt");
+        model.SkippedResources.Should().BeEmpty();
 
-        ProjectFile.Load(project, [ProjectFile.Accept.EmbeddedResource]).CompileItems.Should().HaveCount(1);
+        var skipped = ProjectFile.Load(project, [ProjectFile.Accept.EmbeddedResource]);
+        skipped.CompileItems.Should().HaveCount(1);
+        skipped.EmbeddedResources.Should().BeEmpty();
+        skipped.SkippedResources.Should().ContainSingle().Which.Should().Contain("Data.txt");
     }
 
     // ── references ─────────────────────────────────────────────────────────────────────────────
