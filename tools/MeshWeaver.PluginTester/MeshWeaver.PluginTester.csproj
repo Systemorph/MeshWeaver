@@ -105,6 +105,62 @@
     </ItemGroup>
   </Target>
 
+  <!-- ═══ The SDK's BUILT-IN source generators (GeneratedRegex, JsonSerializable, LibraryImport…) ═══
+       A MeshWeaver image ships the RUNTIME; these generators live in the SDK's targeting pack
+       (packs/Microsoft.NETCore.App.Ref/<version>/analyzers/dotnet/cs), so a module using
+       [GeneratedRegex] compiles on the SDK path and dies as CS8795 under build-project unless the
+       image carries the generator (measured on MeshWeaver.Markdown.Collaboration, 2026-08-31:
+       7 errors → 0 with exactly this DLL supplied by hand via the generators flag). Staging them beside the
+       builder lets build-project pick them up with NO flag, the same way razor-generators/ works.
+
+       Staged FLAT — no per-RID split. Unlike the Razor compiler these are plain AnyCPU IL
+       (PE machine 0x014C, measured on ref pack 10.0.11), so one copy loads on every RID the image
+       publishes. Satellite-resource subfolders are left behind on purpose: diagnostics in English.
+
+       PROVENANCE: sdk-generators.json records the ref-pack version and source. The pairing is
+       GATED by a test that EXECUTES the staged regex generator against this repo's Roslyn
+       (SdkGeneratorBuildTest), so a pack whose generator cannot run here turns a PR red instead
+       of shipping a silent image. -->
+  <PropertyGroup>
+    <MeshWeaverSdkGeneratorSource Condition="'$(MeshWeaverSdkGeneratorSource)' == ''">$(NetCoreRoot)packs/Microsoft.NETCore.App.Ref/$(BundledNETCoreAppPackageVersion)/analyzers/dotnet/cs</MeshWeaverSdkGeneratorSource>
+  </PropertyGroup>
+
+  <Target Name="StageSdkSourceGenerators" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <_MeshWeaverSdkGenerator Include="$(MeshWeaverSdkGeneratorSource)/*.dll" />
+    </ItemGroup>
+    <!-- 🚨 An empty glob would ship an image whose container builds fail every [GeneratedRegex]
+         project as CS8795, and nothing downstream could tell that from "this project has errors". -->
+    <Error Condition="'@(_MeshWeaverSdkGenerator)' == ''"
+           Text="No SDK built-in source generators found in '$(MeshWeaverSdkGeneratorSource)'. build-project supplies the SDK's own generators (GeneratedRegex, JsonSerializable, LibraryImport) from this staged copy, because a runtime image has no SDK; an image built without them fails every project that uses one, as a compile error naming a generator that never ran. Install a .NET SDK whose targeting pack carries them, or point -p:MeshWeaverSdkGeneratorSource=&lt;dir&gt; at a copy." />
+    <Error Condition="'@(_MeshWeaverSdkGenerator->WithMetadataValue('Filename', 'System.Text.RegularExpressions.Generator'))' == ''"
+           Text="The staged SDK generators do not include System.Text.RegularExpressions.Generator.dll — the one generator the module lane's green list is measured against (CS8795)." />
+    <PropertyGroup>
+      <!-- Item transforms cannot be concatenated with literals inside a task's string parameter
+           (MSB4012), so the list becomes a property first. -->
+      <_MeshWeaverSdkGeneratorNames>@(_MeshWeaverSdkGenerator->'%(Filename)%(Extension)', '&quot;, &quot;')</_MeshWeaverSdkGeneratorNames>
+    </PropertyGroup>
+    <WriteLinesToFile
+        File="$(IntermediateOutputPath)sdk-generators.json"
+        Overwrite="true"
+        WriteOnlyWhenDifferent="true"
+        Lines="{ &quot;refPack&quot;: &quot;$(BundledNETCoreAppPackageVersion)&quot;, &quot;source&quot;: &quot;$(MeshWeaverSdkGeneratorSource)&quot;, &quot;assemblies&quot;: [&quot;$(_MeshWeaverSdkGeneratorNames)&quot;] }" />
+    <ItemGroup>
+      <Content Include="@(_MeshWeaverSdkGenerator)"
+               Link="sdk-generators/%(Filename)%(Extension)"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest"
+               Pack="false"
+               Visible="false" />
+      <Content Include="$(IntermediateOutputPath)sdk-generators.json"
+               Link="sdk-generators/sdk-generators.json"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest"
+               Pack="false"
+               Visible="false" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <!-- GateDiscoveryEqualsBakeDiscoveryTest pins PluginGateRunner.DiscoverNodeTypes equal to the
          compiler-driven bake's discovery (#2063). The two halves disagreeing IS the defect, and
