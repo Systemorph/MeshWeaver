@@ -18,6 +18,14 @@
          compiler returned" would be the only evidence a component exists, which is exactly the
          CS0115 blind spot the suite is about. Same reason MeshWeaver.Auth.Test carries it. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!-- StagedGeneratorsTest COMPILES a project that authors an Orleans-serializable type and then
+         LOADS the emitted assembly to look for the generated serializer — so Orleans' own assemblies
+         have to be in this host's reference set (ContainerReferenceSet reads the process's TPA). A
+         missing Orleans code generator produces NO compile error at all, so reflection over the
+         emitted assembly is the only way to tell it ran; without this reference the assertion cannot
+         run. 🚨 This is the TEST project — tools/MeshWeaver.PluginTester's own reference closure IS
+         the framework build identity and is untouched. -->
+    <PackageReference Include="Microsoft.Orleans.Sdk" />
   </ItemGroup>
 
   <!-- The gate boots in-process here, and the gate requires the AI engine MODULE beside the

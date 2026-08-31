@@ -92,6 +92,15 @@ public static class ProjectBuild
         /// </summary>
         public string? RazorGeneratorDirectory { get; init; }
 
+        /// <summary>
+        /// Where the STAGED generators live — the SDK's implicit analyzers and the NuGet analyzer
+        /// packages the image carries (<c>generators/</c> beside this builder). Null means the
+        /// standard search. Named separately from <see cref="GeneratorPaths"/> because these are not
+        /// an operator's choice but the image's contents, and which of them applies to a project is
+        /// decided by that project's <c>PackageReference</c> set rather than by the command line.
+        /// </summary>
+        public string? StagedGeneratorDirectory { get; init; }
+
         /// <summary>Concurrency cap across independent projects.</summary>
         public int MaxParallel { get; init; } = Math.Max(1, Environment.ProcessorCount);
 
@@ -139,6 +148,13 @@ public static class ProjectBuild
         /// exists.</para>
         /// </summary>
         public int RazorCount { get; init; }
+
+        /// <summary>
+        /// How many documents the STAGED generators produced — the SDK's implicit analyzers plus
+        /// any NuGet analyzer package this project references. An <c>init</c> property for the same
+        /// signature reason as <see cref="RazorCount"/>.
+        /// </summary>
+        public int GeneratedCount { get; init; }
 
         /// <summary>Compiled, emitted, and within the warning policy.</summary>
         public bool IsGreen => Failure is null && AssemblyPath is not null;
@@ -433,6 +449,23 @@ public static class ProjectBuild
                   + $"nullable {model.NullableOptions}, "
                   + $"warnings-as-errors {(model.TreatWarningsAsErrors ? "on" : "off")}");
 
+        // 🚨 THE STAGED GENERATORS ARE SELECTED FIRST, because they decide what "supplied" MEANS for
+        // an analyzer-only package. Which ones apply is the SDK's own rule (see StagedGenerators),
+        // and one that fails to LOAD stops the build: the assembly it would otherwise emit is
+        // missing exactly the code no diagnostic can point at.
+        StagedGenerators.Set staged;
+        try
+        {
+            staged = StagedGenerators.LoadFor(
+                model, options.StagedGeneratorDirectory, options.AppDirectory, options.Accept, sink.Logger);
+        }
+        catch (StagedGenerators.MissingGeneratorException ex)
+        {
+            sink.Error($"[{name}] {ex.Message}");
+            return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
+                model.CompileItems.Length, 1, 0, null, [], ex.Message);
+        }
+
         // Packages: the container is authoritative for what the container HAS. Anything it does not
         // have is an ADDITIONAL library, and this mode cannot invent one.
         var unresolved = ImmutableArray.CreateBuilder<string>();
@@ -450,6 +483,20 @@ public static class ProjectBuild
             if (extraByName.ContainsKey(package.Id))
             {
                 sink.Info($"[{name}] package {package.Id} → --extra-refs");
+                continue;
+            }
+            // 🚨 AN ANALYZER-ONLY PACKAGE CONTRIBUTES NO ASSEMBLY, AND NEVER DID. Microsoft.Orleans.Sdk
+            // carries a source generator and nothing else, so the publish PRUNES it: it is absent from
+            // the portal image's deps.json (measured — 209 libraries, Orleans.Core and friends among
+            // them, no Orleans.Sdk), and demanding a file for it would refuse the one project in the
+            // fleet that authors grains. What "supplied" means for such a package is that its
+            // GENERATOR is staged, which is exactly what was just checked above.
+            if (StagedGenerators.IsAnalyzerOnly(package.Id, staged))
+            {
+                sink.Info($"[{name}] package {package.Id} → analyzers only, "
+                          + (staged.Entries.Any(e => string.Equals(e.Reason, package.Id, StringComparison.OrdinalIgnoreCase))
+                              ? "generator staged"
+                              : "generator NOT staged (accepted)"));
                 continue;
             }
             unresolved.Add(package.Id);
@@ -584,9 +631,60 @@ public static class ProjectBuild
             }
         }
 
+        // The staged generators, selected before the reference set was assembled, run here — after
+        // Razor, so the SDK's generators see the component partials exactly as csc does.
+        var generatedCount = 0;
+        if (!staged.IsEmpty)
+        {
+            sink.Info(
+                $"[{name}] generators: {staged.Describe()} from {staged.Root} ({staged.Provenance})");
+            var outcome = StagedGenerators.Run(
+                compilation, staged, parseOptions, CancellationToken.None);
+            compilation = outcome.Compilation;
+            generatedCount = outcome.GeneratedSources;
+            foreach (var diagnostic in outcome.Diagnostics.Where(d => d.Severity >= DiagnosticSeverity.Warning))
+                sink.Warn($"[{name}] generator: {Render(diagnostic)}");
+            sink.Info($"[{name}] generators: {generatedCount} generated document(s)");
+        }
+
+        // 🚨 --generators runs through the SAME loud loader, never the platform's node-compile
+        // discovery. That one reads a failed load as "not a generator" and returns the compilation
+        // UNCHANGED — so an operator who supplied a generator built against a different Roslyn would
+        // get a build that silently ran none of it. A generator named on the command line either
+        // runs or fails the build.
         if (!generators.IsEmpty)
-            compilation = GeneratorPipeline.RunSourceGenerators(
-                compilation, generators, sink.Logger, CancellationToken.None);
+        {
+            var loaded = GeneratorLoader.Load(
+                $"mw-generators-cli-{model.AssemblyName}", generators,
+                [.. generators.Select(p => Path.GetDirectoryName(p)!).Distinct(StringComparer.Ordinal)]);
+            foreach (var failure in loaded.Failures)
+                sink.Error($"[{name}] --generators: {failure}");
+            if (!loaded.Failures.IsEmpty || loaded.Generators.IsEmpty)
+            {
+                var message =
+                    loaded.Generators.IsEmpty && loaded.Failures.IsEmpty
+                        ? "--generators supplied assemblies holding no [Generator] type — they compile "
+                          + "nothing, and the project would look merely broken."
+                        : "--generators could not be loaded; a generator that does not load produces "
+                          + "NOTHING and the emitted assembly would silently be missing it.";
+                sink.Error($"[{name}] {message}");
+                return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
+                    model.CompileItems.Length, 1, 0, null, [], message) { RazorCount = razorGenerated };
+            }
+            var outcome = StagedGenerators.Run(
+                compilation,
+                new StagedGenerators.Set(null, "--generators", [
+                    new StagedGenerators.Entry("--generators", "(command line)", loaded.Generators)]),
+                parseOptions,
+                CancellationToken.None);
+            compilation = outcome.Compilation;
+            generatedCount += outcome.GeneratedSources;
+            foreach (var diagnostic in outcome.Diagnostics.Where(d => d.Severity >= DiagnosticSeverity.Warning))
+                sink.Warn($"[{name}] generator: {Render(diagnostic)}");
+            sink.Info(
+                $"[{name}] --generators: {loaded.Generators.Length} generator(s), "
+                + $"{outcome.GeneratedSources} generated document(s)");
+        }
 
         var errors = 0;
         var warnings = 0;
@@ -618,18 +716,16 @@ public static class ProjectBuild
 
         if (errors > 0)
         {
-            if (generators.IsEmpty && missingGeneratorPartials > 0)
-                // 🚨 Name the CAUSE, not the symptom. A project using [GeneratedRegex],
-                // [LoggerMessage] or [JsonSerializable] produces a WALL of CS8795 "partial method
-                // must have an implementation part" when its generator did not run — which reads
-                // like broken source and is not. The generator lives in the .NET SDK; a MeshWeaver
-                // image ships the RUNTIME, so it is genuinely absent here.
+            if (generatedCount == 0 && missingGeneratorPartials > 0)
+                // 🚨 Name the CAUSE, not the symptom. A project using [GeneratedRegex] produces a
+                // WALL of CS8795 "partial method must have an implementation part" when its
+                // generator did not run — which reads like broken source and is not. The generator
+                // lives in the .NET SDK's targeting pack; a MeshWeaver image ships the RUNTIME, so
+                // the image has to STAGE it, and this says where it looked when it did not.
                 sink.Error(
-                    $"[{name}] {missingGeneratorPartials} of those errors are unimplemented partial "
-                    + "members — the signature of a SOURCE GENERATOR that did not run. The SDK's "
-                    + "built-in generators (GeneratedRegex, LoggerMessage, JsonSerializable) ship in "
-                    + "the .NET SDK, not in a runtime image, so this container has none. Supply them "
-                    + "with --generators <dir>, or the project cannot be built in this mode.");
+                    "[" + name + "] " + StagedGenerators.MissingSdkGeneratorMessage(
+                        name, missingGeneratorPartials,
+                        StagedGenerators.SearchPath(options.StagedGeneratorDirectory, options.AppDirectory)));
             if (model.RazorItems.IsEmpty && missingComponentOverrides > 0)
                 // 🚨 The other half of the same rule. CS0115 in a project this builder found NO
                 // Razor items in means the components were never offered to the generator at all —
@@ -644,7 +740,8 @@ public static class ProjectBuild
             sink.Error($"[{name}] RED — {errors} error(s), {warnings} warning(s) in {clock.Elapsed.TotalMilliseconds:F0} ms");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                 model.CompileItems.Length, errors, warnings, null, [],
-                $"{errors} compile error(s)") { RazorCount = razorGenerated };
+                $"{errors} compile error(s)")
+            { RazorCount = razorGenerated, GeneratedCount = generatedCount };
         }
         if (warnings > 0 && !options.AllowWarnings)
         {
@@ -674,11 +771,12 @@ public static class ProjectBuild
             sink.Info(
                 $"[{name}] OK — {model.CompileItems.Length} source file(s)"
                 + (razorGenerated == 0 ? "" : $" + {model.RazorItems.Length} Razor file(s)")
+                + (generatedCount == 0 ? "" : $" + {generatedCount} generated document(s)")
                 + $", {warnings} warning(s), "
                 + $"{artifact.Length} bytes in {clock.Elapsed.TotalMilliseconds:F0} ms → {artifact.DllPath}");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                 model.CompileItems.Length, 0, warnings, artifact.DllPath, [], null)
-            { RazorCount = razorGenerated };
+            { RazorCount = razorGenerated, GeneratedCount = generatedCount };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

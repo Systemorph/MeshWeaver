@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Runtime.Loader;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -203,81 +202,14 @@ public static class RazorGenerators
                 $"--razor-generators '{full}' does not exist. A generator directory that is not there "
                 + "compiles no component and silently produces a different assembly.");
 
-        var context = new HostFirstLoadContext(full);
-        var generators = ImmutableArray.CreateBuilder<ISourceGenerator>();
-        var loadFailures = new List<string>();
-        foreach (var dll in Directory.GetFiles(full, "*.dll").OrderBy(p => p, StringComparer.Ordinal))
-        {
-            Assembly assembly;
-            try
-            {
-                assembly = context.LoadFromAssemblyPath(dll);
-            }
-            catch (BadImageFormatException ex)
-            {
-                // 🚨 The architecture trap, named. The SDK crossgens its Razor compiler for the
-                // SDK's own RID, so an image that staged the build host's copy into an
-                // arm64 leg fails EXACTLY here — and "incorrect format" on its own sends the reader
-                // hunting for a corrupt file.
-                loadFailures.Add(
-                    $"{Path.GetFileName(dll)}: {ex.Message.TrimEnd()} — this is what a Razor compiler "
-                    + $"built for another architecture looks like. This process is "
-                    + $"{RuntimeInformation.RuntimeIdentifier}; the SDK's copy is ReadyToRun-compiled "
-                    + "for exactly one RID, so the image must stage the copy for THIS one.");
-                continue;
-            }
-            catch (Exception ex) when (ex is FileLoadException or FileNotFoundException)
-            {
-                loadFailures.Add($"{Path.GetFileName(dll)}: {ex.GetType().Name}: {ex.Message}");
-                continue;
-            }
+        var loaded = GeneratorLoader.Load("mw-razor-generators", GeneratorLoader.AssembliesIn(full), [full]);
+        var generators = loaded.Generators;
+        var loadFailures = loaded.Failures;
 
-            Type?[] types;
-            try
-            {
-                types = assembly.GetTypes();
-            }
-            catch (ReflectionTypeLoadException ex)
-            {
-                // 🚨 The signature of the version skew this loader exists to defeat, kept LOUD:
-                // Roslyn's own loader logs this at debug and moves on, which is how "the Razor
-                // generator did not load" turns into "the .razor files were never compiled".
-                loadFailures.Add(
-                    $"{Path.GetFileName(dll)}: {ex.LoaderExceptions.FirstOrDefault()?.Message ?? ex.Message}");
-                types = ex.Types;
-            }
-
-            foreach (var type in types)
-            {
-                if (type is null || type.IsAbstract) continue;
-                if (type.GetCustomAttributes(typeof(GeneratorAttribute), inherit: false).Length == 0) continue;
-                if (type.GetConstructor(Type.EmptyTypes) is null) continue;
-                try
-                {
-                    switch (Activator.CreateInstance(type))
-                    {
-                        case IIncrementalGenerator incremental:
-                            generators.Add(incremental.AsSourceGenerator());
-                            break;
-                        case ISourceGenerator source:
-                            generators.Add(source);
-                            break;
-                        default:
-                            break;
-                    }
-                }
-                catch (Exception ex) when (ex is TargetInvocationException or MissingMethodException
-                                               or TypeLoadException or FileNotFoundException)
-                {
-                    loadFailures.Add($"{type.FullName}: {ex.GetType().Name}: {ex.Message}");
-                }
-            }
-        }
-
-        if (generators.Count == 0)
+        if (generators.IsEmpty)
             throw new MissingRazorCompilerException(
                 $"'{full}' holds no usable Roslyn source generator"
-                + (loadFailures.Count == 0
+                + (loadFailures.IsEmpty
                     ? ". The Razor compiler is a [Generator] type; a directory of assemblies with none "
                       + "of them compiles no component."
                     : " — " + string.Join("; ", loadFailures))
@@ -286,7 +218,7 @@ public static class RazorGenerators
         foreach (var failure in loadFailures)
             logger.LogWarning("razor generator: {Failure}", failure);
 
-        return new Set(full, ReadProvenance(full), generators.ToImmutable());
+        return new Set(full, ReadProvenance(full), generators);
     }
 
     /// <summary>
@@ -366,53 +298,6 @@ public static class RazorGenerators
             .GetFiles(directory, "*.dll")
             .Select(Path.GetFileName)
             .OrderBy(n => n, StringComparer.Ordinal));
-    }
-
-    // ── the load context ───────────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// A load context that binds every assembly the HOST already has to the host's copy, IGNORING
-    /// the version the generator asked for, and loads only what the host does not have from the
-    /// generator directory.
-    ///
-    /// <para>🚨 Both halves are load-bearing. Binding Roslyn to the host is what lets a generator
-    /// built against a newer Roslyn run at all (SDK 10.0.400 wants 5.9.0.0; the image has 5.6.0.0) —
-    /// and, more importantly, it is what keeps <see cref="ISourceGenerator"/> ONE type: a second
-    /// Roslyn loaded into this context would give the generator a different
-    /// <c>ISourceGenerator</c> than the driver expects, and nothing would ever match. Loading the
-    /// private dependency (<c>Microsoft.AspNetCore.Razor.Utilities.Shared</c>) from the directory is
-    /// what makes the compiler work at all: with it absent the compiler assembly loads, its types
-    /// enumerate, and every call into it throws — measured.</para>
-    /// </summary>
-    private sealed class HostFirstLoadContext : AssemblyLoadContext
-    {
-        private readonly ImmutableDictionary<string, string> _local;
-
-        internal HostFirstLoadContext(string directory)
-            : base("mw-razor-generators", isCollectible: false)
-        {
-            _local = Directory
-                .GetFiles(directory, "*.dll")
-                .ToImmutableDictionary(
-                    p => Path.GetFileNameWithoutExtension(p), p => p, StringComparer.OrdinalIgnoreCase);
-        }
-
-        protected override Assembly? Load(AssemblyName assemblyName)
-        {
-            if (assemblyName.Name is not { Length: > 0 } name)
-                return null;
-            try
-            {
-                // Version-BLIND on purpose: `new AssemblyName(name)` carries no version, so the
-                // default context resolves by simple name and hands back whatever the image ships.
-                return Default.LoadFromAssemblyName(new AssemblyName(name));
-            }
-            catch (Exception ex) when (ex is FileNotFoundException or FileLoadException or BadImageFormatException)
-            {
-                // Not a host assembly — fall through to the generator's own directory.
-            }
-            return _local.TryGetValue(name, out var path) ? LoadFromAssemblyPath(path) : null;
-        }
     }
 
     // ── the compiler-visible inputs ────────────────────────────────────────────────────────────

@@ -105,6 +105,114 @@
     </ItemGroup>
   </Target>
 
+  <!-- ═════════ THE REGEX AND ORLEANS GENERATORS RIDE ALONG — as ASSETS, never as references ═════
+       `build-project` compiles projects that use [GeneratedRegex] and projects that author Orleans
+       grains. Both are Roslyn SOURCE GENERATORS that ship OUTSIDE a runtime image: the regex one in
+       the .NET SDK's targeting pack (analyzers/dotnet/cs, applied implicitly to every project), the
+       Orleans one in the Microsoft.Orleans.CodeGenerator NuGet package (applied to projects that
+       reference Microsoft.Orleans.Sdk). Without them a [GeneratedRegex] project dies in a wall of
+       CS8795 "partial method must have an implementation part" — the biggest remaining block in the
+       no-SDK sweep after Razor — and an Orleans project is WORSE: it compiles GREEN and emits an
+       assembly with no serializers, copiers or grain proxies at all.
+
+       🚨 CONTENT, NOT PackageReference and NOT ProjectReference. This project's reference closure IS
+       the framework build identity (see the InternalsVisibleTo block below and
+       FrameworkBuildIdentityTest); a compile-time reference here would move the identity every bake
+       host resolves. PackageDownload puts the Orleans analyzer in the package cache WITHOUT adding
+       anything to the assets this project compiles against. The assemblies are laid beside the
+       binary and loaded at run time by StagedGenerators, into the same host-first load context the
+       Razor generator uses.
+
+       🚨 THE CLOSURE IS ONE FILE EACH, MEASURED from the AssemblyRef tables and checked against the
+       portal image's 209 assemblies: the regex generator wants Roslyn, Immutable, Memory, Buffers,
+       Microsoft.CodeAnalysis.Workspaces, System.Composition.AttributedModel and
+       CompilerServices.Unsafe; Orleans.CodeGenerator wants Roslyn, Immutable, Memory and Buffers.
+       The image ships every one, Workspaces and Composition included, so neither needs a private
+       dependency staged beside it. Orleans.Analyzers is deliberately NOT staged: it carries
+       diagnostics and code fixes, not a [Generator], and this builder runs no analyzers.
+
+       🚨 NO PER-RID SPLIT, and that is a MEASUREMENT rather than an oversight. Both assemblies are
+       PE machine 0x014C — architecture-neutral MSIL — where the SDK's Razor compiler is ReadyToRun
+       per RID (0xFD1D linux-x64, 0xEC20 osx-arm64) and had to be staged twice. One copy therefore
+       serves both image architectures and CD stages nothing. StagedGeneratorsTest ASSERTS the
+       0x014C, so an SDK that starts crossgenning its analyzers turns a PR red instead of shipping an
+       arm64 image that silently drops every generated regex. The search path still probes <rid>/
+       first, so re-splitting later is a staging change, not a code change.
+
+       ONE PIN, NOT TWO: the Orleans version is read out of the central Microsoft.Orleans.Sdk
+       PackageVersion, so the staged generator cannot drift from the Orleans runtime in the image. -->
+  <PropertyGroup>
+    <MeshWeaverSdkAnalyzerSource Condition="'$(MeshWeaverSdkAnalyzerSource)' == ''">$(NetCoreRoot)packs/Microsoft.NETCore.App.Ref/$(BundledNETCoreAppPackageVersion)/analyzers/dotnet/cs</MeshWeaverSdkAnalyzerSource>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The generator only; PackageDownload contributes NOTHING to this project's compilation. -->
+    <PackageDownload Include="Microsoft.Orleans.CodeGenerator"
+                     Version="[@(PackageVersion->WithMetadataValue('Identity','Microsoft.Orleans.Sdk')->'%(Version)')]" />
+  </ItemGroup>
+
+  <Target Name="StageSourceGenerators" BeforeTargets="AssignTargetPaths">
+    <PropertyGroup>
+      <_MeshWeaverOrleansGeneratorVersion>@(PackageVersion->WithMetadataValue('Identity','Microsoft.Orleans.Sdk')->'%(Version)')</_MeshWeaverOrleansGeneratorVersion>
+      <_MeshWeaverOrleansGeneratorDir>$(NuGetPackageRoot)microsoft.orleans.codegenerator/$(_MeshWeaverOrleansGeneratorVersion)/analyzers/dotnet/cs</_MeshWeaverOrleansGeneratorDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <!-- The SDK's implicit analyzers, applied by a real build to EVERY project. Only the regex
+           generator is staged: the others in that directory (LibraryImport, ComInterface,
+           JSImport, System.Text.Json) are not used by anything this builder compiles, and staging a
+           generator nobody asked for is a way to change an assembly for no reason. -->
+      <_MeshWeaverSdkGenerator Include="$(MeshWeaverSdkAnalyzerSource)/System.Text.RegularExpressions.Generator.dll" />
+      <_MeshWeaverPackageGenerator Include="$(_MeshWeaverOrleansGeneratorDir)/Orleans.CodeGenerator.dll"
+                                   ActivatingPackage="microsoft.orleans.sdk" />
+      <!-- The staged path is computed HERE, on the source lists, rather than in the Content
+           Include below: `Link="…%(ActivatingPackage)…"` there would batch over the whole Content
+           item list — which already carries the Razor generator, whose items have no such
+           metadata — and fail with MSB4096. -->
+      <_MeshWeaverSdkGenerator>
+        <Link>generators/sdk/%(Filename)%(Extension)</Link>
+      </_MeshWeaverSdkGenerator>
+      <_MeshWeaverPackageGenerator>
+        <Link>generators/packages/%(ActivatingPackage)/%(Filename)%(Extension)</Link>
+      </_MeshWeaverPackageGenerator>
+    </ItemGroup>
+    <!-- 🚨 An empty glob would ship an image that silently cannot compile a [GeneratedRegex]
+         project, and — for Orleans — one that emits a green assembly with no serializers in it.
+         Nothing downstream could tell either apart from "this project has errors". -->
+    <Error Condition="'@(_MeshWeaverSdkGenerator)' == ''"
+           Text="No SDK source generator found in '$(MeshWeaverSdkAnalyzerSource)'. build-project compiles [GeneratedRegex] through System.Text.RegularExpressions.Generator.dll, which ships in the .NET SDK's Microsoft.NETCore.App.Ref targeting pack; an image built without it reports a wall of CS8795 instead of saying so. Install a .NET SDK that carries it, or point -p:MeshWeaverSdkAnalyzerSource=&lt;dir&gt; at a copy." />
+    <Error Condition="'@(_MeshWeaverPackageGenerator)' == ''"
+           Text="No Orleans source generator found in '$(_MeshWeaverOrleansGeneratorDir)'. build-project compiles Orleans grains through Orleans.CodeGenerator.dll from the Microsoft.Orleans.CodeGenerator package (PackageDownload above, pinned to the central Microsoft.Orleans.Sdk version '$(_MeshWeaverOrleansGeneratorVersion)'); without it an Orleans project compiles GREEN and emits an assembly with no serializers, copiers or grain proxies. Restore the project, or point -p:MeshWeaverOrleansGeneratorDir=&lt;dir&gt; at a copy." />
+    <PropertyGroup>
+      <!-- Item transforms cannot be concatenated with literals inside a task's string parameter
+           (MSB4012), so the lists become properties first. -->
+      <_MeshWeaverSdkGeneratorNames>@(_MeshWeaverSdkGenerator->'sdk/%(Filename)%(Extension)', '&quot;, &quot;')</_MeshWeaverSdkGeneratorNames>
+      <_MeshWeaverPackageGeneratorNames>@(_MeshWeaverPackageGenerator->'packages/%(ActivatingPackage)/%(Filename)%(Extension)', '&quot;, &quot;')</_MeshWeaverPackageGeneratorNames>
+    </PropertyGroup>
+    <WriteLinesToFile
+        File="$(IntermediateOutputPath)generators.json"
+        Overwrite="true"
+        WriteOnlyWhenDifferent="true"
+        Lines="{ &quot;sdk&quot;: &quot;$(NETCoreSdkVersion)&quot;, &quot;targetingPack&quot;: &quot;$(BundledNETCoreAppPackageVersion)&quot;, &quot;orleans&quot;: &quot;$(_MeshWeaverOrleansGeneratorVersion)&quot;, &quot;assemblies&quot;: [&quot;$(_MeshWeaverSdkGeneratorNames)&quot;, &quot;$(_MeshWeaverPackageGeneratorNames)&quot;] }" />
+    <ItemGroup>
+      <Content Include="@(_MeshWeaverSdkGenerator)"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest"
+               Pack="false"
+               Visible="false" />
+      <Content Include="@(_MeshWeaverPackageGenerator)"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest"
+               Pack="false"
+               Visible="false" />
+      <Content Include="$(IntermediateOutputPath)generators.json"
+               Link="generators/generators.json"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest"
+               Pack="false"
+               Visible="false" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <!-- GateDiscoveryEqualsBakeDiscoveryTest pins PluginGateRunner.DiscoverNodeTypes equal to the
          compiler-driven bake's discovery (#2063). The two halves disagreeing IS the defect, and

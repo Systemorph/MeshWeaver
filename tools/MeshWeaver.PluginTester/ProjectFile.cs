@@ -158,6 +158,16 @@ public static class ProjectFile
         /// exact failure this builder was extended to prevent.
         /// </summary>
         public const string RazorNotCompiled = "razor-not-compiled";
+
+        /// <summary>
+        /// Acknowledge that a package whose SOURCE GENERATOR is required for a correct assembly is
+        /// referenced and the generator is not staged — so the project compiles GREEN and produces
+        /// an assembly missing what the generator would have written (for Orleans: every serializer,
+        /// copier, grain proxy and the type manifest that registers them). Refused by default
+        /// because there is no diagnostic to see: the build succeeds and the silo fails at grain
+        /// activation, which is the exact silent shape this builder exists to prevent.
+        /// </summary>
+        public const string MissingGenerators = "generators-missing";
     }
 
     /// <summary>
