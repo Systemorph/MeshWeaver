@@ -107,7 +107,7 @@ jobs:
 
       - name: Mint an installation token for the subscriber repos
         id: token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.app-id || secrets.DEPENDENT_DISPATCH_APP_ID }}
           private-key: ${{ secrets.private-key || secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
