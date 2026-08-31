@@ -352,11 +352,31 @@ public record LayoutAreaHost : IDisposable
                 // before the first render is legitimate and must not page anyone — but it names
                 // the area, which is exactly what the 45 s timeouts in the Orleans suite could
                 // not.
+                //
+                // 🚨 EXCEPT when the HUB ITSELF is going down, which is not a client navigating
+                // away. Then every area this host serves is torn down, and each one that had not
+                // yet rendered reports here — so a single disposal emits this once PER
+                // un-rendered area, at a level that ships to the log pipeline and pages.
+                //
+                // That is the identical argument #2679 already won for the sibling path a few
+                // hundred lines below: "a hub disposal race is routine lifecycle, not a render
+                // fault, so it must not land on an error dashboard (#2255)". A render that faults
+                // on its own disposing host is Debug; a render that never started on that same
+                // host is the same event seen a moment earlier, and was still Warning.
                 if (Volatile.Read(ref rendered) == 0)
-                    logger.LogWarning(
-                        "Layout area '{Area}' on {Hub} was torn down having never rendered — the "
-                        + "subscriber only ever saw the \"awaiting first data\" placeholder.",
-                        context.Area, Hub.Address);
+                {
+                    if (Hub.IsDisposing)
+                        logger.LogDebug(
+                            "Layout area '{Area}' on {Hub} was torn down having never rendered "
+                            + "because the hub is disposing — routine lifecycle, the address "
+                            + "reactivates.",
+                            context.Area, Hub.Address);
+                    else
+                        logger.LogWarning(
+                            "Layout area '{Area}' on {Hub} was torn down having never rendered — the "
+                            + "subscriber only ever saw the \"awaiting first data\" placeholder.",
+                            context.Area, Hub.Address);
+                }
                 renderSubscription.Dispose();
                 milestoneSubscription.Dispose();
                 if (capturedAccessContext != null)
