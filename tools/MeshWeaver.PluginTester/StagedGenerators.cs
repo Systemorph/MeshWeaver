@@ -240,12 +240,12 @@ public static class StagedGenerators
         if (Directory.Exists(sdk))
             AddEntry(SdkDirectoryName, sdk, selected, seen);
 
-        // 🚨 Ordered by the project's own PackageReference list so the run is reproducible, and
-        // de-duplicated by assembly file name: Orleans' codegen is reachable through more than one
-        // package id, and running the same generator twice emits every type twice (CS0101).
+        // Ordered by the project's own PackageReference list, so the run is reproducible.
         foreach (var package in model.PackageReferences)
         {
             var directory = Path.Combine(root, PackagesDirectoryName, package.Id.ToLowerInvariant());
+            // A package with no staged directory simply has no generator here, which is the normal
+            // case for all but a handful — never a failure.
             if (!Directory.Exists(directory)) continue;
             activated.Add(package.Id);
             AddEntry(package.Id, directory, selected, seen);
@@ -272,9 +272,21 @@ public static class StagedGenerators
         ImmutableArray<Entry>.Builder selected,
         HashSet<string> seen)
     {
-        var assemblies = GeneratorLoader.AssembliesIn(directory)
-            .Where(p => seen.Add(Path.GetFileName(p)))
-            .ToImmutableArray();
+        var present = GeneratorLoader.AssembliesIn(directory);
+        if (present.IsEmpty)
+            // A staged directory with no assembly in it is a MIS-STAGED IMAGE, and it is not the
+            // same thing as the de-duplication below: nothing was ever put here. Left silent it
+            // would present as "this project has errors" for every project the directory was
+            // meant to serve.
+            throw new MissingGeneratorException(
+                $"the staged generator directory '{directory}' ({reason}) is EMPTY. The image build "
+                + "stages the generator assemblies here; an empty directory compiles nothing, and "
+                + "every project it was meant to serve would look merely broken.");
+
+        // 🚨 De-duplicated by file name across activations — the same generator is reachable through
+        // more than one package id, and a generator that runs twice emits every type twice (CS0101,
+        // reported against code nobody wrote).
+        var assemblies = present.Where(p => seen.Add(Path.GetFileName(p))).ToImmutableArray();
         if (assemblies.IsEmpty)
             return;
 

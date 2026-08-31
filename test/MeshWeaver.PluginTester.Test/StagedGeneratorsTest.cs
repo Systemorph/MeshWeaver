@@ -465,6 +465,19 @@ public class StagedGeneratorsTest : IDisposable
     }
 
     [Fact]
+    public void AnEMPTYStagedDirectoryIsAFAILURE_becauseItIsAMisStagedImage()
+    {
+        var model = ModelFor("Probe.EmptyDir");
+        var root = Path.Combine(_root, "_staged", "empty-sdk");
+        Directory.CreateDirectory(Path.Combine(root, StagedGenerators.SdkDirectoryName));
+
+        Action act = () => StagedGenerators.LoadFor(model, root, AppDirectory(), [], NullLogger.Instance);
+
+        act.Should().Throw<StagedGenerators.MissingGeneratorException>()
+            .WithMessage("*is EMPTY*");
+    }
+
+    [Fact]
     public void AGeneratorReachableThroughTWOPackagesRunsONCE()
     {
         // Orleans' codegen is reachable through more than one package id, and a generator that runs
