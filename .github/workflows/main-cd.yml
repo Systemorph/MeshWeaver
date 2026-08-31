@@ -1106,6 +1106,15 @@ jobs:
       V_MIGRATION: ${{ needs.migration-image.outputs.version }}
       V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
     steps:
+      # 🚨 The ACR login below is a SCRIPT now (#2857), so this job needs a working tree — the
+      # inline `az acr login` it replaced needed none. Sparse: only the scripts directory, so this
+      # costs nothing. Without it the step dies `bash: .github/scripts/acr-login.sh: No such file
+      # or directory` with exit 127, which is what broke `promote` on 2026-08-31 00:54 and left a
+      # published image set untagged.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -1844,6 +1853,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # 🚨 The ACR login below is a SCRIPT now (#2857), so this job needs a working tree — the
+      # inline `az acr login` it replaced needed none. Sparse: only the scripts directory, so this
+      # costs nothing. Without it the step dies `bash: .github/scripts/acr-login.sh: No such file
+      # or directory` with exit 127, which is what broke `promote` on 2026-08-31 00:54 and left a
+      # published image set untagged.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -1981,6 +1999,15 @@ jobs:
       digest: ${{ steps.digest.outputs.digest }}
       image: ${{ steps.digest.outputs.image }}
     steps:
+      # 🚨 The ACR login below is a SCRIPT now (#2857), so this job needs a working tree — the
+      # inline `az acr login` it replaced needed none. Sparse: only the scripts directory, so this
+      # costs nothing. Without it the step dies `bash: .github/scripts/acr-login.sh: No such file
+      # or directory` with exit 127, which is what broke `promote` on 2026-08-31 00:54 and left a
+      # published image set untagged.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
       - name: Azure login (OIDC)
         uses: azure/login@v3
         with:
