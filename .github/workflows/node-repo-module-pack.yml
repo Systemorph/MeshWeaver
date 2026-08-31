@@ -256,6 +256,18 @@ on:
         type: string
         required: false
         default: ''
+      prebuilt-modules:
+        description: >
+          Comma-separated module names whose BUILT assemblies container entries consume instead of
+          recompiling them as in-root ProjectReferences — "we don't need to rebuild the mesh"
+          (maintainer, 2026-08-31): every AI-family job re-compiled MeshWeaver.AI (~3 min) that the
+          SAME RUN's floor job had already built. Each container job uploads its module DLL as
+          module-dll-<name>; a consumer waits (bounded) for that artifact and passes it as
+          --prebuilt. An expired wait falls back to building from source WITH A LOUD LINE — same
+          compiler, same verification, only slower. Empty = today's behaviour.
+        type: string
+        required: false
+        default: ''
       tester-image-digest:
         description: >
           The digest (sha256:…) of tester-image, pulled as linux/amd64. Same immutability rule as
@@ -678,6 +690,14 @@ jobs:
       # ONE step, not two `if:`-guarded ones: two guards can BOTH skip, and a skipped step renders
       # with the same tick as a passed one. This step always runs, always prints the compiler it
       # used, records it in the receipt, and refuses a mode it does not know.
+      # The tester's extracted /app, cached by DIGEST — one extraction per digest per repo,
+      # every later job restores it in seconds instead of pulling the tester image at all.
+      - name: Restore the tester app (per-digest cache)
+        if: ${{ inputs.tester-image-digest != '' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/tester-app
+          key: tester-app-${{ inputs.tester-image-digest }}
       - name: Build the module — and say which compiler produced it
         id: build
         env:
@@ -690,6 +710,9 @@ jobs:
           DIGEST: ${{ inputs.platform-image-digest }}
           TESTER_IMAGE: ${{ inputs.tester-image }}
           TESTER_DIGEST: ${{ inputs.tester-image-digest }}
+          PREBUILT_MODULES: ${{ inputs.prebuilt-modules }}
+          # For `gh run download` of sibling module-dll artifacts (the prebuilt lane).
+          GH_TOKEN: ${{ github.token }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
           REFS: ${{ inputs.platform-image-digest != '' && format('{0}/platform-refs', runner.temp) || '' }}
@@ -730,7 +753,7 @@ jobs:
               printf '%s\n' --deps-closure >> "$packargs"
               ;;
             container)
-              compiler="memex build project (the tester image's builder, against the platform image's /app)"
+              compiler="memex build project (inside the platform container; tester mounted)"
               # 🚨 TWO images, TWO roles — neither can play the other's (measured, 2026-08-31):
               # the PLATFORM image is the reference set (its /app IS what the bundle loads into)
               # but ships no /app/mw-plugin-test (memex-portal-ai@7e8c0b20: 331 files, none the
@@ -755,28 +778,50 @@ jobs:
               case "${TESTER_IMAGE##*/}" in *:*) TESTER_NOTAG="${TESTER_IMAGE%:*}" ;; *) TESTER_NOTAG="$TESTER_IMAGE" ;; esac
               tester_pinned="${TESTER_NOTAG}@${TESTER_DIGEST}"
               echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
-              # 🚨 --platform linux/amd64 ALWAYS, for the same reason the refs extraction pins it:
-              # framework identities are per-architecture and the bundles are sealed under the x64
-              # identity the portals run. Pulled here rather than relying on the refs step above,
-              # which does not run on a platform-refs cache HIT.
+              # 🚨 --platform linux/amd64 ALWAYS: framework identities are per-architecture and the
+              # bundles are sealed under the x64 identity the portals run.
+              #
+              # ONE image. The build runs INSIDE the platform container itself — its /app IS the
+              # reference set and its own runtime IS the shared-framework surface, so nothing is
+              # extracted and no second image is pulled per job. Measured before this change
+              # (Plugins#1032 attempt 3, MeshWeaver.Mcp): 681 s in this step, dominated by two
+              # multi-GB pulls + docker cp of 331 assemblies + the frameworks — on a registry the
+              # same pulls had beaten into `connection refused`.
               docker pull --platform linux/amd64 "$pinned"
-              docker pull --platform linux/amd64 "$tester_pinned"
-              # The reference set: the platform image's /app, extracted ONCE and mounted read-only.
-              # docker create + cp rather than a run — the portal's entrypoint must never start here.
-              platform_app="$RUNNER_TEMP/platform-app"
-              platform_shared="$RUNNER_TEMP/platform-shared"
-              rm -rf "$platform_app" "$platform_shared"
-              pcid=$(docker create --platform linux/amd64 "$pinned")
-              docker cp -q "$pcid:/app" "$platform_app"
-              # 🚨 The platform's SHARED FRAMEWORKS ride too — the reference set is the RUNTIME the
-              # module lands in, and that runtime's ASP.NET Core framework supplies assemblies the
-              # tester image's console runtime does not (measured on Plugins#1032: every container
-              # entry red on Microsoft.Extensions.FileSystemGlobbing, which lives in the portal's
-              # Microsoft.AspNetCore.App and nowhere in the tester image). /usr/share/dotnet/shared
-              # is the aspnet base image's layout; a portal image without it must fail HERE, by
-              # name, not later as a false "additional library".
-              docker cp -q "$pcid:/usr/share/dotnet/shared" "$platform_shared"                 || { docker rm "$pcid" >/dev/null; echo "::error::could not extract /usr/share/dotnet/shared from $pinned — the platform image's shared frameworks ARE part of the reference set (they supply framework-provided packages like Microsoft.Extensions.FileSystemGlobbing); if the base image moved its dotnet root, update this extraction rather than letting framework assemblies read as missing packages"; exit 1; }
-              docker rm "$pcid" >/dev/null
+              # The BUILDER travels as files, not as an image: the tester image's /app (builder +
+              # razor-generators/ + sdk-generators/ + module-libs/) is extracted once per DIGEST
+              # into the actions cache (the restore step above); a miss fills it here with the one
+              # tester pull this job will ever do.
+              tester_app="$RUNNER_TEMP/tester-app"
+              if [ ! -f "$tester_app/mw-plugin-test.dll" ]; then
+                echo "tester-app cache MISS for $TESTER_DIGEST — extracting once"
+                docker pull --platform linux/amd64 "$tester_pinned"
+                rm -rf "$tester_app"
+                tcid=$(docker create --platform linux/amd64 "$tester_pinned")
+                docker cp -q "$tcid:/app" "$tester_app"
+                docker rm "$tcid" >/dev/null
+              else
+                echo "tester-app cache HIT for $TESTER_DIGEST"
+              fi
+              # PREBUILT siblings: consume what this run already built — never rebuild the mesh.
+              # Bounded wait; the fallback builds from source with a LOUD line (same compiler,
+              # same verification, only slower — not a verification fallback).
+              prebuilt_dir="$RUNNER_TEMP/prebuilt"
+              rm -rf "$prebuilt_dir"; mkdir -p "$prebuilt_dir"
+              if [ -n "${PREBUILT_MODULES:-}" ]; then
+                IFS=',' read -ra wanted <<< "$PREBUILT_MODULES"
+                for m in "${wanted[@]}"; do
+                  m="${m// /}"
+                  { [ -n "$m" ] && [ "$m" != "$MODULE" ]; } || continue
+                  for attempt in 1 2 3 4 5 6 7 8; do
+                    if gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" -n "module-dll-$m" -D "$prebuilt_dir/$m" 2>/dev/null; then
+                      echo "prebuilt: $m consumed from this run's artifact"
+                      break
+                    fi
+                    if [ "$attempt" = 8 ]; then echo "prebuilt: $m did NOT appear within the wait — building it from source (same compiler, same verification; only slower)"; else sleep 45; fi
+                  done
+                done
+              fi
               out="$RUNNER_TEMP/module-build"
               rm -rf "$out"; mkdir -p "$out"; chmod 777 "$out"
               accepts=()
@@ -794,14 +839,29 @@ jobs:
               # runner-side steps that follow — measured on the 31-entry acceptance rerun, where
               # every module with a module-owned sibling died `cp: Permission denied` AFTER a green
               # build. HOME=/tmp keeps the runtime's config probes off the read-only image paths.
+              # Inside the PLATFORM image: --app defaults to the container's own /app and the
+              # shared frameworks are the running runtime's — the two flags this lane used to pass
+              # are facts of the room the build now stands in. The builder is a mounted dll; its
+              # generator and shelf directories sit beside it and are discovered there.
+              prebuilt_mounts=()
+              prebuilt_flags=()
+              for d in "$prebuilt_dir"/*/; do
+                if [ -d "$d" ]; then
+                  prebuilt_mounts+=(-v "$prebuilt_dir:/prebuilt:ro")
+                  break
+                fi
+              done
+              for d in "$prebuilt_dir"/*/; do
+                [ -d "$d" ] && prebuilt_flags+=(--prebuilt "/prebuilt/$(basename "$d")")
+              done
               docker run --rm --init --platform linux/amd64 \
                 --user "$(id -u):$(id -g)" -e HOME=/tmp \
                 -v "$GITHUB_WORKSPACE:/repo:ro" \
-                -v "$platform_app:/platform-app:ro" \
-                -v "$platform_shared:/platform-shared:ro" \
+                -v "$tester_app:/tester:ro" \
+                ${prebuilt_mounts[@]+"${prebuilt_mounts[@]}"} \
                 -v "$out:/out" \
-                --entrypoint /app/mw-plugin-test "$tester_pinned" \
-                build-project "/repo/$PROJECT" --app /platform-app --shared-frameworks /platform-shared --output /out ${accepts[@]+"${accepts[@]}"} 2>&1 | tee "$log"
+                --entrypoint dotnet "$pinned" \
+                /tester/mw-plugin-test.dll build-project "/repo/$PROJECT" --output /out ${prebuilt_flags[@]+"${prebuilt_flags[@]}"} ${accepts[@]+"${accepts[@]}"} 2>&1 | tee "$log"
               # build-project emits <output>/<AssemblyName>/, so the module folder IS the pack input.
               packdir="$out/$MODULE"
               if [ ! -f "$packdir/$MODULE.dll" ]; then
@@ -1043,6 +1103,19 @@ jobs:
       # (~13 min, 1,600 tests) ran on every PR that never touched AI until 2026-08-29.
       # Runs AFTER the bundle artifact and its built marker exist and BEFORE the hand-over: a
       # failing suite never publishes — and never un-builds.
+      # The built module DLL as a run-scoped artifact, IMMEDIATELY — this is what lets a
+      # dependent entry consume it as --prebuilt instead of rebuilding the mesh. Uploaded before
+      # the tests on purpose: a consumer needs the assembly, not the verdict, and the verdict
+      # still gates THIS entry's own bundle exactly as before.
+      - name: Publish the module DLL for prebuilt consumers
+        if: ${{ steps.build.outputs.compiler == 'container' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-dll-${{ matrix.entry.module }}
+          path: |
+            ${{ runner.temp }}/module-build/${{ matrix.entry.module }}/${{ matrix.entry.module }}.dll
+            ${{ runner.temp }}/module-build/${{ matrix.entry.module }}/${{ matrix.entry.module }}.pdb
+          if-no-files-found: error
       - name: Run the module's tests, when it ships any
         if: ${{ matrix.entry.test != false }}
         env:
