@@ -42,6 +42,7 @@
     <!-- MeshWeaver.AI.AzureFoundry -->
     <PackageReference Include="Azure.AI.Inference" />
     <PackageReference Include="Microsoft.Agents.AI.AzureAI" />
+    <PackageReference Include="Microsoft.Agents.AI.AzureAI.Persistent" />
     <PackageReference Include="Azure.AI.Agents.Persistent" />
     <PackageReference Include="Microsoft.Extensions.AI.AzureAIInference" />
     <!-- MeshWeaver.AI.ClaudeCode -->

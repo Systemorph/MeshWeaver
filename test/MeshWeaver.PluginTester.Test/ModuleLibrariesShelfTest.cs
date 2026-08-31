@@ -61,7 +61,10 @@ public class ModuleLibrariesShelfTest : IDisposable
         resolution.Should().NotBeNull();
         resolution!.Version.Should().Be("2.0.0", "the shelf's pin is the same central pin the SDK path used");
         resolution.ReferenceFiles.Select(Path.GetFileName).Order(StringComparer.Ordinal)
-            .Should().Equal("Provider.Sdk.dll");
+            .Should().Equal(["Provider.Sdk.dll", "Provider.Transitive.dll"],
+                "the compile surface is the package's TRANSITIVE closure, exactly as the SDK "
+                + "hands it to a consumer — Mail.MicrosoftGraph rode Kiota but could not compile "
+                + "against it when this offered only the package's own assemblies (Plugins#1032)");
         resolution.RideFiles.Select(Path.GetFileName).Order(StringComparer.Ordinal)
             .Should().Equal(["Provider.Sdk.dll", "Provider.Transitive.dll"],
                 "the transitive shelf closure rides; the image-supplied dependency does not");
