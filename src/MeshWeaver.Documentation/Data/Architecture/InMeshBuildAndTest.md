@@ -378,3 +378,159 @@ project — the repo has spent enough on guards that check nothing.
 
 🚨 **Do not "achieve" no-NuGet by pinning a package.** There are zero `MeshWeaver.*` package
 references today; the direction is to keep it that way, not to replace ProjectReferences with pins.
+
+## Building a COMPILED project without an SDK — `memex build project` (2026-08-31)
+
+> *"The platform builds dll completely without any external dotnet kit or nuget."* — maintainer,
+> 2026-08-30
+
+The sections above are about NodeTypes, whose sources already compile in the portal. This one is
+about the other half — the ~54 compiled projects under `MeshWeaver.Plugins/src`, which until now
+needed a .NET SDK, a NuGet restore and a platform SOURCE checkout to build at all.
+
+`memex build project <csproj|dir> --image <image>` builds one of them with **no SDK and no
+restore**: the `.csproj` is evaluated without MSBuild, and every reference is resolved from the
+image's own `/app` plus the shared frameworks installed in it. The verb is a thin trip into the
+container; the work is `mw-plugin-test build-project`, which is already in the image and shares the
+platform's own `EmitPipeline` for the emit.
+
+### Why the container is the reference set
+
+A module does not run against the platform's SOURCE and it does not run against a feed: it is loaded
+into the platform IMAGE and bound by the assemblies in there. So the honest reference set is what
+that image ships, and the honest package versions are the ones its `.deps.json` records — what
+SHIPPED, not what a source tree would resolve today. This is the same rule
+`MeshWeaver.Plugins/scripts/container-refs.py` derives for the MSBuild path, ported to C# and read
+from `/app` directly instead of from an extracted image.
+
+**A `PackageReference` the image supplies resolves to the image's assembly. One it does not supply
+is an ADDITIONAL library** — additional to the platform — and it is reported by name and refused,
+never skipped. `--extra-refs <dir>` is the one way to supply one, so what a build needed beyond the
+platform is always visible in the command that ran it.
+
+### Nothing is dropped in silence
+
+The evaluator FAILS the load on any construct it cannot reproduce, naming the construct and the file
+— an unknown element or item type, a `Condition` outside its grammar, an `<Import>` of a missing
+file, a `<Target>` (which it cannot execute), an `<EmbeddedResource>` (which it cannot embed).
+`--accept <construct>` acknowledges one deliberately. The reason is that the alternative is worse
+than no build: a silently dropped `Nullable`, `NoWarn` or `DefineConstants` produces a green build
+that is *not the build the SDK would have produced*, and nothing downstream can tell.
+
+The same rule governs the reference set: an unreadable `/app`, a missing or ambiguous `.deps.json`,
+or MeshWeaver assemblies that disagree on their binding identity (MeshWeaver#143's failure, caught in
+the image instead of at run time) each stop the run RED.
+
+### The diagnostic standard is the SDK's
+
+Nullable reference analysis follows the project; `DocumentationMode.Diagnose` is on ALWAYS, so
+doc-QUALITY defects surface (CS1574 unresolved cref, CS0419 ambiguous cref, CS1570 malformed XML) —
+while the doc-COMPLETENESS family (CS1591/CS1573/CS1712) is suppressed exactly when the project did
+not ask for a doc file, which is when csc itself would not raise it. The SDK's own default
+`NoWarn` (`1701;1702`) is seeded before any `Directory.Build.props` appends to `$(NoWarn)`. Warnings
+fail the build by default; `--allow-warnings` is the deliberate opt-out.
+
+### Measured, 2026-08-31 — 12 of 54
+
+Against `memex-portal-ai@sha256:15c49ee…`, over every non-test project in `MeshWeaver.Plugins/src`,
+with `--accept targets --accept embedded-resource` and ClosedXML + CsvHelper as `--extra-refs`:
+
+| | count | why |
+|---|---|---|
+| **green** | **12** | incl. `MeshWeaver.Import` — 90 source files, 0 warnings under warnings-as-errors |
+| Razor/Blazor (CS0115) | 15 | *fixed 2026-08-31 — see below* |
+| source generators (CS8795) | 15 | `[GeneratedRegex]` / `[LoggerMessage]` / `[JsonSerializable]` |
+| gRPC `<Protobuf>` | 3 | protoc codegen is a build task, not a compile |
+| additional libraries | 5 | Snowflake.Data, Microsoft.Data.Sqlite, Azure.Cosmos, … — supply with `--extra-refs` |
+| portal hosts | 3 | an `<Import>` above the mount; Aspire's `<Sdk>` ELEMENT |
+
+## The container compiles Razor (2026-08-31)
+
+Razor was the biggest single category above, and it was one missing file rather than a missing
+feature: **Razor compilation in the .NET SDK is a Roslyn source generator**
+(`Microsoft.CodeAnalysis.Razor.Compiler`) that turns each `.razor` into the partial class carrying
+its generated `BuildRenderTree` override. A runtime image ships no SDK, so without the generator
+every component compiled to a class with nothing to override — a wall of CS0115 that reads exactly
+like broken source.
+
+The image now carries it, in `razor-generators/` beside the builder, and `build-project` finds and
+runs it automatically for any project whose `Sdk` processes Razor items.
+
+### The dependency closure, measured
+
+Exactly **two** assemblies, established by reading the compiler's own assembly references and then
+proving it by deleting one:
+
+| assembly | why |
+|---|---|
+| `Microsoft.CodeAnalysis.Razor.Compiler` | carries `RazorSourceGenerator`, the `[Generator]` type |
+| `Microsoft.AspNetCore.Razor.Utilities.Shared` | its one private dependency — with it absent the compiler loads, its types enumerate, and every call into it throws |
+
+Everything else it references — `netstandard`, `Microsoft.CodeAnalysis(.CSharp)`,
+`System.Collections.Immutable`, `System.Memory`, `System.Buffers` — binds to the assemblies the
+image already has. 🚨 **`Microsoft.Extensions.ObjectPool` is NOT needed**, though an older Razor
+compiler build referenced it; the belief that it was is exactly why the closure was measured rather
+than assumed.
+
+### Two traps, both of which fail at run time and nowhere else
+
+🚨 **The generator is built against the SDK's Roslyn, not the image's.** SDK 10.0.400's copy
+references `Microsoft.CodeAnalysis` **5.9.0.0** while the image carries this repo's pin, **5.6.0**.
+The default load context binds by name *and refuses a lower version*, so a plain `Assembly.LoadFrom`
+fails — and a generator loader that treats "cannot load" as "not a generator" then produces a build
+indistinguishable from one where nobody asked for Razor. The generator is therefore loaded into a
+context that binds every assembly the HOST already has to the host's copy, version ignored. That is
+also what keeps `ISourceGenerator` ONE type: a second Roslyn in that context would give the
+generator a different interface than the driver expects.
+
+🚨 **The generator is ReadyToRun-compiled for the SDK's own RID.** The same SDK 10.0.400 file carries
+PE machine `0xFD1D` on linux-x64, `0xD11D` on linux-arm64 and `0xEC20` on osx-arm64 (the target
+machine XOR'd with the operating system's R2R marker), and the wrong one throws
+`BadImageFormatException`. `mw-plugin-test` publishes BOTH architectures from ONE x64 build host, so
+copying the build machine's SDK once would have shipped an arm64 image that cannot compile a single
+Blazor project. CD stages one directory per RID (`razor-generators/<rid>/`, the arm64 copy read out
+of the dotnet/sdk image of the same SDK version with `docker create` + `docker cp`, so no emulation
+is involved), and the builder picks the directory for the RID it is running on.
+
+### What it refuses, and why
+
+- **A project with Razor files and no generator.** One named failure that says what the CS0115 wall
+  would have been, not the wall.
+- **A generator that ran and emitted nothing.** Not a compile error — a generator that did not
+  recognise its input, which otherwise fails four steps later as CS0115.
+- **CSS isolation (`*.razor.css`).** The `b-…` scope identifier comes from the SDK's
+  `ComputeCssScope`/`ApplyCssScopes` tasks, and this builder runs no MSBuild task, so the components
+  would compile without their scope attributes. `--accept razor-css-scope` builds them anyway (the
+  assembly is valid; only the isolated stylesheet stops applying). Reproducing the scope hash from
+  memory is the guess this evaluator exists to avoid.
+- **`.razor` under a project whose `Sdk` does not process Razor.** The SDK's build ignores them too,
+  so the outcome matches — but it is stated rather than skipped. `--accept razor-not-compiled`.
+
+### Measured, 2026-08-31 — 10 of the 11 Razor projects
+
+Every `Microsoft.NET.Sdk.Razor` project in `MeshWeaver.Plugins/src`, built against
+`memex-portal-ai@sha256:6f38db08…` with the builder mounted, `--accept targets --accept
+razor-css-scope --accept embedded-resource`:
+
+| | count | |
+|---|---|---|
+| **green, no extra help** | **7** | Blazor (31 `.cs` + **42 `.razor`**), Blazor.EntityViews, Blazor.Graph, Blazor.Analysis, Blazor.OpenStreetMap, Blazor.GoogleMaps, Blazor.AppleMaps |
+| green with `--generators` (the SDK's regex generator) | +2 | Blazor.Views, Blazor.Portal — they were blocked by `[GeneratedRegex]` in `MeshWeaver.Markdown.Collaboration`, not by Razor |
+| green with `--extra-refs` | +1 | Blazor.Radzen — `Radzen.Blazor` is an additional library |
+| still red | 1 | `Memex.Portal.Gui` — a transitive `MeshWeaver.Hosting.Grpc` carries `<Protobuf>`; protoc is a build task, not a compile |
+
+**Razor is no longer what blocks any of them.** The two remaining categories are the pre-existing
+ones — SDK source generators and `<Protobuf>`.
+
+### What it does NOT do, and what each would take
+
+- **Source generators.** They live in the .NET **SDK**, and a MeshWeaver image ships the **runtime**.
+  `--generators <dir|dll>` loads them when supplied; with none, the builder names the generator that
+  did not run rather than leaving a wall of CS8795 that reads like broken source.
+- **Embedded resources**, **`<Protobuf>`**, **MSBuild `<Target>`s** and **`<Sdk>` elements** — each a
+  named failure with an `--accept` where one is meaningful.
+
+**The boundary is the point.** This is not an MSBuild reimplementation and must not become one: it
+evaluates the subset a library project under this organisation's `Directory.Build.props` actually
+uses, and everything outside that subset is visible in the output as a refusal rather than
+discovered later as a wrong answer.
