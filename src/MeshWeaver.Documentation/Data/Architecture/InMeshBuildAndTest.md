@@ -355,6 +355,62 @@ static assets, native interop, or a portal host has nothing to hang a `Tests` ar
 explicit exemption recorded here, not a quiet `ProjectReference` that survives because nobody
 noticed it.
 
+## The runner's .NET SDK is a DECLARED need, not a reflex
+
+> *"make installing dotnet sdk a feature flag"* — maintainer, 2026-08-31
+
+Every CI job in the fleet installed `actions/setup-dotnet` the same way: as a reflex, before anyone
+asked whether the job compiles anything with it. That is the wrong shape the moment the platform
+**image** can be the compiler, because "the SDK is here" then silently answers a question nobody
+put — an unconverted step keeps working on a runner SDK the conversion was supposed to have
+removed, and the migration cannot be measured by anything but reading every step.
+
+So the install is declared, with the *safe* direction as the default:
+
+| value | behaviour |
+|---|---|
+| **`install`** (the **DEFAULT**) | install unconditionally. A lane that says nothing — including one added tomorrow — inherits it. |
+| `by-declaration` | install only if a consumer in **that** job still needs one. |
+| anything else, **the empty string included** | **RED**. A flag that cannot be read must never resolve to "skip". |
+
+It is carried by `dotnet-sdk:` on `node-repo-module-pack.yml` (the shared lane every node repo
+calls) and by a `DOTNET_SDK` job env plus a `CONSUMERS` list in a caller's own jobs. **A lane
+converts by EMPTYING its consumer list, never by editing the decision.**
+
+### Why it is not a skip-trapdoor
+
+Three properties, structural rather than hoped-for — this repo's CI invariants #3 and #4 forbid
+anything weaker:
+
+1. **The decision step is unconditional** and fails on an unreadable flag. The only `if:` is on
+   `actions/setup-dotnet` itself, and skipping an *installer* is not skipping a check: every build,
+   pack, inspect and test step still runs and still gates. **The flag chooses a COMPILER; it never
+   chooses whether to verify.**
+2. **"No SDK" is ENFORCED, not merely declined.** GitHub's ubuntu runners ship an SDK of their own,
+   so declining to install one is not the same as not having one. The job puts a **failing `dotnet`
+   on PATH** (exit 97, `::error::` naming the flag), so a consumer nobody declared goes red naming
+   the cause instead of quietly binding against whatever .NET the runner image carries.
+3. **The verdict and every consumer are printed** to the log *and* the job summary on **every** run,
+   including when the answer is *install* — so the two outcomes are never told apart only by what is
+   missing.
+
+### What blocks conversion today — measured, not assumed
+
+**Nothing can opt out yet, and that is the honest state.** The blockers, per lane:
+
+| lane | blocked on |
+|---|---|
+| `node-repo-module-pack.yml` → `pack` | the **module-pack tool** (`src/MeshWeaver.Plugin.Build`) is `dotnet build` + `dotnet run` in *every* mode, `container` included; a module that ships a suite is blocked again by `dotnet test`. Converting the lane means moving the packer inside the platform image. |
+| MeshWeaver.Plugins `portal-hosts` | Razor/Blazor hosts, 14 `dotnet build` projects and ~30 `dotnet test` suites |
+| MeshWeaver.Plugins `memex-template` | its subject is a `dotnet new` template, asserted through `dotnet test` |
+
+`build-project`'s own sweep over all 54 non-test projects in `MeshWeaver.Plugins/src` compiles **10
+green** on the portal-image basis; **Razor (15)** and **SDK source generators (14)** are the two
+largest refusal classes, and `dotnet test` is not a verb it has at all. The flag therefore buys no
+runner time today — what it buys is that each of those facts is now **declared next to the job it
+constrains**, and stated in that job's log on every run, instead of being an assumption nobody
+wrote down.
+
 ## What blocks "any plugin" today
 
 1. **44 module test projects** with no in-mesh equivalent. Each needs its module's source expressible
