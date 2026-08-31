@@ -453,9 +453,22 @@ public static class DataExtensions
     {
         try
         {
-            hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger(typeof(DataExtensions).FullName!)
-                .LogWarning(
+            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(DataExtensions).FullName!);
+            // 🚨 Level is TYPED, deliberately. A StreamEndedEvent to a subscriber whose stream is
+            // already gone is a semantic NO-OP — its entire meaning is "nothing more comes", which
+            // a departed subscriber knows by definition — and every recycled activity produced one
+            // WARN per released reader ("we get tons of this", maintainer, 2026-09-01; Information+
+            // ships to Loki). Every OTHER StreamMessage dropped here is real signal (a lost Full
+            // renders a region blank) and stays a warning.
+            if (message is StreamEndedEvent)
+                logger?.LogDebug(
+                    "Dropping StreamEndedEvent for stream {StreamId} on hub {Address}: the target "
+                    + "stream is already gone, and a terminal notice to a departed subscriber is a "
+                    + "no-op. Sender: {Sender}.",
+                    streamMessage.StreamId, hub.Address, request.Sender);
+            else
+                logger?.LogWarning(
                     "Dropping {MessageType} for stream {StreamId} on hub {Address}: no synchronization "
                     + "hub found on this hub or any parent — the target stream is gone (disposed circuit, "
                     + "released read stream, or never-created sync hub). Sender: {Sender}.",
