@@ -147,6 +147,26 @@ public class ServedBuildIsVerifiableTest(ITestOutputHelper output) : HubTestBase
     /// …and when both sides ARE known and differ, the message must name both builds and say the
     /// thing the reader most needs: the node's status is not evidence, and a recycle will not help.
     /// </summary>
+    /// <summary>
+    /// 🚨 The bind seam REFUSES a stale bind rather than reporting one (#2471 reopened,
+    /// 2026-08-31): with evidence of a mismatch and retry budget left, the activation goes to
+    /// TriggerRecompileAndRetry — a fresh compile mints new bytes AND a new published MVID —
+    /// instead of binding bytes the type did not publish. Once bound, nothing downstream can fix
+    /// it: the banner is report-only, and the instance splits the type family across two
+    /// collectible assemblies (As&lt;T&gt; case 3), which is what degraded StoreContent, every
+    /// TierContent and the order in the paid-fulfilment run this pins.
+    /// </summary>
+    [Theory]
+    [InlineData(PublishedMvid, BoundMvid, 0, true)]   // mismatch, budget left → refuse
+    [InlineData(PublishedMvid, BoundMvid, 1, false)]  // budget exhausted → bind + banner (degraded beats parked)
+    [InlineData(PublishedMvid, PublishedMvid, 0, false)] // identical bytes → bind
+    [InlineData(null, BoundMvid, 0, false)]           // legacy node, no published MVID → no evidence → bind
+    [InlineData(PublishedMvid, null, 0, false)]       // unreadable local file → no evidence → bind
+    public void StaleBind_IsRefusedExactlyOnEvidence_WithinTheRetryBudget(
+        string? published, string? bound, int attempts, bool refused)
+        => Assert.Equal(refused,
+            NodeTypeEnrichmentHelpers.ShouldRefuseStaleBind(published, bound, NodeTypePath, attempts));
+
     [Fact]
     public void Mismatch_NamesBothBuilds_AndSaysARecycleWillNotHelp()
     {

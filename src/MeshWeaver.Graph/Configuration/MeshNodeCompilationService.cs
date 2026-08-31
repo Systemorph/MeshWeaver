@@ -341,7 +341,7 @@ internal class MeshNodeCompilationService(
             logger.LogDebug("Node {NodePath} has no NodeType, skipping assembly compilation", node.Path);
             return Observable.Return(new CompileAttempt(null, null,
                 AppendInfo(log, $"Skipped — node '{node.Path}' has no NodeType.")
-                    .Finish((int)hub.Version, ActivityStatus.Succeeded),
+                    .FinishByOutcome((int)hub.Version),
                 Array.Empty<MeshNode>()));
         }
 
@@ -423,7 +423,7 @@ internal class MeshNodeCompilationService(
                                 null,
                                 AppendInfo(log,
                                     $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).")
-                                    .Finish((int)hub.Version, ActivityStatus.Succeeded),
+                                    .FinishByOutcome((int)hub.Version),
                                 sources));
                         }
                     }
@@ -989,7 +989,7 @@ internal class MeshNodeCompilationService(
                                 $"Compiled assembly loaded in-memory ({actualPath}).");
                         }
                         return (finalPath, emit.InputDigest,
-                            finalLog.Finish((int)hub.Version, ActivityStatus.Succeeded));
+                            finalLog.FinishByOutcome((int)hub.Version));
                     })
                     // 🚨 THE SINGLE REPORTER of a compile failure. Every CompilationException —
                     // Roslyn diagnostics from the disk emit (EmitCompilationToDirectory) or the
@@ -1179,15 +1179,16 @@ internal class MeshNodeCompilationService(
                             node, assemblyLocation, log, snapshot, attempt.InputDigest)),
                     _cacheOptions.AssemblyLoadTimeout, "assembly-load", node.Path))
                 // Re-Finish the log after CompileResultFromAssembly. CompileCore already
-                // Finished it Succeeded, but CompileResultFromAssembly's downstream steps
+                // finished it, but CompileResultFromAssembly's downstream steps
                 // (assembly load, MeshNodeProviderAttribute reflection) can append fresh
                 // Error messages — those need to flip Status to Failed.
-                // ActivityLog.Finish(version, override) takes MAX(override, GetFinalStatus
-                // from Messages), so an Error message appended after the first Finish
-                // bumps Status to Failed automatically.
+                // FinishByOutcome re-reads the log: an Error appended after the first
+                // finish flips Status to Failed; warnings stay in the transcript without
+                // demoting a green compile (the pin/fold split-brain fix — see
+                // ActivityLog.FinishByOutcome).
                 .Select(result => result is null
                     ? result
-                    : result with { Log = result.Log?.Finish((int)hub.Version, ActivityStatus.Succeeded) })
+                    : result with { Log = result.Log?.FinishByOutcome((int)hub.Version) })
                 .SelectMany(result => UploadToStoreIfNeeded(result, node));
         });
 
@@ -1317,7 +1318,7 @@ internal class MeshNodeCompilationService(
         {
             result = result with
             {
-                Log = (result.Log ?? log).Finish((int)hub.Version, ActivityStatus.Succeeded)
+                Log = (result.Log ?? log).FinishByOutcome((int)hub.Version)
             };
         }
         return Observable.Return(result);
