@@ -43,6 +43,11 @@ public class IngressAuthCookieHeaderBudgetGuard
 
     private const string BufferSizeAnnotation = "nginx.ingress.kubernetes.io/proxy-buffer-size";
 
+    private const string IngressTemplate = "deploy/helm/templates/memex-portal/ingress.yaml";
+
+    /// <summary>The resource that terminates the sign-in flow, as the template names it.</summary>
+    private const string PortalResourceMarker = "name: \"memex-portal\"";
+
     /// <summary>
     /// The floor, in kilobytes. Four chunks of the ~4 KB ASP.NET Core cookie limit is the ticket
     /// size an Entra identity with group claims reaches, and the response carries the correlation
@@ -83,14 +88,25 @@ public class IngressAuthCookieHeaderBudgetGuard
     [Fact]
     public void ThePortalIngress_TakesItsAnnotationsFromTheValuesTheGuardChecks()
     {
-        var template = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "deploy/helm/templates/memex-portal/ingress.yaml"));
+        var template = File.ReadAllText(Path.Combine(FindRepoRoot(), IngressTemplate));
 
         // The `memex-portal` resource — the one serving /signin-* — up to the next document.
-        var portal = template[..template.IndexOf("---", template.IndexOf("name: \"memex-portal\"",
-            StringComparison.Ordinal), StringComparison.Ordinal)];
+        // Both markers are asserted before they are used to slice: a template refactor that renamed
+        // the resource or moved the document separator would otherwise surface as an opaque
+        // ArgumentOutOfRangeException, which says nothing about what an author has to fix.
+        var resource = template.IndexOf(PortalResourceMarker, StringComparison.Ordinal);
+        Assert.True(resource >= 0,
+            $"{IngressTemplate} declares no '{PortalResourceMarker}' — the resource this guard "
+            + "exists to pin was renamed or removed, and the guard now covers nothing.");
 
-        Assert.Contains(".Values.ingress.annotations", portal, StringComparison.Ordinal);
+        var nextDocument = template.IndexOf("---", resource, StringComparison.Ordinal);
+        Assert.True(nextDocument > resource,
+            $"The '{PortalResourceMarker}' resource in {IngressTemplate} is not followed by a YAML "
+            + "document separator, so this guard cannot tell where it ends — it would otherwise "
+            + "read annotations belonging to the gRPC or MCP Ingress and pass on the wrong object.");
+
+        Assert.Contains(".Values.ingress.annotations", template[resource..nextDocument],
+            StringComparison.Ordinal);
     }
 
     private static string FindRepoRoot()
