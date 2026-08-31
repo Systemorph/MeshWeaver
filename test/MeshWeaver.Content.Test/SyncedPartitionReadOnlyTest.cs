@@ -53,6 +53,26 @@ public class SyncedPartitionReadOnlyTest(ITestOutputHelper output) : MonolithMes
                 $"'{path}' must be publicly readable but never user-writable (Doc/_Policy CUD=false)");
     }
 
+    [Theory]
+    [InlineData("Doc")]                      // the partition Space root
+    [InlineData("Doc/DataMesh/UnifiedPath")] // a page under the root
+    public async Task Doc_IsAnonymouslyReadable(string path)
+    {
+        // ANONYMOUS read — Doc/_Policy carries PublicRead = true, not just the Public→Viewer grant
+        // (Public = all AUTHENTICATED users; it never reaches a logged-out visitor). Everything
+        // downstream of anonymous read keys off this bit: the crawler-facing SEO head resolves
+        // through the AnonymousGate, so without it a /Doc/… link shared into Teams/Slack/LinkedIn
+        // unfurls as a bare URL, and the /api/og share card 404s. The docs GitSync from the PUBLIC
+        // MeshWeaver repository, so an anonymous reader learns nothing not already on github.com.
+        await Mesh.GetEffectivePermissions(path, WellKnownUsers.Anonymous)
+            .Should().Within(StepTimeout)
+            .Match(p => p.HasFlag(Permission.Read)
+                        && !p.HasFlag(Permission.Create)
+                        && !p.HasFlag(Permission.Update)
+                        && !p.HasFlag(Permission.Delete),
+                $"'{path}' must be world-readable (Doc/_Policy PublicRead=true) and never writable");
+    }
+
     // ── System must ALWAYS bypass row-based access — even on a read-only _Policy partition ──
     //
     // The prod 2026-06-18 wedge: compile/import write their progress as `_Activity` nodes UNDER
