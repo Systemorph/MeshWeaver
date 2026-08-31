@@ -72,6 +72,43 @@ name: node-repo module pack
 # A caller that ships neither scripts/affected-modules.py nor scripts/project-closure.py is simply
 # not narrowable: the scope script says FULL and says why. Nothing to opt into, nothing to skip.
 #
+# ──────────── The .NET SDK is a DECLARED need (`dotnet-sdk`) ────────────
+# 🚨 "make installing dotnet sdk a feature flag" (maintainer, 2026-08-31).
+#
+# `actions/setup-dotnet` used to run in this job the way it runs in every job in the fleet: as a
+# reflex, before anyone asked whether the job compiles anything. That is the wrong shape the moment
+# a module can be compiled by the platform IMAGE instead (`"build": "container"`, see above) —
+# because "the SDK is here" then silently answers a question nobody put: an unconverted step keeps
+# working on a runner SDK that the converted lane was supposed to have removed.
+#
+# So the install is now DECLARED, in two halves that must both be read to know what happened:
+#
+#   * `dotnet-sdk: install` (the DEFAULT) — install it, unconditionally. A caller that says nothing
+#     gets exactly today's behaviour, and a lane ADDED tomorrow inherits it. Opting out is a
+#     deliberate edit; drifting out is impossible.
+#   * `dotnet-sdk: by-declaration` — install it only if this job's own declared consumers still
+#     need it. Today they are: the compiler for any entry that is not `build: container`; the
+#     module-pack tool, which is `dotnet build` + `dotnet run` in EVERY mode; a `build: container`
+#     entry's binding-identity probe; and the module's own `dotnet test` suite when it ships one.
+#     🚨 So NO entry can drop the SDK yet, container or not — the packer alone keeps every pack job
+#     on it. That is not a placeholder, it is the measured state, and the log says it every run.
+#     The lane converts when the packer moves inside the platform image, not before.
+#   * anything else, the empty string included — RED. A flag that cannot be read resolving to
+#     "skip" is precisely the trapdoor this whole family of gates exists to forbid.
+#
+# 🚨 IT IS NOT A SKIP-TRAPDOOR, and three things make that structural rather than hoped-for:
+#   1. The DECISION step is unconditional — it runs on every event, in every mode, and it FAILS on
+#      an unreadable policy. Only `actions/setup-dotnet` itself carries an `if:`, and skipping an
+#      installer is not skipping a check: every build, pack, inspect and test step below still runs
+#      and still gates. The flag chooses a COMPILER; it never chooses whether to verify.
+#   2. When the answer is "no SDK", the job does not merely decline to install one — it PUTS A
+#      FAILING `dotnet` ON PATH. GitHub's ubuntu runners ship an SDK of their own, so "we skipped
+#      setup-dotnet" would otherwise mean "we quietly built against whatever .NET the image happens
+#      to carry", which is the same class of lie as a skipped gate rendering a green tick.
+#   3. The path taken is printed in the log AND in the job summary on EVERY run, with the consumers
+#      enumerated by name — including when the answer is "install", so the two outcomes cannot be
+#      told apart only by what is missing.
+#
 # Republishing is SAFE to repeat, which is why the schedule may simply publish rather than
 # first proving something changed: the registry is keyed by `{package}@{version}` from
 # `manifest.lock`, so a rebuild of an unchanged version overwrites the same slot with equivalent
@@ -157,6 +194,24 @@ on:
         required: false
         type: string
         default: ''
+      dotnet-sdk:
+        description: >
+          FEATURE FLAG — whether the pack job installs the .NET SDK on the runner. See "The .NET
+          SDK is a DECLARED need" at the top of this file.
+
+          `install` — the DEFAULT, and what a caller that says nothing inherits: setup-dotnet runs
+          unconditionally, exactly as it always has.
+
+          `by-declaration` — install it only when a consumer in THIS job still needs it. The
+          consumers are enumerated in the log and the job summary on every run, whichever way the
+          decision goes, so a green log can never leave "the SDK compiled it" and "the image
+          compiled it" indistinguishable.
+
+          Any other value — the empty string included — is RED. A flag that cannot be read must
+          never resolve to "skip".
+        required: false
+        type: string
+        default: install
     secrets:
       publish-token:
         description: The registry's Plugins:Registry:PublishToken. Required when publish is true.
@@ -350,7 +405,99 @@ jobs:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: meshweaver
+      # ═══════ THE .NET SDK — INSTALLED BECAUSE SOMETHING DECLARED IT, NOT BY REFLEX ═══════
+      # 🚨 "make installing dotnet sdk a feature flag" (maintainer, 2026-08-31). The rationale and
+      # the anti-trapdoor argument are at the top of this file, under "The .NET SDK is a DECLARED
+      # need"; what follows is the decision itself.
+      #
+      # ONE step, UNCONDITIONAL, that always says which way it went and why. It enumerates the
+      # consumers this job would hand to a runner SDK, applies the caller's policy, and — when the
+      # answer is "none" — makes the absence REAL, because the runner ships an SDK of its own and a
+      # silent fallback to it is the same class of lie as a skipped gate rendering a green tick.
+      - name: Does this job need the .NET SDK?
+        id: sdk
+        env:
+          POLICY: ${{ inputs.dotnet-sdk }}
+          MODE: ${{ matrix.entry.build || 'sdk' }}
+          MODULE: ${{ matrix.entry.module }}
+          PROJECT: ${{ matrix.entry.project }}
+          RUN_TESTS: ${{ matrix.entry.test != false }}
+        run: |
+          set -euo pipefail
+          # EVERY consumer this job would hand to a runner SDK, named one by one and evaluated
+          # against this entry — not a summary, an inventory. `build: container` (MeshWeaver#2854)
+          # removes the COMPILER from it and NOTHING ELSE: the container path still reads the
+          # emitted assembly's identity with a `dotnet run` file-based app, the packer is a
+          # `dotnet build` + `dotnet run` in every mode, and a module that ships a test suite is a
+          # `dotnet test` the image's build-project cannot do at all. An omission here is exactly
+          # what would let a converted lane skip an install it needs and then blame the shim four
+          # steps later, so the list is deliberately complete rather than convenient.
+          consumers=()
+          if [ "$MODE" = "container" ]; then
+            echo "compiler: NOT a consumer — $MODULE declares build=container, so the pinned platform image compiles it"
+            consumers+=("the binding-identity probe — the container path reads ${MODULE}.dll's AssemblyVersion with a 'dotnet run' file-based app")
+          else
+            consumers+=("the compiler for $MODULE — its matrix entry declares build=$MODE, i.e. 'dotnet build' + 'dotnet publish' on this runner")
+          fi
+          consumers+=("the module-pack tool — meshweaver/src/MeshWeaver.Plugin.Build is 'dotnet build' + 'dotnet run' in EVERY mode; until it ships inside the platform image, this one consumer alone keeps every pack job on the SDK")
+          # Resolved against the tree, exactly as the test step below resolves it, so a module with
+          # no suite does not carry a consumer it does not have.
+          tests="$(dirname "$PROJECT").Test"
+          if [ "$RUN_TESTS" = "true" ] && [ -d "$tests" ]; then
+            consumers+=("the module's own suite — 'dotnet test $tests', a verb the image's build-project does not have at all")
+          fi
+          case "$POLICY" in
+            install)
+              install=true
+              verdict="policy 'install' (the default) — installed whatever the consumers say"
+              ;;
+            by-declaration)
+              if [ "${#consumers[@]}" -gt 0 ]; then install=true; else install=false; fi
+              verdict="policy 'by-declaration' — ${#consumers[@]} declared consumer(s) in this job"
+              ;;
+            *)
+              echo "::error::inputs.dotnet-sdk is '$POLICY'. The only values are 'install' (the default) and 'by-declaration'. An unreadable flag must NEVER resolve to 'do not install' — that is a skipped check wearing a green tick."
+              exit 1
+              ;;
+          esac
+          echo "declared consumers of a runner SDK in this job:"
+          for consumer in ${consumers[@]+"${consumers[@]}"}; do echo "  • $consumer"; done
+          if [ "$install" = true ]; then
+            headline=".NET SDK on the runner: INSTALLED"
+            echo "$headline — $verdict"
+          else
+            headline=".NET SDK on the runner: NOT INSTALLED"
+            echo "$headline — $verdict; the pinned platform image is the only compiler in this job"
+            # 🚨 Make the absence REAL. ubuntu-latest ships its own SDK, so declining to install one
+            # is not the same as not having one: without this, a consumer nobody declared would
+            # quietly build against whatever .NET the runner image happens to carry, and the log of
+            # a converted lane would be indistinguishable from the log of an unconverted one.
+            shim="$RUNNER_TEMP/no-dotnet"
+            mkdir -p "$shim"
+            cat > "$shim/dotnet" <<'SHIM'
+          #!/usr/bin/env bash
+          echo "::error::a step invoked 'dotnet $*', but this job declared dotnet-sdk: by-declaration and named no consumer that needs the .NET SDK, so none was installed. Either add that consumer to the 'Does this job need the .NET SDK?' step, or set dotnet-sdk: install on the caller. Falling back to the runner's preinstalled SDK is deliberately not an option — it would make a converted lane and an unconverted one look identical in a green log."
+          exit 97
+          SHIM
+            chmod +x "$shim/dotnet"
+            echo "$shim" >> "$GITHUB_PATH"
+            echo "a FAILING 'dotnet' shim is on PATH ($shim) — nothing in this job can quietly use the runner's preinstalled SDK"
+          fi
+          echo "install=$install" >> "$GITHUB_OUTPUT"
+          {
+            echo "### $headline"
+            echo
+            echo "- flag: \`dotnet-sdk: $POLICY\` (default \`install\`)"
+            echo "- compiler for \`$MODULE\`: \`$MODE\`"
+            echo "- declared consumers of a runner SDK:"
+            for consumer in ${consumers[@]+"${consumers[@]}"}; do echo "  - $consumer"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+      # 🚨 The ONE `if:` this flag introduces, and it guards an INSTALLER, not a gate. Every build,
+      # pack, inspect and test step below still runs and still gates whichever way it goes; when it
+      # is skipped, the step above has already put a failing `dotnet` on PATH, so an undeclared
+      # consumer goes RED naming the flag rather than silently using the runner's own SDK.
       - uses: actions/setup-dotnet@v6
+        if: steps.sdk.outputs.install == 'true'
         with:
           dotnet-version: "10.0.x"
 
