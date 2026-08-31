@@ -117,7 +117,7 @@ CAPTURE = re.compile(
 
 @dataclass
 class Finding:
-    check: str          # shellcheck | swallow | jmespath
+    check: str          # shellcheck | swallow | jmespath | script-needs-tree
     path: str
     line: int
     code: str           # the offending source, normalized
@@ -340,6 +340,55 @@ def _fields(node) -> set[str]:
 
 
 # ── the allow file ──────────────────────────────────────────────────────────────────────────
+def check_script_needs_tree(root: Path) -> list[Finding]:
+    """A job that RUNS a repo file must CHECK OUT the repo.
+
+    The class, measured (#2857 → CD 33344774738): the retried ACR login became a script,
+    six call sites were swapped, and the three that lived in jobs WITHOUT a checkout —
+    `promote` among them — failed their first production execution with
+    `bash: .github/scripts/acr-login.sh: No such file or directory` (exit 127). The PR was
+    green: those jobs only run on a publishing CD run, never on a PR, so the green attested
+    to a code path that had never executed. A job that only runs in production is not
+    covered by anything that gates the change to it — so the TREE requirement is asserted
+    statically here, where it CAN run on the PR.
+
+    Flagged: any job with a `run:` step referencing `.github/scripts/` and no
+    `actions/checkout` step. The reference is textual on the run block (the same posture as
+    the swallow check) — a path built by string concatenation can evade it, which is
+    accepted: the common case is the literal path, and the evasion still has to get past
+    review wearing a concatenated path for no stated reason.
+    """
+    import yaml
+
+    findings: list[Finding] = []
+    for pattern in WORKFLOW_GLOBS:
+        for path in sorted(root.glob(pattern)):
+            doc = yaml.safe_load(path.read_text())
+            if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
+                continue
+            for job_name, job in doc["jobs"].items():
+                steps = job.get("steps") if isinstance(job, dict) else None
+                if not isinstance(steps, list):
+                    continue
+                has_checkout = any(
+                    isinstance(st, dict) and str(st.get("uses", "")).startswith("actions/checkout")
+                    for st in steps
+                )
+                if has_checkout:
+                    continue
+                for st in steps:
+                    run_block = st.get("run") if isinstance(st, dict) else None
+                    if isinstance(run_block, str) and ".github/scripts/" in run_block:
+                        rel = str(path.relative_to(root))
+                        code = f"{job_name}: " + run_block.strip().splitlines()[0]
+                        findings.append(Finding(
+                            "script-needs-tree", rel, 1, code,
+                            f"job `{job_name}` runs a repo script but has no actions/checkout step — "
+                            "on the runner that file does not exist (exit 127, the #2857 Promote break)"))
+                        break
+    return findings
+
+
 def read_allow(path: Path) -> tuple[dict[str, str], list[str]]:
     """Returns {key: reason} and a list of format errors.
 
@@ -489,6 +538,25 @@ def self_test(root: Path) -> int:
         case("shellcheck does not misread a ${{ }} expression as a constant",
              len(got) == 0, f"got {[f.message for f in got]}")
 
+        # ── script-needs-tree: the #2857 Promote break ─────────────────────────────────
+        wf.write_text(
+            "name: f\non: [push]\njobs:\n  promote:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - name: ACR login\n        run: bash .github/scripts/acr-login.sh\n"
+        )
+        got = check_script_needs_tree(tmp)
+        case("script-needs-tree FIRES on a repo-script run in a checkout-less job",
+             len(got) == 1 and "promote" in got[0].code, f"got {[f.code for f in got]}")
+
+        wf.write_text(
+            "name: f\non: [push]\njobs:\n  promote:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - uses: actions/checkout@v7\n"
+            "        with:\n          sparse-checkout: .github/scripts\n"
+            "      - name: ACR login\n        run: bash .github/scripts/acr-login.sh\n"
+        )
+        got = check_script_needs_tree(tmp)
+        case("script-needs-tree is SILENT once the job checks out (sparse counts)",
+             len(got) == 0, f"got {[f.code for f in got]}")
+
         # ── jmespath: THE fixture — a manifest list with an untagged row ────────────────
         wf.write_text(SELF_TEST_WORKFLOW)
         got = check_jmespath(tmp)
@@ -563,7 +631,8 @@ def run(root: Path, allow_path: Path, write_stale: bool = False) -> int:
     for e in errors:
         print(f"::error::{e}")
 
-    findings = check_shellcheck(root) + check_swallow(root) + check_jmespath(root)
+    findings = (check_shellcheck(root) + check_swallow(root) + check_jmespath(root)
+                + check_script_needs_tree(root))
 
     used: set[str] = set()
     live: list[Finding] = []
