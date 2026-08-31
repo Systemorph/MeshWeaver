@@ -464,15 +464,25 @@ public static class RazorGenerators
             });
             _perFile = model.RazorItems.ToImmutableDictionary(
                 item => item.Path,
-                item => (AnalyzerConfigOptions)new Options(new Dictionary<string, string>(StringComparer.Ordinal)
+                item =>
                 {
-                    // 🚨 BASE64. The SDK pipes every Razor item through EncodeRazorInputItem before
-                    // handing it to the compiler, and the generator decodes it unconditionally — a
-                    // plain relative path here throws inside the generator instead of producing a
-                    // component.
-                    ["build_metadata.AdditionalFiles.TargetPath"] =
-                        Convert.ToBase64String(Encoding.UTF8.GetBytes(item.TargetPath)),
-                }),
+                    var values = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        // 🚨 BASE64. The SDK pipes every Razor item through EncodeRazorInputItem
+                        // before handing it to the compiler, and the generator decodes it
+                        // unconditionally — a plain relative path here throws inside the generator
+                        // instead of producing a component.
+                        ["build_metadata.AdditionalFiles.TargetPath"] =
+                            Convert.ToBase64String(Encoding.UTF8.GetBytes(item.TargetPath)),
+                    };
+                    // CssScope rides plain (the SDK encodes only TargetPath). With it the generator
+                    // stamps `b-…` attributes into the rendered markup; the bundler appends the SAME
+                    // value to the stylesheet's selectors (ScopedCss), which is what makes the
+                    // isolated styles apply.
+                    if (item.CssScope is { Length: > 0 } cssScope)
+                        values["build_metadata.AdditionalFiles.CssScope"] = cssScope;
+                    return (AnalyzerConfigOptions)new Options(values);
+                },
                 StringComparer.Ordinal);
         }
 
