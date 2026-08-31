@@ -430,19 +430,35 @@ not ask for a doc file, which is when csc itself would not raise it. The SDK's o
 `NoWarn` (`1701;1702`) is seeded before any `Directory.Build.props` appends to `$(NoWarn)`. Warnings
 fail the build by default; `--allow-warnings` is the deliberate opt-out.
 
-### Measured, 2026-08-31 — 12 of 54
+### Measured, 2026-08-31 — the sweep, before and after embedded resources
 
-Against `memex-portal-ai@sha256:15c49ee…`, over every non-test project in `MeshWeaver.Plugins/src`,
-with `--accept targets --accept embedded-resource` and ClosedXML + CsvHelper as `--extra-refs`:
+Over every non-test project in `MeshWeaver.Plugins/src` (54 of them), against the portal image
+`memex-portal-ai@sha256:6f38db08…` (the pin `MeshWeaver.Plugins/.github/workflows/ci.yml` carries),
+with `--accept targets` and no `--extra-refs`. Both columns come from the SAME image, so the delta is
+the change and nothing else.
 
-| | count | why |
-|---|---|---|
-| **green** | **12** | incl. `MeshWeaver.Import` — 90 source files, 0 warnings under warnings-as-errors |
-| Razor/Blazor (CS0115) | 15 | `.razor` components are not compiled — see below |
-| source generators (CS8795) | 15 | `[GeneratedRegex]` / `[LoggerMessage]` / `[JsonSerializable]` |
-| gRPC `<Protobuf>` | 3 | protoc codegen is a build task, not a compile |
-| additional libraries | 5 | Snowflake.Data, Microsoft.Data.Sqlite, Azure.Cosmos, … — supply with `--extra-refs` |
-| portal hosts | 3 | an `<Import>` above the mount; Aspire's `<Sdk>` ELEMENT |
+| | before | after | |
+|---|---|---|---|
+| **green** | **9** | **10** | |
+| `<EmbeddedResource>` refused | **19** | **0** | the gap is closed |
+| Razor/Blazor (CS0115) | 12 | 15 | `.razor` is not compiled — fixed separately |
+| source generators (CS8795) | 3 | 14 | they live in the SDK, not a runtime image |
+| additional libraries | 5 | 8 | supply with `--extra-refs` |
+| gRPC `<Protobuf>` | 2 | 3 | protoc codegen is a build task |
+| `<Import>` above the mount | 2 | 2 | portal hosts |
+| Aspire `<Sdk>` ELEMENT | 1 | 1 | |
+| other | 1 | 1 | pre-existing compile errors |
+
+🚨 **Read the two columns together, not the green count alone.** Nineteen projects were failing on
+the resource refusal and NOTHING ELSE WAS KNOWN ABOUT THEM — a refusal stops the load, so it MASKS
+every gap behind it. Closing it moved one project to green and revealed the real blocker for the
+other eighteen: ten of them want SDK source generators, three want Razor, three want an additional
+library, one wants protoc. That is why the "before" column undercounts source generators by a factor
+of four. **No project regressed**, and no project fails on an embedded resource any more.
+
+The lesson generalises: in a builder whose whole design is to refuse rather than guess, a failure
+ranking is a ranking of FIRST refusals, and removing the top one does not add its count to the green
+column — it redistributes it.
 
 ### What it does NOT do, and what each would take
 

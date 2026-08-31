@@ -203,6 +203,30 @@ public static class ProjectFile
         /// </summary>
         public const string BuildOutputResource = "embedded-resource:build-output";
 
+        /// <summary>
+        /// Acknowledge that an <c>&lt;EmbeddedResource&gt;</c> GLOB reaching OUTSIDE the project
+        /// directory is not expanded.
+        ///
+        /// <para>🚨 This evaluator's glob expansion is rooted at the project directory, so a pattern
+        /// like <c>..\shared\**\*.md</c> matches NOTHING — and a glob matching nothing is legal, so
+        /// without this refusal the resources would simply not be there and no line of output would
+        /// say so. Measured: the real SDK expands that pattern and embeds two resources.</para>
+        /// </summary>
+        public const string OutsideGlobResource = "embedded-resource:outside-glob";
+
+        /// <summary>
+        /// Acknowledge that <c>%(LinkBase)</c> on an <c>&lt;EmbeddedResource&gt;</c> OUTSIDE the
+        /// project is not applied.
+        ///
+        /// <para>Measured: <c>LinkBase</c> synthesizes <c>%(Link)</c> as
+        /// <c>&lt;LinkBase&gt;\%(RecursiveDir)%(Filename)%(Extension)</c> for items outside the
+        /// project cone — <c>..\lb\nested\Deep.md</c> with <c>LinkBase="Based"</c> becomes
+        /// <c>R15.Based.nested.Deep.md</c> — and is IGNORED for items inside it
+        /// (<c>inside\deep\In.md</c> stayed <c>R15.inside.deep.In.md</c>). Only the outside case
+        /// changes a name, so only the outside case is refused.</para>
+        /// </summary>
+        public const string LinkBaseResource = "embedded-resource:link-base";
+
         /// <summary>Acknowledge a <c>Condition</c> expression outside the supported grammar,
         /// treating it as FALSE. <c>condition:&lt;text&gt;</c> accepts one.</summary>
         public const string AllConditions = "conditions";
@@ -674,6 +698,26 @@ public static class ProjectFile
                                 excluded.Add(match);
                         foreach (var pattern in declaration.Patterns)
                         {
+                            // 🚨 A glob that climbs OUT of the project directory expands to nothing
+                            // here — ExpandGlob enumerates from the project directory down — and a
+                            // glob matching nothing is legal, so the resources would be missing with
+                            // NOTHING in the output saying so. The real SDK expands it (measured:
+                            // `..\lb\**\*.md` embedded two resources), which is precisely why this
+                            // has to be a refusal rather than a quiet zero.
+                            if (ClimbsOutOfProject(pattern) && (pattern.Contains('*') || pattern.Contains('?')))
+                            {
+                                if (!IsAccepted(Accept.OutsideGlobResource))
+                                    throw new UnsupportedConstructException(
+                                        $"{declaration.File}: <EmbeddedResource Include=\"{pattern}\"> is a glob "
+                                        + "reaching outside the project directory. This evaluator expands globs "
+                                        + "from the project directory down, so it would match NOTHING and embed "
+                                        + "nothing — silently, because an empty glob is legal. Re-run with "
+                                        + $"--accept {Accept.OutsideGlobResource} to build without those "
+                                        + "resources, or list the files individually.");
+                                skippedBuildOutputs.Add($"{pattern} (--accept {Accept.OutsideGlobResource})");
+                                continue;
+                            }
+
                             var matched = 0;
                             foreach (var match in ExpandGlob(pattern).OrderBy(p => p, StringComparer.Ordinal))
                             {
@@ -793,6 +837,19 @@ public static class ProjectFile
             //    ONE invocation. This builder emits its doc file into its own output directory
             //    rather than back into a bin/ inside a read-only source mount, so that file cannot
             //    exist here. Named and skippable, never a hard failure.
+            // Whether a pattern names something the project directory does not contain.
+            bool ClimbsOutOfProject(string pattern)
+            {
+                var normalised = pattern.Replace('\\', Path.DirectorySeparatorChar)
+                                        .Replace('/', Path.DirectorySeparatorChar);
+                if (normalised.StartsWith("..", StringComparison.Ordinal))
+                    return true;
+                if (!Path.IsPathRooted(normalised))
+                    return false;
+                var relative = Path.GetRelativePath(ProjectDirectory, normalised);
+                return relative.StartsWith("..", StringComparison.Ordinal);
+            }
+
             void MissingLiteral(string pattern, string file, List<string> buildOutputs)
             {
                 var segments = pattern.Replace('\\', '/').Split('/');
@@ -852,6 +909,21 @@ public static class ProjectFile
                     + "own C# tokenizer, which skips struct/interface/enum, takes record, and drops "
                     + "generic arity; reproducing that from anything but its source would be a guess.");
 
+            // 🚨 LinkBase changes the name only for a file OUTSIDE the project — measured both ways:
+            // `..\lb\nested\Deep.md` with LinkBase="Based" became `R15.Based.nested.Deep.md`, while
+            // `inside\deep\In.md` with LinkBase="AlsoBased" stayed `R15.inside.deep.In.md`, the
+            // metadata ignored. So only the outside case is refused; refusing the inside one would
+            // be a false refusal on a no-op.
+            if (resource.Metadata.TryGetValue("LinkBase", out var linkBase) && linkBase.Length > 0
+                && Path.GetRelativePath(ProjectDirectory, resource.FullPath)
+                    .StartsWith("..", StringComparison.Ordinal))
+                return Named(Accept.LinkBaseResource,
+                    $"<EmbeddedResource> '{relative}' is outside the project and carries "
+                    + $"LinkBase='{linkBase}', which the SDK turns into a %(Link) of "
+                    + $"'{linkBase}\\%(RecursiveDir)%(Filename)%(Extension)' — so the manifest name is "
+                    + "built from a path this evaluator does not compute. Give the item an explicit "
+                    + "Link or LogicalName instead.");
+
             if (resource.Metadata.ContainsKey("ManifestResourceName"))
                 return Named(Accept.ManifestResourceNameMetadata,
                     $"<EmbeddedResource> '{relative}' carries ManifestResourceName metadata. In the SDK "
@@ -860,16 +932,23 @@ public static class ProjectFile
                     + "the bare file name (measured: ManifestResourceName=\"I.Win.Outright\" produced "
                     + "'Direct.md'). Reproducing an SDK quirk is not fidelity. Use LogicalName.");
 
-            var withCulture = resource.Metadata.GetValueOrDefault("WithCulture", string.Empty);
-            if (string.Equals(withCulture, "false", StringComparison.OrdinalIgnoreCase))
-                return null;
-
+            // 🚨 ORDER. An EXPLICIT %(Culture) beats %(WithCulture)='false' — measured, and the two
+            // are easy to assume the other way round: `Include="A.md" Culture="fr" WithCulture="false"`
+            // still emitted a `fr/` SATELLITE and left the main assembly without the resource, while
+            // `Include="C.de.md" WithCulture="false"` kept it. So the declared culture is checked
+            // FIRST; putting the WithCulture escape hatch ahead of it embeds, under a name the SDK
+            // never produces, a resource the SDK does not put in this assembly at all.
             if (resource.Metadata.TryGetValue("Culture", out var declaredCulture) && declaredCulture.Length > 0)
                 return Named(Accept.CultureResource,
                     $"<EmbeddedResource> '{relative}' declares Culture='{declaredCulture}', which routes it "
                     + $"into a SATELLITE assembly ({declaredCulture}/…resources.dll) and OUT of the main "
-                    + "one. This builder emits a single assembly. Add WithCulture=\"false\" to keep it in "
-                    + "the main assembly.");
+                    + "one — and WithCulture=\"false\" does NOT override an explicitly declared culture "
+                    + "(measured). This builder emits a single assembly. Remove the Culture metadata to "
+                    + "keep the resource in the main assembly.");
+
+            var withCulture = resource.Metadata.GetValueOrDefault("WithCulture", string.Empty);
+            if (string.Equals(withCulture, "false", StringComparison.OrdinalIgnoreCase))
+                return null;
 
             if (!ManifestResourceNames.CanDecideCulture)
                 return ManifestResourceNames.HasDottedBaseName(targetPath)
