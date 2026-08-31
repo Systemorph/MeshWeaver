@@ -31,7 +31,17 @@ public abstract class OrleansSharedTestBase : TestBase
     /// </summary>
     protected virtual SharedOrleansFixture CreateFixture() => new();
     private readonly ConcurrentBag<IMessageHub> _clientHubs = new();
+    private bool _leasedFromPool;
 
+    /// <summary>
+    /// Opt-out for classes that mutate CLUSTER-WIDE state destructively (killing silos,
+    /// asserting global counters): they keep the dedicated per-class cluster. Everyone else
+    /// leases a RUNNING mesh from <see cref="OrleansMeshPool"/> — "we can have a pool of
+    /// running meshes and then parallelize over this pool" (maintainer, 2026-09-01) — which
+    /// deletes the ~90 per-class silo boots the runner paid while executing one class at a
+    /// time. A lease is exclusive; client hubs are cleaned per class either way.
+    /// </summary>
+    protected virtual bool UsePooledMesh => true;
     /// <summary>
     /// Legacy two-arg ctor retained for tests that still inject the fixture from a
     /// collection. New tests should use the parameterless ctor with the per-class shape.
@@ -49,13 +59,21 @@ public abstract class OrleansSharedTestBase : TestBase
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
-        // Per-class fixture — each test class boots its own Orleans cluster so grain
-        // state is isolated. The cost is ~300-500 ms silo boot; the win is no
-        // cross-test pollution and no 120 s disposal-wait pile-ups during the run.
+        // Pool first (exclusive lease of a RUNNING cluster, per fixture type), dedicated
+        // per-class cluster as the fallback — for opted-out classes, for the legacy
+        // fixture-injecting ctor, and for assemblies that do not register the pool fixture.
         if (Fixture is null)
         {
-            Fixture = CreateFixture();
-            await Fixture.InitializeAsync();
+            if (UsePooledMesh && OrleansMeshPool.Current is { } pool)
+            {
+                Fixture = await pool.LeaseAsync(CreateFixture);
+                _leasedFromPool = true;
+            }
+            else
+            {
+                Fixture = CreateFixture();
+                await Fixture.InitializeAsync();
+            }
         }
     }
 
@@ -78,7 +96,10 @@ public abstract class OrleansSharedTestBase : TestBase
         }
         if (Fixture is not null)
         {
-            await Fixture.DisposeAsync();
+            if (_leasedFromPool && OrleansMeshPool.Current is { } pool)
+                pool.Return(Fixture);
+            else
+                await Fixture.DisposeAsync();
         }
         await base.DisposeAsync();
     }

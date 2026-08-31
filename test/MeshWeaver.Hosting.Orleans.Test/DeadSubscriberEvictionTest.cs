@@ -108,6 +108,14 @@ public class DeadSubscriberEvictionTest(ITestOutputHelper output) : OrleansShare
     [Fact(Timeout = 120_000)]
     public async Task A_reachable_subscriber_is_never_evicted()
     {
+        // Snapshot FIRST: ClientSubscriptionsEvicted is owner-global, and both the sibling
+        // eviction test and any earlier class on a pooled cluster legitimately move it — this
+        // test's claim is only that ITS OWN window adds no eviction. Asserting the absolute
+        // value made the verdict depend on alphabetical test order (it ran first) — the exact
+        // never-assert-exactly-N trap, surfaced the day the mesh pool landed.
+        var workspaceBefore = await OwnerWorkspace();
+        var evictionsBefore = workspaceBefore.ClientSubscriptionsEvicted;
+
         var client = GetClient($"live-{Guid.NewGuid():N}");
         var stream = client.GetWorkspace()
             .GetRemoteStream<JsonElement, LayoutAreaReference>(Owner, Reference);
@@ -122,9 +130,10 @@ public class DeadSubscriberEvictionTest(ITestOutputHelper output) : OrleansShare
         var workspace = await OwnerWorkspace();
         workspace.GetClientSubscription(client.Address, stream.StreamId, Reference).Should().NotBeNull(
             "the owner must still hold the server-side stream of a subscriber it can reach");
-        workspace.ClientSubscriptionsEvicted.Should().Be(0,
+        (workspace.ClientSubscriptionsEvicted - evictionsBefore).Should().Be(0,
             "eviction is the router's verdict on an UNSERVED address, never a reaction to ordinary "
-            + "traffic to a live one");
+            + "traffic to a live one — measured as this test's own delta, since the counter is "
+            + "owner-global and other tests evict deliberately");
     }
 
     /// <summary>
