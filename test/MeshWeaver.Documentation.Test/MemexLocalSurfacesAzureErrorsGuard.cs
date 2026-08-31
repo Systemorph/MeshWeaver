@@ -62,8 +62,22 @@ public class MemexLocalSurfacesAzureErrorsGuard
             .Select(line => line.Trim())
             .Where(line => !line.StartsWith('#'))
             .Where(line => Regex.IsMatch(line, @"(^|\s|\()az\s"))
-            .Where(line => line.Contains("2>/dev/null", StringComparison.Ordinal)
-                        || line.Contains("2> /dev/null", StringComparison.Ordinal));
+            .Where(DiscardsStderr);
+
+    /// <summary>
+    /// Every shell spelling that sends stderr to <c>/dev/null</c>, not just the obvious one.
+    ///
+    /// <para>🚨 The first version of this guard matched <c>2&gt;/dev/null</c> alone and passed while
+    /// the script still discarded Azure's output through <c>&gt;/dev/null 2&gt;&amp;1</c> — a guard
+    /// with a loophole exactly the size of the remaining bug. Raised in review of #2903.</para>
+    /// </summary>
+    private static bool DiscardsStderr(string line) =>
+        new[]
+        {
+            "2>/dev/null", "2> /dev/null",
+            ">/dev/null 2>&1", "> /dev/null 2>&1",
+            "&>/dev/null", "&> /dev/null",
+        }.Any(form => line.Contains(form, StringComparison.Ordinal));
 
     [Fact]
     public void TheAcrLogin_NeverDiscardsAzuresOwnError()

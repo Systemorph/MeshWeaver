@@ -2363,9 +2363,19 @@ PLIST
         elif [ "$rdigest" != "$rlast" ]; then
           printf '%s autoroll: acr %s:%s moved (%s -> %s) — pulling portal + migration\n' \
             "$(date -u +%FT%TZ)" "memex-portal-ai" "$ACR_DEFAULT_TAG" "${rlast:-none}" "$rdigest"
-          if az acr login -n "${ACR%%.*}" >/dev/null 2>&1 \
-              && docker pull --platform linux/arm64 "$ACR/memex-portal-ai:$ACR_DEFAULT_TAG" >/dev/null 2>&1 \
-              && docker pull --platform linux/arm64 "$ACR/memex-migration:$ACR_DEFAULT_TAG" >/dev/null 2>&1; then
+          # 🚨 Inverted so the FAILING step's output is the one kept: each arm assigns its combined
+          # output and negates, so the first failure short-circuits with its own message in
+          # $stage_err. The success arm below is unchanged. Written this way because
+          # `A && B && C` with every arm suppressed could only ever report "FAILED", which is what
+          # this line did — three commands deep, with no reason. Raised in review of #2903.
+          local stage_err=""
+          if ! stage_err="$(az acr login -n "${ACR%%.*}" 2>&1)" \
+              || ! stage_err="$(docker pull --platform linux/arm64 "$ACR/memex-portal-ai:$ACR_DEFAULT_TAG" 2>&1)" \
+              || ! stage_err="$(docker pull --platform linux/arm64 "$ACR/memex-migration:$ACR_DEFAULT_TAG" 2>&1)"; then
+            printf '%s autoroll: acr pull FAILED — keeping current images, will retry. Last error: %s\n' \
+              "$(date -u +%FT%TZ)" \
+              "$(printf '%s' "${stage_err:-<no output>}" | tr '\n' ' ' | cut -c1-400)"
+          else
             # Never stage a wrong-arch image: an amd64 image runs EMULATED here and .NET's
             # ConfigurationBinder NREs at startup — the exact crash that forced local source
             # builds before the registry went multi-arch.
@@ -2380,8 +2390,6 @@ PLIST
               printf '%s autoroll: acr image is %s, not arm64 — REFUSING to stage (would crash under emulation), will retry\n' \
                 "$(date -u +%FT%TZ)" "${arch:-unknown}"
             fi
-          else
-            printf '%s autoroll: acr pull FAILED — keeping current images, will retry\n' "$(date -u +%FT%TZ)"
           fi
         fi
         # 0b. Plugin content: refresh the hostPath-mounted Plugins checkout (see the constants
