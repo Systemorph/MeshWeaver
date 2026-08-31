@@ -1263,9 +1263,9 @@ jobs:
         with:
           name: module-dll-${{ matrix.entry.module }}
           path: |
-          retention-days: 1
             ${{ runner.temp }}/module-build/${{ matrix.entry.module }}/${{ matrix.entry.module }}.dll
             ${{ runner.temp }}/module-build/${{ matrix.entry.module }}/${{ matrix.entry.module }}.pdb
+          retention-days: 1
           if-no-files-found: error
       - name: Run the module's tests, when it ships any
         if: ${{ matrix.entry.test != false }}
