@@ -79,6 +79,35 @@ public sealed class RegistryUpdateReconciler(
     private static TimeSpan FeedReadBackoff(int attempt) =>
         TimeSpan.FromSeconds(2 * Math.Pow(3, attempt));
 
+    /// <summary>
+    /// Whether a failed feed read is worth re-asking within the boot window.
+    ///
+    /// <para>🚨 <b>The distinction is the whole point, and it used to be lost.</b> This predicate
+    /// was once <c>fault is not InvalidOperationException</c> — reading that type as "a definite
+    /// HTTP answer (401/403/404), which will answer the same in two seconds". That was true of the
+    /// statuses it named and false of the type: <see cref="RegistryPackageSource"/> threw the SAME
+    /// bare <see cref="InvalidOperationException"/> for every non-2xx, so a
+    /// <c>503 Instance-key resolution is temporarily unavailable — retry shortly</c> was excluded
+    /// by a rule written for permission errors. The one condition a boot retry exists for was the
+    /// one condition it skipped, and a transient registry blip left a pod's installed set
+    /// unreconciled for the rest of its life — silently, because the portal itself stays up
+    /// (Systemorph/MeshWeaver#2836).</para>
+    ///
+    /// <para>The fix is not a longer budget nor a poll behind it: it is that the status now
+    /// survives as data (<see cref="RegistryResponseException.StatusCode"/>), so the policy can ask
+    /// what the server actually said instead of inferring it from a CLR type.</para>
+    /// </summary>
+    internal static bool ShouldRetryFeedRead(Exception fault) => fault switch
+    {
+        // A definite answer naming a transient server-side condition (503/429/5xx) — re-ask.
+        RegistryResponseException http => http.IsTransientFailure,
+        // Any other definite answer (401/403/404, a malformed payload) — re-asking cannot help.
+        InvalidOperationException => false,
+        // A transport fault (TCP hiccup, DNS blip, request timeout): the original #1500 case,
+        // where the read never reached an HTTP answer at all.
+        _ => true,
+    };
+
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -181,14 +210,13 @@ public sealed class RegistryUpdateReconciler(
                     // timeout's length, but that the boot attempt is unrepeated.
                     //
                     // So this is a bounded retry INSIDE the boot attempt, not a clock. It does not
-                    // widen any bound and it adds no background load — and it deliberately does not
-                    // retry an InvalidOperationException, which is how RegistryPackageSource reports
-                    // a definite HTTP answer (401/403/404): a registry that refuses this instance's
-                    // key will refuse it again in two seconds, and burning the boot window on that
-                    // would only delay the log line that names it.
+                    // widen any bound and it adds no background load. What it retries is decided by
+                    // ShouldRetryFeedRead below — a DEFINITE refusal is not re-asked, because a
+                    // registry that refuses this instance's key will refuse it again in two seconds,
+                    // and burning the boot window on that would only delay the log line naming it.
                     .RetryWhen(faults => faults
                         .Select((fault, attempt) => (fault, attempt))
-                        .SelectMany(f => f.fault is not InvalidOperationException && f.attempt < FeedReadRetries
+                        .SelectMany(f => ShouldRetryFeedRead(f.fault) && f.attempt < FeedReadRetries
                             ? Observable.Timer(FeedReadBackoff(f.attempt)).Select(_ => Unit.Default)
                                 .Do(_ => logger.LogWarning(f.fault,
                                     "[RegistryUpdate] reading {Url} failed (attempt {Attempt}/{Total}) — retrying; "
