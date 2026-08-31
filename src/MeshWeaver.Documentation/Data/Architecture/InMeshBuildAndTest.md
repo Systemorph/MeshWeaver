@@ -439,7 +439,7 @@ with `--accept targets --accept embedded-resource` and ClosedXML + CsvHelper as 
 |---|---|---|
 | **green** | **12** | incl. `MeshWeaver.Import` — 90 source files, 0 warnings under warnings-as-errors |
 | Razor/Blazor (CS0115) | 15 | *fixed 2026-08-31 — see below* |
-| source generators (CS8795) | 15 | `[GeneratedRegex]` / `[LoggerMessage]` / `[JsonSerializable]` |
+| source generators (CS8795) | 15 | *fixed 2026-08-31 — see "The container runs the SDK and Orleans generators" below* |
 | gRPC `<Protobuf>` | 3 | protoc codegen is a build task, not a compile |
 | additional libraries | 5 | Snowflake.Data, Microsoft.Data.Sqlite, Azure.Cosmos, … — supply with `--extra-refs` |
 | portal hosts | 3 | an `<Import>` above the mount; Aspire's `<Sdk>` ELEMENT |
@@ -600,6 +600,39 @@ That is trap 1 from the Razor work, and it applied to the operator's own path to
 
 Both paths now share the host-first `AssemblyLoadContext` (`GeneratorLoader`) rather than a copy of
 it.
+
+### Measured, 2026-08-31 — 10 → 19 of 55, and CS8795 is gone
+
+Every non-test project in `MeshWeaver.Plugins/src` (55 with a `.csproj`), inside
+`memex-portal-ai@sha256:6f38db08…` on `linux/arm64` with `--accept targets --accept
+embedded-resource`. The baseline is the SAME harness run against this change's parent, not a
+remembered number.
+
+| | baseline | with the staged generators |
+|---|---|---|
+| **green** | **10** | **19** |
+| CS8795 (a generator that did not run) | 18 | **0** |
+| regressions | — | **0** |
+
+The nine that flipped: `MeshWeaver.Markdown.Collaboration` (7 × `[GeneratedRegex]` — and the
+dependency that was blocking most of the rest), `MeshWeaver.Observability.Contract` (11 ×),
+`MeshWeaver.Observability`, **`MeshWeaver.AI`** (the AI engine — 169 source files, 0 warnings under
+warnings-as-errors), `MeshWeaver.AI.Anthropic`, `MeshWeaver.AI.AppleIntelligence`,
+`MeshWeaver.AI.WebSearch`, `MeshWeaver.Mcp`, `MeshWeaver.Notifications.Channels`.
+
+🚨 **A first-refusal count is not a gap count.** A refusal stops the load, so closing generators
+reveals whatever sat behind them: five AI providers moved from CS8795 to *"the container does not
+supply `Azure.*` / `ClaudeAgentSdk` / `GitHub.*`"* — the older `--extra-refs` category, not a new
+problem. What can be said cleanly is that **CS8795 no longer appears in the sweep at all**. The
+remaining 36 are 13 that only want `--accept razor-css-scope` (the same harness with it takes the
+baseline to 20), 11 additional libraries, 6 constructs refused by name, and 2 genuine compile errors.
+
+### The sweep got SLOWER, and that is the result working
+
+`MeshWeaver.AI.ClaudeCode` used to finish in **0.8 s** — because `MeshWeaver.Markdown.Collaboration`,
+its dependency, died on 7 × CS8795 and the cascade stopped, so nothing behind it was ever compiled.
+With the generator staged, the same command compiles `MeshWeaver.AI` — 169 files, a 1.1 MB assembly —
+in **282 s**, of which the generator itself is 240 ms. The old speed was the speed of failing early.
 
 ### What it does NOT do, and what each would take
 
