@@ -1052,6 +1052,16 @@ public static class DataExtensions
                 // request LOST (memex-cloud 2026-07-20 GitSync burst: every explicit Store/Plugin
                 // compile trigger was dropped while mirrors lagged the owner).
                 RebaseMonotonicTriggers(currentNode, patchNode, baseValues, jsonOpts, logger, hubPath);
+                // 🚨 …and the same resolution for the node's AUDIT STAMP, which is not caller data at
+                // all: MeshNodeStreamHandle stamps LastModified/LastModifiedBy onto EVERY cross-hub
+                // patch itself. So the moment two writers touch one node the second one's base stamp
+                // is stale by construction, the generic scalar rule refuses it, and — since a PARTIAL
+                // refusal nacks Conflict (#2463/#2840) — a write that fully landed is answered with
+                // "re-read and re-apply", which re-runs the caller's mutation. For a RELATIVE mutation
+                // that is a second application, not a no-op. LastModified is monotonic by construction
+                // (every writer sets it to UtcNow), so newest-wins is the correct merge, exactly as for
+                // RequestedReleaseAt — never a refusal.
+                RebaseAuditStamp(currentNode, patchNode, baseValues, jsonOpts, logger, hubPath);
                 var refused = 0;
                 Serialization.MeshNodePatchMerge.Apply(currentNode, patchNode, baseValues,
                     onRefuse: key =>
@@ -1181,6 +1191,73 @@ public static class DataExtensions
                 + "monotonically (newest wins) instead of being refused as a scalar conflict.",
                 hubPath, triggerKey, patchAt, liveAt);
             baseContent[triggerKey] = liveContent[triggerKey]!.DeepClone();
+        }
+    }
+
+    /// <summary>
+    /// 🚨 Audit-stamp resolution for the THREE-WAY merge path — the sibling of
+    /// <see cref="RebaseMonotonicTriggers"/> for the two TOP-LEVEL fields the write path stamps on
+    /// the caller's behalf: <c>MeshNode.LastModified</c> and <c>MeshNode.LastModifiedBy</c>.
+    ///
+    /// <para>These are framework metadata, never a value the caller's update lambda chose:
+    /// <c>MeshNodeStreamHandle.UpdateRemote</c> writes <c>LastModified = UtcNow</c> into every
+    /// cross-hub patch. That makes them the one pair guaranteed to differ from a lagging mirror's
+    /// base whenever ANY other writer touched the node first — so the generic "conflicting scalar ⇒
+    /// refuse" rule turns every concurrent cross-hub write into a refusal, and therefore (a partial
+    /// refusal being a refusal since #2463/#2840) into a Conflict NACK whose prescribed remedy is to
+    /// re-run the caller's mutation. Re-running a RELATIVE mutation applies it twice.</para>
+    ///
+    /// <para><c>LastModified</c> is monotonic by construction, so the conflict IS mergeable and the
+    /// resolution is the monotonic one: patch BEHIND live ⇒ drop the stamp from the patch (the live
+    /// stamp is the newer truth); patch AHEAD of live ⇒ rebase the writer's base onto the live value
+    /// so the three-way merge sees "unchanged since base" and lands it. <c>LastModifiedBy</c> travels
+    /// with whichever stamp wins — an author without its instant is meaningless — so it is dropped or
+    /// rebased in lockstep and likewise never refused.</para>
+    /// </summary>
+    internal static void RebaseAuditStamp(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        System.Text.Json.Nodes.JsonObject baseValues,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath)
+    {
+        var stampKey = jsonOpts.PropertyNamingPolicy?.ConvertName("LastModified") ?? "LastModified";
+        var authorKey = jsonOpts.PropertyNamingPolicy?.ConvertName("LastModifiedBy") ?? "LastModifiedBy";
+
+        if (!TryReadDateTimeOffset(patchNode, stampKey, out var patchAt)
+            || !TryReadDateTimeOffset(currentNode, stampKey, out var liveAt))
+            return;
+
+        if (patchAt < liveAt)
+        {
+            logger?.LogInformation(
+                "[MergeGuard] {HubPath}: dropping superseded audit stamp ({PatchAt:o} < live {LiveAt:o}) — "
+                + "the node was modified again after this writer stamped it; keeping the live stamp.",
+                hubPath, patchAt, liveAt);
+            patchNode.Remove(stampKey);
+            patchNode.Remove(authorKey);
+            return;
+        }
+
+        if (patchAt <= liveAt)
+            return; // equal — nothing to resolve, the generic merge sees no conflict
+
+        Rebase(stampKey);
+        Rebase(authorKey);
+
+        void Rebase(string key)
+        {
+            if (!patchNode.ContainsKey(key)
+                || !baseValues.TryGetPropertyValue(key, out var baseVal)
+                || baseVal is null
+                || System.Text.Json.Nodes.JsonNode.DeepEquals(baseVal, currentNode[key]))
+                return;
+            logger?.LogInformation(
+                "[MergeGuard] {HubPath}: rebasing audit field {Key} — the writer's base is stale but an "
+                + "audit stamp merges newest-wins rather than being refused as a scalar conflict.",
+                hubPath, key);
+            baseValues[key] = currentNode[key]?.DeepClone();
         }
     }
 
