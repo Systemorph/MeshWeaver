@@ -65,6 +65,8 @@ try
         return RunCompile(args[1..]);
     if (args.Length > 0 && args[0] == CascadeBuild.Verb)
         return await RunBuild(args[1..]);
+    if (args.Length > 0 && args[0] == ProjectBuild.Verb)
+        return await RunBuildProject(args[1..]);
     if (args.Length > 0 && args[0] == "framework-identity")
         return RunFrameworkIdentity(args[1..]);
     return await RunGate(args);
@@ -158,6 +160,140 @@ static async Task<int> RunBuild(string[] args)
     }).Await(CancellationToken.None);
     return report.ExitCode;
 }
+
+// 🚨 THE `build-project` VERB — compile a .csproj with NO dotnet SDK and NO NuGet restore, against
+// the assemblies of the container this process runs in (maintainer, 2026-08-30: "the platform builds
+// dll completely without any external dotnet kit or nuget"). The evaluator, the reference set and
+// the cascade live in ProjectFile / ContainerReferenceSet / ProjectBuild; this is only the argv.
+static async Task<int> RunBuildProject(string[] args)
+{
+    // build-project <csproj|dir> [--output <dir>] [--app <dir>] [--extra-refs <dir>]...
+    //               [--accept <construct>]... [--allow-warnings | --no-warn=false] [--max-parallel <n>]
+    string? entry = null;
+    string? outDir = null;
+    var app = ContainerReferenceSet.DefaultAppDirectory;
+    var extraRefs = new List<string>();
+    var generatorPaths = new List<string>();
+    var accept = new List<string>();
+    var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    var allowWarnings = false;
+    var maxParallel = Math.Max(1, Environment.ProcessorCount);
+    for (var i = 0; i < args.Length; i++)
+    {
+        // MSBuild's -p:Name=Value, in both its spellings. It is how the caller supplies the
+        // identity inputs this builder cannot compute — SourceRevisionId above all, which the SDK
+        // reads from git and this builder has no git to read.
+        if (args[i].StartsWith("-p:", StringComparison.Ordinal)
+            || args[i].StartsWith("/p:", StringComparison.Ordinal))
+        {
+            if (!TryAddProperty(properties, args[i][3..]))
+                return 2;
+            continue;
+        }
+        switch (args[i])
+        {
+            case "--property" when i + 1 < args.Length:
+                if (!TryAddProperty(properties, args[++i]))
+                    return 2;
+                break;
+            case "--output" or "-o" when i + 1 < args.Length:
+                outDir = args[++i];
+                break;
+            case "--app" when i + 1 < args.Length:
+                app = args[++i];
+                break;
+            case "--extra-refs" when i + 1 < args.Length:
+                extraRefs.Add(args[++i]);
+                break;
+            case "--generators" when i + 1 < args.Length:
+                generatorPaths.Add(args[++i]);
+                break;
+            case "--accept" when i + 1 < args.Length:
+                accept.Add(args[++i]);
+                break;
+            // The no-warn policy is ON by default; both spellings of the opt-out are accepted
+            // because both are documented, and a flag that silently means nothing is worse than a
+            // flag that does not exist.
+            case "--allow-warnings" or "--no-warn=false" or "--no-warn=False":
+                allowWarnings = true;
+                break;
+            case "--no-warn" or "--no-warn=true":
+                allowWarnings = false;
+                break;
+            case "--max-parallel" when i + 1 < args.Length:
+                if (!int.TryParse(args[++i], NumberStyles.Integer, CultureInfo.InvariantCulture, out maxParallel)
+                    || maxParallel < 1)
+                {
+                    Console.Error.WriteLine("mw-plugin-test build-project: --max-parallel takes a positive integer");
+                    return 2;
+                }
+                break;
+            case "-h" or "--help":
+                Console.WriteLine(BuildProjectUsage());
+                return 0;
+            case var flag when flag.StartsWith("--", StringComparison.Ordinal):
+                Console.Error.WriteLine($"mw-plugin-test build-project: unknown option {flag}");
+                Console.Error.WriteLine(BuildProjectUsage());
+                return 2;
+            default:
+                if (entry is not null)
+                {
+                    Console.Error.WriteLine(
+                        $"mw-plugin-test build-project: one project at a time — got '{entry}' and '{args[i]}'.");
+                    return 2;
+                }
+                entry = args[i];
+                break;
+        }
+    }
+    if (entry is null)
+    {
+        Console.Error.WriteLine(BuildProjectUsage());
+        return 2;
+    }
+    var projectReport = await ProjectBuild.Run(new ProjectBuild.Options
+    {
+        EntryProject = entry,
+        OutputDirectory = outDir,
+        AppDirectory = app,
+        ExtraReferenceDirectories = extraRefs,
+        GeneratorPaths = generatorPaths,
+        Accept = accept,
+        Properties = properties,
+        AllowWarnings = allowWarnings,
+        MaxParallel = maxParallel,
+    }).Await(CancellationToken.None);
+    return projectReport.ExitCode;
+}
+
+// A global property, as `Name=Value`. An unparseable one is a refusal rather than a silent
+// omission: a property that does not arrive changes the assembly this builder emits.
+static bool TryAddProperty(Dictionary<string, string> properties, string assignment)
+{
+    var split = assignment.IndexOf('=', StringComparison.Ordinal);
+    if (split <= 0)
+    {
+        Console.Error.WriteLine(
+            $"mw-plugin-test build-project: '{assignment}' is not a property assignment — write Name=Value.");
+        return false;
+    }
+    properties[assignment[..split]] = assignment[(split + 1)..];
+    return true;
+}
+
+static string BuildProjectUsage() =>
+    "usage: mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] "
+    + "[--extra-refs <dir>]... [--accept <construct>]... [-p:Name=Value]... [--allow-warnings] "
+    + "[--max-parallel <n>]\n"
+    + "  Compiles a .NET project with NO dotnet SDK and NO NuGet restore: the .csproj is evaluated "
+    + "without MSBuild, every reference is resolved from this container's /app (and its .deps.json), "
+    + "ProjectReferences inside the source root are built first in dependency order, and Roslyn runs "
+    + "with the SDK's diagnostic standard (nullable analysis, DocumentationMode.Diagnose). Warnings "
+    + "fail the build unless --allow-warnings. A construct the evaluator cannot reproduce fails the "
+    + "run by name; --accept <construct> acknowledges one. The emitted assembly carries the "
+    + "identity GenerateAssemblyInfo would have given it (AssemblyVersion/FileVersion/"
+    + "InformationalVersion and the rest); -p:Name=Value supplies the properties it is derived "
+    + "from, SourceRevisionId included — this builder runs no git.";
 
 static string BuildUsage() =>
     "usage: mw-plugin-test build <repo-root> [<package>... | all] [--module <dll>]... [--out <dir>] "

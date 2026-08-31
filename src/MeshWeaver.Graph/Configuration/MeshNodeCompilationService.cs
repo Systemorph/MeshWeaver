@@ -278,7 +278,13 @@ internal class MeshNodeCompilationService(
     /// of the fully generated input that produced them (#1707 slice 4 — see
     /// <see cref="GeneratedInputIdentity"/>).
     /// </summary>
-    private readonly record struct CompileEmit(string? Path, string? InputDigest);
+    /// <param name="Path">Where the assembly landed.</param>
+    /// <param name="InputDigest">The generated-input digest the cache key folds.</param>
+    /// <param name="Warnings">Diagnostics the compile produced — carried up so they reach the
+    /// compile ACTIVITY. The emit deliberately does not log them itself (the log-once contract),
+    /// so this is how they travel to the one funnel that reports.</param>
+    private readonly record struct CompileEmit(
+        string? Path, string? InputDigest, IReadOnlyList<string> Warnings);
 
     /// <summary>
     /// One compile attempt's outcome: the assembly path (null on failure), the CONTENT KEY digest
@@ -947,6 +953,14 @@ internal class MeshNodeCompilationService(
                         var actualPath = emit.Path;
                         ActivityLog finalLog;
                         string? finalPath;
+                        // 🚨 DIAGNOSTICS GO TO THE ACTIVITY. A compile's warnings belong on the
+                        // record of that compile — the activity is what a reader opens, what the
+                        // Tests/Overview areas render and what the runner streams, so a warning
+                        // that only reached a server log reached nobody. Appended BEFORE the
+                        // outcome line so the log reads in the order it happened; Warning severity
+                        // never flips ActivityLog.Finish's terminal status, so surfacing them
+                        // cannot turn a green compile red on its own.
+                        discoveryLog = emit.Warnings.Aggregate(discoveryLog, AppendWarning);
                         if (cacheService.IsDiskCacheEnabled)
                         {
                             if (actualPath != null && File.Exists(actualPath))
@@ -1713,20 +1727,30 @@ internal class MeshNodeCompilationService(
             nugetAssemblyPaths, logger, ct);
 
         string? actualPath;
+        // The compile's own diagnostics, on the way to the activity. Empty is a real answer here —
+        // it means the compiler produced none, not that nobody looked.
+        IReadOnlyList<string> warnings = [];
         if (cacheService.IsDiskCacheEnabled)
         {
+            var emitted = default(EmittedArtifact);
             actualPath = EmitPipeline.EmitToDiskWithRetry(
                 cacheService.CacheDirectory, nodeName, EmitPipeline.DiskEmitAttempts, logger,
-                releaseDir => EmitPipeline.EmitCompilationToDirectory(compilation, nodeName, node.Path, releaseDir, ct));
+                releaseDir => emitted = EmitPipeline.EmitCompilationToDirectory(
+                    compilation, nodeName, node.Path, releaseDir, ct));
+            warnings = emitted.Warnings;
         }
         else
         {
+            // The in-memory path compiles the same tree, so it must report the same diagnostics —
+            // a warning that appears only when the disk cache is on would be a warning that depends
+            // on a deployment's caching mode, which is exactly the kind of difference nobody finds.
+            warnings = EmitPipeline.Warnings(compilation.GetDiagnostics(ct));
             var (assemblyBytes, pdbBytes) = EmitPipeline.EmitToMemory(compilation, node.Path, ct);
             cacheService.LoadAssemblyFromBytes(nodeName, assemblyBytes, pdbBytes);
             actualPath = $"memory://{nodeName}";
         }
 
         logger.LogInformation("Successfully compiled assembly for {NodePath} to {ActualPath}", node.Path, actualPath);
-        return new CompileEmit(actualPath, generatedInputDigest);
+        return new CompileEmit(actualPath, generatedInputDigest, warnings);
     }
 }

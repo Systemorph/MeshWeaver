@@ -21,7 +21,106 @@ mw-compiler <checkout-root>                 # GATE: mesh run — render + Tests 
 mw-compiler <root> --bake-output <dir>      # legacy: the gate's mesh ALSO produces the bundles
 mw-compiler --print-framework-identity      # one-line identity + provenance diagnostic
 mw-compiler build <root> [<pkg>...|all]     # BUILD: compile + test per package, dependency cascade
+mw-compiler build-project <csproj|dir>     # BUILD A .csproj: no dotnet SDK, no NuGet restore
 ```
+
+## `build-project` — compile a `.csproj` with NO SDK and NO NuGet (2026-08-31)
+
+> *"The platform builds dll completely without any external dotnet kit or nuget."* — maintainer,
+> 2026-08-30
+
+```
+mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] [--extra-refs <dir>]... \
+    [--generators <dir|dll>]... [--accept <construct>]... [-p:Name=Value]... [--allow-warnings] \
+    [--max-parallel <n>]
+```
+
+Runs INSIDE the image (`memex build project --image …` is the trip in). Three parts:
+
+- **`ProjectFile`** evaluates the `.csproj` without MSBuild — properties, items, the default
+  `**/*.cs` glob minus `bin`/`obj`, `Compile Include/Remove`, `ProjectReference`,
+  `PackageReference`, implicit usings, the target-framework symbol ladder, the nearest
+  `Directory.Build.props` / `.targets` / `Directory.Packages.props`, and every `<Import>` whose
+  condition holds. 🚨 **Anything it cannot reproduce FAILS the load by name** — an unknown element
+  or item type, a `Condition` outside its grammar, an `<Import>` of a missing file (MSB4019's
+  behaviour, deliberately), a `<Target>`, an `<EmbeddedResource>`. `--accept <construct>`
+  acknowledges one. The alternative is worse than no build: a dropped `Nullable`, `NoWarn` or
+  `DefineConstants` produces a green build that is not the build the SDK would have produced.
+- **`ContainerReferenceSet`** reads `/app`, the image's own `*.deps.json` and the shared frameworks
+  installed in the container. The C# port of `MeshWeaver.Plugins/scripts/container-refs.py`, read
+  from disk instead of an extracted image. 🚨 **Fails closed** on an unreadable `/app`, a missing or
+  ambiguous `.deps.json`, or MeshWeaver assemblies that disagree on their binding identity. 🚨 **A
+  package is matched by the ASSEMBLY FILE on disk, never by its id alone** — a metapackage whose
+  version the image records but whose assembly is not there is NOT supplied. A package the container
+  does not supply is an ADDITIONAL library, reported by name; `--extra-refs` is the only way in.
+- **`ProjectBuild`** sequences the `ProjectReference` graph on the same `Cascade` the `build` verb
+  uses (a cycle is refused up front and named), compiles with Roslyn, and emits through the
+  platform's own `EmitPipeline` — the verified emit-to-memory-then-write, so the file on disk is
+  provably the image that was emitted (#1412). 🚨 It builds its **own** `CSharpCompilationOptions`
+  and never touches `EmitPipeline.CreateCompilationOptions`, which feeds
+  `GeneratedInputIdentity.OptionsFingerprint` — the key every cached NodeType assembly is filed
+  under.
+
+**A `ProjectReference` inside the SOURCE ROOT** (the nearest `Directory.Build.props` ancestor of the
+entry project) is built from source, in dependency order. **Outside it, the container supplies the
+assembly** — which is exactly the `$(MeshWeaverRoot)/src/…` shape every `MeshWeaver.Plugins/src`
+project carries, and it resolves to the assembly the image ships rather than to a checkout.
+
+### 🔴 The emitted assembly carries the SDK's binding identity
+
+`GenerateAssemblyInfo` is a TARGET, and this builder runs no targets — so it emitted Roslyn's own
+default, **`AssemblyVersion=0.0.0.0`**, while the whole fleet binds `3.0.0.0`. Nothing went red: the
+compile was green, the DLL loaded, and the failure would have arrived in a different repo, at
+runtime, as `FileNotFoundException: Could not load file or assembly '…, Version=3.0.0.0'` — the
+shape of Systemorph/MeshWeaver#143, which CrashLoopBackOff'd a migration.
+
+The identity is now **evaluated** from the project and synthesized into the compilation as one more
+source document, exactly as the SDK's generated `<Project>.AssemblyInfo.cs` is one more Compile
+item: `AssemblyVersion` (explicit, else the numeric core of `$(Version)` padded to four fields,
+which is what the SDK's `GetAssemblyVersion` task does), `FileVersion` (following `AssemblyVersion`,
+never `$(Version)`), `InformationalVersion` (following `$(Version)`), the descriptive attributes
+with the SDK's `$(AssemblyName)` → `$(Authors)` → `$(Company)` fallback chain, and the
+`InternalsVisibleTo` / `AssemblyMetadata` / `AssemblyAttribute` items — all of which this evaluator
+used to drop as "metadata that changes nothing", true of the COMPILE and false of the ASSEMBLY.
+`GenerateAssemblyInfo=false` synthesizes nothing (the project supplies its own; a second set is
+CS0579), and each `Generate…Attribute` switch is honoured individually.
+
+🚨 **A property it cannot derive is a NAMED failure, never a plausible substitute** — an
+unparseable `$(Version)`, or `PublishRepositoryUrl=true` with no `$(RepositoryUrl)` (the SDK reads
+that one off the git remote).
+
+**Two things it deliberately does not reproduce, and both are said out loud:**
+
+- **`$(SourceRevisionId)`** — the SDK appends `+<sha>` to `InformationalVersion` from git; there is
+  no git here, so every build reports the absent suffix by name. `-p:SourceRevisionId=<sha>` gives
+  exact parity. `-p:Name=Value` (or `--property Name=Value`) is MSBuild's global property, and it is
+  immutable during evaluation exactly as MSBuild makes it: a `<PropertyGroup>` cannot overwrite one.
+- **`TargetFrameworkAttribute`** — written by a different target
+  (`GenerateTargetFrameworkMonikerAttribute`) with its own switches and its own
+  `TargetPlatform`/`SupportedOSPlatform` companions for a platform-suffixed TFM this evaluator
+  cannot compute. Emitting half of that set would be worse than the gap.
+
+Measured, not assumed: every rule above was produced by building the same project with SDK 10.0.400
+and reading the generated `*.AssemblyInfo.cs`, and the container output for
+`MeshWeaver.Plugins/src/MeshWeaver.Speech.Contract` was compared attribute-for-attribute against a
+real `dotnet build` of it — identical but for `TargetFrameworkAttribute`.
+
+**The diagnostic standard is the SDK's.** Nullable analysis follows the project;
+`DocumentationMode.Diagnose` is ALWAYS on so doc-QUALITY defects surface (CS1574, CS0419, CS1570),
+while the doc-COMPLETENESS family (CS1591/CS1573/CS1712) is suppressed exactly when the project asked
+for no doc file — which is when csc would not raise it either. The SDK's default `NoWarn`
+(`1701;1702`) is seeded first. **Warnings fail the build**; `--allow-warnings` opts out.
+
+**Everything streams.** Every progress line and every diagnostic is appended to an `ActivityLog`
+(`ActivityCategory.Compilation`) and pushed to the caller's observer the moment it is produced; the
+console is a rendering of that stream, which is why nothing is batched to the end.
+
+**Not supported, and each says so:** Razor/Blazor compilation (needs
+`Microsoft.CodeAnalysis.Razor.Compiler`, `Microsoft.AspNetCore.Razor.Utilities.Shared` and
+`Microsoft.Extensions.ObjectPool` in the image — it ships none), SDK source generators (they live in
+the SDK, not the runtime; `--generators` supplies them), embedded resources, `<Protobuf>`, MSBuild
+`<Target>`s and `<Sdk>` elements. Full measurements:
+[In-Mesh Build and Test](https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Documentation/Data/Architecture/InMeshBuildAndTest.md).
 
 ## `build` — compile AND test, per package, as a dependency cascade (2026-08-30)
 
