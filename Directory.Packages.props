@@ -9,13 +9,41 @@
          so removing that unused package broke the build - an accidental dependency, now explicit. -->
     <PackageVersion Include="YamlDotNet" Version="16.3.0" />
     <PackageVersion Include="AspNet.Security.OAuth.Apple" Version="10.0.0" />
+    <!-- 🚨 THE ASPIRE FAMILY IS HELD AT 13.4.6 ON PURPOSE — do not let a dependency sweep move it.
+         Every Aspire.Hosting version depends on JsonPatch.Net; only the VERSION differs, and the
+         licence changes with it:
+
+             Aspire 13.3.3 .. 13.4.6  ->  JsonPatch.Net 3.3.0   MIT
+             Aspire 13.5.0 .. 13.5.3  ->  JsonPatch.Net 5.0.2   OSMFEULA (Open Source Maintenance Fee)
+
+         JsonPatch.Net 5.0.0 is where json-everything moved its BINARY releases to a maintenance
+         fee: the source stays MIT, but consuming the published binaries obliges any user with
+         >= US$10,000 annual revenue from revenue-generating use to pay it (OSMFEULA.txt §1-§4).
+
+         🚨 The exposure is NOT the memex image — nothing there references Aspire at any depth.
+         It is memex/aspire/Memex.Aspire.Hosting, which is IsPackable and PUBLISHED as
+         MeshWeaver.Aspire.Hosting.Memex. Its nuspec carries these three as dependencies, so
+         bumping to 13.5.x hands the fee obligation to everyone who installs our integration and
+         calls builder.AddMemex() — people who never chose it. Measured on both pins:
+
+             13.4.6 -> JsonPatch.Net 3.3.0, JsonPointer.Net 5.2.0, Json.More.Net 2.1.0   (MIT)
+             13.5.3 -> JsonPatch.Net 5.0.2, JsonPointer.Net 7.0.1, Json.More.Net 3.0.1   (OSMFEULA)
+
+         Aspire uses it internally in its DCP layer (DcpExecutor.PatchDcpObjectAsync,
+         KubernetesService.PatchAsync) to patch local orchestrator objects — nothing to do with
+         MeshWeaver's own mesh-node patch path, so "use our own" is not available here.
+
+         Moving to 13.5.x is a COMMERCIAL decision, not a version bump. If it is taken, the three
+         packages need a documented exception in the licence gate (the `~` mechanism
+         UglyToad.PdfPig already uses), and consumers should be told.
+         PackageFamiliesMoveTogetherGuard keeps the 14 pins on one base version either way. -->
     <PackageVersion Include="Aspire.Azure.Npgsql" Version="13.4.6" />
     <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="13.4.6" />
-    <PackageVersion Include="Aspire.Hosting" Version="13.5.3" />
+    <PackageVersion Include="Aspire.Hosting" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.Docker" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.Kubernetes" Version="13.4.6-preview.1.26319.6" />
-    <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.5.3" />
+    <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.Azure.AppContainers" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.Azure.KeyVault" Version="13.4.6" />
