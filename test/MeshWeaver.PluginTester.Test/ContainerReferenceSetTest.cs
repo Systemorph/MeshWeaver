@@ -287,4 +287,49 @@ public class ContainerReferenceSetTest : IDisposable
         act.Should().Throw<ContainerReferenceSet.UnreadableContainerException>()
             .Which.Message.Should().Contain("exactly one *.deps.json");
     }
+
+    // ── the platform's shared frameworks ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 🚨 The false-"additional library" this parameter kills, measured on Plugins#1032: a
+    /// framework-provided (NU1510-prunable) package like Microsoft.Extensions.FileSystemGlobbing
+    /// lives in the PLATFORM's ASP.NET Core shared framework — absent from the platform /app AND
+    /// from the tester image's console runtime, so without the explicit root every container
+    /// entry binding it went red on a package the landing runtime supplies.
+    /// </summary>
+    [Fact]
+    public void AFrameworkProvidedPackageResolvesFromTheExplicitSharedFrameworksRoot()
+    {
+        var app = App("fw-app");
+        Dll(app, "MeshWeaver.Data");
+        File.WriteAllText(Path.Combine(app, "host.deps.json"), Deps());
+        var shared = Path.Combine(_root, "platform-shared", "Microsoft.AspNetCore.App", "10.0.11");
+        Directory.CreateDirectory(shared);
+        Dll(shared, "Microsoft.Extensions.FileSystemGlobbing");
+
+        var refs = ContainerReferenceSet.Read(
+            app, string.Empty, Path.Combine(_root, "platform-shared"));
+
+        var resolution = refs.Resolve("Microsoft.Extensions.FileSystemGlobbing");
+        resolution.Supplied.Should().BeTrue(
+            "the reference set is the runtime the module LANDS in, shared frameworks included");
+        resolution.AssemblyPaths.Single().Should().Be(
+            Path.Combine(shared, "Microsoft.Extensions.FileSystemGlobbing.dll"));
+    }
+
+    [Fact]
+    public void AnExplicitSharedFrameworksRootThatIsMissingIsARefusalNotAFallback()
+    {
+        var app = App("fw-missing");
+        Dll(app, "MeshWeaver.Data");
+        File.WriteAllText(Path.Combine(app, "host.deps.json"), Deps());
+
+        Action act = () => ContainerReferenceSet.Read(
+            app, string.Empty, Path.Combine(_root, "not-there"));
+
+        act.Should().Throw<ContainerReferenceSet.UnreadableContainerException>()
+            .Which.Message.Should().Contain("--shared-frameworks",
+                "silently falling back to the builder's own runtime would resurrect the exact "
+                + "false verdicts the parameter exists to kill");
+    }
 }
