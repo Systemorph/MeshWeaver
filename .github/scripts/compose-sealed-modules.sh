@@ -53,6 +53,48 @@ case "$identity" in */*|*..*|"") echo "::error::compose-sealed-modules.sh: ident
 mkdir -p "$out"
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
+# ── re-ask a registry that has not answered yet ───────────────────────────────────────────────
+# 🚨 A 5xx is not an answer — it is the ABSENCE of one. Promoting the platform ROLLS the portal
+# that serves this registry, so every promotion opens a window in which a dependent repo's gate
+# reads a 503 through no fault of its own diff (MeshWeaver#2787: three promotions in one day, six
+# repos reading this endpoint). Refusing on it makes the fleet's CI a function of deploy timing.
+#
+# A DEFINITE answer is untouched and still refuses at once — 404 (unsealed / predates module
+# sealing) and 401/403 (no grant) are decisions the registry has already made, and waiting on one
+# only delays the message naming it. Same distinction, same reason, as MeshWeaver#2836 on the
+# portal side: branch on what the server SAID, never on "the read failed".
+#
+# 🚨 A retry, NOT a skip-trapdoor: when the attempts are spent the last status is returned and
+# every caller still fails RED — a registry that is genuinely down fails the gate exactly as it
+# did before, about three minutes later.
+#
+# 🚨 There is a SECOND copy of this function, in .github/workflows/node-repo-gate.yml (same
+# policy, REGISTRY_KEY spelled upper-case there). It is duplicated ON PURPOSE rather than
+# factored into a third file: THIS script is fetched from core at a pinned `platform-ref` while
+# that workflow is pinned by the caller's `uses:`, so a shared file would be a THIRD
+# independently-pinned artefact — the exact skew that once let an old workflow drive a new
+# script and seal an empty module set. Change one, change both.
+registry_get() { # <url> <out-file> → echoes the final HTTP status
+  local url="$1" out="$2" code="" attempt=0
+  local -r delays="15 30 60 90"
+  while :; do
+    code=$(curl -sS -o "$out" -w '%{http_code}' \
+             -H "Authorization: Bearer $registry_key" "$url") || code="000"
+    case "$code" in
+      # Transient: a roll window, a gateway blip, or a connection that never landed (000).
+      408|429|5??|000) ;;
+      *) printf '%s' "$code"; return 0 ;;
+    esac
+    attempt=$((attempt+1))
+    local delay
+    delay=$(printf '%s\n' $delays | sed -n "${attempt}p")
+    [ -n "$delay" ] || { printf '%s' "$code"; return 0; }
+    echo "registry answered $code for $url — transient (a platform roll looks like this);" \
+         "re-asking in ${delay}s, attempt $((attempt+1))" >&2
+    sleep "$delay"
+  done
+}
+
 # ── one upstream's sealed module set (an index), or a RED reason ──────────────────────────────
 # Writes the listed bundle names, one per line, into <list-file>. Exit 1 with ::error when the
 # upstream has no seal for this identity or the seal predates module sealing — both are stop
@@ -65,7 +107,7 @@ sealed_modules_of() { # <source> <list-file>
   if [ -n "$registry_url" ]; then
     local base="${registry_url%/}/api/plugins/bundles/prebuilt/$identity/$src"
     local code
-    code=$(curl -sS -o "$work/$src.modules.json" -w '%{http_code}' -H "Authorization: Bearer $registry_key" "$base/modules")
+    code=$(registry_get "$base/modules" "$work/$src.modules.json")
     case "$code" in
       200) ;;
       404)
@@ -102,9 +144,10 @@ sealed_modules_of() { # <source> <list-file>
 fetch_module() { # <source> <bundle-name> <dest>
   local src="$1" name="$2" dest="$3"
   if [ -n "$registry_url" ]; then
-    curl -sSf -H "Authorization: Bearer $registry_key" -o "$dest" \
-      "${registry_url%/}/api/plugins/bundles/prebuilt/$identity/$src/modules/$name" \
-      || { echo "::error::could not fetch sealed module $name of '$src' for identity $identity"; return 1; }
+    local code
+    code=$(registry_get \
+      "${registry_url%/}/api/plugins/bundles/prebuilt/$identity/$src/modules/$name" "$dest")
+    [ "$code" = 200 ] || { echo "::error::could not fetch sealed module $name of '$src' for identity $identity — registry answered $code."; return 1; }
   else
     local account="${storage_target%%/*}" rest="${storage_target#*/}"
     local share="${rest%%/*}" base=""

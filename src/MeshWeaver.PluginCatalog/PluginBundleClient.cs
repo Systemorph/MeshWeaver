@@ -128,7 +128,10 @@ public sealed class PluginBundleClient
 
             var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
-                throw new InvalidOperationException(
+                // Carries the status (see RegistryResponseException): the index read shares the
+                // registry's availability, so a caller deciding whether to re-ask must be able to
+                // tell a refusal from a transient 5xx without reading the message text.
+                throw new RegistryResponseException(resp.StatusCode,
                     $"Bundle index fetch failed ({(int)resp.StatusCode}): {json}");
 
             return JsonSerializer.Deserialize<BundleIndex>(json, Json) ?? new BundleIndex(null, []);
