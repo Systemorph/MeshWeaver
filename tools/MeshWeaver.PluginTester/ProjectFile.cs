@@ -123,7 +123,15 @@ public static class ProjectFile
         string FileVersion,
         string InformationalVersion,
         bool SourceRevisionApplied,
-        ImmutableArray<AssemblyAttributeSpec> Attributes);
+        ImmutableArray<AssemblyAttributeSpec> Attributes)
+    {
+        /// <summary>The identity of a model built without evaluating GenerateAssemblyInfo —
+        /// every field the "nothing was stamped" shape: no generation, empty versions, no
+        /// attributes. Exists so <see cref="Model.AssemblyInfo"/> can default to a VALID value
+        /// instead of null, keeping the property non-nullable.</summary>
+        public static readonly AssemblyInfo None =
+            new(false, "", "", "", "", false, []);
+    }
 
     /// <summary>The evaluated project.</summary>
     /// <param name="ProjectPath">Absolute path of the <c>.csproj</c>.</param>
@@ -147,8 +155,6 @@ public static class ProjectFile
     /// <param name="GlobalUsings">Namespaces the SDK would have emitted as <c>global using</c>.</param>
     /// <param name="Properties">Every evaluated property, for diagnosis.</param>
     /// <param name="UnexecutedTargets">Names of <c>Target</c> elements this evaluator did not run.</param>
-    /// <param name="AssemblyInfo">🔴 The assembly's identity — what <c>GenerateAssemblyInfo</c>
-    /// would have written. Omitting it emits <c>0.0.0.0</c>, which no compile can catch.</param>
     public sealed record Model(
         string ProjectPath,
         string Sdk,
@@ -170,8 +176,7 @@ public static class ProjectFile
         ImmutableArray<PackageRef> PackageReferences,
         ImmutableArray<string> GlobalUsings,
         ImmutableDictionary<string, string> Properties,
-        ImmutableArray<string> UnexecutedTargets,
-        AssemblyInfo AssemblyInfo)
+        ImmutableArray<string> UnexecutedTargets)
     {
         /// <summary>
         /// Every <c>.razor</c>/<c>.cshtml</c> the Razor SDK would compile, ordered.
@@ -213,6 +218,19 @@ public static class ProjectFile
         /// missing from the assembly rather than leaving it to be discovered at run time.
         /// </summary>
         public ImmutableArray<string> SkippedResources { get; init; } = [];
+
+        /// <summary>
+        /// 🔴 The assembly's identity — what <c>GenerateAssemblyInfo</c> would have stamped.
+        ///
+        /// <para>🚨 An <c>init</c> PROPERTY, not a primary-constructor parameter — the same rule
+        /// this record already documents for RazorItems and EmbeddedResources: adding a parameter,
+        /// even a defaulted one, REPLACES the constructor signature, and
+        /// <c>scripts/check-record-signatures.py</c> refuses that. The original #2855 commit added
+        /// this as a 22nd positional parameter; its green attested to a stale merge base where the
+        /// arity check compared against a tree that already had it. Defaulted to
+        /// <see cref="ProjectFile.AssemblyInfo.None"/> so a model built without it stays valid.</para>
+        /// </summary>
+        public AssemblyInfo AssemblyInfo { get; init; } = ProjectFile.AssemblyInfo.None;
 
         /// <summary>The project's own directory.</summary>
         public string Directory => Path.GetDirectoryName(ProjectPath)!;
@@ -1273,9 +1291,9 @@ public static class ProjectFile
                     .Select(p => new PackageRef(p.Id, p.Version ?? _packageVersions.GetValueOrDefault(p.Id)))],
                 globalUsings,
                 _properties.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase),
-                [.. _unexecutedTargets],
-                BuildAssemblyInfo(assemblyName))
+                [.. _unexecutedTargets])
             {
+                AssemblyInfo = BuildAssemblyInfo(assemblyName),
                 RazorItems = razorItems,
                 RazorLangVersion = Prop("RazorLangVersion") is { Length: > 0 } rlv ? rlv : DefaultRazorLangVersion,
                 RazorConfiguration = Prop("RazorConfiguration") is { Length: > 0 } rc ? rc : DefaultRazorConfiguration,
