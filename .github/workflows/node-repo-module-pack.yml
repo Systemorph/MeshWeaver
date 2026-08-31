@@ -643,7 +643,12 @@ jobs:
               # would then land a module that faults at first use — the 2026-08-19/20 outage. The
               # builder REFUSES such a PackageReference by name, which is exactly the answer wanted:
               # that module stays on the SDK path until the image carries what it needs.
+              # 🚨 AS THE RUNNER'S UID, never root: a root-owned /out subtree is unwritable to the
+              # runner-side steps that follow — measured on the 31-entry acceptance rerun, where
+              # every module with a module-owned sibling died `cp: Permission denied` AFTER a green
+              # build. HOME=/tmp keeps the runtime's config probes off the read-only image paths.
               docker run --rm --init --platform linux/amd64 \
+                --user "$(id -u):$(id -g)" -e HOME=/tmp \
                 -v "$GITHUB_WORKSPACE:/repo:ro" \
                 -v "$platform_app:/platform-app:ro" \
                 -v "$platform_shared:/platform-shared:ro" \
