@@ -51,7 +51,7 @@ namespace MeshWeaver.Mesh;
 /// write the owner had refused. <see cref="DispatchFailure"/> is that missing seam, and it obeys
 /// the identical exactly-once rule.</para>
 /// </summary>
-public sealed class LatePatchResponseRegistry
+public sealed class LatePatchResponseRegistry : ILatePatchVerdictSink
 {
     /// <summary>
     /// 🚨 How long after the patch post a late owner response is still acted upon. This is
