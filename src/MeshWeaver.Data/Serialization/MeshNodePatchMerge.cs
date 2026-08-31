@@ -75,6 +75,29 @@ public static class MeshNodePatchMerge
                 continue;
             }
 
+            // 🚨 NOT A CONFLICT: the writer's value is ALREADY the live value. `live != base` only
+            // says the owner moved since the writer read; it does not say the two DISAGREE. When the
+            // patch and the live value are the same, applying it is a no-op and refusing it invents a
+            // conflict out of nothing — including the commonest shape of all, an RFC 7396 REMOVAL
+            // (patch null) of a key the owner has already removed.
+            //
+            // That invention is expensive, because a refusal is no longer only a dropped field: since
+            // "a PARTIAL merge refusal is still a refusal" (#2463/#2840) it NACKs Conflict on a write
+            // that LANDED, and Conflict's remedy is to re-run the caller's update lambda
+            // (MeshNodeStreamHandle.UpdateRemote's re-enqueue, MeshNodeStreamCache's conflict retry).
+            // A lambda that performs a RELATIVE mutation — truncate at an index, drop a tail — then
+            // performs it a second and third time against a node that has already moved on. Measured
+            // on MeshWeaver.Plugins#1009: a chat resubmit whose patch set Status/ActiveMessageId/
+            // ExecutionStartedAt to EXACTLY what the owner already held was refused three times, the
+            // write was re-run three times, and the thread's Messages list oscillated
+            // [u,r] → [] → [u,r'] → [r'] → [r',u,r''] → … losing cells and scrambling order.
+            //
+            // Checked before the string and array resolutions as well: an identical string needs no
+            // splice rebase (and an overlapping-delta pair would REFUSE it), and an identical array
+            // needs no element merge.
+            if (JsonNode.DeepEquals(patchVal, liveVal))
+                continue;
+
             // CONFLICT: the field changed on the owner since the writer's base.
             // String on all three → rebase the writer's edit over the intervening edit and merge.
             if (TryGetString(patchVal, out var newStr)
