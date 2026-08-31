@@ -74,18 +74,38 @@ public class InstallerBoundsNameThemselvesGuard
     /// <summary>
     /// 🚨 The scanner must actually find the sites. A regex that matched nothing would satisfy the
     /// test above vacuously — which is the same defect the test exists to prevent, one level up.
+    ///
+    /// <para>🚨 It asserts a COUNT and a SHAPE, never specific identifiers. The first version listed
+    /// three bound names, and CI reddened it within the hour: #2849 had renamed
+    /// <c>GatingSettleTimeout</c> to <c>GatingDetectorBudget</c> while this branch was being written,
+    /// so a guard about *silence on expiry* failed for a reason that had nothing to do with silence.
+    /// A guard naming a symbol inherits every rename of that symbol as a false failure — and a guard
+    /// that cries wolf gets deleted, taking the real check with it. Bind to the property, not the
+    /// name.</para>
     /// </summary>
     [Fact]
     public void TheScannerSeesTheBoundsItClaimsTo()
     {
         var waits = BoundedWaits(SubjectLines());
-        Assert.True(waits.Count >= 6,
-            $"expected the installer's bounded waits to be found; saw {waits.Count}");
 
-        // And the named bounds are the ones documented on #2446, not incidental matches.
-        var names = waits.Select(w => w.Bound).ToHashSet(StringComparer.Ordinal);
-        foreach (var expected in new[] { "WarmTimeout", "GatingSettleTimeout", "RootRecycleTimeout" })
-            Assert.Contains(expected, names);
+        Assert.True(waits.Count >= 6,
+            $"expected the installer's bounded waits to be found; saw {waits.Count}. A scanner that "
+            + "matches nothing makes the guard above pass on an empty set.");
+
+        // The SHAPE of a bound's name, which survives renaming: these are budget-ish identifiers,
+        // not literals and not locals. If a future bound is a bare TimeSpan literal the regex will
+        // not see it at all, and the count assertion above is what notices.
+        var odd = waits
+            .Where(w => !(w.Bound.EndsWith("Timeout", StringComparison.Ordinal)
+                          || w.Bound.EndsWith("Budget", StringComparison.Ordinal)
+                          || w.Bound.EndsWith("Bound", StringComparison.Ordinal)
+                          || w.Bound is "bound"))
+            .Select(w => $"{Subject}:{w.Line + 1} — .Timeout({w.Bound})")
+            .ToList();
+
+        Assert.True(odd.Count == 0,
+            "every bounded wait should name a budget-shaped identifier, so the scanner is provably "
+            + "matching bounds rather than incidental tokens:\n  " + string.Join("\n  ", odd));
     }
 
     private static string FindRepoRoot()
