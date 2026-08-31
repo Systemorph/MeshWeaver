@@ -130,7 +130,7 @@
     <PackageVersion Include="Microsoft.Playwright" Version="1.62.0" />
     <PackageVersion Include="NuGet.Protocol" Version="7.9.0" />
     <PackageVersion Include="NuGet.Packaging" Version="7.9.0" />
-    <PackageVersion Include="NuGet.Versioning" Version="7.6.0" />
+    <PackageVersion Include="NuGet.Versioning" Version="7.9.0" />
     <PackageVersion Include="NuGet.Resolver" Version="7.9.0" />
     <PackageVersion Include="NuGet.DependencyResolver.Core" Version="7.9.0" />
     <PackageVersion Include="NuGet.Frameworks" Version="7.9.0" />
