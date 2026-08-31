@@ -1,4 +1,3 @@
-using System.Diagnostics;
 
 namespace MeshWeaver.Cli;
 
@@ -18,8 +17,9 @@ namespace MeshWeaver.Cli;
 /// </summary>
 public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
 {
-    /// <summary>Attempts for a registry PULL — see <see cref="PullImage"/>.</summary>
-    private const int PullAttempts = 3;
+    /// <summary>The docker plumbing this verb shares with <c>build project</c>: the pull
+    /// retry, the digest pin, and the process launch. One copy, so the pin cannot drift.</summary>
+    private readonly ImageRunner _runner = new(output, error);
 
     /// <summary>
     /// The file the compile stage writes to record which framework the bundles were built against.
@@ -55,7 +55,7 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         // this (`${IMAGE%%:*}@${DIGEST}`) for a reason: a tag can move between the compile and the
         // gate, and then the bytes tested are not the bytes baked — which is the one claim the
         // two-stage split exists to make.
-        var pinned = await PullImage(options.Image, ct);
+        var pinned = await _runner.PullImage(options.Image, ct);
         if (pinned is null) return 4;
         await output.WriteLineAsync($"image: {pinned}");
 
@@ -70,11 +70,7 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         // writing the first bundle. Applied to a caller-supplied directory too: the caller asked
         // for a bake THERE, and a mount the container cannot write is a promise this command
         // cannot keep. Windows has no unix mode and no such non-root docker convention; skip.
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(bake,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
-                UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
-                UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+        ImageRunner.MakeContainerWritable(bake);
 
         // ── the upstream seed comes FIRST, because it is also where the modules come from ───────
         // Round 4's lesson: sourcing module DLLs from the package index takes the LATEST version,
@@ -89,7 +85,7 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         var seedDir = bake; // the gate consumes one dir: own bake + upstream bundles
         if (options.UpstreamSeed is { Length: > 0 } upstreams)
         {
-            var line = await Capture("docker",
+            var line = await ImageRunner.Capture("docker",
                 ["run", "--rm", "--init", "--entrypoint", "/app/mw-plugin-test", pinned,
                  "--print-framework-identity"], ct);
             var idIdx = line.IndexOf("identity=", StringComparison.Ordinal);
@@ -133,14 +129,14 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                 { moduleArgs.Add("--module"); moduleArgs.Add($"/ext/{name}/{name}.dll"); }
             }
         }
-        if (extDir is not null && !OperatingSystem.IsWindows() && Directory.Exists(extDir))
-            File.SetUnixFileMode(extDir, WorldRwx);
+        if (extDir is not null && Directory.Exists(extDir))
+            ImageRunner.MakeContainerWritable(extDir);
 
         // ── stage 1: PRODUCE ───────────────────────────────────────────────────────────────────
         // Module args go to BOTH stages: the compile needs the externals to RESOLVE their types,
         // the gate needs them to REGISTER them (the node-repo gate passes them to both for exactly
         // this reason, and dropping either half reintroduces one of the two failures).
-        var compile = await RunInImage(pinned, repo, options, extDir,
+        var compile = await RunInImage(pinned, repo, extDir,
             mounts: [$"{bake}:/bake"],
             env: [],
             args: ["compile", "/repo", ..AllowArgs(repo, options), ..moduleArgs, ..options.ExtraArgs,
@@ -159,17 +155,12 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
 
 
         // ── stage 2: CONSUME — stand a mesh up on the bytes stage 1 produced ───────────────────
-        return await RunInImage(pinned, repo, options, extDir,
+        return await RunInImage(pinned, repo, extDir,
             mounts: [$"{bake}:/seed:ro"],
             env: ["MW_INSTALL_DIFF=1"],
             args: ["/repo", ..AllowArgs(repo, options), ..moduleArgs, ..options.ExtraArgs, "--seed", "/seed"],
             ct);
     }
-
-    private const UnixFileMode WorldRwx =
-        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
-        UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
-        UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
 
     /// <summary>
     /// Fetches each named package's sealed bundle from the plugin registry and composes it under
@@ -286,47 +277,6 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
 
     private static IEnumerable<string> SourceShaArgs(BuildPluginOptions o) =>
         o.SourceSha is { Length: > 0 } sha ? ["--source-sha", sha] : [];
-
-    /// <summary>
-    /// Pull the image and resolve it to a digest.
-    ///
-    /// <para>🚨 Bounded retry, and deliberately NOT a skip-trapdoor: after the last attempt this
-    /// returns null and the command fails RED. It exists because a registry pull is the one step
-    /// here that fails for reasons that have nothing to do with the change under test — on
-    /// 2026-08-30 core CD lost a whole release to `Connection refused` on one pull, and the same
-    /// class of fault had already put a bounded retry into three node-repo workflows.</para>
-    /// </summary>
-    private async Task<string?> PullImage(string image, CancellationToken ct)
-    {
-        for (var attempt = 1; attempt <= PullAttempts; attempt++)
-        {
-            if (await Exec("docker", ["pull", image], ct) == 0)
-            {
-                var digest = await Capture("docker",
-                    ["image", "inspect", image, "--format", "{{index .RepoDigests 0}}"], ct);
-                // No digest is not a failure to retry: a locally-built image legitimately has none,
-                // and pinning is then simply not available. Say so rather than inventing one.
-                if (string.IsNullOrWhiteSpace(digest))
-                {
-                    await output.WriteLineAsync(
-                        $"note: '{image}' has no repo digest (local image?) — using the tag as given, "
-                        + "so the two stages are pinned only as well as the tag is.");
-                    return image;
-                }
-                return digest.Trim();
-            }
-            if (attempt < PullAttempts)
-            {
-                await error.WriteLineAsync(
-                    $"pull attempt {attempt} of {PullAttempts} failed for '{image}' — retrying in 10s");
-                await Task.Delay(TimeSpan.FromSeconds(10), ct);
-            }
-        }
-        await error.WriteLineAsync(
-            $"error: could not pull '{image}' in {PullAttempts} attempts. Three consecutive failures "
-            + "is no longer a transient — check the registry and the credentials rather than retrying.");
-        return null;
-    }
 
     /// <summary>
     /// Composes the requested module packages from the SEED's own bundles — identity-matched by
@@ -471,47 +421,16 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
     }
 
     private Task<int> RunInImage(
-        string image, string repo, BuildPluginOptions o,
+        string image, string repo,
         string? extDir,
         IEnumerable<string> mounts, IEnumerable<string> env, IEnumerable<string> args,
         CancellationToken ct)
     {
-        var docker = new List<string> { "run", "--rm", "-v", $"{repo}:/repo" };
-        foreach (var m in mounts) { docker.Add("-v"); docker.Add(m); }
+        var all = new List<string> { $"{repo}:/repo" };
+        all.AddRange(mounts);
         if (extDir is { Length: > 0 } ext)
-        { docker.Add("-v"); docker.Add($"{ext}:/ext"); }
-        foreach (var e in env) { docker.Add("-e"); docker.Add(e); }
-        docker.Add("--entrypoint"); docker.Add("/app/mw-plugin-test");
-        docker.Add(image);
-        docker.AddRange(args);
-        return Exec("docker", docker, ct);
-    }
-
-    private async Task<int> Exec(string file, IEnumerable<string> args, CancellationToken ct)
-    {
-        var psi = new ProcessStartInfo(file) { UseShellExecute = false };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        await output.WriteLineAsync($"$ {file} {string.Join(' ', psi.ArgumentList)}");
-        using var p = Process.Start(psi);
-        if (p is null)
-        {
-            await error.WriteLineAsync($"error: could not start '{file}' — is Docker installed and on PATH?");
-            return 127;
-        }
-        await p.WaitForExitAsync(ct);
-        return p.ExitCode;
-    }
-
-    private static async Task<string> Capture(string file, IEnumerable<string> args, CancellationToken ct)
-    {
-        var psi = new ProcessStartInfo(file)
-        { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        using var p = Process.Start(psi);
-        if (p is null) return string.Empty;
-        var stdout = await p.StandardOutput.ReadToEndAsync(ct);
-        await p.WaitForExitAsync(ct);
-        return p.ExitCode == 0 ? stdout : string.Empty;
+            all.Add($"{ext}:/ext");
+        return _runner.RunInImage(image, all, env, args, ct);
     }
 }
 
