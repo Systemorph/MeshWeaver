@@ -21,7 +21,86 @@ mw-compiler <checkout-root>                 # GATE: mesh run — render + Tests 
 mw-compiler <root> --bake-output <dir>      # legacy: the gate's mesh ALSO produces the bundles
 mw-compiler --print-framework-identity      # one-line identity + provenance diagnostic
 mw-compiler build <root> [<pkg>...|all]     # BUILD: compile + test per package, dependency cascade
+mw-compiler build-project <csproj|dir>     # BUILD A .csproj: no dotnet SDK, no NuGet restore
 ```
+
+## `build-project` — compile a `.csproj` with NO SDK and NO NuGet (2026-08-31)
+
+> *"The platform builds dll completely without any external dotnet kit or nuget."* — maintainer,
+> 2026-08-30
+
+```
+mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] [--extra-refs <dir>]... \
+    [--generators <dir|dll>]... [--razor-generators <dir>] \
+    [--accept <construct>]... [--allow-warnings] [--max-parallel <n>]
+```
+
+Runs INSIDE the image (`memex build project --image …` is the trip in). Three parts:
+
+- **`ProjectFile`** evaluates the `.csproj` without MSBuild — properties, items, the default
+  `**/*.cs` glob minus `bin`/`obj`, `Compile Include/Remove`, `ProjectReference`,
+  `PackageReference`, implicit usings, the target-framework symbol ladder, the nearest
+  `Directory.Build.props` / `.targets` / `Directory.Packages.props`, and every `<Import>` whose
+  condition holds. 🚨 **Anything it cannot reproduce FAILS the load by name** — an unknown element
+  or item type, a `Condition` outside its grammar, an `<Import>` of a missing file (MSB4019's
+  behaviour, deliberately), a `<Target>`, an `<EmbeddedResource>`. `--accept <construct>`
+  acknowledges one. The alternative is worse than no build: a dropped `Nullable`, `NoWarn` or
+  `DefineConstants` produces a green build that is not the build the SDK would have produced.
+- **`ContainerReferenceSet`** reads `/app`, the image's own `*.deps.json` and the shared frameworks
+  installed in the container. The C# port of `MeshWeaver.Plugins/scripts/container-refs.py`, read
+  from disk instead of an extracted image. 🚨 **Fails closed** on an unreadable `/app`, a missing or
+  ambiguous `.deps.json`, or MeshWeaver assemblies that disagree on their binding identity. 🚨 **A
+  package is matched by the ASSEMBLY FILE on disk, never by its id alone** — a metapackage whose
+  version the image records but whose assembly is not there is NOT supplied. A package the container
+  does not supply is an ADDITIONAL library, reported by name; `--extra-refs` is the only way in.
+- **`ProjectBuild`** sequences the `ProjectReference` graph on the same `Cascade` the `build` verb
+  uses (a cycle is refused up front and named), compiles with Roslyn, and emits through the
+  platform's own `EmitPipeline` — the verified emit-to-memory-then-write, so the file on disk is
+  provably the image that was emitted (#1412). 🚨 It builds its **own** `CSharpCompilationOptions`
+  and never touches `EmitPipeline.CreateCompilationOptions`, which feeds
+  `GeneratedInputIdentity.OptionsFingerprint` — the key every cached NodeType assembly is filed
+  under.
+
+**A `ProjectReference` inside the SOURCE ROOT** (the nearest `Directory.Build.props` ancestor of the
+entry project) is built from source, in dependency order. **Outside it, the container supplies the
+assembly** — which is exactly the `$(MeshWeaverRoot)/src/…` shape every `MeshWeaver.Plugins/src`
+project carries, and it resolves to the assembly the image ships rather than to a checkout.
+
+**The diagnostic standard is the SDK's.** Nullable analysis follows the project;
+`DocumentationMode.Diagnose` is ALWAYS on so doc-QUALITY defects surface (CS1574, CS0419, CS1570),
+while the doc-COMPLETENESS family (CS1591/CS1573/CS1712) is suppressed exactly when the project asked
+for no doc file — which is when csc would not raise it either. The SDK's default `NoWarn`
+(`1701;1702`) is seeded first. **Warnings fail the build**; `--allow-warnings` opts out.
+
+**Everything streams.** Every progress line and every diagnostic is appended to an `ActivityLog`
+(`ActivityCategory.Compilation`) and pushed to the caller's observer the moment it is produced; the
+console is a rendering of that stream, which is why nothing is batched to the end.
+
+**Razor/Blazor compiles** (2026-08-31). `.razor` and `.cshtml` are turned into C# by the SDK's
+Roslyn **source generator**, which the image now ships in `razor-generators/<rid>/` beside the
+builder: `Microsoft.CodeAnalysis.Razor.Compiler.dll` + `Microsoft.AspNetCore.Razor.Utilities.Shared.dll`
+— the measured closure, everything else the compiler references binds to the host.
+
+- 🚨 **Per RID.** The SDK crossgens its Razor compiler for the SDK's own runtime identifier, so ONE
+  copy cannot serve a multi-arch image: the same 10.0.400 file carries PE machine `0xFD1D` on
+  linux-x64 and `0xD11D` on linux-arm64, and the wrong one throws `BadImageFormatException`. CD
+  stages both; `--razor-generators <dir>` names another copy and REPLACES the search rather than
+  heading it.
+- 🚨 **Loaded into a host-first load context.** The generator is built against the SDK's Roslyn
+  (10.0.400's wants `Microsoft.CodeAnalysis` 5.9.0.0) and the image carries this repo's pin (5.6.0);
+  the default context refuses the lower version, so every assembly the host already has is bound to
+  the host's copy with the version ignored — which is also the only way the generator and the driver
+  agree on the identity of `ISourceGenerator`.
+- **Refused by name rather than skipped:** a project with Razor files and no generator (it says what
+  the CS0115 wall would have been); a generator that runs and emits nothing; `*.razor.css` CSS
+  isolation, whose `b-…` scope comes from an MSBuild task this builder does not run
+  (`--accept razor-css-scope` builds without it); and `.razor` files under a project whose `Sdk`
+  does not process them (`--accept razor-not-compiled`).
+
+**Still not supported, and each says so:** SDK source generators (they live in the SDK, not the
+runtime; `--generators` supplies them), embedded resources, `<Protobuf>`, MSBuild `<Target>`s and
+`<Sdk>` elements. Full measurements:
+[In-Mesh Build and Test](https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Documentation/Data/Architecture/InMeshBuildAndTest.md).
 
 ## `build` — compile AND test, per package, as a dependency cascade (2026-08-30)
 
