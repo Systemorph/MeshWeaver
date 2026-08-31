@@ -172,6 +172,9 @@ public static class StagedGenerators
         var candidates = ImmutableArray.CreateBuilder<string>();
         foreach (var directory in bases)
         {
+            // ONE RID list for the whole builder, kept where it was first measured
+            // (RazorGenerators) rather than copied — two lists would drift, and the day one of
+            // these generators does become per-RID they must agree.
             foreach (var rid in RazorGenerators.RuntimeIdentifiers)
                 candidates.Add(Path.Combine(directory, rid));
             candidates.Add(directory);
