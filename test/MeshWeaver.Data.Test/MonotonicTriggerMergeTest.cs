@@ -133,4 +133,92 @@ public class MonotonicTriggerMergeTest
         // …while the monotonic trigger in the SAME patch still lands.
         Assert.Equal(T3, ReadTrigger(live));
     }
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // THE AUDIT STAMP IS NOT CALLER DATA — DataExtensions.RebaseAuditStamp
+    //
+    // MeshNodeStreamHandle stamps LastModified = UtcNow onto EVERY cross-hub patch itself, so
+    // the second of two concurrent writers ALWAYS carries a base stamp the owner has already
+    // moved past. Under the generic scalar rule that is a guaranteed refusal on every
+    // concurrent write — and since a PARTIAL refusal nacks Conflict (#2463/#2840), a write that
+    // fully landed is answered with "re-read and re-apply", re-running the caller's mutation.
+    // LastModified is monotonic by construction, so it merges newest-wins like the release
+    // trigger; LastModifiedBy travels with whichever stamp wins.
+    // ═════════════════════════════════════════════════════════════════════════════
+
+    private static JsonObject Stamped(DateTimeOffset at, string? by = null)
+    {
+        var o = new JsonObject { ["LastModified"] = Instant(at), ["Content"] = new JsonObject() };
+        if (by is not null) o["LastModifiedBy"] = JsonValue.Create(by);
+        return o;
+    }
+
+    private static int MergeCountingRefusals(JsonObject live, JsonObject patch, JsonObject baseValues)
+    {
+        var message = new PatchDataRequest(new MeshNodeReference(), new RawJson(patch.ToJsonString(Options)))
+        {
+            BaseValues = new RawJson(baseValues.ToJsonString(Options))
+        };
+        return DataExtensions.ApplyMeshNodeMerge(
+            live, patch, isMeshNode: true, message, Options, logger: null, HubPath);
+    }
+
+    /// <summary>
+    /// The concurrent-write case, and the reason #1009's resubmit was re-run: the writer's base
+    /// stamp (T1) is stale because another writer stamped T2 first, and this writer stamps T3.
+    /// Refusing that would report a Conflict for a write with no disagreement in it at all.
+    /// </summary>
+    [Fact]
+    public void ForwardAuditStamp_OverStaleBase_LandsAndIsNotRefused()
+    {
+        var live = Stamped(T2, "user-a");
+        var @base = Stamped(T1, "user-b");
+        var patch = Stamped(T3, "user-b");
+
+        var refused = MergeCountingRefusals(live, patch, @base);
+
+        Assert.Equal(0, refused);
+        Assert.Equal(T3, DateTimeOffset.Parse(live["LastModified"]!.GetValue<string>()));
+        Assert.Equal("user-b", live["LastModifiedBy"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A stamp that arrives BEHIND the live one is superseded, not conflicting: drop it (with its
+    /// author) and keep the newer live stamp. Still no refusal — nothing was lost that the newer
+    /// write did not already replace.
+    /// </summary>
+    [Fact]
+    public void BackwardAuditStamp_IsDroppedNotRefused()
+    {
+        var live = Stamped(T2, "user-a");
+        var @base = Stamped(T0, "user-b");
+        var patch = Stamped(T1, "user-b");
+
+        var refused = MergeCountingRefusals(live, patch, @base);
+
+        Assert.Equal(0, refused);
+        Assert.Equal(T2, DateTimeOffset.Parse(live["LastModified"]!.GetValue<string>()));
+        Assert.Equal("user-a", live["LastModifiedBy"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// Scoped exactly like the monotonic trigger: the audit stamp merging never softens the flap
+    /// guard on a real content field carried in the SAME patch.
+    /// </summary>
+    [Fact]
+    public void AuditStampMerge_DoesNotSoftenAConflictingContentScalar()
+    {
+        var live = Stamped(T2, "user-a");
+        live["Content"]!["CompilationStatus"] = JsonValue.Create("Compiling");
+        var @base = Stamped(T1, "user-b");
+        @base["Content"]!["CompilationStatus"] = JsonValue.Create("Ok");
+        var patch = Stamped(T3, "user-b");
+        patch["Content"]!["CompilationStatus"] = JsonValue.Create("Pending");
+
+        var refused = MergeCountingRefusals(live, patch, @base);
+
+        Assert.Equal(1, refused);
+        Assert.Equal("Compiling", live["Content"]!["CompilationStatus"]!.GetValue<string>());
+        Assert.Equal(T3, DateTimeOffset.Parse(live["LastModified"]!.GetValue<string>()));
+    }
 }
