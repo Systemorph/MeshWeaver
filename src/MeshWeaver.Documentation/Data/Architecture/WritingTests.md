@@ -387,6 +387,44 @@ The shared `OrleansTestBase` exposes a synchronous `GetClient(clientId?, userId)
 
 ---
 
+## The Mesh Pool — Leased Running Clusters, Not Per-Class Boots
+
+**Direction of record (maintainer, 2026-09-01):** *"why do we start so many silos? we should
+integrate into the mesh"* … *"we can have a pool of running meshes and then parallelize over this
+pool"* … *"if we have static node repo, we can just recycle."*
+
+The per-class model booted ~90 Orleans silos per run (~300–500 ms each) and needed a background
+disposal drain to keep 90 teardowns from wedging the runner — while `test/xunit.runner.json` runs
+ONE class at a time, so all that isolation paid for parallelism that never happened. Measured on
+the Orleans suite the day this landed: **3 clusters booted instead of one per class**, wall
+22s → 19s locally, and the CI shape (slow cores, disposal pile-ups) is where the multiple lands.
+
+**How it works:**
+
+* `OrleansMeshPool` is an xUnit **assembly fixture**: 🚨 the `[assembly: AssemblyFixture(…)]`
+  attribute must be declared **in the test assembly itself** (see `AssemblyFixtures.cs`) — an
+  attribute in a referenced base library registers nothing, silently: the pool then never
+  engages and every class quietly boots its own cluster again. The pool prints a one-line
+  receipt (`OrleansMeshPool: N cluster(s) booted`) so an inactive pool is visible, not inferred.
+* `OrleansSharedTestBase` **leases** a running cluster (take-or-create, never wait — a waiting
+  gate would be the hand-woven primitive `test/` forbids; the runner's own class-parallelism cap
+  bounds the pool). The lease is exclusive; on class teardown the cluster returns to the pool.
+* **Isolation is by construction, not by process**: the seeded node repo is static and
+  read-only; what a test creates lives under its own paths and addresses; client hubs are
+  cleaned per class (`CleanupClientAsync`). Self-healing disruptions (forced deactivations,
+  dead-subscriber eviction) hand back a healthy cluster by the platform's own guarantees — they
+  pool like everyone else.
+* A class that genuinely wrecks CLUSTER-WIDE state (kills silos, asserts global counters) opts
+  out with `protected override bool UsePooledMesh => false` and keeps a dedicated cluster — or
+  builds its own host, as the silo-kill suites already do.
+* **Porting the shape to another repo's Orleans suite** is two steps: reference the TestBase and
+  add the one-line `AssemblyFixtures.cs` registration. Derived fixtures pool per fixture TYPE,
+  so a repo with its own silo configurator (the AI rig) gets its own pooled instances.
+
+If cross-class bleed ever surfaces, the fix is a **recycle step on the lease** (delete the
+test-created nodes against the static baseline) — a designed fixture stage, never a `Clear()`
+on shared state.
+
 ## CI-Only Failure ≠ Flake — It's a Real Bug
 
 When a test fails on CI but passes locally, **don't label it a flake and skip it.** Every CI-only failure investigated in this repo traced to a real bug: an eventually-consistent index read too eagerly; a hot `Subject` that should have been a `ReplaySubject`; an `AccessContext` lost across the post-pipeline boundary; an init ping removed from a hub that doesn't self-activate. Skipping hides the bug; running it on CI is exactly what surfaced it.
