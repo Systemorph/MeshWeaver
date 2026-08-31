@@ -1,0 +1,64 @@
+# ──────────── One automatic retry for NAMED infrastructure transients ────────────
+# "can't we automate this?" (maintainer, 2026-08-31) — the queue-drain labor that motivated this
+# was re-running ~25-minute CI cycles whose only failures were registry blips (`connection
+# refused` from ACR mid-login, the plugins registry answering 503 during #2915's window).
+#
+# 🚨 THIS IS NOT A FLAKE-RETRIER, and three guards make that structural:
+#   1. It reruns ONLY when EVERY failed job's log matches a NAMED signature below. One failed job
+#      without a match — a compile error, a test failure, anything — and it does nothing: a real
+#      red must stay red, and retrying it would be the investigate-the-red rule's forbidden shape.
+#   2. ONE attempt, ever: it acts only on run_attempt 1, so a transient that persists through the
+#      retry surfaces as the durable failure it is.
+#   3. Every decision is printed: which jobs failed, which signature matched, or which job refused
+#      the retry — so a rerun in the history is never a mystery.
+#
+# The signature list is CURATED — add an entry with the incident that proved it transient, in the
+# commit message. Signatures assert INFRASTRUCTURE identity (the registry hostname, the exact
+# refusal), never generic words like "error" or "timeout".
+name: Retry known transients
+
+on:
+  workflow_run:
+    workflows: ["MeshWeaver Build and Test", "Continuous Delivery (main)"]
+    types: [completed]
+
+permissions:
+  actions: write
+
+jobs:
+  retry:
+    if: >
+      github.event.workflow_run.conclusion == 'failure'
+      && github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Rerun iff EVERY failure matches a named transient
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The curated signatures. Each line: an extended regex + the incident that proved it.
+          #   meshweaver.azurecr.io.*connection refused — 2026-08-31, ACR login refused mid-run,
+          #     10+ jobs across Plugins#1032; every build that ran was green.
+          #   registry answered 503 — #2915, the plugins registry's key-resolution outage window.
+          signatures='meshweaver\.azurecr\.io.*connection refused|dial tcp .*: connect: connection refused|registry answered 503 for https://memex\.meshweaver\.cloud'
+          mapfile -t failed < <(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion=="failure") | .id')
+          if [ "${#failed[@]}" -eq 0 ]; then
+            echo "run $RUN_ID: failure conclusion but no failed jobs listed — doing nothing."
+            exit 0
+          fi
+          for job in "${failed[@]}"; do
+            log="$(gh api "repos/$REPO/actions/jobs/$job/logs" 2>/dev/null || true)"
+            if printf '%s' "$log" | grep -qE "$signatures"; then
+              echo "job $job: matches a named transient signature."
+            else
+              echo "job $job: NO named signature matched — this is (or may be) a real red, so no retry. Investigate it."
+              exit 0
+            fi
+          done
+          echo "all ${#failed[@]} failed job(s) matched named transients — one retry."
+          gh api -X POST "repos/$REPO/actions/runs/$RUN_ID/rerun-failed-jobs"
