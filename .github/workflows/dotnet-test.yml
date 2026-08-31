@@ -1808,10 +1808,28 @@ jobs:
     #   * no `continue-on-error:` anywhere, and no path filter (an unrelated PR would otherwise
     #     "pass" by not running);
     #   * the checker fails closed on every unreadable input, including its own manifest.
-    # The ONE exemption is expressed on the EVENT, never on the secret: a pull request from a
-    # FORK has no access to any secret by GitHub's design, so it cannot mint the token at all.
-    # `collect-results` mirrors that same event predicate rather than inventing a second one.
-    if: ${{ github.event.pull_request.head.repo.fork != true }}
+    # The exemption is expressed on the EVENT, never on the secret. There are TWO events where
+    # GitHub withholds the credential by design, and the rule is the same for both: the job
+    # genuinely cannot run, so it must not pretend to.
+    #
+    #   * a pull request from a FORK — no access to any secret;
+    #   * a pull request opened by DEPENDABOT — its runs read the separate `dependabot` secrets
+    #     scope, so repository secrets resolve EMPTY.
+    #
+    # 🚨 Dependabot was the missing half, and it did not look like a missing exemption: a
+    # dependabot branch lives in THIS repo, so `head.repo.fork` is false, the job ran, the
+    # credential assertion fired exactly as designed, and the gate went red naming two secrets
+    # that are in fact provisioned. Because this gate is REQUIRED, that made every dependabot PR
+    # permanently unmergeable — #2870 and #2871 were both sitting on it. A gate failing for a
+    # reason no pull request can fix is as useless as one that skips.
+    #
+    # 🚨 And this is NOT a skip-trapdoor, for a reason specific to this workflow: it also triggers
+    # on `merge_group`, where the credential IS available. So an exempted PR still has its shared
+    # rule blocks checked — on the queue's temporary ref, with the token minted, BEFORE the merge
+    # lands. The exemption moves WHERE the gate runs, never WHETHER it runs.
+    #
+    # `collect-results` mirrors this same event predicate rather than inventing a second one.
+    if: ${{ github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -2252,11 +2270,13 @@ jobs:
 
     # `!= 'success'` rather than `== 'failure'`, for the same reason as the gate above: a job
     # that was skipped or cancelled produced no verdict, and no verdict must never read as
-    # passed. The fork clause is the SAME event predicate the gate itself carries — a fork PR
-    # cannot mint the App token by GitHub's design, so the job genuinely does not run there. It
-    # is written on the event and never on the secret, and it is the only exemption.
+    # passed. The fork and dependabot clauses are the SAME event predicate the gate itself
+    # carries — in both, GitHub withholds the credential by design, so the job genuinely does not
+    # run. Written on the event and never on the secret, and kept identical to the gate's own
+    # `if:` so the two can never disagree about who is exempt. The merge_group run enforces it
+    # with credentials before anything lands.
     - name: Fail if the shared rule blocks drifted
-      if: github.event.pull_request.head.repo.fork != true && needs.shared-rules.result != 'success'
+      if: github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.shared-rules.result != 'success'
       run: |
         echo "::error::The 'AGENTS.md shared rule blocks' gate concluded '${{ needs.shared-rules.result }}' — see that job, which names the repo and the exact drift. Every repo's CLAUDE.md is a one-line @AGENTS.md include, so a block that differs between repos means agents follow different instructions in each of them. The register is .github/shared-rules.json; the rationale is Doc/Architecture/SharedRuleBlocks. The fix is always a pull request in the repo the error names — never a bypass here."
         exit 1
