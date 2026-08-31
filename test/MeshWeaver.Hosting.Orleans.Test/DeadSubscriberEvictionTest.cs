@@ -45,6 +45,13 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class DeadSubscriberEvictionTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
+    // 🚨 This class asserts the OWNER-GLOBAL eviction counter — the documented opt-out category
+    // for the mesh pool (WritingTests.md § The Mesh Pool). On a pooled cluster the counter moves
+    // for reasons this class does not control: CI measured its own ordinary traffic evicting a
+    // STALE subscriber left by an earlier class (correct router behaviour, delta = 1, test red).
+    // A dedicated cluster makes the counter's frame of reference the class itself again.
+    protected override bool UsePooledMesh => false;
+
     private static readonly Address Owner = new("TestUser");
     private static readonly LayoutAreaReference Reference = new("Overview");
 
@@ -108,14 +115,6 @@ public class DeadSubscriberEvictionTest(ITestOutputHelper output) : OrleansShare
     [Fact(Timeout = 120_000)]
     public async Task A_reachable_subscriber_is_never_evicted()
     {
-        // Snapshot FIRST: ClientSubscriptionsEvicted is owner-global, and both the sibling
-        // eviction test and any earlier class on a pooled cluster legitimately move it — this
-        // test's claim is only that ITS OWN window adds no eviction. Asserting the absolute
-        // value made the verdict depend on alphabetical test order (it ran first) — the exact
-        // never-assert-exactly-N trap, surfaced the day the mesh pool landed.
-        var workspaceBefore = await OwnerWorkspace();
-        var evictionsBefore = workspaceBefore.ClientSubscriptionsEvicted;
-
         var client = GetClient($"live-{Guid.NewGuid():N}");
         var stream = client.GetWorkspace()
             .GetRemoteStream<JsonElement, LayoutAreaReference>(Owner, Reference);
@@ -130,10 +129,14 @@ public class DeadSubscriberEvictionTest(ITestOutputHelper output) : OrleansShare
         var workspace = await OwnerWorkspace();
         workspace.GetClientSubscription(client.Address, stream.StreamId, Reference).Should().NotBeNull(
             "the owner must still hold the server-side stream of a subscriber it can reach");
-        (workspace.ClientSubscriptionsEvicted - evictionsBefore).Should().Be(0,
+        // Owner-global and sound ONLY on this class's dedicated cluster (UsePooledMesh => false
+        // above): a pooled cluster carries other classes' history — CI measured this test's own
+        // traffic evicting a STALE earlier-class subscriber (correct router behaviour, count 1) —
+        // and snapshotting the counter before the first subscription just times out, because
+        // nothing has materialised the owner workspace yet.
+        workspace.ClientSubscriptionsEvicted.Should().Be(0,
             "eviction is the router's verdict on an UNSERVED address, never a reaction to ordinary "
-            + "traffic to a live one — measured as this test's own delta, since the counter is "
-            + "owner-global and other tests evict deliberately");
+            + "traffic to a live one");
     }
 
     /// <summary>
