@@ -142,6 +142,71 @@ whether the suspect diff is even on its reference graph: on 2026-08-30 an Orlean
 runs no Orleans. One `grep` closed it. The same check exonerated a CI/tooling diff (#2721) whose own
 issue body had already said so.
 
+### 🚨 When reachability CANNOT exonerate you: ask whether your path EMITTED anything
+
+Reachability only ever answers *no*. When the failing test's project **does** reference everything
+your diff touched — and a plausible mechanism exists — the graph says nothing, and this is exactly
+the moment the temptation to re-run "to see" is strongest.
+
+The decisive question is cheaper than the reasoning: **did the code you changed produce any output
+in the failing test?** Every interesting path in this codebase logs a tag. Grep the failing test's
+own lines for it:
+
+```bash
+gh run view <run-id> --repo Systemorph/MeshWeaver --job <job-id> --log > job.log
+grep "<FailingTestName>" job.log | grep -cE "LATE_NACK|OwnerDisposing"   # a tag YOUR change emits
+```
+
+Measured 2026-08-31 on #2868, which changed four assemblies that `MeshWeaver.Graph.Test` depends on,
+with a real mechanism to worry about (the change moved a callback onto a different thread):
+
+```
+the changed path's tags in the failing test's own output:   0
+the same tags elsewhere in that shard:                     30
+```
+
+**A change cannot hang a test through a branch the test never takes.** Zero-against-thirty is
+positive evidence that the branch was not entered, not an absence of evidence — the thirty prove the
+grep works. Re-running then confirmed it, but the attribution was already sound before the re-run,
+which is the point: a re-run you cannot predict the result of is a coin toss, and a re-run you can is
+a confirmation.
+
+**Corroboration worth checking in the same breath:** two *unrelated* PRs going red in the same window
+on different tests and different shards is the signature of an ambient population, not of either
+diff. That happened here — the sibling PR's diff was CI YAML and a plugin catalog, and it failed on a
+chart-render flake.
+
+### 🚨 A host-cap kill DESTROYS the hung test's transcript; a `methodTimeout` kill KEEPS it
+
+The two ways a hang ends a test are not equally useful, and the difference decides where to look:
+
+| how it dies | transcript of the test that hung | usable? |
+|---|---|---|
+| host cap (`exit=124`, `HOST_CRASHED`) | **destroyed** — no trx entry, no captured stdout | no |
+| xUnit `methodTimeout` (30 s, `test/xunit.runner.json`) | **written in full** | yes |
+
+So the ambient hang family **erases its own defining artefact**: an investigation that waits for a CI
+occurrence and reads the artifacts is reading everything *except* the thing that hung. Measured
+2026-08-31 — a crashed shard held 21 `Dropping StreamEndedEvent` and 3 `ADVANCE_WITHOUT_HANDOFF`,
+while the hung test's name appeared **nowhere**, so nothing could be established about whether the
+two co-occurred.
+
+**Hunt the method-timeout instances instead.** They carry the window in full, and they are routinely
+discarded as ordinary flakes. One found the same night showed the pair 12 ms apart on the same path,
+inside the hang:
+
+```
+02:46:41.286  Dropping StreamEndedEvent for stream _FIj…
+02:46:41.298  [UpdateQueue] ADVANCE_WITHOUT_HANDOFF path=logonuser
+02:46:41.300  Dropping StreamEndedEvent for stream P3X…
+              ── 25 s of complete silence ──
+02:47:06.218  TEST FAILED: The operation has timed out
+```
+
+A burst of work followed by *total* silence to the deadline is
+[/debug](/Doc/Architecture/DebuggingMessageFlow)'s signature for a **dropped reactive emission**, not
+a lock — idle cores and silence are never a hot loop.
+
 ## 🌍 The i18n mirror — deal with it routinely, not as an incident
 
 Core owns `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json`. MeshWeaver.Plugins

@@ -291,9 +291,17 @@ static string? PromptForToken()
     { Description = "Commit stamped into the bake, so a bundle records the source it came from." };
     var allowOpt = new Option<string?>("--allow")
     { Description = "Allow-file relative to the plugin path (default: plugin-gate.allow, used only if present)." };
+    var regUrlOpt = new Option<string?>("--registry-url")
+    { Description = "Plugin registry base URL for dependency install (e.g. https://memex.meshweaver.cloud)." };
+    var regModulesOpt = new Option<string?>("--registry-modules")
+    { Description = "Space-separated packages to INSTALL as built artifacts before building (e.g. \"AI Essentials\") — PluginBuildContract step 2." };
+    var regKeyOpt = new Option<string?>("--registry-key")
+    { Description = "mwi_… instance key for the registry (default: $MW_REGISTRY_KEY; prefer the env var — argv is visible in process listings)." };
+    var upstreamOpt = new Option<string?>("--upstream-seed")
+    { Description = "Space-separated upstream SOURCES whose sealed publication seeds the gate's mesh (e.g. \"plugins\") — the packages a requires chain reaches, not merely their DLLs." };
 
-    var plugin = new Command("plugin", "Build a plugin: bake its packages, then test the BAKED bytes.")
-    { pathArg, imageOpt, bakeOpt, extOpt, shaOpt, allowOpt };
+    var plugin = new Command("plugin", "Build a plugin: install its dependencies, bake its packages, then test the BAKED bytes.")
+    { pathArg, imageOpt, bakeOpt, extOpt, shaOpt, allowOpt, regUrlOpt, regModulesOpt, regKeyOpt, upstreamOpt };
 
     plugin.SetAction((result, ct) => new BuildPluginCommand(Console.Out, Console.Error).RunAsync(
         new BuildPluginOptions(
@@ -302,7 +310,13 @@ static string? PromptForToken()
             result.GetValue(bakeOpt),
             result.GetValue(extOpt),
             result.GetValue(shaOpt),
-            result.GetValue(allowOpt)),
+            result.GetValue(allowOpt))
+        {
+            RegistryUrl = result.GetValue(regUrlOpt),
+            RegistryModules = result.GetValue(regModulesOpt),
+            RegistryKey = result.GetValue(regKeyOpt) ?? Environment.GetEnvironmentVariable("MW_REGISTRY_KEY"),
+            UpstreamSeed = result.GetValue(upstreamOpt),
+        },
         ct));
 
     build.Subcommands.Add(plugin);

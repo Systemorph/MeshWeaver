@@ -892,6 +892,40 @@ public static class DataExtensions
                 Error = nodeErr.Message,
                 NodeError = nodeErr,
             };
+            // 🚨 Hand the verdict to the waiting caller DIRECTLY, before considering a post.
+            //
+            // The transport below is not the seam this NACK was designed to arrive on. A verdict
+            // that lands after UpdateRemote's ~2 s bounded wait has NO pending Observe callback,
+            // so the post is only ever a way to reach LatePatchResponseRegistry the long way round
+            // — routed to the caller, into the cache hub's PatchDataResponse handler, and finally
+            // Dispatch. That handler's own comment names this NACK as the thing it exists for.
+            // Inside one mesh the registry is a singleton both hubs already share, so asking it
+            // first reaches the same waiter with no hub woken and no message routed.
+            //
+            // 🚨 This is what makes the fix affordable. The obvious repair — walk the parent chain
+            // and post through the first ancestor that can still post — is correct about the
+            // caller and was MEASURED at ~10x on teardown: MeshWeaver.Content.Test went 29 s → 176 s,
+            // a uniform ~0.9 s per test, because every hub going down with a delivery outstanding
+            // now wakes callers mid-drain. It was implemented and reverted for that reason. A
+            // dictionary lookup that misses costs nothing, so the common teardown — nobody waiting
+            // — pays nothing at all.
+            //
+            // 🚨 And it replaces an assumption with a fact. The old guard's rationale was "during a
+            // whole-mesh teardown the parent is past that mark too, the post is skipped, and NOBODY
+            // IS WAITING". Nobody-is-waiting is not something that code could verify, and it was
+            // false precisely when it mattered: the caller whose wait outlives the start of
+            // teardown is still waiting, and it is the one guaranteed to get silence instead of its
+            // NACK, then to burn the full 31 s WriteVerdictBound (#2778). Dispatch RETURNS whether
+            // a caller was armed, so the question is now answered rather than assumed.
+            var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
+            if (lateVerdicts is not null && lateVerdicts.Dispatch(request.Id, resp))
+                return;
+
+            // No caller armed in THIS mesh. Either nobody is waiting — now a checked fact, and
+            // skipping is correct — or the caller is in another process, which the registry here
+            // cannot see. The existing post remains that case's only route, with its run-level
+            // guard unchanged: removing it is the ~10x regression above, and a cross-process
+            // caller during owner teardown is not the case #2778 reproduced.
             var parent = hub.Configuration.ParentHub;
             if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
                 parent.Post(resp, o => o.ResponseFor(request));
@@ -1285,6 +1319,32 @@ public static class DataExtensions
                         return;
                     }
 
+                    // 🚨 A PARTIAL refusal is still a refusal (#2463). The check above only fires
+                    // when NOTHING landed; a patch where some fields applied and others were
+                    // refused fell through here and acked SUCCESS, so the caller believed its whole
+                    // write had landed and never re-applied the refused half. That is the #648
+                    // acked-write-loss in its partial form, and it is the harder one to see: the
+                    // node really did change, so every "did it commit?" check says yes.
+                    //
+                    // It has a name in the wild. RolePlay/Scenery compiled fine, the mesh phase
+                    // patched four compile-outcome fields, MergeGuard refused all four as
+                    // stale/reordered, another field in the same patch landed — so this path acked
+                    // Success, `IsDirty` never converged, and the gate read a status that was never
+                    // written and called it a compile failure. A false RED on the required check.
+                    //
+                    // AckOnce LATCHES, so nacking here and letting the commit proceed is
+                    // deliberate: the fields that were NOT in conflict are valid and keeping them
+                    // is right, while the caller re-reads and re-applies. The re-run re-diffs
+                    // against fresh state, so what already landed is a no-op and only the refused
+                    // fields are retried. Conflict is one of the provably-safe retried codes and
+                    // its budget is bounded, so this cannot spin.
+                    if (refusedKeys > 0)
+                        AckOnce(false, new MeshNodeError(
+                            MeshNodeErrorCode.Conflict, hubPath,
+                            $"cross-hub write PARTIALLY refused: {refusedKeys} field(s) changed on "
+                            + "the owner since the writer's base. What did not conflict was kept — "
+                            + "re-read and re-apply so the refused field(s) converge."));
+
                     // 🚨 The OWNER mints the new Version on apply.
                     // Per the owned-stream contract — SynchronizationStream
                     // ("ONLY the owning hub sets Version", line ~255) and
@@ -1635,6 +1695,33 @@ public static class DataExtensions
                             AckOnce(true);
                         return null;
                     }
+
+                    // 🚨 A PARTIAL refusal is still a refusal (#2463). The check above only fires
+                    // when NOTHING landed; a patch where some fields applied and others were
+                    // refused fell through here and acked SUCCESS, so the caller believed its whole
+                    // write had landed and never re-applied the refused half. That is the #648
+                    // acked-write-loss in its partial form, and it is the harder one to see: the
+                    // node really did change, so every "did it commit?" check says yes.
+                    //
+                    // It has a name in the wild. RolePlay/Scenery compiled fine, the mesh phase
+                    // patched four compile-outcome fields, MergeGuard refused all four as
+                    // stale/reordered, another field in the same patch landed — so this path acked
+                    // Success, `IsDirty` never converged, and the gate read a status that was never
+                    // written and called it a compile failure. A false RED on the required check.
+                    //
+                    // AckOnce LATCHES, so nacking here and letting the commit proceed is
+                    // deliberate: the fields that were NOT in conflict are valid and keeping them
+                    // is right, while the caller re-reads and re-applies. The re-run re-diffs
+                    // against fresh state, so what already landed is a no-op and only the refused
+                    // fields are retried. Conflict is one of the provably-safe retried codes and
+                    // its budget is bounded, so this cannot spin.
+                    if (refusedKeys > 0)
+                        AckOnce(false, new MeshNodeError(
+                            MeshNodeErrorCode.Conflict, hubPath,
+                            $"cross-hub write PARTIALLY refused: {refusedKeys} field(s) changed on "
+                            + "the owner since the writer's base. What did not conflict was kept — "
+                            + "re-read and re-apply so the refused field(s) converge."));
+
                     // The OWNER bumps the Version on apply (same rule as the deferred path).
                     // 🚨 Count from the PRE-MERGE node: the patch is client-supplied, and a
                     // `version` field in it has already been merged into currentNode — counting

@@ -250,8 +250,9 @@ internal class RoutingGrain(
         {
             ReportSaturation(Interlocked.Increment(ref inFlightRoutes), addressPath);
             // Claimed at ENQUEUE like the in-flight slot — a leg queued behind another leg is work
-            // this silo has accepted and must let land before it stops (#2638).
-            var slot = quiescence?.Track();
+            // this silo has accepted and must let land before it stops (#2638). Labelled so the
+            // shutdown residual can NAME it if it never lands (#2833).
+            var slot = quiescence?.Track($"stream-routed → {addressPath} (delivery {delivery.Id})");
             orderedDispatcher.Enqueue(
                 addressPath,
                 BuildPodHubRoute(delivery, address, addressPath, streamProvider, grainFactory),
@@ -276,7 +277,7 @@ internal class RoutingGrain(
     private void Dispatch(IObservable<Unit> route, string addressPath, string deliveryId)
     {
         ReportSaturation(Interlocked.Increment(ref inFlightRoutes), addressPath);
-        var slot = quiescence?.Track();
+        var slot = quiescence?.Track($"dispatch → {addressPath} (delivery {deliveryId})");
         routingPool.SubscribeThroughPool(route)
             .Finally(() =>
             {
@@ -1073,7 +1074,8 @@ internal class RoutingGrain(
         // gauge the silo stop holds until it has been carried — over a transport that still exists.
         void SubscribeNack(IObservable<Unit> nack, string transport = "")
         {
-            var slot = quiescence?.Track();
+            var slot = quiescence?.Track(
+                $"NACK{(string.IsNullOrEmpty(transport) ? string.Empty : $" over {transport}")}");
             routingPool.SubscribeThroughPool(nack)
                 .Finally(() => slot?.Dispose())
                 .Subscribe(
