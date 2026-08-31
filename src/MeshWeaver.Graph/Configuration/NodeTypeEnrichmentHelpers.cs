@@ -1181,6 +1181,28 @@ internal static class NodeTypeEnrichmentHelpers
                     // publication-driven watcher stayed silent while memex served old code.
                     var boundMvid = ServedBuildIdentity.OfFile(localPath);
 
+                    // 🚨 #2471, the SAME-PATH half, healed where it is FIRST true. The path is a
+                    // store key resolved through a per-pod local cache, so the bytes behind it can
+                    // differ from the bytes the type published — and once BOUND, nothing downstream
+                    // can fix it: the banner is report-only ("a recycle re-binds the same local
+                    // copy"), and the served instance splits the type family across two collectible
+                    // assemblies, degrading every cross-hub read of its content (As<T> case 3 — the
+                    // 2026-08-31 paid-fulfilment outage: StoreContent, all TierContent and the
+                    // order degraded in one run, the fulfilment watcher never fired). So a
+                    // mismatch is REFUSED here, before the bind, by the same bounded machinery the
+                    // bytes-missing sibling uses: a fresh compile mints new bytes AND a new
+                    // published MVID, and the retry re-enriches against them. On exhaustion the
+                    // activation falls through to today's bind-and-banner — degraded but
+                    // functional beats parked.
+                    if (ShouldRefuseStaleBind(def.LatestAssemblyMvid, boundMvid, nodeType, recompileAttempts))
+                        return TriggerRecompileAndRetry(
+                            node, nodeType, meshConfiguration, compilationService, meshHub,
+                            logger, recompileAttempts,
+                            reason: "served bytes are not the published build ("
+                                + ServedBuildIdentity.Mismatch(def.LatestAssemblyMvid, boundMvid, nodeType)
+                                + ") — refusing the stale bind (#2471)",
+                            staleVersion: typeNode.Version);
+
                     if (compilationService is null)
                         return Observable.Return(WithStaleAssemblySelfHeal(
                             ApplyEntry(node, localPath, hubConfig: null, nodeType, meshConfiguration),
@@ -1533,6 +1555,20 @@ internal static class NodeTypeEnrichmentHelpers
     /// (blob / filesystem). Null/empty collection short-circuits to a null
     /// emission so callers can fall through to the error overlay.
     /// </summary>
+    /// <summary>
+    /// Whether an activation that resolved bytes with <paramref name="boundMvid"/> for a type
+    /// publishing <paramref name="publishedMvid"/> must REFUSE the bind and recompile instead —
+    /// true exactly when the identities give EVIDENCE of a mismatch
+    /// (<see cref="ServedBuildIdentity.Mismatch"/>: both present and different; a legacy node
+    /// without a published MVID never refuses) and the bounded retry budget
+    /// (<see cref="MaxRecompileAttempts"/>) is not exhausted. Pure — pinned by
+    /// <c>ServedBuildIsVerifiableTest</c>.
+    /// </summary>
+    internal static bool ShouldRefuseStaleBind(
+        string? publishedMvid, string? boundMvid, string nodeType, int recompileAttempts)
+        => recompileAttempts < MaxRecompileAttempts
+           && ServedBuildIdentity.Mismatch(publishedMvid, boundMvid, nodeType) is not null;
+
     private static IObservable<string?> ResolveAssembly(
         IMessageHub meshHub, string? collection, string nodeTypePath, long version)
     {
