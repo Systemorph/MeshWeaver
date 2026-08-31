@@ -172,6 +172,7 @@ static async Task<int> RunBuildProject(string[] args)
     string? entry = null;
     string? outDir = null;
     var app = ContainerReferenceSet.DefaultAppDirectory;
+    string? sharedFrameworks = null;
     var extraRefs = new List<string>();
     var generatorPaths = new List<string>();
     string? razorGenerators = null;
@@ -199,6 +200,9 @@ static async Task<int> RunBuildProject(string[] args)
                 break;
             case "--output" or "-o" when i + 1 < args.Length:
                 outDir = args[++i];
+                break;
+            case "--shared-frameworks" when i + 1 < args.Length:
+                sharedFrameworks = args[++i];
                 break;
             case "--app" when i + 1 < args.Length:
                 app = args[++i];
@@ -262,6 +266,7 @@ static async Task<int> RunBuildProject(string[] args)
         EntryProject = entry,
         OutputDirectory = outDir,
         AppDirectory = app,
+        SharedFrameworksRoot = sharedFrameworks,
         ExtraReferenceDirectories = extraRefs,
         GeneratorPaths = generatorPaths,
         RazorGeneratorDirectory = razorGenerators,
@@ -290,6 +295,7 @@ static bool TryAddProperty(Dictionary<string, string> properties, string assignm
 
 static string BuildProjectUsage() =>
     "usage: mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] "
+    + "[--shared-frameworks <dir>] "
     + "[--extra-refs <dir>]... [--generators <dir|dll>]... [--razor-generators <dir>] "
     + "[--accept <construct>]... [-p:Name=Value]... [--allow-warnings] [--max-parallel <n>]\n"
     + "  Compiles a .NET project with NO dotnet SDK and NO NuGet restore: the .csproj is evaluated "
