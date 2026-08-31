@@ -140,6 +140,17 @@ public static class ProjectBuild
         public string? TrustedPlatformAssemblies { get; init; }
 
         /// <summary>
+        /// Directories of PREBUILT sibling-module assemblies (<c>--prebuilt</c>). An in-root
+        /// <c>ProjectReference</c> whose assembly name is found here resolves to that DLL instead
+        /// of being rebuilt from source — the maintainer's "we don't need to rebuild the mesh"
+        /// (2026-08-31): a dependent module's job consumed ~3 minutes re-compiling MeshWeaver.AI
+        /// that the SAME RUN's floor job had already built, per dependent. Prebuilt assemblies are
+        /// references only: they never ride the dependent's bundle (they ship as their OWN
+        /// bundles), and the platform binding-identity check covers them like every reference.
+        /// </summary>
+        public IReadOnlyList<string> PrebuiltDirectories { get; init; } = [];
+
+        /// <summary>
         /// The PLATFORM image's <c>shared/</c> frameworks root — required whenever
         /// <see cref="AppDirectory"/> comes from a different image than the one running this
         /// builder (see <see cref="ContainerReferenceSet.Read"/>). Null = the running runtime's.
@@ -436,12 +447,36 @@ public static class ProjectBuild
         ImmutableDictionary<string, ImmutableArray<string>> Edges,
         ImmutableHashSet<string> ShadowedAssemblyNames)
     {
+        /// <summary>
+        /// Assembly name → prebuilt DLL for in-root ProjectReferences resolved via
+        /// <c>--prebuilt</c> — referenced by every compile in the graph, never rebuilt and never
+        /// riding a bundle. (An <c>init</c> property, not a positional parameter — the record
+        /// signature rule.)
+        /// </summary>
+        public ImmutableDictionary<string, string> PrebuiltReferences { get; init; } =
+            ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+
         internal IReadOnlyList<string> DependenciesOf(string id) =>
             Edges.TryGetValue(id, out var deps) ? deps : [];
 
         internal static Graph Discover(
             string entry, ContainerReferenceSet container, Options options, Sink sink)
         {
+            var prebuilt = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var directory in options.PrebuiltDirectories)
+            {
+                var full = Path.GetFullPath(directory);
+                if (!Directory.Exists(full))
+                    throw new InvalidOperationException(
+                        $"--prebuilt '{full}' does not exist. A prebuilt directory that is not there "
+                        + "silently rebuilds every module it was supposed to supply — the exact "
+                        + "wasted work the flag exists to remove, wearing a green log.");
+                foreach (var dll in Directory.GetFiles(full, "*.dll"))
+                    prebuilt[Path.GetFileNameWithoutExtension(dll)] = dll;
+            }
+            if (prebuilt.Count > 0)
+                sink.Info($"prebuilt siblings: {prebuilt.Count} assembl(y|ies) — an in-root "
+                    + "ProjectReference matching one resolves to it instead of rebuilding");
             var sourceRoot = ProjectFile.FindNearest(Path.GetDirectoryName(entry)!, "Directory.Build.props") is { } props
                 ? Path.GetDirectoryName(props)!
                 : Path.GetDirectoryName(entry)!;
@@ -449,6 +484,7 @@ public static class ProjectBuild
 
             var models = ImmutableDictionary.CreateBuilder<string, ProjectFile.Model>(StringComparer.OrdinalIgnoreCase);
             var edges = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
+            var prebuiltReferences = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var pending = new Stack<string>();
             pending.Push(entry);
 
@@ -464,6 +500,15 @@ public static class ProjectBuild
                 var dependencies = ImmutableArray.CreateBuilder<string>();
                 foreach (var reference in model.ProjectReferences)
                 {
+                    var referenceAssembly = Path.GetFileNameWithoutExtension(reference);
+                    if (prebuilt.TryGetValue(referenceAssembly, out var prebuiltDll))
+                    {
+                        prebuiltReferences[referenceAssembly] = prebuiltDll;
+                        sink.Info(
+                            $"{Path.GetFileNameWithoutExtension(current)}: ProjectReference {referenceAssembly} "
+                            + "→ PREBUILT (this run already built it; not rebuilding the mesh)");
+                        continue;
+                    }
                     var inSourceTree = File.Exists(reference)
                         && reference.StartsWith(sourceRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
                     if (inSourceTree)
@@ -489,10 +534,15 @@ public static class ProjectBuild
                 edges[current] = dependencies.ToImmutable();
             }
 
-            var shadowed = models.Values.Select(m => m.AssemblyName).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+            var shadowed = models.Values.Select(m => m.AssemblyName)
+                .Concat(prebuiltReferences.Keys)
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
             return new Graph(
                 [.. models.Keys.OrderBy(k => k, StringComparer.Ordinal)],
-                models.ToImmutable(), edges.ToImmutable(), shadowed);
+                models.ToImmutable(), edges.ToImmutable(), shadowed)
+            {
+                PrebuiltReferences = prebuiltReferences.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase),
+            };
         }
     }
 
@@ -594,6 +644,8 @@ public static class ProjectBuild
         }
         foreach (var extra in extraReferences)
             references.Add(MetadataReference.CreateFromFile(extra));
+        foreach (var prebuiltDll in graph.PrebuiltReferences.Values)
+            references.Add(MetadataReference.CreateFromFile(prebuiltDll));
         foreach (var fromShelf in shelfResolutions)
             foreach (var file in fromShelf.ReferenceFiles)
                 references.Add(MetadataReference.CreateFromFile(file));
