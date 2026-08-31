@@ -1533,13 +1533,34 @@ public record LayoutAreaHost : IDisposable
     /// <param name="forceLoad">Whether to force a full page reload.</param>
     /// <param name="replace">Whether to replace the current history entry instead of adding a new one.</param>
     public void NavigateTo(string uri, bool forceLoad = false, bool replace = false)
+        => PostNavigation(new NavigationRequest(uri) { ForceLoad = forceLoad, Replace = replace });
+
+    /// <summary>
+    /// Opens the specified URI in the portal's side panel — the page the viewer is on stays where
+    /// it is. This is the missing first link of a chain the framework already carries end to end:
+    /// <see cref="NavigationRequest.Target"/> → the portal's handler → the navigation service's
+    /// side-panel event → the layout opens the chat panel on the path. Use it wherever a click
+    /// creates or references a thread the viewer should see BESIDE their work — an embedded
+    /// exercise composer navigating the whole page to the thread it just opened loses the very
+    /// page the exercise told the viewer to come back to.
+    ///
+    /// <para>A NEW method rather than an optional parameter on <see cref="NavigateTo"/>: adding a
+    /// parameter replaces that method's signature, and module DLLs compiled against
+    /// <c>NavigateTo(string, bool, bool)</c> would throw <c>MissingMethodException</c> at runtime
+    /// — the image/module atomicity hazard.</para>
+    /// </summary>
+    /// <param name="uri">The URI to open in the side panel.</param>
+    public void NavigateToSidePanel(string uri)
+        => PostNavigation(new NavigationRequest(uri) { Target = "SidePanel" });
+
+    private void PostNavigation(NavigationRequest request)
     {
         var subscriber = Stream.Get<Address>(nameof(SubscribeRequest.Subscriber));
         if (subscriber != null)
         {
             if (subscriber.Host is { })
                 subscriber = subscriber.Host;
-            Stream.Hub.Post(new NavigationRequest(uri) { ForceLoad = forceLoad, Replace = replace }, o => o.WithTarget(subscriber));
+            Stream.Hub.Post(request, o => o.WithTarget(subscriber));
         }
         else
         {
