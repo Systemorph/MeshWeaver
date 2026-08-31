@@ -37,6 +37,29 @@ namespace MeshWeaver.PluginTester;
 /// and a builder that cannot see them is not reproducing the build the SDK would have produced.
 /// Warnings fail the run by default; <c>--allow-warnings</c> is the deliberate opt-out.</para>
 ///
+/// <para>🔴 <b>The emitted assembly carries the SDK's IDENTITY.</b> <c>GenerateAssemblyInfo</c> is a
+/// TARGET, and this builder runs no targets — so before <see cref="ProjectFile.AssemblyInfo"/>
+/// existed every assembly it produced was <c>AssemblyVersion=0.0.0.0</c> while the fleet binds
+/// <c>3.0.0.0</c>. Nothing went red: the compile was green and the failure would have surfaced in
+/// another repo, at runtime, as a missing-file error. The identity is now EVALUATED from the
+/// project (<c>AssemblyVersion</c>/<c>FileVersion</c>/<c>Version</c>/<c>InformationalVersion</c>
+/// and the descriptive attributes, plus <c>InternalsVisibleTo</c>, <c>AssemblyMetadata</c> and
+/// <c>AssemblyAttribute</c> items) and synthesized into the compilation as one more source
+/// document, exactly as the SDK's generated <c>&lt;Project&gt;.AssemblyInfo.cs</c> is one more
+/// Compile item.</para>
+///
+/// <para><b>Two things it deliberately does not reproduce, both named rather than hidden.</b>
+/// (1) <c>$(SourceRevisionId)</c>: the SDK reads the commit from git and appends <c>+&lt;sha&gt;</c>
+/// to <c>InformationalVersion</c>; there is no git here, so the suffix is absent and every build
+/// SAYS so — pass <c>-p:SourceRevisionId=&lt;sha&gt;</c> for exact parity.
+/// (2) <c>TargetFrameworkAttribute</c>: written by a DIFFERENT target
+/// (<c>GenerateTargetFrameworkMonikerAttribute</c>), with its own switches and its own
+/// <c>TargetPlatform</c>/<c>SupportedOSPlatform</c> companions for a platform-suffixed TFM that
+/// this evaluator cannot compute. Emitting half of that set would be worse than the gap, so the gap
+/// is written down here instead. Everything else was compared attribute-for-attribute against a
+/// real <c>dotnet build</c> of <c>MeshWeaver.Plugins/src/MeshWeaver.Speech.Contract</c> and
+/// matches.</para>
+///
 /// <para><b>Reactive.</b> The graph is sequenced by <see cref="Cascade"/> — the same dependency
 /// cascade <c>mw-plugin-test build</c> runs on: every project observes its dependencies' result
 /// streams and starts when the last one lands green, a cycle is refused by name before anything
@@ -71,6 +94,15 @@ public static class ProjectBuild
 
         /// <summary>The <c>--accept</c> tokens acknowledging constructs the evaluator cannot reproduce.</summary>
         public IReadOnlyList<string> Accept { get; init; } = [];
+
+        /// <summary>
+        /// Global properties — MSBuild's <c>-p:Name=Value</c>. They win over anything the project
+        /// files set unconditionally, and they are how a caller supplies the identity inputs this
+        /// builder cannot compute for itself: <c>PlatformVersion</c>, <c>Version</c>, and above all
+        /// <c>SourceRevisionId</c> (the SDK gets it from git; there is no git here).
+        /// </summary>
+        public IReadOnlyDictionary<string, string> Properties { get; init; } =
+            ImmutableDictionary<string, string>.Empty;
 
         /// <summary>
         /// Assemblies (or directories of them) to load Roslyn <c>[Generator]</c> source generators
@@ -139,6 +171,16 @@ public static class ProjectBuild
         /// exists.</para>
         /// </summary>
         public int RazorCount { get; init; }
+
+        /// <summary>
+        /// How many managed resources were embedded in the emitted assembly.
+        ///
+        /// <para>🚨 An <c>init</c> PROPERTY, not a primary-constructor parameter — adding a
+        /// parameter REPLACES the record's signature, and every assembly compiled against the old
+        /// arity would call a constructor that no longer exists
+        /// (<c>scripts/check-record-signatures.py</c>).</para>
+        /// </summary>
+        public int ResourceCount { get; init; }
 
         /// <summary>Compiled, emitted, and within the warning policy.</summary>
         public bool IsGreen => Failure is null && AssemblyPath is not null;
@@ -371,7 +413,7 @@ public static class ProjectBuild
             {
                 var current = pending.Pop();
                 if (models.ContainsKey(current)) continue;
-                var model = ProjectFile.Load(current, options.Accept);
+                var model = ProjectFile.Load(current, options.Accept, options.Properties);
                 models[current] = model;
                 foreach (var target in model.UnexecutedTargets)
                     sink.Warn($"{Path.GetFileName(current)}: target not executed — {target}");
@@ -432,6 +474,23 @@ public static class ProjectBuild
                   + $"target {(model.TargetFramework.Length > 0 ? model.TargetFramework : "(unset)")}, "
                   + $"nullable {model.NullableOptions}, "
                   + $"warnings-as-errors {(model.TreatWarningsAsErrors ? "on" : "off")}");
+
+        // 🚨 Say the NAMES, not the count. A manifest resource is asked for BY NAME in some other
+        // process, months later, and a wrong name is a null stream rather than an error — so the
+        // names this build committed to belong in the log, where a reader can compare them against
+        // what the code asks for. Capped: MeshWeaver.Documentation embeds hundreds.
+        if (!model.EmbeddedResources.IsEmpty)
+        {
+            sink.Info($"[{name}] embedded resources: {model.EmbeddedResources.Length}");
+            foreach (var resource in model.EmbeddedResources.Take(MaxListedResources))
+                sink.Info($"[{name}]   {resource.ManifestName}  ({resource.Origin})");
+            if (model.EmbeddedResources.Length > MaxListedResources)
+                sink.Info($"[{name}]   … and {model.EmbeddedResources.Length - MaxListedResources} more");
+        }
+        // A resource the operator ACCEPTED away is still missing from the assembly, so it is a
+        // WARNING every time — never a footnote on the accept token.
+        foreach (var skipped in model.SkippedResources)
+            sink.Warn($"[{name}] resource NOT embedded — {skipped}");
 
         // Packages: the container is authoritative for what the container HAS. Anything it does not
         // have is an ADDITIONAL library, and this mode cannot invent one.
@@ -495,13 +554,45 @@ public static class ProjectBuild
                 .Concat(ProjectFile.FrameworkSymbols(model.TargetFramework))
                 .Distinct(StringComparer.Ordinal));
 
-        var trees = ImmutableArray.CreateBuilder<SyntaxTree>(model.CompileItems.Length + 1);
+        var trees = ImmutableArray.CreateBuilder<SyntaxTree>(model.CompileItems.Length + 2);
         if (!model.GlobalUsings.IsEmpty)
             trees.Add(CSharpSyntaxTree.ParseText(
                 SourceText.From(
                     string.Join('\n', model.GlobalUsings.Select(u => $"global using global::{u};")) + "\n",
                     Encoding.UTF8),
                 parseOptions, path: GlobalUsingsPath));
+
+        // 🔴 THE ASSEMBLY'S IDENTITY. Without this tree Roslyn emits its own default — 0.0.0.0 —
+        // and NOTHING goes red: the compile is green, the DLL loads, and the failure arrives later
+        // in a different process as `FileNotFoundException: … Version=3.0.0.0`. Synthesized here
+        // rather than in ProjectFile because it is a compile INPUT, exactly as the SDK's generated
+        // <Project>.AssemblyInfo.cs is a Compile item.
+        var assemblyInfo = model.AssemblyInfo;
+        if (assemblyInfo.Generate && !assemblyInfo.Attributes.IsEmpty)
+        {
+            trees.Add(CSharpSyntaxTree.ParseText(
+                SourceText.From(RenderAssemblyInfo(assemblyInfo.Attributes), Encoding.UTF8),
+                parseOptions, path: AssemblyInfoPath));
+            sink.Info(
+                $"[{name}] assembly identity — AssemblyVersion {assemblyInfo.AssemblyVersion}, "
+                + $"FileVersion {assemblyInfo.FileVersion}, "
+                + $"InformationalVersion {assemblyInfo.InformationalVersion}"
+                + (assemblyInfo.SourceRevisionApplied
+                    ? string.Empty
+                    : " (no SourceRevisionId: this builder runs no git, so the SDK's +<sha> suffix on "
+                      + "InformationalVersion is absent — pass --property SourceRevisionId=<sha> to "
+                      + "reproduce it)"));
+        }
+        else if (!assemblyInfo.Generate)
+        {
+            // GenerateAssemblyInfo=false means the project supplies its own attributes; synthesizing
+            // a second set is CS0579, so this is a deliberate no-op — said out loud, because an
+            // assembly with no identity attributes at all is otherwise indistinguishable from this
+            // builder having forgotten them.
+            sink.Info(
+                $"[{name}] GenerateAssemblyInfo=false — no identity attributes synthesized; the "
+                + "project's own sources supply them.");
+        }
         foreach (var file in model.CompileItems)
         {
             try
@@ -663,7 +754,8 @@ public static class ProjectBuild
             // The platform's own verified emit: emit to memory, write, and prove the file on disk IS
             // the image that was emitted (EmittedArtifact). Nothing here re-implements it.
             var artifact = EmitPipeline.EmitCompilationToDirectory(
-                compilation, model.AssemblyName, model.ProjectPath, outputDirectory, CancellationToken.None);
+                compilation, model.AssemblyName, model.ProjectPath, outputDirectory,
+                ManifestResources(model), CancellationToken.None);
             if (!artifact.MatchesFileOnDisk(out var reason))
             {
                 sink.Error($"[{name}] RED — the emitted assembly did not survive the write: {reason}");
@@ -674,11 +766,15 @@ public static class ProjectBuild
             sink.Info(
                 $"[{name}] OK — {model.CompileItems.Length} source file(s)"
                 + (razorGenerated == 0 ? "" : $" + {model.RazorItems.Length} Razor file(s)")
+                + (model.EmbeddedResources.IsEmpty ? "" : $" + {model.EmbeddedResources.Length} resource(s)")
                 + $", {warnings} warning(s), "
                 + $"{artifact.Length} bytes in {clock.Elapsed.TotalMilliseconds:F0} ms → {artifact.DllPath}");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                 model.CompileItems.Length, 0, warnings, artifact.DllPath, [], null)
-            { RazorCount = razorGenerated };
+            {
+                RazorCount = razorGenerated,
+                ResourceCount = model.EmbeddedResources.Length,
+            };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -688,8 +784,56 @@ public static class ProjectBuild
         }
     }
 
+    /// <summary>
+    /// The project's <c>&lt;EmbeddedResource&gt;</c> items as Roslyn resource descriptions.
+    ///
+    /// <para>🚨 <c>isPublic: true</c>, and it is not a preference. Every resource the real SDK
+    /// emits carries <c>ManifestResourceAttributes.Public</c> — measured by reading the
+    /// <c>ManifestResource</c> table out of a probe assembly the SDK built. A private resource is
+    /// invisible to <c>Assembly.GetManifestResourceStream</c> from outside the assembly, which is
+    /// the same silent null the manifest NAME rules exist to prevent.</para>
+    ///
+    /// <para>The stream is opened lazily, by Roslyn, during the emit — so a file that vanishes
+    /// between evaluation and emit fails the emit rather than embedding zero bytes.</para>
+    /// </summary>
+    /// <param name="model">The evaluated project.</param>
+    /// <returns>One description per resource, in declaration order.</returns>
+    private static ImmutableArray<ResourceDescription> ManifestResources(ProjectFile.Model model) =>
+    [
+        .. model.EmbeddedResources.Select(resource => new ResourceDescription(
+            resource.ManifestName, () => File.OpenRead(resource.Path), isPublic: true)),
+    ];
+
+    /// <summary>How many resource names a build lists before it counts the rest instead.</summary>
+    internal const int MaxListedResources = 25;
+
     /// <summary>Sentinel path for the synthesized implicit-usings document.</summary>
     internal const string GlobalUsingsPath = "__implicit_usings__.cs";
+
+    /// <summary>Sentinel path for the synthesized assembly-info document.</summary>
+    internal const string AssemblyInfoPath = "__assembly_info__.cs";
+
+    /// <summary>
+    /// The generated <c>&lt;Project&gt;.AssemblyInfo.cs</c>, as the SDK's <c>WriteCodeFragment</c>
+    /// task writes it: one fully-qualified <c>[assembly: …]</c> per attribute, arguments as C#
+    /// string literals.
+    /// </summary>
+    /// <param name="attributes">What <c>GetAssemblyAttributes</c> collected.</param>
+    /// <returns>The source text.</returns>
+    internal static string RenderAssemblyInfo(ImmutableArray<ProjectFile.AssemblyAttributeSpec> attributes)
+    {
+        var text = new StringBuilder("// <auto-generated/> — the SDK's GenerateAssemblyInfo, without MSBuild.\n");
+        foreach (var attribute in attributes)
+        {
+            text.Append("[assembly: global::").Append(attribute.TypeName).Append('(');
+            // 🚨 FormatLiteral, never string concatenation. A Description carrying a quote, a
+            // backslash or a newline — and these repos' Description properties carry all three —
+            // would otherwise produce source that does not parse, or worse, parses differently.
+            text.AppendJoin(", ", attribute.Arguments.Select(a => SymbolDisplay.FormatLiteral(a, quote: true)));
+            text.Append(")]\n");
+        }
+        return text.ToString();
+    }
 
     /// <summary>
     /// The doc-COMPLETENESS warning family — the one csc raises only when <c>/doc</c> is on. Kept
@@ -700,7 +844,7 @@ public static class ProjectBuild
         ["CS1591", "CS1573", "CS1712"];
 
     /// <summary>
-    /// <see cref="EmitPipeline.EmitCompilationToDirectory"/> names the XML doc for a dynamic NodeType
+    /// <see cref="EmitPipeline"/>'s emit names the XML doc for a dynamic NodeType
     /// (<c>DynamicNode_&lt;name&gt;.xml</c>). A project's doc file is <c>&lt;AssemblyName&gt;.xml</c>
     /// beside the DLL, and a project that did not ask for one gets none.
     /// </summary>
@@ -724,7 +868,12 @@ public static class ProjectBuild
         if (!location.IsInSource)
             return $"{diagnostic.Id} {diagnostic.Severity}: {diagnostic.GetMessage()}";
         var span = location.GetLineSpan();
-        var file = span.Path == GlobalUsingsPath ? "(implicit usings)" : span.Path;
+        var file = span.Path switch
+        {
+            GlobalUsingsPath => "(implicit usings)",
+            AssemblyInfoPath => "(generated assembly info)",
+            _ => span.Path,
+        };
         return $"{file}({span.StartLinePosition.Line + 1},{span.StartLinePosition.Character + 1}): "
                + $"{diagnostic.Severity.ToString().ToLowerInvariant()} {diagnostic.Id}: {diagnostic.GetMessage()}";
     }

@@ -133,6 +133,35 @@ public static class EmitPipeline
     /// </summary>
     internal static EmittedArtifact EmitCompilationToDirectory(
         CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir, CancellationToken ct)
+        => EmitCompilationToDirectory(compilation, nodeName, nodePath, releaseDir, [], ct);
+
+    /// <summary>
+    /// The same verified emit, carrying MANAGED RESOURCES into the assembly — the shape
+    /// <c>mw-plugin-test build-project</c> needs to reproduce an SDK build of a project with
+    /// <c>&lt;EmbeddedResource&gt;</c> items.
+    ///
+    /// <para>🚨 <b>A separate overload rather than an optional parameter on the one above.</b>
+    /// Adding a parameter — even a defaulted one — REPLACES a method's signature, so an assembly
+    /// compiled against the old arity calls a method the new one does not have; that is the same
+    /// binary break <c>scripts/check-record-signatures.py</c> exists to refuse for records, and it
+    /// applies here for exactly the same reason. The overload leaves the four-argument entry point
+    /// byte-identical for <c>MeshNodeCompilationService</c> and <c>NodeSetCompiler</c>, which pass
+    /// no resources and never will: a dynamic NodeType is generated source, not a project.</para>
+    ///
+    /// <para>Nothing else differs. The emit is still to MEMORY first and the bytes written out, so
+    /// <see cref="EmittedArtifact"/> can prove the file on disk is the image that was emitted
+    /// (#1412), and this still does not log (the log-once contract).</para>
+    /// </summary>
+    /// <param name="compilation">The compilation to emit.</param>
+    /// <param name="nodeName">Base name for the emitted files.</param>
+    /// <param name="nodePath">Path reported in a <see cref="CompilationException"/>.</param>
+    /// <param name="releaseDir">Directory to write into.</param>
+    /// <param name="manifestResources">Managed resources to embed; empty for a dynamic NodeType.</param>
+    /// <param name="ct">Cancellation.</param>
+    /// <returns>The artifact descriptor, for the publisher to verify.</returns>
+    internal static EmittedArtifact EmitCompilationToDirectory(
+        CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir,
+        IReadOnlyCollection<ResourceDescription> manifestResources, CancellationToken ct)
     {
         var dllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
         var pdbPath = Path.Combine(releaseDir, $"{nodeName}.pdb");
@@ -151,6 +180,7 @@ public static class EmitPipeline
         {
             emitResult = compilation.Emit(
                 dllImage, pdbImage, xmlDocumentationStream: xmlDoc,
+                manifestResources: manifestResources.Count == 0 ? null : manifestResources,
                 options: emitOptions, cancellationToken: ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -188,7 +218,7 @@ public static class EmitPipeline
     }
 
     /// <summary>
-    /// Key under which <see cref="EmitCompilationToDirectory"/> stamps the canary verdict on a
+    /// Key under which <see cref="EmitCompilationToDirectory(CSharpCompilation, string, string, string, CancellationToken)"/> stamps the canary verdict on a
     /// thrown-from-Emit exception, and under which
     /// <c>NodeTypeCompilationHelpers.SummarizeCompileError</c> reads it back.
     /// </summary>
@@ -672,7 +702,7 @@ public static class EmitPipeline
 
     /// <summary>
     /// Compiles and emits the assembly to memory (no disk I/O), returning the DLL + PDB bytes for
-    /// the caller to load. Like <see cref="EmitCompilationToDirectory"/>, a failed emit throws
+    /// the caller to load. Like <see cref="EmitCompilationToDirectory(CSharpCompilation, string, string, string, CancellationToken)"/>, a failed emit throws
     /// UNLOGGED — the pipeline's single <c>.Catch&lt;…, CompilationException&gt;</c> funnel is the
     /// one reporter of a compile failure.
     /// </summary>

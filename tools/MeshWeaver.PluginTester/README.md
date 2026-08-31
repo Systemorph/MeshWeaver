@@ -32,7 +32,7 @@ mw-compiler build-project <csproj|dir>     # BUILD A .csproj: no dotnet SDK, no 
 ```
 mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] [--extra-refs <dir>]... \
     [--generators <dir|dll>]... [--razor-generators <dir>] \
-    [--accept <construct>]... [--allow-warnings] [--max-parallel <n>]
+    [--accept <construct>]... [-p:Name=Value]... [--allow-warnings] [--max-parallel <n>]
 ```
 
 Runs INSIDE the image (`memex build project --image …` is the trip in). Three parts:
@@ -41,11 +41,13 @@ Runs INSIDE the image (`memex build project --image …` is the trip in). Three 
   `**/*.cs` glob minus `bin`/`obj`, `Compile Include/Remove`, `ProjectReference`,
   `PackageReference`, implicit usings, the target-framework symbol ladder, the nearest
   `Directory.Build.props` / `.targets` / `Directory.Packages.props`, and every `<Import>` whose
-  condition holds. 🚨 **Anything it cannot reproduce FAILS the load by name** — an unknown element
-  or item type, a `Condition` outside its grammar, an `<Import>` of a missing file (MSB4019's
-  behaviour, deliberately), a `<Target>`, an `<EmbeddedResource>`. `--accept <construct>`
-  acknowledges one. The alternative is worse than no build: a dropped `Nullable`, `NoWarn` or
-  `DefineConstants` produces a green build that is not the build the SDK would have produced.
+  condition holds, plus every **`<EmbeddedResource>`** with the manifest NAME the SDK would give it.
+  🚨 **Anything it cannot reproduce FAILS the load by name** — an unknown element or item type, a
+  `Condition` outside its grammar, an `<Import>` of a missing file (MSB4019's behaviour,
+  deliberately), a `<Target>`, a resource construct whose name cannot be matched exactly.
+  `--accept <construct>` acknowledges one. The alternative is worse than no build: a dropped
+  `Nullable`, `NoWarn` or `DefineConstants` produces a green build that is not the build the SDK
+  would have produced.
 - **`ContainerReferenceSet`** reads `/app`, the image's own `*.deps.json` and the shared frameworks
   installed in the container. The C# port of `MeshWeaver.Plugins/scripts/container-refs.py`, read
   from disk instead of an extracted image. 🚨 **Fails closed** on an unreadable `/app`, a missing or
@@ -65,6 +67,45 @@ Runs INSIDE the image (`memex build project --image …` is the trip in). Three 
 entry project) is built from source, in dependency order. **Outside it, the container supplies the
 assembly** — which is exactly the `$(MeshWeaverRoot)/src/…` shape every `MeshWeaver.Plugins/src`
 project carries, and it resolves to the assembly the image ships rather than to a checkout.
+
+### 🔴 The emitted assembly carries the SDK's binding identity
+
+`GenerateAssemblyInfo` is a TARGET, and this builder runs no targets — so it emitted Roslyn's own
+default, **`AssemblyVersion=0.0.0.0`**, while the whole fleet binds `3.0.0.0`. Nothing went red: the
+compile was green, the DLL loaded, and the failure would have arrived in a different repo, at
+runtime, as `FileNotFoundException: Could not load file or assembly '…, Version=3.0.0.0'` — the
+shape of Systemorph/MeshWeaver#143, which CrashLoopBackOff'd a migration.
+
+The identity is now **evaluated** from the project and synthesized into the compilation as one more
+source document, exactly as the SDK's generated `<Project>.AssemblyInfo.cs` is one more Compile
+item: `AssemblyVersion` (explicit, else the numeric core of `$(Version)` padded to four fields,
+which is what the SDK's `GetAssemblyVersion` task does), `FileVersion` (following `AssemblyVersion`,
+never `$(Version)`), `InformationalVersion` (following `$(Version)`), the descriptive attributes
+with the SDK's `$(AssemblyName)` → `$(Authors)` → `$(Company)` fallback chain, and the
+`InternalsVisibleTo` / `AssemblyMetadata` / `AssemblyAttribute` items — all of which this evaluator
+used to drop as "metadata that changes nothing", true of the COMPILE and false of the ASSEMBLY.
+`GenerateAssemblyInfo=false` synthesizes nothing (the project supplies its own; a second set is
+CS0579), and each `Generate…Attribute` switch is honoured individually.
+
+🚨 **A property it cannot derive is a NAMED failure, never a plausible substitute** — an
+unparseable `$(Version)`, or `PublishRepositoryUrl=true` with no `$(RepositoryUrl)` (the SDK reads
+that one off the git remote).
+
+**Two things it deliberately does not reproduce, and both are said out loud:**
+
+- **`$(SourceRevisionId)`** — the SDK appends `+<sha>` to `InformationalVersion` from git; there is
+  no git here, so every build reports the absent suffix by name. `-p:SourceRevisionId=<sha>` gives
+  exact parity. `-p:Name=Value` (or `--property Name=Value`) is MSBuild's global property, and it is
+  immutable during evaluation exactly as MSBuild makes it: a `<PropertyGroup>` cannot overwrite one.
+- **`TargetFrameworkAttribute`** — written by a different target
+  (`GenerateTargetFrameworkMonikerAttribute`) with its own switches and its own
+  `TargetPlatform`/`SupportedOSPlatform` companions for a platform-suffixed TFM this evaluator
+  cannot compute. Emitting half of that set would be worse than the gap.
+
+Measured, not assumed: every rule above was produced by building the same project with SDK 10.0.400
+and reading the generated `*.AssemblyInfo.cs`, and the container output for
+`MeshWeaver.Plugins/src/MeshWeaver.Speech.Contract` was compared attribute-for-attribute against a
+real `dotnet build` of it — identical but for `TargetFrameworkAttribute`.
 
 **The diagnostic standard is the SDK's.** Nullable analysis follows the project;
 `DocumentationMode.Diagnose` is ALWAYS on so doc-QUALITY defects surface (CS1574, CS0419, CS1570),
@@ -100,6 +141,16 @@ builder: `Microsoft.CodeAnalysis.Razor.Compiler.dll` + `Microsoft.AspNetCore.Raz
 **Still not supported, and each says so:** SDK source generators (they live in the SDK, not the
 runtime; `--generators` supplies them), embedded resources, `<Protobuf>`, MSBuild `<Target>`s and
 `<Sdk>` elements. Full measurements:
+**Not supported, and each says so:** Razor/Blazor compilation (needs
+`Microsoft.CodeAnalysis.Razor.Compiler`, `Microsoft.AspNetCore.Razor.Utilities.Shared` and
+`Microsoft.Extensions.ObjectPool` in the image — it ships none), SDK source generators (they live in
+the SDK, not the runtime; `--generators` supplies them), `<Protobuf>`, MSBuild `<Target>`s and
+`<Sdk>` elements. **Embedded resources ARE supported** — under the SDK's own manifest names, every
+rule established by building probe projects with the real SDK and reading the names back out of the
+emitted PE; `.resx`, a culture in a file name (which the SDK routes to a SATELLITE assembly),
+`DependentUpon` and `ManifestResourceName` are each refused BY NAME rather than guessed, because a
+plausible-looking wrong resource name is the one defect nothing downstream can see. Full
+measurements:
 [In-Mesh Build and Test](https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Documentation/Data/Architecture/InMeshBuildAndTest.md).
 
 ## `build` — compile AND test, per package, as a dependency cascade (2026-08-30)

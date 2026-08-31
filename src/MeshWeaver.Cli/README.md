@@ -76,6 +76,7 @@ assembly the image already carries. See
 | `--root <dir>` | directory mounted as `/repo` (default: the nearest `Directory.Build.props` ancestor) |
 | `--extra-refs <dir>` | libraries ADDITIONAL to the platform — the only way to satisfy a `PackageReference` the image does not supply. Repeatable |
 | `--accept <construct>` | acknowledge one construct the evaluator cannot reproduce (`target:<Name>`, `embedded-resource`, `conditions`, `razor-css-scope`, `razor-not-compiled`). Repeatable |
+| `--accept <construct>` | acknowledge one construct the evaluator cannot reproduce (`target:<Name>`, `conditions`, `embedded-resource`, `embedded-resource:{resx,culture,dependent-upon,manifest-resource-name,build-output}`). Repeatable |
 | `--no-warn` / `--allow-warnings` | warnings fail the build (default); `--no-warn=false` or `--allow-warnings` opts out |
 | `--no-pull` | use the image the docker daemon already has, for one built locally |
 
@@ -87,7 +88,8 @@ and CSS isolation (`*.razor.css`) needs `--accept razor-css-scope` because the `
 from an MSBuild task this builder does not run.
 
 🚨 **Nothing is dropped in silence.** A project construct this builder cannot reproduce — an unknown
-element, an unevaluatable `Condition`, a `<Target>`, an `<EmbeddedResource>` — FAILS the run naming
+element, an unevaluatable `Condition`, a `<Target>`, a resource whose SDK manifest name cannot be
+matched exactly — FAILS the run naming
 the construct and the file, and a `PackageReference` the container does not supply is reported by
 name rather than skipped. A silently dropped `Nullable` or `NoWarn` produces a build that looks green
 and is not the build the SDK would have produced.
