@@ -84,20 +84,30 @@ public class MemexLocalDiscoversNodeRepoSiblingsGuard : IDisposable
     /// </summary>
     private IReadOnlyList<string> Discovered(string? overrideVar = null)
     {
+        // 🚨 The shell redirects to FILES and nothing is piped back. Reading a redirected stream
+        // with ReadToEnd() before WaitForExit blocks in the read, so the bounded wait below could
+        // never fire and a hung script would hang the runner instead of failing it — a cap that
+        // cannot fire is not a cap. Raised in review of #2904. With no pipe to drain, WaitForExit
+        // is the only thing that waits, and it is bounded.
+        var outPath = Path.Combine(root, "stdout.txt");
+        var errPath = Path.Combine(root, "stderr.txt");
+
         var info = new ProcessStartInfo("/bin/bash",
-            ["-c", $". '{Script()}'; plugin_repo_paths"])
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
+            ["-c", $"{{ . '{Script()}'; plugin_repo_paths; }} > '{outPath}' 2> '{errPath}'"]);
         info.Environment["MEMEX_LOCAL_LIB"] = "1";
         info.Environment["MEMEX_REPO"] = Path.Combine(root, "Platform");
         if (overrideVar is not null) info.Environment["MEMEX_PLUGIN_REPOS"] = overrideVar;
 
         using var process = Process.Start(info)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(60_000), "memex-local did not finish resolving plugin repos");
+        if (!process.WaitForExit(60_000))
+        {
+            process.Kill(entireProcessTree: true);
+            Assert.Fail("memex-local did not finish resolving plugin repos within 60s — it is "
+                + "stuck, and the cap must report that rather than wait forever.");
+        }
+
+        var stdout = File.Exists(outPath) ? File.ReadAllText(outPath) : "";
+        var stderr = File.Exists(errPath) ? File.ReadAllText(errPath) : "";
         Assert.True(process.ExitCode == 0,
             $"sourcing memex-local failed (exit {process.ExitCode}). stderr:\n{stderr}");
 
@@ -138,8 +148,13 @@ public class MemexLocalDiscoversNodeRepoSiblingsGuard : IDisposable
         Assert.Equal(["Acme.Views"], Discovered(Path.Combine(root, "Acme.Views")));
     }
 
+    /// <summary>
+    /// Best-effort: a temp tree that outlives the test is untidy, never a failure, so no cleanup
+    /// problem may turn a passing assertion red. Raised in review of #2904 — catching only
+    /// IOException left UnauthorizedAccessException and friends able to fail the test.
+    /// </summary>
     public void Dispose()
     {
-        try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        try { Directory.Delete(root, recursive: true); } catch (Exception) { }
     }
 }
