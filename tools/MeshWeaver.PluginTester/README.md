@@ -40,11 +40,13 @@ Runs INSIDE the image (`memex build project --image …` is the trip in). Three 
   `**/*.cs` glob minus `bin`/`obj`, `Compile Include/Remove`, `ProjectReference`,
   `PackageReference`, implicit usings, the target-framework symbol ladder, the nearest
   `Directory.Build.props` / `.targets` / `Directory.Packages.props`, and every `<Import>` whose
-  condition holds. 🚨 **Anything it cannot reproduce FAILS the load by name** — an unknown element
-  or item type, a `Condition` outside its grammar, an `<Import>` of a missing file (MSB4019's
-  behaviour, deliberately), a `<Target>`, an `<EmbeddedResource>`. `--accept <construct>`
-  acknowledges one. The alternative is worse than no build: a dropped `Nullable`, `NoWarn` or
-  `DefineConstants` produces a green build that is not the build the SDK would have produced.
+  condition holds, plus every **`<EmbeddedResource>`** with the manifest NAME the SDK would give it.
+  🚨 **Anything it cannot reproduce FAILS the load by name** — an unknown element or item type, a
+  `Condition` outside its grammar, an `<Import>` of a missing file (MSB4019's behaviour,
+  deliberately), a `<Target>`, a resource construct whose name cannot be matched exactly.
+  `--accept <construct>` acknowledges one. The alternative is worse than no build: a dropped
+  `Nullable`, `NoWarn` or `DefineConstants` produces a green build that is not the build the SDK
+  would have produced.
 - **`ContainerReferenceSet`** reads `/app`, the image's own `*.deps.json` and the shared frameworks
   installed in the container. The C# port of `MeshWeaver.Plugins/scripts/container-refs.py`, read
   from disk instead of an extracted image. 🚨 **Fails closed** on an unreadable `/app`, a missing or
@@ -78,8 +80,13 @@ console is a rendering of that stream, which is why nothing is batched to the en
 **Not supported, and each says so:** Razor/Blazor compilation (needs
 `Microsoft.CodeAnalysis.Razor.Compiler`, `Microsoft.AspNetCore.Razor.Utilities.Shared` and
 `Microsoft.Extensions.ObjectPool` in the image — it ships none), SDK source generators (they live in
-the SDK, not the runtime; `--generators` supplies them), embedded resources, `<Protobuf>`, MSBuild
-`<Target>`s and `<Sdk>` elements. Full measurements:
+the SDK, not the runtime; `--generators` supplies them), `<Protobuf>`, MSBuild `<Target>`s and
+`<Sdk>` elements. **Embedded resources ARE supported** — under the SDK's own manifest names, every
+rule established by building probe projects with the real SDK and reading the names back out of the
+emitted PE; `.resx`, a culture in a file name (which the SDK routes to a SATELLITE assembly),
+`DependentUpon` and `ManifestResourceName` are each refused BY NAME rather than guessed, because a
+plausible-looking wrong resource name is the one defect nothing downstream can see. Full
+measurements:
 [In-Mesh Build and Test](https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Documentation/Data/Architecture/InMeshBuildAndTest.md).
 
 ## `build` — compile AND test, per package, as a dependency cascade (2026-08-30)
