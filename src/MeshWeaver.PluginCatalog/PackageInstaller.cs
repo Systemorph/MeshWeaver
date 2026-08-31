@@ -1162,7 +1162,8 @@ public static class PackageInstaller
     /// wait for — no local instance, or one that is not disposing (the recycle already finished,
     /// or the hub lives on another silo) — the re-ask proceeds immediately.
     /// </summary>
-    private static IObservable<Unit> RootTeardownSettled(IMessageHub hub, string rootPath)
+    private static IObservable<Unit> RootTeardownSettled(
+        IMessageHub hub, string rootPath, ILogger? logger)
     {
         var live = hub.GetHostedHub(new Address(rootPath), HostedHubCreation.Never);
         if (live is null || !live.IsDisposing)
@@ -1170,7 +1171,26 @@ public static class PackageInstaller
         return live.DisposalCompleted
             .Take(1)
             .Timeout(RootRecycleTimeout)
-            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+            // 🚨 Continue, but never SILENTLY. Proceeding is right — the re-ask is worth attempting
+            // even if the teardown never reported finishing — but the bound's own remark says it
+            // "is only ever reached when a hub's teardown itself WEDGES". So expiring it is not a
+            // slow path, it is the wedge, and this arm used to swallow the one moment that says so:
+            // `.Catch(_ => Observable.Return(Unit.Default))` with no log at all.
+            //
+            // Thirty silent seconds per occurrence is exactly what #2446 is trying to account for
+            // — "31 MB written in under a second, then minutes of idle" — and every OTHER bound in
+            // this installer already names itself on expiry, so this was the one gap that made a
+            // post-hoc log read incomplete. A wait nobody can see is a wait nobody can fix.
+            .Catch<Unit, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[PackageInstaller] the teardown of {Root} did not report finishing within "
+                    + "{Bound} — re-asking anyway, so the install continues. This bound is only "
+                    + "reached when a teardown WEDGES, so an occurrence is a stalled disposal on "
+                    + "that root, not a slow one, and it costs the install the full {Bound}",
+                    rootPath, RootRecycleTimeout, RootRecycleTimeout);
+                return Observable.Return(Unit.Default);
+            })
             .DefaultIfEmpty(Unit.Default);
     }
 
@@ -1687,7 +1707,7 @@ public static class PackageInstaller
                 .RetryWhen(faults => faults
                     .Select((fault, attempt) => (fault, attempt))
                     .SelectMany(f => IsRootRecycling(f.fault) && f.attempt < RootRecycleReAsks
-                        ? RootTeardownSettled(hub, sync.NodePath)
+                        ? RootTeardownSettled(hub, sync.NodePath, logger)
                         : Observable.Throw<Unit>(f.fault)))
                 .Catch<int, Exception>(exception =>
                 {
