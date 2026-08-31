@@ -1133,11 +1133,40 @@ plugin_repo_paths() {
     done
     return 0
   fi
-  local repo sibling
+  # Otherwise: every node repo checked out BESIDE the platform, discovered by CONTENT.
+  #
+  # 🚨 This used to be the single sibling literally named MeshWeaver.Plugins, with
+  # MEMEX_PLUGIN_REPOS as the only way to serve anything else. A developer with the course repo
+  # checked out next to it therefore had a portal that could not serve a single course, and
+  # nothing said so — the Store just listed less. Setting the variable fixed it until the next
+  # `memex-local update` typed without it, at which point the courses silently went away again.
+  local repo parent d
   repo="$(resolve_repo 2>/dev/null)" || return 0
-  sibling="$(dirname "$repo")/MeshWeaver.Plugins"
-  [ -d "$sibling" ] && printf '%s\n' "$sibling"
+  parent="$(dirname "$repo")"
+  for d in "$parent"/*/; do
+    d="${d%/}"
+    [ -d "$d" ] || continue
+    is_node_repo "$d" && printf '%s\n' "$d"
+  done
   return 0
+}
+
+# Whether a directory is a node repo: does it DECLARE a package root — <Folder>/index.json with a
+# root nodeType? That is the registry's own predicate (NodeRepoPackageSource: Space, Store/Plugin,
+# Store/Catalog), applied at the same depth.
+#
+# 🚨 By content, never by a list of names. That is what makes the platform checkout and its
+# worktrees exclude THEMSELVES — they carry no root manifest at this depth — so no name list has to
+# enumerate them and none can go stale; and a node repo added or renamed tomorrow is picked up with
+# no change here. The glob is exactly depth 2, so a manifest nested deeper does not qualify, which
+# is the same line the registry draws.
+is_node_repo() {
+  local f
+  for f in "$1"/*/index.json; do
+    [ -f "$f" ] || continue
+    grep -qE '"nodeType"[[:space:]]*:[[:space:]]*"(Space|Store/Plugin|Store/Catalog)"' "$f" && return 0
+  done
+  return 1
 }
 
 readonly E2E_DB="memex_e2e"
@@ -2480,4 +2509,7 @@ main() {
     *) die "unknown command '$cmd' (try: memex-local help)" ;;
   esac
 }
-main "$@"
+# Sourceable for tests: `MEMEX_LOCAL_LIB=1 . memex-local` defines the functions without dispatching.
+# Without this the only way to check a helper's BEHAVIOUR is to assert on the script's text, which
+# is not a check of what the helper does.
+[ "${MEMEX_LOCAL_LIB:-}" = "1" ] || main "$@"
