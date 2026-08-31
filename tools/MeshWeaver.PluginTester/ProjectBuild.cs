@@ -351,9 +351,26 @@ public static class ProjectBuild
     }
 
     /// <summary>
+    /// The directory, beside the builder (then under the container's <c>/app</c>), that carries the
+    /// SDK's BUILT-IN generators (<c>GeneratedRegex</c>, <c>JsonSerializable</c>,
+    /// <c>LibraryImport</c>…). They live in the SDK's targeting pack, not the runtime the image
+    /// ships, so the image build stages them here (<c>StageSdkSourceGenerators</c> in this
+    /// project's <c>.csproj</c>) and every build picks them up without a flag — the same shipping
+    /// pattern as <c>razor-generators/</c>, minus the per-RID split (these are plain AnyCPU IL).
+    /// </summary>
+    public const string SdkGeneratorDirectoryName = "sdk-generators";
+
+    /// <summary>
     /// Expands <c>--generators</c> into assembly paths. A directory contributes its <c>*.dll</c>;
     /// a path that does not exist is a failure, because a generator directory that is not there
     /// would silently run no generator and produce a different assembly.
+    ///
+    /// <para>The image-shipped <see cref="SdkGeneratorDirectoryName"/> directory is then appended
+    /// unconditionally when present — beside the builder first, then under the container's
+    /// <c>/app</c>. Absence is NOT an error here: a from-source run on a dev machine has no staged
+    /// copy, and a project that uses no SDK generator builds identically either way; a project
+    /// that DOES need one still fails by name (the missing-partials diagnostic below names the
+    /// generator that never ran), so nothing goes quietly.</para>
     /// </summary>
     private static ImmutableArray<string> ResolveGenerators(Options options, Sink sink)
     {
@@ -369,6 +386,20 @@ public static class ProjectBuild
                 throw new InvalidOperationException(
                     $"--generators '{full}' does not exist. A generator path that is not there runs "
                     + "no generator and silently produces a different assembly.");
+        }
+        var shipped = new[]
+            {
+                Path.Combine(AppContext.BaseDirectory, SdkGeneratorDirectoryName),
+                Path.Combine(options.AppDirectory, SdkGeneratorDirectoryName),
+            }
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.Ordinal)
+            .FirstOrDefault(Directory.Exists);
+        if (shipped is not null)
+        {
+            var dlls = Directory.GetFiles(shipped, "*.dll");
+            paths.AddRange(dlls);
+            sink.Info($"sdk generators: {dlls.Length} from {shipped} (staged by the image build)");
         }
         if (paths.Count > 0)
             sink.Info($"source generators: {paths.Count} candidate assembl(y|ies)");
