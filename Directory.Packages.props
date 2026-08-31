@@ -33,9 +33,21 @@
          KubernetesService.PatchAsync) to patch local orchestrator objects — nothing to do with
          MeshWeaver's own mesh-node patch path, so "use our own" is not available here.
 
-         Moving to 13.5.x is a COMMERCIAL decision, not a version bump. If it is taken, the three
-         packages need a documented exception in the licence gate (the `~` mechanism
-         UglyToad.PdfPig already uses), and consumers should be told.
+         🚨 UPSTREAM HAS ALREADY FIXED THIS — the hold is TEMPORARY, not a standing position.
+         microsoft/aspire#19493 raised exactly this ("Aspire shouldn't add a dependency requiring
+         a commercial fee"), and #19498 replaced JsonPatch.Net with a focused internal RFC 6902
+         implementation over System.Text.Json.Nodes. Both closed 2026-08-25. It is MERGED BUT NOT
+         YET RELEASED: 13.5.3, the newest at the time of writing, still pins JsonPatch.Net 5.0.2.
+
+         So the upgrade path is: stay on 13.4.6, SKIP 13.5.x entirely, and move straight to the
+         first release whose Aspire.Hosting nuspec no longer lists JsonPatch.Net. Check with:
+
+             curl -s https://api.nuget.org/v3-flatcontainer/aspire.hosting/<ver>/aspire.hosting.nuspec \
+               | grep JsonPatch.Net        # no match => the dependency is gone, safe to take
+
+         Taking 13.5.x anyway is a COMMERCIAL decision, not a version bump: the three packages
+         would need a documented exception in the licence gate (the `~` mechanism
+         UglyToad.PdfPig already uses), and consumers of our published integration told.
          PackageFamiliesMoveTogetherGuard keeps the 14 pins on one base version either way. -->
     <PackageVersion Include="Aspire.Azure.Npgsql" Version="13.4.6" />
     <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="13.4.6" />
