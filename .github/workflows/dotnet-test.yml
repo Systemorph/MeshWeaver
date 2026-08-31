@@ -1858,7 +1858,7 @@ jobs:
     # problem (#1709). Scoped to contents:read on exactly the repos in the register.
     - name: Mint an installation token for the fleet
       id: fleet-token
-      uses: actions/create-github-app-token@v2
+      uses: actions/create-github-app-token@v3
       with:
         app-id: ${{ secrets.MESHWEAVER_APP_ID }}
         private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
