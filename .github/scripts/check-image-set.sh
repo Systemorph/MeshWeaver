@@ -2,8 +2,25 @@
 #
 # Is the COMPLETE deployment image set present in ACR for one commit?
 #
-#   .github/scripts/check-image-set.sh <short-sha>
+#   .github/scripts/check-image-set.sh <short-sha> [<plugins-short-sha>]
 #   exit 0 = complete   exit 1 = something is missing / malformed
+#
+# 🚨 THE SECOND ARGUMENT IS WHAT MAKES THE IDENTITY HONEST (MeshWeaver#2622). The portal HOSTS
+# live in MeshWeaver.Plugins, so a merge THERE that edits a file shipping in the image — an
+# appsettings.json, a csproj — changes what the image should contain while core's HEAD does not
+# move. Keyed on core's sha alone this script answers "complete", the reconciler does nothing,
+# and the fix has no producer that would ever rebuild it. That is not hypothetical: Plugins#814
+# fixed fresh-install engine activation at 14:54Z and the newest image predated it.
+#
+# Given a plugins sha, "the set" additionally requires the PAIR tag memex-portal-ai:<sha>-p<psha>,
+# which `promote` phase A stamps on the image it publishes. A plugins merge therefore makes the
+# set INCOMPLETE on core's next reconcile tick, and the reconciler heals it on its own.
+#
+# 🚨 Callers MUST pass a value RESOLVED ONCE by `gate` and threaded through, never re-resolve it.
+# `gate` and `verify-images` both call this file and their answers must agree (see below); if
+# each resolved plugins HEAD itself, a plugins merge landing during the ~20 min run would make
+# verify look for a tag the publish could not have written, and every such publish would go red
+# on a correct result. Cry wolf, and the ledger becomes noise.
 #
 # 🚨 THIS FILE IS THE DEFINITION OF "THE SET". Used by BOTH jobs in main-cd.yml that need to
 # answer the question, and they MUST agree:
@@ -28,7 +45,8 @@
 # is not a cross-image identity.
 set -uo pipefail
 
-SHA="${1:?usage: check-image-set.sh <short-sha>}"
+SHA="${1:?usage: check-image-set.sh <short-sha> [<plugins-short-sha>]}"
+PLUGINS_SHA="${2:-}"
 REGISTRY="${ACR_NAME:-meshweaver}"
 
 # Reads manifests through ARM (an `az login` is enough — `az acr login` is for docker push creds).
@@ -67,8 +85,21 @@ done
 # it, so it is not part of THIS repo's all-or-nothing set. Asserting an image this repo does not
 # build would fail every commit.
 
+# 🚨 The PAIR tag — is the published portal image the one built from the CURRENT plugins HEAD?
+# Only checked when a caller supplies the plugins sha, so every other caller keeps today's exact
+# behaviour and nothing else has to change. Absent argument = absent check, deliberately: this is
+# the one place the answer may narrow, and it narrows only for callers that opted in.
+if [ -n "$PLUGINS_SHA" ]; then
+  pair="$SHA-p$PLUGINS_SHA"
+  if az acr manifest show --registry "$REGISTRY" --name "memex-portal-ai:$pair" -o json >/dev/null 2>&1; then
+    ok "memex-portal-ai:$pair — built from plugins $PLUGINS_SHA"
+  else
+    report "memex-portal-ai:$pair is MISSING — the published portal image was NOT built from the current plugins HEAD ($PLUGINS_SHA). The portal hosts live in MeshWeaver.Plugins, so a merge there ships in the image while core's sha does not move (#2622). The reconciler will rebuild."
+  fi
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "::error::main $SHA does NOT have a complete image set. Every self-updating install stays on the previous image until a CD run publishes all of them."
   exit 1
 fi
-echo "All four images exist in ACR for $SHA."
+echo "All images exist in ACR for $SHA${PLUGINS_SHA:+ (built from plugins $PLUGINS_SHA)}."
