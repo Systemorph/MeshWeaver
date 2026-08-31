@@ -29,4 +29,16 @@ public static class UiActionContextExtensions
     {
         context.Host.NavigateTo(uri, forceLoad, replace);
     }
+
+    /// <summary>
+    /// Opens the URI in the portal's side panel, leaving the page the viewer is on in place —
+    /// see <see cref="Composition.LayoutAreaHost.NavigateToSidePanel"/> for when to prefer this
+    /// over <see cref="NavigateTo"/>.
+    /// </summary>
+    /// <param name="context">The action context of the click.</param>
+    /// <param name="uri">The URI to open in the side panel.</param>
+    public static void NavigateToSidePanel(this UiActionContext context, string uri)
+    {
+        context.Host.NavigateToSidePanel(uri);
+    }
 }

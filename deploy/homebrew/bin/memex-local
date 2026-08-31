@@ -573,8 +573,26 @@ image_pull_acr() {                                     # §3 Option A
   step "Pulling multi-arch images from ACR ($ACR, tag=$tag) (§3 Option A)"
   # The registry is private. `az acr login` is idempotent (a docker credential helper entry), and
   # failing HERE names the remedy — a bare `docker pull` denial reads like a missing tag.
-  az acr login -n "$ACR_NAME" -o none 2>/dev/null \
-    || die "cannot log in to $ACR — run 'az login' first (the account needs pull access to the '$ACR_NAME' registry)"
+  #
+  # 🚨 NEVER discard Azure's answer. This ran `2>/dev/null` and then said "run 'az login' first",
+  # which is the one remedy that cannot help the failure people actually hit: an account that IS
+  # signed in and simply holds no role on the registry. Azure states the missing permission exactly
+  # — "(AuthorizationFailed) … does not have authorization to perform action
+  # 'Microsoft.Resources/subscriptions/resources/read'" — and that sentence IS the diagnosis.
+  # Reported 2026-08-31 by a developer who signed out, signed back in and switched tenant on the old
+  # advice before asking; the role had been missing the whole time. Note also that `az acr login`
+  # resolves the registry through ARM BEFORE it talks to the registry, so a bare AcrPull grant is
+  # not enough for this command — hence both roles below.
+  local acr_err=""
+  if ! acr_err="$(az acr login -n "$ACR_NAME" -o none 2>&1)"; then
+    [ -n "$acr_err" ] && printf '%s\n' "$acr_err" >&2
+    die "cannot log in to $ACR — Azure's own answer is printed above.
+     signed OUT     -> az login
+     signed IN      -> the account needs the AcrPull role on the '$ACR_NAME' registry, and Reader on
+                       its subscription ('az acr login' resolves the registry through ARM first)
+     no ACR access  -> build the image instead:  memex-local update --build
+                       or keep the running one:  memex-local update --skip-image"
+  fi
   info "Verify the tag is multi-arch (must list arm64):"
   docker manifest inspect "$ACR/memex-portal-ai:$tag" | grep -A1 '"architecture"' || \
     warn "could not inspect manifest — continuing (amd64-only tags crash on arm64, see §14)"
@@ -1115,11 +1133,40 @@ plugin_repo_paths() {
     done
     return 0
   fi
-  local repo sibling
+  # Otherwise: every node repo checked out BESIDE the platform, discovered by CONTENT.
+  #
+  # 🚨 This used to be the single sibling literally named MeshWeaver.Plugins, with
+  # MEMEX_PLUGIN_REPOS as the only way to serve anything else. A developer with the course repo
+  # checked out next to it therefore had a portal that could not serve a single course, and
+  # nothing said so — the Store just listed less. Setting the variable fixed it until the next
+  # `memex-local update` typed without it, at which point the courses silently went away again.
+  local repo parent d
   repo="$(resolve_repo 2>/dev/null)" || return 0
-  sibling="$(dirname "$repo")/MeshWeaver.Plugins"
-  [ -d "$sibling" ] && printf '%s\n' "$sibling"
+  parent="$(dirname "$repo")"
+  for d in "$parent"/*/; do
+    d="${d%/}"
+    [ -d "$d" ] || continue
+    is_node_repo "$d" && printf '%s\n' "$d"
+  done
   return 0
+}
+
+# Whether a directory is a node repo: does it DECLARE a package root — <Folder>/index.json with a
+# root nodeType? That is the registry's own predicate (NodeRepoPackageSource: Space, Store/Plugin,
+# Store/Catalog), applied at the same depth.
+#
+# 🚨 By content, never by a list of names. That is what makes the platform checkout and its
+# worktrees exclude THEMSELVES — they carry no root manifest at this depth — so no name list has to
+# enumerate them and none can go stale; and a node repo added or renamed tomorrow is picked up with
+# no change here. The glob is exactly depth 2, so a manifest nested deeper does not qualify, which
+# is the same line the registry draws.
+is_node_repo() {
+  local f
+  for f in "$1"/*/index.json; do
+    [ -f "$f" ] || continue
+    grep -qE '"nodeType"[[:space:]]*:[[:space:]]*"(Space|Store/Plugin|Store/Catalog)"' "$f" && return 0
+  done
+  return 1
 }
 
 readonly E2E_DB="memex_e2e"
@@ -2331,17 +2378,33 @@ PLIST
       if [ "$(cat "$AUTOROLL_SOURCE_STATE" 2>/dev/null)" = "acr" ] \
           && [ -z "$(find "$AUTOROLL_ACR_CHECKED" -mmin "-$AUTOROLL_ACR_INTERVAL_MIN" 2>/dev/null)" ]; then
         touch "$AUTOROLL_ACR_CHECKED"
-        local rdigest rlast
-        rdigest="$(az acr manifest show-metadata -r "${ACR%%.*}" -n "memex-portal-ai:$ACR_DEFAULT_TAG" --query digest -o tsv 2>/dev/null || true)"
+        local rdigest rlast racr_err=""
+        # 🚨 Same rule as image_pull_acr: keep Azure's answer. Guessing "(az not logged in /
+        # offline?)" in a line that repeats every polling window is worse than saying nothing —
+        # a missing AcrPull role reads as a transient network blip forever.
+        rdigest="$(az acr manifest show-metadata -r "${ACR%%.*}" -n "memex-portal-ai:$ACR_DEFAULT_TAG" --query digest -o tsv 2>&1)" \
+          || { racr_err="$rdigest"; rdigest=""; }
         rlast="$(cat "$AUTOROLL_ACR_STATE" 2>/dev/null || true)"
         if [ -z "$rdigest" ]; then
-          printf '%s autoroll: acr poll FAILED (az not logged in / offline?) — keeping current images, will retry\n' "$(date -u +%FT%TZ)"
+          printf '%s autoroll: acr poll FAILED — keeping current images, will retry. Azure said: %s\n' \
+            "$(date -u +%FT%TZ)" \
+            "$(printf '%s' "${racr_err:-<no output>}" | tr '\n' ' ' | cut -c1-400)"
         elif [ "$rdigest" != "$rlast" ]; then
           printf '%s autoroll: acr %s:%s moved (%s -> %s) — pulling portal + migration\n' \
             "$(date -u +%FT%TZ)" "memex-portal-ai" "$ACR_DEFAULT_TAG" "${rlast:-none}" "$rdigest"
-          if az acr login -n "${ACR%%.*}" >/dev/null 2>&1 \
-              && docker pull --platform linux/arm64 "$ACR/memex-portal-ai:$ACR_DEFAULT_TAG" >/dev/null 2>&1 \
-              && docker pull --platform linux/arm64 "$ACR/memex-migration:$ACR_DEFAULT_TAG" >/dev/null 2>&1; then
+          # 🚨 Inverted so the FAILING step's output is the one kept: each arm assigns its combined
+          # output and negates, so the first failure short-circuits with its own message in
+          # $stage_err. The success arm below is unchanged. Written this way because
+          # `A && B && C` with every arm suppressed could only ever report "FAILED", which is what
+          # this line did — three commands deep, with no reason. Raised in review of #2903.
+          local stage_err=""
+          if ! stage_err="$(az acr login -n "${ACR%%.*}" 2>&1)" \
+              || ! stage_err="$(docker pull --platform linux/arm64 "$ACR/memex-portal-ai:$ACR_DEFAULT_TAG" 2>&1)" \
+              || ! stage_err="$(docker pull --platform linux/arm64 "$ACR/memex-migration:$ACR_DEFAULT_TAG" 2>&1)"; then
+            printf '%s autoroll: acr pull FAILED — keeping current images, will retry. Last error: %s\n' \
+              "$(date -u +%FT%TZ)" \
+              "$(printf '%s' "${stage_err:-<no output>}" | tr '\n' ' ' | cut -c1-400)"
+          else
             # Never stage a wrong-arch image: an amd64 image runs EMULATED here and .NET's
             # ConfigurationBinder NREs at startup — the exact crash that forced local source
             # builds before the registry went multi-arch.
@@ -2356,8 +2419,6 @@ PLIST
               printf '%s autoroll: acr image is %s, not arm64 — REFUSING to stage (would crash under emulation), will retry\n' \
                 "$(date -u +%FT%TZ)" "${arch:-unknown}"
             fi
-          else
-            printf '%s autoroll: acr pull FAILED — keeping current images, will retry\n' "$(date -u +%FT%TZ)"
           fi
         fi
         # 0b. Plugin content: refresh the hostPath-mounted Plugins checkout (see the constants
@@ -2448,4 +2509,7 @@ main() {
     *) die "unknown command '$cmd' (try: memex-local help)" ;;
   esac
 }
-main "$@"
+# Sourceable for tests: `MEMEX_LOCAL_LIB=1 . memex-local` defines the functions without dispatching.
+# Without this the only way to check a helper's BEHAVIOUR is to assert on the script's text, which
+# is not a check of what the helper does.
+[ "${MEMEX_LOCAL_LIB:-}" = "1" ] || main "$@"

@@ -81,6 +81,26 @@ public static class MessageHubExtensions
         => hub.Observe(delivery);
 
     /// <summary>
+    /// Posts <paramref name="request"/> under a CALLER-SUPPLIED message id and observes the
+    /// response, registering the subject BEFORE the post — the #2882 seam.
+    ///
+    /// <para>🚨 <b>Why the id must come from the caller.</b> The self-minting overload applies
+    /// <see cref="PostOptions.WithMessageId"/> AFTER the caller's options, so an id cannot be
+    /// forced through it — and the cross-hub write needs the id up front to arm
+    /// <c>LatePatchResponseRegistry</c> before the post. The previous <c>Post(...)</c> +
+    /// <c>Observe(delivery)</c> shape registered the subject after the post, and the hub DROPS a
+    /// response whose id has no registered subject yet — against a WARM owner answering in
+    /// sub-millisecond time, a thread-pool preemption between the two calls lost the verdict and
+    /// the caller waited out the full 31 s outer bound. The read path had the identical defect,
+    /// fixed the identical way (see <c>GetMeshNode</c>'s Issue()).</para>
+    /// </summary>
+    /// <returns>The response observable, or <c>null</c> when the target address could not be
+    /// resolved (the post returned null) — the registered subject is already cleaned up.</returns>
+    public static IObservable<IMessageDelivery>? Observe(
+        this IMessageHub hub, object request, Func<PostOptions, PostOptions> options, string messageId)
+        => hub.Observe(request, options, messageId);
+
+    /// <summary>
     /// Posts <paramref name="request"/> and observes the typed response.
     /// <para>
     /// Registers the response subject BEFORE posting (<c>MessageHub.Observe</c> allocates the

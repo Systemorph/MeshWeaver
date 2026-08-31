@@ -78,6 +78,20 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// in place. Application code calls <c>hub.Observe(request, options?)</c>.
     /// </summary>
     internal IObservable<IMessageDelivery> Observe(object request, Func<PostOptions, PostOptions> options);
+
+    /// <summary>
+    /// Like <see cref="Observe(object, Func{PostOptions, PostOptions})"/> but with a
+    /// CALLER-SUPPLIED message id — the seam #2882 asked for. A caller that must arm something
+    /// keyed by the request id BEFORE the post (the cross-hub write arms
+    /// <c>LatePatchResponseRegistry</c>) cannot use the self-minting overload: it needs the id
+    /// first, and forcing one through <c>options</c> is overwritten by <c>WithMessageId</c> after
+    /// the caller's options run. Registers the response subject before posting, exactly like the
+    /// self-minting overload.
+    /// </summary>
+    /// <returns>The response observable, or <c>null</c> when the post itself returned null (the
+    /// target address could not be resolved) — the just-registered subject is removed again, so
+    /// a caller keeping its own "unresolvable address" error path leaks nothing.</returns>
+    internal IObservable<IMessageDelivery>? Observe(object request, Func<PostOptions, PostOptions> options, string messageId);
     /// <summary>
     /// Schedules an action to run on the hub's action block (so it executes serially with message
     /// handling, on the hub's thread). The work is posted as an execution request; its

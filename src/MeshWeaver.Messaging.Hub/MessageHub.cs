@@ -1021,6 +1021,51 @@ public sealed class MessageHub : IMessageHub
             capturedCtx);
     }
 
+    /// <summary>
+    /// <see cref="Observe(object, Func{PostOptions, PostOptions})"/> with a CALLER-SUPPLIED id —
+    /// the #2882 seam. Identical register-subject-then-post ordering; the only difference is who
+    /// mints the id, which is what lets the caller arm id-keyed state (the cross-hub write's
+    /// <c>LatePatchResponseRegistry</c> entry) BEFORE anything can answer.
+    /// </summary>
+    public IObservable<IMessageDelivery>? Observe(object r, Func<PostOptions, PostOptions> options, string messageId)
+    {
+        // Same identity capture as the self-minting overload — see its comment.
+        var capturedCtx = accessService.Context;
+        var probeOptions = options(new PostOptions(Address));
+        var requestType = r?.GetType().Name ?? "<null>";
+        var subject = GetOrAddResponseSubject(messageId, requestType, probeOptions.Target,
+            (r as IDiagnosticKeyed)?.DiagnosticKey);
+        IMessageDelivery? posted;
+        try
+        {
+            posted = Post(r, opts => options(opts).WithMessageId(messageId));
+        }
+        catch (Exception postEx)
+        {
+            requestFates.Find(messageId)?.Add($"POST_THREW {postEx.GetType().Name}: {postEx.Message}", Address);
+            throw;
+        }
+        if (posted is null)
+        {
+            // The address could not be resolved, so nothing will ever answer this id. Remove the
+            // subject registered three lines up rather than letting it ripen into a leaked
+            // pending callback the quiescing budget reports, and hand the caller back its
+            // existing "unresolvable address" error path via null.
+            lock (responseSubjects)
+            {
+                if (responseSubjects.TryGetValue(messageId, out var entry)
+                    && ReferenceEquals(entry.Subject, subject))
+                    responseSubjects.Remove(messageId);
+            }
+            return null;
+        }
+        return RestoreUserContextOnEmission(
+            WrapWithCancelOnDispose(
+                ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
+                messageId, subject),
+            capturedCtx);
+    }
+
     private IObservable<IMessageDelivery> ObserveById(string messageId,
         string requestType = "<unknown>",
         Address? target = null)

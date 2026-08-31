@@ -219,6 +219,48 @@ closure. The portal-served side assembles the module section from its own `modul
 (the bytes it runs), and the consuming side lands it through `ModuleLandingService`
 (restart-as-activation) — see [Modules](/Doc/Architecture/Modules) → "The bundle lane".
 
+#### Which compiler produces the module — the container, not the runner's SDK
+
+> *"we want to use memex build plugin and not dotnet build"* — maintainer, 2026-08-31
+
+A module does not run against a source tree and it does not run against a feed: it is loaded into
+the platform **image** and bound by the assemblies in there. So the honest compiler is that image's
+own. `node-repo-module-pack.yml` takes it per matrix entry — `"build": "container"` compiles with
+`memex build project` (i.e. `mw-plugin-test build-project` inside the pinned image: no .NET SDK, no
+NuGet restore, no platform source checkout), and the default `sdk` keeps `dotnet build` +
+`dotnet publish` on the runner. See
+[In-Mesh Build and Test](/Doc/Architecture/InMeshBuildAndTest) for the builder itself.
+
+**It is a per-module conversion, not a switch.** The builder's sweep over all 54 non-test projects in
+`MeshWeaver.Plugins/src` compiled 12 green; the rest need what a *runtime* image does not carry — SDK
+source generators, Razor/Blazor, `<Protobuf>`, additional libraries, portal hosts. A blanket swap
+would break most bundles, so the split is declared, printed by the build step, recorded in the
+receipt, and counted by the lane's `verify` job every run — a split nobody counts is a split that
+becomes permanent.
+
+🚨 **And there is no fallback between the two.** A lane that tries the container and quietly drops
+back to the SDK makes *"the container built it"* and *"the SDK built it"* indistinguishable in a
+green log. A declared mode that cannot run fails; an unknown mode fails.
+
+**Why the container path needs no `--deps-closure`, and how that is proven rather than asserted.**
+`--deps-closure` derives a module's private closure from the `deps.json` the SDK emits, and there is
+no SDK on this path. What replaces it is a stronger fact: `build-project` **refuses by name** every
+`PackageReference` the image does not supply, and the lane passes **no `--extra-refs`** — so a
+container build that succeeded proves every assembly the module binds is one the image it lands into
+already carries. The bundle inspection then asserts exactly that claim, refusing any non-`MeshWeaver.*`
+assembly in a container-built bundle. The in-root `ProjectReference`s the builder compiled from source
+are a separate question, answered the same way for both paths: **module-owned** ones ride (`--with`),
+**image-shipped** ones (`src/platform-shipped.txt`) must not, and one script computes that set for the
+packer, the lane and the inspection alike.
+
+🚨 **Two preconditions gate any entry declaring `container`.** The pinned image must carry the
+`build-project` verb at all; and the builder must stamp `<AssemblyVersion>`. It runs no MSBuild
+targets, so the SDK's `GenerateAssemblyInfo` never happens and Roslyn's default identity is emitted —
+shipping `0.0.0.0` into a `3.0.0.0` process is MeshWeaver#143 exactly: it does not fail at build, it
+fails at runtime binding, in another repo, naming a version nobody wrote down. The lane compares the
+emitted identity against the one the builder itself read out of the image and fails on drift, so it
+cannot ship silently.
+
 **The assembly entry path is the node path verbatim**, not slash-replaced. Sanitising is not
 injective — `A/B/C` and `A_B/C` both become `A_B_C`, and mesh paths do contain underscores — so two
 NodeTypes would land on one archive entry and the second would silently adopt the first's bytes. Zip

@@ -469,6 +469,18 @@ ingress:
     # ingress has carried this for its own uploads since it was written; the portal ingress —
     # which is the one serving /api — did not, so the two disagreed about how big a POST may be.
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    # 🚨 SIGN-IN 502s WITHOUT THIS. proxy-body-size above bounds how big a REQUEST may be;
+    # this bounds how big a RESPONSE HEADER may be, and the sign-in callback's is large by
+    # construction. ASP.NET Core serialises the whole authentication ticket — the external
+    # identity's claims — into the auth cookie and splits anything past ~4 KB into numbered
+    # chunks (MemexAuthC1, MemexAuthC2, …), each its own Set-Cookie header; the same response
+    # also deletes the OIDC correlation and nonce cookies, whose NAMES alone are ~380 chars.
+    # nginx's DEFAULT proxy_buffer_size is 4 KB, so it discards its own upstream's answer with
+    # "upstream sent too big header" and serves the user 502 Bad Gateway — while the portal's
+    # logs show the callback handled successfully, because the response died one hop later.
+    # Developer login writes a small cookie and passes, so a deployment looks healthy while
+    # EVERY external provider is broken. Observed on a chart-deployed portal, 2026-08-31.
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "32k"
 # ---- Next.js React portal (experimental frontend — FEATURE-FLAGGED) --------
 # When enabled, a Next.js streaming-SSR build of the React GUI (clients/portal-next)
 # runs as its OWN Deployment beside memex-portal, and the portal ingress gains a

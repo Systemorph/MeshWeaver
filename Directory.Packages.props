@@ -9,6 +9,46 @@
          so removing that unused package broke the build - an accidental dependency, now explicit. -->
     <PackageVersion Include="YamlDotNet" Version="16.3.0" />
     <PackageVersion Include="AspNet.Security.OAuth.Apple" Version="10.0.0" />
+    <!-- 🚨 THE ASPIRE FAMILY IS HELD AT 13.4.6 ON PURPOSE — do not let a dependency sweep move it.
+         Every Aspire.Hosting version depends on JsonPatch.Net; only the VERSION differs, and the
+         licence changes with it:
+
+             Aspire 13.3.3 .. 13.4.6  ->  JsonPatch.Net 3.3.0   MIT
+             Aspire 13.5.0 .. 13.5.3  ->  JsonPatch.Net 5.0.2   OSMFEULA (Open Source Maintenance Fee)
+
+         JsonPatch.Net 5.0.0 is where json-everything moved its BINARY releases to a maintenance
+         fee: the source stays MIT, but consuming the published binaries obliges any user with
+         >= US$10,000 annual revenue from revenue-generating use to pay it (OSMFEULA.txt §1-§4).
+
+         🚨 The exposure is NOT the memex image — nothing there references Aspire at any depth.
+         It is memex/aspire/Memex.Aspire.Hosting, which is IsPackable and PUBLISHED as
+         MeshWeaver.Aspire.Hosting.Memex. Its nuspec carries these three as dependencies, so
+         bumping to 13.5.x hands the fee obligation to everyone who installs our integration and
+         calls builder.AddMemex() — people who never chose it. Measured on both pins:
+
+             13.4.6 -> JsonPatch.Net 3.3.0, JsonPointer.Net 5.2.0, Json.More.Net 2.1.0   (MIT)
+             13.5.3 -> JsonPatch.Net 5.0.2, JsonPointer.Net 7.0.1, Json.More.Net 3.0.1   (OSMFEULA)
+
+         Aspire uses it internally in its DCP layer (DcpExecutor.PatchDcpObjectAsync,
+         KubernetesService.PatchAsync) to patch local orchestrator objects — nothing to do with
+         MeshWeaver's own mesh-node patch path, so "use our own" is not available here.
+
+         🚨 UPSTREAM HAS ALREADY FIXED THIS — the hold is TEMPORARY, not a standing position.
+         microsoft/aspire#19493 raised exactly this ("Aspire shouldn't add a dependency requiring
+         a commercial fee"), and #19498 replaced JsonPatch.Net with a focused internal RFC 6902
+         implementation over System.Text.Json.Nodes. Both closed 2026-08-25. It is MERGED BUT NOT
+         YET RELEASED: 13.5.3, the newest at the time of writing, still pins JsonPatch.Net 5.0.2.
+
+         So the upgrade path is: stay on 13.4.6, SKIP 13.5.x entirely, and move straight to the
+         first release whose Aspire.Hosting nuspec no longer lists JsonPatch.Net. Check with:
+
+             curl -s https://api.nuget.org/v3-flatcontainer/aspire.hosting/<ver>/aspire.hosting.nuspec \
+               | grep JsonPatch.Net        # no match => the dependency is gone, safe to take
+
+         Taking 13.5.x anyway is a COMMERCIAL decision, not a version bump: the three packages
+         would need a documented exception in the licence gate (the `~` mechanism
+         UglyToad.PdfPig already uses), and consumers of our published integration told.
+         PackageFamiliesMoveTogetherGuard keeps the 14 pins on one base version either way. -->
     <PackageVersion Include="Aspire.Azure.Npgsql" Version="13.4.6" />
     <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting" Version="13.4.6" />
@@ -27,14 +67,14 @@
     <PackageVersion Include="Azure.Core" Version="1.60.0" />
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Azure.Provisioning.Storage" Version="1.1.2" />
-    <PackageVersion Include="Azure.Storage.Blobs" Version="12.29.1" />
+    <PackageVersion Include="Azure.Storage.Blobs" Version="12.29.2" />
     <PackageVersion Include="Azure.Storage.Common" Version="12.28.0" />
     <PackageVersion Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.84.2" />
     <PackageVersion Include="System.ClientModel" Version="1.14.0" />
     <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.62.0" />
     <PackageVersion Include="BlazorMonaco" Version="3.5.0" />
     <PackageVersion Include="Radzen.Blazor" Version="10.3.2" />
-    <PackageVersion Include="DocSharp.Markdown" Version="0.20.0" />
+    <PackageVersion Include="DocSharp.Markdown" Version="0.21.0" />
     <PackageVersion Include="ClosedXML" Version="0.105.1" />
     <PackageVersion Include="CSharpVitamins.ShortGuid" Version="2.0.0" />
     <PackageVersion Include="CsvHelper" Version="33.1.0" />
@@ -42,7 +82,7 @@
     <PackageVersion Include="Grpc.AspNetCore" Version="2.80.0" />
     <PackageVersion Include="Grpc.AspNetCore.Web" Version="2.80.0" />
     <PackageVersion Include="Grpc.Net.Client" Version="2.80.0" />
-    <PackageVersion Include="HtmlAgilityPack" Version="1.12.4" />
+    <PackageVersion Include="HtmlAgilityPack" Version="1.13.0" />
     <!-- Humanizer.Core (MIT) backs the `DateTime.Humanize()` calls in MeshWeaver.Graph and
          MeshWeaver.AI. It used to arrive ONLY as an accidental transitive of JsonPointer.Net,
          which is the single reason those `using Humanizer;` lines compiled; Roslyn's own
@@ -71,18 +111,18 @@
          3.53.3). The pin is the source of truth; this comment explains WHY it exists.
          Pinned explicitly in the Sqlite projects. -->
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
-    <PackageVersion Include="ModelContextProtocol" Version="1.2.0" />
+    <PackageVersion Include="ModelContextProtocol" Version="1.4.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.2.0" />
     <PackageVersion Include="ModelContextProtocol.Core" Version="1.2.0" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.8.3" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.8.3" />
     <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.14.0" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Identity.Web" Version="4.14.2" />
     <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.14.2" />
     <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.2.2" />
@@ -102,23 +142,23 @@
          multi-arch portal image requires. -->
     <PackageVersion Include="SkiaSharp" Version="3.116.1" />
     <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.116.1" />
-    <PackageVersion Include="System.CommandLine" Version="2.0.10" />
+    <PackageVersion Include="System.CommandLine" Version="2.0.11" />
     <PackageVersion Include="System.Composition.AttributedModel" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Features" Version="5.6.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.6.0" />
-    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Features" Version="5.9.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Diagnostics.Runtime" Version="3.1.512801" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.8.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.8.0" />
     <PackageVersion Include="Microsoft.Orleans.Core" Version="10.2.2" />
     <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.2.2" />
@@ -127,13 +167,13 @@
     <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="10.2.2" />
     <PackageVersion Include="Microsoft.Orleans.Server" Version="10.2.2" />
     <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.2.2" />
-    <PackageVersion Include="Microsoft.Playwright" Version="1.61.0" />
-    <PackageVersion Include="NuGet.Protocol" Version="7.6.0" />
-    <PackageVersion Include="NuGet.Packaging" Version="7.6.0" />
-    <PackageVersion Include="NuGet.Versioning" Version="7.6.0" />
-    <PackageVersion Include="NuGet.Resolver" Version="7.6.0" />
-    <PackageVersion Include="NuGet.DependencyResolver.Core" Version="7.6.0" />
-    <PackageVersion Include="NuGet.Frameworks" Version="7.6.0" />
+    <PackageVersion Include="Microsoft.Playwright" Version="1.62.0" />
+    <PackageVersion Include="NuGet.Protocol" Version="7.9.0" />
+    <PackageVersion Include="NuGet.Packaging" Version="7.9.0" />
+    <PackageVersion Include="NuGet.Versioning" Version="7.9.0" />
+    <PackageVersion Include="NuGet.Resolver" Version="7.9.0" />
+    <PackageVersion Include="NuGet.DependencyResolver.Core" Version="7.9.0" />
+    <PackageVersion Include="NuGet.Frameworks" Version="7.9.0" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
     <PackageVersion Include="Pgvector" Version="0.3.2" />
     <PackageVersion Include="Snowflake.Data" Version="5.7.0" />
@@ -148,7 +188,7 @@
     <!-- The memex test container package (src/MeshWeaver.Testcontainers): a real memex from the
          platform build as a test substrate, the way Testcontainers.PostgreSql gives a test a real
          Postgres. Same version as the test tree pins. -->
-    <PackageVersion Include="Testcontainers" Version="4.11.0" />
+    <PackageVersion Include="Testcontainers" Version="4.14.0" />
     <PackageVersion Include="SSH.NET" Version="2026.0.0" /> <!-- High GHSA-q939-rpr3-3284; transitive via Testcontainers, direct-ref override in test/Directory.Build.props -->
     <PackageVersion Include="System.Reactive" Version="6.1.0" />
     <PackageVersion Include="Microsoft.Reactive.Testing" Version="6.1.0" />
@@ -167,7 +207,7 @@
     <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.4.6" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.4.6" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
     <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
     <PackageVersion Include="Verify.XunitV3" Version="31.28.0" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
@@ -200,7 +240,7 @@
     <PackageVersion Include="Microsoft.Extensions.AI.AzureAIInference" Version="10.0.0-preview.1.25559.3" />
     <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.8.3" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Graph" Version="6.2.0" />
     <PackageVersion Include="OpenAI" Version="2.12.0" />
   </ItemGroup>
