@@ -20,6 +20,48 @@ public static class EmitPipeline
     internal static CSharpParseOptions CreateParseOptions()
         => new(documentationMode: DocumentationMode.Diagnose);
 
+    /// <summary>
+    /// The warnings a SUCCESSFUL compile produced, formatted for the compile ACTIVITY.
+    ///
+    /// <para>🚨 They used to be dropped on the floor. <c>emitResult.Diagnostics</c> is read only
+    /// when <c>Success</c> is false, so on a green compile every warning the compiler produced was
+    /// discarded — measured from the outside: a deliberate <c>CS0219</c> (an unused local) added to
+    /// an in-mesh source compiled <c>ok</c> with zero warnings reported. That is the absence of a
+    /// report, not a clean build, and it is why in-mesh C# was not held to the standard the
+    /// compiled half is held to under <c>-warnaserror</c>: no unused-code warnings, and therefore
+    /// no doc-comment or cref ones either, even though <see cref="CreateParseOptions"/> has always
+    /// asked for <see cref="DocumentationMode.Diagnose"/>.</para>
+    ///
+    /// <para>Ordered and capped. A single bad using-directive can produce hundreds of identical
+    /// diagnostics, and an activity log that is 400 lines of the same warning is one nobody reads —
+    /// the cap is named in the last entry rather than applied silently.</para>
+    /// </summary>
+    internal static IReadOnlyList<string> Warnings(IEnumerable<Diagnostic> diagnostics)
+    {
+        var warnings = diagnostics
+            .Where(d => d.Severity == DiagnosticSeverity.Warning && !d.IsSuppressed)
+            .Select(d => $"{d.Id}: {d.GetMessage()}{Where(d)}")
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(text => text, StringComparer.Ordinal)
+            .ToList();
+        return warnings.Count <= MaxReportedWarnings
+            ? warnings
+            : warnings.Take(MaxReportedWarnings)
+                .Append($"… and {warnings.Count - MaxReportedWarnings} more warning(s) not listed.")
+                .ToList();
+    }
+
+    /// <summary>Where a diagnostic is, when the compiler knows — the generated source is one
+    /// concatenated tree, so the line is the only locator a reader gets.</summary>
+    private static string Where(Diagnostic diagnostic)
+        => diagnostic.Location.IsInSource
+            ? $" (line {diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1})"
+            : string.Empty;
+
+    /// <summary>How many distinct warnings reach the activity before the rest are counted instead
+    /// of listed.</summary>
+    internal const int MaxReportedWarnings = 50;
+
     /// <summary>The canonical compilation options every dynamic NodeType compile uses.</summary>
     internal static CSharpCompilationOptions CreateCompilationOptions()
         => new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
@@ -137,7 +179,7 @@ public static class EmitPipeline
         var image = Bytes(dllImage);
         File.WriteAllBytes(dllPath, image);
 
-        return EmittedArtifact.For(dllPath, image);
+        return EmittedArtifact.For(dllPath, image, Warnings(emitResult.Diagnostics));
 
         // Expandable MemoryStreams created with the parameterless ctor expose their buffer, so the
         // common path hands out a span over it instead of copying a multi-megabyte image.
