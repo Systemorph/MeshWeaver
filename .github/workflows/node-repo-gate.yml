@@ -338,7 +338,7 @@ jobs:
       - name: Mint an installation token for the stage repo
         id: stage-token
         if: inputs.stage-modules != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.stage-repo-app-id }}
           private-key: ${{ secrets.stage-repo-app-private-key }}
@@ -490,7 +490,7 @@ jobs:
           sparse-checkout: ${{ inputs.stage-modules }}
       - name: Download this run's module-bundle artifacts
         if: inputs.module-artifacts != ''
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: ${{ inputs.module-artifacts }}
           path: ${{ runner.temp }}/ext-bundles
