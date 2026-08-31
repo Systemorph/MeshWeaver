@@ -186,7 +186,12 @@ public sealed class NuGetAssemblyResolver(
 
         foreach (var src in sources)
         {
+            // A source that offers no FindPackageByIdResource cannot answer for this id at all
+            // (an unreachable or misconfigured feed resolves the resource to null). Skipping is
+            // right: the next source gets its turn, and exhausting them all still ends in the
+            // named throw below rather than a NullReferenceException here.
             var finder = await src.GetResourceAsync<FindPackageByIdResource>(ct);
+            if (finder is null) continue;
             var versions = await finder.GetAllVersionsAsync(req.Id, _sourceCache, _nugetLogger, ct);
             var match = versions?.Where(v => range.Satisfies(v)).OrderByDescending(v => v).FirstOrDefault();
             if (match is not null) return new PackageIdentity(req.Id, match);
@@ -233,6 +238,7 @@ public sealed class NuGetAssemblyResolver(
             foreach (var src in FilterSourcesForPackage(current.Id, sources, mapping))
             {
                 var resource = await src.GetResourceAsync<DependencyInfoResource>(ct);
+                if (resource is null) continue;
                 info = await resource.ResolvePackage(current, framework, _sourceCache, _nugetLogger, ct);
                 if (info is not null) break;
             }
@@ -285,13 +291,34 @@ public sealed class NuGetAssemblyResolver(
             Directory.CreateDirectory(installedPath);
         }
 
+        if (info.Source is null)
+            throw new InvalidOperationException(
+                $"{info.Id} {info.Version} was resolved without a source repository, so there is "
+                + "nowhere to download it from. This is dependency info assembled from a feed that "
+                + "did not identify itself — check the configured sources.");
         var downloadResource = await info.Source.GetResourceAsync<DownloadResource>(ct);
+        if (downloadResource is null)
+            throw new InvalidOperationException(
+                $"Source '{info.Source.PackageSource?.Source ?? "<unknown>"}' resolved {info.Id} "
+                + $"{info.Version} but offers no download resource — the feed answered metadata and "
+                + "cannot serve bytes. Check the source is reachable and is a v3 feed.");
         var downloadContext = new PackageDownloadContext(_sourceCache);
         using var result = await downloadResource.GetDownloadResourceResultAsync(
             new PackageIdentity(info.Id, info.Version), downloadContext, packagesRoot, _nugetLogger, ct);
 
-        if (result.Status != DownloadResourceResultStatus.Available && result.Status != DownloadResourceResultStatus.AvailableWithoutStream)
-            throw new InvalidOperationException($"Failed to download {info.Id} {info.Version}: {result.Status}");
+        // 🚨 ONLY `Available` is usable here, and this used to accept `AvailableWithoutStream` too
+        // — then immediately Seek() and CopyToAsync() the stream that status exists to say is
+        // ABSENT. That was a latent NullReferenceException on a status the code deliberately let
+        // through; the nullable annotations in the bumped NuGet client are what surfaced it.
+        // This method installs FROM the stream, so "available without one" cannot satisfy it, and
+        // saying so beats an NRE three frames away.
+        if (result.Status != DownloadResourceResultStatus.Available || result.PackageStream is null)
+            throw new InvalidOperationException(
+                $"Failed to download {info.Id} {info.Version}: {result.Status}"
+                + (result.Status == DownloadResourceResultStatus.AvailableWithoutStream
+                    ? " — the source reports the package as available but served no stream, and this "
+                      + "install path needs the bytes."
+                    : string.Empty));
 
         result.PackageStream.Seek(0, SeekOrigin.Begin);
         // Install into the v3 global-packages layout ({id-lowercase}/{version}/) — the SAME path
@@ -305,7 +332,7 @@ public sealed class NuGetAssemblyResolver(
         // is the canonical v3 install resolver and lands exactly at
         // Path.Combine(packagesRoot, id.ToLowerInvariant(), version.ToNormalizedString()).
         await PackageExtractor.InstallFromSourceAsync(
-            source: info.Source.PackageSource.Source,
+            source: info.Source.PackageSource?.Source ?? string.Empty,
             packageIdentity: new PackageIdentity(info.Id, info.Version),
             copyToAsync: destination => result.PackageStream.CopyToAsync(destination, ct),
             versionFolderPathResolver: new VersionFolderPathResolver(packagesRoot),
