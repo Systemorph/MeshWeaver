@@ -174,6 +174,7 @@ static async Task<int> RunBuildProject(string[] args)
     var app = ContainerReferenceSet.DefaultAppDirectory;
     string? sharedFrameworks = null;
     var prebuilt = new List<string>();
+    var verbose = false;
     var extraRefs = new List<string>();
     var generatorPaths = new List<string>();
     string? razorGenerators = null;
@@ -224,6 +225,9 @@ static async Task<int> RunBuildProject(string[] args)
                 break;
             case "--accept" when i + 1 < args.Length:
                 accept.Add(args[++i]);
+                break;
+            case "--verbose":
+                verbose = true;
                 break;
             // The no-warn policy is ON by default; both spellings of the opt-out are accepted
             // because both are documented, and a flag that silently means nothing is worse than a
@@ -278,6 +282,7 @@ static async Task<int> RunBuildProject(string[] args)
         Accept = accept,
         Properties = properties,
         AllowWarnings = allowWarnings,
+        Verbose = verbose,
         MaxParallel = maxParallel,
     }).Await(CancellationToken.None);
     return projectReport.ExitCode;

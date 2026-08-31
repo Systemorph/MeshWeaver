@@ -93,6 +93,14 @@ public static class ProjectBuild
         /// <summary>False (the default) fails the build on any warning the project did not suppress.</summary>
         public bool AllowWarnings { get; init; }
 
+        /// <summary>
+        /// Per-item narration (resource names, per-package resolutions). OFF by default — "ci
+        /// should be silent, only warn / error" plus the basic progress verdicts (maintainer,
+        /// 2026-09-01); the detail returns with <c>--verbose</c> when a name mismatch or a
+        /// resolution question actually needs it.
+        /// </summary>
+        public bool Verbose { get; init; }
+
         /// <summary>The <c>--accept</c> tokens acknowledging constructs the evaluator cannot reproduce.</summary>
         public IReadOnlyList<string> Accept { get; init; } = [];
 
@@ -588,16 +596,17 @@ public static class ProjectBuild
                   + $"nullable {model.NullableOptions}, "
                   + $"warnings-as-errors {(model.TreatWarningsAsErrors ? "on" : "off")}");
 
-        // 🚨 Say the NAMES, not the count. A manifest resource is asked for BY NAME in some other
-        // process, months later, and a wrong name is a null stream rather than an error — so the
-        // names this build committed to belong in the log, where a reader can compare them against
-        // what the code asks for. Capped: MeshWeaver.Documentation embeds hundreds.
+        // The NAMES matter (a manifest resource is asked for BY NAME months later, and a wrong
+        // name is a null stream, not an error) — but 37 lines per project is CI spam, so the
+        // count is the default and the names come back with --verbose when a mismatch needs
+        // comparing. Capped even then: MeshWeaver.Documentation embeds hundreds.
         if (!model.EmbeddedResources.IsEmpty)
         {
-            sink.Info($"[{name}] embedded resources: {model.EmbeddedResources.Length}");
-            foreach (var resource in model.EmbeddedResources.Take(MaxListedResources))
+            sink.Info($"[{name}] embedded resources: {model.EmbeddedResources.Length}"
+                + (options.Verbose ? "" : " (names with --verbose)"));
+            foreach (var resource in (options.Verbose ? model.EmbeddedResources.Take(MaxListedResources) : []))
                 sink.Info($"[{name}]   {resource.ManifestName}  ({resource.Origin})");
-            if (model.EmbeddedResources.Length > MaxListedResources)
+            if (options.Verbose && model.EmbeddedResources.Length > MaxListedResources)
                 sink.Info($"[{name}]   … and {model.EmbeddedResources.Length - MaxListedResources} more");
         }
         // A resource the operator ACCEPTED away is still missing from the assembly, so it is a
@@ -609,6 +618,7 @@ public static class ProjectBuild
         // have is an ADDITIONAL library, and this mode cannot invent one.
         var unresolved = ImmutableArray.CreateBuilder<string>();
         var shelfResolutions = new List<ModuleLibrariesShelf.Resolution>();
+        var containerResolved = 0;
         var extraByName = extraReferences.ToDictionary(
             p => Path.GetFileNameWithoutExtension(p)!, p => p, StringComparer.OrdinalIgnoreCase);
         foreach (var package in model.PackageReferences)
@@ -616,8 +626,10 @@ public static class ProjectBuild
             var resolution = container.Resolve(package.Id);
             if (resolution.Supplied)
             {
-                sink.Info($"[{name}] package {package.Id} → the container "
-                          + $"({resolution.Version ?? package.Version ?? "version unknown"})");
+                if (options.Verbose)
+                    sink.Info($"[{name}] package {package.Id} → the container "
+                              + $"({resolution.Version ?? package.Version ?? "version unknown"})");
+                containerResolved++;
                 continue;
             }
             if (extraByName.ContainsKey(package.Id))
@@ -635,6 +647,8 @@ public static class ProjectBuild
             }
             unresolved.Add(package.Id);
         }
+        if (containerResolved > 0 && !options.Verbose)
+            sink.Info($"[{name}] {containerResolved} package(s) resolved from the container (per-package detail with --verbose)");
         if (unresolved.Count > 0)
         {
             var message =
