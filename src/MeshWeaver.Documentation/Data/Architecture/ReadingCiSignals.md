@@ -176,6 +176,51 @@ on different tests and different shards is the signature of an ambient populatio
 diff. That happened here — the sibling PR's diff was CI YAML and a plugin catalog, and it failed on a
 chart-render flake.
 
+### 🚨 A flake's PASSING re-run is the CONTROL ARM — do not throw it away
+
+When a flake is re-run and goes green on the same commit, you own something CI almost never gives
+you: **a controlled experiment.** Same commit, same shard, same job, same runner generation — one
+variable, the outcome. It is routinely discarded as "the problem went away".
+
+**Method.** Count each candidate tag inside the FAILING test's own log lines, then inside the
+PASSING run's lines for the same test, and compare:
+
+```bash
+gh run view <run> --repo Systemorph/MeshWeaver --attempt 1 --log > fail.log   # ← see the trap below
+gh run view <run> --repo Systemorph/MeshWeaver --log            > pass.log
+for t in "TagA" "TagB"; do
+  printf '%-34s fail=%s pass=%s\n' "$t" \
+    "$(grep '<TestName>' fail.log | grep -c "$t")" \
+    "$(grep '<TestName>' pass.log | grep -c "$t")"
+done
+```
+
+**Measured 2026-08-31 on the `FutuReAnalysisTest` flake:**
+
+| tag | FAIL (50 s) | PASS (7.7 s) |
+|---|---:|---:|
+| `$type … NOT registered` | 66 | **122** |
+| `is not registered` (the upsert refusal) | 0 | 0 |
+| `Dropping StreamEndedEvent` | **8** | 2 |
+
+**The suspected cause was MORE frequent in the run that passed.** A separate issue had inferred that
+this flake was "the test-visible face" of *its* defect, on the strength of that shared
+`NOT registered` wall. The wall is ambient in that suite — heavier in the PASS — so it cannot be
+causal, and one table retired a cross-issue link that had stood for days and would have sent someone
+to the wrong subsystem.
+
+**The rule:** a tag present in BOTH windows is ambient. Only a tag whose count moves *with* the
+outcome is a candidate; absent-in-pass plus present-in-fail is the shape worth chasing.
+
+🚨 **The trap that makes this fail silently:** `gh run view --job <id> --log` returns the **LATEST
+attempt**. After a re-run, that is the transcript that **passed** — same job id, no marker saying so.
+Pass `--attempt 1` for the failure. The tell is inside the data: the window ends `[PASS]`, or its
+span is far shorter than the reported failure duration. Check the span before analysing anything.
+
+**Corollary:** never re-run a flake and move on without first pulling `--attempt 1`. The failing
+window has a retention shelf life, and once it is gone the control arm is worthless — there is
+nothing left to compare it against.
+
 ### 🚨 A host-cap kill DESTROYS the hung test's transcript; a `methodTimeout` kill KEEPS it
 
 The two ways a hang ends a test are not equally useful, and the difference decides where to look:
