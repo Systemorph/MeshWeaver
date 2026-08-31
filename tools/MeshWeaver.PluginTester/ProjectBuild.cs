@@ -315,7 +315,10 @@ public static class ProjectBuild
                         deps.Where(d => d.Result is not null).Select(d => d.Result!).ToArray());
                     return (result, result.IsGreen);
                 },
-                options.MaxParallel)
+                options.MaxParallel,
+                // Target-directed build: the first failure ends the run ("when build fails =>
+                // exit") — a red here dooms the job, so independents must not keep earning slots.
+                stopOnFirstFailure: true)
             .Select(results =>
             {
                 var report = new Report(

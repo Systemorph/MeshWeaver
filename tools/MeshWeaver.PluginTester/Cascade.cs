@@ -99,12 +99,18 @@ public static class Cascade
     /// <param name="maxParallel">Concurrency cap for the work function. Blocking a node costs no slot.</param>
     /// <param name="scheduler">Where the work runs; the task pool by default.</param>
     /// <typeparam name="T">The work's payload type.</typeparam>
+    /// <param name="stopOnFirstFailure">When set, the first red/faulted node also blocks every
+    /// node that has not yet STARTED — independents included ("when build fails => exit",
+    /// maintainer, 2026-09-01). Off by default: a SWEEP exists to enumerate every verdict, and
+    /// one module's failure must not hide the rest — only a target-directed build wants the
+    /// early exit.</param>
     public static IObservable<ImmutableArray<NodeResult<T>>> Run<T>(
         IReadOnlyCollection<string> ids,
         Func<string, IReadOnlyList<string>> dependenciesOf,
         Func<string, IReadOnlyList<NodeResult<T>>, (T Result, bool Green)> run,
         int maxParallel,
-        IScheduler? scheduler = null)
+        IScheduler? scheduler = null,
+        bool stopOnFirstFailure = false)
     {
         ArgumentNullException.ThrowIfNull(ids);
         ArgumentNullException.ThrowIfNull(dependenciesOf);
@@ -125,13 +131,9 @@ public static class Cascade
             var clock = Stopwatch.StartNew();
             var pool = scheduler ?? TaskPoolScheduler.Default;
 
-            // 🚨 FAIL-FAST across the whole graph ("when build fails => exit", maintainer,
-            // 2026-09-01): dependents were always Blocked on a red dependency, but INDEPENDENT
-            // nodes kept earning slots after the run's verdict was already RED — on CI that is
-            // minutes of work whose only possible outcome is a redder red. The first failure
-            // stamps itself here; a work item that reaches the gate afterwards refuses its slot
-            // and reports Blocked by that first failure. Nodes already RUNNING finish (their
-            // verdicts are real); nothing new starts.
+            // FAIL-FAST (opt-in, see the parameter doc): the first failure stamps itself here; a
+            // work item that reaches the gate afterwards refuses its slot and reports Blocked by
+            // that first failure. Nodes already RUNNING finish — their verdicts are real.
             var firstFailure = new string[1];
 
             // The concurrency gate. Every node hands its work here when it becomes ready;
@@ -176,14 +178,14 @@ public static class Cascade
                         var work = Observable.Defer(() => Observable.Start(() =>
                             {
                                 var started = clock.Elapsed;
-                                if (Volatile.Read(ref firstFailure[0]) is { } failedFirst)
+                                if (stopOnFirstFailure && Volatile.Read(ref firstFailure[0]) is { } failedFirst)
                                     return new NodeResult<T>(
                                         id, NodeOutcome.Blocked, default, failedFirst, null,
                                         ready, started, clock.Elapsed);
                                 try
                                 {
                                     var (payload, green) = run(id, ordered);
-                                    if (!green)
+                                    if (!green && stopOnFirstFailure)
                                         Interlocked.CompareExchange(ref firstFailure[0], id, null);
                                     return new NodeResult<T>(
                                         id, green ? NodeOutcome.Green : NodeOutcome.Red, payload, null, null,
@@ -191,7 +193,8 @@ public static class Cascade
                                 }
                                 catch (Exception ex)
                                 {
-                                    Interlocked.CompareExchange(ref firstFailure[0], id, null);
+                                    if (stopOnFirstFailure)
+                                        Interlocked.CompareExchange(ref firstFailure[0], id, null);
                                     return new NodeResult<T>(
                                         id, NodeOutcome.Faulted, default, null,
                                         $"{ex.GetType().Name}: {ex.Message}", ready, started, clock.Elapsed);
