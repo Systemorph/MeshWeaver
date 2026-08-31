@@ -281,22 +281,31 @@ public class RazorBuildTest : IDisposable
     }
 
     [Fact]
-    public void ScopedCssIsREFUSED_becauseTheScopeIdentifierIsAnMSBuildTaskThisBuilderCannotRun()
+    public void ScopedCssPairsTheComponentWithTheSdkScope_andTheOldAcceptStaysANoOp()
     {
+        // This used to be a REFUSAL (the scope hash was an MSBuild task this builder could not
+        // run); ScopedCss now reproduces that hash, pinned against SDK-built values
+        // (ScopedCssTest), so evaluation pairs the component with its stylesheet's scope instead.
         var project = Write("Widgets/Widgets.csproj", RazorProject("Widgets.Scoped"));
         Write("Widgets/Spacer.razor", "<div>spacer</div>\n");
         Write("Widgets/Spacer.razor.css", ".spacer { height: 8px; }\n");
+        Write("Widgets/Bare.razor", "<div>no stylesheet</div>\n");
 
-        var refusal = Assert.Throws<ProjectFile.UnsupportedConstructException>(
-            () => ProjectFile.Load(project));
-        refusal.Message.Should().Contain(ProjectFile.Accept.RazorCssScope);
-        refusal.Message.Should().Contain("scope");
-
-        var model = ProjectFile.Load(project, [ProjectFile.Accept.RazorCssScope]);
-        model.RazorItems.Should().ContainSingle();
+        var model = ProjectFile.Load(project);
+        var spacer = model.RazorItems.Single(i => i.Path.EndsWith("Spacer.razor"));
+        spacer.CssScope.Should().Be(
+            ScopedCss.GenerateScope("Spacer.razor.css", "Widgets.Scoped"),
+            "the generator's markup attribute and the bundler's selector suffix are this one value");
+        model.RazorItems.Single(i => i.Path.EndsWith("Bare.razor")).CssScope.Should().BeNull(
+            "a component without a stylesheet sibling gets no scope, exactly like ApplyCssScopes");
         // The .razor.css itself is never a Razor input — it is a stylesheet, and the default
         // *.razor glob must not pick it up.
-        model.RazorItems.Single().Path.Should().EndWith("Spacer.razor");
+        model.RazorItems.Should().HaveCount(2);
+
+        // A caller still passing the historical accept keeps building identically.
+        ProjectFile.Load(project, [ProjectFile.Accept.RazorCssScope])
+            .RazorItems.Single(i => i.Path.EndsWith("Spacer.razor"))
+            .CssScope.Should().Be(spacer.CssScope);
     }
 
     [Fact]

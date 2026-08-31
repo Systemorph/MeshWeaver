@@ -51,7 +51,22 @@ public static class ProjectFile
     /// <param name="Path">Absolute path of the file.</param>
     /// <param name="TargetPath">Path relative to the project directory.</param>
     /// <param name="IsComponent">True for <c>.razor</c>, false for <c>.cshtml</c>.</param>
-    public sealed record RazorItem(string Path, string TargetPath, bool IsComponent);
+    public sealed record RazorItem(string Path, string TargetPath, bool IsComponent)
+    {
+        /// <summary>
+        /// The <c>b-…</c> CSS-isolation scope, when a <c>{Path}.css</c> sibling exists — the value
+        /// <c>ComputeCssScope</c> would have derived, reproduced by
+        /// <see cref="ScopedCss.GenerateScope"/> and pinned by test against SDK-built artifacts.
+        /// The generator receives it per file (<c>build_metadata.AdditionalFiles.CssScope</c>) and
+        /// the bundler appends the SAME value to the stylesheet's selectors — one string, two
+        /// consumers, or the isolated styles match nothing.
+        ///
+        /// <para>🚨 An <c>init</c> PROPERTY, not a primary-constructor parameter — adding a
+        /// parameter REPLACES the record's constructor signature
+        /// (<c>scripts/check-record-signatures.py</c>).</para>
+        /// </summary>
+        public string? CssScope { get; init; }
+    }
 
     /// <summary>
     /// One <c>&lt;EmbeddedResource&gt;</c>, resolved to the file on disk AND to the manifest name
@@ -337,13 +352,12 @@ public static class ProjectFile
         public const string AllConditions = "conditions";
 
         /// <summary>
-        /// Acknowledge that CSS ISOLATION is not applied — the project has <c>*.razor.css</c> files
-        /// whose scope identifier the SDK computes with an MSBuild task this builder does not run,
-        /// so the components compile WITHOUT their <c>b-…</c> scope attributes. The assembly is
-        /// valid and every component in it renders; what it loses is the attribute that makes the
-        /// isolated stylesheet apply. Refused by default because reproducing the scope hash from
-        /// memory is exactly the guess this evaluator exists to avoid, and a half-right scope is
-        /// worse than a named refusal.
+        /// 🕰️ A NO-OP since CSS isolation became supported: <see cref="ScopedCss"/> reproduces the
+        /// SDK's scope hash (pinned by test against SDK-built artifacts, not from memory — the
+        /// original reason this was a refusal), the generator receives it per file, and the build
+        /// emits the <c>wwwroot/&lt;TargetName&gt;.styles.css</c> aggregate. Kept so a caller that
+        /// still passes <c>--accept razor-css-scope</c> keeps building rather than failing on an
+        /// unknown token.
         /// </summary>
         public const string RazorCssScope = "razor-css-scope";
 
@@ -1360,15 +1374,24 @@ public static class ProjectFile
 
             if (!items.IsEmpty && !IsFalse(Prop("ScopedCssEnabled")))
             {
-                var scoped = ScopedCssFilesOnDisk().ToImmutableArray();
-                if (!scoped.IsEmpty && !IsAccepted(Accept.RazorCssScope))
-                    throw new UnsupportedConstructException(
-                        $"{projectPath}: {scoped.Length} scoped-CSS file(s) (*.razor.css) — the SDK's "
-                        + "ComputeCssScope/ApplyCssScopes tasks derive each component's `b-…` scope "
-                        + "identifier, and this builder runs no MSBuild task, so the components would "
-                        + "compile WITHOUT their scope attributes and the isolated styles would not "
-                        + $"apply. Re-run with --accept {Accept.RazorCssScope} to build them anyway "
-                        + "(the assembly is valid; only CSS isolation is missing).");
+                // ApplyCssScopes, reproduced: a component pairs with its `{name}.razor.css` sibling
+                // and both sides of the isolation get ONE scope value — the generator stamps it into
+                // the markup, the bundler appends it to the selectors. The algorithm is pinned by
+                // test against SDK-built artifacts (ScopedCss.GenerateScope), so an SDK-built
+                // neighbour and a container-built module agree on the attribute. This used to be a
+                // refusal (--accept razor-css-scope built WITHOUT isolation); the accept is now a
+                // no-op kept for callers that still pass it.
+                var assemblyName = Prop("AssemblyName") is { Length: > 0 } an
+                    ? an : System.IO.Path.GetFileNameWithoutExtension(projectPath);
+                items = items
+                    .Select(item =>
+                    {
+                        if (!item.IsComponent || !File.Exists(item.Path + ".css"))
+                            return item;
+                        var relative = System.IO.Path.GetRelativePath(ProjectDirectory, item.Path + ".css");
+                        return item with { CssScope = ScopedCss.GenerateScope(relative, assemblyName) };
+                    })
+                    .ToImmutableArray();
             }
 
             return items;
