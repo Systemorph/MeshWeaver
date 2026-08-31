@@ -544,7 +544,7 @@ jobs:
           case "${IMAGE##*/}" in *:*) NOTAG="${IMAGE%:*}" ;; *) NOTAG="$IMAGE" ;; esac
           pinned="${NOTAG}@${DIGEST}"
           if [ "$IMAGE_HIT" != "true" ] || [ "$REFS_HIT" != "true" ]; then
-            docker pull --platform linux/amd64 "$pinned"
+            docker pull -q --platform linux/amd64 "$pinned"
           fi
           if [ "$IMAGE_HIT" != "true" ]; then
             mkdir -p "$RUNNER_TEMP/platform-image"
@@ -566,7 +566,7 @@ jobs:
           if [ -n "$TESTER_DIGEST" ] && [ "$TESTER_HIT" != "true" ]; then
             case "${TESTER_IMAGE##*/}" in *:*) TNOTAG="${TESTER_IMAGE%:*}" ;; *) TNOTAG="$TESTER_IMAGE" ;; esac
             tester_pinned="${TNOTAG}@${TESTER_DIGEST}"
-            docker pull --platform linux/amd64 "$tester_pinned"
+            docker pull -q --platform linux/amd64 "$tester_pinned"
             rm -rf "$RUNNER_TEMP/tester-app"
             tcid=$(docker create --platform linux/amd64 "$tester_pinned")
             docker cp -q "$tcid:/app" "$RUNNER_TEMP/tester-app"
@@ -926,7 +926,7 @@ jobs:
               else
                 echo "platform image: cache MISS for $DIGEST — pulling from ACR (same bytes, only slower)"
                 echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
-                docker pull --platform linux/amd64 "$pinned"
+                docker pull -q --platform linux/amd64 "$pinned"
                 img="$pinned"
               fi
               # The BUILDER travels as files, not as an image: the tester image's /app (builder +
@@ -937,7 +937,7 @@ jobs:
               if [ ! -f "$tester_app/mw-plugin-test.dll" ]; then
                 echo "tester-app cache MISS for $TESTER_DIGEST — extracting once"
                 echo "$ACR_PASSWORD" | docker login "${TESTER_IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
-                docker pull --platform linux/amd64 "$tester_pinned"
+                docker pull -q --platform linux/amd64 "$tester_pinned"
                 rm -rf "$tester_app"
                 tcid=$(docker create --platform linux/amd64 "$tester_pinned")
                 docker cp -q "$tcid:/app" "$tester_app"
@@ -1221,6 +1221,7 @@ jobs:
         with:
           name: module-bundle-${{ matrix.entry.module }}
           path: ${{ runner.temp }}/bundles/*.module.nupkg
+          retention-days: 3
           if-no-files-found: error
 
       # ───────────── THE BUILT MARKER — "the bundle exists", and nothing more ─────────────
@@ -1243,6 +1244,7 @@ jobs:
         with:
           name: module-built-${{ matrix.entry.module }}
           path: ${{ runner.temp }}/built/*.json
+          retention-days: 1
           if-no-files-found: error
 
       # 🚨 Only when THIS diff reaches the module (or on a full run): a floor-only entry — built
@@ -1261,6 +1263,7 @@ jobs:
         with:
           name: module-dll-${{ matrix.entry.module }}
           path: |
+          retention-days: 1
             ${{ runner.temp }}/module-build/${{ matrix.entry.module }}/${{ matrix.entry.module }}.dll
             ${{ runner.temp }}/module-build/${{ matrix.entry.module }}/${{ matrix.entry.module }}.pdb
           if-no-files-found: error
@@ -1383,6 +1386,7 @@ jobs:
         with:
           name: module-pack-receipt-${{ matrix.entry.module }}
           path: ${{ runner.temp }}/receipts/*.json
+          retention-days: 1
           if-no-files-found: error
 
   # ═══════════════ THE COUNT GATE — one STABLE context, on every run ═══════════════
