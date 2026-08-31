@@ -148,4 +148,73 @@ public class ActivityLogRollupTest
         Assert.Equal(ActivityStatus.Failed,
             log.Append(Msg(LogLevel.Error)).Finish(1, ActivityStatus.Succeeded).Status);
     }
+
+    // ── FinishByOutcome: the pin/fold split-brain fix (2026-08-30 merge-queue incident) ──────────
+    // Finish(v, Succeeded) treats the override as a FLOOR, so one Warning entry finishes the
+    // activity Warning — while NodeTypeCompilationActivity pins the activity node Succeeded. Two
+    // terminal writers disagreeing on one log made the surfaced status a race. FinishByOutcome is
+    // the single semantic both compile-lane writers now share: errors fail, warnings surface
+    // without demoting.
+
+    /// <summary>The incident shape, both halves: the fold demotes on a warning (pinned so a future
+    /// "fix" to Finish is caught loudly), the outcome finish does not — and keeps the warning
+    /// visible in the transcript and the severity roll-up.</summary>
+    [Fact]
+    public void FinishByOutcome_WarningsSurfaceWithoutDemoting()
+    {
+        var log = new ActivityLog("Test")
+            .Append(Msg(LogLevel.Information))
+            .Append(Msg(LogLevel.Warning));
+
+        Assert.Equal(ActivityStatus.Warning, log.Finish(1, ActivityStatus.Succeeded).Status);
+
+        var finished = log.FinishByOutcome(1);
+        Assert.Equal(ActivityStatus.Succeeded, finished.Status);
+        Assert.Equal(LogLevel.Warning, finished.MaxSeverity);
+        Assert.Equal(2, finished.TotalMessageCount);
+        Assert.NotNull(finished.End);
+        Assert.Equal(1, finished.Version);
+    }
+
+    [Fact]
+    public void FinishByOutcome_ErrorFails()
+    {
+        var log = new ActivityLog("Test").Append(Msg(LogLevel.Error));
+        Assert.Equal(ActivityStatus.Failed, log.FinishByOutcome(1).Status);
+    }
+
+    /// <summary>An error whose line has flushed out of the bounded message window still fails —
+    /// the outcome reads the <see cref="ActivityLog.MaxSeverity"/> roll-up, not a list scan.</summary>
+    [Fact]
+    public void FinishByOutcome_FlushedError_StillFails()
+    {
+        var log = new ActivityLog("Test") with
+        {
+            MaxSeverity = LogLevel.Error,
+            MessageCount = 5
+        };
+        Assert.Equal(ActivityStatus.Failed, log.FinishByOutcome(1).Status);
+    }
+
+    [Fact]
+    public void FinishByOutcome_FailedSubActivity_Fails()
+    {
+        var log = new ActivityLog("Test") with
+        {
+            SubActivities = [new ActivityLog("Sub") with { Status = ActivityStatus.Failed }]
+        };
+        Assert.Equal(ActivityStatus.Failed, log.FinishByOutcome(1).Status);
+        // A Warning sub-activity, like a warning message, does not demote.
+        var warnSub = new ActivityLog("Test") with
+        {
+            SubActivities = [new ActivityLog("Sub") with { Status = ActivityStatus.Warning }]
+        };
+        Assert.Equal(ActivityStatus.Succeeded, warnSub.FinishByOutcome(1).Status);
+    }
+
+    [Fact]
+    public void FinishByOutcome_CleanLog_Succeeds()
+    {
+        Assert.Equal(ActivityStatus.Succeeded, new ActivityLog("Test").FinishByOutcome(1).Status);
+    }
 }
