@@ -412,8 +412,8 @@ platform is always visible in the command that ran it.
 
 The evaluator FAILS the load on any construct it cannot reproduce, naming the construct and the file
 — an unknown element or item type, a `Condition` outside its grammar, an `<Import>` of a missing
-file, a `<Target>` (which it cannot execute), an `<EmbeddedResource>` (which it cannot embed).
-`--accept <construct>` acknowledges one deliberately. The reason is that the alternative is worse
+file, a `<Target>` (which it cannot execute), an embedded-resource construct whose SDK manifest name
+it cannot match exactly. `--accept <construct>` acknowledges one deliberately. The reason is that the alternative is worse
 than no build: a silently dropped `Nullable`, `NoWarn` or `DefineConstants` produces a green build
 that is *not the build the SDK would have produced*, and nothing downstream can tell.
 
@@ -527,8 +527,61 @@ ones — SDK source generators and `<Protobuf>`.
 - **Source generators.** They live in the .NET **SDK**, and a MeshWeaver image ships the **runtime**.
   `--generators <dir|dll>` loads them when supplied; with none, the builder names the generator that
   did not run rather than leaving a wall of CS8795 that reads like broken source.
-- **Embedded resources**, **`<Protobuf>`**, **MSBuild `<Target>`s** and **`<Sdk>` elements** — each a
-  named failure with an `--accept` where one is meaningful.
+- **`<Protobuf>`**, **MSBuild `<Target>`s** and **`<Sdk>` elements** — each a named failure with an
+  `--accept` where one is meaningful.
+
+### Embedded resources — supported, under the SDK's own manifest names
+
+**`<EmbeddedResource>` items are embedded**, each under the name the SDK's own
+`CreateCSharpManifestResourceName` would have produced. That was the single biggest coverage gap
+measured over `MeshWeaver.Plugins/src` — 15 projects failed on nothing but
+`<EmbeddedResource Include="Data\**\*.md">`.
+
+🚨 **Fidelity of the NAME is the whole problem, because getting it wrong is SILENT.** The assembly
+compiles, ships, loads, and `Assembly.GetManifestResourceStream(name)` returns `null` at run time in
+some other process — no error, no failing test, nothing for a review to catch. Core's own
+`MeshWeaver.Messaging.Hub.csproj` already carries a comment describing exactly that outcome ("the
+build succeeds, the main assembly carries ZERO manifest resources, every lookup falls through to the
+key-fallback path, and the UI renders raw `chat.new` tokens"). So no rule below was recalled: each
+was established by building a probe project with the real .NET SDK and reading the manifest-resource
+table back out of the emitted PE.
+
+**The pipeline, reproduced step for step.** `AssignTargetPath` assigns each item a `%(TargetPath)`
+(Microsoft.Common.CurrentVersion.targets says so out loud: *"AssignTargetPath generates TargetPath
+metadata that is consumed by CreateManifestResourceNames target for manifest name generation"*),
+`AssignCulture` routes the culture-carrying items towards SATELLITE assemblies, and
+`CreateCSharpManifestResourceName` turns the survivors into
+`$(RootNamespace).<mangled directory>.<file name>`.
+
+| rule | measured |
+|---|---|
+| the default name | `$(RootNamespace)` + the directory with separators as dots + the file name |
+| the DIRECTORY is mangled | `Data\with-dash\Three.md` → `…Data.with_dash.Three.md` |
+| the FILE NAME is **not** | `Weird-File.Name.md` → `…Weird-File.Name.md`, hyphen and dot intact |
+| a leading digit is PREFIXED | `9digits` → `_9digits` (never `_digits`) |
+| a dot in a directory is a SEPARATOR | `Dot.9Dir` → `Dot._9Dir`; each half mangled on its own |
+| a segment reducing to one `_` DOUBLES | `--` and `_` both → `__` — sibling dirs so named fail the real SDK build with `CS1508` |
+| `$(RootNamespace)` defaults to the PROJECT name | not `$(AssemblyName)`; empty means no prefix at all |
+| `LogicalName` replaces the name outright | attribute or child element |
+| `TargetPath` beats `Link` beats the item spec | a `Link` renames a file that is already inside the project |
+| a file OUTSIDE the project loses its directory | `..\shared\Shared.md` → `<ns>.Shared.md` |
+| resources are emitted PUBLIC | `ManifestResourceAttributes.Public`, every one |
+| a missing LITERAL include is `CS1566` | a glob matching nothing is legal |
+
+**Refused BY NAME rather than guessed**, each with its own `--accept` token, because a plausible
+wrong name is worse than no build:
+
+| construct | why |
+|---|---|
+| `.resx` / `.restext` | the NAME is reproducible; the CONTENT needs resgen (`GenerateResource`), and this builder runs no MSBuild tasks. Embedding the XML under the `.resources` name compiles green and throws at run time. The SDK's default glob `**/*.resx` is reproduced so a stray one is a refusal rather than a silent omission |
+| a CULTURE in the file name | the SDK routes it into a satellite assembly (`de/…resources.dll`) and OUT of the main one, and an explicit `LogicalName` does **not** rescue it — measured. This builder emits one assembly. `WithCulture="false"` on the item is the project-side fix and needs no acceptance |
+| `DependentUpon` | replaces the name with the first CLASS declared in that file, fully qualified — extracted by MSBuild's own C# tokenizer, which skips `struct`/`interface`/`enum`, takes `record`, and drops generic arity |
+| `ManifestResourceName` | makes the SDK skip its own naming task, which is also what sets `%(LogicalName)`, so csc falls back to the bare file name — the metadata does not do what it appears to do |
+| the build's OWN OUTPUT | `Include="bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml"` builds green under the real SDK from a clean tree (csc writes `/doc:` and reads `/resource:` in one invocation); this builder writes its doc file elsewhere, so it is named and skipped rather than failing the project |
+
+Under invariant globalization the runtime reports no predefined culture even for `de`, so the culture
+question cannot be answered at all — the capability is PROBED, and any dotted-basename resource is
+refused rather than embedded under a guessed name.
 
 **The boundary is the point.** This is not an MSBuild reimplementation and must not become one: it
 evaluates the subset a library project under this organisation's `Directory.Build.props` actually

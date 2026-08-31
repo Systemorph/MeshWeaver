@@ -140,6 +140,16 @@ public static class ProjectBuild
         /// </summary>
         public int RazorCount { get; init; }
 
+        /// <summary>
+        /// How many managed resources were embedded in the emitted assembly.
+        ///
+        /// <para>🚨 An <c>init</c> PROPERTY, not a primary-constructor parameter — adding a
+        /// parameter REPLACES the record's signature, and every assembly compiled against the old
+        /// arity would call a constructor that no longer exists
+        /// (<c>scripts/check-record-signatures.py</c>).</para>
+        /// </summary>
+        public int ResourceCount { get; init; }
+
         /// <summary>Compiled, emitted, and within the warning policy.</summary>
         public bool IsGreen => Failure is null && AssemblyPath is not null;
     }
@@ -433,6 +443,23 @@ public static class ProjectBuild
                   + $"nullable {model.NullableOptions}, "
                   + $"warnings-as-errors {(model.TreatWarningsAsErrors ? "on" : "off")}");
 
+        // 🚨 Say the NAMES, not the count. A manifest resource is asked for BY NAME in some other
+        // process, months later, and a wrong name is a null stream rather than an error — so the
+        // names this build committed to belong in the log, where a reader can compare them against
+        // what the code asks for. Capped: MeshWeaver.Documentation embeds hundreds.
+        if (!model.EmbeddedResources.IsEmpty)
+        {
+            sink.Info($"[{name}] embedded resources: {model.EmbeddedResources.Length}");
+            foreach (var resource in model.EmbeddedResources.Take(MaxListedResources))
+                sink.Info($"[{name}]   {resource.ManifestName}  ({resource.Origin})");
+            if (model.EmbeddedResources.Length > MaxListedResources)
+                sink.Info($"[{name}]   … and {model.EmbeddedResources.Length - MaxListedResources} more");
+        }
+        // A resource the operator ACCEPTED away is still missing from the assembly, so it is a
+        // WARNING every time — never a footnote on the accept token.
+        foreach (var skipped in model.SkippedResources)
+            sink.Warn($"[{name}] resource NOT embedded — {skipped}");
+
         // Packages: the container is authoritative for what the container HAS. Anything it does not
         // have is an ADDITIONAL library, and this mode cannot invent one.
         var unresolved = ImmutableArray.CreateBuilder<string>();
@@ -663,7 +690,8 @@ public static class ProjectBuild
             // The platform's own verified emit: emit to memory, write, and prove the file on disk IS
             // the image that was emitted (EmittedArtifact). Nothing here re-implements it.
             var artifact = EmitPipeline.EmitCompilationToDirectory(
-                compilation, model.AssemblyName, model.ProjectPath, outputDirectory, CancellationToken.None);
+                compilation, model.AssemblyName, model.ProjectPath, outputDirectory,
+                ManifestResources(model), CancellationToken.None);
             if (!artifact.MatchesFileOnDisk(out var reason))
             {
                 sink.Error($"[{name}] RED — the emitted assembly did not survive the write: {reason}");
@@ -674,11 +702,15 @@ public static class ProjectBuild
             sink.Info(
                 $"[{name}] OK — {model.CompileItems.Length} source file(s)"
                 + (razorGenerated == 0 ? "" : $" + {model.RazorItems.Length} Razor file(s)")
+                + (model.EmbeddedResources.IsEmpty ? "" : $" + {model.EmbeddedResources.Length} resource(s)")
                 + $", {warnings} warning(s), "
                 + $"{artifact.Length} bytes in {clock.Elapsed.TotalMilliseconds:F0} ms → {artifact.DllPath}");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                 model.CompileItems.Length, 0, warnings, artifact.DllPath, [], null)
-            { RazorCount = razorGenerated };
+            {
+                RazorCount = razorGenerated,
+                ResourceCount = model.EmbeddedResources.Length,
+            };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -687,6 +719,29 @@ public static class ProjectBuild
                 model.CompileItems.Length, 1, warnings, null, [], $"{ex.GetType().Name}: {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// The project's <c>&lt;EmbeddedResource&gt;</c> items as Roslyn resource descriptions.
+    ///
+    /// <para>🚨 <c>isPublic: true</c>, and it is not a preference. Every resource the real SDK
+    /// emits carries <c>ManifestResourceAttributes.Public</c> — measured by reading the
+    /// <c>ManifestResource</c> table out of a probe assembly the SDK built. A private resource is
+    /// invisible to <c>Assembly.GetManifestResourceStream</c> from outside the assembly, which is
+    /// the same silent null the manifest NAME rules exist to prevent.</para>
+    ///
+    /// <para>The stream is opened lazily, by Roslyn, during the emit — so a file that vanishes
+    /// between evaluation and emit fails the emit rather than embedding zero bytes.</para>
+    /// </summary>
+    /// <param name="model">The evaluated project.</param>
+    /// <returns>One description per resource, in declaration order.</returns>
+    private static ImmutableArray<ResourceDescription> ManifestResources(ProjectFile.Model model) =>
+    [
+        .. model.EmbeddedResources.Select(resource => new ResourceDescription(
+            resource.ManifestName, () => File.OpenRead(resource.Path), isPublic: true)),
+    ];
+
+    /// <summary>How many resource names a build lists before it counts the rest instead.</summary>
+    internal const int MaxListedResources = 25;
 
     /// <summary>Sentinel path for the synthesized implicit-usings document.</summary>
     internal const string GlobalUsingsPath = "__implicit_usings__.cs";
@@ -700,7 +755,7 @@ public static class ProjectBuild
         ["CS1591", "CS1573", "CS1712"];
 
     /// <summary>
-    /// <see cref="EmitPipeline.EmitCompilationToDirectory"/> names the XML doc for a dynamic NodeType
+    /// <see cref="EmitPipeline"/>'s emit names the XML doc for a dynamic NodeType
     /// (<c>DynamicNode_&lt;name&gt;.xml</c>). A project's doc file is <c>&lt;AssemblyName&gt;.xml</c>
     /// beside the DLL, and a project that did not ask for one gets none.
     /// </summary>

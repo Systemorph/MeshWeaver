@@ -53,6 +53,25 @@ public static class ProjectFile
     /// <param name="IsComponent">True for <c>.razor</c>, false for <c>.cshtml</c>.</param>
     public sealed record RazorItem(string Path, string TargetPath, bool IsComponent);
 
+    /// <summary>
+    /// One <c>&lt;EmbeddedResource&gt;</c>, resolved to the file on disk AND to the manifest name
+    /// the SDK would have given it.
+    ///
+    /// <para>🚨 The NAME is the whole point. Embedding the right bytes under the wrong name is a
+    /// green build that ships an assembly whose <c>GetManifestResourceStream</c> returns
+    /// <c>null</c> — see <see cref="ManifestResourceNames"/> for how each naming rule was
+    /// measured.</para>
+    /// </summary>
+    /// <param name="Path">Absolute path of the file to embed.</param>
+    /// <param name="ManifestName">The manifest resource name, as the SDK computes it.</param>
+    /// <param name="TargetPath">The <c>%(TargetPath)</c> the name was computed from, for diagnosis
+    /// — it is not always the file's location (a <c>Link</c> changes it, and a file outside the
+    /// project loses its directory entirely).</param>
+    /// <param name="Origin">Why the name is what it is — <c>path</c> or <c>LogicalName</c> — so a
+    /// build log can be read without re-deriving the rule.</param>
+    public sealed record EmbeddedResourceItem(
+        string Path, string ManifestName, string TargetPath, string Origin);
+
     /// <summary>The evaluated project.</summary>
     /// <param name="ProjectPath">Absolute path of the <c>.csproj</c>.</param>
     /// <param name="Sdk">The <c>Sdk</c> attribute, verbatim.</param>
@@ -119,6 +138,26 @@ public static class ProjectFile
         /// <summary>The <c>SupportLocalizedComponentNames</c> setting.</summary>
         public bool SupportLocalizedComponentNames { get; init; }
 
+        /// <summary>
+        /// Every <c>&lt;EmbeddedResource&gt;</c> to embed, in declaration order, each already
+        /// carrying the manifest name the SDK would have produced.
+        ///
+        /// <para>🚨 An <c>init</c> PROPERTY, not a primary-constructor parameter. Adding a
+        /// parameter — even a defaulted one — REPLACES the record's constructor signature, which
+        /// <c>scripts/check-record-signatures.py</c> refuses for exactly the right reason: every
+        /// assembly compiled against the old arity calls a constructor that no longer exists.
+        /// Defaulted to empty so a model built without it is still safe to enumerate (a default
+        /// <see cref="ImmutableArray{T}"/> throws).</para>
+        /// </summary>
+        public ImmutableArray<EmbeddedResourceItem> EmbeddedResources { get; init; } = [];
+
+        /// <summary>
+        /// Resources the evaluator deliberately did NOT embed because the operator accepted the
+        /// construct that made them unreproducible — one line each, so a build log says what is
+        /// missing from the assembly rather than leaving it to be discovered at run time.
+        /// </summary>
+        public ImmutableArray<string> SkippedResources { get; init; } = [];
+
         /// <summary>The project's own directory.</summary>
         public string Directory => Path.GetDirectoryName(ProjectPath)!;
     }
@@ -133,8 +172,67 @@ public static class ProjectFile
         /// <c>target:&lt;Name&gt;</c> accepts one target; <c>targets</c> accepts all of them.</summary>
         public const string AllTargets = "targets";
 
-        /// <summary>Acknowledge that <c>EmbeddedResource</c> items are not embedded.</summary>
+        /// <summary>
+        /// Acknowledge that <c>EmbeddedResource</c> items are not embedded AT ALL — the escape
+        /// hatch, and the meaning this token has always had. It is no longer needed for an ordinary
+        /// project (resources are embedded now, under the SDK's own names), and passing it produces
+        /// an assembly that is deliberately NOT the one the SDK would have produced, so every
+        /// skipped resource is listed in the build output rather than silently dropped.
+        /// </summary>
         public const string EmbeddedResource = "embedded-resource";
+
+        /// <summary>
+        /// Acknowledge that <c>.resx</c> / <c>.restext</c> resources are SKIPPED. Their manifest
+        /// name is reproducible; their CONTENT is not — a <c>.resx</c> is XML that
+        /// <c>GenerateResource</c> (resgen) turns into a binary <c>.resources</c> stream, including
+        /// typed and file-reference entries, and this builder runs no MSBuild tasks. Embedding the
+        /// XML under the <c>.resources</c> name would produce an assembly whose
+        /// <c>ResourceManager</c> throws at run time.
+        /// </summary>
+        public const string ResxResource = "embedded-resource:resx";
+
+        /// <summary>
+        /// Acknowledge that a resource whose file name carries a CULTURE is skipped. The SDK routes
+        /// it into a SATELLITE assembly (<c>de/Foo.resources.dll</c>) and out of the main one, and
+        /// this builder emits a single assembly. <c>WithCulture="false"</c> on the item is the
+        /// project-side fix and needs no acceptance — it is what core's
+        /// <c>MeshWeaver.Messaging.Hub</c> already does for its <c>strings.de.json</c>.
+        /// </summary>
+        public const string CultureResource = "embedded-resource:culture";
+
+        /// <summary>
+        /// Acknowledge that a resource carrying <c>%(DependentUpon)</c> is skipped. Its manifest
+        /// name is not derived from its path at all but from the first CLASS declared in the file
+        /// it depends on, fully qualified — and MSBuild extracts that with a hand-rolled C#
+        /// tokenizer whose behaviour is quirky enough that reproducing it from anything other than
+        /// its own source would be a guess (measured: it skips <c>struct</c>, <c>interface</c> and
+        /// <c>enum</c> but takes <c>record</c>, and drops generic arity).
+        /// </summary>
+        public const string DependentUponResource = "embedded-resource:dependent-upon";
+
+        /// <summary>
+        /// Acknowledge that a resource carrying <c>%(ManifestResourceName)</c> is skipped. That
+        /// metadata makes the SDK SKIP its own naming task, which is also what would have set
+        /// <c>%(LogicalName)</c> — so csc receives no logical name and falls back to the bare file
+        /// name, meaning the metadata does not do what it appears to do (measured:
+        /// <c>ManifestResourceName="I.Win.Outright"</c> produced <c>Direct.md</c>). Reproducing an
+        /// SDK quirk is not fidelity; use <c>LogicalName</c>.
+        /// </summary>
+        public const string ManifestResourceNameMetadata = "embedded-resource:manifest-resource-name";
+
+        /// <summary>
+        /// Acknowledge that a resource which is the BUILD'S OWN OUTPUT is skipped — an
+        /// <c>&lt;EmbeddedResource Include="bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml"&gt;</c>,
+        /// which is how <c>MeshWeaver.Northwind.Domain</c> embeds its own XML documentation.
+        ///
+        /// <para>Measured: the real SDK builds that from a CLEAN tree, because csc writes
+        /// <c>/doc:</c> and reads <c>/resource:</c> in ONE invocation. This builder emits the doc
+        /// file into its own output directory — never back into a <c>bin/</c> inside a read-only
+        /// source mount — so the file the item names cannot exist, and the resource is genuinely
+        /// absent rather than merely late. Skipped by name instead of failing the whole project,
+        /// because unlike a missing INPUT this one is not a broken project.</para>
+        /// </summary>
+        public const string BuildOutputResource = "embedded-resource:build-output";
 
         /// <summary>Acknowledge a <c>Condition</c> expression outside the supported grammar,
         /// treating it as FALSE. <c>condition:&lt;text&gt;</c> accepts one.</summary>
@@ -241,6 +339,40 @@ public static class ProjectFile
 
     // ── evaluation ─────────────────────────────────────────────────────────────────────────────
 
+    /// <summary>Which of MSBuild's three item verbs a declaration used.</summary>
+    private enum ResourceVerb
+    {
+        /// <summary>Adds items.</summary>
+        Include,
+
+        /// <summary>Removes items already added.</summary>
+        Remove,
+
+        /// <summary>Attaches metadata to items already added, adding none.</summary>
+        Update,
+    }
+
+    /// <summary>One <c>&lt;EmbeddedResource&gt;</c> element, verbatim, awaiting replay.</summary>
+    /// <param name="Verb">Include / Remove / Update.</param>
+    /// <param name="Patterns">The semicolon-split specs of the verb's attribute.</param>
+    /// <param name="Excludes">The <c>Exclude</c> specs (Include only).</param>
+    /// <param name="Metadata">Metadata from attributes and child elements.</param>
+    /// <param name="File">The file the element came from, for the refusal message.</param>
+    private sealed record ResourceDeclaration(
+        ResourceVerb Verb,
+        ImmutableArray<string> Patterns,
+        ImmutableArray<string> Excludes,
+        ImmutableDictionary<string, string> Metadata,
+        string File);
+
+    /// <summary>A resource item mid-evaluation, before its manifest name is settled.</summary>
+    private sealed record PendingResource(string ItemSpec, string FullPath, string DeclaredIn)
+    {
+        /// <summary>Metadata accumulated from the Include and every later Update.</summary>
+        public ImmutableDictionary<string, string> Metadata { get; init; } =
+            ImmutableDictionary<string, string>.Empty;
+    }
+
     private sealed class EvaluationState(
         string projectPath, IReadOnlyCollection<string> accepted, IReadOnlyDictionary<string, string> globals)
     {
@@ -249,6 +381,11 @@ public static class ProjectFile
         private readonly List<string> _compileRemoves = [];
         private readonly List<string> _razorIncludes = [];
         private readonly List<string> _razorRemoves = [];
+        // EmbeddedResource is order-sensitive in a way Compile is not: an Update that arrives before
+        // its Include attaches nothing, and a Remove only removes what is already there. So the
+        // declarations are kept as an ORDERED LOG and replayed in ToModel, rather than being
+        // flattened into three unrelated lists.
+        private readonly List<ResourceDeclaration> _resourceDeclarations = [];
         private readonly List<string> _projectReferences = [];
         private readonly List<(string Id, string? Version)> _packageReferences = [];
         private readonly List<string> _usings = [];
@@ -297,6 +434,19 @@ public static class ProjectFile
             // $(Configuration) reads the same value the emit uses.
             _properties["Configuration"] = "Release";
             _properties["Platform"] = "AnyCPU";
+            // 🚨 The SDK's own conditional defaults, verbatim from
+            // Sdks/Microsoft.NET.Sdk/targets/Microsoft.NET.Sdk.props:
+            //     <AssemblyName Condition=" '$(AssemblyName)' == '' ">$(MSBuildProjectName)</AssemblyName>
+            //     <RootNamespace Condition=" '$(RootNamespace)' == '' ">$(MSBuildProjectName.Replace(" ", "_"))</RootNamespace>
+            // Seeded rather than resolved at the end, because a project READS them: MeshWeaver's own
+            // MeshWeaver.Northwind.Domain writes <DocumentationFile>bin\$(Configuration)\
+            // $(TargetFramework)\$(AssemblyName).xml</DocumentationFile> and embeds that same path,
+            // and with $(AssemblyName) expanding to the empty string the item pointed at a file
+            // called ".xml" that exists nowhere. RootNamespace joins it because it now PREFIXES
+            // every manifest resource name, where an empty value is a silently wrong name rather
+            // than a broken path.
+            _properties["AssemblyName"] = Path.GetFileNameWithoutExtension(projectPath);
+            _properties["RootNamespace"] = Path.GetFileNameWithoutExtension(projectPath).Replace(" ", "_");
             // 🚨 THE SDK'S OWN DEFAULT NoWarn, and it is not cosmetic. Microsoft.NET.Sdk seeds
             // `1701;1702` for every C# project — the assembly-binding advisories ("assuming
             // assembly reference X matches Y, you may need a supplemental binding redirect"). A
@@ -476,14 +626,20 @@ public static class ProjectFile
                     break;
 
                 case "EmbeddedResource":
-                    if (remove.Length > 0 || update.Length > 0) break;
-                    if (include.Length == 0) break;
-                    if (!IsAccepted(Accept.EmbeddedResource))
-                        throw new UnsupportedConstructException(
-                            $"{file}: <EmbeddedResource Include=\"{include}\"> — this builder emits no "
-                            + "managed resources, so the assembly it produces would differ from the "
-                            + $"SDK's. Re-run with --accept {Accept.EmbeddedResource} to build without them.");
+                {
+                    var exclude = Expand((string?)item.Attribute("Exclude") ?? string.Empty, file);
+                    var metadata = ReadMetadata(item, file);
+                    if (remove.Length > 0)
+                        _resourceDeclarations.Add(new ResourceDeclaration(
+                            ResourceVerb.Remove, [.. Split(remove)], [], metadata, file));
+                    else if (update.Length > 0)
+                        _resourceDeclarations.Add(new ResourceDeclaration(
+                            ResourceVerb.Update, [.. Split(update)], [], metadata, file));
+                    else if (include.Length > 0)
+                        _resourceDeclarations.Add(new ResourceDeclaration(
+                            ResourceVerb.Include, [.. Split(include)], [.. Split(exclude)], metadata, file));
                     break;
+                }
 
                 case "Reference":
                     // A raw <Reference Include="path/*.dll"> is how Directory.PlatformRefs.targets
@@ -532,6 +688,296 @@ public static class ProjectFile
             }
         }
 
+        /// <summary>
+        /// An item's metadata, from BOTH forms MSBuild accepts — attributes on the element and
+        /// child elements — because the repos this builder serves use both in the same file
+        /// (<c>MeshWeaver.Messaging.Hub</c> writes <c>LogicalName="…"</c> as an attribute,
+        /// <c>MeshWeaver.Northwind.Domain</c> writes <c>&lt;LogicalName&gt;…&lt;/LogicalName&gt;</c>
+        /// as a child). Reading only one of them would drop a name that pins the whole contract.
+        /// </summary>
+        private ImmutableDictionary<string, string> ReadMetadata(XElement item, string file)
+        {
+            var metadata = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var attribute in item.Attributes())
+            {
+                var name = attribute.Name.LocalName;
+                if (name is "Include" or "Exclude" or "Remove" or "Update" or "Condition" or "Label")
+                    continue;
+                metadata[name] = Expand(attribute.Value, file);
+            }
+            foreach (var child in item.Elements())
+            {
+                if (!ConditionHolds(child, file))
+                    continue;
+                metadata[child.Name.LocalName] = Expand(child.Value, file);
+            }
+            return metadata.ToImmutable();
+        }
+
+        /// <summary>
+        /// Replays the <c>&lt;EmbeddedResource&gt;</c> declarations in order and settles every
+        /// manifest name — the one part of this evaluator whose mistakes are invisible, so every
+        /// construct it cannot reproduce EXACTLY leaves by a named refusal rather than a plausible
+        /// name. See <see cref="ManifestResourceNames"/> for how each rule was measured.
+        /// </summary>
+        private (ImmutableArray<EmbeddedResourceItem> Items, ImmutableArray<string> Skipped) ResolveEmbeddedResources(
+            string rootNamespace)
+        {
+            var skipEverything = IsAccepted(Accept.EmbeddedResource);
+            var pending = new List<PendingResource>();
+            var byPath = new Dictionary<string, PendingResource>(StringComparer.OrdinalIgnoreCase);
+            var skippedBuildOutputs = new List<string>();
+
+            // The SDK's own default item, verbatim from Microsoft.NET.Sdk.DefaultItems.props:
+            //   <EmbeddedResource Include="**/*.resx" Exclude="$(DefaultItemExcludes);…" />
+            // Reproduced rather than skipped BECAUSE .resx is refused: a project with a stray .resx
+            // that nobody declared must fail by name, not build without a resource the SDK embeds.
+            if (!IsFalse(Prop("EnableDefaultItems")) && !IsFalse(Prop("EnableDefaultEmbeddedResourceItems")))
+                foreach (var file in DefaultGlob("*.resx"))
+                    Add(file, Path.GetRelativePath(ProjectDirectory, file), "(SDK default items)",
+                        ImmutableDictionary<string, string>.Empty);
+
+            foreach (var declaration in _resourceDeclarations)
+            {
+                switch (declaration.Verb)
+                {
+                    case ResourceVerb.Include:
+                    {
+                        var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var pattern in declaration.Excludes)
+                            foreach (var match in ExpandGlob(pattern))
+                                excluded.Add(match);
+                        foreach (var pattern in declaration.Patterns)
+                        {
+                            var matched = 0;
+                            foreach (var match in ExpandGlob(pattern).OrderBy(p => p, StringComparer.Ordinal))
+                            {
+                                matched++;
+                                if (excluded.Contains(match))
+                                    continue;
+                                Add(match, SpecFor(pattern, match), declaration.File, declaration.Metadata);
+                            }
+                            // 🚨 A LITERAL include of a file that is not there is csc's CS1566
+                            // ("Error reading resource … Could not find"), which fails the SDK build.
+                            // A GLOB that matches nothing is legal and matches nothing, so only the
+                            // literal form is an error — measured both ways.
+                            if (matched == 0 && !pattern.Contains('*') && !pattern.Contains('?'))
+                                MissingLiteral(pattern, declaration.File, skippedBuildOutputs);
+                        }
+                        break;
+                    }
+
+                    case ResourceVerb.Remove:
+                        foreach (var pattern in declaration.Patterns)
+                            foreach (var match in ExpandGlob(pattern))
+                                if (byPath.Remove(match, out var gone))
+                                    pending.Remove(gone);
+                        break;
+
+                    case ResourceVerb.Update:
+                        foreach (var pattern in declaration.Patterns)
+                            foreach (var match in ExpandGlob(pattern))
+                                if (byPath.TryGetValue(match, out var existing))
+                                {
+                                    // MSBuild's Update MERGES metadata onto the item; it never adds one.
+                                    var merged = existing with
+                                    {
+                                        Metadata = existing.Metadata.SetItems(declaration.Metadata),
+                                    };
+                                    byPath[match] = merged;
+                                    pending[pending.IndexOf(existing)] = merged;
+                                }
+                        break;
+
+                    default:
+                        break;
+                }
+            }
+
+            var items = ImmutableArray.CreateBuilder<EmbeddedResourceItem>(pending.Count);
+            var skipped = ImmutableArray.CreateBuilder<string>();
+            skipped.AddRange(skippedBuildOutputs);
+            var claimed = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var resource in pending)
+            {
+                var relative = Path.GetRelativePath(ProjectDirectory, resource.FullPath);
+                if (skipEverything)
+                {
+                    skipped.Add($"{relative} (--accept {Accept.EmbeddedResource})");
+                    continue;
+                }
+
+                var targetPath = ManifestResourceNames.TargetPathFor(
+                    ProjectDirectory, resource.ItemSpec, resource.FullPath,
+                    resource.Metadata.GetValueOrDefault("Link"),
+                    resource.Metadata.GetValueOrDefault("TargetPath"));
+
+                if (Refuse(resource, relative, targetPath) is { } reason)
+                {
+                    skipped.Add(reason);
+                    continue;
+                }
+
+                var logicalName = resource.Metadata.GetValueOrDefault("LogicalName", string.Empty);
+                var origin = logicalName.Length > 0 ? "LogicalName" : "path";
+                var manifestName = logicalName.Length > 0
+                    ? logicalName
+                    : ManifestResourceNames.Compute(rootNamespace, targetPath);
+
+                // csc raises CS1508 for this; naming BOTH files beats naming the collision, because
+                // the two declarations are usually in different ItemGroups (measured: sibling
+                // directories `--` and `_` both mangle to `__`, which nothing about either name
+                // suggests).
+                if (claimed.TryGetValue(manifestName, out var first))
+                    throw new UnsupportedConstructException(
+                        $"{projectPath}: two embedded resources both claim the manifest name "
+                        + $"'{manifestName}' — '{first}' and '{relative}'. csc refuses this with "
+                        + "CS1508. Give one of them an explicit LogicalName.");
+                claimed[manifestName] = relative;
+                items.Add(new EmbeddedResourceItem(resource.FullPath, manifestName, targetPath, origin));
+            }
+
+            return (items.ToImmutable(), skipped.ToImmutable());
+
+            void Add(string fullPath, string itemSpec, string declaredIn, ImmutableDictionary<string, string> metadata)
+            {
+                if (byPath.TryGetValue(fullPath, out var existing))
+                {
+                    // MSBuild would carry two items and csc would raise CS1508 on the duplicate
+                    // name; the SDK pre-empts that with NETSDK1022 when its own default glob is the
+                    // second one. Either way it is an error, and merging is the wrong answer — so
+                    // the later metadata wins and the duplicate NAME check downstream still fires.
+                    var merged = existing with { Metadata = existing.Metadata.SetItems(metadata) };
+                    byPath[fullPath] = merged;
+                    pending[pending.IndexOf(existing)] = merged;
+                    return;
+                }
+                var item = new PendingResource(itemSpec, fullPath, declaredIn) { Metadata = metadata };
+                byPath[fullPath] = item;
+                pending.Add(item);
+            }
+
+            // 🚨 Two kinds of "the file is not there", and conflating them turns a project the SDK
+            // builds GREEN into a red one.
+            //
+            //  * A missing INPUT is csc's CS1566 and a broken project — measured: `dotnet build` of
+            //    an <EmbeddedResource Include="does\not\exist.md"> fails.
+            //  * A missing BUILD OUTPUT is not. `Include="bin\$(Configuration)\$(TargetFramework)\
+            //    $(AssemblyName).xml"` — how MeshWeaver.Northwind.Domain embeds its own XML doc —
+            //    builds green from a CLEAN tree, because csc writes /doc: and reads /resource: in
+            //    ONE invocation. This builder emits its doc file into its own output directory
+            //    rather than back into a bin/ inside a read-only source mount, so that file cannot
+            //    exist here. Named and skippable, never a hard failure.
+            void MissingLiteral(string pattern, string file, List<string> buildOutputs)
+            {
+                var segments = pattern.Replace('\\', '/').Split('/');
+                if (segments.Any(s => s is "bin" or "obj"))
+                {
+                    if (!IsAccepted(Accept.BuildOutputResource))
+                        throw new UnsupportedConstructException(
+                            $"{file}: <EmbeddedResource Include=\"{pattern}\"> embeds the build's OWN OUTPUT. "
+                            + "The real SDK manages that from a clean tree because csc writes /doc: and reads "
+                            + "/resource: in one invocation; this builder emits its documentation file into "
+                            + "its own output directory, never back into a bin/ inside a read-only source "
+                            + $"mount, so the file cannot exist. Re-run with --accept {Accept.BuildOutputResource} "
+                            + "to build without it.");
+                    buildOutputs.Add($"{pattern} (--accept {Accept.BuildOutputResource})");
+                    return;
+                }
+                throw new UnsupportedConstructException(
+                    $"{file}: <EmbeddedResource Include=\"{pattern}\"> names a file that does not exist "
+                    + $"(looked in '{ProjectDirectory}'). csc fails this with CS1566 rather than embedding "
+                    + "nothing, and so does this builder — a resource silently missing from an assembly is "
+                    + "only discovered at run time, by whoever asks for it.");
+            }
+
+            // A glob's item spec is the matched path relative to the project; a literal include's is
+            // the spec as written, because that is what AssignTargetPath sees and its rooted/".."
+            // tests key on it.
+            string SpecFor(string pattern, string match) =>
+                pattern.Contains('*') || pattern.Contains('?')
+                    ? Path.GetRelativePath(ProjectDirectory, match)
+                    : pattern;
+        }
+
+        /// <summary>
+        /// The named refusals — every construct whose manifest name this builder cannot promise to
+        /// match. Returns the log line when the operator accepted it, and THROWS when they did not.
+        /// </summary>
+        private string? Refuse(PendingResource resource, string relative, string targetPath)
+        {
+            var extension = Path.GetExtension(targetPath);
+            if (extension.Equals(".resx", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".restext", StringComparison.OrdinalIgnoreCase))
+                return Named(Accept.ResxResource,
+                    $"<EmbeddedResource> '{relative}' is a {extension} resource. Its manifest name is "
+                    + "reproducible, but its CONTENT is not: the SDK runs resgen (the GenerateResource "
+                    + "task) to turn that XML into the binary .resources stream a ResourceManager reads, "
+                    + "including typed and file-reference entries, and this builder runs no MSBuild "
+                    + "tasks. Embedding the XML under the .resources name would compile green and throw "
+                    + "at run time.");
+
+            if (resource.Metadata.ContainsKey("DependentUpon"))
+                return Named(Accept.DependentUponResource,
+                    $"<EmbeddedResource> '{relative}' carries DependentUpon="
+                    + $"'{resource.Metadata["DependentUpon"]}'. That does not adjust the name — it "
+                    + "REPLACES it with the first class declared in that file, fully qualified "
+                    + "(measured: a .md dependent on a file declaring Owner.Ns.Owner is embedded as "
+                    + "'Owner.Ns.Owner', extension and path gone). MSBuild extracts the class with its "
+                    + "own C# tokenizer, which skips struct/interface/enum, takes record, and drops "
+                    + "generic arity; reproducing that from anything but its source would be a guess.");
+
+            if (resource.Metadata.ContainsKey("ManifestResourceName"))
+                return Named(Accept.ManifestResourceNameMetadata,
+                    $"<EmbeddedResource> '{relative}' carries ManifestResourceName metadata. In the SDK "
+                    + "that metadata makes CreateManifestResourceNames SKIP the item — and that task is "
+                    + "also what sets %(LogicalName) — so csc receives no logical name and falls back to "
+                    + "the bare file name (measured: ManifestResourceName=\"I.Win.Outright\" produced "
+                    + "'Direct.md'). Reproducing an SDK quirk is not fidelity. Use LogicalName.");
+
+            var withCulture = resource.Metadata.GetValueOrDefault("WithCulture", string.Empty);
+            if (string.Equals(withCulture, "false", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            if (resource.Metadata.TryGetValue("Culture", out var declaredCulture) && declaredCulture.Length > 0)
+                return Named(Accept.CultureResource,
+                    $"<EmbeddedResource> '{relative}' declares Culture='{declaredCulture}', which routes it "
+                    + $"into a SATELLITE assembly ({declaredCulture}/…resources.dll) and OUT of the main "
+                    + "one. This builder emits a single assembly. Add WithCulture=\"false\" to keep it in "
+                    + "the main assembly.");
+
+            if (!ManifestResourceNames.CanDecideCulture)
+                return ManifestResourceNames.HasDottedBaseName(targetPath)
+                    ? Named(Accept.CultureResource,
+                        $"<EmbeddedResource> '{relative}' has a second extension, and THIS PROCESS CANNOT TELL "
+                        + "whether it is a culture: the runtime reports no predefined culture even for 'de', "
+                        + "which means globalization is invariant here. A culture-carrying resource belongs in "
+                        + "a satellite assembly and must not be embedded in the main one, so it is refused "
+                        + "rather than guessed. Add WithCulture=\"false\" if the second extension is not a "
+                        + "culture.")
+                    : null;
+
+            if (ManifestResourceNames.CultureOf(targetPath) is { } culture)
+                return Named(Accept.CultureResource,
+                    $"<EmbeddedResource> '{relative}' carries the culture '{culture}' in its file name, so the "
+                    + $"SDK puts it in a SATELLITE assembly ({culture}/…resources.dll) and NOT in the main "
+                    + "one — an explicit LogicalName does NOT rescue it (measured). This builder emits a "
+                    + "single assembly. Add WithCulture=\"false\" to the item to keep it in the main "
+                    + "assembly, which is what core's MeshWeaver.Messaging.Hub already does for its "
+                    + "Localization/strings.*.json.");
+
+            return null;
+
+            string? Named(string token, string message)
+            {
+                if (!IsAccepted(token))
+                    throw new UnsupportedConstructException(
+                        $"{resource.DeclaredIn}: {message} Re-run with --accept {token} to build WITHOUT "
+                        + "this resource, knowing the assembly will not carry it.");
+                return $"{relative} (--accept {token})";
+            }
+        }
+
         private void ReadPackageVersions(string path)
         {
             var doc = LoadXml(path);
@@ -569,11 +1015,21 @@ public static class ProjectFile
             }
             globalUsings = globalUsings.AddRange(_usings).Distinct(StringComparer.Ordinal).ToImmutableArray();
 
+            // 🚨 $(RootNamespace) defaults to the PROJECT NAME, never to $(AssemblyName) — measured
+            // against the real SDK with a project whose two differ (ProjNameDiffers.csproj emitting
+            // DifferentAsmName.dll named its resources `ProjNameDiffers.*`). It used to fall back to
+            // the assembly name here, which was harmless while RootNamespace was informational and
+            // is not now that it PREFIXES every manifest resource name. The default itself is seeded
+            // in SeedWellKnown, exactly where the SDK's props set it, so a project that READS
+            // $(RootNamespace) or $(AssemblyName) sees the same value the SDK would give it.
+            var rootNamespace = Prop("RootNamespace");
+            var (resources, skippedResources) = ResolveEmbeddedResources(rootNamespace);
+
             return new Model(
                 projectPath,
                 sdk,
                 assemblyName,
-                Prop("RootNamespace") is { Length: > 0 } rn ? rn : assemblyName,
+                rootNamespace,
                 ParseOutputKind(Prop("OutputType")),
                 Prop("TargetFramework"),
                 ParseNullable(Prop("Nullable")),
@@ -598,6 +1054,8 @@ public static class ProjectFile
                 RazorLangVersion = Prop("RazorLangVersion") is { Length: > 0 } rlv ? rlv : DefaultRazorLangVersion,
                 RazorConfiguration = Prop("RazorConfiguration") is { Length: > 0 } rc ? rc : DefaultRazorConfiguration,
                 SupportLocalizedComponentNames = IsTrue(Prop("SupportLocalizedComponentNames")),
+                EmbeddedResources = resources,
+                SkippedResources = skippedResources,
             };
         }
 
