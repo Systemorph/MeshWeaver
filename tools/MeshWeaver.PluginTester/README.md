@@ -31,7 +31,7 @@ mw-compiler build-project <csproj|dir>     # BUILD A .csproj: no dotnet SDK, no 
 
 ```
 mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] [--extra-refs <dir>]... \
-    [--generators <dir|dll>]... [--razor-generators <dir>] \
+    [--generators <dir|dll>]... [--razor-generators <dir>] [--staged-generators <dir>] \
     [--accept <construct>]... [--allow-warnings] [--max-parallel <n>]
 ```
 
@@ -97,8 +97,30 @@ builder: `Microsoft.CodeAnalysis.Razor.Compiler.dll` + `Microsoft.AspNetCore.Raz
   (`--accept razor-css-scope` builds without it); and `.razor` files under a project whose `Sdk`
   does not process them (`--accept razor-not-compiled`).
 
-**Still not supported, and each says so:** SDK source generators (they live in the SDK, not the
-runtime; `--generators` supplies them), embedded resources, `<Protobuf>`, MSBuild `<Target>`s and
+**The SDK's and Orleans' generators run too** (2026-08-31). The image stages them in `generators/`
+beside the builder and selects them by the SDK's own rule: `generators/sdk/`
+(`System.Text.RegularExpressions.Generator.dll`, from the targeting pack) applies to EVERY project,
+`generators/packages/<package id>/` (`Orleans.CodeGenerator.dll`) applies to a project whose
+`PackageReference` set names that id. `--staged-generators <dir>` names another copy and REPLACES the
+search rather than heading it.
+
+- 🚨 **NOT per RID, and that is measured.** Both are PE machine `0x014C` — architecture-neutral MSIL
+  — on the linux-x64 AND linux-arm64 `dotnet/sdk:10.0.400` images, so one copy serves every image
+  architecture and CD stages nothing. `StagedGeneratorsTest` asserts it, so an SDK that starts
+  crossgenning its analyzers goes red on the bump rather than shipping a broken arm64 image.
+- 🚨 **Missing Orleans codegen is a FAILURE, not a warning.** Unlike `[GeneratedRegex]` (which
+  announces itself as CS8795), a project without Orleans codegen compiles GREEN and emits an assembly
+  with no serializers, copiers or grain proxies — failing at grain activation instead. So it is
+  refused by name; `--accept generators-missing` builds the incomplete assembly deliberately.
+- 🚨 **`--generators` is loud now.** It used to route through the node-compile discovery, which reads
+  a failed load as "not a generator" and returns the compilation UNCHANGED — a green build that ran
+  none of the generator supplied. Both paths share the host-first load context.
+- **An analyzer-only package counts as supplied when its generator is staged.**
+  `Microsoft.Orleans.Sdk` has no runtime assets, so the publish prunes it from the image's
+  `deps.json`; demanding a file for it would refuse the one project in the fleet that authors grains.
+
+**Still not supported, and each says so:** source generators OTHER than the staged ones
+(`--generators` supplies them), embedded resources, `<Protobuf>`, MSBuild `<Target>`s and
 `<Sdk>` elements. Full measurements:
 [In-Mesh Build and Test](https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Documentation/Data/Architecture/InMeshBuildAndTest.md).
 

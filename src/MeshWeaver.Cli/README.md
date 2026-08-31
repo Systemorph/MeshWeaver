@@ -75,7 +75,7 @@ assembly the image already carries. See
 | `--output <dir>` | where the emitted assemblies land (default: a temp dir) |
 | `--root <dir>` | directory mounted as `/repo` (default: the nearest `Directory.Build.props` ancestor) |
 | `--extra-refs <dir>` | libraries ADDITIONAL to the platform — the only way to satisfy a `PackageReference` the image does not supply. Repeatable |
-| `--accept <construct>` | acknowledge one construct the evaluator cannot reproduce (`target:<Name>`, `embedded-resource`, `conditions`, `razor-css-scope`, `razor-not-compiled`). Repeatable |
+| `--accept <construct>` | acknowledge one construct the evaluator cannot reproduce (`target:<Name>`, `embedded-resource`, `conditions`, `razor-css-scope`, `razor-not-compiled`, `generators-missing`). Repeatable |
 | `--no-warn` / `--allow-warnings` | warnings fail the build (default); `--no-warn=false` or `--allow-warnings` opts out |
 | `--no-pull` | use the image the docker daemon already has, for one built locally |
 
@@ -85,6 +85,15 @@ builder, per RID, and `build-project` runs it for any project whose `Sdk` proces
 not do quietly is skip a `.razor` file: a project with Razor input and no generator fails by name,
 and CSS isolation (`*.razor.css`) needs `--accept razor-css-scope` because the `b-…` scope comes
 from an MSBuild task this builder does not run.
+
+**The SDK's and Orleans' generators run too** (2026-08-31): the image stages
+`System.Text.RegularExpressions.Generator` (from the targeting pack, applied to every project) and
+`Orleans.CodeGenerator` (applied to projects referencing `Microsoft.Orleans.Sdk`) in `generators/`
+beside the builder — one architecture-neutral copy each, unlike Razor's per-RID pair. 🚨 A missing
+Orleans generator is a **failure**, not a warning: unlike `[GeneratedRegex]`, which announces itself
+as CS8795, a project without Orleans codegen compiles GREEN and emits an assembly with no
+serializers, copiers or grain proxies, failing at grain activation instead. `--accept
+generators-missing` builds that assembly deliberately.
 
 🚨 **Nothing is dropped in silence.** A project construct this builder cannot reproduce — an unknown
 element, an unevaluatable `Condition`, a `<Target>`, an `<EmbeddedResource>` — FAILS the run naming

@@ -522,11 +522,90 @@ razor-css-scope --accept embedded-resource`:
 **Razor is no longer what blocks any of them.** The two remaining categories are the pre-existing
 ones — SDK source generators and `<Protobuf>`.
 
+
+## The container runs the SDK and Orleans generators (2026-08-31)
+
+With Razor closed, **source generators were the largest remaining category** — and the same
+diagnosis applies twice over. A generator is not part of the runtime: `[GeneratedRegex]`'s ships in
+the **.NET SDK's targeting pack** (`Microsoft.NETCore.App.Ref/<version>/analyzers/dotnet/cs`, applied
+implicitly to every project), and Orleans' ships in the **`Microsoft.Orleans.CodeGenerator` NuGet
+package** (applied to projects that reference `Microsoft.Orleans.Sdk`). A runtime image has neither,
+so a project using one compiled to an assembly missing exactly what the generator would have written.
+
+The image now stages both in `generators/` beside the builder, and `build-project` runs them.
+
+### The two failures are NOT the same shape, and that decides the design
+
+| | what a missing generator looks like |
+|---|---|
+| **`[GeneratedRegex]`** | a wall of **CS8795** *"partial method must have an implementation part"* — loud, but it reads like broken source |
+| **Orleans** | **nothing.** The project compiles GREEN and the assembly simply has no serializers, copiers or grain proxies in it. The silo throws at grain activation, days later, with nothing pointing back at the build |
+
+So Orleans gets a rule regex does not need: a project referencing a package in
+`StagedGenerators.CodegenRequiredPackages` whose generator is **not** staged **fails the build**,
+naming what the green build would have hidden. `--accept generators-missing` is the recorded escape
+and really does emit the incomplete assembly.
+
+### Which project gets which generator — the SDK's own rule
+
+- **`generators/sdk/`** applies to **every** project, exactly as the targeting pack's analyzers do.
+- **`generators/packages/<package id>/`** applies to a project whose `PackageReference` set names
+  that id, exactly as a NuGet analyzer does.
+
+🚨 The rule is deliberately **not** *"does the compilation resolve an Orleans type"*. This builder
+hands every project the container's **whole** reference set — 209 assemblies in the portal image,
+Orleans among them — so a reference-shaped test would run Orleans codegen over every project in the
+repo. Assemblies are also de-duplicated by file name across activations: Orleans' codegen is
+reachable through more than one package id, and a generator that runs twice emits every type twice
+(CS0101, reported against code nobody wrote).
+
+### The staged closure is ONE assembly each, and both are architecture-neutral
+
+Read from the AssemblyRef tables, then checked against the portal image's 209 libraries:
+
+| generator | references | staged |
+|---|---|---|
+| `System.Text.RegularExpressions.Generator` | netstandard, Roslyn (+CSharp), Immutable, Memory, Buffers, **Workspaces**, **System.Composition.AttributedModel**, CompilerServices.Unsafe | itself only |
+| `Orleans.CodeGenerator` | netstandard, Roslyn (+CSharp), Immutable, Memory, Buffers | itself only |
+
+The image ships every one of those — **including Workspaces and Composition**, which are what an
+IDE-flavoured analyzer usually drags in — so neither needs a private dependency beside it, unlike
+the Razor compiler. `Orleans.Analyzers` is deliberately **not** staged: it carries diagnostics and
+code fixes, not a `[Generator]`, and this builder runs no analyzers.
+
+🚨 **And neither is ReadyToRun.** Measured PE machine **`0x014C` (MSIL)** on both, inside the
+`linux/amd64` *and* `linux/arm64` `dotnet/sdk:10.0.400` images — against `0xFD1D`/`0xD11D`/`0xEC20`
+for the Razor compiler, which had to be staged per RID. **One copy therefore serves both image
+architectures and CD stages nothing.** That is a measurement, not an assumption:
+`StagedGeneratorsTest` asserts the `0x014C`, so an SDK that starts crossgenning its analyzers turns
+a PR red instead of shipping an arm64 image that silently drops every generated regex. The search
+path still probes `<rid>/` first, so re-splitting later is a staging change, not a code change.
+
+### An analyzer-only package is "supplied" when its generator is staged
+
+`Microsoft.Orleans.Sdk` is **absent from the portal image's `deps.json`** (measured: 209 libraries,
+`Microsoft.Orleans.Core` and its siblings among them, no `Orleans.Sdk`) because the publish prunes a
+package with no runtime assets. Reading that as *"the container does not supply it"* would refuse the
+one project in the fleet that authors grains, for a file that has never existed. What supplying such
+a package MEANS is that its generator is staged — so that is the test.
+
+### Nothing is skipped in silence — including `--generators`
+
+A staged generator that fails to LOAD **fails the build by name**; a directory of assemblies with no
+`[Generator]` in it fails by name. And **`--generators` now runs through the same loud loader.** It
+used to route through the node-compile discovery (`SourceGeneratorLoader`), which reads a failed load
+as *"not a generator"*, logs it at **debug**, and returns the compilation UNCHANGED — so an operator
+who supplied a generator built against a different Roslyn got a green build that ran none of it.
+That is trap 1 from the Razor work, and it applied to the operator's own path too.
+
+Both paths now share the host-first `AssemblyLoadContext` (`GeneratorLoader`) rather than a copy of
+it.
+
 ### What it does NOT do, and what each would take
 
-- **Source generators.** They live in the .NET **SDK**, and a MeshWeaver image ships the **runtime**.
-  `--generators <dir|dll>` loads them when supplied; with none, the builder names the generator that
-  did not run rather than leaving a wall of CS8795 that reads like broken source.
+- **Source generators OTHER than the staged ones.** `--generators <dir|dll>` loads them when
+  supplied, and a supplied generator that does not load now fails the build rather than running
+  silently as nothing.
 - **Embedded resources**, **`<Protobuf>`**, **MSBuild `<Target>`s** and **`<Sdk>` elements** — each a
   named failure with an `--accept` where one is meaningful.
 
