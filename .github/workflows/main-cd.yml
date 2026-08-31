@@ -847,7 +847,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       # portal-ai app image — the deployment image (aspnet + node + Claude Code/Copilot CLIs),
       # layered on the base already in ACR. The base (memex-portal-ai-base) changes rarely and is
       # rebuilt by the release path / runbook §1, NOT on every main merge.
@@ -1013,7 +1015,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       # migration — lean image on the standard (already multi-arch) aspnet base; same multi-arch publish.
       # <RuntimeIdentifiers> lives in Memex.Database.Migration.csproj (project-local, same reason as above).
       - name: Build + push migration (staging tag)
@@ -1067,7 +1071,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       # Lean console image on the standard multi-arch base; <RuntimeIdentifiers> lives in the
       # csproj (project-local — a global -p:RuntimeIdentifiers breaks referenced libs, see above).
       # `latest` (the tag the plugins repo pins as MW_TEST_IMAGE) and the GHCR mirror both moved
@@ -1111,7 +1117,9 @@ jobs:
       # buildx reads registry credentials from ~/.docker/config.json, which is what both of these
       # logins write — one store, both registries.
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
@@ -1852,7 +1860,9 @@ jobs:
           V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
         run: |
           set -euo pipefail
-          az acr login --name meshweaver
+          # Retried login (same transport class as the step-level sites — and this one guards the
+          # BUILD FACT, which drives every consumer repo's pin update; see acr-login.sh).
+          bash .github/scripts/acr-login.sh
           # The digest of mw-plugin-test:main — the exact pin (MW_IMAGE_DIGEST) the plugin repos
           # compile against. Resolved HERE so the mesh side needs no registry credential.
           # 🚨 Resolved from THIS run's version tag, never `:main` — `main` moves the moment another run
@@ -1978,7 +1988,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       - name: Resolve the promoted tester image's digest
         id: digest
         env:
