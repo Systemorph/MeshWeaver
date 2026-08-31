@@ -145,7 +145,7 @@ jobs:
       # here, expires in an hour, and is scoped to the one repository named below.
       - name: Mint an installation token for the deploy repo
         id: deploy-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.MESHWEAVER_APP_ID }}
           private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
@@ -226,7 +226,7 @@ jobs:
       # here, expires in an hour, and is scoped to the one repository named below.
       - name: Mint an installation token for the deploy repo
         id: deploy-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.MESHWEAVER_APP_ID }}
           private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
@@ -308,7 +308,7 @@ jobs:
       # here, expires in an hour, and is scoped to the one repository named below.
       - name: Mint an installation token for the deploy repo
         id: deploy-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.MESHWEAVER_APP_ID }}
           private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}

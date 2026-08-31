@@ -261,6 +261,34 @@ public record ActivityLog(string Category)
         };
 
     /// <summary>
+    /// Finish by OUTCOME: <see cref="ActivityStatus.Failed"/> when the log (or a sub-activity)
+    /// recorded an error, otherwise <see cref="ActivityStatus.Succeeded"/> — warning entries stay
+    /// in the transcript (and in <see cref="MaxSeverity"/>) but never demote the terminal status.
+    ///
+    /// <para>🚨 This exists because <see cref="Finish(int, ActivityStatus?)"/>'s
+    /// <c>overrideStatus</c> is a FLOOR, not a pin: <c>Finish(v, Succeeded)</c> with one Warning
+    /// message yields <see cref="ActivityStatus.Warning"/>. The compile lane finished with that
+    /// fold while <c>NodeTypeCompilationActivity</c> pinned the activity node — two terminal
+    /// writers disagreeing on the same activity, and which one a
+    /// <c>GetCompilationPathResponse</c> surfaced depended on the compile write-back race
+    /// (2026-08-30 merge-queue incident: <c>Status=Succeeded</c> + <c>MaxSeverity=Warning</c> on
+    /// one log; CI load flipped the surfaced side to Warning and red-flagged green compiles).
+    /// A pipeline whose contract is "warnings are reported, never demote" finishes through
+    /// THIS method at every terminal write, so both writers give one answer.</para>
+    /// </summary>
+    /// <param name="version">The workspace version to record on the finished activity.</param>
+    /// <returns>The finished activity log, Failed on recorded errors, otherwise Succeeded.</returns>
+    public ActivityLog FinishByOutcome(int version) =>
+        this with
+        {
+            Status = HasErrors() || SubActivities.Any(s => s.Status == ActivityStatus.Failed)
+                ? ActivityStatus.Failed
+                : ActivityStatus.Succeeded,
+            End = DateTime.UtcNow,
+            Version = version
+        };
+
+    /// <summary>
     /// The status implied by what has been logged: the worse of the sub-activities' statuses and the
     /// severity roll-up.
     /// <para>🚨 Derived from <see cref="MaxSeverity"/> — a counter — <b>not</b> from a scan of

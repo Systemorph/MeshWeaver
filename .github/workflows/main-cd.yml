@@ -321,6 +321,11 @@ jobs:
       # The three facts the delivery verdict below judges. Exposed as outputs so the check is a
       # JOB anyone can read in the run summary, not a conclusion buried in this job's log.
       complete: ${{ steps.acr.outputs.complete }}
+      # 🚨 Resolved ONCE (steps.plugins) and consumed by promote + verify-images. Never
+      # re-resolved downstream — see the step's own comment for why re-resolving turns a correct
+      # publish red (#2622).
+      plugins_short: ${{ steps.plugins.outputs.plugins_short }}
+      plugins_sha: ${{ steps.plugins.outputs.plugins_sha }}
       # Reconcile found the images complete: no image build is due, but the content bake still
       # is — the images being present says nothing about whether the bundles are.
       bake_only: ${{ steps.decide.outputs.bake_only }}
@@ -500,12 +505,58 @@ jobs:
           fi
           echo "Newest published ci tag: ${newest:-<none>} (${age_min} min ago)"
           echo "age_min=$age_min" >> "$GITHUB_OUTPUT"
+      # 🚨 Resolve the plugins HEAD ONCE, here, and thread it. Everything downstream — the
+      # completeness probe below, promote's pair tag, verify-images' assertion — consumes THIS
+      # output and never re-resolves (MeshWeaver#2622).
+      #
+      # That is not tidiness, it is the correctness condition. The run takes ~20 minutes. If
+      # `verify-images` re-resolved, a plugins merge landing inside that window would make it look
+      # for `…-pB` on an image this run correctly built from `A`, and a successful publish would go
+      # red. Cry wolf, and the ledger becomes noise — the failure mode the gate's own comments
+      # already name. Resolving once means the identity is minted by the run that owns it, exactly
+      # like the staging tag; the NEXT reconcile tick re-resolves and correctly finds the set
+      # stale, which is the desired behaviour at the right moment.
+      #
+      # 🚨 No `if:` on a secret and no `continue-on-error`. An unresolvable plugins HEAD means the
+      # image identity cannot be established at all, so this FAILS RED naming what to provision —
+      # a skipped resolution would silently disable the pair check and be indistinguishable from
+      # a passing one.
+      - name: "Resolve the plugins HEAD this image set is bound to"
+        id: plugins
+        env:
+          PLUGINS_REF: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          SSH_KEY: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SSH_KEY:-}" ]; then
+            echo "::error::PLUGINS_REPO_SSH_KEY is not set on this repository. main-cd cannot resolve the plugins HEAD, so it cannot tell whether the published portal image carries the current hosts (#2622). Provision the deploy key used by the host checkouts."
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/plugins_key && chmod 600 ~/.ssh/plugins_key
+          ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/plugins_key -o IdentitiesOnly=yes"
+          # One network round trip; no clone. A ref that resolves to nothing is a hard error, not
+          # an empty string travelling downstream as "no pair to check".
+          full=$(git ls-remote git@github.com:Systemorph/MeshWeaver.Plugins.git \
+                   "refs/heads/$PLUGINS_REF" | awk '{print $1}' | head -1)
+          rm -f ~/.ssh/plugins_key
+          if [ -z "$full" ]; then
+            echo "::error::'refs/heads/$PLUGINS_REF' does not resolve in Systemorph/MeshWeaver.Plugins — check MW_PLUGINS_REF."
+            exit 1
+          fi
+          short="${full:0:7}"
+          echo "plugins HEAD ($PLUGINS_REF) = $full  short=$short"
+          echo "plugins_short=$short" >> "$GITHUB_OUTPUT"
+          echo "plugins_sha=$full" >> "$GITHUB_OUTPUT"
       - name: "Does main's HEAD already have a complete image set?"
         id: acr
         if: steps.target.outputs.reason == 'reconcile'
         run: |
           set -uo pipefail
-          if .github/scripts/check-image-set.sh "${{ steps.target.outputs.short_sha }}"; then
+          # 🚨 The second argument is what lets a plugins-only host change be SEEN. Without it a
+          # complete-for-core's-sha set answers "complete" and the reconciler does nothing (#2622).
+          if .github/scripts/check-image-set.sh "${{ steps.target.outputs.short_sha }}" "${{ steps.plugins.outputs.plugins_short }}"; then
             echo "complete=true" >> "$GITHUB_OUTPUT"
           else
             echo "complete=false" >> "$GITHUB_OUTPUT"
@@ -649,11 +700,15 @@ jobs:
           # fresh-install engine activation by editing src/Memex.Portal.Distributed/appsettings.json
           # at 14:54Z, and the newest image predated it with no producer that would ever rebuild.
           #
-          # This is the ESCAPE HATCH, not the fix. The durable shape is to make the identity honest
-          # — record the plugins sha the image was baked from and have check-image-set.sh compare it
-          # against plugins@main — so the RECONCILER notices on its own. Until that exists, an
-          # operator who knows the hosts changed has no way to say so, and a dispatch is a
-          # structural no-op for exactly this case.
+          # 🚨 THE DURABLE FIX NOW EXISTS and runs above this line: `gate` resolves plugins HEAD
+          # once and passes it to check-image-set.sh, which requires the pair tag
+          # memex-portal-ai:<core-short>-p<plugins-short> that promote phase A stamps. So a
+          # plugins-only host merge makes the set INCOMPLETE and the RECONCILER heals it on its
+          # own — `COMPLETE` below is already pair-aware.
+          #
+          # `rebuild` stays as the operator escape hatch (it is still the only way to force a
+          # rebuild for a reason no tag encodes), but it is no longer the ONLY way this case is
+          # noticed, which is what made it a structural no-op before.
           if [ "$COMPLETE" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
             echo "bake_only=true" >> "$GITHUB_OUTPUT"
             decision false "✅ main \`$SHORT\` already has a complete image set — no image build; re-asserting the content bake (publication is idempotent)"
@@ -847,7 +902,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       # portal-ai app image — the deployment image (aspnet + node + Claude Code/Copilot CLIs),
       # layered on the base already in ACR. The base (memex-portal-ai-base) changes rarely and is
       # rebuilt by the release path / runbook §1, NOT on every main merge.
@@ -904,6 +961,14 @@ jobs:
           # which is what a bounded retry is for. Mirrors the idiom already used by
           # node-repo-{compile-check,gate,publish-bake}.yml for their registry logins.
           set -euo pipefail
+          # 🚨 The retry discriminates by FAILURE CLASS, mirroring the node-repo login idiom: the
+          # one class known to be deterministic — a COMPILER diagnostic — fails immediately, and
+          # everything else is retried (including failures this does not recognise; an
+          # unclassified publish failure is far more often transport than permanent). Measured on
+          # run 33332830755: a CS0419 in plugins-repo failed identically on all 3 attempts,
+          # 20:10 → 20:24 — fourteen minutes to fail one deterministic compile three times. A
+          # build that already produced diagnostics cannot be retried into success.
+          LOG="${RUNNER_TEMP:-/tmp}/portal-ai-publish.log"
           for attempt in 1 2 3; do
             echo "::group::portal-ai publish attempt $attempt of 3"
             if dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
@@ -914,21 +979,30 @@ jobs:
                  -p:ContainerRegistry=${{ env.ACR }} \
                  -p:ContainerRepository=memex-portal-ai \
                  -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }} \
-                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest; then
+                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest \
+                 2>&1 | tee "$LOG"; then
               echo "::endgroup::"
               echo "portal-ai published on attempt $attempt"
               exit 0
             fi
             echo "::endgroup::"
+            # Compiler diagnostics are deterministic: the same source fails the same way, so a
+            # retry only triples the cost and delays the red. (This reads the CAPTURED attempt
+            # output, not the workflow log, so it cannot match its own comments — the script-echo
+            # trap that has misled two CD triages already.)
+            if grep -qE 'error (CS|MSB)[0-9]{4}' "$LOG"; then
+              echo "::error::portal-ai publish failed with COMPILER diagnostics (see attempt $attempt above) — deterministic, not retried. Fix the build; the retry exists for the transport, not the compiler."
+              exit 1
+            fi
             if [ "$attempt" -lt 3 ]; then
               # Re-login before retrying: an ACR token can expire during a long multi-arch push,
               # and a re-auth costs seconds against a leg that takes minutes.
-              echo "attempt $attempt failed — re-authenticating and retrying in 30s"
+              echo "attempt $attempt failed without compiler diagnostics — re-authenticating and retrying in 30s"
               az acr login --name meshweaver || true
               sleep 30
             fi
           done
-          echo "::error::portal-ai publish failed on all 3 attempts — read the LAST attempt's output above. A CONTAINER1001 blob-upload failure there means the registry connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
+          echo "::error::portal-ai publish failed on all 3 attempts with no compiler diagnostics — read the LAST attempt's output above. A registry blob-upload failure there (the CONTAINER-10xx family) means the connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
           exit 1
 
   migration-image:
@@ -996,7 +1070,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       # migration — lean image on the standard (already multi-arch) aspnet base; same multi-arch publish.
       # <RuntimeIdentifiers> lives in Memex.Database.Migration.csproj (project-local, same reason as above).
       - name: Build + push migration (staging tag)
@@ -1050,7 +1126,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       # Lean console image on the standard multi-arch base; <RuntimeIdentifiers> lives in the
       # csproj (project-local — a global -p:RuntimeIdentifiers breaks referenced libs, see above).
       # `latest` (the tag the plugins repo pins as MW_TEST_IMAGE) and the GHCR mirror both moved
@@ -1125,7 +1203,18 @@ jobs:
       V_PORTAL: ${{ needs.portal-image.outputs.version }}
       V_MIGRATION: ${{ needs.migration-image.outputs.version }}
       V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
+      # 🚨 The plugins sha `gate` resolved, threaded — NOT re-resolved here. See gate's
+      # "Resolve the plugins HEAD" step: re-resolving is what turns a correct publish red (#2622).
+      PLUGINS_SHORT: ${{ needs.gate.outputs.plugins_short }}
     steps:
+      # 🚨 The retried ACR login is a SCRIPT (.github/scripts/acr-login.sh, #2857), and a script
+      # needs a working tree — this job had none, so the first publishing run after #2857 failed
+      # Promote with `bash: .github/scripts/acr-login.sh: No such file or directory` (exit 127,
+      # CD 33344774738) while all three image legs, which do check out, pushed fine. Sparse: the
+      # job needs exactly that one script, not the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -1137,7 +1226,9 @@ jobs:
       # buildx reads registry credentials from ~/.docker/config.json, which is what both of these
       # logins write — one store, both registries.
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
@@ -1156,8 +1247,21 @@ jobs:
           }
           promote memex-migration   "$V_MIGRATION" "$SHA"
           promote mw-plugin-test    "$V_PLUGIN"    "$SHA"
+          # 🚨 The portal carries a PAIR tag as well as its SHA tag (MeshWeaver#2622): the portal
+          # HOSTS live in MeshWeaver.Plugins, so core's sha alone does not say what is in this
+          # image. `<core-short>-p<plugins-short>` does, and it is what makes a plugins-only host
+          # change visible to check-image-set.sh — the set goes INCOMPLETE on the next reconcile
+          # tick and heals itself, instead of waiting for an unrelated core merge or a human
+          # remembering to pass `rebuild`.
+          #
+          # It belongs HERE, in phase A, with the other identity tags — never on the build. The
+          # build pushes only the staging tag, which is the all-or-nothing gate; putting a
+          # consumer-selectable identity on a leg that has not yet earned promotion is exactly
+          # what that design prevents.
+          #
+          # Additive: it names a tag nothing else writes, so it cannot disturb an existing one.
           # The portal's SHA tag, but NOT its version tag — see phase C.
-          promote memex-portal-ai   "$SHA"
+          promote memex-portal-ai   "$SHA" "$SHA-p$PLUGINS_SHORT"
       - name: "Phase B — moving pointers (main, latest, GHCR mirror)"
         run: |
           set -euo pipefail
@@ -1862,6 +1966,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # 🚨 The retried ACR login is a SCRIPT (.github/scripts/acr-login.sh, #2857), and a script
+      # needs a working tree — this job had none, so the first publishing run after #2857 failed
+      # Promote with `bash: .github/scripts/acr-login.sh: No such file or directory` (exit 127,
+      # CD 33344774738) while all three image legs, which do check out, pushed fine. Sparse: the
+      # job needs exactly that one script, not the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -1878,7 +1990,9 @@ jobs:
           V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
         run: |
           set -euo pipefail
-          az acr login --name meshweaver
+          # Retried login (same transport class as the step-level sites — and this one guards the
+          # BUILD FACT, which drives every consumer repo's pin update; see acr-login.sh).
+          bash .github/scripts/acr-login.sh
           # The digest of mw-plugin-test:main — the exact pin (MW_IMAGE_DIGEST) the plugin repos
           # compile against. Resolved HERE so the mesh side needs no registry credential.
           # 🚨 Resolved from THIS run's version tag, never `:main` — `main` moves the moment another run
@@ -1997,6 +2111,14 @@ jobs:
       digest: ${{ steps.digest.outputs.digest }}
       image: ${{ steps.digest.outputs.image }}
     steps:
+      # 🚨 The retried ACR login is a SCRIPT (.github/scripts/acr-login.sh, #2857), and a script
+      # needs a working tree — this job had none, so the first publishing run after #2857 failed
+      # Promote with `bash: .github/scripts/acr-login.sh: No such file or directory` (exit 127,
+      # CD 33344774738) while all three image legs, which do check out, pushed fine. Sparse: the
+      # job needs exactly that one script, not the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
       - name: Azure login (OIDC)
         uses: azure/login@v3
         with:
@@ -2004,7 +2126,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       - name: Resolve the promoted tester image's digest
         id: digest
         env:
@@ -2083,7 +2207,10 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: Every image for this commit must exist in ACR
-        run: .github/scripts/check-image-set.sh "${{ needs.gate.outputs.short_sha }}"
+        # 🚨 The SAME plugins sha `gate` resolved — read from its output, never re-resolved. A
+        # plugins merge landing during this ~20 min run must not make this assert a tag the
+        # publish could not have written (#2622).
+        run: .github/scripts/check-image-set.sh "${{ needs.gate.outputs.short_sha }}" "${{ needs.gate.outputs.plugins_short }}"
       # A heal that WORKED has to say so on the same issue that recorded the attempt, or the
       # ledger only ever grows and nobody can tell a fixed hole from an open one.
       - name: Report a successful heal

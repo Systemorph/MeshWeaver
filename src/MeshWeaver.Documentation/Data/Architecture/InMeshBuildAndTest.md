@@ -260,6 +260,50 @@ answers "everything" satisfies rule 3 trivially and rebuilds the world; one that
 is a gate that tests nothing. Both look identical on a green day. Whatever replaces it must keep
 that self-test **and run it in CI**.
 
+## The test shape: no dependencies, not even ours
+
+**Maintainer, 2026-08-30: *"we are about to remove all nuget dependencies — for tests. All repos.
+Check plugins how we do it."***
+
+Checked, and the Plugins idiom is stricter than "no xUnit" — **a test carries no dependencies at
+all**, measured across all 206 in-mesh test node sets (`using Xunit`: **0** occurrences):
+
+- **Plain C#, throws on failure.** A test case is a `public static void` method; the assertion
+  surface is a local four-line helper, per file, owned by the test:
+
+  ```csharp
+  private static void Expect(bool condition, string message)
+  {
+      if (!condition) throw new Exception("CourseCatalogTests failed: " + message);
+  }
+  ```
+
+  No xUnit, no FluentAssertions — and deliberately not even `MeshWeaver.Reactive.Assertions`. The
+  test compiles against exactly what the image's framework provides plus its own type's `Source`,
+  so there is nothing to restore, nothing to version, and nothing that can drift against the
+  framework under test.
+
+- **A `TestsArea` is the runner.** It enumerates `(name, Action)` cases and renders a pass/fail
+  table as the type's `Tests` layout area. Registered with a **literal** `.WithView("Tests", …)`
+  in the configuration lambda — literal, because the gate reads that field as *text*, and an area
+  registered only inside an extension method reports `tests=skipped` and asserts nothing.
+
+- **The gate is the executor.** It creates a probe instance and runs the area; `tests=ok 7/7` in
+  the gate log is the verdict, and the Tests-area ratchet holds the population (a type that skips
+  its area is new debt, red).
+
+This resolves the open question stated further down ("deciding what the in-mesh unit-test surface
+is" for module tests): the surface exists, it is this, and it has 206 production instances. What
+retires with the compiled test projects is therefore not just `MeshWeaver.Fixture` — it is the
+whole test-dependency graph: xUnit v3, FluentAssertions, the runner, the `.trx` machinery, and the
+restore step that feeds them.
+
+**What is deliberately given up, stated so it is a decision rather than a discovery:** parametrised
+theories, per-test isolation of the runner process, IDE test-explorer integration, and `.trx`
+artifacts. The gate log and the rendered pass/fail table are the record instead. For the fleet's
+test population — behaviour checks against a live mesh — that trade has already been paid 206
+times without a request for any of the four back.
+
 ## What retires: the compiled test scaffolding
 
 **Maintainer, 2026-08-30: *"we want to discontinue fixture project overall."***
@@ -282,7 +326,9 @@ has no callers left.
 `AutoTestLoggingAttribute`, `FreshThread`, `FaultRecordBudget`, and the `IMeshQuery` /
 `IStorageAdapter` test extensions — all of it machinery for constructing and tearing down a mesh
 around a `[Fact]`. Alongside it sit `MeshWeaver.Hosting.Monolith.TestBase` (31 of the Plugins
-references) and `MeshWeaver.Hosting.Orleans.TestBase`.
+references) and `MeshWeaver.Hosting.Orleans.TestBase` — and behind all of it, the NuGet test
+dependencies themselves (xUnit v3, FluentAssertions, the runner), which retire with it per the
+no-test-dependencies shape above.
 
 🚨 **This is the cross-repo coupling, and it dissolves rather than being ported.** Those 39 Plugins
 projects reach into a core checkout through `$(MeshWeaverRoot)` *because* their tests are compiled.

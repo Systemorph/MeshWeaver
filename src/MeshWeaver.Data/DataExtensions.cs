@@ -892,6 +892,40 @@ public static class DataExtensions
                 Error = nodeErr.Message,
                 NodeError = nodeErr,
             };
+            // 🚨 Hand the verdict to the waiting caller DIRECTLY, before considering a post.
+            //
+            // The transport below is not the seam this NACK was designed to arrive on. A verdict
+            // that lands after UpdateRemote's ~2 s bounded wait has NO pending Observe callback,
+            // so the post is only ever a way to reach LatePatchResponseRegistry the long way round
+            // — routed to the caller, into the cache hub's PatchDataResponse handler, and finally
+            // Dispatch. That handler's own comment names this NACK as the thing it exists for.
+            // Inside one mesh the registry is a singleton both hubs already share, so asking it
+            // first reaches the same waiter with no hub woken and no message routed.
+            //
+            // 🚨 This is what makes the fix affordable. The obvious repair — walk the parent chain
+            // and post through the first ancestor that can still post — is correct about the
+            // caller and was MEASURED at ~10x on teardown: MeshWeaver.Content.Test went 29 s → 176 s,
+            // a uniform ~0.9 s per test, because every hub going down with a delivery outstanding
+            // now wakes callers mid-drain. It was implemented and reverted for that reason. A
+            // dictionary lookup that misses costs nothing, so the common teardown — nobody waiting
+            // — pays nothing at all.
+            //
+            // 🚨 And it replaces an assumption with a fact. The old guard's rationale was "during a
+            // whole-mesh teardown the parent is past that mark too, the post is skipped, and NOBODY
+            // IS WAITING". Nobody-is-waiting is not something that code could verify, and it was
+            // false precisely when it mattered: the caller whose wait outlives the start of
+            // teardown is still waiting, and it is the one guaranteed to get silence instead of its
+            // NACK, then to burn the full 31 s WriteVerdictBound (#2778). Dispatch RETURNS whether
+            // a caller was armed, so the question is now answered rather than assumed.
+            var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
+            if (lateVerdicts is not null && lateVerdicts.Dispatch(request.Id, resp))
+                return;
+
+            // No caller armed in THIS mesh. Either nobody is waiting — now a checked fact, and
+            // skipping is correct — or the caller is in another process, which the registry here
+            // cannot see. The existing post remains that case's only route, with its run-level
+            // guard unchanged: removing it is the ~10x regression above, and a cross-process
+            // caller during owner teardown is not the case #2778 reproduced.
             var parent = hub.Configuration.ParentHub;
             if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
                 parent.Post(resp, o => o.ResponseFor(request));
