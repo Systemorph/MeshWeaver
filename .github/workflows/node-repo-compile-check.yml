@@ -199,8 +199,17 @@ jobs:
           id=$(docker create "$IMAGE")
           mkdir -p refs
           docker cp "$id:/app/." refs/ >/dev/null
+          # 🚨 The platform's SHARED FRAMEWORKS ride into the reference set too. A container-built
+          # module (mw-plugin-test build-project compiles against /app) references
+          # System.Private.CoreLib's identity DIRECTLY — the SDK ref pack cannot resolve it, and
+          # the first run whose floor bundles were container-built failed 11 NodeTypes with
+          # CS0012 'System.Private.CoreLib not referenced' (Plugins#1032, 2026-09-01). With these
+          # present, compile-check.py switches itself to implementation-framework mode and
+          # compiles exactly the way the mesh does.
+          mkdir -p refs/shared-frameworks
+          docker cp "$id:/usr/share/dotnet/shared/." refs/shared-frameworks/ >/dev/null
           docker rm -v "$id" >/dev/null
-          echo "framework assemblies: $(find refs -name 'MeshWeaver.*.dll' | wc -l)"
+          echo "framework assemblies: $(find refs -maxdepth 1 -name 'MeshWeaver.*.dll' | wc -l) from /app; $(find refs/shared-frameworks -name '*.dll' | wc -l) implementation-framework assemblies"
           # The identity that addresses an upstream's sealed publication — only when one is seeded.
           if [ -n "${UPSTREAM_SEED:-}" ]; then
             line=$(docker run --rm --init --entrypoint /app/mw-plugin-test "$IMAGE" --print-framework-identity)

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Reactive.Linq;
@@ -91,6 +92,14 @@ public static class ProjectBuild
 
         /// <summary>False (the default) fails the build on any warning the project did not suppress.</summary>
         public bool AllowWarnings { get; init; }
+
+        /// <summary>
+        /// Per-item narration (resource names, per-package resolutions). OFF by default — "ci
+        /// should be silent, only warn / error" plus the basic progress verdicts (maintainer,
+        /// 2026-09-01); the detail returns with <c>--verbose</c> when a name mismatch or a
+        /// resolution question actually needs it.
+        /// </summary>
+        public bool Verbose { get; init; }
 
         /// <summary>The <c>--accept</c> tokens acknowledging constructs the evaluator cannot reproduce.</summary>
         public IReadOnlyList<string> Accept { get; init; } = [];
@@ -314,7 +323,10 @@ public static class ProjectBuild
                         deps.Where(d => d.Result is not null).Select(d => d.Result!).ToArray());
                     return (result, result.IsGreen);
                 },
-                options.MaxParallel)
+                options.MaxParallel,
+                // Target-directed build: the first failure ends the run ("when build fails =>
+                // exit") — a red here dooms the job, so independents must not keep earning slots.
+                stopOnFirstFailure: true)
             .Select(results =>
             {
                 var report = new Report(
@@ -456,6 +468,21 @@ public static class ProjectBuild
         public ImmutableDictionary<string, string> PrebuiltReferences { get; init; } =
             ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// One Roslyn reference universe for the whole run — "one workspace": every project in the
+        /// graph shares the SAME <see cref="PortableExecutableReference"/> instance per path, so a
+        /// reference assembly is opened and its metadata decoded from the filesystem ONCE, and
+        /// Roslyn's metadata-keyed symbol caches carry across the graph instead of every project
+        /// re-materializing 200+ assemblies (maintainer, 2026-09-01: "create *one* roslyn
+        /// workspace with all projects at beginning … and you read from file system directly").
+        /// Run-scoped instance state, deliberately not static.
+        /// </summary>
+        public ConcurrentDictionary<string, PortableExecutableReference> SharedReferences { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        internal PortableExecutableReference Reference(string path) =>
+            SharedReferences.GetOrAdd(path, static p => MetadataReference.CreateFromFile(p));
+
         internal IReadOnlyList<string> DependenciesOf(string id) =>
             Edges.TryGetValue(id, out var deps) ? deps : [];
 
@@ -569,16 +596,17 @@ public static class ProjectBuild
                   + $"nullable {model.NullableOptions}, "
                   + $"warnings-as-errors {(model.TreatWarningsAsErrors ? "on" : "off")}");
 
-        // 🚨 Say the NAMES, not the count. A manifest resource is asked for BY NAME in some other
-        // process, months later, and a wrong name is a null stream rather than an error — so the
-        // names this build committed to belong in the log, where a reader can compare them against
-        // what the code asks for. Capped: MeshWeaver.Documentation embeds hundreds.
+        // The NAMES matter (a manifest resource is asked for BY NAME months later, and a wrong
+        // name is a null stream, not an error) — but 37 lines per project is CI spam, so the
+        // count is the default and the names come back with --verbose when a mismatch needs
+        // comparing. Capped even then: MeshWeaver.Documentation embeds hundreds.
         if (!model.EmbeddedResources.IsEmpty)
         {
-            sink.Info($"[{name}] embedded resources: {model.EmbeddedResources.Length}");
-            foreach (var resource in model.EmbeddedResources.Take(MaxListedResources))
+            sink.Info($"[{name}] embedded resources: {model.EmbeddedResources.Length}"
+                + (options.Verbose ? "" : " (names with --verbose)"));
+            foreach (var resource in (options.Verbose ? model.EmbeddedResources.Take(MaxListedResources) : []))
                 sink.Info($"[{name}]   {resource.ManifestName}  ({resource.Origin})");
-            if (model.EmbeddedResources.Length > MaxListedResources)
+            if (options.Verbose && model.EmbeddedResources.Length > MaxListedResources)
                 sink.Info($"[{name}]   … and {model.EmbeddedResources.Length - MaxListedResources} more");
         }
         // A resource the operator ACCEPTED away is still missing from the assembly, so it is a
@@ -590,6 +618,7 @@ public static class ProjectBuild
         // have is an ADDITIONAL library, and this mode cannot invent one.
         var unresolved = ImmutableArray.CreateBuilder<string>();
         var shelfResolutions = new List<ModuleLibrariesShelf.Resolution>();
+        var containerResolved = 0;
         var extraByName = extraReferences.ToDictionary(
             p => Path.GetFileNameWithoutExtension(p)!, p => p, StringComparer.OrdinalIgnoreCase);
         foreach (var package in model.PackageReferences)
@@ -597,8 +626,10 @@ public static class ProjectBuild
             var resolution = container.Resolve(package.Id);
             if (resolution.Supplied)
             {
-                sink.Info($"[{name}] package {package.Id} → the container "
-                          + $"({resolution.Version ?? package.Version ?? "version unknown"})");
+                if (options.Verbose)
+                    sink.Info($"[{name}] package {package.Id} → the container "
+                              + $"({resolution.Version ?? package.Version ?? "version unknown"})");
+                containerResolved++;
                 continue;
             }
             if (extraByName.ContainsKey(package.Id))
@@ -616,6 +647,8 @@ public static class ProjectBuild
             }
             unresolved.Add(package.Id);
         }
+        if (containerResolved > 0 && !options.Verbose)
+            sink.Info($"[{name}] {containerResolved} package(s) resolved from the container (per-package detail with --verbose)");
         if (unresolved.Count > 0)
         {
             var message =
@@ -640,21 +673,21 @@ public static class ProjectBuild
         {
             if (graph.ShadowedAssemblyNames.Contains(assemblyName)) continue;
             if (extraByName.ContainsKey(assemblyName)) continue;
-            references.Add(MetadataReference.CreateFromFile(path));
+            references.Add(graph.Reference(path));
         }
         foreach (var extra in extraReferences)
-            references.Add(MetadataReference.CreateFromFile(extra));
+            references.Add(graph.Reference(extra));
         foreach (var prebuiltDll in graph.PrebuiltReferences.Values)
-            references.Add(MetadataReference.CreateFromFile(prebuiltDll));
+            references.Add(graph.Reference(prebuiltDll));
         // Two shelf packages can share a transitive; each names the full closure, so dedupe by path.
         var shelfReferencePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var fromShelf in shelfResolutions)
             foreach (var file in fromShelf.ReferenceFiles)
                 if (shelfReferencePaths.Add(file))
-                    references.Add(MetadataReference.CreateFromFile(file));
+                    references.Add(graph.Reference(file));
         foreach (var dependency in dependencies)
             if (dependency.AssemblyPath is { Length: > 0 } dll)
-                references.Add(MetadataReference.CreateFromFile(dll));
+                references.Add(graph.Reference(dll));
 
         var parseOptions = new CSharpParseOptions(
                 model.LanguageVersion,
@@ -787,15 +820,31 @@ public static class ProjectBuild
             }
         }
 
+        // Phase timing: the CI receipt for MeshWeaver.AI read "OK … in 558956 ms" with nine silent
+        // minutes between the identity line and the verdict — a duration with no phases is a
+        // number nobody can act on. Each phase now reports itself.
+        var phase = System.Diagnostics.Stopwatch.StartNew();
         if (!generators.IsEmpty)
+        {
             compilation = GeneratorPipeline.RunSourceGenerators(
                 compilation, generators, sink.Logger, CancellationToken.None);
+            sink.Info($"[{name}] phase: source generators {phase.ElapsedMilliseconds} ms");
+        }
 
+        phase.Restart();
         var errors = 0;
         var warnings = 0;
         var missingGeneratorPartials = 0;
         var missingComponentOverrides = 0;
-        foreach (var diagnostic in compilation.GetDiagnostics())
+        // 🚨 ONE body pass, like csc. GetDiagnostics() binds and flow-analyzes every method body,
+        // and the Emit below then lowers them ALL AGAIN — measured on MeshWeaver.AI (168
+        // nullable-heavy files): 82s analysis + 79s emit locally, 559s inside the CI container,
+        // for work csc does once. So the upfront pass reads only parse + declaration diagnostics
+        // (imports, signatures, partials — including the CS8795/CS0115 generator signatures
+        // classified below); body diagnostics surface from the emit itself, whose EmitResult
+        // carries every one.
+        foreach (var diagnostic in compilation.GetParseDiagnostics()
+                     .Concat(compilation.GetDeclarationDiagnostics()))
         {
             switch (diagnostic.Severity)
             {
@@ -818,6 +867,9 @@ public static class ProjectBuild
                     break;
             }
         }
+
+        sink.Info($"[{name}] phase: declaration analysis {phase.ElapsedMilliseconds} ms");
+        phase.Restart();
 
         if (errors > 0)
         {
@@ -868,11 +920,27 @@ public static class ProjectBuild
             var artifact = EmitPipeline.EmitCompilationToDirectory(
                 compilation, model.AssemblyName, model.ProjectPath, outputDirectory,
                 ManifestResources(model), CancellationToken.None);
+            sink.Info($"[{name}] phase: emit {phase.ElapsedMilliseconds} ms");
             if (!artifact.MatchesFileOnDisk(out var reason))
             {
                 sink.Error($"[{name}] RED — the emitted assembly did not survive the write: {reason}");
                 return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                     model.CompileItems.Length, 0, warnings, null, [], reason);
+            }
+            // Body-level warnings arrive from the emit (the single body pass); under
+            // warnings-as-errors they were already escalated inside the Emit and threw. This is
+            // the same no-warn policy gate as the declaration pass above, applied to the rest.
+            foreach (var bodyWarning in artifact.Warnings)
+                sink.Warn($"[{name}] {bodyWarning}");
+            warnings += artifact.Warnings.Count;
+            if (artifact.Warnings.Count > 0 && !options.AllowWarnings)
+            {
+                sink.Error(
+                    $"[{name}] RED — {warnings} warning(s), and the no-warn policy is on. Fix them, add them "
+                    + "to the project's NoWarn, or pass --allow-warnings to build anyway.");
+                return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
+                    model.CompileItems.Length, 0, warnings, null, [],
+                    $"{warnings} warning(s) under the no-warn policy");
             }
             NameTheDocumentationFile(outputDirectory, model);
             EmitShelfRides(outputDirectory, model, shelfResolutions, sink, name);
@@ -890,6 +958,14 @@ public static class ProjectBuild
                 RazorCount = razorGenerated,
                 ResourceCount = model.EmbeddedResources.Length,
             };
+        }
+        catch (CompilationException ex)
+        {
+            // Body-level compile errors surface HERE now (the emit is the single body pass); the
+            // message already carries every formatted diagnostic.
+            sink.Error($"[{name}] RED — {ex.Message}");
+            return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
+                model.CompileItems.Length, 1, warnings, null, [], ex.Message);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

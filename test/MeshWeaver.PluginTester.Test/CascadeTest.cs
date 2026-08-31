@@ -76,6 +76,31 @@ public class CascadeTest
     }
 
     [Fact]
+    public async Task StopOnFirstFailure_AnIndependentNodeThatHasNotStartedIsBlockedByTheFirstRed()
+    {
+        // maxParallel: 1 makes the order deterministic: "AAA" (ordinal-first) runs and fails
+        // before "ZZZ" ever gets the slot. With the target-directed option, ZZZ must refuse the
+        // slot and name AAA — "when build fails => exit" (maintainer, 2026-09-01). The default
+        // (sweep) contract is pinned by OnRedWeBreak…: independents still run.
+        var ran = new ConcurrentBag<string>();
+        var results = await Cascade.Run<string>(
+            ["AAA", "ZZZ"], _ => [],
+            (id, _) =>
+            {
+                ran.Add(id);
+                return (id, id != "AAA"); // the first node fails
+            },
+            maxParallel: 1,
+            stopOnFirstFailure: true).Await(TestContext.Current.CancellationToken);
+
+        var byId = results.ToDictionary(r => r.Id, StringComparer.Ordinal);
+        Assert.Equal(Cascade.NodeOutcome.Red, byId["AAA"].Outcome);
+        Assert.Equal(Cascade.NodeOutcome.Blocked, byId["ZZZ"].Outcome);
+        Assert.Equal("AAA", byId["ZZZ"].BlockedBy); // the refusal names the first failure
+        Assert.DoesNotContain("ZZZ", ran); // its work never ran
+    }
+
+    [Fact]
     public async Task AFaultingWorkFunctionIsReportedAsFaulted_NotAsACrashOfTheWholeBuild()
     {
         var results = await Cascade.Run<string>(

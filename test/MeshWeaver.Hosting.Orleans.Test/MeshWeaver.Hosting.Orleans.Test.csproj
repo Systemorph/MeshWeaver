@@ -1,5 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <!-- Orleans logs 'Silo not running with ServerGC turned on' as a WARNING on every silo
+         start, and this suite starts one per cluster — dozens of identical warn lines per run
+         ("we get tons of this", maintainer, 2026-09-01). Server GC is what Orleans actually
+         recommends for a silo host, so turn it ON rather than filtering the message. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
     <ProjectGuid>{bd553448-e2b5-4e44-8e91-fff0884a0b28}</ProjectGuid>
   </PropertyGroup>
     <ItemGroup>
