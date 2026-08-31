@@ -1106,6 +1106,14 @@ jobs:
       V_MIGRATION: ${{ needs.migration-image.outputs.version }}
       V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
     steps:
+      # 🚨 The retried ACR login is a SCRIPT (.github/scripts/acr-login.sh, #2857), and a script
+      # needs a working tree — this job had none, so the first publishing run after #2857 failed
+      # Promote with `bash: .github/scripts/acr-login.sh: No such file or directory` (exit 127,
+      # CD 33344774738) while all three image legs, which do check out, pushed fine. Sparse: the
+      # job needs exactly that one script, not the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -1844,6 +1852,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # 🚨 The retried ACR login is a SCRIPT (.github/scripts/acr-login.sh, #2857), and a script
+      # needs a working tree — this job had none, so the first publishing run after #2857 failed
+      # Promote with `bash: .github/scripts/acr-login.sh: No such file or directory` (exit 127,
+      # CD 33344774738) while all three image legs, which do check out, pushed fine. Sparse: the
+      # job needs exactly that one script, not the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -1981,6 +1997,14 @@ jobs:
       digest: ${{ steps.digest.outputs.digest }}
       image: ${{ steps.digest.outputs.image }}
     steps:
+      # 🚨 The retried ACR login is a SCRIPT (.github/scripts/acr-login.sh, #2857), and a script
+      # needs a working tree — this job had none, so the first publishing run after #2857 failed
+      # Promote with `bash: .github/scripts/acr-login.sh: No such file or directory` (exit 127,
+      # CD 33344774738) while all three image legs, which do check out, pushed fine. Sparse: the
+      # job needs exactly that one script, not the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
       - name: Azure login (OIDC)
         uses: azure/login@v3
         with:
