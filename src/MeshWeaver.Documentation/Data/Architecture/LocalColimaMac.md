@@ -470,7 +470,7 @@ The result: every device trusts the cert out of the box (no mkcert CA install), 
 | Uploaded documents aren't searchable / `nodeType:Document` returns 0 / an agent can't find its input | Content **indexing** needs an embedding provider, which is separate from the chat model and off by default. Set `Embedding__Provider`/`Embedding__Endpoint`/`Embedding__Model` (§10.1) and **re-upload** — indexing fires on the upload event, so pre-existing files aren't retro-indexed. |
 | `memex-local` targets the **wrong cluster** — `helm` fails `kubernetes cluster unreachable: …privatelink…azmk8s.io`, or (worse) a reachable cloud cluster gets rolled | 🚨 `memex-local` uses the **ambient `kubectl` context**, not a pinned one. If your current context is an AKS cluster, `up`/`update` deploy *there*. Check with `kubectl config current-context` and switch: `kubectl config use-context colima`. It failed loudly here only because that cluster is private and unroutable — a reachable one would have been rolled silently. |
 | `https://memex.localhost:8443` refuses the connection although the pods are healthy | Same root cause as above: the launchd port-forward agent runs `kubectl port-forward` with **no context**, so an AKS current-context breaks it. Fix the context, then `memex-local port-forward`. |
-| Plugin Catalog is empty / a new instance installs nothing | The local portal is the **registry** and serves plugins from your **checkout** (§16). No checkout found ⇒ nothing to serve. Confirm the config landed: `kubectl -n memex get cm memex-portal-config -o json \| grep PluginCatalog__Sources` and that the mount exists: `kubectl -n memex exec deploy/memex-portal-deployment -- ls /plugin-repos/Plugins`. Point it explicitly with `MEMEX_PLUGIN_REPOS=/path/to/MeshWeaver.Plugins`. |
+| Plugin Catalog is empty / a new instance installs nothing | The local portal is the **registry** and serves plugins from your **checkout** (§16). No checkout found ⇒ nothing to serve. Confirm the config landed: `kubectl -n memex get cm memex-portal-config -o json \| grep PluginCatalog__Sources` and that the mount exists: `kubectl -n memex exec deploy/memex-portal-deployment -- ls /plugin-repos/Plugins`. Node repos beside `MEMEX_REPO` are discovered by content (a `<Folder>/index.json` with a root `nodeType`), so a repo that declares no package root is silently not one; point at it explicitly with `MEMEX_PLUGIN_REPOS=/path/to/repo`. |
 | `instance up` fails `409 — Instance id '<id>' is already registered` | An instance id is claimed **globally** on the registry, and dropping the instance's database does not release it. Use `memex-local instance down --id <id>` (which releases the claim and restarts the registry) before re-running, or pick a new id. |
 | A plugin install fails with `NodeType(s) not registered: <Other>/<Type>` | The package depends on another that is not installed yet. The default install orders by the manifest's `requires`; a package that depends on something **outside** the granted set cannot be ordered against and will fail. Grant the dependency too (§16). |
 | Instance pod OOMs mid-install (`OutOfMemoryException`, often surfacing inside Npgsql) and the remaining packages never install | A first boot compiles every default-installed plugin's node types back to back, and each compile **retains** its collectible ALC. `memex-local` sizes the instance pod 3cpu/6Gi for this; a smaller pod dies partway. Installing fewer packages by default (a narrower `InstallByDefault`) is the other lever. |
@@ -539,15 +539,27 @@ no such credential, so it reads them straight off disk: `helm_deploy` mounts eac
 **read-only** (`pluginCatalog.localRepoMounts` → a `hostPath`; Colima runs the node on this very
 machine) and points a source at the in-container path.
 
-Discovery is by convention — a `MeshWeaver.Plugins` checkout **beside** your `MEMEX_REPO`. Override
-or add repos with `MEMEX_PLUGIN_REPOS` (colon-separated absolute paths):
+**Discovery is automatic, and by CONTENT.** Every directory beside your `MEMEX_REPO` that declares
+a package root — a `<Folder>/index.json` whose `nodeType` is `Space`, `Store/Plugin` or
+`Store/Catalog`, the registry's own predicate — is mounted and served. Clone a node repo next to the
+platform checkout and it is picked up on the next `memex-local update`; nothing to configure.
+
+The platform checkout and its worktrees exclude *themselves*: they carry no root manifest at that
+depth, so the rule needs no list of names to skip, and none can go stale.
+
+`MEMEX_PLUGIN_REPOS` (colon-separated absolute paths) still overrides the discovered set, for
+serving *fewer* repos than you have checked out:
 
 ```bash
-# One extra repo alongside the platform one. Each folder's basename (minus a "MeshWeaver." prefix)
-# becomes the SOURCE NAME, and every new instance is granted that source.
-MEMEX_PLUGIN_REPOS=/Users/me/code/MeshWeaver.Plugins:/Users/me/code/education \
+# Each folder's basename (minus a "MeshWeaver." prefix) becomes the SOURCE NAME, and every new
+# instance is granted that source.
+MEMEX_PLUGIN_REPOS=/Users/me/code/MeshWeaver.Plugins \
   memex-local update --build
 ```
+
+🚨 It is an environment variable, so it applies to **that one invocation**. A later
+`memex-local update` typed without it serves the discovered set again — which is why discovery,
+not the variable, is the default.
 
 Verify what actually landed — the values file is not the evidence, the pod is:
 
@@ -589,7 +601,8 @@ Expected on a healthy run — the instance registers, is granted `Plugins/*` by
 
 ### Adding another plugin repo
 
-1. Clone it next to your checkout (or anywhere) and list it in `MEMEX_PLUGIN_REPOS`.
+1. Clone it **next to your checkout** — nothing else to do, it is discovered. (Somewhere else? Then
+   list every repo you want in `MEMEX_PLUGIN_REPOS`, which replaces the discovered set.)
 2. `memex-local update --build` — the chart mounts it and adds it as a source **and** grants it to
    every new instance (`defaultGrants: <name>/*`).
 3. Whether new instances **install** it as well is separate: `pluginCatalog.installByDefault`
