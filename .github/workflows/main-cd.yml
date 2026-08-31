@@ -847,7 +847,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       # portal-ai app image — the deployment image (aspnet + node + Claude Code/Copilot CLIs),
       # layered on the base already in ACR. The base (memex-portal-ai-base) changes rarely and is
       # rebuilt by the release path / runbook §1, NOT on every main merge.
@@ -904,6 +906,14 @@ jobs:
           # which is what a bounded retry is for. Mirrors the idiom already used by
           # node-repo-{compile-check,gate,publish-bake}.yml for their registry logins.
           set -euo pipefail
+          # 🚨 The retry discriminates by FAILURE CLASS, mirroring the node-repo login idiom: the
+          # one class known to be deterministic — a COMPILER diagnostic — fails immediately, and
+          # everything else is retried (including failures this does not recognise; an
+          # unclassified publish failure is far more often transport than permanent). Measured on
+          # run 33332830755: a CS0419 in plugins-repo failed identically on all 3 attempts,
+          # 20:10 → 20:24 — fourteen minutes to fail one deterministic compile three times. A
+          # build that already produced diagnostics cannot be retried into success.
+          LOG="${RUNNER_TEMP:-/tmp}/portal-ai-publish.log"
           for attempt in 1 2 3; do
             echo "::group::portal-ai publish attempt $attempt of 3"
             if dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
@@ -914,21 +924,30 @@ jobs:
                  -p:ContainerRegistry=${{ env.ACR }} \
                  -p:ContainerRepository=memex-portal-ai \
                  -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }} \
-                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest; then
+                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest \
+                 2>&1 | tee "$LOG"; then
               echo "::endgroup::"
               echo "portal-ai published on attempt $attempt"
               exit 0
             fi
             echo "::endgroup::"
+            # Compiler diagnostics are deterministic: the same source fails the same way, so a
+            # retry only triples the cost and delays the red. (This reads the CAPTURED attempt
+            # output, not the workflow log, so it cannot match its own comments — the script-echo
+            # trap that has misled two CD triages already.)
+            if grep -qE 'error (CS|MSB)[0-9]{4}' "$LOG"; then
+              echo "::error::portal-ai publish failed with COMPILER diagnostics (see attempt $attempt above) — deterministic, not retried. Fix the build; the retry exists for the transport, not the compiler."
+              exit 1
+            fi
             if [ "$attempt" -lt 3 ]; then
               # Re-login before retrying: an ACR token can expire during a long multi-arch push,
               # and a re-auth costs seconds against a leg that takes minutes.
-              echo "attempt $attempt failed — re-authenticating and retrying in 30s"
+              echo "attempt $attempt failed without compiler diagnostics — re-authenticating and retrying in 30s"
               az acr login --name meshweaver || true
               sleep 30
             fi
           done
-          echo "::error::portal-ai publish failed on all 3 attempts — read the LAST attempt's output above. A CONTAINER1001 blob-upload failure there means the registry connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
+          echo "::error::portal-ai publish failed on all 3 attempts with no compiler diagnostics — read the LAST attempt's output above. A registry blob-upload failure there (the CONTAINER-10xx family) means the connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
           exit 1
 
   migration-image:
@@ -996,7 +1015,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       # migration — lean image on the standard (already multi-arch) aspnet base; same multi-arch publish.
       # <RuntimeIdentifiers> lives in Memex.Database.Migration.csproj (project-local, same reason as above).
       - name: Build + push migration (staging tag)
@@ -1050,7 +1071,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       # Lean console image on the standard multi-arch base; <RuntimeIdentifiers> lives in the
       # csproj (project-local — a global -p:RuntimeIdentifiers breaks referenced libs, see above).
       # `latest` (the tag the plugins repo pins as MW_TEST_IMAGE) and the GHCR mirror both moved
@@ -1083,6 +1106,14 @@ jobs:
       V_MIGRATION: ${{ needs.migration-image.outputs.version }}
       V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
     steps:
+      # 🚨 The retried ACR login is a SCRIPT (.github/scripts/acr-login.sh, #2857), and a script
+      # needs a working tree — this job had none, so the first publishing run after #2857 failed
+      # Promote with `bash: .github/scripts/acr-login.sh: No such file or directory` (exit 127,
+      # CD 33344774738) while all three image legs, which do check out, pushed fine. Sparse: the
+      # job needs exactly that one script, not the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -1094,7 +1125,9 @@ jobs:
       # buildx reads registry credentials from ~/.docker/config.json, which is what both of these
       # logins write — one store, both registries.
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
@@ -1819,6 +1852,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # 🚨 The retried ACR login is a SCRIPT (.github/scripts/acr-login.sh, #2857), and a script
+      # needs a working tree — this job had none, so the first publishing run after #2857 failed
+      # Promote with `bash: .github/scripts/acr-login.sh: No such file or directory` (exit 127,
+      # CD 33344774738) while all three image legs, which do check out, pushed fine. Sparse: the
+      # job needs exactly that one script, not the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -1835,7 +1876,9 @@ jobs:
           V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
         run: |
           set -euo pipefail
-          az acr login --name meshweaver
+          # Retried login (same transport class as the step-level sites — and this one guards the
+          # BUILD FACT, which drives every consumer repo's pin update; see acr-login.sh).
+          bash .github/scripts/acr-login.sh
           # The digest of mw-plugin-test:main — the exact pin (MW_IMAGE_DIGEST) the plugin repos
           # compile against. Resolved HERE so the mesh side needs no registry credential.
           # 🚨 Resolved from THIS run's version tag, never `:main` — `main` moves the moment another run
@@ -1954,6 +1997,14 @@ jobs:
       digest: ${{ steps.digest.outputs.digest }}
       image: ${{ steps.digest.outputs.image }}
     steps:
+      # 🚨 The retried ACR login is a SCRIPT (.github/scripts/acr-login.sh, #2857), and a script
+      # needs a working tree — this job had none, so the first publishing run after #2857 failed
+      # Promote with `bash: .github/scripts/acr-login.sh: No such file or directory` (exit 127,
+      # CD 33344774738) while all three image legs, which do check out, pushed fine. Sparse: the
+      # job needs exactly that one script, not the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
       - name: Azure login (OIDC)
         uses: azure/login@v3
         with:
@@ -1961,7 +2012,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        run: az acr login --name meshweaver
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
       - name: Resolve the promoted tester image's digest
         id: digest
         env:

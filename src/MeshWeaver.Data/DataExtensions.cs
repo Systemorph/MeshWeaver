@@ -1285,6 +1285,32 @@ public static class DataExtensions
                         return;
                     }
 
+                    // 🚨 A PARTIAL refusal is still a refusal (#2463). The check above only fires
+                    // when NOTHING landed; a patch where some fields applied and others were
+                    // refused fell through here and acked SUCCESS, so the caller believed its whole
+                    // write had landed and never re-applied the refused half. That is the #648
+                    // acked-write-loss in its partial form, and it is the harder one to see: the
+                    // node really did change, so every "did it commit?" check says yes.
+                    //
+                    // It has a name in the wild. RolePlay/Scenery compiled fine, the mesh phase
+                    // patched four compile-outcome fields, MergeGuard refused all four as
+                    // stale/reordered, another field in the same patch landed — so this path acked
+                    // Success, `IsDirty` never converged, and the gate read a status that was never
+                    // written and called it a compile failure. A false RED on the required check.
+                    //
+                    // AckOnce LATCHES, so nacking here and letting the commit proceed is
+                    // deliberate: the fields that were NOT in conflict are valid and keeping them
+                    // is right, while the caller re-reads and re-applies. The re-run re-diffs
+                    // against fresh state, so what already landed is a no-op and only the refused
+                    // fields are retried. Conflict is one of the provably-safe retried codes and
+                    // its budget is bounded, so this cannot spin.
+                    if (refusedKeys > 0)
+                        AckOnce(false, new MeshNodeError(
+                            MeshNodeErrorCode.Conflict, hubPath,
+                            $"cross-hub write PARTIALLY refused: {refusedKeys} field(s) changed on "
+                            + "the owner since the writer's base. What did not conflict was kept — "
+                            + "re-read and re-apply so the refused field(s) converge."));
+
                     // 🚨 The OWNER mints the new Version on apply.
                     // Per the owned-stream contract — SynchronizationStream
                     // ("ONLY the owning hub sets Version", line ~255) and
@@ -1635,6 +1661,33 @@ public static class DataExtensions
                             AckOnce(true);
                         return null;
                     }
+
+                    // 🚨 A PARTIAL refusal is still a refusal (#2463). The check above only fires
+                    // when NOTHING landed; a patch where some fields applied and others were
+                    // refused fell through here and acked SUCCESS, so the caller believed its whole
+                    // write had landed and never re-applied the refused half. That is the #648
+                    // acked-write-loss in its partial form, and it is the harder one to see: the
+                    // node really did change, so every "did it commit?" check says yes.
+                    //
+                    // It has a name in the wild. RolePlay/Scenery compiled fine, the mesh phase
+                    // patched four compile-outcome fields, MergeGuard refused all four as
+                    // stale/reordered, another field in the same patch landed — so this path acked
+                    // Success, `IsDirty` never converged, and the gate read a status that was never
+                    // written and called it a compile failure. A false RED on the required check.
+                    //
+                    // AckOnce LATCHES, so nacking here and letting the commit proceed is
+                    // deliberate: the fields that were NOT in conflict are valid and keeping them
+                    // is right, while the caller re-reads and re-applies. The re-run re-diffs
+                    // against fresh state, so what already landed is a no-op and only the refused
+                    // fields are retried. Conflict is one of the provably-safe retried codes and
+                    // its budget is bounded, so this cannot spin.
+                    if (refusedKeys > 0)
+                        AckOnce(false, new MeshNodeError(
+                            MeshNodeErrorCode.Conflict, hubPath,
+                            $"cross-hub write PARTIALLY refused: {refusedKeys} field(s) changed on "
+                            + "the owner since the writer's base. What did not conflict was kept — "
+                            + "re-read and re-apply so the refused field(s) converge."));
+
                     // The OWNER bumps the Version on apply (same rule as the deferred path).
                     // 🚨 Count from the PRE-MERGE node: the patch is client-supplied, and a
                     // `version` field in it has already been merged into currentNode — counting

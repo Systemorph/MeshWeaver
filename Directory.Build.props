@@ -97,7 +97,7 @@
          it publishes are the ones the platform still builds. Do not "fill in" rc4 later: the
          version never shipped, and minting a tag for it now would publish that superseded
          content set for real. -->
-    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc8</PlatformVersion>
+    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc9</PlatformVersion>
   </PropertyGroup>
   <!-- Multi-arch container publish race fix (main-cd / release-images / edge-images pass
        -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"). The SDK's _PublishMultiArchContainers

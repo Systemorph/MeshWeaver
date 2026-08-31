@@ -189,6 +189,71 @@ public class RoutingQuiescenceTest
     }
 
     /// <summary>
+    /// 🚨 The residual must name WHICH leg, not just how many (#2833).
+    ///
+    /// <para>#2833 reports one leg outliving the budget and is explicit about why it went nowhere:
+    /// <i>"the message names no target, sender, or delivery id and carries no exception or stack"</i>
+    /// — leaving "high confidence on the class of defect, low on the specific leg". This
+    /// participant runs ONLY at silo stop, so an occurrence cannot be reproduced on demand:
+    /// whatever the line does not say is lost until the next shutdown.</para>
+    ///
+    /// <para>Fail-without: the count only. Pass-with: the label the leg was tracked under.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task SiloStop_BudgetExpiry_NamesTheStuckLeg_NotJustHowMany()
+    {
+        using var quiescence = new RoutingQuiescence();
+        var logger = new CapturingLogger();
+        var participant = new RoutingQuiescenceSiloParticipant(quiescence, logger, TimeSpan.FromMilliseconds(200));
+
+        using var stuck = quiescence.Track("dispatch → acme/Stuck (delivery abc123)");
+        (await WaitForCount(quiescence, 1)).Should().Be(1);
+
+        await ((ILifecycleObserver)participant).OnStop(TestContext.Current.CancellationToken).WaitAsync(Bound);
+
+        logger.Entries.Should().Contain(
+            e => e.Level == LogLevel.Error
+                 && e.Message.Contains("acme/Stuck", StringComparison.Ordinal)
+                 && e.Message.Contains("abc123", StringComparison.Ordinal),
+            "a count cannot be chased — the residual must carry the leg's target and delivery id, "
+            + "because this line is the only record that will ever exist of that shutdown");
+    }
+
+    /// <summary>
+    /// The sample is CAPPED, so a saturated silo cannot turn its own shutdown log into a flood —
+    /// and the cap must say what it elided rather than silently truncating, or the reader cannot
+    /// tell a complete list from a clipped one.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task SiloStop_ManyStuckLegs_SamplesThemAndSaysHowManyItElided()
+    {
+        using var quiescence = new RoutingQuiescence();
+        var logger = new CapturingLogger();
+        var participant = new RoutingQuiescenceSiloParticipant(quiescence, logger, TimeSpan.FromMilliseconds(200));
+
+        var legs = new List<IDisposable>();
+        for (var i = 0; i < 25; i++)
+            legs.Add(quiescence.Track($"dispatch → acme/Leg{i}"));
+        (await WaitForCount(quiescence, 25)).Should().Be(25);
+
+        try
+        {
+            await ((ILifecycleObserver)participant).OnStop(TestContext.Current.CancellationToken).WaitAsync(Bound);
+
+            logger.Entries.Should().Contain(
+                e => e.Level == LogLevel.Error
+                     && e.Message.Contains("25 route leg(s) did not land", StringComparison.Ordinal)
+                     && e.Message.Contains("+15 more", StringComparison.Ordinal),
+                "25 legs must report 10 by name and admit the other 15 — a truncation the reader "
+                + "cannot see is worse than no sample at all");
+        }
+        finally
+        {
+            foreach (var leg in legs) leg.Dispose();
+        }
+    }
+
+    /// <summary>
     /// A NON-graceful stop (the token already cancelled — <c>Silo.Dispose()</c>'s path, on which
     /// Orleans' own Active-stage stop returns immediately) holds nothing and says what it is
     /// abandoning.
