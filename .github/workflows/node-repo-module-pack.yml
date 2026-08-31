@@ -77,7 +77,8 @@ name: node-repo module pack
 #
 # A module does not run against a source tree and it does not run against a feed: it is loaded into
 # the platform IMAGE and bound by the assemblies in there. So the honest compiler is that image's
-# own — `memex build project`, whose work is `mw-plugin-test build-project` INSIDE the pinned image
+# own — `memex build project`, whose work is `mw-plugin-test build-project` from the pinned TESTER
+# image, compiling against the pinned PLATFORM image's /app
 # (MeshWeaver#2850). This lane runs the container form directly, because CI has already pulled and
 # digest-pinned the image; going through the `memex` CLI would add an SDK build in order to remove
 # one.
@@ -104,7 +105,11 @@ name: node-repo module pack
 # What the container path needs from the caller:
 #   * `platform-image` + `platform-image-digest` — the image IS the reference set, so an entry that
 #     asks for `container` without them fails RED rather than building against anything else.
-#   * the `acr-username`/`acr-password` secrets, to pull it.
+#   * `tester-image` + `tester-image-digest` — the image that CARRIES the builder (and, beside it,
+#     the generators the SDK would have supplied). The platform image ships no /app/mw-plugin-test
+#     and the tester image's /app is not the full reference surface, so the build runs the tester
+#     image against the platform image's extracted /app; both pins move together, from one CD wave.
+#   * the `acr-username`/`acr-password` secrets, to pull them.
 #   * `accept` for every construct the evaluator refuses. MeshWeaver.Plugins' own
 #     `src/Directory.Build.props` carries a `<Target>` (the AssemblyVersion contract check), so its
 #     entries need at least `"accept": "targets"`.
@@ -198,6 +203,26 @@ on:
           manifest-list digest (immutable, never re-tagged), pulled as linux/amd64 below. Record the
           x64 framework identity beside the pin in the caller (mw-plugin-test --print-framework-identity
           on the linux-x64 member) so a mismatch is diagnosable by eye. Empty = build from source.
+        type: string
+        required: false
+        default: ''
+      tester-image:
+        description: >
+          The image that CARRIES the builder (meshweaver.azurecr.io/mw-plugin-test) for entries
+          declaring "build":"container". 🚨 Two images, two roles, deliberately split: the PORTAL
+          image has no /app/mw-plugin-test (measured on memex-portal-ai@7e8c0b20, 331 files, none of
+          them the tester), and the TESTER image's /app lacks the Blazor/Hosting.AspNetCore half of
+          the reference surface (the platform-image doc above) — so the container build runs THIS
+          image's builder against THAT image's extracted /app. The two are published by the same CD
+          run and tagged in step by construction; pin them from the same wave. Empty (the default)
+          leaves container entries failing RED by name.
+        type: string
+        required: false
+        default: ''
+      tester-image-digest:
+        description: >
+          The digest (sha256:…) of tester-image, pulled as linux/amd64. Same immutability rule as
+          platform-image-digest; move the two pins together, from one CD wave.
         type: string
         required: false
         default: ''
@@ -516,6 +541,8 @@ jobs:
           VERSION: ${{ steps.identity.outputs.version }}
           IMAGE: ${{ inputs.platform-image }}
           DIGEST: ${{ inputs.platform-image-digest }}
+          TESTER_IMAGE: ${{ inputs.tester-image }}
+          TESTER_DIGEST: ${{ inputs.tester-image-digest }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
           REFS: ${{ inputs.platform-image-digest != '' && format('{0}/platform-refs', runner.temp) || '' }}
@@ -556,33 +583,50 @@ jobs:
               printf '%s\n' --deps-closure >> "$packargs"
               ;;
             container)
-              compiler="memex build project (in the platform image)"
-              # The container IS the reference set, so a run that cannot name one has nothing to
-              # build against — and there is deliberately no local-SDK fallback to slide into.
-              if [ -z "$IMAGE" ] || [ -z "$DIGEST" ]; then
-                echo "::error::matrix entry '$MODULE' declares build=container, but platform-image / platform-image-digest are not both set. The image IS the reference set for that path; there is nothing to compile against and deliberately no local-SDK fallback."
+              compiler="memex build project (the tester image's builder, against the platform image's /app)"
+              # 🚨 TWO images, TWO roles — neither can play the other's (measured, 2026-08-31):
+              # the PLATFORM image is the reference set (its /app IS what the bundle loads into)
+              # but ships no /app/mw-plugin-test (memex-portal-ai@7e8c0b20: 331 files, none the
+              # tester); the TESTER image carries the builder — and, beside it, the generators the
+              # SDK would have supplied (razor-generators/, sdk-generators/) — but its own /app
+              # lacks the Blazor/Hosting.AspNetCore half of the surface (the platform-image input's
+              # doc above). So the build runs the TESTER image with the PLATFORM /app extracted and
+              # mounted read-only as --app. A run that cannot name BOTH pins has nothing sound to
+              # build with — and there is deliberately no local-SDK fallback to slide into.
+              if [ -z "$IMAGE" ] || [ -z "$DIGEST" ] || [ -z "$TESTER_IMAGE" ] || [ -z "$TESTER_DIGEST" ]; then
+                echo "::error::matrix entry '$MODULE' declares build=container, but platform-image / platform-image-digest / tester-image / tester-image-digest are not all set. The platform image is the reference set and the tester image carries the builder; with either pin missing there is nothing to compile with, and deliberately no local-SDK fallback."
                 exit 1
               fi
               if [ -z "${ACR_USERNAME:-}" ] || [ -z "${ACR_PASSWORD:-}" ]; then
-                echo "::error::build=container needs the acr-username/acr-password secrets to pull $IMAGE — without them the builder image cannot be fetched, and a build that cannot start must not look like one that skipped."
+                echo "::error::build=container needs the acr-username/acr-password secrets to pull $IMAGE and $TESTER_IMAGE — without them the images cannot be fetched, and a build that cannot start must not look like one that skipped."
                 exit 1
               fi
               # Strip a TAG only — a colon after the last slash. `${IMAGE%%:*}` would also eat a
               # registry port and `${IMAGE%:*}` would eat the path when there is no tag.
               case "${IMAGE##*/}" in *:*) IMAGE_NOTAG="${IMAGE%:*}" ;; *) IMAGE_NOTAG="$IMAGE" ;; esac
               pinned="${IMAGE_NOTAG}@${DIGEST}"
+              case "${TESTER_IMAGE##*/}" in *:*) TESTER_NOTAG="${TESTER_IMAGE%:*}" ;; *) TESTER_NOTAG="$TESTER_IMAGE" ;; esac
+              tester_pinned="${TESTER_NOTAG}@${TESTER_DIGEST}"
               echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
               # 🚨 --platform linux/amd64 ALWAYS, for the same reason the refs extraction pins it:
               # framework identities are per-architecture and the bundles are sealed under the x64
               # identity the portals run. Pulled here rather than relying on the refs step above,
               # which does not run on a platform-refs cache HIT.
               docker pull --platform linux/amd64 "$pinned"
+              docker pull --platform linux/amd64 "$tester_pinned"
+              # The reference set: the platform image's /app, extracted ONCE and mounted read-only.
+              # docker create + cp rather than a run — the portal's entrypoint must never start here.
+              platform_app="$RUNNER_TEMP/platform-app"
+              rm -rf "$platform_app"
+              pcid=$(docker create --platform linux/amd64 "$pinned")
+              docker cp -q "$pcid:/app" "$platform_app"
+              docker rm "$pcid" >/dev/null
               out="$RUNNER_TEMP/module-build"
               rm -rf "$out"; mkdir -p "$out"; chmod 777 "$out"
               accepts=()
               for construct in $ACCEPT; do accepts+=(--accept "$construct"); done
-              echo "compiler: CONTAINER — memex build project ⇒ mw-plugin-test build-project inside $pinned"
-              echo "compiler: no .NET SDK, no NuGet restore, no platform source checkout; every reference comes from that image's /app"
+              echo "compiler: CONTAINER — memex build project ⇒ mw-plugin-test build-project from $tester_pinned"
+              echo "compiler: no .NET SDK, no NuGet restore, no platform source checkout; every reference comes from $pinned's /app"
               [ ${#accepts[@]} -eq 0 ] || echo "compiler: acknowledged constructs — $ACCEPT"
               log="$RUNNER_TEMP/build-project-$MODULE.log"
               # 🚨 NO --extra-refs, ever, on this lane. An additional library is one the image does
@@ -592,9 +636,10 @@ jobs:
               # that module stays on the SDK path until the image carries what it needs.
               docker run --rm --init --platform linux/amd64 \
                 -v "$GITHUB_WORKSPACE:/repo:ro" \
+                -v "$platform_app:/platform-app:ro" \
                 -v "$out:/out" \
-                --entrypoint /app/mw-plugin-test "$pinned" \
-                build-project "/repo/$PROJECT" --output /out ${accepts[@]+"${accepts[@]}"} 2>&1 | tee "$log"
+                --entrypoint /app/mw-plugin-test "$tester_pinned" \
+                build-project "/repo/$PROJECT" --app /platform-app --output /out ${accepts[@]+"${accepts[@]}"} 2>&1 | tee "$log"
               # build-project emits <output>/<AssemblyName>/, so the module folder IS the pack input.
               packdir="$out/$MODULE"
               if [ ! -f "$packdir/$MODULE.dll" ]; then
