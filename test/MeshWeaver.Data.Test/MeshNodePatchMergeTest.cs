@@ -226,4 +226,77 @@ public class MeshNodePatchMergeTest
         Assert.Single(pending);
         Assert.Equal("m2", pending[0]!["id"]!.GetValue<string>());
     }
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // A LEAF THE WRITER AND THE OWNER ALREADY AGREE ON IS NOT A CONFLICT
+    //
+    // `live != base` says the owner moved since the writer read it. It does NOT say the two
+    // DISAGREE — and when the patch value already equals the live value, applying it is a no-op,
+    // so refusing it invents a conflict. That invention is not free: a refusal NACKs Conflict
+    // (partial refusals included, #2463/#2840), Conflict's remedy is to re-run the caller's update
+    // lambda, and a RELATIVE mutation re-run against a node that has moved on applies twice.
+    // Measured on MeshWeaver.Plugins#1009 — a chat resubmit refused three times on three fields it
+    // had set to exactly the owner's own values, then re-run three times, losing message cells.
+    // ═════════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void NoOpLeaf_PatchAlreadyEqualsLive_NotRefused()
+    {
+        // The writer computed "Status: Idle" off a stale base that still said Executing.
+        // The owner is ALREADY Idle. Nothing to resolve; nothing to refuse.
+        var live = Obj(("Status", "Idle"));
+        var @base = Obj(("Status", "Executing"));
+        var patch = Obj(("Status", "Idle"));
+
+        var refused = Merge(live, patch, @base);
+
+        Assert.Empty(refused);
+        Assert.Equal("Idle", live["Status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void NoOpLeaf_RemovalOfAnAlreadyRemovedKey_NotRefused()
+    {
+        // The commonest shape of all, and the exact #1009 trigger: an RFC 7396 REMOVAL
+        // (patch value null) of a key the owner has already removed. ActiveMessageId /
+        // ExecutionStartedAt were cleared by the round that finished; the resubmit patch
+        // clears them too.
+        var live = Obj(("Name", "n"));                                  // ActiveMessageId absent
+        var @base = Obj(("ActiveMessageId", "cell-1"), ("Name", "n"));
+        var patch = Obj(("ActiveMessageId", null));
+
+        var refused = Merge(live, patch, @base);
+
+        Assert.Empty(refused);
+        Assert.False(live.ContainsKey("ActiveMessageId"));
+    }
+
+    [Fact]
+    public void NoOpLeaf_IdenticalString_NotRefused()
+    {
+        // Checked BEFORE the string rebase: an identical string needs no splice, and the
+        // overlapping-delta arm would otherwise refuse it.
+        var live = Obj(("Text", "the same text"));
+        var @base = Obj(("Text", "something entirely different"));
+        var patch = Obj(("Text", "the same text"));
+
+        var refused = Merge(live, patch, @base);
+
+        Assert.Empty(refused);
+        Assert.Equal("the same text", live["Text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void NoOpLeaf_DoesNotMaskAGenuineScalarConflict()
+    {
+        // The guard is exact: the moment the values differ, the flap guard is back in force.
+        var live = Obj(("Status", "Ok"));
+        var @base = Obj(("Status", "Compiling"));
+        var patch = Obj(("Status", "Error"));
+
+        var refused = Merge(live, patch, @base);
+
+        Assert.Contains("Status", refused);
+        Assert.Equal("Ok", live["Status"]!.GetValue<string>());
+    }
 }
