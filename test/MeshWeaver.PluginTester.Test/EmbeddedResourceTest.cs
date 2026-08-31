@@ -381,6 +381,26 @@ public class EmbeddedResourceTest : IDisposable
             ]));
     }
 
+    /// <summary>
+    /// 🚨 An EXPLICIT <c>Culture</c> metadata beats <c>WithCulture="false"</c> — the opposite of what
+    /// the two names suggest, and measured both ways: <c>Include="A.md" Culture="fr"
+    /// WithCulture="false"</c> still emitted a <c>fr/</c> satellite and left the main assembly
+    /// without the resource, while <c>Include="C.de.md" WithCulture="false"</c> kept it. Checking
+    /// them in the other order would embed, under a name the SDK never produces, a resource the SDK
+    /// does not put in this assembly at all.
+    /// </summary>
+    [Fact]
+    public void AnExplicitCultureBeatsWithCultureFalse()
+    {
+        var project = ProjectWith("""
+                <EmbeddedResource Include="A.md" Culture="fr" WithCulture="false" />
+            """);
+        Write("Lib/A.md", "a");
+
+        Assert.Throws<ProjectFile.UnsupportedConstructException>(() => ProjectFile.Load(project))
+            .Message.Should().Contain("Culture='fr'").And.Contain("does NOT override");
+    }
+
     /// <summary>A culture-SHAPED name that is not a culture is embedded normally.</summary>
     [Fact]
     public async Task ASecondExtensionThatIsNotACultureIsNotTreatedAsOne()
@@ -554,6 +574,45 @@ public class EmbeddedResourceTest : IDisposable
         var accepted = ProjectFile.Load(project, [ProjectFile.Accept.BuildOutputResource]);
         accepted.EmbeddedResources.Should().BeEmpty();
         accepted.SkippedResources.Should().ContainSingle().Which.Should().Contain("Own.xml");
+    }
+
+    /// <summary>
+    /// 🚨 A glob reaching OUTSIDE the project expands to nothing here — and an empty glob is legal,
+    /// so without a refusal the resources would simply be absent with no line of output saying so.
+    /// The real SDK expands <c>..\lb\**\*.md</c> and embeds what it finds (measured). A LITERAL
+    /// outside include still works, because that path is resolvable.
+    /// </summary>
+    [Fact]
+    public void AnOutsideGlobIsRefusedRatherThanSilentlyMatchingNothing()
+    {
+        var project = ProjectWith("""    <EmbeddedResource Include="..\shared\**\*.md" />""");
+        Write("shared/A.md", "a");
+        Write("shared/nested/B.md", "b");
+
+        Assert.Throws<ProjectFile.UnsupportedConstructException>(() => ProjectFile.Load(project))
+            .Message.Should().Contain("match NOTHING").And.Contain(ProjectFile.Accept.OutsideGlobResource);
+
+        var accepted = ProjectFile.Load(project, [ProjectFile.Accept.OutsideGlobResource]);
+        accepted.EmbeddedResources.Should().BeEmpty();
+        accepted.SkippedResources.Should().ContainSingle();
+    }
+
+    /// <summary>
+    /// <c>LinkBase</c> changes the name only for a file OUTSIDE the project — measured both ways —
+    /// so the outside case is refused and the inside case is ignored, exactly as the SDK ignores it.
+    /// </summary>
+    [Fact]
+    public void LinkBaseIsRefusedOutsideTheProjectAndIgnoredInsideIt()
+    {
+        var outside = ProjectWith("""    <EmbeddedResource Include="..\shared\Out.md" LinkBase="Based" />""", "Outside");
+        Write("shared/Out.md", "o");
+        Assert.Throws<ProjectFile.UnsupportedConstructException>(() => ProjectFile.Load(outside))
+            .Message.Should().Contain("LinkBase='Based'").And.Contain(ProjectFile.Accept.LinkBaseResource);
+
+        var inside = ProjectWith("""    <EmbeddedResource Include="in\deep\In.md" LinkBase="AlsoBased" />""", "Inside");
+        Write("Inside/in/deep/In.md", "i");
+        ProjectFile.Load(inside).EmbeddedResources.Should().ContainSingle()
+            .Which.ManifestName.Should().Be("Probe.Root.Ns.in.deep.In.md");
     }
 
     // ── the parity test ────────────────────────────────────────────────────────────────────────
