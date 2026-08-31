@@ -690,7 +690,7 @@ jobs:
               if [ -f "$packdir/module-libs.txt" ]; then
                 while IFS= read -r ride; do
                   [ -n "$ride" ] || continue
-                  printf '%s\n%s\n' --with "$ride" >> "$packargs\"
+                  printf '%s\n%s\n' --with "$ride" >> "$packargs"
                   echo "closure: $ride RIDES — module-libraries shelf (deps.json-derived; the image does not carry it)"
                 done < "$packdir/module-libs.txt"
               fi
