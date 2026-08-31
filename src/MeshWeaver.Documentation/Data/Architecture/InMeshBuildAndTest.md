@@ -611,7 +611,8 @@ remembered number.
 | | baseline | with the staged generators |
 |---|---|---|
 | **green** | **10** | **19** |
-| CS8795 (a generator that did not run) | 18 | **0** |
+| green, `--accept razor-css-scope` as well | 20 | **32** |
+| CS8795 (a generator that did not run) | 18 | **0** — in either flag set, in no log |
 | regressions | — | **0** |
 
 The nine that flipped: `MeshWeaver.Markdown.Collaboration` (7 × `[GeneratedRegex]` — and the
@@ -624,8 +625,14 @@ warnings-as-errors), `MeshWeaver.AI.Anthropic`, `MeshWeaver.AI.AppleIntelligence
 reveals whatever sat behind them: five AI providers moved from CS8795 to *"the container does not
 supply `Azure.*` / `ClaudeAgentSdk` / `GitHub.*`"* — the older `--extra-refs` category, not a new
 problem. What can be said cleanly is that **CS8795 no longer appears in the sweep at all**. The
-remaining 36 are 13 that only want `--accept razor-css-scope` (the same harness with it takes the
-baseline to 20), 11 additional libraries, 6 constructs refused by name, and 2 genuine compile errors.
+remaining 36 are 13 that only want `--accept razor-css-scope` — the second row above, where the same
+change takes 20 to 32 — plus 14 additional libraries (`--extra-refs`: ClosedXML, CsvHelper,
+Snowflake.Data, Microsoft.Data.Sqlite, Azure.*, ClaudeAgentSdk, GitHub.*, Microsoft.Graph, Radzen),
+7 constructs refused by name (`<Sdk>` element, `<Protobuf>`, an `<Import>` above the mount, a
+`ProjectReference` outside the source root) and 2 genuine compile errors — `Memex.Database.Migration`
+(CS0436: its own `DbVersion` against the copy baked into `Memex.Portal.Distributed` in the image) and
+`MeshWeaver.LogWatcher` (one CS1061 on `IConfigurationSection.Get<T>`, down from 11 errors of which
+10 were CS8795).
 
 ### The sweep got SLOWER, and that is the result working
 
