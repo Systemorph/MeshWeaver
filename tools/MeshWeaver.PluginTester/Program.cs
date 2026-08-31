@@ -174,6 +174,7 @@ static async Task<int> RunBuildProject(string[] args)
     var app = ContainerReferenceSet.DefaultAppDirectory;
     var extraRefs = new List<string>();
     var generatorPaths = new List<string>();
+    string? razorGenerators = null;
     var accept = new List<string>();
     var allowWarnings = false;
     var maxParallel = Math.Max(1, Environment.ProcessorCount);
@@ -192,6 +193,11 @@ static async Task<int> RunBuildProject(string[] args)
                 break;
             case "--generators" when i + 1 < args.Length:
                 generatorPaths.Add(args[++i]);
+                break;
+            // The RAZOR generator is found automatically beside the builder (the image ships it in
+            // razor-generators/); this names a different copy — a newer SDK's, or a mount.
+            case "--razor-generators" when i + 1 < args.Length:
+                razorGenerators = args[++i];
                 break;
             case "--accept" when i + 1 < args.Length:
                 accept.Add(args[++i]);
@@ -243,6 +249,7 @@ static async Task<int> RunBuildProject(string[] args)
         AppDirectory = app,
         ExtraReferenceDirectories = extraRefs,
         GeneratorPaths = generatorPaths,
+        RazorGeneratorDirectory = razorGenerators,
         Accept = accept,
         AllowWarnings = allowWarnings,
         MaxParallel = maxParallel,
@@ -252,13 +259,17 @@ static async Task<int> RunBuildProject(string[] args)
 
 static string BuildProjectUsage() =>
     "usage: mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] "
-    + "[--extra-refs <dir>]... [--accept <construct>]... [--allow-warnings] [--max-parallel <n>]\n"
+    + "[--extra-refs <dir>]... [--generators <dir|dll>]... [--razor-generators <dir>] "
+    + "[--accept <construct>]... [--allow-warnings] [--max-parallel <n>]\n"
     + "  Compiles a .NET project with NO dotnet SDK and NO NuGet restore: the .csproj is evaluated "
     + "without MSBuild, every reference is resolved from this container's /app (and its .deps.json), "
     + "ProjectReferences inside the source root are built first in dependency order, and Roslyn runs "
     + "with the SDK's diagnostic standard (nullable analysis, DocumentationMode.Diagnose). Warnings "
     + "fail the build unless --allow-warnings. A construct the evaluator cannot reproduce fails the "
-    + "run by name; --accept <construct> acknowledges one.";
+    + "run by name; --accept <construct> acknowledges one. .razor/.cshtml are compiled by the Razor "
+    + "source generator the image ships in razor-generators/ beside this builder; --razor-generators "
+    + "<dir> names another copy, and a project with Razor files and no generator FAILS rather than "
+    + "quietly emitting an assembly with no components in it.";
 
 static string BuildUsage() =>
     "usage: mw-plugin-test build <repo-root> [<package>... | all] [--module <dll>]... [--out <dir>] "
