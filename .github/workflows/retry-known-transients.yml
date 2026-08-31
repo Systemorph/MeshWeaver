@@ -52,7 +52,12 @@ jobs:
             exit 0
           fi
           for job in "${failed[@]}"; do
-            log="$(gh api "repos/$REPO/actions/jobs/$job/logs" 2>/dev/null || true)"
+            # An unreadable log cannot PROVE a transient — so it disables the retry, loudly,
+            # instead of becoming an empty answer that matches nothing by accident.
+            if ! log="$(gh api "repos/$REPO/actions/jobs/$job/logs" 2>&1)"; then
+              echo "job $job: log unreadable ($(printf '%s' "$log" | head -1)) — cannot prove a transient, no retry."
+              exit 0
+            fi
             if printf '%s' "$log" | grep -qE "$signatures"; then
               echo "job $job: matches a named transient signature."
             else
