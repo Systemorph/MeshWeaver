@@ -125,6 +125,15 @@ public static class Cascade
             var clock = Stopwatch.StartNew();
             var pool = scheduler ?? TaskPoolScheduler.Default;
 
+            // 🚨 FAIL-FAST across the whole graph ("when build fails => exit", maintainer,
+            // 2026-09-01): dependents were always Blocked on a red dependency, but INDEPENDENT
+            // nodes kept earning slots after the run's verdict was already RED — on CI that is
+            // minutes of work whose only possible outcome is a redder red. The first failure
+            // stamps itself here; a work item that reaches the gate afterwards refuses its slot
+            // and reports Blocked by that first failure. Nodes already RUNNING finish (their
+            // verdicts are real); nothing new starts.
+            var firstFailure = new string[1];
+
             // The concurrency gate. Every node hands its work here when it becomes ready;
             // Merge(maxParallel) subscribes at most that many at a time and takes the next as one
             // completes. The gate is subscribed BEFORE any node, so nothing is handed to a queue
@@ -167,15 +176,22 @@ public static class Cascade
                         var work = Observable.Defer(() => Observable.Start(() =>
                             {
                                 var started = clock.Elapsed;
+                                if (Volatile.Read(ref firstFailure[0]) is { } failedFirst)
+                                    return new NodeResult<T>(
+                                        id, NodeOutcome.Blocked, default, failedFirst, null,
+                                        ready, started, clock.Elapsed);
                                 try
                                 {
                                     var (payload, green) = run(id, ordered);
+                                    if (!green)
+                                        Interlocked.CompareExchange(ref firstFailure[0], id, null);
                                     return new NodeResult<T>(
                                         id, green ? NodeOutcome.Green : NodeOutcome.Red, payload, null, null,
                                         ready, started, clock.Elapsed);
                                 }
                                 catch (Exception ex)
                                 {
+                                    Interlocked.CompareExchange(ref firstFailure[0], id, null);
                                     return new NodeResult<T>(
                                         id, NodeOutcome.Faulted, default, null,
                                         $"{ex.GetType().Name}: {ex.Message}", ready, started, clock.Elapsed);
