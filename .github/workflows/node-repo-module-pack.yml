@@ -452,9 +452,131 @@ jobs:
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
             --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" > "$RUNNER_TEMP/scope.json"
 
+  # ─────────────────── THE SHARED BUILD ENVIRONMENT, WARMED ONCE ───────────────────
+  # "see we update *once at beginning for everyone* and not by module" (maintainer, 2026-08-31).
+  # Everything every pack job consumes identically is produced HERE, once per run, never once per
+  # module:
+  #   * the PLATFORM IMAGE, as a per-digest zstd tarball in the actions cache (GitHub's own
+  #     blob storage, colocated with the runners) — the matrix `docker load`s it instead of each
+  #     job pulling the same bytes from ACR (~52s/job measured on Plugins#1032; on a fresh digest
+  #     EVERY job used to pull at once — the stampede that helped beat the registry into
+  #     `connection refused` on 2026-08-31);
+  #   * the platform /app extraction and the TESTER APP extraction (the same per-digest caches the
+  #     matrix already reads) — warmed here so a fresh digest costs ONE trip to the registry per
+  #     run, not one per job;
+  #   * the MODULE-PACK TOOL, published once per platform pin and handed over as an artifact
+  #     (~5s download) instead of `dotnet build` in every job (48–79s/job measured).
+  # On a warm digest the matrix touches NO registry at all — an ACR outage cannot red a run whose
+  # images are already in the cache. This is deliberately NOT a gate: a cache miss in a pack job
+  # falls back to the pull of the SAME digest-pinned bytes, loudly — both paths build identically.
+  prepare:
+    name: Warm the shared build environment (once)
+    needs: select
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Systemorph/MeshWeaver at the pinned ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: meshweaver
+      - name: Restore the module-pack tool (per-platform-pin cache)
+        id: tool-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/pack-tool
+          key: pack-tool-${{ inputs.platform-ref }}
+      - uses: actions/setup-dotnet@v6
+        if: steps.tool-cache.outputs.cache-hit != 'true'
+        with:
+          dotnet-version: "10.0.x"
+      - name: Publish the module-pack tool (once for every pack job)
+        if: steps.tool-cache.outputs.cache-hit != 'true'
+        run: dotnet publish meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o "$RUNNER_TEMP/pack-tool"
+      - name: Hand the tool to the matrix
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-pack-tool
+          path: ${{ runner.temp }}/pack-tool
+          retention-days: 1
+      - name: Restore the platform image tarball (per-digest cache)
+        if: inputs.platform-image-digest != ''
+        id: image-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/platform-image
+          key: platform-image-${{ inputs.platform-image-digest }}
+      - name: Restore the platform image's assemblies from cache
+        if: inputs.platform-image-digest != ''
+        id: refs-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/platform-refs
+          key: platform-refs-${{ inputs.platform-image-digest }}
+      - name: Restore the tester app (per-digest cache)
+        if: inputs.tester-image-digest != ''
+        id: tester-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/tester-app
+          key: tester-app-${{ inputs.tester-image-digest }}
+      - name: Fill whichever cache is cold — the run's ONE trip to the registry
+        if: >-
+          inputs.platform-image-digest != ''
+          && (steps.image-cache.outputs.cache-hit != 'true'
+              || steps.refs-cache.outputs.cache-hit != 'true'
+              || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
+        env:
+          IMAGE: ${{ inputs.platform-image }}
+          DIGEST: ${{ inputs.platform-image-digest }}
+          TESTER_IMAGE: ${{ inputs.tester-image }}
+          TESTER_DIGEST: ${{ inputs.tester-image-digest }}
+          IMAGE_HIT: ${{ steps.image-cache.outputs.cache-hit }}
+          REFS_HIT: ${{ steps.refs-cache.outputs.cache-hit }}
+          TESTER_HIT: ${{ steps.tester-cache.outputs.cache-hit }}
+          ACR_USERNAME: ${{ secrets.acr-username }}
+          ACR_PASSWORD: ${{ secrets.acr-password }}
+        run: |
+          set -euo pipefail
+          [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::platform-image-digest is set but the acr-username/acr-password secrets are not passed — the cold caches cannot be filled"; exit 1; }
+          echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+          case "${IMAGE##*/}" in *:*) NOTAG="${IMAGE%:*}" ;; *) NOTAG="$IMAGE" ;; esac
+          pinned="${NOTAG}@${DIGEST}"
+          if [ "$IMAGE_HIT" != "true" ] || [ "$REFS_HIT" != "true" ]; then
+            docker pull --platform linux/amd64 "$pinned"
+          fi
+          if [ "$IMAGE_HIT" != "true" ]; then
+            mkdir -p "$RUNNER_TEMP/platform-image"
+            # `docker load` of a digest-pulled save keeps no RepoDigests, so the matrix runs the
+            # image by ID — content-addressed, i.e. exactly as pinned as the digest itself.
+            docker inspect --format '{{.Id}}' "$pinned" > "$RUNNER_TEMP/platform-image/image-id.txt"
+            docker save "$pinned" | zstd -T0 -3 -o "$RUNNER_TEMP/platform-image/image.tar.zst"
+            ls -lh "$RUNNER_TEMP/platform-image/image.tar.zst"
+          fi
+          if [ "$REFS_HIT" != "true" ]; then
+            cid=$(docker create --platform linux/amd64 "$pinned")
+            mkdir -p "$RUNNER_TEMP/platform-refs"
+            docker cp "$cid:/app/." "$RUNNER_TEMP/platform-refs/"
+            docker rm "$cid" >/dev/null
+            shopt -s nullglob
+            dlls=("$RUNNER_TEMP"/platform-refs/*.dll)
+            [ "${#dlls[@]}" -gt 50 ] || { echo "::error::the image's /app yielded ${#dlls[@]} assemblies — not a platform image"; exit 1; }
+          fi
+          if [ -n "$TESTER_DIGEST" ] && [ "$TESTER_HIT" != "true" ]; then
+            case "${TESTER_IMAGE##*/}" in *:*) TNOTAG="${TESTER_IMAGE%:*}" ;; *) TNOTAG="$TESTER_IMAGE" ;; esac
+            tester_pinned="${TNOTAG}@${TESTER_DIGEST}"
+            docker pull --platform linux/amd64 "$tester_pinned"
+            rm -rf "$RUNNER_TEMP/tester-app"
+            tcid=$(docker create --platform linux/amd64 "$tester_pinned")
+            docker cp -q "$tcid:/app" "$RUNNER_TEMP/tester-app"
+            docker rm "$tcid" >/dev/null
+            [ -f "$RUNNER_TEMP/tester-app/mw-plugin-test.dll" ] || { echo "::error::the tester image's /app carries no mw-plugin-test.dll — not a tester image"; exit 1; }
+          fi
+
   pack:
     name: Module bundle (${{ matrix.entry.module }})
-    needs: select
+    needs: [select, prepare]
     runs-on: ubuntu-latest
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
     # a matrix with no vectors, so an empty selection has to express itself as "this job does not
@@ -464,7 +586,10 @@ jobs:
     # (`select.result` too, not just the count: a FAILED select emits no count at all, and
     # `'' != '0'` is true — the matrix would then fail to evaluate instead of the verify job
     # naming the real cause.)
-    if: needs.select.result == 'success' && needs.select.outputs.count != '0'
+    # (An explicit `if:` replaces the implicit all-needs-succeeded check, so prepare's result
+    # is asserted by name — a failed prepare must stop the matrix, not strand 30 jobs at their
+    # artifact downloads.)
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success'
     strategy:
       # One module's failure must not hide the rest — a sweep wants every verdict in one run.
       fail-fast: false
@@ -545,7 +670,7 @@ jobs:
           else
             consumers+=("the compiler for $MODULE — its matrix entry declares build=$MODE, i.e. 'dotnet build' + 'dotnet publish' on this runner")
           fi
-          consumers+=("the module-pack tool — meshweaver/src/MeshWeaver.Plugin.Build is 'dotnet build' + 'dotnet run' in EVERY mode; until it ships inside the platform image, this one consumer alone keeps every pack job on the SDK")
+          consumers+=("the module-pack tool — prebuilt once by the prepare job, but 'dotnet <dll>' still takes the runner's dotnet; a pack-module verb inside the image would remove this last every-mode consumer")
           # Resolved against the tree, exactly as the test step below resolves it, so a module with
           # no suite does not carry a consumer it does not have.
           tests="$(dirname "$PROJECT").Test"
@@ -698,6 +823,12 @@ jobs:
         with:
           path: ${{ runner.temp }}/tester-app
           key: tester-app-${{ inputs.tester-image-digest }}
+      - name: Restore the platform image tarball (per-digest cache)
+        if: ${{ inputs.platform-image-digest != '' }}
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/platform-image
+          key: platform-image-${{ inputs.platform-image-digest }}
       - name: Build the module — and say which compiler produced it
         id: build
         env:
@@ -777,17 +908,27 @@ jobs:
               pinned="${IMAGE_NOTAG}@${DIGEST}"
               case "${TESTER_IMAGE##*/}" in *:*) TESTER_NOTAG="${TESTER_IMAGE%:*}" ;; *) TESTER_NOTAG="$TESTER_IMAGE" ;; esac
               tester_pinned="${TESTER_NOTAG}@${TESTER_DIGEST}"
-              echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
               # 🚨 --platform linux/amd64 ALWAYS: framework identities are per-architecture and the
               # bundles are sealed under the x64 identity the portals run.
               #
-              # ONE image. The build runs INSIDE the platform container itself — its /app IS the
-              # reference set and its own runtime IS the shared-framework surface, so nothing is
-              # extracted and no second image is pulled per job. Measured before this change
-              # (Plugins#1032 attempt 3, MeshWeaver.Mcp): 681 s in this step, dominated by two
-              # multi-GB pulls + docker cp of 331 assemblies + the frameworks — on a registry the
-              # same pulls had beaten into `connection refused`.
-              docker pull --platform linux/amd64 "$pinned"
+              # ONE image — and on a warm digest, ZERO registry trips: the prepare job staged the
+              # image as a per-digest tarball in the actions cache (GitHub's blob storage), so this
+              # job `docker load`s the SAME digest-pinned bytes instead of pulling them from ACR
+              # (~52s/job measured on Plugins#1032, and the per-job pulls were the stampede that
+              # helped beat the registry into `connection refused` on 2026-08-31). The fallback
+              # pull is NOT a verification fallback — both paths yield the identical image, the
+              # digest pins the content — it only costs the ACR trip, and says so.
+              if [ -f "$RUNNER_TEMP/platform-image/image.tar.zst" ]; then
+                echo "platform image: cache HIT for $DIGEST — docker load, no ACR"
+                zstd -dc "$RUNNER_TEMP/platform-image/image.tar.zst" | docker load
+                img="$(cat "$RUNNER_TEMP/platform-image/image-id.txt")"
+                docker image inspect "$img" >/dev/null 2>&1 || { echo "::error::the cached tarball loaded but image id $img is absent — the platform-image-$DIGEST cache entry is corrupt; delete it and rerun"; exit 1; }
+              else
+                echo "platform image: cache MISS for $DIGEST — pulling from ACR (same bytes, only slower)"
+                echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+                docker pull --platform linux/amd64 "$pinned"
+                img="$pinned"
+              fi
               # The BUILDER travels as files, not as an image: the tester image's /app (builder +
               # razor-generators/ + sdk-generators/ + module-libs/) is extracted once per DIGEST
               # into the actions cache (the restore step above); a miss fills it here with the one
@@ -795,6 +936,7 @@ jobs:
               tester_app="$RUNNER_TEMP/tester-app"
               if [ ! -f "$tester_app/mw-plugin-test.dll" ]; then
                 echo "tester-app cache MISS for $TESTER_DIGEST — extracting once"
+                echo "$ACR_PASSWORD" | docker login "${TESTER_IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
                 docker pull --platform linux/amd64 "$tester_pinned"
                 rm -rf "$tester_app"
                 tcid=$(docker create --platform linux/amd64 "$tester_pinned")
@@ -827,7 +969,7 @@ jobs:
               accepts=()
               for construct in $ACCEPT; do accepts+=(--accept "$construct"); done
               echo "compiler: CONTAINER — memex build project ⇒ mw-plugin-test build-project from $tester_pinned"
-              echo "compiler: no .NET SDK, no NuGet restore, no platform source checkout; every reference comes from $pinned's /app"
+              echo "compiler: no .NET SDK, no NuGet restore, no platform source checkout; every reference comes from $pinned's /app (running as $img)"
               [ ${#accepts[@]} -eq 0 ] || echo "compiler: acknowledged constructs — $ACCEPT"
               log="$RUNNER_TEMP/build-project-$MODULE.log"
               # 🚨 NO --extra-refs, ever, on this lane. An additional library is one the image does
@@ -860,7 +1002,7 @@ jobs:
                 -v "$tester_app:/tester:ro" \
                 ${prebuilt_mounts[@]+"${prebuilt_mounts[@]}"} \
                 -v "$out:/out" \
-                --entrypoint dotnet "$pinned" \
+                --entrypoint dotnet "$img" \
                 /tester/mw-plugin-test.dll build-project "/repo/$PROJECT" --output /out ${prebuilt_flags[@]+"${prebuilt_flags[@]}"} ${accepts[@]+"${accepts[@]}"} 2>&1 | tee "$log"
               # build-project emits <output>/<AssemblyName>/, so the module folder IS the pack input.
               packdir="$out/$MODULE"
@@ -949,8 +1091,14 @@ jobs:
             echo "- closure args: \`$( (tr '\n' ' ' < "$packargs") || true )\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build the module-pack tool
-        run: dotnet build meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release
+      # Published ONCE by the prepare job — `dotnet build` here cost 48–79s in EVERY job (measured
+      # across Plugins#1032). A missing artifact fails this download RED rather than quietly
+      # rebuilding a maybe-different tool.
+      - name: Fetch the module-pack tool (built once by prepare)
+        uses: actions/download-artifact@v8
+        with:
+          name: module-pack-tool
+          path: ${{ runner.temp }}/pack-tool
 
       - name: Pack the module bundle
         env:
@@ -969,7 +1117,7 @@ jobs:
           closure=()
           while IFS= read -r flag; do closure+=("$flag"); done < "$RUNNER_TEMP/pack-args"
           echo "packing $MODULE from $PACKDIR (compiler: $COMPILER); closure flags: ${closure[*]:-<none>}"
-          dotnet run --project meshweaver/src/MeshWeaver.Plugin.Build -c Release --no-build -- \
+          dotnet "$RUNNER_TEMP/pack-tool/MeshWeaver.Plugin.Build.dll" \
             module-pack "$PACKDIR" \
             ${closure[@]+"${closure[@]}"} \
             --module-name "$MODULE" \

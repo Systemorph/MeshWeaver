@@ -128,7 +128,13 @@ public sealed class ModuleLibrariesShelf
     /// <summary>One shelf resolution: the package's own assemblies plus its transitive ride set.</summary>
     /// <param name="PackageId">The package.</param>
     /// <param name="Version">The shelf's pinned version — the same central pin the SDK path used.</param>
-    /// <param name="ReferenceFiles">The package's own assembly files, for the compile.</param>
+    /// <param name="ReferenceFiles">The compile references: the package's deps-recorded transitive
+    /// shelf closure, minus what the container supplies (those are already referenced from
+    /// <c>/app</c>). The SDK hands a consumer its package's TRANSITIVE compile surface — a
+    /// <c>PackageReference Microsoft.Graph</c> lets code <c>using Microsoft.Kiota…</c> — and a
+    /// shelf that offered only the package's own assemblies re-created exactly that gap
+    /// (Plugins#1032, 2026-08-31: Mail.MicrosoftGraph rode Kiota at runtime but could not compile
+    /// against it).</param>
     /// <param name="RideFiles">Every file that must travel with the bundle: the package's
     /// assemblies plus its transitive shelf dependencies, MINUS anything the container already
     /// supplies (a duplicate beside the platform's copy is the binding trap, not a convenience).</param>
@@ -150,11 +156,9 @@ public sealed class ModuleLibrariesShelf
         if (!_assembliesByPackage.TryGetValue(packageId, out var own))
             return null;
 
-        var referenceFiles = own
-            .Where(_filesByName.ContainsKey)
-            .Select(n => _filesByName[n])
-            .ToImmutableArray();
-        if (referenceFiles.IsEmpty)
+        // The package must put at least one of its OWN assemblies on the shelf to resolve at all —
+        // "the shelf carries it" means the package, not merely some transitive of another entry.
+        if (!own.Any(_filesByName.ContainsKey))
             return null;
 
         // The transitive shelf closure: packages reachable from this one whose assemblies are on
@@ -182,10 +186,14 @@ public sealed class ModuleLibrariesShelf
                     pending.Push(dependency);
         }
 
+        // Compile references ARE the ride closure: same record, same container-wins filter. The
+        // container-supplied names are already referenced from /app — offering the shelf's copy
+        // beside them would be the same-identity duplicate the ride filter exists to prevent.
+        var closure = rides.ToImmutable();
         return new Resolution(
             packageId,
             _versionsByPackage.GetValueOrDefault(packageId, "unknown"),
-            referenceFiles,
-            rides.ToImmutable());
+            closure,
+            closure);
     }
 }
