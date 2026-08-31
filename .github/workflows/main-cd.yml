@@ -1072,12 +1072,55 @@ jobs:
       # csproj (project-local — a global -p:RuntimeIdentifiers breaks referenced libs, see above).
       # `latest` (the tag the plugins repo pins as MW_TEST_IMAGE) and the GHCR mirror both moved
       # to `promote`: they are consumer-visible, so they must not appear until every leg is green.
+      # 🚨 THE RAZOR COMPILER, STAGED FOR BOTH IMAGE ARCHITECTURES.
+      # `mw-plugin-test build-project` compiles .razor/.cshtml, and Razor compilation in the .NET
+      # SDK is a Roslyn SOURCE GENERATOR. This image ships the runtime and no SDK, so the generator
+      # has to travel with the builder — and it CANNOT be copied once: the SDK crossgens it for the
+      # SDK's own RID, so the same 10.0.400 file carries PE machine 0xFD1D on linux-x64 and 0xD11D
+      # on linux-arm64, and the wrong one throws BadImageFormatException at run time and nowhere
+      # else. This image publishes BOTH architectures from ONE x64 host, so both copies are staged
+      # and the builder picks the one for the RID it is running on.
+      #
+      # The arm64 copy comes from the dotnet/sdk image of the EXACT SAME SDK VERSION the runner is
+      # using — one source of truth, no second pin to drift — and `docker create` + `docker cp`
+      # reads it out without ever executing an arm64 binary, so no qemu is needed.
+      - name: Stage the Razor source generator for linux-x64 and linux-arm64
+        id: razor
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "x86_64" \
+            || { echo "::error::this step assumes an x64 runner (it takes the host SDK's copy as the linux-x64 one)"; exit 1; }
+          SDK_VERSION="$(dotnet --version)"
+          SDK_ROOT="$(dotnet --list-sdks | sed -n "s|^${SDK_VERSION} \[\(.*\)\]$|\1|p" | head -1)"
+          HOST_SOURCE="$SDK_ROOT/$SDK_VERSION/Sdks/Microsoft.NET.Sdk.Razor/source-generators"
+          ROOT="$RUNNER_TEMP/razor-generators"
+          echo "SDK $SDK_VERSION; host source-generators: $HOST_SOURCE"
+
+          mkdir -p "$ROOT/linux-x64" "$ROOT/linux-arm64"
+          cp "$HOST_SOURCE"/*.dll "$ROOT/linux-x64/"
+
+          IMAGE="mcr.microsoft.com/dotnet/sdk:$SDK_VERSION"
+          docker pull --platform linux/arm64 "$IMAGE"
+          CID="$(docker create --platform linux/arm64 "$IMAGE")"
+          trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+          docker cp "$CID:/usr/share/dotnet/sdk/$SDK_VERSION/Sdks/Microsoft.NET.Sdk.Razor/source-generators/." \
+            "$ROOT/linux-arm64/"
+
+          # 🚨 Fail closed. An empty or half-staged RID ships an image whose Razor builds fail on
+          # exactly one architecture — which nothing in this pipeline would notice.
+          for rid in linux-x64 linux-arm64; do
+            test -f "$ROOT/$rid/Microsoft.CodeAnalysis.Razor.Compiler.dll" \
+              || { echo "::error::no Razor compiler staged for $rid"; exit 1; }
+            echo "$rid: $(ls "$ROOT/$rid" | tr '\n' ' ')"
+          done
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
       - name: Build + push mw-plugin-test (staging tag, ACR)
         run: >
           dotnet publish tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
+          -p:MeshWeaverRazorGeneratorRoot=${{ steps.razor.outputs.root }}
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=mw-plugin-test
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}

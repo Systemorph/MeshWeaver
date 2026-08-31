@@ -15,6 +15,96 @@
     <MeshWeaverSurfaceManifest>true</MeshWeaverSurfaceManifest>
   </PropertyGroup>
 
+  <!-- ═════════ THE RAZOR COMPILER RIDES ALONG — as ASSETS, never as a reference ═════════
+       `build-project` compiles .razor/.cshtml, and Razor compilation in the .NET SDK is a Roslyn
+       SOURCE GENERATOR (Microsoft.CodeAnalysis.Razor.Compiler). A MeshWeaver image ships the
+       RUNTIME and no SDK, so without these two assemblies every Blazor project fails with a wall of
+       CS0115 "no suitable method found to override" — the generated BuildRenderTree half of every
+       component simply is not there. That was 15 of the 42 failures in the first no-SDK sweep of
+       MeshWeaver.Plugins/src, more than any other category.
+
+       🚨 CONTENT, NOT PackageReference and NOT ProjectReference. This project's reference closure IS
+       the framework build identity (see the block below); a compile-time reference here would move
+       the identity every bake host resolves. These are laid beside the binary and LOADED AT RUNTIME
+       by RazorGenerators, into a load context that binds Roslyn to the host's copy — the generator
+       is built against the SDK's Roslyn (10.0.400's wants Microsoft.CodeAnalysis 5.9.0.0) and the
+       image carries this repo's pin (5.6.0), and the default context refuses the lower version.
+
+       🚨 The closure is EXACTLY these two, measured rather than assumed: Razor.Compiler references
+       netstandard, Microsoft.CodeAnalysis(.CSharp), System.Collections.Immutable, System.Memory,
+       System.Buffers and Razor.Utilities.Shared — every one but the last resolves to the host.
+       Microsoft.Extensions.ObjectPool, which older Razor compiler builds needed, is NOT referenced
+       by this one. The glob copies whatever the SDK's source-generators directory holds, so a
+       future SDK that adds a third assembly needs no code change here.
+
+       🚨 PER-RID, because the SDK's copy is READYTORUN-compiled for the SDK's own RID and does not
+       load on another. Measured on SDK 10.0.400: Razor.Compiler.dll carries PE machine 0xFD1D on
+       linux-x64 and 0xEC20 on osx-arm64 (the target machine XOR'd with the OS's R2R marker), and the
+       wrong one throws BadImageFormatException. This image is published for linux-x64 AND
+       linux-arm64 from ONE x64 build host, so copying the build machine's SDK would have shipped an
+       arm64 image that cannot compile a single Blazor project — loudly, but only for arm64 users.
+       -p:MeshWeaverRazorGeneratorRoot=<dir> names a directory of <rid>/ subdirectories (what CD
+       stages from the pinned dotnet/sdk image, both architectures); with none, a build stages the
+       host SDK's copy under its own RID, which is what a developer and the test suite need.
+
+       PROVENANCE: razor-generators.json records the SDK version, the source and the RIDs — the image
+       is the pin, and it says what it pinned. The pairing is GATED by a test that EXECUTES the
+       shipped generator against this repo's Roslyn (RazorBuildTest), so an SDK whose Razor compiler
+       cannot run here turns a PR red instead of shipping a silent image. -->
+  <PropertyGroup>
+    <MeshWeaverRazorGeneratorSource Condition="'$(MeshWeaverRazorGeneratorSource)' == ''">$(NetCoreRoot)sdk/$(NETCoreSdkVersion)/Sdks/Microsoft.NET.Sdk.Razor/source-generators</MeshWeaverRazorGeneratorSource>
+    <MeshWeaverRazorGeneratorRid Condition="'$(MeshWeaverRazorGeneratorRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</MeshWeaverRazorGeneratorRid>
+  </PropertyGroup>
+
+  <Target Name="StageRazorSourceGenerator" BeforeTargets="AssignTargetPaths">
+    <!-- Two layouts, and the staged one wins: CD hands over a root of <rid>/ directories (every
+         architecture the image publishes), while an ordinary build has only the host SDK's copy and
+         stages it under the host's own RID. -->
+    <ItemGroup Condition="'$(MeshWeaverRazorGeneratorRoot)' != ''">
+      <_MeshWeaverRazorGenerator Include="$(MeshWeaverRazorGeneratorRoot)/*/*.dll" />
+      <_MeshWeaverRazorGenerator>
+        <RidFolder>$([System.IO.Path]::GetFileName($([System.IO.Path]::GetDirectoryName('%(FullPath)'))))</RidFolder>
+      </_MeshWeaverRazorGenerator>
+    </ItemGroup>
+    <ItemGroup Condition="'$(MeshWeaverRazorGeneratorRoot)' == ''">
+      <_MeshWeaverRazorGenerator Include="$(MeshWeaverRazorGeneratorSource)/*.dll" RidFolder="$(MeshWeaverRazorGeneratorRid)" />
+    </ItemGroup>
+    <!-- 🚨 An empty glob would ship an image that silently cannot compile a single Blazor project,
+         and nothing downstream could tell the difference from "this project has errors". -->
+    <Error Condition="'@(_MeshWeaverRazorGenerator)' == ''"
+           Text="No Razor source generator found in '$(MeshWeaverRazorGeneratorSource)'. build-project compiles .razor through Microsoft.CodeAnalysis.Razor.Compiler, which ships in the .NET SDK's Microsoft.NET.Sdk.Razor/source-generators directory; an image built without it cannot compile any Blazor project and would report a wall of CS0115 instead of saying so. Install a .NET SDK that carries it, or point -p:MeshWeaverRazorGeneratorSource=&lt;dir&gt; at a copy." />
+    <Error Condition="'@(_MeshWeaverRazorGenerator->WithMetadataValue('Filename', 'Microsoft.CodeAnalysis.Razor.Compiler'))' == ''"
+           Text="The staged Razor generators do not include Microsoft.CodeAnalysis.Razor.Compiler.dll — that is the assembly carrying the [Generator] type, and without it the directory compiles nothing." />
+    <Error Condition="'%(_MeshWeaverRazorGenerator.RidFolder)' == ''"
+           Text="A staged Razor generator has no RID folder. The SDK's copy is ReadyToRun-compiled for one RID; shipping it un-labelled would put an x64 compiler in an arm64 image, which fails at run time and nowhere else." />
+    <PropertyGroup>
+      <!-- Item transforms cannot be concatenated with literals inside a task's string parameter
+           (MSB4012), so the lists become properties first. -->
+      <_MeshWeaverRazorGeneratorNames>@(_MeshWeaverRazorGenerator->'%(RidFolder)/%(Filename)%(Extension)', '&quot;, &quot;')</_MeshWeaverRazorGeneratorNames>
+      <_MeshWeaverRazorGeneratorOrigin Condition="'$(MeshWeaverRazorGeneratorRoot)' != ''">$(MeshWeaverRazorGeneratorRoot)</_MeshWeaverRazorGeneratorOrigin>
+      <_MeshWeaverRazorGeneratorOrigin Condition="'$(MeshWeaverRazorGeneratorRoot)' == ''">$(MeshWeaverRazorGeneratorSource)</_MeshWeaverRazorGeneratorOrigin>
+    </PropertyGroup>
+    <WriteLinesToFile
+        File="$(IntermediateOutputPath)razor-generators.json"
+        Overwrite="true"
+        WriteOnlyWhenDifferent="true"
+        Lines="{ &quot;sdk&quot;: &quot;$(NETCoreSdkVersion)&quot;, &quot;source&quot;: &quot;$(_MeshWeaverRazorGeneratorOrigin)&quot;, &quot;assemblies&quot;: [&quot;$(_MeshWeaverRazorGeneratorNames)&quot;] }" />
+    <ItemGroup>
+      <Content Include="@(_MeshWeaverRazorGenerator)"
+               Link="razor-generators/%(RidFolder)/%(Filename)%(Extension)"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest"
+               Pack="false"
+               Visible="false" />
+      <Content Include="$(IntermediateOutputPath)razor-generators.json"
+               Link="razor-generators/razor-generators.json"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest"
+               Pack="false"
+               Visible="false" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <!-- GateDiscoveryEqualsBakeDiscoveryTest pins PluginGateRunner.DiscoverNodeTypes equal to the
          compiler-driven bake's discovery (#2063). The two halves disagreeing IS the defect, and

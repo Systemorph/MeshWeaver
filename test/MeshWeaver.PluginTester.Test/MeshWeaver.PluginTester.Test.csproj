@@ -11,6 +11,15 @@
     <ProjectReference Include="..\..\tools\MeshWeaver.ComboVerifier\MeshWeaver.ComboVerifier.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- RazorBuildTest LOADS the Blazor component it just compiled and reads the generated
+         BuildRenderTree override off it — which resolves ComponentBase, so this host has to be able
+         to bind Microsoft.AspNetCore.App. Without it the assertion cannot run at all, and "the
+         compiler returned" would be the only evidence a component exists, which is exactly the
+         CS0115 blind spot the suite is about. Same reason MeshWeaver.Auth.Test carries it. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
   <!-- The gate boots in-process here, and the gate requires the AI engine MODULE beside the
        binary (#2276) — modules/ is laid by the closure lane, not copied by a ProjectReference, so
        this TEST bin needs its own lane run with the same tester-local single row. Same pattern as

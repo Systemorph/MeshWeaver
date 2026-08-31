@@ -75,9 +75,16 @@ assembly the image already carries. See
 | `--output <dir>` | where the emitted assemblies land (default: a temp dir) |
 | `--root <dir>` | directory mounted as `/repo` (default: the nearest `Directory.Build.props` ancestor) |
 | `--extra-refs <dir>` | libraries ADDITIONAL to the platform — the only way to satisfy a `PackageReference` the image does not supply. Repeatable |
-| `--accept <construct>` | acknowledge one construct the evaluator cannot reproduce (`target:<Name>`, `embedded-resource`, `conditions`). Repeatable |
+| `--accept <construct>` | acknowledge one construct the evaluator cannot reproduce (`target:<Name>`, `embedded-resource`, `conditions`, `razor-css-scope`, `razor-not-compiled`). Repeatable |
 | `--no-warn` / `--allow-warnings` | warnings fail the build (default); `--no-warn=false` or `--allow-warnings` opts out |
 | `--no-pull` | use the image the docker daemon already has, for one built locally |
+
+**Razor/Blazor compiles** (2026-08-31): the image ships the SDK's Razor source generator beside the
+builder, per RID, and `build-project` runs it for any project whose `Sdk` processes Razor items —
+`MeshWeaver.Blazor` (31 `.cs` + 42 `.razor`) builds green against `memex-portal-ai`. What it will
+not do quietly is skip a `.razor` file: a project with Razor input and no generator fails by name,
+and CSS isolation (`*.razor.css`) needs `--accept razor-css-scope` because the `b-…` scope comes
+from an MSBuild task this builder does not run.
 
 🚨 **Nothing is dropped in silence.** A project construct this builder cannot reproduce — an unknown
 element, an unevaluatable `Condition`, a `<Target>`, an `<EmbeddedResource>` — FAILS the run naming
