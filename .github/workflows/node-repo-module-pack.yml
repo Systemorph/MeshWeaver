@@ -774,6 +774,10 @@ jobs:
         env:
           PACKAGE: ${{ matrix.entry.package }}
           MODULE: ${{ matrix.entry.module }}
+          # The staticAssets assertion reads the PROJECT's source tree (wwwroot/, *.razor.css) —
+          # measured missing on the first 31-entry acceptance run: every container inspection died
+          # `PROJECT: unbound variable` AFTER a GREEN build, because only the build step carried it.
+          PROJECT: ${{ matrix.entry.project }}
           VERSION: ${{ steps.identity.outputs.version }}
           FLOOR: ${{ steps.identity.outputs.floor }}
           COMPILER: ${{ steps.build.outputs.compiler }}
