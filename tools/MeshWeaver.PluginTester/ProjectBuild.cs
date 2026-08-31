@@ -646,9 +646,12 @@ public static class ProjectBuild
             references.Add(MetadataReference.CreateFromFile(extra));
         foreach (var prebuiltDll in graph.PrebuiltReferences.Values)
             references.Add(MetadataReference.CreateFromFile(prebuiltDll));
+        // Two shelf packages can share a transitive; each names the full closure, so dedupe by path.
+        var shelfReferencePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var fromShelf in shelfResolutions)
             foreach (var file in fromShelf.ReferenceFiles)
-                references.Add(MetadataReference.CreateFromFile(file));
+                if (shelfReferencePaths.Add(file))
+                    references.Add(MetadataReference.CreateFromFile(file));
         foreach (var dependency in dependencies)
             if (dependency.AssemblyPath is { Length: > 0 } dll)
                 references.Add(MetadataReference.CreateFromFile(dll));
