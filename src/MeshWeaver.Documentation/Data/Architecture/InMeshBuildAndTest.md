@@ -553,9 +553,9 @@ and really does emit the incomplete assembly.
   that id, exactly as a NuGet analyzer does.
 
 🚨 The rule is deliberately **not** *"does the compilation resolve an Orleans type"*. This builder
-hands every project the container's **whole** reference set — 209 assemblies in the portal image,
-Orleans among them — so a reference-shaped test would run Orleans codegen over every project in the
-repo. Assemblies are also de-duplicated by file name across activations: Orleans' codegen is
+hands every project the container's **whole** reference set — 524 assemblies against the portal
+image (its `/app` plus the shared frameworks), Orleans among them — so a reference-shaped test would
+run Orleans codegen over every project in the repo. Assemblies are also de-duplicated by file name across activations: Orleans' codegen is
 reachable through more than one package id, and a generator that runs twice emits every type twice
 (CS0101, reported against code nobody wrote).
 

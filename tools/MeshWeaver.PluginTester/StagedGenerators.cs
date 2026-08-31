@@ -25,8 +25,9 @@ namespace MeshWeaver.PluginTester;
 /// to the projects that REFERENCE its package, so <c>packages/&lt;package id&gt;/</c> runs on a
 /// project whose <c>PackageReference</c> set names that id. 🚨 The rule is deliberately NOT "does
 /// the compilation resolve an Orleans type": this builder hands every project the container's WHOLE
-/// reference set (209 assemblies in the portal image, Orleans among them), so a reference-shaped
-/// test would run Orleans codegen over every project in the repo.</para>
+/// reference set (524 assemblies against the portal image — its /app plus the shared frameworks,
+/// Orleans among them), so a reference-shaped test would run Orleans codegen over every project in
+/// the repo.</para>
 ///
 /// <para><b>The staged closure is one file each, MEASURED.</b> Read from the AssemblyRef tables:
 /// <c>System.Text.RegularExpressions.Generator</c> references netstandard, Roslyn,
