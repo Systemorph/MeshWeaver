@@ -161,6 +161,30 @@
     </ItemGroup>
   </Target>
 
+  <!-- ═══ The MODULE-LIBRARIES shelf (tools/MeshWeaver.ModuleLibraries) ═══
+       CD publishes the shelf project and hands its output root over here, and it ships as
+       module-libs/ beside the builder — the same handover pattern as the Razor generators, minus
+       the per-RID split (the shelf is AnyCPU IL). A build WITHOUT the property simply ships no
+       shelf: a dev build then resolves no additional libraries, and a shelf-needing module fails
+       BY NAME exactly as before — absence is visible, never wrong. The deps.json ships with it:
+       it IS the record every shelf ride's closure is derived from (ModuleLibrariesShelf). -->
+  <Target Name="StageModuleLibraries" BeforeTargets="AssignTargetPaths"
+          Condition="'$(MeshWeaverModuleLibrariesRoot)' != ''">
+    <ItemGroup>
+      <_MeshWeaverModuleLibrary Include="$(MeshWeaverModuleLibrariesRoot)/**/*" />
+    </ItemGroup>
+    <Error Condition="'@(_MeshWeaverModuleLibrary)' == ''"
+           Text="MeshWeaverModuleLibrariesRoot '$(MeshWeaverModuleLibrariesRoot)' staged nothing — an empty shelf ships an image where every shelf-resolved module reds on 'the container does not supply', indistinguishable from a module defect." />
+    <ItemGroup>
+      <Content Include="@(_MeshWeaverModuleLibrary)"
+               Link="module-libs/%(RecursiveDir)%(Filename)%(Extension)"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest"
+               Pack="false"
+               Visible="false" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <!-- GateDiscoveryEqualsBakeDiscoveryTest pins PluginGateRunner.DiscoverNodeTypes equal to the
          compiler-driven bake's discovery (#2063). The two halves disagreeing IS the defect, and

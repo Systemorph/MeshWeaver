@@ -1175,6 +1175,25 @@ jobs:
             echo "$rid: $(ls "$ROOT/$rid" | tr '\n' ' ')"
           done
           echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+      # The module-libraries SHELF: the curated additional libraries a container-built module may
+      # bind (tools/MeshWeaver.ModuleLibraries). One publish — the assemblies are AnyCPU IL, so
+      # both image architectures stage the same copy — and its deps.json travels with it: it IS
+      # the record every shelf ride's closure is derived from.
+      - name: Stage the module-libraries shelf
+        id: shelf
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/module-libs-staging"
+          dotnet publish tools/MeshWeaver.ModuleLibraries/MeshWeaver.ModuleLibraries.csproj \
+            -c Release -o "$ROOT"
+          # 🚨 Fail closed: a half-staged shelf ships an image where every shelf-resolved module
+          # reds on "the container does not supply" — indistinguishable from a module defect.
+          test -f "$ROOT/MeshWeaver.ModuleLibraries.deps.json" \
+            || { echo "::error::the shelf publish produced no deps.json — the ride record is what makes shelf closures accountable"; exit 1; }
+          count=$(ls "$ROOT"/*.dll | wc -l)
+          [ "$count" -gt 10 ] || { echo "::error::the shelf publish staged only $count assemblies — not a shelf"; exit 1; }
+          echo "shelf: $count assemblies"
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
       - name: Build + push mw-plugin-test (staging tag, ACR)
         run: >
           dotnet publish tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj
@@ -1182,6 +1201,7 @@ jobs:
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
           -p:MeshWeaverRazorGeneratorRoot=${{ steps.razor.outputs.root }}
+          -p:MeshWeaverModuleLibrariesRoot=${{ steps.shelf.outputs.root }}
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=mw-plugin-test
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}

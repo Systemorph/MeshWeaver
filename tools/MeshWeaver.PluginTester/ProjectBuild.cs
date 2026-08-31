@@ -288,6 +288,10 @@ public static class ProjectBuild
 
         var extraReferences = ResolveExtraReferences(options, sink);
         var generators = ResolveGenerators(options, sink);
+        var shelf = ModuleLibrariesShelf.Locate(container.AppDirectory);
+        if (shelf is not null)
+            sink.Info($"module-libraries shelf: {shelf.PackageCount} package(s) from {shelf.Directory} "
+                + "(an additional library resolves here and RIDES the bundle with its deps.json-derived closure)");
 
         return Cascade.Run<ProjectResult>(
                 graph.Order,
@@ -295,7 +299,7 @@ public static class ProjectBuild
                 (id, deps) =>
                 {
                     var result = Compile(
-                        graph.Models[id], graph, container, extraReferences, generators, options, sink, workRoot,
+                        graph.Models[id], graph, container, extraReferences, generators, shelf, options, sink, workRoot,
                         deps.Where(d => d.Result is not null).Select(d => d.Result!).ToArray());
                     return (result, result.IsGreen);
                 },
@@ -500,6 +504,7 @@ public static class ProjectBuild
         ContainerReferenceSet container,
         ImmutableArray<string> extraReferences,
         ImmutableArray<string> generators,
+        ModuleLibrariesShelf? shelf,
         Options options,
         Sink sink,
         string workRoot,
@@ -534,6 +539,7 @@ public static class ProjectBuild
         // Packages: the container is authoritative for what the container HAS. Anything it does not
         // have is an ADDITIONAL library, and this mode cannot invent one.
         var unresolved = ImmutableArray.CreateBuilder<string>();
+        var shelfResolutions = new List<ModuleLibrariesShelf.Resolution>();
         var extraByName = extraReferences.ToDictionary(
             p => Path.GetFileNameWithoutExtension(p)!, p => p, StringComparer.OrdinalIgnoreCase);
         foreach (var package in model.PackageReferences)
@@ -550,6 +556,14 @@ public static class ProjectBuild
                 sink.Info($"[{name}] package {package.Id} → --extra-refs");
                 continue;
             }
+            if (shelf?.Resolve(package.Id, n => container.FindAssembly(n) is not null)
+                is { } fromShelf)
+            {
+                shelfResolutions.Add(fromShelf);
+                sink.Info($"[{name}] package {package.Id} → the module-libraries shelf "
+                    + $"({fromShelf.Version}); {fromShelf.RideFiles.Length} file(s) ride the bundle");
+                continue;
+            }
             unresolved.Add(package.Id);
         }
         if (unresolved.Count > 0)
@@ -557,10 +571,11 @@ public static class ProjectBuild
             var message =
                 $"{unresolved.Count} PackageReference(s) the container does not supply: "
                 + string.Join(", ", unresolved)
-                + ". This mode resolves references from the image and from --extra-refs only — there is "
-                + "no NuGet here. Only libraries ADDITIONAL to the platform have to be specified, and "
-                + "these are they: pass --extra-refs <dir> holding their assemblies, or build against an "
-                + "image that carries them.";
+                + ". This mode resolves references from the image, the module-libraries shelf and "
+                + "--extra-refs only — there is no NuGet here. Only libraries ADDITIONAL to the platform "
+                + "have to be specified, and these are they: add the package to the curated shelf "
+                + "(tools/MeshWeaver.ModuleLibraries — its deps.json is the ride closure), pass "
+                + "--extra-refs <dir>, or build against an image that carries them.";
             sink.Error($"[{name}] {message}");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                 model.CompileItems.Length, 0, 0, null, unresolved.ToImmutable(), message);
@@ -579,6 +594,9 @@ public static class ProjectBuild
         }
         foreach (var extra in extraReferences)
             references.Add(MetadataReference.CreateFromFile(extra));
+        foreach (var fromShelf in shelfResolutions)
+            foreach (var file in fromShelf.ReferenceFiles)
+                references.Add(MetadataReference.CreateFromFile(file));
         foreach (var dependency in dependencies)
             if (dependency.AssemblyPath is { Length: > 0 } dll)
                 references.Add(MetadataReference.CreateFromFile(dll));
@@ -802,6 +820,7 @@ public static class ProjectBuild
                     model.CompileItems.Length, 0, warnings, null, [], reason);
             }
             NameTheDocumentationFile(outputDirectory, model);
+            EmitShelfRides(outputDirectory, model, shelfResolutions, sink, name);
             var scopedCssCount = EmitStaticAssets(outputDirectory, model, sink, name);
             sink.Info(
                 $"[{name}] OK — {model.CompileItems.Length} source file(s)"
@@ -887,6 +906,41 @@ public static class ProjectBuild
         sink.Info($"[{name}] css isolation: {scoped.Length} scoped stylesheet(s) → "
             + $"wwwroot/{model.AssemblyName}.styles.css (scopes match the generated markup)");
         return scoped.Length;
+    }
+
+    /// <summary>
+    /// The file, beside the built module, that names every shelf-supplied assembly riding the
+    /// bundle. 🚨 It is the PROVENANCE the lane's inspection keys on: a container bundle may carry
+    /// a non-MeshWeaver assembly ONLY when this manifest names it — anything else still means the
+    /// closure cannot be accounted for and the pack must fail.
+    /// </summary>
+    public const string ShelfManifestName = "module-libs.txt";
+
+    /// <summary>
+    /// Copies every shelf ride beside the module and writes <see cref="ShelfManifestName"/>. The
+    /// rides were derived from the shelf's deps.json minus everything the landing image supplies
+    /// (<see cref="ModuleLibrariesShelf.Resolve"/>), so the bundle's closure stays complete BY
+    /// RECORD — the property the lane's no-extra-refs stance protects.
+    /// </summary>
+    private static void EmitShelfRides(
+        string outputDirectory, ProjectFile.Model model,
+        List<ModuleLibrariesShelf.Resolution> shelfResolutions, Sink sink, string name)
+    {
+        if (shelfResolutions.Count == 0)
+            return;
+        var manifest = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var resolution in shelfResolutions)
+            foreach (var file in resolution.RideFiles)
+            {
+                var fileName = Path.GetFileName(file);
+                if (fileName.Equals(model.AssemblyName + ".dll", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                File.Copy(file, Path.Combine(outputDirectory, fileName), overwrite: true);
+                manifest.Add(fileName);
+            }
+        File.WriteAllLines(Path.Combine(outputDirectory, ShelfManifestName), manifest);
+        sink.Info($"[{name}] shelf rides: {manifest.Count} assembl(y|ies) beside the module "
+            + $"({ShelfManifestName} is the provenance the pack inspection keys on)");
     }
 
     /// <summary>How many resource names a build lists before it counts the rest instead.</summary>
