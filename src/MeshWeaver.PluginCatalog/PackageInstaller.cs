@@ -167,7 +167,7 @@ public static class PackageInstaller
                 return VerifyDeclaredAccess(hub, manifest, partition, logger)
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, authorizingUserId: authorizingUserId))
-                    .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
+                    .SelectMany(_ => WarmInstalledRoots(hub, manifest, nodes, logger))
                     // …then the package's committed binaries, into the warmed root's content
                     // collection — the half of "publish" that merging used to leave undone (#848).
                     .SelectMany(_ => SyncPackageContent(hub, partition, sourceFolder, files, nodes, logger))
@@ -392,28 +392,52 @@ public static class PackageInstaller
     private static readonly TimeSpan WarmTimeout = TimeSpan.FromSeconds(90);
 
     /// <summary>
-    /// How long a warmed root is given to become READABLE — i.e. for the activation-triggered
-    /// gating pass to write its cover grant — before the installer gives up waiting and says so.
+    /// The cover-grant DEADLOCK DETECTOR's budget: how long a warmed root whose partition this
+    /// install deliberately left GATED is given to show its cover grant before the installer
+    /// reports the gating pass as stalled. A detector budget, not a settle barrier — its whole
+    /// product is a log line.
     ///
-    /// <para>🚨 This exists because <b>warmed is not gated</b>. Warming completes as soon as the
+    /// <para>🚨 It exists because <b>warmed is not gated</b>. Warming completes as soon as the
     /// root NODE can be read; the gating pass that seeds the cover grants runs as a CONSEQUENCE of
-    /// that activation, asynchronously. So without this wait the installer reports a clean install
-    /// while the partition is still dark, and the first viewer to open <c>{package}/Subscribe</c>
-    /// is denied — measured at 12–17 s, and the whole reason MeshWeaver.Education's disposable-mesh
-    /// e2e fails non-deterministically with <c>Access denied: user 'e2e-admin' lacks Read
-    /// permission on '{course}'</c> followed by a 180 s coupon timeout.</para>
+    /// that activation, asynchronously. With nothing watching, the installer reports a clean
+    /// install while the partition is still dark, and the first viewer to open
+    /// <c>{package}/Subscribe</c> is denied — measured at 12–17 s, and the whole reason
+    /// MeshWeaver.Education's disposable-mesh e2e fails non-deterministically with
+    /// <c>Access denied: user 'e2e-admin' lacks Read permission on '{course}'</c> followed by a
+    /// 180 s coupon timeout.</para>
     ///
-    /// <para>Shorter than <see cref="WarmTimeout"/> on purpose: the hub is already up by the time
-    /// this starts, so the only thing outstanding is one access-table write.</para>
+    /// <para><b>Why 5 s, down from 30.</b> The 30 s was only ever PAID by the case that can never
+    /// succeed. The wait ran on every in-package-typed root, including the partitions the installer
+    /// itself publishes — and for those no cover grant is ever coming, so each such install burned
+    /// the entire budget and then reported success. Measured in
+    /// <c>MeshWeaver.PluginCatalog.Test</c> before this fix: 30.2–30.3 s per install
+    /// (<c>RootTypedByAnInPackageNodeType_Installs</c>, both
+    /// <c>StaleStampSelfTypedRoot…_RootServesItsTypesArea</c>,
+    /// <c>DeferredNodeTypeReleases_AreRequestedAfterTheRootRecycle</c>) and 60.4 s for the one that
+    /// installs twice (<c>SelfTypedRoot_ReinstallImmediately_WritesNothing</c>) — 211 s of a 325 s
+    /// suite, and the same dead wall-clock on the production install path. Those roots are no
+    /// longer waited on at all (<see cref="CoverGrantExpected"/>), so what remains is the case
+    /// where a grant genuinely IS owed — and there it is observable in MILLISECONDS:
+    /// <c>GatingDetectorTest.Detector_sees_a_cover_grant_that_lands</c> measures the real
+    /// write→observe latency on a live mesh and it comes back in <b>44–55 ms</b> over repeated runs,
+    /// a hundred-fold
+    /// inside this budget. The hub is already up by the time this starts (phase 1 paid the
+    /// activation under <see cref="WarmTimeout"/>), so the only outstanding work is one
+    /// access-table write.</para>
+    ///
+    /// <para>The trade is deliberate: a gating pass slower than this budget is now REPORTED rather
+    /// than waited out. Nothing relies on the waiting — the phase's result is discarded, and roots
+    /// typed outside the package are skipped outright, so this step already "cannot change what is
+    /// installed or who can read it" (see the call site). What it can do is say so, loudly.</para>
     /// </summary>
-    private static readonly TimeSpan GatingSettleTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan GatingDetectorBudget = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// How many cover-grant waits may be in flight at once. Each is a LIVE mesh query held open
     /// until its grant lands, so an unbounded fan-out over a large install is a self-inflicted
     /// query storm — the shape that saturates the action block and takes the liveness probe with
     /// it. Small on purpose: the waits overlap, so the phase still finishes in one
-    /// <see cref="GatingSettleTimeout"/> rather than one per root.
+    /// <see cref="GatingDetectorBudget"/> rather than one per root.
     /// </summary>
     private const int GatingWaitConcurrency = 4;
 
@@ -426,6 +450,61 @@ public static class PackageInstaller
     /// never writes it, which this treats as "nothing to wait for", never as a failure.</para>
     /// </summary>
     internal static string CoverGrantPath(string partition) => $"{partition}/_Access/Public_Access";
+
+    /// <summary>What the cover-grant deadlock detector saw for one installed root.</summary>
+    internal enum GatingOutcome
+    {
+        /// <summary>Nothing is owed. This install PUBLISHED the partition itself (or there is no
+        /// mesh service to ask), so no gating pass is going to write a cover grant and there is
+        /// nothing to wait for — the shape the old code spent its whole budget on.</summary>
+        NotExpected,
+
+        /// <summary>The cover grant landed: the partition installs gated AND is readable.</summary>
+        Landed,
+
+        /// <summary>The budget expired on a partition that installs GATED — the one outcome this
+        /// detector exists to catch. Reported LOUDLY; never fatal.</summary>
+        Stalled,
+    }
+
+    /// <summary>
+    /// Is a cover grant OWED for <paramref name="root"/> — i.e. did this install deliberately leave
+    /// the partition gated, so that a plugin-side gating pass is the only thing that can make it
+    /// readable? Pure, and the whole reason the detector no longer costs 30 s on every install.
+    ///
+    /// <para>🚨 <b>The discriminator is core's OWN decision, never the node type.</b>
+    /// <c>Store/Plugin</c>, <c>PluginContent</c> and <c>AddPluginGating</c> live in the plugins
+    /// repo; core cannot take a dependency on them, which is exactly why the grant is addressed as
+    /// a well-known PATH (<see cref="CoverGrantPath"/>). But core does not need to ask the type:
+    /// <see cref="EnsureDeclaredAccess"/> is the ONE access-establishment step of an install and it
+    /// already states, per manifest, whether it published the partition or left it gated —
+    /// <see cref="DeclaredAccessMarker"/> names the node it wrote and is <c>null</c> exactly when it
+    /// wrote nothing (the COMMERCIAL branch: any non-zero price, or a contact-sales address). So:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><b>Free / pre-installed</b> — the installer wrote <c>{partition}/_Policy ·
+    ///     PublicRead = true</c>. The partition is readable through that policy whether or not any
+    ///     gate ever covers it, and <see cref="VerifyDeclaredAccess"/> already re-reads that marker
+    ///     and reports its absence as an ERROR. Waiting here adds nothing.</item>
+    ///   <item><b>Free with declared public segments</b> — the installer wrote the root
+    ///     <c>Public</c> Viewer grant, which IS this very cover grant. Waiting here waits on the
+    ///     installer's own write, already verified one phase earlier by a storage read that does
+    ///     not have to travel through the query index.</item>
+    ///   <item><b>Commercial</b> — the installer wrote NOTHING on purpose: the partition lands
+    ///     gated and only the entitlement machinery can open it. Its cover grant is the single
+    ///     observable proof that a gating pass ran, and its absence means every viewer is denied,
+    ///     including on the <c>Subscribe</c> cover that would sell the package. THIS is worth
+    ///     detecting.</item>
+    /// </list>
+    ///
+    /// <para>Restricted to the partition the manifest actually speaks for. A root this package
+    /// wrote into but does not target is one core has made no access statement about, so it has no
+    /// honest opinion to offer and stays silent rather than inventing a verdict.</para>
+    /// </summary>
+    internal static bool CoverGrantExpected(PackageManifest manifest, string? root) =>
+        !string.IsNullOrWhiteSpace(root)
+        && string.Equals(root, manifest.TargetPartition ?? manifest.Id, StringComparison.Ordinal)
+        && DeclaredAccessMarker(manifest, root) is null;
 
     /// <summary>
     /// ACTIVATES each partition root this install just wrote, by opening its node stream once.
@@ -460,27 +539,48 @@ public static class PackageInstaller
     /// failing hook is logged and never fails the install.</para>
     /// </summary>
     /// <summary>
-    /// Waits for <paramref name="root"/>'s cover grant to exist, so an install that has returned
-    /// really is readable.
+    /// Watches <paramref name="root"/>'s cover grant for as long as
+    /// <see cref="GatingDetectorBudget"/>, so an install that returns over a GATED partition either
+    /// knows it is readable or SAYS that it is not.
     ///
-    /// <para>Bounded by <see cref="GatingSettleTimeout"/> and never fatal: a partition whose node
-    /// type does not gate never writes the grant, and that is a normal, common shape (a course
-    /// copied into a viewer's home, a plain data partition). The timeout is therefore the
-    /// "nothing to wait for" answer as well as the "gating did not settle" answer — which is why
-    /// it LOGS the distinction it can observe instead of pretending to know which it was.</para>
+    /// <para>🚨 <b>The defect this closes.</b> The wait used to run on every in-package-typed root
+    /// while its own doc comment called the missing grant normal — "a partition whose node type
+    /// does not gate never writes it" — so on the shape the code itself called normal the query
+    /// could never emit, the install paid the whole 30 s, and the only trace was ONE Information
+    /// line that read the same as the healthy case. Both halves are fixed here: the case that
+    /// cannot succeed is not waited on (<see cref="CoverGrantExpected"/>), and the case that can is
+    /// bounded by a detector budget and reported at WARNING when it expires.</para>
+    ///
+    /// <para><b>Never fatal.</b> The content is committed and recorded by the time this runs, and
+    /// the caller discards the outcome — an unreadable partition is worth a loud diagnosis, never
+    /// worth failing an install that succeeded. WARNING and not ERROR on purpose: the budget's
+    /// expiry proves the grant is not there YET, not that it will never come, and
+    /// <see cref="VerifyDeclaredAccess"/> owns the error-level verdict for the access core itself
+    /// promised to write.</para>
     /// </summary>
-    private static IObservable<Unit> WaitForGating(
-        IMessageHub hub, string root, ILogger? logger)
+    // Internal for the GatingDetectorTest pin (InternalsVisibleTo): a detector nothing exercises is
+    // a detector nobody knows is broken — which is how this one came to log the wedged case and the
+    // normal case with the same line and the same level.
+    internal static IObservable<GatingOutcome> DetectGatingStall(
+        IMessageHub hub, PackageManifest manifest, string root, ILogger? logger)
     {
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
-            return Observable.Return(Unit.Default);
+            return Observable.Return(GatingOutcome.NotExpected);
+
+        if (!CoverGrantExpected(manifest, root))
+        {
+            logger?.LogDebug(
+                "[PackageInstaller] no cover grant is owed for root {Root}: this install published "
+                + "the partition itself ({Marker}), so nothing here is waiting on a gating pass",
+                root, DeclaredAccessMarker(manifest, root) ?? "(a root this manifest does not target)");
+            return Observable.Return(GatingOutcome.NotExpected);
+        }
 
         var grant = CoverGrantPath(root);
-        // 🚨 A children LISTING, never an exact-path stream. The grant is OPTIONAL by this
-        // method's own contract ("a partition whose node type does not gate never writes it"),
-        // and an exact-path GetMeshNodeStream on an absent node does not wait — the owner answers
-        // an authoritative routing NotFound that TERMINATES the stream, and that NotFound opens
+        // 🚨 A QUERY, never an exact-path stream. The grant is OPTIONAL, and an exact-path
+        // GetMeshNodeStream on an absent node does not wait — the owner answers an authoritative
+        // routing NotFound that TERMINATES the stream, and that NotFound opens
         // MeshNodeStreamCache's storm-breaker window on the path. The breaker fast-fails WRITES
         // too, so this wait SUPPRESSED THE VERY WRITE IT WAS WAITING FOR: the gating pass's own
         // CreateOrUpdateNodeRequest for the grant then never completed, and the caller sat out its
@@ -489,15 +589,15 @@ public static class PackageInstaller
         // TimeoutException → the provisioning plan failing in its create-home-root phase
         // (Systemorph/MeshWeaver#2229 item A, reproduced on MeshWeaver.Education CI).
         //
-        // A listing is empty-on-absent, so the watcher can be in place long before the node is
+        // A query is empty-on-absent, so the watcher can be in place long before the node is
         // written, and it is LIVE — the grant landing emits. Nothing here reads Content, so the
         // index's lag costs at most one extra beat of waiting; existence is all this asks.
         // See Doc/Architecture/CqrsAndContentAccess.md → "An OPTIONAL node".
         // 🚨 Anchored at the EXACT grant, never a page of the _Access container's children.
         // A `scope:children … limit:N` listing can MISS a grant that exists — a partition with more
-        // than N access entries puts it off the first page — and the wait would then time out for a
+        // than N access entries puts it off the first page — and the detector would then fire for a
         // partition that is perfectly readable. That is the same user-visible symptom this method
-        // was just fixed for (a false "no cover grant"), reintroduced by a rarer and harder-to-
+        // was once fixed for (a false "no cover grant"), reintroduced by a rarer and harder-to-
         // diagnose route.
         //
         // `path:{grant}` with no `scope:` qualifier is QueryScope.Exact, whose contract for a path
@@ -514,20 +614,22 @@ public static class PackageInstaller
                 $"path:{grant} nodeType:{AccessAssignmentNodeType.NodeType}"))
             .Where(change => change.Items.Count > 0)
             .Take(1)
-            .Select(_ => Unit.Default)
+            .Select(_ => GatingOutcome.Landed)
             .Do(_ => logger?.LogInformation(
                 "[PackageInstaller] root {Root} is gated and readable — its cover grant landed",
                 root))
-            .Timeout(GatingSettleTimeout)
-            .Catch<Unit, Exception>(_ =>
+            .Timeout(GatingDetectorBudget)
+            .Catch<GatingOutcome, Exception>(_ =>
             {
-                logger?.LogInformation(
-                    "[PackageInstaller] root {Root} has no cover grant after {Seconds}s. Either its "
-                    + "node type does not gate (normal — a course copy or a plain partition), or the "
-                    + "gating pass has not settled and the partition will DENY viewers until it "
-                    + "does. The install itself is complete either way.",
-                    root, GatingSettleTimeout.TotalSeconds);
-                return Observable.Return(Unit.Default);
+                logger?.LogWarning(
+                    "[PackageInstaller] {Id} installed into {Root} GATED — it is commercial, so the "
+                    + "installer published no access shape on purpose — but its cover grant {Grant} "
+                    + "has not appeared after {Seconds}s. Until a gating pass writes it the "
+                    + "partition DENIES every viewer, including on the Subscribe cover that would "
+                    + "sell it. The install itself is complete; what is missing is the gating "
+                    + "machinery (the Store's PluginGate) or its pass over this root.",
+                    manifest.Id, root, grant, GatingDetectorBudget.TotalSeconds);
+                return Observable.Return(GatingOutcome.Stalled);
             });
     }
 
@@ -1446,7 +1548,7 @@ public static class PackageInstaller
     }
 
     private static IObservable<Unit> WarmInstalledRoots(
-        IMessageHub hub, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
+        IMessageHub hub, PackageManifest manifest, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
     {
         var workspace = hub.GetWorkspace();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -1521,11 +1623,10 @@ public static class PackageInstaller
         // READABLE runs off the activation, so returning at the end of phase 1 reports a clean
         // install over a partition whose cover still denies every viewer. Wait for the grant itself.
         //
-        // 🚨 But the wait must NOT ride the sequential chain. It only OBSERVES — a listing, no
-        // write — so it carries none of the serialisation phase 1 needs, and GatingSettleTimeout is
-        // ALSO the "this partition does not gate" answer, which is a normal and common shape. Ridden
-        // sequentially, a boot installing eight non-gating packages would pay the bound eight times
-        // over (~4 minutes of dead air). Merged, the whole install pays it at most once.
+        // 🚨 But the wait must NOT ride the sequential chain. It only OBSERVES — a query, no
+        // write — so it carries none of the serialisation phase 1 needs, and ridden sequentially a
+        // boot installing eight gated packages would pay the detector budget eight times over.
+        // Merged, the whole install pays it at most once.
         //
         // The predecessor of this code appeared to be fast here, but only because it asked an
         // exact-path GetMeshNodeStream about a node that is usually absent: that NotFounds
@@ -1541,11 +1642,20 @@ public static class PackageInstaller
                 // root typed by something this install did not bring, there is no gating pass of ours
                 // to wait for and the bound would be spent entirely on dead air.
                 //
-                // This can only ever skip a DIAGNOSTIC: WaitForGating is documented "never fatal",
-                // its result is discarded, and its whole product is the log line below it. It cannot
-                // change what is installed or who can read it.
+                // 🚨 …and only roots this install left GATED (CoverGrantExpected). That filter is
+                // the fix for the stall: the grant is optional BY THIS METHOD'S OWN CONTRACT, so on
+                // a partition the installer itself published, the query could never emit and every
+                // install paid the whole budget before proceeding green — 30.2 s each, 60.4 s for a
+                // test doing two installs, on the PRODUCTION install path as much as in the suite.
+                // Filtering here rather than inside the detector keeps the merge width honest: a
+                // root with nothing owed does not occupy one of GatingWaitConcurrency's slots.
+                //
+                // This can only ever skip a DIAGNOSTIC: DetectGatingStall is documented "never
+                // fatal", its result is discarded, and its whole product is the log line inside it.
+                // It cannot change what is installed or who can read it.
                 var gating = warmed
                     .Where(root => InPackageTypeOf(root, nodes) is not null)
+                    .Where(root => CoverGrantExpected(manifest, root))
                     .ToList();
                 if (gating.Count == 0)
                     return Observable.Return(Unit.Default);
@@ -1557,7 +1667,8 @@ public static class PackageInstaller
                 // leaving the subscriber latched as system-security (#1790, and the shape
                 // ImpersonationScopeSiteRatchetGuard refuses at any new site).
                 return accessService.RunAsSystem(() => gating
-                    .Select(root => WaitForGating(hub, root, logger))
+                    .Select(root => DetectGatingStall(hub, manifest, root, logger)
+                        .Select(_ => Unit.Default))
                     .ToObservable()
                     // 🚨 BOUNDED. A bare Merge() subscribes every root at once, and each one is a
                     // LIVE mesh query held open until the grant lands or the bound elapses — a boot
@@ -1566,7 +1677,7 @@ public static class PackageInstaller
                     // saturated -> liveness probe times out -> pod pulled from the Service -> 502 ->
                     // SIGKILL. Merge's own maxConcurrent is the bound (never a SemaphoreSlim, which
                     // parks a hub thread); it costs nothing in latency here because the waits
-                    // overlap, and the whole phase is still capped by GatingSettleTimeout.
+                    // overlap, and the whole phase is still capped by GatingDetectorBudget.
                     .Merge(GatingWaitConcurrency)
                     .DefaultIfEmpty(Unit.Default)
                     .LastAsync());
@@ -1881,7 +1992,7 @@ public static class PackageInstaller
                 return releases
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, all.Length, authorizingUserId: authorizingUserId))
-                    .SelectMany(_ => WarmInstalledRoots(hub, all, logger))
+                    .SelectMany(_ => WarmInstalledRoots(hub, manifest, all, logger))
                     .Select(_ => result);
             });
     }
@@ -2716,7 +2827,7 @@ public static class PackageInstaller
                     .SelectMany(_ => result.Written > 0
                         ? RequestReleases(hub, deferredWave, logger)
                         : Observable.Return(System.Reactive.Unit.Default))
-                    .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
+                    .SelectMany(_ => WarmInstalledRoots(hub, manifest, nodes, logger))
                     // …then the package's committed binaries (course videos/posters) into the
                     // warmed root's content collection — the half of "publish" that merging used
                     // to leave undone (#848).
@@ -2997,7 +3108,7 @@ public static class PackageInstaller
                         hub, manifest, manifest.TargetPartition ?? manifest.Id, logger))
                     .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
                         newManifest.Files.Count, newManifest, authorizingUserId))
-                    .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
+                    .SelectMany(_ => WarmInstalledRoots(hub, manifest, nodes, logger))
                     // A changed BINARY is a changed file like any other: manifest.lock hashes the
                     // `content/**` assets too, so a re-cut video is in `changedFiles` and an
                     // unchanged one never travels. This is what keeps the incremental path cheap
