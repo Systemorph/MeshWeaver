@@ -138,6 +138,13 @@ public static class ProjectBuild
 
         /// <summary>Overrides the process's TPA list; for tests that have no container.</summary>
         public string? TrustedPlatformAssemblies { get; init; }
+
+        /// <summary>
+        /// The PLATFORM image's <c>shared/</c> frameworks root — required whenever
+        /// <see cref="AppDirectory"/> comes from a different image than the one running this
+        /// builder (see <see cref="ContainerReferenceSet.Read"/>). Null = the running runtime's.
+        /// </summary>
+        public string? SharedFrameworksRoot { get; init; }
     }
 
     /// <summary>One project's build.</summary>
@@ -242,7 +249,8 @@ public static class ProjectBuild
         ContainerReferenceSet container;
         try
         {
-            container = ContainerReferenceSet.Read(options.AppDirectory, options.TrustedPlatformAssemblies);
+            container = ContainerReferenceSet.Read(
+                options.AppDirectory, options.TrustedPlatformAssemblies, options.SharedFrameworksRoot);
         }
         catch (ContainerReferenceSet.UnreadableContainerException ex)
         {

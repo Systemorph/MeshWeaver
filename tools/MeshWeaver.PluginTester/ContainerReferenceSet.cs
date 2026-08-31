@@ -78,10 +78,20 @@ public sealed class ContainerReferenceSet
     /// <param name="trustedPlatformAssemblies">The process's TPA list — the shared framework plus
     /// this app's own closure. Defaults to the running process's; injectable so the fail-closed
     /// behaviour is testable without a container.</param>
+    /// <param name="sharedFrameworksRoot">The PLATFORM image's <c>shared/</c> frameworks root
+    /// (<c>&lt;dotnet root&gt;/shared</c>, one directory per framework, one per version below it).
+    /// 🚨 Pass it whenever the app directory comes from a DIFFERENT image than the one this
+    /// process runs in: the module lands in the PLATFORM's runtime, whose ASP.NET Core shared
+    /// framework supplies assemblies (FileSystemGlobbing, Components.Web…) that a console-image
+    /// builder's own runtime does not have — measured on MeshWeaver.Plugins#1032, where every
+    /// container entry redded on Microsoft.Extensions.FileSystemGlobbing, a framework-provided
+    /// (NU1510-prunable) assembly the portal runtime carries and the tester image does not. When
+    /// null, the RUNNING runtime's shared root is used, which is correct only in-place.</param>
     /// <returns>The reference set.</returns>
     /// <exception cref="UnreadableContainerException">Anything that would leave the set partial.</exception>
     public static ContainerReferenceSet Read(
-        string? appDirectory = null, string? trustedPlatformAssemblies = null)
+        string? appDirectory = null, string? trustedPlatformAssemblies = null,
+        string? sharedFrameworksRoot = null)
     {
         var app = Path.GetFullPath(appDirectory ?? DefaultAppDirectory);
         if (!Directory.Exists(app))
@@ -111,7 +121,7 @@ public sealed class ContainerReferenceSet
         //    modules reported Microsoft.AspNetCore.Components.Web "not supplied" against an image
         //    that ships it. This is the C# form of Directory.PlatformRefs.targets'
         //    <FrameworkReference Include="Microsoft.AspNetCore.App" />.
-        foreach (var path in SharedFrameworkAssemblies())
+        foreach (var path in SharedFrameworkAssemblies(sharedFrameworksRoot))
             byName.TryAdd(Path.GetFileNameWithoutExtension(path), path);
 
         // 2. This process's own closure.
@@ -146,15 +156,35 @@ public sealed class ContainerReferenceSet
     /// grandparent is the <c>shared</c> root. Returns nothing when that shape does not hold — a
     /// self-contained deployment has no shared root, and TPA already carries everything there.</para>
     /// </summary>
-    private static IEnumerable<string> SharedFrameworkAssemblies()
+    private static IEnumerable<string> SharedFrameworkAssemblies(string? explicitRoot = null)
     {
-        var runtime = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
-        var frameworkDirectory = Path.GetDirectoryName(runtime.TrimEnd(Path.DirectorySeparatorChar, '/'));
-        var sharedRoot = frameworkDirectory is null ? null : Path.GetDirectoryName(frameworkDirectory);
-        if (sharedRoot is null
-            || !string.Equals(Path.GetFileName(sharedRoot), "shared", StringComparison.OrdinalIgnoreCase)
-            || !Directory.Exists(sharedRoot))
-            yield break;
+        string? sharedRoot;
+        if (explicitRoot is { Length: > 0 })
+        {
+            // The PLATFORM's frameworks, handed over explicitly (see Read). A named root that is
+            // not there is a hard failure — silently falling back to the builder's own runtime
+            // would resurrect exactly the false "additional library" verdicts this parameter
+            // exists to kill.
+            sharedRoot = Path.GetFullPath(explicitRoot);
+            if (!Directory.Exists(sharedRoot))
+                throw new UnreadableContainerException(
+                    $"--shared-frameworks '{sharedRoot}' does not exist. It must be the platform "
+                    + "image's <dotnet root>/shared directory; without it, framework-provided "
+                    + "assemblies read as missing packages.");
+        }
+        else
+        {
+            var runtime = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
+            var frameworkDirectory = Path.GetDirectoryName(runtime.TrimEnd(Path.DirectorySeparatorChar, '/'));
+            sharedRoot = frameworkDirectory is null ? null : Path.GetDirectoryName(frameworkDirectory);
+            // The name check only guards the DERIVED shape (a self-contained deployment has no
+            // shared root and TPA already carries everything); an explicit root was validated above
+            // and may be mounted under any name.
+            if (sharedRoot is null
+                || !string.Equals(Path.GetFileName(sharedRoot), "shared", StringComparison.OrdinalIgnoreCase)
+                || !Directory.Exists(sharedRoot))
+                yield break;
+        }
 
         foreach (var framework in Directory.GetDirectories(sharedRoot).OrderBy(d => d, StringComparer.Ordinal))
         {

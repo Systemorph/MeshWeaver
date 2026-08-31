@@ -617,9 +617,18 @@ jobs:
               # The reference set: the platform image's /app, extracted ONCE and mounted read-only.
               # docker create + cp rather than a run — the portal's entrypoint must never start here.
               platform_app="$RUNNER_TEMP/platform-app"
-              rm -rf "$platform_app"
+              platform_shared="$RUNNER_TEMP/platform-shared"
+              rm -rf "$platform_app" "$platform_shared"
               pcid=$(docker create --platform linux/amd64 "$pinned")
               docker cp -q "$pcid:/app" "$platform_app"
+              # 🚨 The platform's SHARED FRAMEWORKS ride too — the reference set is the RUNTIME the
+              # module lands in, and that runtime's ASP.NET Core framework supplies assemblies the
+              # tester image's console runtime does not (measured on Plugins#1032: every container
+              # entry red on Microsoft.Extensions.FileSystemGlobbing, which lives in the portal's
+              # Microsoft.AspNetCore.App and nowhere in the tester image). /usr/share/dotnet/shared
+              # is the aspnet base image's layout; a portal image without it must fail HERE, by
+              # name, not later as a false "additional library".
+              docker cp -q "$pcid:/usr/share/dotnet/shared" "$platform_shared"                 || { docker rm "$pcid" >/dev/null; echo "::error::could not extract /usr/share/dotnet/shared from $pinned — the platform image's shared frameworks ARE part of the reference set (they supply framework-provided packages like Microsoft.Extensions.FileSystemGlobbing); if the base image moved its dotnet root, update this extraction rather than letting framework assemblies read as missing packages"; exit 1; }
               docker rm "$pcid" >/dev/null
               out="$RUNNER_TEMP/module-build"
               rm -rf "$out"; mkdir -p "$out"; chmod 777 "$out"
@@ -637,9 +646,10 @@ jobs:
               docker run --rm --init --platform linux/amd64 \
                 -v "$GITHUB_WORKSPACE:/repo:ro" \
                 -v "$platform_app:/platform-app:ro" \
+                -v "$platform_shared:/platform-shared:ro" \
                 -v "$out:/out" \
                 --entrypoint /app/mw-plugin-test "$tester_pinned" \
-                build-project "/repo/$PROJECT" --app /platform-app --output /out ${accepts[@]+"${accepts[@]}"} 2>&1 | tee "$log"
+                build-project "/repo/$PROJECT" --app /platform-app --shared-frameworks /platform-shared --output /out ${accepts[@]+"${accepts[@]}"} 2>&1 | tee "$log"
               # build-project emits <output>/<AssemblyName>/, so the module folder IS the pack input.
               packdir="$out/$MODULE"
               if [ ! -f "$packdir/$MODULE.dll" ]; then
