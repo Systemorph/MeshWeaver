@@ -802,6 +802,20 @@ jobs:
               "$manifest" > /dev/null \
               || { echo "::error::the container-built bundle carries a non-MeshWeaver assembly, which contradicts the reason it needs no --deps-closure: every reference was supposed to resolve from the image's /app"; exit 1; }
             echo "container path: closure is entry + module-owned MeshWeaver siblings only, as derived"
+            # 🚨 The STATIC-ASSET half, asserted — because its absence is the one failure with no
+            # symptom at any later gate: the publish 200s, the module lands and loads, every page
+            # renders, only UNSTYLED (#2221's exact signature; PluginBundlePublishAssetsTest names
+            # it). The packer nulls `staticAssets` when the pack input has no wwwroot, and nothing
+            # downstream distinguishes "this module ships no assets" from "the compiler forgot
+            # them" — so this lane distinguishes it HERE, from the source of truth: a project that
+            # has *.razor.css or wwwroot/ in its tree must produce a bundle that declares assets.
+            src_dir="$GITHUB_WORKSPACE/$(dirname "$PROJECT")"
+            if [ -d "$src_dir/wwwroot" ] \
+               || find "$src_dir" -name '*.razor.css' -not -path '*/bin/*' -not -path '*/obj/*' -print -quit | grep -q .; then
+              jq -e '(.module.staticAssets // []) | length > 0' "$manifest" > /dev/null \
+                || { echo "::error::$MODULE has wwwroot/ or *.razor.css in its source tree, but the container-built bundle declares NO staticAssets — it would land, load, and render unstyled with nothing in any log (#2221). The builder must emit wwwroot/ (its .styles.css aggregate included) into the pack input."; exit 1; }
+              echo "container path: staticAssets declared ($(jq '(.module.staticAssets // []) | length' "$manifest") file(s)) for a source tree that has assets"
+            fi
           fi
           echo "path=$bundle" >> "$GITHUB_OUTPUT"
           echo "bundle OK:"; jq . "$manifest"

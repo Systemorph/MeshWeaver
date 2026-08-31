@@ -794,10 +794,12 @@ public static class ProjectBuild
                     model.CompileItems.Length, 0, warnings, null, [], reason);
             }
             NameTheDocumentationFile(outputDirectory, model);
+            var scopedCssCount = EmitStaticAssets(outputDirectory, model, sink, name);
             sink.Info(
                 $"[{name}] OK — {model.CompileItems.Length} source file(s)"
                 + (razorGenerated == 0 ? "" : $" + {model.RazorItems.Length} Razor file(s)")
                 + (model.EmbeddedResources.IsEmpty ? "" : $" + {model.EmbeddedResources.Length} resource(s)")
+                + (scopedCssCount == 0 ? "" : $" + {scopedCssCount} scoped stylesheet(s)")
                 + $", {warnings} warning(s), "
                 + $"{artifact.Length} bytes in {clock.Elapsed.TotalMilliseconds:F0} ms → {artifact.DllPath}");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
@@ -834,6 +836,50 @@ public static class ProjectBuild
         .. model.EmbeddedResources.Select(resource => new ResourceDescription(
             resource.ManifestName, () => File.OpenRead(resource.Path), isPublic: true)),
     ];
+
+    /// <summary>
+    /// The static-asset half of the module: the project's own <c>wwwroot/**</c> copied verbatim,
+    /// plus the CSS-isolation aggregate <c>wwwroot/&lt;AssemblyName&gt;.styles.css</c> — each
+    /// <c>*.razor.css</c> rewritten under the SAME scope the generator stamped into the markup
+    /// (<see cref="ScopedCss"/>), concatenated in item order. The packer sweeps <c>wwwroot/</c>
+    /// into the bundle's <c>staticAssets</c>, and the portal's module-asset host links the
+    /// aggregate at runtime — without this a converted pack lands, loads, and renders UNSTYLED
+    /// with nothing in any log (#2221's signature).
+    /// </summary>
+    /// <returns>How many scoped stylesheets went into the aggregate.</returns>
+    private static int EmitStaticAssets(
+        string outputDirectory, ProjectFile.Model model, Sink sink, string name)
+    {
+        var projectDirectory = Path.GetDirectoryName(model.ProjectPath)!;
+        var wwwroot = Path.Combine(projectDirectory, "wwwroot");
+        var target = Path.Combine(outputDirectory, "wwwroot");
+        if (Directory.Exists(wwwroot))
+        {
+            foreach (var file in Directory.GetFiles(wwwroot, "*", SearchOption.AllDirectories))
+            {
+                var destination = Path.Combine(target, Path.GetRelativePath(wwwroot, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(file, destination, overwrite: true);
+            }
+            sink.Info($"[{name}] static assets: wwwroot/ copied "
+                + $"({Directory.GetFiles(wwwroot, "*", SearchOption.AllDirectories).Length} file(s))");
+        }
+
+        var scoped = model.RazorItems
+            .Where(item => item.CssScope is { Length: > 0 })
+            .Select(item => (
+                RelativePath: item.TargetPath + ".css",
+                Rewritten: ScopedCss.Rewrite(File.ReadAllText(item.Path + ".css"), item.CssScope!)))
+            .ToImmutableArray();
+        if (scoped.IsEmpty)
+            return 0;
+        Directory.CreateDirectory(target);
+        var aggregatePath = Path.Combine(target, model.AssemblyName + ".styles.css");
+        File.WriteAllText(aggregatePath, ScopedCss.Aggregate(scoped.Select(s => (s.RelativePath, s.Rewritten))));
+        sink.Info($"[{name}] css isolation: {scoped.Length} scoped stylesheet(s) → "
+            + $"wwwroot/{model.AssemblyName}.styles.css (scopes match the generated markup)");
+        return scoped.Length;
+    }
 
     /// <summary>How many resource names a build lists before it counts the rest instead.</summary>
     internal const int MaxListedResources = 25;
