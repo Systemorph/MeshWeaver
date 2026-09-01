@@ -676,7 +676,23 @@ public record MessageHubConfiguration
     // covered the test-side post but intermediate sync/mesh hubs still
     // followed the 30s default. 60s as a framework default matches that
     // ceiling; anything genuinely longer than that is a real bug.
-    internal TimeSpan RequestTimeout { get; init; } = new(0, 1, 0);
+    internal TimeSpan RequestTimeout { get; init; } = DefaultRequestTimeout;
+
+    /// <summary>
+    /// 🚨 THE FRAMEWORK'S LAST-RESORT REQUEST CEILING — <b>60 s</b>, and the OUTER bound every
+    /// nested budget must stay strictly inside.
+    ///
+    /// <para><b>Why this is public.</b> It was previously a bare literal on
+    /// <see cref="RequestTimeout"/>, invisible outside this assembly, so every nested bound that
+    /// needed to stay under it hand-copied the number into a comment instead of referencing it.
+    /// That is exactly how a nested bound drifts up until it EQUALS this one — and an inner bound
+    /// that cannot fire first cannot deliver its diagnostic, so the caller gets this ceiling's
+    /// generic "No response received in hub …" instead of the specific reason. See
+    /// <c>ReadBudget</c>'s class remarks for the rule and its incident history, and
+    /// <c>NodeTypeEnrichmentHelpers.SlowPathTimeout</c> for the bound this exists to keep honest.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// Quiescing-phase drain budget per hub. When <see cref="MessageHub.Dispose"/> fires,
