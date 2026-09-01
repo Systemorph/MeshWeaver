@@ -128,19 +128,25 @@ messages and its terminal status.
 | Status | Meaning |
 |---|---|
 | `Dispatched` | The owning hub accepted the submission and created the run's `ActivityLog`. Watch `activityPath` for `Running → Succeeded / Warning / Failed`. |
-| `Error` | The run never started. `errorType` names the condition and `message` explains it — see below. **Nothing was executed**, so no side effects occurred. |
+| `Error` | The run did not start, **or it is not known whether it started**. `errorType` says which — read the table below before deciding whether a retry is safe. |
 
-### Failing fast: `errorType`
+### `errorType` — and whether a retry is safe
 
-Two of the three reasons a target cannot run a script are decidable **before** anything is
-dispatched, and are decided that way — from one bounded read of the target node, with the caller's
-own `timeoutSeconds` as the ceiling:
+**Every** `Error` reply carries an `errorType`, so a caller can always branch on it. Two of the
+conditions are decidable **before** anything is dispatched, and are decided that way — from one
+bounded read of the target node, with the caller's own `timeoutSeconds` as the ceiling:
 
-| `errorType` | Meaning | What to do |
-|---|---|---|
-| `NodeNotFound` | There is no readable node at that path. | Check the path. A denied read reports the same way on purpose — saying "denied" would disclose that a gated node exists there. |
-| `NotExecutable` | The node exists but carries no `CodeConfiguration`, or carries one with `isExecutable: false`. | Point at a `Code` node, or set `isExecutable: true` on it. |
-| *(an exception type name)* | The dispatch itself failed — undeliverable, refused by the owning hub, or the budget elapsed. | `message` and `detail` carry the type and stack; the owning hub has logged the full cause. |
+| `errorType` | Meaning | Side effects | What to do |
+|---|---|---|---|
+| `NodeNotFound` | There is no readable node at that path. | **None** — nothing was dispatched. | Check the path. A denied read reports the same way on purpose — saying "denied" would disclose that a gated node exists there. |
+| `NotExecutable` | The node exists but carries no `CodeConfiguration`, or carries one with `isExecutable: false`. | **None** — nothing was dispatched. | Point at a `Code` node, or set `isExecutable: true` on it. |
+| `DispatchRefused` | The owning hub was reached and said no (unreadable node, activity creation refused, a fault while starting the run). | **None** — the hub creates no `ActivityLog` on any refusal path. | `message` carries the hub's own verdict; the hub has logged the full cause. |
+| `NoActivityPath` | The hub **accepted** the submission but returned no activity path. | 🚨 **Possible** — the run may be under way, it simply cannot be observed. | Check the Code node's activity history before re-running; a blind retry can run the script twice. |
+| *(an exception type name)* | The dispatch itself failed — undeliverable, or the acknowledgement never arrived within the budget. | 🚨 **Unknown** — "no acknowledgement" is not "not delivered". | `message` and `detail` carry the type and stack. Check the activity history before retrying. |
+
+> 🚨 **"Error" does not universally mean "nothing happened."** The two pre-flight verdicts and a hub
+> refusal are genuinely side-effect free. The last two are not: an acknowledgement that never came
+> back says nothing about whether the submission landed, so a retry can run the script a second time.
 
 > 🚨 **The pre-flight refuses only on a DEFINITIVE answer.** A read that reaches no verdict inside
 > its budget is *unknown*, not *absent* — so it never refuses; the dispatch proceeds exactly as it
