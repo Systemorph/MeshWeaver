@@ -148,8 +148,15 @@ NAMESPACE_RE = re.compile(
 # type, which no module binds by its own simple name and which is therefore out of scope.
 TOP_LEVEL_INDENT = {";": 0, "{": 4, "": 4}
 
+# 🚨 The attribute may be written BARE (with `using System.Runtime.CompilerServices;`) or FULLY
+# QUALIFIED — both compile to the same ExportedType row, so both must be recognised. The optional
+# `(?:[\w.]*\.)?` is what makes that true. Without it the gate refused a correct forwarder and
+# demanded one that was already there, which is exactly the shape this file's own header warns
+# about: "a gate that only understood one of the two spellings would demand a forwarder that is
+# already there" — and a gate that rejects correct work is how people learn to allow-list past it.
+# `\s*` already spans newlines, so a split declaration was never the problem.
 FORWARD_RE = re.compile(
-    r"\[assembly:\s*TypeForwardedTo\s*\(\s*typeof\(\s*(?P<type>[A-Za-z_][\w.]*)\s*\)\s*\)\s*\]"
+    r"\[assembly:\s*(?:[\w.]*\.)?TypeForwardedTo\s*\(\s*typeof\(\s*(?P<type>[A-Za-z_][\w.]*)\s*\)\s*\)\s*\]"
 )
 
 # Paths under src/ that are NOT compiled into their assembly. `MeshWeaver.Documentation/Data` is
@@ -224,11 +231,17 @@ def parse_forwards(text: str) -> set[str]:
     # a far less likely way to disable one line. Truncating at `//` can also cut a string literal
     # containing a URL; harmless here, because the two regexes match declarations and assembly
     # attributes, neither of which lives inside a string.
-    return {
-        m.group("type")
-        for line in text.splitlines()
-        for m in FORWARD_RE.finditer(line.split("//", 1)[0])
-    }
+    # 🚨 Strip line comments FIRST, then match over the whole text — not per line. Matching per
+    # line silently defeated FORWARD_RE's `\s*`, so a forwarder wrapped across two lines did not
+    # count, which is how a long type name is naturally written:
+    #     [assembly: TypeForwardedTo(
+    #         typeof(MeshWeaver.ContentCollections.Indexing.DocumentPaths))]
+    # That is the same false-NEGATIVE class as the qualifier above: the gate demands a forwarder
+    # that is already there, and the way out people find is the allow file. Comment stripping keeps
+    # its own line granularity, so the #2398 negative control still holds — a commented-out
+    # forwarder contributes nothing.
+    stripped = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
+    return {m.group("type") for m in FORWARD_RE.finditer(stripped)}
 
 
 # ─────────────────────────────── tree readers ───────────────────────────────
@@ -567,6 +580,25 @@ SELF_TESTS: list[tuple] = [
             "src/MeshWeaver.AI/MeshPlugin.cs": AI_KEEP,
             "src/MeshWeaver.AI/TypeForwards.cs":
                 "[assembly: TypeForwardedTo(typeof(MeshWeaver.AI.MeshOperations))]\n",
+        },
+        True,
+    ),
+    (
+        "the forwarder is FULLY QUALIFIED — same ExportedType row, must be accepted",
+        {
+            "src/MeshWeaver.AI/MeshOperations.cs": AI_OPS_OLD,
+            "src/MeshWeaver.AI/MeshPlugin.cs": AI_KEEP,
+        },
+        {
+            "src/MeshWeaver.Mesh.Operations/MeshOperations.cs": AI_OPS_OLD,
+            "src/MeshWeaver.AI/MeshPlugin.cs": AI_KEEP,
+            # No `using System.Runtime.CompilerServices;` — so the attribute is written out in
+            # full, which the C# compiler accepts and emits identically. The gate refused exactly
+            # this shape until the qualifier was made optional, demanding a forwarder that was
+            # already there. Pinned so a narrowing of FORWARD_RE cannot quietly bring that back.
+            "src/MeshWeaver.AI/TypeForwards.cs":
+                "[assembly: System.Runtime.CompilerServices.TypeForwardedTo(\n"
+                "    typeof(MeshWeaver.AI.MeshOperations))]\n",
         },
         True,
     ),
