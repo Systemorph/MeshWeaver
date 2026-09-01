@@ -73,17 +73,98 @@ public static class MeshNodeImageHelper
     /// When the node carries no icon of its own, falls back to a default icon for its
     /// <see cref="MeshNode.NodeType"/> (<see cref="DefaultIconForNodeType"/>) so every node reads as
     /// its type rather than a bare letter — Markdown → document, Code → code, Agent → bot, etc.
+    ///
+    /// <para>This overload inherits NOTHING: it is the resolution for a caller that has only the one
+    /// node in hand. A caller that also holds the node's partition root — a page, a tab — passes it
+    /// to <see cref="ResolveNodeIcon(MeshNode?, MeshNode?)"/> and gets the package's mark instead of
+    /// a generic type glyph.</para>
     /// </summary>
-    public static string? ResolveNodeIcon(MeshNode? node) =>
+    public static string? ResolveNodeIcon(MeshNode? node) => ResolveNodeIcon(node, null);
+
+    /// <summary>
+    /// 🚨 THE RESOLUTION WITH PACKAGE-ROOT INHERITANCE — a node that carries no mark of its own
+    /// wears its PACKAGE's, ahead of the generic glyph for its type (issue #2075, item 2).
+    ///
+    /// <para><b>Why.</b> A lesson under <c>AgenticEngineering</c>, a game under <c>Chess</c>, a doc
+    /// under a store package: none of them authors an icon, so all of them resolved to the same
+    /// <c>document</c> / <c>box</c> chrome — in the page header and, worse, in the browser tab,
+    /// where "which package is this" is the only thing the 16 px square can usefully say. The
+    /// package roots DO carry marks, aligned to one visual language precisely so they read at that
+    /// size (MeshWeaver.Plugins #588).</para>
+    ///
+    /// <para><b>Only the root's OWN mark is inherited</b> — <see cref="MeshNode.Icon"/>, resolved
+    /// the same two ways a node's own icon is (a <c>content:</c> reference, a shipped glyph of that
+    /// name). Deliberately NOT the root's full chain: falling through to the root's NodeType default
+    /// would dress every doc under an unmarked package in the ROOT's type glyph instead of its own,
+    /// which is strictly worse than what it replaces.</para>
+    ///
+    /// <para><b>A partition root never inherits</b> — <see cref="PartitionRootPath"/> is null for a
+    /// single-segment path, so a root cannot resolve itself, and a supplied root that is not
+    /// actually this node's partition root is ignored rather than borrowed from.</para>
+    ///
+    /// <para><b>Still total</b>, exactly as the one-argument overload is: own icon → shipped glyph
+    /// of that name → the partition root's own mark → the NodeType default → the neutral box. Every
+    /// node resolves to something, so no card, tab or avatar can fall back to a bare initial.</para>
+    /// </summary>
+    /// <param name="node">The node whose icon is being resolved.</param>
+    /// <param name="partitionRoot">The node's partition root, when the caller has it — the node at
+    /// the FIRST segment of <paramref name="node"/>'s path. Null (the default, and the one-argument
+    /// overload) simply skips the inheritance step.</param>
+    public static string? ResolveNodeIcon(MeshNode? node, MeshNode? partitionRoot) =>
         node == null ? null
             // Guarantee a resolved icon for ANY non-null node so a card / avatar NEVER falls back to
             // the bare-initial (blue) placeholder: own Icon → the shipped glyph of the same name →
-            // NodeType default → a neutral box glyph (covers a typeless node, where
-            // DefaultIconForNodeType returns null).
+            // the partition root's own mark → NodeType default → a neutral box glyph (covers a
+            // typeless node, where DefaultIconForNodeType returns null).
             : ResolveContentPath(node.Icon, node.Path)
               ?? ShippedIconFor(node.Icon)
+              ?? InheritedIcon(node, partitionRoot)
               ?? DefaultIconForNodeType(node.NodeType)
               ?? NeutralIconUrl;
+
+    /// <summary>
+    /// The PARTITION ROOT path of a mesh path — its first segment — or null when there is no
+    /// distinct root to inherit from.
+    ///
+    /// <para>Null in exactly two cases, and both mean "nothing above this to inherit": an empty
+    /// path, and a path that IS a single segment. The second is the load-bearing one — a partition
+    /// root's own root is itself, and inheriting from yourself is a no-op at best and, once the
+    /// value is fed back through the chain, a way to make <c>Chess</c> resolve <c>Chess</c>
+    /// forever.</para>
+    /// </summary>
+    /// <param name="nodePath">A mesh node path, e.g. <c>AgenticEngineering/Lesson1</c>.</param>
+    public static string? PartitionRootPath(string? nodePath)
+    {
+        if (string.IsNullOrWhiteSpace(nodePath))
+            return null;
+        var segments = nodePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length <= 1 ? null : segments[0];
+    }
+
+    /// <summary>
+    /// The mark <paramref name="node"/> inherits from <paramref name="partitionRoot"/>, or null when
+    /// it inherits nothing.
+    ///
+    /// <para>🚨 The relationship is VERIFIED, not assumed: the supplied root is used only when its
+    /// path really is the first segment of the node's. A caller that hands over the wrong node —
+    /// the parent instead of the root, a stale frame from another page — gets no inheritance rather
+    /// than an unrelated package's mark on someone else's page, which is the failure that would be
+    /// invisible in a screenshot.</para>
+    /// </summary>
+    /// <param name="node">The node that would inherit.</param>
+    /// <param name="partitionRoot">The candidate partition root; null yields null.</param>
+    public static string? InheritedIcon(MeshNode? node, MeshNode? partitionRoot)
+    {
+        if (node is null || partitionRoot is null)
+            return null;
+        if (PartitionRootPath(node.Path) is not { } rootPath
+            || !string.Equals(rootPath, (partitionRoot.Path ?? "").Trim('/'),
+                StringComparison.OrdinalIgnoreCase))
+            return null;
+        // The root's OWN mark only — never its NodeType default, see ResolveNodeIcon's remarks.
+        return ResolveContentPath(partitionRoot.Icon, partitionRoot.Path)
+               ?? ShippedIconFor(partitionRoot.Icon);
+    }
 
     /// <summary>
     /// The shipped glyph matching a FLUENT ICON NAME, or null when none is shipped under that name.
@@ -302,7 +383,7 @@ public static class MeshNodeImageHelper
     /// 🚨 THE NODE'S ICON, READY FOR THE BROWSER TAB — a node page identifies itself in the tab
     /// strip rather than wearing the same portal favicon as every other page.
     ///
-    /// <para>Resolution is <see cref="ResolveNodeIcon"/>, i.e. EXACTLY what the app already renders
+    /// <para>Resolution is <see cref="ResolveNodeIcon(MeshNode?)"/>, i.e. EXACTLY what the app already renders
     /// for the node in the tree, the menus and its cards (own icon → the shipped glyph of that name
     /// → the NodeType default → a neutral box). Nothing is synthesised beyond putting a value an
     /// <c>href</c> cannot carry into a form it can: an inline <c>&lt;svg&gt;</c> identicon and a text
@@ -310,13 +391,30 @@ public static class MeshNodeImageHelper
     /// the per-instance favicon uses. So the tab and the app can never disagree about what a node
     /// looks like.</para>
     ///
-    /// <para>Total, like <see cref="ResolveNodeIcon"/>: every node resolves to something, so a tab
+    /// <para>Total, like <see cref="ResolveNodeIcon(MeshNode?)"/>: every node resolves to something, so a tab
     /// never silently keeps the previous page's icon.</para>
     /// </summary>
     /// <param name="node">The node whose page is being shown.</param>
-    public static IconLink ResolveIconLink(MeshNode node)
+    public static IconLink ResolveIconLink(MeshNode node) => ResolveIconLink(node, null);
+
+    /// <summary>
+    /// <see cref="ResolveIconLink(MeshNode)"/> with package-root inheritance — the tab of a page
+    /// under a marked package wears the PACKAGE's mark rather than a generic type glyph, which is
+    /// the surface issue #2075 was actually about: at 16 px "which package" is the only thing worth
+    /// saying, and <c>document</c> says nothing.
+    ///
+    /// <para>Resolution stays <see cref="ResolveNodeIcon(MeshNode?, MeshNode?)"/> — the identical
+    /// chain the app renders — so the tab and the page still cannot disagree, including about an
+    /// inherited mark. The official-mark substitution below applies to an inherited value too: a
+    /// package whose mark is a vendor's still yields the portal's own mark in the TAB, because a
+    /// favicon claims the tab is theirs.</para>
+    /// </summary>
+    /// <param name="node">The node whose page is being shown.</param>
+    /// <param name="partitionRoot">The node's partition root, when the caller has it; null skips
+    /// inheritance.</param>
+    public static IconLink ResolveIconLink(MeshNode node, MeshNode? partitionRoot)
     {
-        var icon = ResolveNodeIcon(node);
+        var icon = ResolveNodeIcon(node, partitionRoot);
 
         // 🚨 THE ONE PLACE THE TAB AND THE CARD DELIBERATELY DIVERGE. A card showing a vendor's mark
         // is nominative use — the package is an API client to that service, and the mark says which

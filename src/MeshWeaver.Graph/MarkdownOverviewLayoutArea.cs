@@ -46,13 +46,18 @@ public static class MarkdownOverviewLayoutArea
             ? Observable.Return<NodeNavigation?>(null)
             : SuppliedNavigation(host);
 
+        // The node's PARTITION ROOT, for the header icon's package-mark inheritance (#2075 item 2).
+        // Starts null and never gates: a page that inherits nothing renders exactly as before.
+        var partitionRootStream = host.Workspace.ObservePartitionRoot(host.Hub.Address.Path);
+
         return host.Workspace.GetMeshNodeStream()
             .CombineLatest(permissionsStream, host.ObserveChildren("is:main"), suppliedStream,
-                (node, perms, children, supplied) =>
+                partitionRootStream,
+                (node, perms, children, supplied, partitionRoot) =>
             {
                 var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
                 var canEdit = perms.HasFlag(Permission.Update);
-                var content = (UiControl)BuildOverview(host, node, canComment, canEdit, hideHeader);
+                var content = (UiControl)BuildOverview(host, node, canComment, canEdit, hideHeader, partitionRoot);
 
                 // A markdown node with sub-nodes gets a collapsible side menu of them. Skipped for
                 // @@ embeds and when there are none; internal satellites (_Access, _Thread, …) excluded.
@@ -232,7 +237,11 @@ public static class MarkdownOverviewLayoutArea
         return group;
     }
 
-    private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, bool canComment, bool canEdit, bool hideHeader)
+    // partitionRoot: the node's partition root, when the caller holds it — the header icon inherits
+    // its package mark from there (#2075 item 2). Null keeps the NodeType glyph.
+    private static UiControl BuildOverview(
+        LayoutAreaHost host, MeshNode? node, bool canComment, bool canEdit, bool hideHeader,
+        MeshNode? partitionRoot = null)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var rawContent = GetMarkdownContent(node);
@@ -242,7 +251,8 @@ public static class MarkdownOverviewLayoutArea
 
         // Standard header with title/icon (skipped for @@ embeds)
         if (!hideHeader)
-            container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
+            container = container.WithView(
+                MeshNodeLayoutAreas.BuildHeader(host, node, false, partitionRoot));
 
         // Read-only markdown content — the CollaborativeMarkdownControl is added as
         // a DIRECT child of `container` so agents and tests can locate it without
