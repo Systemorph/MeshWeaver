@@ -617,6 +617,38 @@ public record NodeTypeDefinition
             : node.Version;
 
     /// <summary>
+    /// 🚨 Does this NodeType TAKE PART in the compile lifecycle at all? — issue #3006.
+    ///
+    /// <para><c>true</c> when the definition has source to build (<see cref="Configuration"/>,
+    /// <see cref="HubConfiguration"/> or <see cref="Sources"/>) or already carries a recorded
+    /// compile state (<see cref="CompilationStatus"/>). <c>false</c> only for a pure MARKER type —
+    /// a definition that names a shape and ships no code, so no compile is ever coming for it.</para>
+    ///
+    /// <para><b>Why it is a method and not an ad-hoc condition.</b> An absent
+    /// <see cref="CompilationStatus"/> means two completely different things, and telling them
+    /// apart is the whole of #3006: <i>"no compile will ever start"</i> (a marker / test-seeded
+    /// type) and <i>"the first-build kickoff has not stamped <c>Pending</c> YET"</i> (a repo- or
+    /// JSON-loaded type carrying a <c>Configuration</c> string, in the window before
+    /// <c>InstallCompileWatcher</c>'s kickoff runs). Reading only the status conflates them, and
+    /// an instance hub that activates in that window binds the mesh DEFAULT configuration —
+    /// permanently, because enrichment binds once and the rebind watcher only fires on a change
+    /// of the INSTANCE's own <c>NodeType</c>, never on a compile transition. Its areas never
+    /// appear and every deep link to one answers the TERMINAL <c>area-not-found</c>.</para>
+    ///
+    /// <para>The rule already existed inline in <c>NodeTypeLayoutAreas.AppendSweepSummary</c>
+    /// ("Only types that participate in compilation"); it lives here now so the sweep summary and
+    /// the enrichment decision cannot drift apart — a NodeType the sweep counts as compiling and
+    /// enrichment treats as inert is precisely the disagreement that produced the bug.</para>
+    /// </summary>
+    /// <param name="def">The definition to classify; <c>null</c> is not a participant.</param>
+    public static bool ParticipatesInCompilation(NodeTypeDefinition? def) =>
+        def is not null
+        && (def.CompilationStatus is not null
+            || !string.IsNullOrWhiteSpace(def.Configuration)
+            || !string.IsNullOrWhiteSpace(def.HubConfiguration)
+            || def.Sources is { Count: > 0 });
+
+    /// <summary>
     /// <c>true</c> iff <see cref="CurrentSourceVersions"/> differs from
     /// <see cref="CompiledSources"/> — i.e. an edit / add / remove has landed on a
     /// dependent source since the last successful compile, so the cached assembly

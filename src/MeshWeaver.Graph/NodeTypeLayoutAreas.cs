@@ -282,13 +282,13 @@ public static class NodeTypeLayoutAreas
     {
         var defs = sweepNodes
             .Select(n => (Node: n, Def: n.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions)))
-            .Where(x => x.Def is not null
-                // Only types that participate in compilation: with source to build or a
-                // compile state already recorded. Pure marker types stay out of the totals.
-                && (x.Def!.CompilationStatus is not null
-                    || !string.IsNullOrWhiteSpace(x.Def.Configuration)
-                    || !string.IsNullOrWhiteSpace(x.Def.HubConfiguration)
-                    || x.Def.Sources is { Count: > 0 }))
+            // Only types that participate in compilation: with source to build or a compile
+            // state already recorded. Pure marker types stay out of the totals.
+            // 🚨 Single-sourced (#3006): enrichment reads the SAME predicate to decide whether an
+            // instance may bind the mesh default configuration. A type this summary counts as
+            // compiling while enrichment treats it as inert is the disagreement that pinned an
+            // instance to the default chain — and its areas — for the grain's whole life.
+            .Where(x => NodeTypeDefinition.ParticipatesInCompilation(x.Def))
             .ToList();
 
         var total = defs.Count;

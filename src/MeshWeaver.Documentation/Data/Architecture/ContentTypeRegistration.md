@@ -158,7 +158,10 @@ Two seams are deliberately left alone:
 - **`MeshNodeStreamCache.GetQuery`** is a query snapshot, not a node binding. Its consumers re-issue
   the query; a single held emission is not the shape of the defect.
 
-### 🚨 What the late re-type does NOT fix — the same race at the ENRICHMENT seam
+### 🚨 The same race at the ENRICHMENT seam — the second cure
+
+*This section described a gap the late re-type deliberately did not close. The cure has since
+landed; the analysis is kept because it is the reason there are two fixes and not one.*
 
 Content typing and layout-area registration are **two side effects of one configuration build**. A
 compiled NodeType's `configuration` is a single expression:
@@ -182,17 +185,48 @@ if ((def.CompilationStatus is null || def.CompilationStatus == CompilationStatus
     return Observable.Return(node);        // bare node: no overlay, no WithOverlaySelfHeal
 ```
 
-— returns the instance **unwrapped by `WithOverlaySelfHeal`**, unlike every sibling branch
+— returned the instance **unwrapped by `WithOverlaySelfHeal`**, unlike every sibling branch
 (in-flight compile, missing bytes, execution refused). The instance falls to the mesh default hub
-chain, and the re-enrichment short-circuit at the top of `EnrichWithNodeType`
-(`if (node.HubConfiguration != null) return …`) pins it there for the grain's lifetime;
-`NodeTypeRebindWatcher` recycles only on a change of `MeshNode.NodeType`, never on a compile
-transition. A type whose first build has not been *kicked off* yet is therefore indistinguishable
-from one that will never compile — and the framework already has a predicate for the difference (a
-`Configuration`/`HubConfiguration` source string, or a recorded `CompilationStatus`, is what
-`NodeTypeLayoutAreas.AppendSweepSummary` counts as "participates in compilation"). Until that branch
-uses it, an instance that activates before its type's first build is stamped is answered with the
-TERMINAL `area-not-found` where the transient `compile-progress` is true.
+chain, and the binding is then **permanent by three independent mechanisms**: the re-enrichment
+short-circuit at the top of `EnrichWithNodeType` (`if (node.HubConfiguration != null) return …`);
+`NodeTypeRebindWatcher`, which recycles only on a change of the *instance's own* `MeshNode.NodeType`,
+never on a compile transition, and which bails outright when the configuration is null; and the
+absent self-heal wrapper, so nothing recycles the instance when the build later settles.
+
+The premise of that branch — "a compile that will never start" — is a real state (a marker type, a
+test-seeded definition). What it could not do is tell that state apart from **"a compile that has not
+been kicked off yet"**: a NodeType loaded from a repo or from JSON carries no `CompilationStatus`
+until `InstallCompileWatcher`'s first-build kickoff stamps `Pending`, and an absent status is all
+these two states have in common. An instance activating in that window took this branch; one
+activating a moment later took the healthy in-flight branch and got the compile-progress overlay plus
+its self-heal. That is the race whose loser never recovered, and it produced the **terminal**
+`area-not-found` verdict (`LayoutDefinition.BuildNotFoundControl`, emitted on stream *completion*)
+where the transient `AreaFrameClassifier.CompileProgressId` promise was the true one — the exact
+distinction `AreaFrameClassifier` exists to make.
+
+**The cure.** The branch now asks two questions before binding the default:
+
+```csharp
+if (compilationService is not null && NodeTypeDefinition.ParticipatesInCompilation(def))
+    return WithCompilationInProgressOverlay(node, nodeType, typeNode, meshHub, logger);
+return Observable.Return(node);        // unchanged for a type no compile is coming for
+```
+
+- **`ParticipatesInCompilation`** is the predicate that already existed inline in
+  `NodeTypeLayoutAreas.AppendSweepSummary` ("only types that participate in compilation"): a
+  `Configuration` or `HubConfiguration` source string, `Sources`, or a recorded `CompilationStatus`.
+  It now lives on `NodeTypeDefinition` and both sites read it, so the sweep summary and the
+  enrichment decision cannot drift — a NodeType the summary counts as compiling while enrichment
+  treats it as inert *is* the disagreement that pinned the instance.
+- **The `compilationService` null-check is the other half of the correctness argument**, not
+  belt-and-braces. A test-seeded NodeType that carries a `Configuration` string on a mesh with no
+  `IMeshNodeCompilationService` must **not** be parked on a progress page for a build that will never
+  run; there the original behaviour is right and is kept. Both directions are pinned by
+  `NodeTypeFirstCompileKickoffTest`.
+
+The instance now serves the compile-progress overlay — whose catch-all renderer answers *every* area,
+so no `area-not-found` — wrapped by `WithOverlaySelfHeal`, which recycles it onto the real
+configuration the moment the build lands.
 
 ## Diagnosing a suspected miss
 
