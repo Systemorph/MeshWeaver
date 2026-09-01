@@ -29,7 +29,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// Orleans TestCluster fixture. Despite the name it is no longer shared across the assembly:
-/// <see cref="OrleansSharedTestBase"/> constructs one per test class, so grain state is
+/// <see cref="OrleansMeshTestBase"/> leases or constructs one per test class, so grain state is
 /// isolated by construction.
 ///
 /// <para>Configuration: production-like (Graph + RLS + memory persistence), and deliberately
@@ -59,7 +59,7 @@ public class SharedOrleansFixture : IAsyncLifetime
     /// Per-client tracker: every hub returned by <see cref="GetClient"/>
     /// gets recorded along with its routing-stream subscriptions on both the
     /// client mesh and the silo mesh. Tests dispose these in
-    /// <c>OrleansSharedTestBase.DisposeAsync</c> so the shared cluster's
+    /// <c>OrleansMeshTestBase.DisposeAsync</c> so the shared cluster's
     /// stream registries and hosted-hub collection don't grow unboundedly
     /// across the test run.
     /// </summary>
@@ -68,17 +68,60 @@ public class SharedOrleansFixture : IAsyncLifetime
     private sealed record ClientRegistration(IMessageHub Hub, IReadOnlyList<IDisposable> Subscriptions);
 
     /// <summary>
+    /// The cluster shape this fixture was asked for, or <c>null</c> when it was constructed the
+    /// old way (a DERIVED fixture that answers the hooks below by overriding them).
+    ///
+    /// <para>🚨 A derived fixture's override WINS. That is what keeps a repo-owned rig — the AI
+    /// one in MeshWeaver.Plugins — working unchanged while <see cref="OrleansMeshTestBase"/>
+    /// drives the shape from the suite's <see cref="IMeshBootstrap"/> instead of from a second
+    /// fixture subclass per silo configurator.</para>
+    /// </summary>
+    private readonly OrleansClusterShape? shape;
+
+    /// <summary>Constructs the default cluster — one silo, the shared configurator.</summary>
+    public SharedOrleansFixture() { }
+
+    /// <summary>Constructs the cluster a caller DESCRIBED, rather than one a subclass hard-codes.</summary>
+    public SharedOrleansFixture(OrleansClusterShape shape) => this.shape = shape;
+
+    /// <summary>
     /// Subclass hook: the silo configurator this cluster is built with. Orleans instantiates it via
     /// <c>new()</c>, so a subclass contributes behaviour by naming a DERIVED type here rather than
     /// by handing over an instance.
     /// </summary>
-    protected virtual Type SiloConfiguratorType => typeof(SharedSiloConfigurator);
+    protected virtual Type SiloConfiguratorType => shape?.SiloConfigurator ?? typeof(SharedSiloConfigurator);
 
     /// <summary>
     /// Subclass hook: the CLIENT configurator. Separate from the silo's on purpose — the client
     /// mesh is its own hub and needs its own registrations (see TestClientConfigurator.MeshExtra).
     /// </summary>
-    protected virtual Type ClientConfiguratorType => typeof(TestClientConfigurator);
+    protected virtual Type ClientConfiguratorType => shape?.ClientConfigurator ?? typeof(TestClientConfigurator);
+
+    /// <summary>
+    /// How many silos this cluster starts with. Comes from the suite's
+    /// <c>MeshBootstrap.Orleans(o =&gt; o.WithSilos(n))</c>; one unless asked otherwise.
+    /// </summary>
+    protected virtual short InitialSilosCount => shape?.Silos ?? 1;
+
+    /// <summary>
+    /// Whether the Orleans CLIENT borrows the SILO's <see cref="InMemoryStorageAdapter"/>, making
+    /// the two hosts one logical store — prod's "several adapter instances, one PG database".
+    ///
+    /// <para>🚨 False for a configurator that brings its OWN durable backend (FileSystem, the
+    /// PostgreSQL ones): those claim at Priority 100 while the in-memory catch-all sits at 0, so
+    /// joining the stores would let a client-side mirror answer a read the durable backend owns.</para>
+    /// </summary>
+    protected virtual bool ClientSharesSiloStore => shape?.ShareSiloStore ?? true;
+
+    /// <summary>
+    /// What makes two clusters INTERCHANGEABLE, and therefore what <see cref="OrleansMeshPool"/>
+    /// leases on. 🚨 The fixture TYPE alone is not enough any more: since the shape can be
+    /// described rather than subclassed, two suites can both want a plain
+    /// <see cref="SharedOrleansFixture"/> and mean different silos.
+    /// </summary>
+    public OrleansClusterShape PoolKey =>
+        new(SiloConfiguratorType, ClientConfiguratorType, InitialSilosCount, ClientSharesSiloStore)
+        { FixtureType = GetType() };
 
     /// <summary>
     /// The silo container, for a subclass that registered its own services through its silo
@@ -104,7 +147,7 @@ public class SharedOrleansFixture : IAsyncLifetime
                 // lookup finds the node the mesh hub just saved. Production runs N silos
                 // with backend-shared persistence (PostgreSQL / Cosmos) which doesn't have
                 // this issue; the in-memory test cluster does.
-                builder.Options.InitialSilosCount = 1;
+                builder.Options.InitialSilosCount = InitialSilosCount;
                 // Added by TYPE NAME rather than through AddSiloBuilderConfigurator<T>(), which
                 // needs a compile-time argument: a subclass in another repo contributes its own
                 // configurator by overriding SiloConfiguratorType, and that is what lets the AI rig
@@ -115,8 +158,9 @@ public class SharedOrleansFixture : IAsyncLifetime
                     ClientConfiguratorType.AssemblyQualifiedName!);
             },
             // The Orleans client borrows the silo's InMemoryStorageAdapter so the two hosts are
-            // one logical store — the shape prod gets for free from a shared PG database.
-            configureClientServices: OrleansTestCluster.ShareSiloNodeStore);
+            // one logical store — the shape prod gets for free from a shared PG database. A
+            // configurator with its OWN durable backend opts out; see ClientSharesSiloStore.
+            configureClientServices: ClientSharesSiloStore ? OrleansTestCluster.ShareSiloNodeStore : null);
 
         // 🚨 Register the client's mesh hub as an Orleans memory-stream
         // subscriber so the silo can route response messages back to it.
@@ -146,10 +190,27 @@ public class SharedOrleansFixture : IAsyncLifetime
     /// (client + silo mesh) and the hub itself are released.
     /// </summary>
     public IMessageHub GetClient(string clientId, string userId = "TestUser")
+        => GetClient(clientId, userId, null);
+
+    /// <summary>
+    /// As <see cref="GetClient(string,string)"/>, plus the SUITE's own client configuration.
+    ///
+    /// <para>🚨 Two client shapes were maintained here and in the retired <c>OrleansTestBase</c>:
+    /// this one added only <c>AddLayoutClient</c>, that one also added <c>AddMeshDataSource</c>
+    /// (the <c>MeshNodeReference</c> reducer + <c>GetDataRequest</c> handler a client needs to
+    /// read nodes). The union is what every caller gets now — the data source is additive, and a
+    /// client that cannot answer <c>GetDataRequest</c> is the more surprising of the two.</para>
+    /// </summary>
+    public IMessageHub GetClient(
+        string clientId,
+        string userId,
+        Func<MessageHubConfiguration, MessageHubConfiguration>? configureSuiteClient)
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", clientId),
-            config => ConfigureClient(config).AddLayoutClient());
+            config => (configureSuiteClient ?? (c => c))(ConfigureClient(config))
+                .AddMeshDataSource(source => source)
+                .AddLayoutClient());
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetHostIdentity(new AccessContext
         {
@@ -363,4 +424,32 @@ public class SharedSiloConfigurator : ISiloConfigurator, IHostConfigurator
     /// <c>NodeType 'ModelProvider' is not registered</c> — measured, 2 tests, 2026-08-28.</para>
     /// </summary>
     protected virtual Func<MeshBuilder, MeshBuilder>? MeshExtra => null;
+}
+
+/// <summary>
+/// WHAT a test cluster is, reduced to the values that make two of them interchangeable.
+///
+/// <para>🚨 This is the record <see cref="OrleansMeshPool"/> leases on. Before it, the pool keyed
+/// on the fixture TYPE — which was only sound while "a different cluster" and "a different fixture
+/// subclass" were the same statement. They stopped being the same the moment a suite could DESCRIBE
+/// its cluster (<c>MeshBootstrap.Orleans(o =&gt; o.WithSilos(2))</c>) instead of subclassing a
+/// fixture for it, and handing a suite a cluster built by someone else's silo configurator is a
+/// failure that reads as a missing registration two files away.</para>
+/// </summary>
+/// <param name="SiloConfigurator">The silo configurator Orleans <c>new()</c>s for every silo.</param>
+/// <param name="ClientConfigurator">The Orleans CLIENT host's configurator.</param>
+/// <param name="Silos">How many silos the cluster starts with.</param>
+/// <param name="ShareSiloStore">Whether the client borrows the silo's in-memory node store.</param>
+public sealed record OrleansClusterShape(
+    Type SiloConfigurator,
+    Type ClientConfigurator,
+    short Silos,
+    bool ShareSiloStore)
+{
+    /// <summary>
+    /// The fixture CLASS, so a repo-owned derived fixture never leases a base-fixture cluster.
+    /// Not a constructor parameter: a caller DESCRIBING a cluster does not know which fixture class
+    /// will end up carrying it.
+    /// </summary>
+    public Type FixtureType { get; init; } = typeof(SharedOrleansFixture);
 }

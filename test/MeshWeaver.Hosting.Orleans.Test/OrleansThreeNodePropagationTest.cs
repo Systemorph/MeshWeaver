@@ -52,7 +52,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// the cross-grain stream propagation cluster.
 /// </para>
 /// </summary>
-public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
+public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
     [Fact]
     public async Task ChangeInC_PropagatesViaA_ToB_AcrossGrains()

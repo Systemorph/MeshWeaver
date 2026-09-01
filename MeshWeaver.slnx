@@ -34,8 +34,6 @@
     <Project Path="src/MeshWeaver.Compiler/MeshWeaver.Compiler.csproj" />
     <Project Path="src/MeshWeaver.Connection.Orleans/MeshWeaver.Connection.Orleans.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
-    <Project Path="src/MeshWeaver.ContentCollections.Indexing/MeshWeaver.ContentCollections.Indexing.csproj" />
-    <Project Path="src/MeshWeaver.ContentCollections.Indexing.Graph/MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
     <Project Path="src/MeshWeaver.Data.Contract/MeshWeaver.Data.Contract.csproj" />
     <Project Path="src/MeshWeaver.Data/MeshWeaver.Data.csproj" />
     <Project Path="src/MeshWeaver.Documentation/MeshWeaver.Documentation.csproj" />
@@ -43,7 +41,6 @@
     <Project Path="test/MeshWeaver.Fixture/MeshWeaver.Fixture.csproj" />
     <Project Path="src/MeshWeaver.Reactive.Assertions/MeshWeaver.Reactive.Assertions.csproj" />
     <Project Path="src/MeshWeaver.Testcontainers/MeshWeaver.Testcontainers.csproj" />
-    <Project Path="src/MeshWeaver.Maps/MeshWeaver.Maps.csproj" />
     <Project Path="src/MeshWeaver.Hosting.AspNetCore/MeshWeaver.Hosting.AspNetCore.csproj" />
     <Project Path="src/MeshWeaver.Graph/MeshWeaver.Graph.csproj" />
     <Project Path="src/MeshWeaver.GitSync/MeshWeaver.GitSync.csproj" />
@@ -75,7 +72,6 @@
     <File Path="test/Directory.Packages.props" />
     <Project Path="test/MeshWeaver.Hosting.Monolith.TestBase/MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Test/MeshWeaver.ContentCollections.Test.csproj" />
-    <Project Path="test/MeshWeaver.ContentCollections.Indexing.Test/MeshWeaver.ContentCollections.Indexing.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj" />
     <Project Path="test/MeshWeaver.Documentation.Test/MeshWeaver.Documentation.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />

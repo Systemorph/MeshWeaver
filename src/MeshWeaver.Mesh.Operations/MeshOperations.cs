@@ -2323,7 +2323,9 @@ public class MeshOperations
             return node;
 
         var normalized = ResolvePath(ns).TrimStart('/');
-        return normalized == ns ? node : node with { Namespace = normalized };
+        // WithNamespace, not `with { Namespace = … }`: MainNode is a STORED default and would keep
+        // the un-normalised "@/ACME/Projects/x" while Path became "ACME/Projects/x" (#2939).
+        return normalized == ns ? node : node.WithNamespace(normalized);
     }
 
     /// <summary>
@@ -2345,7 +2347,8 @@ public class MeshOperations
         logger.LogWarning("SanitizeNodeId: Fixed slash in id. Was id='{OldId}', now id='{NewId}' namespace='{Namespace}'",
             node.Id, id, ns);
 
-        return node with { Id = id, Namespace = ns };
+        // WithPath keeps MainNode on the node's own (new) path when it was never set explicitly.
+        return node.WithPath(id, ns);
     }
 
     /// <summary>

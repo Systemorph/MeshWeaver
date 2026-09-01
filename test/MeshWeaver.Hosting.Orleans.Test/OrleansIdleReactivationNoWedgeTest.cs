@@ -36,7 +36,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// wedge into a deterministic <see cref="TimeoutException"/> (RED); a value inside the budget is
 /// GREEN.</para>
 /// </summary>
-public class OrleansIdleReactivationNoWedgeTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
+public class OrleansIdleReactivationNoWedgeTest(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
     private IMessageHub GetClient([CallerMemberName] string? name = null)
         => base.GetClient($"idle-react-{name}-{Guid.NewGuid():N}", "TestUser");

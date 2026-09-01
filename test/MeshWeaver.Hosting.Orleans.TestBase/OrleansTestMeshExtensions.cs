@@ -34,7 +34,7 @@ public static class OrleansTestMeshExtensions
             // that lives there and the memory stream is not a fallback for it — it is the only
             // transport there is. The rig puts a hub of EVERY built-in stream-routed type on its
             // cluster client:
-            //   client — OrleansTestBase.GetClient / SharedOrleansFixture.GetClient
+            //   client — OrleansMeshTestBase.GetClient / SharedOrleansFixture.GetClient
             //   mesh   — the client host's own root hub, via RootMeshHubReplyStreamService
             //   portal — OrleansDocumentationTest / OrleansGraphDataTest / OrleansInteractiveMarkdownTest
             //   cache  — the client host's MeshNodeStreamCache hub

@@ -25,7 +25,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// passes; this checks the Orleans grain boundary doesn't introduce the bug.
 /// </para>
 /// </summary>
-public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
+public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
     [Fact]
     public async Task LocalUpdate_VisibleViaPolledGetDataRequest_AcrossGrains()

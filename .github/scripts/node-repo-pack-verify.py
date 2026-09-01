@@ -34,6 +34,24 @@ the other call's receipts and reads them as "built but never selected". `--decla
 caller's own matrix (`inputs.modules`): a receipt for a module this call did not declare belongs
 to a sibling call and is set aside, NAMED, and never counted. Within the declared set the
 accounting is exactly as strict as before.
+
+🚨 …AND A NAME-ONLY SEPARATION IS NOT ENOUGH. `--declared` tells two calls apart only while their
+matrices are DISJOINT; the moment both declare the same module — one `always-modules` entry that
+also appears in the other call's list is all it takes — one call's evidence answers the other's
+question, and the answer a REQUIRED gate composes on (`bundles-built`) becomes truthy from
+evidence this call never produced (Plugins#1077). So the producer now STAMPS its lane into every
+marker and receipt and `--lane` checks it: evidence this call cannot attribute to itself is set
+aside and NAMED, and a SELECTED module left without attributable evidence reads as NOT BUILT.
+Fail closed — zero markers, an unstamped marker and a foreign marker are all `false`, never a
+silent true.
+
+🚨 AND THE MARKER MUST ASSERT WHAT THE CALLER ACTUALLY NEEDS. `bundles-built` is consumed by gates
+that only COMPOSE the bundles, so it has to mean "the set is complete and USABLE". A marker saying
+only "an artifact was uploaded" leaves "present but uncomposable" reading as true, so the marker
+carries the bundle it attests and the closure evidence its build resolved, and a marker missing
+either is refused here rather than trusted because of where its step happened to sit in the job.
+🚨 None of this touches the module's TESTS: the marker is still dropped BEFORE them (#2710,
+Plugins#937) so a red suite cannot read as "bundle missing" to a gate that only composes.
 """
 from __future__ import annotations
 
@@ -76,13 +94,27 @@ def _receipt_stem(broken_entry: str) -> str:
 
 def verify(expected: list[str], receipts: dict[str, dict], broken: list[str],
            pack_result: str, receipts_dir_exists: bool,
-           scope: str = "", declared: set[str] | None = None) -> tuple[int, list[str], list[str]]:
+           scope: str = "", declared: set[str] | None = None,
+           lane: str = "") -> tuple[int, list[str], list[str]]:
     """(exit code, error lines, note lines). `declared` is the caller's own matrix; when given,
     receipts for modules outside it are a SIBLING call's (artifacts are run-wide) and are set
-    aside rather than counted. `None` keeps the pre-#932 behaviour: every receipt is this call's."""
+    aside rather than counted. `None` keeps the pre-#932 behaviour: every receipt is this call's.
+    `lane` is this call's own lane key: a receipt stamped with any other lane — or with none —
+    is a sibling's STRUCTURALLY, whatever its module is called, and is set aside the same way."""
     errors: list[str] = []
     notes: list[str] = []
     want = set(expected)
+
+    # 🚨 STRUCTURAL ATTRIBUTION FIRST. `--declared` separates two calls in one run by module NAME,
+    # which holds only while their matrices are disjoint; the stamp the producer wrote holds
+    # always. Applied before anything is counted, so a foreign receipt can neither satisfy a
+    # selection nor be reported as "built but never selected".
+    if lane:
+        foreign = sorted(m for m, r in receipts.items() if r.get("lane") != lane)
+        if foreign:
+            receipts = {m: r for m, r in receipts.items() if r.get("lane") == lane}
+            notes.append(f"{len(foreign)} receipt(s) carry another lane's stamp (this call is "
+                         f"'{lane}') and are not this call's to count: " + ", ".join(foreign))
 
     if declared is not None:
         # 🚨 The selection is computed FROM the declared matrix, so a selected module the caller
@@ -165,35 +197,74 @@ def verify(expected: list[str], receipts: dict[str, dict], broken: list[str],
     return (1 if errors else 0), errors, notes
 
 
-def read_markers(directory: Path) -> set[str]:
-    """The modules with a well-formed built marker (`module-built-<module>` artifacts, merged)."""
+MARKER_CLAIMS = ("bundle", "closure")
+"""What a built marker must ASSERT, not merely imply from where its step sits in the job.
+
+`bundle` — the bundle file the upload step took; `closure` — how the build resolved this
+module's private closure (the `<Module>.closure.txt` manifest on the container path, the
+publish `deps.json` on the sdk path). `bundles-built` is what a REQUIRED gate composes bundles
+on, so it must mean "complete AND usable": a marker that attests only "an artifact exists"
+lets present-but-uncomposable read as true, which is the class Plugins#1077 sits in."""
+
+
+def read_markers(directory: Path, lane: str = "") -> tuple[set[str], list[str]]:
+    """(modules this call can attribute a complete built marker to, the markers it REFUSED and why).
+
+    🚨 EVERY REFUSAL IS FAIL-CLOSED. A marker that cannot be parsed, does not name its own file,
+    carries another call's lane stamp (or none at all), or does not record what it attests, is not
+    a marker — the module then reads as NOT built. A truthy answer derived from absent or foreign
+    evidence is the whole defect, so the refusals are returned and NAMED rather than dropped."""
     found: set[str] = set()
+    refused: list[str] = []
     if not directory.is_dir():
-        return found
+        return found, refused
     for path in sorted(directory.rglob("*.json")):
         try:
             doc = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
+            refused.append(f"{path.name} (unreadable as JSON)")
             continue
-        module = doc.get("module") if isinstance(doc, dict) else None
-        if isinstance(module, str) and module and path.stem == module:
-            found.add(module)
-    return found
+        if not isinstance(doc, dict):
+            refused.append(f"{path.name} (not a marker object)")
+            continue
+        module = doc.get("module")
+        if not isinstance(module, str) or not module or path.stem != module:
+            refused.append(f"{path.name} (claims module {doc.get('module')!r})")
+            continue
+        stamp = doc.get("lane")
+        if lane and stamp != lane:
+            refused.append(f"{module} (lane {stamp!r}, this call is {lane!r})")
+            continue
+        absent = [claim for claim in MARKER_CLAIMS
+                  if not isinstance(doc.get(claim), str) or not doc.get(claim)]
+        if absent:
+            refused.append(f"{module} (records no " + ", no ".join(absent) + ")")
+            continue
+        found.add(module)
+    return found, refused
 
 
-def bundles_built(expected: list[str], built: set[str], declared: set[str] | None) -> tuple[bool, str]:
-    """(every selected bundle exists as an artifact, one line saying so). Independent of the
-    receipts and of the pack job's result on purpose: this is the claim a caller's gate depends on
-    when it only COMPOSES the bundles, and a red suite or a failed hand-over must not turn it
-    false. A sibling call's markers are set aside the same way as its receipts."""
+def bundles_built(expected: list[str], built: set[str], declared: set[str] | None,
+                  refused: list[str] | None = None) -> tuple[bool, str]:
+    """(every selected bundle exists as a COMPOSABLE artifact of THIS call, one line saying so).
+
+    Independent of the receipts and of the pack job's result on purpose: this is the claim a
+    caller's gate depends on when it only COMPOSES the bundles, and a red suite or a failed
+    hand-over must not turn it false (#2710, Plugins#937). A sibling call's markers are set aside
+    the same way as its receipts — by lane stamp in `read_markers`, and by name here."""
     want = set(expected)
     if declared is not None:
         built = {m for m in built if m in declared}
+    refused = list(refused or [])
+    aside = (f" ({len(refused)} marker(s) refused: " + "; ".join(refused) + ")") if refused else ""
     missing = sorted(want - built)
     if missing:
         return False, (f"bundles-built: false — {len(missing)} of {len(want)} selected bundle(s) "
-                       f"never became an artifact: " + ", ".join(missing))
-    return True, f"bundles-built: true — {len(want)} of {len(want)} selected bundle(s) exist as artifacts"
+                       f"have no built marker this call can attribute to itself: "
+                       + ", ".join(missing) + aside)
+    return True, (f"bundles-built: true — {len(want)} of {len(want)} selected bundle(s) exist as "
+                  f"this call's artifacts, each recording the bundle and the closure it was "
+                  f"composed from" + aside)
 
 
 def parse_declared(text: str) -> set[str] | None:
@@ -233,9 +304,17 @@ def self_test() -> int:
             failures.append(name)
 
     def run(directory: Path, expected: list[str], result: str = "success", scope: str = "",
-            declared: set[str] | None = None):
+            declared: set[str] | None = None, lane: str = ""):
         receipts, broken = read_receipts(directory)
-        return verify(expected, receipts, broken, result, directory.is_dir(), scope, declared)
+        return verify(expected, receipts, broken, result, directory.is_dir(), scope, declared, lane)
+
+    def marker(module: str, lane: str = "floor-abc123", **overrides) -> str:
+        doc = {"lane": lane, "package": module.split(".")[-1], "module": module,
+               "version": "1.2.3", "compiler": "container",
+               "bundle": f"{module}.1.2.3.module.nupkg",
+               "closure": f"{module}.closure.txt (2 entries)"}
+        doc.update(overrides)
+        return json.dumps({k: v for k, v in doc.items() if v is not None})
 
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp) / "receipts"
@@ -321,24 +400,97 @@ def self_test() -> int:
         check("no receipts at all is a FAILURE, never a pass",
               code == 1 and any("no receipt directory" in e for e in errors), f"{errors}")
 
-        print("the built markers — 'the bundle exists' stays true through a red suite:")
+        # 🚨 The receipts' lane half: `--declared` separates two calls by NAME, which holds only
+        # while their matrices are disjoint. The stamp holds always (Plugins#1077).
+        print("the receipts' LANE stamp — the separation that survives two calls declaring the "
+              "same module:")
+        (d / "MeshWeaver.AI.json").write_text(json.dumps(
+            {"lane": "floor-abc123", "package": "AI", "module": "MeshWeaver.AI",
+             "published": True}), encoding="utf-8")
+        for m in three[1:]:
+            (d / f"{m}.json").write_text(json.dumps(
+                {"lane": "floor-abc123", "package": m.split(".")[-1], "module": m,
+                 "published": False}), encoding="utf-8")
+        code, errors, notes = run(d, three, lane="floor-abc123")
+        check("this call's own stamped receipts still add up", code == 0, f"{errors}")
+        # A module BOTH calls declare — the case --declared cannot see — must not be donated.
+        (d / "MeshWeaver.Mcp.json").write_text(json.dumps(
+            {"lane": "rest-def456", "package": "Mcp", "module": "MeshWeaver.Mcp"}),
+            encoding="utf-8")
+        code, errors, notes = run(d, three, declared=set(three), lane="floor-abc123")
+        check("a receipt this call DECLARED but a SIBLING LANE produced is set aside and the "
+              "module then reads as never built",
+              code == 1
+              and any("another lane's stamp" in n and "MeshWeaver.Mcp" in n for n in notes)
+              and any("NO receipt" in e and "MeshWeaver.Mcp" in e for e in errors),
+              f"{errors} {notes}")
+        (d / "MeshWeaver.Mcp.json").write_text(json.dumps(
+            {"lane": "floor-abc123", "package": "Mcp", "module": "MeshWeaver.Mcp"}),
+            encoding="utf-8")
+
+        print("the built markers — 'complete AND composable, from THIS lane', still surviving a "
+              "red suite:")
         b = Path(tmp) / "built"
         b.mkdir()
         for m in three:
-            (b / f"{m}.json").write_text(json.dumps({"module": m}), encoding="utf-8")
-        ok, line = bundles_built(three, read_markers(b), None)
-        check("every selected bundle has a marker ⇒ bundles-built true", ok and "true" in line, line)
-        code, errors, _ = run(d, three, "failure")
-        ok, _ = bundles_built(three, read_markers(b), None)
+            (b / f"{m}.json").write_text(marker(m), encoding="utf-8")
+        found, refused = read_markers(b, "floor-abc123")
+        ok, line = bundles_built(three, found, None, refused)
+        check("every selected bundle has a complete marker ⇒ bundles-built true",
+              ok and "true" in line and not refused, line)
+        code, errors, _ = run(d, three, "failure", lane="floor-abc123")
+        found, refused = read_markers(b, "floor-abc123")
+        ok, _ = bundles_built(three, found, None, refused)
         check("…and a FAILED pack job (its suite went red) keeps bundles-built TRUE while the "
-              "lane itself still fails", ok and code == 1, f"{errors}")
+              "lane itself still fails — #2710 is untouched", ok and code == 1, f"{errors}")
+
+        print("marker mutations — each must make bundles-built FALSE and name what it refused:")
         (b / "MeshWeaver.Mcp.json").unlink()
-        ok, line = bundles_built(three, read_markers(b), None)
-        check("a selected bundle with NO marker ⇒ bundles-built false, naming it",
+        found, refused = read_markers(b, "floor-abc123")
+        ok, line = bundles_built(three, found, None, refused)
+        check("a selected bundle with NO marker ⇒ false, naming it",
               not ok and "MeshWeaver.Mcp" in line, line)
-        (b / "MeshWeaver.Ghost.json").write_text(json.dumps({"module": "MeshWeaver.Ghost"}), encoding="utf-8")
-        ok, _ = bundles_built(["MeshWeaver.AI", "MeshWeaver.Teams"], read_markers(b), set(three))
-        check("a sibling call's marker is set aside like its receipt", ok)
+        # 🚨 THE DEFECT ITSELF: a sibling call's marker for a module THIS call also declared.
+        (b / "MeshWeaver.Mcp.json").write_text(marker("MeshWeaver.Mcp", lane="rest-def456"),
+                                               encoding="utf-8")
+        found, refused = read_markers(b, "floor-abc123")
+        ok, line = bundles_built(three, found, None, refused)
+        check("a marker from a FOREIGN LANE does not satisfy this one — false, and it says whose",
+              not ok and "MeshWeaver.Mcp" in line and "rest-def456" in line, line)
+        (b / "MeshWeaver.Mcp.json").write_text(marker("MeshWeaver.Mcp", lane=None),
+                                               encoding="utf-8")
+        found, refused = read_markers(b, "floor-abc123")
+        ok, line = bundles_built(three, found, None, refused)
+        check("an UNSTAMPED marker is not this call's either ⇒ false (fail closed, never a "
+              "silent true)", not ok and "MeshWeaver.Mcp" in line, line)
+        for claim in ("closure", "bundle"):
+            (b / "MeshWeaver.Mcp.json").write_text(
+                marker("MeshWeaver.Mcp", **{claim: None}), encoding="utf-8")
+            found, refused = read_markers(b, "floor-abc123")
+            ok, line = bundles_built(three, found, None, refused)
+            check(f"a marker recording no {claim} ⇒ false — 'the artifact exists' is not the "
+                  f"claim `bundles-built` makes", not ok and claim in line, line)
+        (b / "MeshWeaver.Mcp.json").write_text(marker("MeshWeaver.Mcp"), encoding="utf-8")
+        (b / "MeshWeaver.Mcp.json").write_text("{ not json", encoding="utf-8")
+        found, refused = read_markers(b, "floor-abc123")
+        ok, line = bundles_built(three, found, None, refused)
+        check("a CORRUPT marker is not a marker ⇒ false, naming the file",
+              not ok and "unreadable" in line, line)
+        (b / "MeshWeaver.Mcp.json").write_text(marker("MeshWeaver.Mcp"), encoding="utf-8")
+
+        found, refused = read_markers(Path(tmp) / "no-markers-at-all", "floor-abc123")
+        ok, line = bundles_built(three, found, None, refused)
+        check("ZERO markers with a non-empty selection ⇒ false, never a silent true",
+              not ok and not found, line)
+
+        (b / "MeshWeaver.Ghost.json").write_text(marker("MeshWeaver.Ghost"), encoding="utf-8")
+        found, refused = read_markers(b, "floor-abc123")
+        ok, _ = bundles_built(["MeshWeaver.AI", "MeshWeaver.Teams"], found, set(three), refused)
+        check("a sibling call's marker for an UNDECLARED module is set aside like its receipt", ok)
+        (b / "MeshWeaver.Ghost.json").unlink()
+        found, refused = read_markers(b)
+        ok, _ = bundles_built(three, found, None, refused)
+        check("no --lane ⇒ the pre-#1077 name-only behaviour still adds up", ok)
         ok, _ = bundles_built([], set(), None)
         check("an empty selection has every bundle it needs ⇒ true", ok)
 
@@ -372,8 +524,12 @@ def self_test() -> int:
               "skipped module bundle.")
         return 1
     print("\n✓ node-repo-pack-verify self-test: 2 green-run assertions, 10 mutations that must go "
-          "red, the two sibling-call receipts (well-formed and corrupt) that must NOT, 5 built-marker cases, and 5 empty-selection cases including the "
-          "scope=full contradiction lock — all green.")
+          "red, the two sibling-call receipts (well-formed and corrupt) that must NOT, the two "
+          "receipt LANE cases (own stamp counts, a sibling lane's does not — even for a module "
+          "both calls declared), 12 built-marker cases (foreign lane, unstamped, no closure, no "
+          "bundle, corrupt, zero markers — every one fail-closed — plus #2710's red-suite "
+          "survival), and 5 empty-selection cases including the scope=full contradiction lock — "
+          "all green.")
     return 0
 
 
@@ -391,9 +547,15 @@ def main() -> int:
                    help="the caller's own `modules:` input (JSON entries or names). Receipts for "
                         "modules outside it belong to a sibling call in the same run and are set "
                         "aside, not counted. Empty ⇒ every receipt is this call's.")
+    p.add_argument("--lane", default="",
+                   help="this call's lane key (select.outputs.lane). A marker or receipt stamped "
+                        "with any other lane — or with none — belongs to a sibling call in the "
+                        "same run and is set aside, NAMED, never counted. Empty ⇒ no lane check "
+                        "(name-based --declared separation only).")
     p.add_argument("--built", default="",
                    help="directory the module-built-* markers were merged into; with --github-output, "
-                        "writes bundles_built=true|false — the receipt-independent 'bundle exists' claim")
+                        "writes bundles_built=true|false — the receipt-independent 'this call built "
+                        "a complete, composable bundle' claim")
     p.add_argument("--github-output", default="", dest="github_output",
                    help="the $GITHUB_OUTPUT file to append bundles_built to")
     p.add_argument("--self-test", action="store_true", dest="self_test")
@@ -407,10 +569,11 @@ def main() -> int:
     expected = [m for m in args.expected.split() if m]
     receipts, broken = read_receipts(directory)
     code, errors, notes = verify(expected, receipts, broken, args.pack_result,
-                                 directory.is_dir(), args.scope, parse_declared(args.declared))
+                                 directory.is_dir(), args.scope, parse_declared(args.declared),
+                                 args.lane)
 
-    ok, line = bundles_built(expected, read_markers(Path(args.built)) if args.built else set(),
-                             parse_declared(args.declared))
+    markers, refused = read_markers(Path(args.built), args.lane) if args.built else (set(), [])
+    ok, line = bundles_built(expected, markers, parse_declared(args.declared), refused)
     if args.built:
         notes.append(line)
         if args.github_output:

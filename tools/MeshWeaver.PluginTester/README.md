@@ -181,6 +181,26 @@ mw-compiler build <repo-root> [<package>... | all] [--module <dll>]... [--out <d
   host (a `Tests` layout-area aggregator, anything needing a hub) is COUNTED and NAMED as
   `needs-mesh`, never dropped: the gate (`mw-compiler <root> --seed <out>`) still runs those,
   seeded from `--out` so nothing is compiled twice.
+- **What a case may reach for — three things, and there is no xUnit in this process.**
+  `MeshWeaver.Testing` (in this assembly) supplies `TestContext.Current` — the case's name and a
+  `CancellationToken` that trips just inside `--case-timeout`, so a case that threads it through its
+  waits ends with a NAMED cancellation instead of being abandoned as a hung thread;
+  `SkipException(reason)`, which a case throws to decline (a platform it is not on, a credential it
+  does not have); and `TestLog.WriteLine`, captured per case and printed with that case when it
+  FAILS. It is deliberately not a second xUnit: no attributes, no fixtures, no theories, no
+  assertion library. Every one is installed on the case's own thread — packages build in parallel,
+  so anything process-wide would attribute one package's output to another.
+  🚨 These types live in `mw-plugin-test`, not in a framework assembly. In-mesh source reaches them
+  here only because `ContainerReferenceSet` folds this process's own closure into the reference set;
+  a PORTAL compiling the same `Test/*.cs` at runtime has no such assembly. So a node repo's test
+  source that literally names `SkipException` compiles in this lane and **fails to compile on a
+  portal** — moving the shim into a framework assembly is the prerequisite for using it there.
+- 🚨 **A skip is never a pass.** `skipped` is its own count next to `passed` / `failed` /
+  `needs-mesh` in the per-type line, the package line, the summary table and `--report` JSON, and
+  prints as `SKIP` with its reason rather than `ok`. It does not turn a build red — declining is a
+  legitimate answer — but a suite that declined proved nothing, and a verdict reading `12/12 passed`
+  over three declines is the absence-of-evidence-reads-as-green failure the node-repo CI policy
+  exists to forbid.
 - **Timings are the point.** Every package reports ready / queued / work, its compile and test
   splits and per-type compile times; the summary prints the critical path (the chain whose serial
   length is the wall-clock floor) and the parallel speed-up. `--report` writes all of it as JSON.
