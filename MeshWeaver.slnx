@@ -87,6 +87,8 @@
     <Project Path="test/MeshWeaver.PluginTester.Test/MeshWeaver.PluginTester.Test.csproj" />
     <Project Path="test/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" />
     <Project Path="test/Memex.Portal.Shared.Test/Memex.Portal.Shared.Test.csproj" />
+    <Project Path="test/MeshWeaver.Testing.Xunit/MeshWeaver.Testing.Xunit.csproj" />
+    <Project Path="test/MeshWeaver.Testing.Xunit.Test/MeshWeaver.Testing.Xunit.Test.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/MeshWeaver.ComboAssembler/MeshWeaver.ComboAssembler.csproj" />

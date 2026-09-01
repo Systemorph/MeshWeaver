@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- A test-SUPPORT library, not a test project: no test SDK, no generated entry point.
+         Same opt-out MeshWeaver.Fixture uses (test/Directory.Build.props). -->
+    <OutputType>Library</OutputType>
+    <MeshWeaverTestSupportLibrary>true</MeshWeaverTestSupportLibrary>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The custom-test-framework hook lives here. Already pinned and already referenced by
+         MeshWeaver.Fixture and MeshWeaver.Hosting.Orleans.TestBase — no new dependency. -->
+    <PackageReference Include="xunit.v3.extensibility.core" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- TestCollectionScope.Begin is internal on purpose: only the assembly runner may open a
+         scope. The runner's own tests need to construct one without a framework. -->
+    <InternalsVisibleTo Include="MeshWeaver.Testing.Xunit.Test" />
+  </ItemGroup>
+</Project>
