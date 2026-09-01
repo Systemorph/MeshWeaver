@@ -137,6 +137,18 @@ AnonymousGate.Evaluate(hub, path)
 
 **No evaluator registered ⇒ `Denied`, definitively — not undetermined.** When no `EffectivePermissionsDelegate` is installed the gate still refuses, and that refusal *is* a verdict: an ungated mesh has no way to express an anonymous grant, so nothing on it is anonymous-readable and no retry changes that. Calling it undetermined would make every unsecured deployment answer a permanent 503 — the same lie pointed the other way. "Deliberately ungated" versus "somebody forgot `AddRowLevelSecurity()`" is a separate statement with its own type, `UnsecuredMeshDeclaration`.
 
+**The same shape was hiding in three more places, and a guard is how they surfaced.** The ratchet below was written to hold the tree at zero after the anonymous gate was fixed; widening its statement window (a review catch — the naive "up to the next `;`" truncated at a semicolon inside a block lambda, so `.Catch(ex => { logger.Log…; return Observable.Return(false); })` fell outside it) immediately reported three live ones:
+
+| Site | What the swallow produced | Now |
+|---|---|---|
+| `MeshOperations` — Recycle | *"Recycle requires Update permission… ask someone with write access"* — an actionable sentence, false, told to a caller who may hold Update | a distinct retryable answer, logged as no-verdict |
+| `MeshOperations` — Export | a node silently dropped from an export the user believes is complete | still omitted (fail closed), logged as a degraded dependency |
+| `MeshExtensions` — partition bootstrap probe | a skipped heal, indistinguishable from "not needed" | verdict path byte-identical; the trail records `BOOTSTRAP_PERM_UNDETERMINED` |
+
+Each of the three also documented a hole it could not close: the `.Timeout` guarding them faults on **silence**, so a fold that *completes without emitting* (#2742) sailed past every bound in the chain. `CheckPermissionOutcome` materialises that terminal, so moving to it closed the timeout's blind spot as a side effect of removing the swallow.
+
+🚨 The lesson is about the guard, not the sites: **a zero-tolerance scan with a blind spot is indistinguishable from a clean tree**, so the scanner's logic is covered by its own test (planting the hidden shape, the plain shape, and over-reach controls) rather than trusted. Its anti-vacuity floor is likewise a *measured* count of the call sites it inspects, not a guess — an earlier value came from a raw grep that also counted the two `CheckPermission` declarations, so it was never a count of anything the scan looked at.
+
 **One violator of the ban is left, and it is not in this repo.** `BlazorHostingExtensions.AllowContentRead` (MeshWeaver.Plugins) still carries the same `.Catch(_ => Observable.Return(false))` on the authenticated leg of `/api/content`, so a request whose permission fold reaches no verdict answers 404 — byte-identical to "no such file" — instead of the retryable 503 that route's own `ContentFailure` classifier already knows how to produce. Until it is ported, that surface keeps the behaviour this page describes as the bug. Tracked as MeshWeaver.Plugins#1078.
 
 This repo's `PermissionSwallowRatchetGuard` holds `src/`, `memex/` and `samples/` at zero occurrences of the shape and deliberately carries **no allow file**: anything that genuinely cannot reach a verdict already has a name for that, so an exemption could only ever be a request to keep lying. The guard cannot see the satellite repos, which is why the remaining violator is named here in prose — and why the claim was re-measured against `MeshWeaver.Plugins@origin/main` rather than copied from the issue that reported it.

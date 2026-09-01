@@ -33,3 +33,16 @@ instead of a confident, wrong "this is not for you".
 
 Public pages, published catalogs and course covers are unaffected, and a page that really is private
 still asks for sign-in in exactly the way it did before.
+
+**The same mistake, in three more places.** Reviewing the fix turned up other actions that gave the
+same confident wrong answer when their check hiccuped:
+
+- **Recycling a node** replied *"Recycle requires Update permission — ask someone with write
+  access"*. Told to someone who already had write access, that sends them to interrupt a colleague
+  over nothing. It now says the check did not complete and to try again.
+- **Exporting** quietly left a node out of the ZIP. It is still left out — that is the safe
+  direction — but the omission is now recorded, so an export that is short a node is something you
+  can find out about rather than something you discover later.
+- **Setting up a new personal or shared space** skipped a repair step without distinguishing "not
+  needed" from "could not tell". The visible behaviour is unchanged; the difference is now in the
+  record.
