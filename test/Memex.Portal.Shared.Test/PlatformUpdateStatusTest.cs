@@ -1,4 +1,6 @@
+using System;
 using Memex.Portal.Shared.SelfUpdate;
+using MeshWeaver.PluginCatalog;
 using Xunit;
 using MeshWeaver.Hosting.SelfUpdate;
 
@@ -131,4 +133,71 @@ public class PlatformUpdateStatusTest
 
         Assert.Equal(PlatformUpdateAvailability.UpdateAvailable, status.Availability);
     }
+
+    /// <summary>
+    /// 🚨 A combo REFUSAL (#2274) renders as held too, off the recorded verdict itself — not only
+    /// off the poller's <c>HeldTag</c> note about it.
+    ///
+    /// <para>The verdict is the FACT; the hold field is bookkeeping the poller writes beside it, and
+    /// that write is deliberately allowed to fail without gating the roll. Reading only the note
+    /// would therefore leave a build that the gate blocked rendering as an unqualified "update
+    /// available" forever — a control covering the empty state and never the populated one.</para>
+    /// </summary>
+    [Fact]
+    public void ACandidateRefusedByTheComboGate_RendersAsHeld_EvenWithNoHoldFieldWritten()
+    {
+        var status = PlatformUpdateStatus.Derive(
+            new UpdatePolicyContent
+            {
+                LatestAvailableTag = "3.0.0-ci.2400",
+                ComboVerifications = [Verdict("3.0.0-ci.2400", ComboVerdictKind.Red)],
+            },
+            Running);
+
+        Assert.Equal(PlatformUpdateAvailability.UpdateHeld, status.Availability);
+        Assert.Equal("3.0.0-ci.2400", status.LatestVersion);
+    }
+
+    /// <summary>
+    /// 🚨 Only a RED reads as held. "We could not find out" is not a refusal — nothing blocked that
+    /// build — and rendering it as one would send an operator to fix an incompatibility that was
+    /// never diagnosed. The Updates settings tab renders that state on its own terms.
+    /// </summary>
+    [Theory]
+    [InlineData(ComboVerdictKind.Green)]
+    [InlineData(ComboVerdictKind.NotVerifiable)]
+    public void ANonRedVerdict_IsNotAHold(ComboVerdictKind kind)
+    {
+        var status = PlatformUpdateStatus.Derive(
+            new UpdatePolicyContent
+            {
+                LatestAvailableTag = "3.0.0-ci.2400",
+                ComboVerifications = [Verdict("3.0.0-ci.2400", kind)],
+            },
+            Running);
+
+        Assert.Equal(PlatformUpdateAvailability.UpdateAvailable, status.Availability);
+    }
+
+    /// <summary>A verdict about an EARLIER candidate must not suppress the current one.</summary>
+    [Fact]
+    public void ARedVerdictForADifferentTag_DoesNotHoldTheCurrentCandidate()
+    {
+        var status = PlatformUpdateStatus.Derive(
+            new UpdatePolicyContent
+            {
+                LatestAvailableTag = "3.0.0-ci.2400",
+                ComboVerifications = [Verdict("3.0.0-ci.2350", ComboVerdictKind.Red)],
+            },
+            Running);
+
+        Assert.Equal(PlatformUpdateAvailability.UpdateAvailable, status.Availability);
+    }
+
+    private static ComboVerification Verdict(string tag, ComboVerdictKind kind) => new()
+    {
+        CandidateTag = tag,
+        Verdict = kind,
+        VerifiedAt = DateTimeOffset.UtcNow,
+    };
 }
