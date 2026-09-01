@@ -1710,17 +1710,29 @@ public static class MeshExtensions
                 // Without this pair the two are indistinguishable in the trail.
                 hub.NoteRequestStage(requestId,
                     $"BOOTSTRAP_PERM_AWAIT partition={partition} user={effectiveUser}");
-                return hub.CheckPermission(partition, effectiveUser, Permission.Create)
+                // 🚨 The tri-state, not a swallow (#2901). The verdict path is byte-identical —
+                // the heal runs only on a positive Create grant — but the probe now says WHICH of
+                // the two negatives it reached, and CheckPermissionOutcome also materialises the
+                // fold that COMPLETES WITHOUT EMITTING, which the `.Timeout` above provably cannot
+                // catch (it faults on silence, not on a clean finish) and which the hand-rolled
+                // DefaultIfEmpty below exists to backstop.
+                return hub.CheckPermissionOutcome(partition, effectiveUser, Permission.Create)
                     .TakeDecisionOutsideGate()
                     .Timeout(TimeSpan.FromSeconds(15))
-                    .Catch<bool, Exception>(ex =>
+                    .Catch<PermissionCheckOutcome, Exception>(ex => Observable.Return(
+                        PermissionCheckOutcome.Undetermined(
+                            $"the bootstrap authorization probe did not complete: {ex.GetType().Name}")))
+                    .Select(outcome =>
                     {
+                        if (!outcome.IsUndetermined)
+                            return outcome.IsGranted;
                         hub.NoteRequestStage(requestId,
-                            $"BOOTSTRAP_PERM_FAULTED {ex.GetType().Name}");
-                        logger.LogDebug(ex,
-                            "[PartitionBootstrap] authorization probe for {User} on '{Partition}' faulted; skipping heal",
-                            effectiveUser, partition);
-                        return Observable.Return(false);
+                            $"BOOTSTRAP_PERM_UNDETERMINED {outcome.UndeterminedReason}");
+                        logger.LogDebug(
+                            "[PartitionBootstrap] authorization probe for {User} on '{Partition}' reached "
+                            + "no verdict; skipping heal (retryable, not a refusal): {Reason}",
+                            effectiveUser, partition, outcome.UndeterminedReason);
+                        return false;
                     })
                     // 🚨 An authorization probe that COMPLETES WITHOUT A VERDICT must not vanish.
                     //
