@@ -180,20 +180,20 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
         var node = registry.TryParse(entry.Extension, entry.ResourceName, content, normalized);
         if (node == null) return null;
 
-        // Same path-source-of-truth normalization as FileSystemStorageAdapter.
+        // Same path-source-of-truth normalization as FileSystemStorageAdapter. MeshNode.WithPath,
+        // not a bare `with { Namespace = … }`: MainNode is STORED and would otherwise stay frozen at
+        // the namespace the parser produced, dropping the served node out of `is:main` (#2939).
         var lastSlash = normalized.LastIndexOf('/');
         if (lastSlash > 0)
         {
             var expectedNamespace = normalized[..lastSlash];
             var expectedId = normalized[(lastSlash + 1)..];
-            if (node.Namespace != expectedNamespace)
-                node = node with { Namespace = expectedNamespace };
-            if (node.Id != expectedId)
-                node = node with { Id = expectedId };
+            if (node.Namespace != expectedNamespace || node.Id != expectedId)
+                node = node.WithPath(expectedId, expectedNamespace);
         }
         else if (node.Id != normalized)
         {
-            node = node with { Id = normalized };
+            node = node.WithPath(normalized, node.Namespace);
         }
 
         return node;
