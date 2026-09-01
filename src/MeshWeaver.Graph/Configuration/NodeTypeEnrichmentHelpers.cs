@@ -32,31 +32,41 @@ namespace MeshWeaver.Graph.Configuration;
 internal static class NodeTypeEnrichmentHelpers
 {
     /// <summary>
-    /// Slow-path budget. The slow path waits for the per-NodeType compile
-    /// stream to emit a settled state (Ok / Error / non-NodeTypeDefinition
-    /// content). On timeout we fall back to
-    /// <see cref="WithCompilationErrorOverlay"/> so the per-instance hub still
-    /// activates — with an error-overlay HubConfiguration so the operator
-    /// sees the diagnostic instead of a dead grain.
+    /// Slow-path budget — the wall clock that runs ONLY while the NodeType is making no
+    /// progress (see <see cref="WaitForCompileSettled"/>: the deadline is disarmed with
+    /// <c>Observable.Never</c> for as long as a compile is genuinely in flight). On expiry we
+    /// fall back to <see cref="WithCompilationErrorOverlay"/> so the per-instance hub still
+    /// activates — with an error-overlay HubConfiguration so the operator sees the diagnostic
+    /// instead of a dead grain.
     ///
-    /// <para>The slow path itself nests another remote-stream subscribe (the
-    /// per-NodeType hub's MeshNode stream behind <c>IMeshNodeStreamCache</c>),
-    /// which in turn drives that hub's own activation chain. 30 s leaves
-    /// budget for the chained SubscribeRequest to land its Initial frame
-    /// before the overlay fallback kicks in. The double-enrichment that
-    /// stacked TWO 30 s windows on the same activation is fixed at the
-    /// EnrichWithNodeType fast-path (re-entry on a node that already carries
-    /// HubConfiguration short-circuits to the cached result) — see
-    /// <c>NodeTypeEnrichmentDoubleCallTest</c>.</para>
+    /// <para>🚨 <b>THIS BOUND MUST FIRE STRICTLY BEFORE
+    /// <see cref="MessageHubConfiguration.DefaultRequestTimeout"/> (60 s), OR IT DELIVERS
+    /// NOTHING.</b> It is an INNER bound nested inside the caller's request ceiling, and the
+    /// rule <c>ReadBudget</c> states for every such pair applies here verbatim: <i>a bound
+    /// nested inside another bound must be able to fire FIRST, because it is the only one that
+    /// knows WHICH read starved.</i> This constant was 60 s — exactly equal to the ceiling — so
+    /// the overlay it exists to produce could never reach the caller inside the caller's own
+    /// window. Every such activation surfaced as the ceiling's generic <c>"No response received
+    /// in hub …"</c>, and the specific, correct message the overlay already carries —
+    /// <c>"NodeType 'X' is not registered (referenced by instance '…')"</c> — had never once
+    /// been seen in production. The same collision is recorded from the test side in
+    /// <c>OrleansDynamicCompilationTest</c>, where an equal Fact timeout preempted the
+    /// framework's graceful sink and left "five sessions theorising from that silence".</para>
+    ///
+    /// <para><b>Why lowering it costs nothing.</b> The budget never bounded a legitimate
+    /// compile: it is disarmed while one is in flight, and in-flight VISIBILITY is
+    /// <see cref="InFlightOverlayGrace"/> (5 s to a live progress overlay that self-heals onto
+    /// the real hub via <see cref="WithOverlaySelfHeal"/>). So this number governs exactly one
+    /// case — nothing is compiling and the type stream still has not settled, i.e. a dangling
+    /// or unreachable NodeType — where the entire remaining wait is dead time. 30 s keeps the
+    /// margin the surrounding design has always argued for (enough for the chained
+    /// SubscribeRequest to land its Initial frame) while leaving a full 30 s for the overlay to
+    /// be built and delivered inside the caller's ceiling.</para>
+    ///
+    /// <para>Internal rather than private so the ordering invariant can be pinned by a test
+    /// rather than restated in a comment — see <c>NodeTypeOverlayBudgetTest</c>.</para>
     /// </summary>
-    // Reactive wait with a sane upper bound — NOT a "make the number bigger"
-    // fix. A wedged owning grain never responds no matter how long we wait, so
-    // the budget's only jobs are to (a) outlast a legitimate cold first-compile
-    // and (b) then surface the overlay instead of hanging activation forever.
-    // 60s is the agreed cap. Correctness comes from the activity FINISHING and
-    // DISPOSING (writing the terminal NodeType state), which consumers observe
-    // via this same stream.Where(settled) — not from a longer timeout.
-    private static readonly TimeSpan SlowPathTimeout = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan SlowPathTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// How long an activation may sit behind an IN-FLIGHT compile before it stops waiting
