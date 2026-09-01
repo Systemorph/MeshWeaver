@@ -97,8 +97,15 @@ public static class StandardReducers
     //     refreshing" bug on the UWDeepfield treaty tabs).
     //   • quiet client (clock < owner): the outgoing PatchDataChangeRequest carried a version below
     //     the owner mirror's Current and the USER'S EDIT was silently dropped on the owner.
-    // (UpdateStream re-stamps INCOMING patches with delivery.Message.Version before SetCurrent, so
-    // applying received frames is unaffected — this stamp matters for locally-originated updates.)
+    // 🚨 Carrying the base cures the FIRST of those and CANNOT cure the second — the base is below
+    // the owner's clock by construction whenever an owner frame is in flight, which is exactly the
+    // dropped-edit case. That half is cured on the RECEIVE side (#2701): the owner's monotonicity
+    // guard now applies to owner→mirror DataChangedEvents only, so a subscriber's optimistically
+    // based write is merged rather than discarded. See SynchronizationStream.UpdateStream and
+    // Doc/Architecture/DataSyncAndCrdt §3.
+    // (UpdateStream re-stamps INCOMING OWNER frames with delivery.Message.Version before SetCurrent
+    // — a subscriber's write keeps this stamp, floored at the owner's clock, so applying it can
+    // never rewind the owner. This stamp matters for locally-originated updates.)
     private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch? patch, string changedBy)
     {
         var typeRegistry = stream.Hub.TypeRegistry;
