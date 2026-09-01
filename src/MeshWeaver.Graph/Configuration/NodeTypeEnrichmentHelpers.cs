@@ -961,6 +961,44 @@ internal static class NodeTypeEnrichmentHelpers
         if (def is null)
             return Observable.Return(node);
 
+        // ── #2820 — THE EXECUTE-TIME INTERLOCK. ────────────────────────────────────────────────
+        // Placed HERE, above every branch that resolves an assembly, because this is the single
+        // act that ARMS a NodeType: everything the compiled code can do — its handlers, its
+        // layout areas, its WithInitialization watchers, its writes — reaches the mesh through the
+        // per-instance hub that MonolithRoutingService / MessageHubGrain build from the
+        // HubConfiguration those branches bind. One check above them covers the pinned-release
+        // branch, the hot activation path and the legacy fallbacks at once; a check inside only
+        // some of them would make the gap LOOK closed, which is worse than none.
+        //
+        // 🚨 It refuses ONE state — AdoptionRefused, where the bundle NAMED the sources it was
+        // built from and they are not this mesh's. AdoptedUnverified (a legacy bundle with no
+        // fingerprint) is PERMITTED, deliberately: unknown is not proven-stale, and refusing it
+        // would park every legacy type — see NodeTypeExecutionGate.
+        //
+        // On a mesh that can compile locally this branch is mostly unreachable by design:
+        // ApplyAdoptedSourceStamp already clears the assembly coordinates on refusal, so
+        // HasUsableBuild is false and the ABI-stale / bytes-missing branches below take over. The
+        // state this gate actually catches is the one that refusal deliberately LEAVES SERVING —
+        // a Modules:RequirePrebuilt mesh, where clearing the coordinates would strand the type
+        // with no assembly at all and only a human rebake can replace them — plus the window
+        // between PrebuiltAssemblySeeder.Seed stamping the coordinates and the owner judging them.
+        if (NodeTypeExecutionGate.Evaluate(def) is BuildExecutionVerdict.Refused)
+        {
+            var summary = NodeTypeExecutionGate.RefusalSummary(nodeType, def);
+            // Critical, not Warning: nothing this process does will change the verdict — only a
+            // recompile of the live source or a rebake will. Same class of statement DbVersionGate
+            // makes when a portal is ahead of its schema.
+            logger?.LogCritical(
+                "EnrichWithNodeType: {Summary} Instance '{InstancePath}' is NOT being armed with "
+                + "those bytes; it serves the refusal overlay instead. {Recovery}",
+                summary, node.Path, NodeTypeExecutionGate.RecoveryVerb);
+            return Observable.Return(
+                WithOverlaySelfHeal(
+                    WithExecutionRefusedOverlay(
+                        node, nodeType, summary, def.LastCompilationActivityPath),
+                    meshHub, nodeType, typeNode.Version, logger));
+        }
+
         // NodeTypeDefinition with no compile lifecycle attached and no
         // HubConfiguration: a test-seeded type definition (or any framework
         // type that won't be Roslyn-compiled). No node configuration to resolve — the
@@ -2478,6 +2516,63 @@ internal static class NodeTypeEnrichmentHelpers
             config => overlay(config).Set(nack);
         return node with { HubConfiguration = composed };
     }
+
+    /// <summary>
+    /// The EXECUTE-TIME REFUSAL overlay (#2820): the instance activates, serves a page that says
+    /// exactly why it is not running its type's code, and NACKs every typed request with
+    /// <see cref="ErrorType.ExecutionRefused"/> naming the NodeType.
+    ///
+    /// <para>🚨 It is a sibling of <see cref="WithCompilationErrorOverlay"/> rather than a call
+    /// into it for two reasons, both load-bearing. (1) The NACK must not read
+    /// <see cref="ErrorType.CompilationFailed"/>: nothing failed to compile — a build exists and
+    /// was rejected — and handing a caller a signal whose plain reading is the opposite of what
+    /// happened is precisely the hour #2818 documents losing to a "settle timeout" that meant
+    /// "never dispatched". (2) The copy is resolved through <c>host.Localize</c> at RENDER time,
+    /// off the viewer's <c>AccessContext</c>, instead of being baked in English at enrichment
+    /// time as the older overlay causes still are.</para>
+    ///
+    /// <para><see cref="WithCompilationErrorOverlay"/> keeps its exact signature: it has nine call
+    /// sites whose wording contract <c>CompileErrorOverviewTest</c> pins, and threading two more
+    /// optional parameters through it to serve one cause would put the localized path and the
+    /// baked-English path in the same function — the shape that made every unnamed cause inherit
+    /// "please correct the code" in the first place (#641).</para>
+    /// </summary>
+    internal static MeshNode WithExecutionRefusedOverlay(
+        MeshNode node,
+        string nodeType,
+        string summary,
+        string? activityPath)
+    {
+        Func<MessageHubConfiguration, MessageHubConfiguration> overlay =
+            config => config.AddLayout(layout =>
+                layout.WithView(MeshNodeLayoutAreas.OverviewArea, (host, _) =>
+                    Observable.Return<UiControl?>(
+                        BuildCompilationErrorMarkdown(
+                            errorMessage: summary,
+                            guidance: host.Localize(ExecutionRefusedGuidanceKey),
+                            intro: host.Localize(ExecutionRefusedIntroKey),
+                            callToAction: host.Localize(NoCodeChangeNeededKey),
+                            activityPath: activityPath,
+                            activityLinkLabel: host.Localize("ui.viewCompileLog")))));
+
+        var nack = new UnhandledMessageNack(
+            $"{summary} {NodeTypeExecutionGate.RecoveryVerb}",
+            ErrorType.ExecutionRefused,
+            nodeType);
+        return node with
+        {
+            HubConfiguration = config => overlay(config).Set(nack)
+        };
+    }
+
+    /// <summary>Localization key for the refusal overlay's lead-in.</summary>
+    internal const string ExecutionRefusedIntroKey = "ui.executionRefusedIntro";
+
+    /// <summary>Localization key for the refusal overlay's guidance paragraph.</summary>
+    internal const string ExecutionRefusedGuidanceKey = "ui.executionRefusedGuidance";
+
+    /// <summary>Localization key for the shared "this is not your code" lead-out.</summary>
+    internal const string NoCodeChangeNeededKey = "ui.noCodeChangeNeeded";
 
     /// <summary>
     /// The compilation-IN-PROGRESS overlay: activates the instance hub immediately (instead of

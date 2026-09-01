@@ -158,6 +158,66 @@ public class CellSurfaceScriptingSeamTest(ITestOutputHelper output) : MonolithMe
         await LogWith(client, kernelAddress, "cellsurface-42").Should().Within(60.Seconds()).Emit();
     }
 
+    [Fact(Timeout = 180_000)]
+    public async Task ACellSurfaceTypeWhoseBuildIsProvenStale_IsNotJoined()
+    {
+        // 🚨 #2820, enforcement site 2 — the one the per-instance-hub gate cannot reach. The cell
+        // surface loads the assembly straight through NodeAssemblyLoadContext, with no enrichment
+        // and no HubConfiguration, and from that moment every submission in the session can call
+        // the pack's functions by bare name with full write access. It is the most directly ARMED
+        // surface there is.
+        //
+        // The comparison is what makes this mean something: the FIRST submission proves the type
+        // is genuinely on the cell surface (identical to
+        // CellSurfacePackType_IsCallableByBareName_FromAKernelCell), and the second differs from
+        // it in exactly one field of the NodeType node — BuildProvenance. Asserting only the
+        // refusal would pass just as well against a provider that had stopped joining anything.
+        var def = await CreateAndCompile(
+            "type/StalePack",
+            new NodeTypeDefinition
+            {
+                CellSurface = true,
+                Configuration = "config => config.WithContentType<StalePackContent>()"
+            },
+            ("api", """
+                public record StalePackContent { public string Title { get; init; } = ""; }
+                public static class StalePackApi { public static int TheAnswer() => 7; }
+                """));
+        def.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            $"the pack type must compile; error: {def.CompilationError}");
+
+        const string call = """Console.WriteLine($"stalepack-{StalePackApi.TheAnswer()}");""";
+
+        var (beforeKernel, beforeClient) = await CreateKernel("stalepack-before");
+        beforeClient.Post(new SubmitCodeRequest(call), o => o.WithTarget(beforeKernel));
+        await LogWith(beforeClient, beforeKernel, "stalepack-7").Should().Within(60.Seconds())
+            .Emit("the control arm — with an honest build the pack IS on the cell surface");
+
+        // Stage the refusal exactly as ApplyAdoptedSourceStamp records it: the bundle names the
+        // sources it was built from and they are not this mesh's.
+        await Mesh.GetMeshNodeStream("type/StalePack")
+            .Update<NodeTypeDefinition>(d => d with
+            {
+                AdoptedSourceFingerprint = "bundlefingerprintA",
+                CurrentSourceFingerprint = "livefingerprintB",
+                BuildProvenance = BuildProvenance.AdoptionRefused,
+            })
+            .Should().Within(30.Seconds()).Emit();
+        await Mesh.GetMeshNodeStream("type/StalePack").Should().Within(30.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition
+            {
+                BuildProvenance: BuildProvenance.AdoptionRefused
+            });
+
+        // A NEW session re-resolves the cell surface. The bytes are unchanged and still perfectly
+        // loadable — the ONLY thing that changed is the verdict about where they came from.
+        var (afterKernel, afterClient) = await CreateKernel("stalepack-after");
+        afterClient.Post(new SubmitCodeRequest(call), o => o.WithTarget(afterKernel));
+        await LogWith(afterClient, afterKernel, "CS0103").Should().Within(60.Seconds())
+            .Emit("a build PROVEN to come from other source must not be callable from a cell — "
+                + "the bare name has to stop resolving, exactly as for a type that never opted in");
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task NonCellSurfacePackType_StaysInvisibleToCells()
     {
