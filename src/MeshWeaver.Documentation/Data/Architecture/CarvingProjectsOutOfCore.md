@@ -70,31 +70,80 @@ those. Only deleting the reference can.
 `Social`, `Storage` — and it is still in **core**, while all four hosts that consume it
 (`Memex.Portal.Gui`, `.Distributed`, `.Monolith`, `Memex.LocalMesh`) live in **plugins**.
 
-It alone holds 13 core `ProjectReference`s. It is the single reason `Maps`, `GitSync`,
-`ContentCollections.Indexing`, `.Indexing.Graph` and `Mesh.Operations` cannot leave. **Finishing
-that one move releases five projects at once; every other carve-out below is downstream of it.**
+It alone holds 13 core `ProjectReference`s — but **most of them are not real**. Measured: it builds
+clean without `Observability.Contract`, `Maps`, `ContentCollections.Indexing` and `.Indexing.Graph`.
+The one candidate it genuinely couples to is **`GitSync`**, through four files —
+`MemexConfiguration` plus the GitHub login, connect and webhook endpoints. That is authentication,
+which is precisely why an earlier attempt to move Portal.Shared wholesale was split instead: doing
+it exiles sign-in from the platform repo. **That contradiction is still open and is a maintainer
+call, not an implementation detail.**
+
+So the keystone is narrower than it looks: it gates `GitSync`, and it does not gate `Maps` or
+`Indexing`.
 
 The second-order pin behind it is `tools/MeshWeaver.PluginTester` — core-owned, shipped as the gate
 image — which directly references `Indexing.Graph`, `GitSync`, `Maps`, `Mesh.Operations` and
 `PluginCatalog`. Since it gained `--module` those references are convertible rather than fatal, but
 each has to be converted deliberately.
 
+## The real boundary is the CONTENT SURFACE
+
+The `.csproj` graph is not what decides whether a project can leave cheaply.
+`FrameworkBuildIdentity.ContentSurfaceAssemblies` is — the 26 assemblies whose reference-assembly
+hashes are folded into the framework build identity `s<hash>`, and therefore the set that in-mesh
+content compiles against by default.
+
+**Both projects moved in the first wave were OUTSIDE that list, and that is the entire reason they
+were free.** `MeshWeaver.Hosting.Embeddings` and `MeshWeaver.Observability.Contract` are not content
+surface, so nothing in any mesh binds them by name, no bake was invalidated, and the move was a
+`.csproj` edit.
+
+🚨 **Every remaining candidate is INSIDE the content surface**, and leaving it is a different class
+of operation with a precedent to copy rather than a decision to improvise. `MeshWeaver.AI` and
+`MeshWeaver.Markdown.Collaboration` have both already made the trip, and the comment left in
+`FrameworkBuildIdentity` states the shape exactly: the project becomes a MODULE, leaves the
+identity list, is composed into content compiles per-mesh via
+`CompileReferences.ComposeWithModules`, and is made `required` by a pre-installed package so every
+portal still lands it.
+
+The cost is a **framework identity flip**: a new `s<hash>`, so every existing bake is invalidated
+and every portal and satellite re-bakes (a degraded start of roughly ten minutes per pod, and
+satellites must republish under the new identity before their bundles are adoptable). That is a
+delivery event, not a refactor, and it is why these do not get done casually or in batches of one.
+
 ## The remaining core projects, and what pins each
 
-| Project | Lines | What pins it to core | Verdict |
-|---|---|---|---|
-| `Hosting.Embeddings` | 471 | **nothing** | moved out |
-| `Observability.Contract` | 1 320 | a ships-the-bits reference + one test project | moved out |
-| `Maps` | 116 | Portal.Shared, PluginTester, 6 test projects | after the keystone |
-| `ContentCollections.Indexing` | 1 851 | one `using` in `Mesh.Operations`, Portal.Shared, PluginTester | contract split, then module |
-| `ContentCollections.Indexing.Graph` | 2 253 | Portal.Shared, PluginTester | with the above |
-| `GitSync` | 9 649 | `PluginCatalog`, Portal.Shared, PluginTester, ComboAssembler/Verifier | module-able now; auth ⇒ `Modules:Required` |
-| `PluginCatalog` | 21 245 | Portal.Shared, PluginTester, ComboAssembler/Verifier | **stays** — it *is* the plugin system |
-| `Documentation` | 1 670 | the doc gate; settled decision | **stays** |
-| `Mesh.Operations` | 4 726 | Portal.Shared, LocalMesh, PluginTester | **stays** |
+| Project | Lines | Content surface? | What pins it to core | Verdict |
+|---|---|---|---|---|
+| `Hosting.Embeddings` | 471 | no | **nothing at all** | moved out — free |
+| `Observability.Contract` | 1 320 | no | a ships-the-bits reference + one test project | moved out — free |
+| `Maps` | 116 | **yes** | in-mesh sample content (`Cornerstone/Pricing`), 5 test meshes, PluginTester | module + identity flip |
+| `ContentCollections.Indexing` | 1 851 | **yes** | one `using` in `Mesh.Operations`; in-mesh content | module + identity flip |
+| `ContentCollections.Indexing.Graph` | 2 253 | **yes** | PluginTester; in-mesh content | with the above |
+| `GitSync` | 9 649 | **yes** | `PluginCatalog`, 4 real files in Portal.Shared (**GitHub login = authentication**) | module + identity flip; auth ⇒ `Modules:Required` |
+| `PluginCatalog` | 21 245 | **yes** | Portal.Shared, PluginTester, ComboAssembler/Verifier | **stays** — it *is* the plugin system |
+| `Documentation` | 1 670 | no | the doc gate; settled decision | **stays** |
+| `Mesh.Operations` | 4 726 | **yes** | Portal.Shared, LocalMesh, PluginTester | **stays** |
 
 Everything not listed is kernel: messaging, data, layout, the mesh contract, hosting, the compiler
-and NuGet resolution, packaging. Those are the platform by definition.
+and NuGet resolution, packaging.
+
+### The `ProjectReference` graph lies about all of them
+
+🚨 Four of the references that appear to pin these projects turned out to carry **no code
+dependency at all** — `Memex.Portal.Shared` builds Release `-warnaserror` with **0 Warning(s)**
+after dropping `Observability.Contract`, `Maps`, `ContentCollections.Indexing` *and*
+`.Indexing.Graph`. They exist to put the assembly in the app closure, nothing more.
+
+And the reference that actually matters is **not in any `.csproj`**:
+`samples/Graph/Data/Cornerstone/Pricing/Source/PricingLayoutAreas.cs` binds `MapControl`, and it is
+a `Source/*.cs` mesh node — it compiles at RUNTIME in the portal, never in CI. That is why five core
+test projects reference `MeshWeaver.Maps` while not one line of their own C# mentions it: their test
+meshes compile that sample.
+
+**So neither direction of the `.csproj` graph can be trusted here.** A reference may be dead weight,
+and a live consumer may have no reference at all. Check both: a warnings-as-errors build of the
+consumer settles the first; the content trees and the node JSON settle the second.
 
 ## Two defects this survey found
 
