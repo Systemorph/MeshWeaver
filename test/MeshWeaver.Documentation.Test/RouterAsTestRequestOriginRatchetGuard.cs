@@ -70,7 +70,7 @@ public class RouterAsTestRequestOriginRatchetGuard(ITestOutputHelper output)
     /// the shape; this stops the list as a WHOLE from growing — including by the trick of adding a
     /// new file's line. Lower it whenever you delete or lower an entry.
     /// </summary>
-    private const int TotalBudget = 6;
+    private const int TotalBudget = 3;
 
     /// <summary>
     /// <c>test/</c> only. In <c>src/</c> the same shape is already handled by the shared
