@@ -30,6 +30,16 @@ namespace MeshWeaver.Data;
 /// <c>MeshNodeStreamExtensions.GetMeshNodeOutcome</c> therefore answers a probe's read of its OWN
 /// address <c>Absent</c> immediately — the truthful answer, since there is no node there and never
 /// will be. Reads of any REAL path from a probe are untouched.</para>
+///
+/// <para>🚨 There are TWO own-node read seams, and both are guarded (see
+/// <see cref="TransientProbeAddresses"/>). The other is the process-wide
+/// <c>IMeshNodeStreamCache.GetStream(path, options)</c> — the one in-mesh NodeType content
+/// actually uses, because it is the only own-node read that answers before the hub's init gates
+/// open. Unguarded it evaluated the caller's permissions on the synthetic address and threw
+/// "lacks Read permission on '$model-probe/…'", or routed and died on "No node found at
+/// '$model-probe/…'"; either faulted the virtual data source whose provider issued it
+/// (Systemorph/MeshWeaver#2894). <c>MeshNodeStreamCache.GetStreamRaw</c> answers a probe address
+/// with an EMPTY stream — the stream-shaped twin of <c>Absent</c>.</para>
 /// </summary>
 /// <param name="StartDataSources">Whether the probe still STARTS its data sources on the init
 /// turn. Default TRUE — the pre-existing behaviour, which probes that snapshot actual data (the
@@ -39,3 +49,50 @@ namespace MeshWeaver.Data;
 /// that reads NOTHING BUT THE TYPE REGISTRY — the schema validation/lookup probes, whose eager
 /// sync/ stream raced its own dispose into the CD-killing ProbeHubCostTest flake — opts out.</param>
 public sealed record TransientNodeProbe(bool StartDataSources = true);
+
+/// <summary>
+/// The synthetic hub addresses a transient node probe is created under, and the one predicate
+/// that recognises them.
+///
+/// <para>🚨 <b>These addresses can never carry a mesh node.</b> They are minted with a fresh
+/// <see cref="System.Guid"/> for a hub that lives for microseconds and is disposed in the same
+/// breath (<see cref="TransientNodeProbe"/>), so "is there a node at this path?" has ONE answer,
+/// for every reader, forever: no. Every read seam that can be handed such a path must therefore
+/// answer it directly rather than route it — see
+/// <c>MeshNodeStreamExtensions.GetMeshNodeOutcome</c> (answers <c>Absent</c>) and
+/// <c>MeshNodeStreamCache.GetStreamRaw</c> (answers an empty stream).</para>
+///
+/// <para>The constants live here, next to the marker that states the contract, because EVERY
+/// producer (<c>NodeTypeDataModelAreas.ProbeInstanceModel</c>, the schema probe in
+/// <c>MeshDataSource</c>, and the schema validation / lookup probes in <c>MeshOperations</c>)
+/// and every consuming guard have to agree on the literal. A guard whose prefix drifts from its
+/// producer's is a guard that silently stops firing — so the producers mint their address FROM
+/// these constants, which is what keeps <see cref="IsProbeAddress"/> exhaustive.</para>
+/// </summary>
+public static class TransientProbeAddresses
+{
+    /// <summary>Prefix of the model probe's address — <c>NodeTypeDataModelAreas.ProbeInstanceModel</c>.</summary>
+    public const string ModelProbePrefix = "$model-probe/";
+
+    /// <summary>Prefix of the schema probe's address — the schema lookup in <c>MeshDataSource</c>.</summary>
+    public const string SchemaProbePrefix = "$schema-probe/";
+
+    /// <summary>Prefix of the content-validation probe's address — <c>MeshOperations</c>.</summary>
+    public const string SchemaValidationProbePrefix = "_schema_validation/";
+
+    /// <summary>Prefix of the schema-lookup probe's address — <c>MeshOperations</c>.</summary>
+    public const string SchemaLookupProbePrefix = "_schema_lookup/";
+
+    /// <summary>
+    /// True when <paramref name="path"/> is a transient probe hub's own synthetic address — a
+    /// path that is not, and can never become, a mesh node.
+    /// </summary>
+    /// <param name="path">The mesh path a reader was handed.</param>
+    /// <returns><c>true</c> for a probe address, <c>false</c> for every real path.</returns>
+    public static bool IsProbeAddress(string? path)
+        => path is not null
+           && (path.StartsWith(ModelProbePrefix, StringComparison.Ordinal)
+               || path.StartsWith(SchemaProbePrefix, StringComparison.Ordinal)
+               || path.StartsWith(SchemaValidationProbePrefix, StringComparison.Ordinal)
+               || path.StartsWith(SchemaLookupProbePrefix, StringComparison.Ordinal));
+}

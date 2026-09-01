@@ -636,6 +636,13 @@ jobs:
   # pinned platform container. What is rebuilt is exactly the selection's parameters — nothing
   # else. The pack matrix only CONSUMES this job's artifact: a module missing from it is RED
   # there, never rebuilt locally.
+  #
+  # 🚨 AND THIS JOB ASSERTS ITS OWN POSTCONDITION (Plugins#1051). "The compiler did not throw" is
+  # not "the selected set was emitted", and the difference used to be discovered N jobs later by
+  # the pack matrix. The last step before the upload checks, per SELECTED container entry, the
+  # three things every pack job demands — the assembly, the closure manifest, and a build log the
+  # binding-identity check can read — so this job is green only when the artifact it hands over is
+  # complete.
   build-workspace:
     name: Build the workspace (one global build)
     needs: [select, prepare]
@@ -761,6 +768,45 @@ jobs:
             --entrypoint dotnet "$img" \
             /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out ${accepts[@]+"${accepts[@]}"} 2>&1 | tee "$out/workspace-build.log"
           echo "built=true" >> "$GITHUB_OUTPUT"
+      # 🚨 THE PLATFORM CHECKOUT LANDS **AFTER** THE BUILD, ON PURPOSE. This job mounts
+      # `$GITHUB_WORKSPACE` at `/repo:ro` for the container build, so anything checked out beside
+      # the content tree BEFORE that line is inside what the builder sees. The pack job checks
+      # core out at `path: meshweaver` up front because it has no such mount; here the order is
+      # inverted so the compile input stays exactly the content repository and nothing else.
+      - name: Check out Systemorph/MeshWeaver at the pinned ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: meshweaver
+      # ───────────── THE BUILD ASSERTS ITS OWN POSTCONDITION (Plugins#1051) ─────────────
+      # A green here used to mean "the compiler did not throw" and was read as "the selected set
+      # was emitted". Those are different claims, and the gap between them surfaced N JOBS LATER:
+      # seven bundle jobs red with `the global workspace build produced no MeshWeaver.AI.OpenAI.dll`
+      # on a PR whose entire diff was one XML doc comment, while THIS job reported success in the
+      # same run (Plugins#1051, run 33480755857). The downstream message was accurate and in the
+      # wrong place — the job that knew the selection was the one that stayed green.
+      #
+      # So the producer now checks what the consumers demand, against the SAME enumerator the pack
+      # matrix expands (`needs.select.outputs.modules`, not a re-derivation and not a glob of the
+      # output — a second enumerator is the defect one level up). One accurate failure here
+      # replaces N inaccurate ones there, and no SHORT workspace is ever handed to the matrix:
+      # this step sits BEFORE the upload.
+      #
+      # 🚨 NO `if:` ON IT. The sdk-only case is handled INSIDE the script (it asserts nothing and
+      # says so) rather than by a condition that would render as a grey tick indistinguishable
+      # from a pass. Its self-test runs FIRST and fails the job — an unproven postcondition is
+      # exactly the thing #1051 is about.
+      - name: The global build emitted every selected module (postcondition)
+        env:
+          MODULES: ${{ needs.select.outputs.modules }}
+        run: |
+          set -euo pipefail
+          python3 meshweaver/.github/scripts/workspace-build-verify.py --self-test
+          printf '%s' "$MODULES" > "$RUNNER_TEMP/selection.json"
+          python3 meshweaver/.github/scripts/workspace-build-verify.py \
+            --modules "@$RUNNER_TEMP/selection.json" \
+            --output "$RUNNER_TEMP/module-build"
       - name: Hand the workspace to the matrix
         if: steps.build.outputs.built == 'true'
         uses: actions/upload-artifact@v7
@@ -1091,7 +1137,13 @@ jobs:
               log="$ws/workspace-build.log"
               packdir="$ws/$MODULE"
               if [ ! -f "$packdir/$MODULE.dll" ]; then
-                echo "::error::the global workspace build produced no $MODULE.dll under $packdir. Local builds are discontinued: if build-workspace was green without this module, the selection or this entry is wrong — fix that, never rebuild here."
+                # 🚨 build-workspace now asserts this very file EXISTS for every selected entry
+                # before it uploads (Plugins#1051), so a green build can no longer be a short one.
+                # Reaching here therefore means this job read the WRONG workspace — a sibling
+                # call's artifact (Plugins#1077) or a torn download — not that the build skipped
+                # the module. Still never rebuild locally: that would paper over which artifact
+                # arrived.
+                echo "::error::the global workspace build produced no $MODULE.dll under $packdir — yet build-workspace asserted every selected entry's assembly before uploading. So the workspace this job downloaded is not the one this call built (a sibling call's artifact, or a torn download); the lane key is ${{ needs.select.outputs.lane }}. Local builds are discontinued: fix which artifact arrives, never rebuild here."
                 exit 1
               fi
               closure_file="$ws/$MODULE.closure.txt"
@@ -1125,16 +1177,24 @@ jobs:
                   echo "closure: $name.dll does NOT ride — the image ships it (src/platform-shipped.txt); bundling it would land a same-identity duplicate beside /app's copy"
                 fi
               done < "$closure_file"
-              # The SHELF rides: module-libs.txt is the builder-written provenance.
+              # The PRIVATE CLOSURE rides: module-libs.txt is the builder-written provenance —
+              # every non-framework assembly this module's own PackageReferences pull in, sourced
+              # from the image's /app and the module-libraries shelf.
+              # 🚨 "The image has it" is NOT a reason to leave one out. The reference image is a
+              # PORTAL, and a portal with a module compiled into it carries that module's private
+              # dependencies too: reading /app as a platform guarantee dropped Microsoft.Agents.AI
+              # out of the AI bundle and threw ReflectionTypeLoadException in every host that was
+              # not that exact image — this repo's bake gate and MeshWeaver.Reinsurance's trunk
+              # (MeshWeaver.Plugins#1043). The SHARED FRAMEWORK is the only sound omission.
               if [ -f "$packdir/module-libs.txt" ]; then
                 while IFS= read -r ride; do
                   [ -n "$ride" ] || continue
                   printf '%s\n%s\n' --with "$ride" >> "$packargs"
-                  echo "closure: $ride RIDES — module-libraries shelf (deps.json-derived; the image does not carry it)"
+                  echo "closure: $ride RIDES — the module's private closure (deps.json-derived, from the image or the shelf)"
                 done < "$packdir/module-libs.txt"
               fi
               echo "closure: NO --deps-closure on the container path — there is no SDK deps.json to derive one from."
-              echo "closure: complete BY RECORD instead — every reference resolved from the image, its shared frameworks, or the module-libraries shelf; the builder refuses BY NAME anything none of them supplies, and this lane passes no --extra-refs."
+              echo "closure: complete BY RECORD instead — the builder walked the module's own package references over the image's and the shelf's deps.json and copied everything the shared framework does not supply; it refuses BY NAME anything neither supplies, and this lane passes no --extra-refs."
               # 🚨 THE BINDING IDENTITY, CHECKED (MeshWeaver#143): the expected value is the one
               # the global builder read out of the image, so it cannot drift from what the portals
               # run. The global build log carries it once for the whole workspace.
@@ -1267,9 +1327,10 @@ jobs:
           # refusal, not a curiosity. The SDK path is untouched: its private closure legitimately
           # carries package assemblies.
           if [ "$COMPILER" = "container" ]; then
-            # A non-MeshWeaver assembly is allowed ONLY with shelf provenance: the builder's
-            # module-libs.txt names every ride it derived from the shelf's deps.json. Anything
-            # else has no accountable closure and must fail — the 2026-08-19/20 outage shape.
+            # A non-MeshWeaver assembly is allowed ONLY with builder provenance: the builder's
+            # module-libs.txt names every ride it derived from the image's and the shelf's
+            # deps.json. Anything else has no accountable closure and must fail — the
+            # 2026-08-19/20 outage shape.
             # 🚨 FROM THE BUILD STEP'S OWN packdir output — never a hard-coded layout. The global
             # workspace moved the pack input to workspace-build/<Module>; this path still reading
             # module-build/ made the allow-list EMPTY and failed all 8 shelf-consuming modules on
@@ -1283,8 +1344,8 @@ jobs:
                   | select(. as $a | $shelf | index($a) | not)]
                | length == 0' \
               "$manifest" > /dev/null \
-              || { echo "::error::the container-built bundle carries a non-MeshWeaver assembly with NO shelf provenance (not in the builder's module-libs.txt) — its closure cannot be accounted for, so the pack fails rather than landing a module that faults at first use"; exit 1; }
-            echo "container path: closure is entry + module-owned MeshWeaver siblings + shelf-manifested rides, as recorded"
+              || { echo "::error::the container-built bundle carries a non-MeshWeaver assembly with NO builder provenance (not in the builder's module-libs.txt) — its closure cannot be accounted for, so the pack fails rather than landing a module that faults at first use"; exit 1; }
+            echo "container path: closure is entry + module-owned MeshWeaver siblings + the manifested private closure, as recorded"
             # 🚨 The STATIC-ASSET half, asserted — because its absence is the one failure with no
             # symptom at any later gate: the publish 200s, the module lands and loads, every page
             # renders, only UNSTYLED (#2221's exact signature; PluginBundlePublishAssetsTest names

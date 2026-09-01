@@ -24,7 +24,7 @@ namespace MeshWeaver.Graph.Configuration;
 public static class ReleaseNodeType
 {
     /// <summary>The node-type identifier string for Release nodes.</summary>
-    public const string NodeType = "Release";
+    public const string NodeType = GraphNodeTypeNames.Release;
 
     /// <summary>
     /// The path SEGMENT release records are minted under — <c>{nodeTypePath}/Release/{version}</c>.
@@ -35,7 +35,7 @@ public static class ReleaseNodeType
     /// default. It happens to equal <see cref="NodeType"/>; it is declared separately because they
     /// are different facts, and code that means "the path segment" must not read as a type name.
     /// </summary>
-    public const string ReleaseSegment = "Release";
+    public const string ReleaseSegment = GraphNodeTypeNames.ReleaseSegment;
 
     /// <summary>
     /// Registers the Release node type on the mesh builder by adding its MeshNode definition.

@@ -342,6 +342,97 @@ Note the RN job is **not** a required context in Plugins, so this reds PRs witho
 which is its own hazard: eleven PRs red on a known-benign check is exactly the noise a *real*
 failure hides in.
 
+## 🔗 Reading a red that came from ANOTHER repository
+
+The hardest reds to attribute are the ones a repo did not cause. On 2026-09-01 a single carve-out
+wave in core produced **five distinct failures in MeshWeaver.Plugins**, each hiding the next, and
+only one of them was an API change:
+
+| # | what broke | what a public-API gate would have said |
+|---|---|---|
+| 1 | a quoted phrase inside a C# `//` comment parsed as a canonical assembly | green — the API is unchanged |
+| 2 | a package's `category` disagreeing with its 11 siblings | green — not an API |
+| 3 | moved test suites arrived without their Testcontainers pre-pull | green — not code |
+| 4 | pin-vs-source skew: a type moved to a new assembly hours after the pinned image was cut | green — the type exists, just not in *that* image |
+| 5 | a type moving assemblies without a forwarder | red — the one shape a surface gate catches |
+
+**So the class is not "core changed its public surface." It is "anything downstream reads out of
+core's tree, at a version it does not control."** Prose, package data, CI infrastructure and image
+timing all belong to it.
+
+### A verdict about an unpinned checkout is a function of wall-clock time
+
+The cross-repo gates check core out with **no `ref:`**. Two people therefore measured the same
+downstream branch on the same day and got **opposite answers**, both correct — core's tip had moved
+between them. Failure #1 above landed in core at 08:01:19Z; every downstream run before that passed
+and every run after it failed, with no downstream commit in between.
+
+**The rule:** record the **core tip** alongside any cross-repo verdict, and resolve it once per run
+rather than per checkout step. A verdict without that stamp cannot be reproduced or disputed.
+
+### A grep hit is not a binder
+
+Twice in one day, prose was mistaken for the thing it described. A quoted phrase in a `//` comment
+became a demanded assembly; and two types looked *bound* by exactly one caller each — one a doc
+comment naming an example subscriber, the other a markdown page that `MeshWeaver.Documentation.dll`
+embeds as a **resource**, so it appears in a *binary* grep.
+
+**Before concluding a symbol is used, declared or bound, classify each hit.** Strip comments in the
+language actually being parsed, not another language's — a `<!--.*?-->` stripper is a complete no-op
+on C#, and that is precisely how a comment became a canonical assembly.
+
+### 🚨 Mutually blocking PRs — when "one concern per PR" inverts
+
+Two open PRs each failed a **required** context on exactly what the other fixed:
+
+| PR | required check A | required check B |
+|---|---|---|
+| the pin bump | ❌ the phantom assembly | ✅ fixes the build |
+| the parser fix | ✅ | ❌ the build the pin fixes |
+
+Neither could go green alone, so **a correct PR could not land however correct it was.** The house
+rule that a pin bump is *"deliberate, in its own PR"* is right for a healthy trunk and inverts the
+moment the pin is itself part of the breakage.
+
+**The rule:** when two required contexts each fail on the other's fix, separation is the thing
+preventing the repair — merge one branch into the other and say why in the body. Check for this
+explicitly before concluding a PR is "just flaky"; the signature is *two* red PRs whose failures are
+each other's subject.
+
+### The container lane sees a WIDER namespace surface than any local build
+
+A build that composes its references from the platform image's `/app` gives source a **strictly
+wider** namespace surface than a project-referenced build. Core compiles a project against its
+`ProjectReference` graph, so a transitive package's extension methods are visible only where
+something references it; the container build composes *everything in `/app`*, so every module sees
+them whether it references them or not.
+
+The visible consequence is an ambiguity that **cannot be reproduced locally**:
+
+```
+CS0121  The call is ambiguous between
+        'System.Linq.Enumerable.TakeLast<T>(IEnumerable<T>, int)' and
+        'System.Linq.EnumerableEx.TakeLast<T>(IEnumerable<T>, int)'
+```
+
+Two extension methods, same signature, same namespace — one from the BCL, one from Ix.NET, which is
+a legitimate pinned platform dependency that in-mesh source uses deliberately. Core never sees it;
+the container lane always does.
+
+**The rule:** a green local build is not evidence about the container lane, and "it compiles in core"
+is not an argument that a module will compile. When a compile error appears only in that lane,
+suspect the reference set's *width* before suspecting the source. And do not "fix" it by pruning the
+platform assembly — qualify the call, and only where the receiver's type actually makes it ambiguous
+(an `IObservable` receiver resolving through `System.Reactive.Linq` is not).
+
+### Fixing the first red can reveal a second that never ran
+
+A job stops at its first failing step, so every later step reports **SKIPPED** — which reads as
+"fine". Repairing failure #1 above let the job reach a step that had never executed on any branch,
+and it failed immediately on a real defect. **"Red for a known reason" is the cheapest state in
+which to miss a second regression**, and it is an argument for fixing the first red rather than
+routing around it. Expect the count of problems to go *up* when you fix one.
+
 ## Related
 
 [Module Versioning](/Doc/Architecture/ModuleVersioning) · [Modules](/Doc/Architecture/Modules) ·

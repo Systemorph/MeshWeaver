@@ -111,23 +111,49 @@ The `path` follows the same Unified Content Reference rules as every other MCP t
 
 ### Response shape
 
+The reply is the **dispatch acknowledgement**, not the run's result. On success it carries the
+`activityPath` the owning hub actually created, which you then poll or subscribe for the run's live
+messages and its terminal status.
+
 ```jsonc
 {
-  "status": "Executed",          // or "Error" / "Timeout"
+  "status": "Dispatched",        // or "Error"
   "path": "Systemorph/FutuRe/EuropeRe/AcmeSubmission2025/Script/ImportLargeClaims",
   "submissionId": "…",           // stable id for this run
-  "kernelAddress": "kernel/code-Systemorph-FutuRe-EuropeRe-AcmeSubmission2025-Script-ImportLargeClaims",
-  "outputUrl": "kernel/code-…/…",// layout area path holding this run's Console output
-  "error": null,                 // populated on status=Error
-  "message": "Code dispatched and kernel signalled completion…"
+  "activityPath": "…/_Activity/…",// the ActivityLog node to watch
+  "message": "Script dispatched. Poll `get @…` for live messages and final status."
 }
 ```
 
 | Status | Meaning |
 |---|---|
-| `Executed` | The kernel posted a `SubmitCodeResponse` with `Success=true` — no compiler or runtime error. |
-| `Error` | The kernel reported a failure; the `error` field carries the exception message. |
-| `Timeout` | The kernel did not signal completion within `timeoutSeconds`. **Side effects may still have occurred** — re-query the mesh to confirm. |
+| `Dispatched` | The owning hub accepted the submission and created the run's `ActivityLog`. Watch `activityPath` for `Running → Succeeded / Warning / Failed`. |
+| `Error` | The run did not start, **or it is not known whether it started**. `errorType` says which — read the table below before deciding whether a retry is safe. |
+
+### `errorType` — and whether a retry is safe
+
+**Every** `Error` reply carries an `errorType`, so a caller can always branch on it. Two of the
+conditions are decidable **before** anything is dispatched, and are decided that way — from one
+bounded read of the target node, with the caller's own `timeoutSeconds` as the ceiling:
+
+| `errorType` | Meaning | Side effects | What to do |
+|---|---|---|---|
+| `NodeNotFound` | There is no readable node at that path. | **None** — nothing was dispatched. | Check the path. A denied read reports the same way on purpose — saying "denied" would disclose that a gated node exists there. |
+| `NotExecutable` | The node exists but carries no `CodeConfiguration`, or carries one with `isExecutable: false`. | **None** — nothing was dispatched. | Point at a `Code` node, or set `isExecutable: true` on it. |
+| `DispatchRefused` | The owning hub was reached and said no (unreadable node, activity creation refused, a fault while starting the run). | **None** — the hub creates no `ActivityLog` on any refusal path. | `message` carries the hub's own verdict; the hub has logged the full cause. |
+| `NoActivityPath` | The hub **accepted** the submission but returned no activity path. | 🚨 **Possible** — the run may be under way, it simply cannot be observed. | Check the Code node's activity history before re-running; a blind retry can run the script twice. |
+| *(an exception type name)* | The dispatch itself failed — undeliverable, or the acknowledgement never arrived within the budget. | 🚨 **Unknown** — "no acknowledgement" is not "not delivered". | `message` and `detail` carry the type and stack. Check the activity history before retrying. |
+
+> 🚨 **"Error" does not universally mean "nothing happened."** The two pre-flight verdicts and a hub
+> refusal are genuinely side-effect free. The last two are not: an acknowledgement that never came
+> back says nothing about whether the submission landed, so a retry can run the script a second time.
+
+> 🚨 **The pre-flight refuses only on a DEFINITIVE answer.** A read that reaches no verdict inside
+> its budget is *unknown*, not *absent* — so it never refuses; the dispatch proceeds exactly as it
+> would have, and the owning hub gets the last word. That asymmetry is what makes the check safe to
+> add: it can turn a guaranteed failure into a fast one, never a would-be success into an error.
+> See [CQRS and Content Access](/Doc/Architecture/CqrsAndContentAccess) for the same rule at the
+> read layer.
 
 ### Watching progress via the ActivityLog
 
@@ -210,7 +236,8 @@ On a clean run the log's `Status` ends at `Succeeded`; a `LogWarning` flips it t
 
 ## Limitations
 
-- `ExecuteScript` waits synchronously for kernel completion. Long-running imports (many thousands of `CreateNode` calls) may hit the default 120 s timeout — pass a higher `timeoutSeconds` for those.
+- `ExecuteScript` returns when the **dispatch** is acknowledged, not when the script finishes — a long-running import keeps going after the tool has answered. Watch `activityPath` for the terminal status; do not raise `timeoutSeconds` expecting it to wait longer.
+- `timeoutSeconds` bounds the dispatch acknowledgement, and it is bounded in turn by the hub's own request timeout — **60 s**. Values above that are inert: the hub gives up first, and the answer is a `TimeoutException` carrying the request id and target rather than the tool's own message.
 - NuGet `#r` directives run against the same in-process resolver used by interactive markdown. New packages are fetched on first use and cached afterwards.
 - The kernel is per-Code-node, not per-call. Two concurrent `ExecuteScript` calls on the same node contend for the same kernel — serialise them if that matters.
 

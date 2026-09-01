@@ -244,7 +244,7 @@ internal static class NodeTypeDataModelAreas
         Func<MessageHubConfiguration, MessageHubConfiguration> config,
         string? nodeTypePath = null)
     {
-        var probeAddress = new Address($"$model-probe/{Guid.NewGuid():N}");
+        var probeAddress = new Address($"{TransientProbeAddresses.ModelProbePrefix}{Guid.NewGuid():N}");
         // 🚨 AsTransientNodeProbe: this hub exists to be read and disposed. It must get the data
         // context (DataSources / TypeSources / SchemaReference are exactly what SnapshotModel
         // reads) but NOT the per-node control plane — the compile / release-request / sources

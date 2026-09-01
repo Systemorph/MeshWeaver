@@ -1443,7 +1443,7 @@ public static class PackageInstaller
     ///
     /// <para>So: when a root is typed by a NodeType this very package installs, SKIP the warm
     /// unless that type currently has a build an instance could load
-    /// (<see cref="MeshDataSourceExtensions.AwaitLoadableBuild"/>, read once, bounded by
+    /// (<c>NodeTypeBuildState.AwaitLoadableBuild</c>, read once, bounded by
     /// <see cref="RootTypeProbeTimeout"/>). Skipping is the safe answer, and it is cheap: warming
     /// is only an optimisation against "the root stays dark until something touches it", whereas a
     /// warm into an unloadable type PINS the wrong configuration. The next real access — the gate's

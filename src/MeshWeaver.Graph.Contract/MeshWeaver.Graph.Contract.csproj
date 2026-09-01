@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>The shared vocabulary between the graph model (MeshWeaver.Graph) and the NodeType
+      compile pipeline (MeshWeaver.Compiler): the NodeType declaration record, its source set, build
+      and release state, the served build identity, and the seams by which the pipeline reports back
+      into the graph. Neither half owns it, so neither half can pull the other into a cycle.</Description>
+    <RootNamespace>MeshWeaver.Graph</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MeshWeaver.Graph" />
+    <InternalsVisibleTo Include="MeshWeaver.Compiler" />
+    <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Compiler.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+  </ItemGroup>
+
+</Project>

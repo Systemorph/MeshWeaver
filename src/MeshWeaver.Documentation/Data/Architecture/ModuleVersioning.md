@@ -98,16 +98,63 @@ So for a mixed package the hash should cover:
 | the module project's own sources | **yes** | they are the assembly |
 | the module's `.csproj` | **yes** | it pins package versions, and a NuGet bump changes the shipped bundle |
 | non-`MeshWeaver.*` transitive deps | **yes**, by resolved version | they are bundled alongside the module |
-| `MeshWeaver.*` project references | **no** | never bundled — they ship in their own bundles or come from `/app`, so changing one does not change this module's bytes |
+| **module-owned** `MeshWeaver.*` project references | **yes** — and today they are NOT | they RIDE in the bundle (see below), so changing one changes this module's bytes |
+| **image-shipped** `MeshWeaver.*` project references | **no** | never bundled — `/app` supplies them, so changing one does not change this module's bytes |
 
-That last row is the one worth stating out loud: **a change to `MeshWeaver.AI` does not require
-bumping `MeshWeaver.AI.OpenAI`.** Modules bind platform types by simple assembly name, so the
-dependent's bytes are unchanged; `MeshWeaver.AI` ships its own bundle at its own version. Bumping
-every dependent would be busywork that also destroys the signal in the version number.
+#### 🚨 `MeshWeaver.*` is not one row — the container lane split it in two
+
+The version derivation implemented for the fix above hashes the module's **own project alone**,
+on the reasoning that a `MeshWeaver.*` reference is never bundled. **That reasoning is only half
+true, and the half it misses is live.**
+
+`DepsClosure.Derive` does stop at `MeshWeaver.*`, and that is what the `sdk` pack path uses
+(`--deps-closure`). The **container** path — now the default for nearly every entry — does not use
+it. It reads the module's closure manifest and, for every `MeshWeaver.*` sibling in it, asks
+`module-owned-platform.sh` one question: *is this project's source in this repo's `src/` and
+absent from `src/platform-shipped.txt`?* If yes, the sibling **is copied into the bundle** and
+passed as `--with <Name>.dll`, and the job log says so:
+
+```
+closure: MeshWeaver.Blazor.dll RIDES — module-owned (its source is in this repo's src/,
+         so it is nowhere in the image's /app)
+```
+
+It must ride: nothing else would supply it at run time. But the version derivation does not know
+that, so **a bundle can change its bytes without moving its version** — the exact defect the
+`src/` fix above was written to remove, one hop out.
+
+**Measured on `MeshWeaver.Plugins`, 2026-09-01** (35 matrix entries, 119 module-owned
+`MeshWeaver.*` projects): `MeshWeaver.Blazor` is module-owned and rides in **7** published
+bundles — `Analysis`, `AppleMaps`, `EntityViews`, `GoogleMaps`, `GraphViews`, `OpenStreetMap`,
+`Radzen`. Not one of those seven `manifest.lock` files hashes a single `src/MeshWeaver.Blazor/`
+path. An edit there changes what all seven bundles ship and moves none of their versions, so every
+existing portal keeps the old copy — `SkipUpToDate`, before any bytes are read.
+
+The `MeshWeaver.AI` example in the row above is *currently* safe only by accident of a transition:
+`MeshWeaver.AI` is listed in that repo's `src/platform-shipped.txt` while `MeshWeaver.Blazor.Portal`
+still references the engine. That line is marked to leave with MeshWeaver#2599 — **and the moment
+it does, every AI-provider bundle joins the seven above.** Do not read "a change to
+`MeshWeaver.AI` does not require bumping `MeshWeaver.AI.OpenAI`" as a standing rule; it is a
+statement about one entry in one exclusion list on one day.
+
+**The correct scope is the RIDING closure, not the whole reference graph.** Hash the module's own
+project plus exactly the `MeshWeaver.*` siblings `module-owned-platform.sh` says ride in its
+bundle. That is neither "own project only" (which under-covers, as measured) nor "the whole
+closure" (which bumps every dependent on any change and destroys the signal in the number) — it is
+the set whose bytes are actually inside the artifact being versioned.
 
 The ProjectReference walker for this already exists — see `scripts/check-surface-manifest.py`
-(`assembly names reachable from start through ProjectReference`) and the floor rule in
-`scripts/check-module-floors.py`. Reuse one of those rather than writing a fourth.
+(`assembly names reachable from start through ProjectReference`), `scripts/project-closure.py`,
+and the floor rule in `scripts/check-module-floors.py`. Reuse one of those rather than writing a
+fourth; the module-owned/image-shipped split is `.github/scripts/module-owned-platform.sh`, the
+same script the pack step and the bundle inspection call, so the three cannot disagree.
+
+**Until that lands, `registry-version ≠ manifest-version` is NOT a sound publication baseline.**
+It is proposed periodically as a way to narrow the module lane on `push` (Plugins#889 option 3);
+version equality does not imply byte equality while any sibling rides, so narrowing on it would
+silently under-publish exactly the bundles above. A sound baseline has to be a **commit** — the
+analogue of the bake's `source-commit.txt` — diffed with `project-closure.py`, which walks
+transitive in-repo `ProjectReference`s and therefore sees riders for free.
 
 > **If you are reading this while that derivation is still landing:** bump `content.version`'s MINOR
 > by hand for any `src/`-only change to a mixed package, and say in the PR that you did so and why.
@@ -120,11 +167,18 @@ reads `FrameworkDeclined (built against <old>, live <new>)` and adopts nothing.
 
 So the two lanes differ deliberately:
 
-| trigger | scope |
-|---|---|
-| `pull_request` | the **affected** closure |
-| `push` to `main` | the **affected** closure, baselined on the PUBLICATION (`source-commit.txt`), never `github.event.before` |
-| `repository_dispatch` / `schedule` (release-follow) | **everything** |
+| trigger | bake lane | module lane |
+|---|---|---|
+| `pull_request` / `merge_group` | the **affected** closure | the **affected** closure |
+| `push` to `main` | the **affected** closure, baselined on the PUBLICATION (`source-commit.txt`), never `github.event.before` | **everything** — this lane records no publication marker, and the registry version is not one (see the riding-closure note above) |
+| `repository_dispatch` / `schedule` (release-follow) | **everything** | **everything** |
+| `workflow_dispatch` | **everything** | **everything** |
+
+The `push` row is the only one where the two lanes differ, and the difference is a **missing
+marker, not a policy**: `bake-scope.sh` reads a `source-commit.txt` sealed beside the bundles, so it
+knows the commit its own last publication covered. The module lane has no equivalent, so
+`node-repo-scope.py` answers FULL and says why in the log and the job summary. Closing that gap is
+Plugins#889 — and the baseline it needs is a **commit**, not a version.
 
 ## Before you open the PR
 

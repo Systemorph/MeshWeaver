@@ -178,11 +178,11 @@ public static class ApiTokenNodeType
                     }
 
                     // Include the roles captured on the ApiToken at creation time.
-                    // UserContextMiddleware stamps these onto AccessContext.Roles so
-                    // SecurityService.GetEffectivePermissions can resolve them via
-                    // the claim-based role path on per-node hubs — where the
-                    // synced AccessAssignment query is intentionally not registered
-                    // (SecurityServiceExtensions:44-50, recursion avoidance).
+                    // 🚨 Diagnostic only — no permission decision reads them (see
+                    // ApiToken.Roles). Permissions and the Api capability are folded
+                    // live off the TARGET PATH on every request, so a token never
+                    // needs re-minting to see a grant, and a mint-time role can never
+                    // outlive the authority it was copied from.
                     var response = ValidateTokenResponse.Ok(
                         apiToken.UserId, apiToken.UserName, apiToken.UserEmail, apiToken.Roles);
                     hub.Post(response, o => o.ResponseFor(request));

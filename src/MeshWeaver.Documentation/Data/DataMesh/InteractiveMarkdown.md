@@ -85,3 +85,12 @@ MeshWeaver.Layout.Controls.Markdown($"**Interactive Markdown is live.** This cel
 ```
 
 > **Why this matters.** Documentation that executes its own examples can never silently drift out of date — a broken example is a build failure, not a future support ticket.
+
+## Adding a fence of your own
+
+The dialect above is not closed — but extending it is not a one-repo edit either. The platform
+*parses* a fence and emits an inert HTML marker; whichever client is rendering the page is what turns
+that marker into something interactive, and every client lives outside this repository. See
+[Markdown Fence Extensions](/Doc/Architecture/MarkdownFenceExtensions) for the seam, the two markers
+that already exist (reuse one rather than mint a third), and the degradation rule that keeps a new
+fence from rendering as *less* than the plain fenced block it replaced.
