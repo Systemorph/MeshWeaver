@@ -705,8 +705,12 @@ differently, and `assert-bake-consumption.sh` fails on it by name.
   mechanism went inert the first time.
 - **Refusing to LOAD is the second line of defence.** The damage needs two ingredients — stale bytes
   *and something armed to run them*. A type that renders read-only pages from unverified bytes is a
-  degraded system; a type that WRITES from them is the incident. The execute-time interlock is
-  tracked separately (#2820), and `BuildProvenance` is what makes it stateable.
+  degraded system; a type that WRITES from them is the incident. The execute-time half is
+  [The Execute-Time Build-Provenance Interlock](/Doc/Architecture/ExecuteTimeInterlock) (#2820):
+  a type whose provenance is `AdoptionRefused` is never given a durable, write-capable per-instance
+  hub and is never joined into a kernel session's cell surface, while its own pages keep rendering
+  so an operator can diagnose it. `AdoptedUnverified` is deliberately NOT refused there either, for
+  exactly the reason the legacy row above keeps its stamp.
 
 > `BuildProvenance` is reset to `Compiled` by `ApplyCompileSuccess`: Roslyn built those bytes here,
 > from the source this mesh holds, so nothing about an earlier adoption survives a successful local
