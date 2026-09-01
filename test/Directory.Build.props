@@ -77,7 +77,9 @@
     <Using Include="MeshWeaver.Messaging"
            Condition="'$(MSBuildProjectName)' != 'MeshWeaver.Json.Test'
                   and '$(MSBuildProjectName)' != 'MeshWeaver.PluginImage.Test'
-                  and '$(MSBuildProjectName)' != 'MeshWeaver.Portal.E2E.Test'" />
+                  and '$(MSBuildProjectName)' != 'MeshWeaver.Portal.E2E.Test'
+                  and '$(MSBuildProjectName)' != 'MeshWeaver.Testing.Xunit'
+                  and '$(MSBuildProjectName)' != 'MeshWeaver.Testing.Xunit.Test'" />
   </ItemGroup>
 
   <ItemGroup>

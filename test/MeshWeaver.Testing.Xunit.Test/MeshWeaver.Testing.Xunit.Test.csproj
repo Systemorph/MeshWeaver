@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Testing.Xunit\MeshWeaver.Testing.Xunit.csproj" />
+  </ItemGroup>
+</Project>

@@ -151,6 +151,8 @@ WEIGHTS=$(cat <<'EOF'
 1 MeshWeaver.TestDomain
 1 MeshWeaver.Data.TestDomain
 1 MeshWeaver.Hub.Fixture
+1 MeshWeaver.Testing.Xunit.Test
+1 MeshWeaver.Testing.Xunit
 EOF
 )
 

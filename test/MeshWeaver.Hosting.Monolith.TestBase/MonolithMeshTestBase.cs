@@ -16,6 +16,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
+using MeshWeaver.Testing.Xunit;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -209,7 +210,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // subsequent [Fact]. Skip the BuildHub registration on later instances
         // so their per-instance Services don't try to re-register the singleton
         // (and the wasted ConfigureMesh + builder allocation is avoided).
-        if (!SharesMeshAcrossTests || !_sharedProviders.ContainsKey(GetType()))
+        if (!SharesMeshAcrossTests || !TestCollectionScope.Current!.Contains(GetType()))
         {
             var builder = ConfigureMesh(
                 new(
@@ -242,27 +243,49 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected virtual bool ShareMeshAcrossTests => false;
 
     /// <summary>
-    /// 🚧 Master kill-switch for the shared-mesh cluster — currently <c>false</c>.
+    /// Effective sharing decision: a class's <see cref="ShareMeshAcrossTests"/> opt-in takes effect
+    /// only while the test is running inside a <see cref="TestCollectionScope"/> — i.e. only in an
+    /// assembly that declares
+    /// <c>[assembly: TestFramework(typeof(MeshWeaver.Testing.Xunit.MeshTestFramework))]</c>.
     ///
-    /// <para>Keeping a per-class <see cref="IServiceProvider"/> alive in the static
-    /// <c>_sharedProviders</c> pinned the mesh (and every hosted hub + subscription +
-    /// MemoryCache timer it owns) for the whole testhost. A pinned class's mesh then
-    /// interfered with later classes' per-test meshes — concretely the Acme bulk
-    /// <c>UpdateNodeRequest@…/DefinePersona</c> never received its reply once the
-    /// shared <c>AcmeSearchTest</c> mesh stayed live alongside the Todo meshes
-    /// (passes in isolation, hangs in bulk).</para>
+    /// <para>🚨 <b>This used to be a hard-coded <c>false</c>, and the reason is the whole point of
+    /// the scope.</b> The only sharing mechanism available was a <c>static</c> dictionary keyed by
+    /// test class and never cleared. A static cache is not a lifetime: it pinned each class's mesh
+    /// (and every hosted hub, subscription and <c>MemoryCache</c> timer it owns) for the entire
+    /// testhost, where it went on interfering with later classes' per-test meshes — concretely, the
+    /// Acme bulk <c>UpdateNodeRequest@…/DefinePersona</c> stopped receiving its reply once a shared
+    /// <c>AcmeSearchTest</c> mesh stayed live alongside the Todo meshes (passed in isolation, hung
+    /// in bulk). So the ~72 classes that asked to share were all ignored.</para>
     ///
-    /// <para>While this is <c>false</c> the ~60 <see cref="ShareMeshAcrossTests"/>
-    /// overrides are IGNORED and every test gets a fresh, per-test-disposed mesh.
-    /// Flip back to <c>true</c> (and restore the proper per-class lifetime via an
-    /// <c>IClassFixture</c>) to re-enable the optimisation. "for now" — we will see
-    /// what the memory/runtime cost is without it.</para>
+    /// <para>A <see cref="TestCollectionScope"/> supplies the missing half: the shared provider is
+    /// disposed when the COLLECTION ends, so it can no longer outlive the tests it was built for.
+    /// An assembly that has not opted in has no scope, this stays <c>false</c>, and its behaviour is
+    /// bit-for-bit what it was — every test gets a fresh, per-test-disposed mesh.</para>
     /// </summary>
-    private bool ShareMeshClusterEnabled => false;
+    private bool SharesMeshAcrossTests => ShareMeshAcrossTests && TestCollectionScope.Current is not null;
 
-    /// <summary>Effective sharing decision: a class's opt-in only takes effect while
-    /// the cluster kill-switch is on.</summary>
-    private bool SharesMeshAcrossTests => ShareMeshAcrossTests && ShareMeshClusterEnabled;
+    /// <summary>
+    /// Keeps the shared <see cref="IServiceProvider"/> disposable by the collection scope, tearing
+    /// it down exactly the way the per-test path does — <c>(sp as IDisposable)?.Dispose()</c>, with
+    /// a failure traced rather than thrown, so a teardown fault cannot red a suite that passed.
+    /// </summary>
+    private sealed class SharedMeshProvider(IServiceProvider serviceProvider, string testClassName)
+        : IDisposable
+    {
+        /// <summary>The provider every test of the class shares.</summary>
+        public IServiceProvider ServiceProvider { get; } = serviceProvider;
+
+        /// <inheritdoc/>
+        public void Dispose()
+        {
+            try { (ServiceProvider as IDisposable)?.Dispose(); }
+            catch (Exception ex)
+            {
+                Fixture.TestTraceLog.AppendPhase(
+                    testClassName, "DISPOSE_SHARED_SP_ERROR", 0, $"{ex.GetType().Name}: {ex.Message}");
+            }
+        }
+    }
 
     /// <summary>
     /// Opt-in: when overridden to <c>true</c>, <see cref="DisposeAsync"/> disposes
@@ -282,15 +305,6 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// must never be disposed per-test) — the dispose runs only on the non-shared path.</para>
     /// </summary>
     protected virtual bool DisposeServiceProviderOnTeardown => true;
-
-    /// <summary>
-    /// Cached <see cref="IServiceProvider"/> per test-class type, populated on
-    /// the first instance of a class that opts in via
-    /// <see cref="ShareMeshAcrossTests"/>. Never cleared during the testhost
-    /// process — the cached SP outlives every test instance, which is exactly
-    /// what avoids the per-test JIT compilation leak.
-    /// </summary>
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, IServiceProvider> _sharedProviders = new();
 
     /// <summary>
     /// Cross-process per-test phase trace. Single line per event into a fixed
@@ -871,11 +885,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     {
         if (SharesMeshAcrossTests)
         {
-            ServiceProvider = _sharedProviders.GetOrAdd(GetType(), _ =>
+            ServiceProvider = TestCollectionScope.Current!.GetOrCreate(GetType(), () =>
             {
                 base.Initialize();              // builds SP from this instance's Services
-                return ServiceProvider;          // cache the result
-            });
+                return new SharedMeshProvider(ServiceProvider, GetType().Name);
+            }).ServiceProvider;
             // Per-instance buildup of [Inject] members on `this` — even when SP
             // is shared, the test instance's fields need filling.
             Configuration = ServiceProvider.GetRequiredService<IConfiguration>();
@@ -1413,10 +1427,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
         // Shared-mesh classes never dispose the Mesh per-test — that's the entire
         // point of opting in (avoid rebuilding the Autofac container's compiled
-        // factories for every [Fact]). The mesh outlives the testhost and
-        // process exit reclaims it. Per-test base teardown (FileOutput unregister
-        // etc.) still runs. (Gated by the cluster kill-switch — while disabled this
-        // branch is never taken and every class falls through to per-test disposal.)
+        // factories for every [Fact]). It is torn down when the COLLECTION ends:
+        // TestCollectionScope disposes the SharedMeshProvider it cached, which is the
+        // lifetime the old static dictionary never had (it leaked to process exit and
+        // interfered with later classes' meshes). Per-test base teardown (FileOutput
+        // unregister etc.) still runs. Gated by SharesMeshAcrossTests — an assembly
+        // with no collection scope never takes this branch.
         if (SharesMeshAcrossTests)
         {
             // Drop the per-test client hubs FIRST — the shared mesh stays alive

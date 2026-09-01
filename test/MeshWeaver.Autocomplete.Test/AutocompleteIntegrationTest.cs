@@ -41,7 +41,26 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
         Path.Combine(Path.GetTempPath(), "MeshWeaverAutoIntTests", Guid.NewGuid().ToString());
     static AutocompleteIntegrationTest() => Directory.CreateDirectory(_cacheDirectory);
 
-    protected override bool ShareMeshAcrossTests => true;
+    /// <summary>
+    /// 🚨 <b>Deliberately <c>false</c>, and it is the only class in this assembly where that is
+    /// true.</b> This override read <c>true</c> for as long as the flag was INERT — the
+    /// <c>ShareMeshClusterEnabled</c> kill-switch meant no class ever actually ran shared, so every
+    /// one of the estate's 72 opt-ins is an assumption nobody tested. When the collection-scoped
+    /// lifetime made sharing real (see Doc/Architecture/CollectionScopedTestFixtures), this class
+    /// was the one that did not survive it.
+    ///
+    /// <para><b>Measured 2026-09-01, full-assembly runs, local:</b> sharing ON —
+    /// <c>ChatAutocomplete_GlobalFanOut_ReachesOtherPartitions</c> failed 2 times in 22 runs
+    /// ("broadening should find ACME from Systemorph context … completed without one", 1 emission
+    /// in 0.29 s); sharing OFF — 0 failures in 21 runs. The same class run ALONE with sharing on is
+    /// 20/20 green, so what it does not tolerate is a mesh that has already served this class's
+    /// other 22 cases while the rest of the assembly ran before it.</para>
+    ///
+    /// <para>The test is unchanged and still runs; only the untested optimisation is declined.
+    /// Re-enable it with a measurement, not an assumption — the fan-out assertion is the thing to
+    /// make robust first.</para>
+    /// </summary>
+    protected override bool ShareMeshAcrossTests => false;
 
     public AutocompleteIntegrationTest(ITestOutputHelper output) : base(output)
     {
