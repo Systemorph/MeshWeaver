@@ -929,6 +929,178 @@ Pinned by `ApiTokenCapabilityFreshnessTest` (core) and `PaywallRealGateShapeTest
 
 ---
 
+# Build principals — a repository the mesh trusts, with no secret to keep
+
+A `BuildPrincipal` node is the third caller class on the registry surface, beside a signed-in
+**user** and a registered **instance**. Its subject is a **GitHub repository's CI**, it presents a
+short-lived OIDC token GitHub mints for the run, and there is no credential anywhere to store,
+rotate or leak. Introduced by #2483; the surrounding delivery design is
+[Plugin build contract](/Doc/Architecture/PluginBuildContract) → *The build principal*.
+
+## Why it exists
+
+Fetching an upstream's sealed publication needed an Azure OIDC identity whose federated credentials
+live in the Entra tenant — four of them, every one scoped to `ref:refs/heads/main`, none for
+`pull_request`, so a gate could not fetch on the one event it exists for (`AADSTS700213`, measured
+2026-08-27 on `MeshWeaver.SocialMedia#84` and `MeshWeaver.Reinsurance#100`). Nothing in the mesh
+recorded that those credentials existed, which repositories held one, or who authorised them.
+
+That is the shape of the plaintext-provider-key incident: **a security fact with no record a reader
+can point at.** Here the rule IS a node — `search nodeType:BuildPrincipal` is the complete list of
+repositories this mesh trusts and exactly what each may do, and revoking one is a node write.
+
+|  | Azure OIDC federated credential | Build principal |
+|---|---|---|
+| what is stored | a subject rule, in Entra | a subject rule, on a mesh node |
+| who can see which repos may fetch | whoever has tenant access | `search nodeType:BuildPrincipal` |
+| PR vs main | one credential per event subject, per subject *format* | one node; `event_name` is a claim it reads |
+| secret in the repo | none (already) | none |
+| verified by | Azure | the mesh, the way it already verifies `mwa_` tokens |
+
+## One verifier, two issuers, a trust node per issuer
+
+`InstanceRegistryAuthenticator.AuthenticateToken` forks on the token's `iss` claim, read
+**unverified**, and that read only picks a verifier — it grants nothing, and every claim that
+matters (`iss` included) is re-read from the verified payload afterwards.
+
+| `iss` | verified against | resolves to |
+|---|---|---|
+| the registry itself | `SyncTokenSigningKeyService`'s HMAC material (HS256) | a `MeshWeaverInstance` + its `PluginGrant` |
+| `https://token.actions.githubusercontent.com` | GitHub's published JWKS (RS256) | a `BuildPrincipal` node |
+
+Neither leg ever honours a token's own `alg`. The HS256 leg accepts `HS256` and nothing else; the
+RS256 leg accepts `RS256` and nothing else, so `alg: none` and an RSA-public-key-as-HMAC-secret
+forgery are refused before a key is looked up at all.
+
+## 🚨 A verified signature is not an authorization
+
+**Every workflow run on GitHub carries a token signed by these same keys.** The signature establishes
+only *which repository, on which event, asked*. A verifier that checked it and stopped would
+authenticate the entire public GitHub's CI.
+
+So the token is checked on five things — signature, `iss`, `aud`, validity window, and a non-empty
+`repository` — and then resolved to a node. **No node ⇒ no caller ⇒ 401.**
+
+* **`aud` is mandatory and unconfigured means REFUSE.** A registry with no
+  `Plugins:Registry:BuildPrincipalAudience` has no build-principal surface at all, rather than one
+  that accepts any audience. The audience is the only claim that distinguishes a token minted for
+  *this* registry from one a workflow legitimately minted for Azure and someone replayed here.
+* **`iss` is pinned in code, never configurable.** A configurable issuer is a configurable trust
+  anchor: one overlay pointing it at another key set and every claim below is attacker-authored.
+* **The path is a routing hint; the record is the authority.** `Admin/_BuildPrincipal/{owner}--{repo}`
+  routes the read, and the node's own `repository` is then compared with the claim again. The match
+  is exact — never a prefix, or `Systemorph/MeshWeaver.Evil` authenticates as `Systemorph/MeshWeaver`.
+
+## The node
+
+It lives at `Admin/_BuildPrincipal/{owner}--{repo}`, in the **Admin partition** — the same place
+`PluginGrant` lives and for the same reason: *the subject of an access decision must not be able to
+write the decision*. The partition's own access control **is** the global-admin gate, not a second
+role check beside it that could drift.
+
+```json
+{
+  "$type": "BuildPrincipal",
+  "repository": "Systemorph/MeshWeaver.SocialMedia",
+  "repositoryId": "123456789",
+  "events":    { "push": ["publish", "fetch"], "pull_request": ["fetch"] },
+  "eventRefs": { "push": ["refs/heads/main"] },
+  "scopes":    ["publish:socialmedia", "fetch:plugins"],
+  "issuedBy": "…", "issuedAt": "2026-09-01T00:00:00Z"
+}
+```
+
+| field | meaning |
+|---|---|
+| `repository` | the `repository` claim it must match, exactly |
+| `repositoryId` / `repositoryOwnerId` | optional pins on GitHub's **immutable** numeric ids — a name can be renamed and re-registered, an id cannot |
+| `events` | which `event_name`s may act, with which verbs. An event that is not a key here may do nothing |
+| `eventRefs` | optional per-event pin on the run's `ref`, so "`push` **on main** may publish" is expressible rather than merely intended. An event with no entry is not ref-constrained — a `pull_request` ref is `refs/pull/<n>/merge` and cannot be enumerated in advance |
+| `scopes` | `verb:source`, matched exactly on both halves. **No wildcard**: `fetch:*` is a scope for a source literally named `*` |
+| `issuedBy` / `issuedAt` | the audit trail the Entra credentials could not answer |
+| `lastSeen` | advisory, and **nothing writes it yet** — stamping it on the authentication path is a write per request, so an absent value means *not recorded*, never *never used* |
+| `requestedAction` / `isRevoked` | the stop, below |
+
+**The scope split is the security tie.** The identity that publishes a source is the identity that
+may fetch what it depends on, and it can do neither outside its scopes: SocialMedia's principal holds
+`publish:socialmedia` + `fetch:plugins`, so it can never publish *as* Plugins and never fetch a
+source it does not declare in `requires`. Both facts on one node.
+
+### Creating and revoking one
+
+Both are ordinary node writes into the Admin partition — `create` the node, or write
+`requestedAction: "Revoke"` onto it. There is no bespoke request type and no service: `stream.Update`
+(and the `create`/`patch` tools that ride it) is the only mutation API, and the Admin partition is
+the gate.
+
+🚨 **The revoke is honoured immediately, not folded by a watcher.** `BuildPrincipal.IsActive` reads
+`requestedAction` itself, so a principal stops authenticating on the very next request, on every
+replica, with nothing running in between. `isRevoked: true` is the equivalent permanent form for an
+admin who wants the record to read as revoked rather than as *asked to be*. **A security stop that
+waits for a reactor is a security stop with a window.**
+
+## Both subject formats, or a valid principal silently stops working
+
+This fleet's federated credentials already carry two forms — `repo:Systemorph/<repo>:ref:…` and the
+immutable `repo:Systemorph@<orgId>/<repo>@<repoId>:ref:…`. Matching is therefore done on a
+**normalized** `owner/name`: an `@<all-digits>` suffix is stripped from either half, which is
+unambiguous because neither a GitHub login nor a repository name may contain `@`. Both forms also
+resolve to the **same** node path. Without this, the day GitHub moves an organisation onto immutable
+ids is the day every build principal in the fleet stops authenticating and nobody changed anything.
+
+## JWKS: cached, bounded, and fail-closed
+
+`GitHubOidcKeyService` is a **mesh-scoped singleton holding the key set on an instance field** — never
+a static cache, which would outlive the mesh and bleed across tests and deployments. The HTTP read
+runs through `IIoPool`, and the promise is held so concurrent callers share one round trip; a failure
+nulls it, so the next caller starts a genuinely new attempt rather than replaying a latched
+`OnError`.
+
+* **Discovery may move the path, never the host.** The `jwks_uri` a discovery document advertises is
+  accepted only when it is HTTPS on the pinned issuer's own host; otherwise the pinned
+  `/.well-known/jwks` is used.
+* **Refresh is bounded twice.** The set is re-read when older than an hour; an unknown `kid` — the
+  signal of a GitHub key rotation — may force **one** early re-read, but only past a one-minute
+  floor. Without that floor a caller presenting invented key ids turns every unauthenticated request
+  into an outbound fetch.
+
+### 🚨 Undetermined is a third state, and it must not authenticate
+
+A key set that cannot be read is **not** a denial and certainly not an admission. The read errors,
+the authenticator answers `InstanceAuthResult.Unavailable`, and the endpoint answers **503 +
+`Retry-After`** — never the 401 a genuinely bad token gets. This is the same distinction the
+instance-key leg adopted in #2695 and the same rule core #2901 states generally: *collapsing an
+unreachable check into a boolean is a defect.* A build told "your identity is unknown" goes hunting
+for a credential that was never the problem.
+
+The unknown-`kid` case is graded rather than flattened:
+
+| what happened | answer |
+|---|---|
+| the key set was re-read and still does not hold the key | **401** — GitHub does not publish it. A verdict |
+| the refresh floor suppressed the re-read | **503** — nothing was established; ask again past the floor |
+
+## The node is read on every request — only the JWKS is cached
+
+The instance leg caches its verdict for a minute because an install *polls*; a build asks a handful
+of times per run, so there is nothing to buy by caching it and a revocation window to lose. Reading
+the node every time is what makes `requestedAction: Revoke` take effect at once rather than when a
+verdict cache expires.
+
+## Where a build principal is admitted
+
+Only the **prebuilt-publication routes** (`/api/plugins/bundles/prebuilt/…`), requiring
+`fetch:<source>`. A build is not an installation: it has no instance record, no plan and no
+`PluginGrant`, so every other bundle route — which decides per package against exactly those — keeps
+refusing it with the same 401 as before. The narrowing is expressed once, in the group filter, so a
+route added later is refused by default rather than by remembering to.
+
+Pinned by `GitHubBuildTokenTest`, `BuildPrincipalDecisionTest` and `BuildPrincipalAuthenticationTest`
+(core, `Memex.Portal.Shared.Test`). Every refusal there starts from a token that WOULD be accepted
+and moves exactly one thing, so a passing assertion can only mean that one thing was checked.
+
+---
+
 # Hierarchical access pattern
 
 ```mermaid
