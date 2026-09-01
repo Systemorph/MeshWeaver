@@ -2909,21 +2909,17 @@ public static class MeshNodeStreamExtensions
     /// site has not been taught to embed one, keeps the count accurate in both directions: never
     /// inflated by per-delivery text, never fabricated from a NACK that carries no identity at
     /// all.</para>
+    ///
+    /// <para>🚨 Delegates to <see cref="ShutdownNack.ExtractActivationTag"/> rather than keeping a
+    /// private copy: the sync stream's recycle re-arm latch (<c>JsonSynchronizationStream</c>, in
+    /// <c>MeshWeaver.Data</c>) is a SECOND rider on the same token, and two parsers over a hand-
+    /// written marker is the drift this token exists to prevent. The formatter lives beside the
+    /// parser there too, so the minting side cannot wander off either.</para>
     /// </summary>
     /// <param name="message">A <see cref="DeliveryFailureException"/> message from a ShuttingDown NACK.</param>
     /// <returns>The hex activation id, or <c>null</c> when the message carries none.</returns>
     internal static string? ExtractActivationTag(string message)
-    {
-        const string marker = "activation #";
-        var start = message.IndexOf(marker, StringComparison.Ordinal);
-        if (start < 0)
-            return null;
-        start += marker.Length;
-        var end = start;
-        while (end < message.Length && Uri.IsHexDigit(message[end]))
-            end++;
-        return end > start ? message[start..end] : null;
-    }
+        => ShutdownNack.ExtractActivationTag(message);
 }
 
 /// <summary>
