@@ -29,6 +29,13 @@ public record MeshBuilder
     {
         this.ServiceConfig = ServiceConfig;
         this.Address = Address;
+        // 🚨 "No one must ever publish from main hub": the router names its spokesman up front,
+        // so infrastructure that would otherwise post through the router (Workspace's recycle
+        // announcement) has a sanctioned non-router carrier — the same nodeops execution hub
+        // every node-CRUD path already hops onto. Resolve returns null only during teardown,
+        // which is exactly when the caller's own fallback applies.
+        ConfigureHub(config => config.Set(
+            new RouterCarrier(static router => router.NodeOperationExecutionHub())));
         Register();
     }
 
