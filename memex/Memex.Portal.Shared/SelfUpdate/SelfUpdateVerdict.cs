@@ -1,3 +1,5 @@
+using MeshWeaver.PluginCatalog;
+
 namespace Memex.Portal.Shared.SelfUpdate;
 
 /// <summary>What woke a self-update check. Named, because "why did this run" is half of what makes
@@ -55,6 +57,17 @@ public enum SelfUpdateOutcome
 
     /// <summary>The check itself faulted (ACR outage, k8s 403, …). The watch stays live.</summary>
     CheckFailed,
+
+    /// <summary>
+    /// 🚨 A newer release exists and the COMBO gate (#2274) refused it: a verdict recorded on
+    /// <c>Admin/UpdatePolicy</c> says at least one module this instance runs FAILS against that
+    /// image. Distinct from <see cref="Held"/>, which is the availability gate's refusal — the two
+    /// answer different questions ("does an artifact exist" vs "can the candidate serve what we
+    /// already run") and an operator fixes them in different places.
+    ///
+    /// <para>🚨 Appended, never inserted: the members before it keep their ordinals.</para>
+    /// </summary>
+    ComboBlocked,
 }
 
 /// <summary>
@@ -93,7 +106,8 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     /// something published and nothing told this install about it.</para>
     /// </summary>
     public bool FoundNewerRelease => Outcome is SelfUpdateOutcome.Held or SelfUpdateOutcome.Deferred
-        or SelfUpdateOutcome.DetectOnly or SelfUpdateOutcome.Applied;
+        or SelfUpdateOutcome.DetectOnly or SelfUpdateOutcome.Applied
+        or SelfUpdateOutcome.ComboBlocked;
 
     /// <summary>The policy says never update.</summary>
     public static SelfUpdateVerdict UpdatesDisabled() => new(
@@ -126,6 +140,29 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
         SelfUpdateOutcome.Applied,
         $"applied update {tag} (was {installed}; last rolled {lastRolledAt?.ToString("O") ?? "never"}).",
         tag);
+
+    /// <summary>
+    /// 🚨 A newer release exists and the COMBO gate refused it — the recorded verdict for that
+    /// candidate is Red for this instance's module set. The reason NAMES every failing module: an
+    /// unnamed refusal is unactionable, and an environment that quietly stops updating is its own
+    /// outage.
+    /// </summary>
+    public static SelfUpdateVerdict ComboBlocked(string tag, string reason) => new(
+        SelfUpdateOutcome.ComboBlocked,
+        $"BLOCKED by the combo gate: {reason}", tag);
+
+    /// <summary>
+    /// 🚨 Qualifies a verdict that was reached WITHOUT combo clearance — the
+    /// <see cref="ComboVerdictKind.NotVerifiable"/> / no-verdict state, which is neither a pass nor
+    /// a refusal.
+    ///
+    /// <para>It has to ride the check verdict rather than only a log line, for the reason
+    /// <see cref="UpdatePolicyContent.LastCheckVerdict"/> exists at all: a log line depends on a
+    /// per-category log level a deployment may simply not have set, a node write does not. An
+    /// unverified roll that leaves no durable trace is indistinguishable from a verified one.</para>
+    /// </summary>
+    public SelfUpdateVerdict Unverified(string reason) =>
+        this with { Message = $"{Message} UNVERIFIED — {reason}" };
 
     /// <summary>The check faulted.</summary>
     public static SelfUpdateVerdict CheckFailed(Exception ex) => new(

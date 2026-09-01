@@ -488,7 +488,7 @@ public class SelfUpdateHostedService : IHostedService
                 // distinguishes a healthy up-to-date install from one whose checker is dead.
                 ? Observable.Return(SelfUpdateVerdict.NoNewerRelease(
                     listing.Listed, ShippedReleaseSeed.InstalledPlatformVersion))
-                : FirstRollable(listing.Candidates)
+                : FirstRollable(policy, listing.Candidates)
                     .SelectMany(target => RecordAvailable(target!)
                         // 🚨 BOOKKEEPING, NOT A GATE (#1020). RecordAvailable writes two cosmetic fields
                         // (LatestAvailableTag / CheckedAt) that drive the admin tab; the ROLL-FORWARD does not
@@ -513,7 +513,7 @@ public class SelfUpdateHostedService : IHostedService
                         // and the Select below is unreachable by construction.
                         .IgnoreElements()
                         .Select(_ => SelfUpdateVerdict.NoOutcome())
-                        .Concat(GateThenApply(target!))));
+                        .Concat(GateThenApply(policy, target!))));
     }
 
     /// <summary>
@@ -553,20 +553,20 @@ public class SelfUpdateHostedService : IHostedService
     /// in a HOLD — with the newest tag's reason, which is the one that explains why the fleet is
     /// not moving. Reporting the OLDEST candidate's reason instead would be true and useless.</para>
     /// </summary>
-    private IObservable<string?> FirstRollable(string[] candidates)
+    private IObservable<string?> FirstRollable(UpdatePolicyContent policy, string[] candidates)
     {
         if (candidates.Length == 0)
             return Observable.Return<string?>(null);
 
         var gate = ResolveAvailabilityGate();
-        // No gate wired: preserve today's behaviour exactly — the head, and GateThenApply reports
-        // the not-wired case itself.
-        if (gate is null)
+        var combo = ResolveComboGate();
+        // Neither gate wired: preserve today's behaviour exactly — the head, and GateThenApply
+        // reports the not-wired case itself.
+        if (gate is null && combo is null)
             return Observable.Return<string?>(candidates[0]);
 
         return candidates
-            .Select(tag => Observable.Defer(() => gate.IsUpdatable(tag)
-                .Select(verdict => (tag, rollable: verdict.IsUpdatable))))
+            .Select(tag => Observable.Defer(() => Rollable(gate, combo, policy, tag)))
             .Concat()
             .FirstOrDefaultAsync(x => x.rollable)
             .Select(x => x.tag ?? candidates[0])
@@ -575,12 +575,42 @@ public class SelfUpdateHostedService : IHostedService
             .Catch((Exception _) => Observable.Return<string?>(candidates[0]));
     }
 
-    private IObservable<SelfUpdateVerdict> GateThenApply(string target) =>
+    /// <summary>
+    /// Whether ONE candidate survives the walk: the availability gate accepts it AND the combo gate
+    /// has not already CONDEMNED it.
+    ///
+    /// <para>🚨 The combo half reads only what is RECORDED
+    /// (<see cref="ComboVerificationGate.Recorded"/>) — a pure read of the policy content this tick
+    /// already holds, so the walk costs neither an extra mesh touch nor a docker run per candidate.
+    /// A verdict is PRODUCED exactly once, in <see cref="GateThenApply"/>, about the candidate
+    /// actually chosen; if that comes back Red the tick holds, and the now-recorded Red makes the
+    /// very next walk step past it. The two halves converge in one extra check instead of paying a
+    /// full gate run per tag.</para>
+    ///
+    /// <para>🚨 Only a REFUSAL removes a candidate. One with no verdict, or one whose verdict could
+    /// not answer, is neither preferred nor condemned here — treating "unknown" as disqualifying
+    /// would empty the candidate list on every instance in the fleet, which is the freeze this gate
+    /// exists to avoid causing, not to cause.</para>
+    /// </summary>
+    private static IObservable<(string tag, bool rollable)> Rollable(
+        ReleaseAvailabilityService? gate,
+        ComboVerificationGate? combo,
+        UpdatePolicyContent policy,
+        string tag)
+    {
+        var notCondemned = combo is null || !combo.Recorded(policy, tag).Refuses;
+        return (gate is null
+                ? Observable.Return(true)
+                : gate.IsUpdatable(tag).Select(verdict => verdict.IsUpdatable))
+            .Select(available => (tag, rollable: available && notCondemned));
+    }
+
+    private IObservable<SelfUpdateVerdict> GateThenApply(UpdatePolicyContent policy, string target) =>
         Observable.Defer(() =>
         {
             var gate = ResolveAvailabilityGate();
             if (gate is null)
-                return GateNotWired(target);
+                return GateNotWired(policy, target);
 
             return gate.IsUpdatable(target)
                 .SelectMany(verdict =>
@@ -591,12 +621,11 @@ public class SelfUpdateHostedService : IHostedService
                             _logger?.LogInformation(
                                 "[SelfUpdate] release-availability gate not enforced for {Tag}: {Reason}",
                                 target, notEnforced);
-                        // Clearing is unconditional: a previous hold that no longer applies must
-                        // disappear from the admin tab the moment it is resolved.
-                        return RecordHold(target, null).Catch(HoldWriteFailed(target))
-                            .IgnoreElements()
-                            .Select(_ => SelfUpdateVerdict.NoOutcome())
-                            .Concat(Apply(target));
+                        // 🚨 The availability gate answered "an artifact exists". The combo gate
+                        // answers the question that artifact cannot: whether the candidate's
+                        // assemblies can still serve the module content this instance has landed.
+                        // Both have to clear before anything is patched.
+                        return ComboThenApply(policy, target);
                     }
 
                     return RecordHold(target, verdict).Catch(HoldWriteFailed(target))
@@ -606,6 +635,102 @@ public class SelfUpdateHostedService : IHostedService
                             SelfUpdateVerdict.Held(target, verdict.HoldReason)));
                 });
         });
+
+    /// <summary>
+    /// 🚨 <b>The combo gate (#2274), the last thing between a rollable tag and a pod restart.</b>
+    ///
+    /// <para>"A sealed bake exists for it" was never the whole precondition. The candidate must also
+    /// be able to SERVE the modules this instance has actually landed — and it can fail to while
+    /// every artifact is present, because a framework-identity change invalidates the assembly
+    /// cache by design and an optional parameter added to a record's primary constructor replaces
+    /// the signature. memex.systemorph.com was trapped between two failing states for exactly that
+    /// reason: rolling forward aborted the host with a <c>MissingMethodException</c>, and so did
+    /// re-fetching the bundles, from the other side.</para>
+    ///
+    /// <para><b>The three verdicts are never conflated</b> (<see cref="ComboClearance"/>):</para>
+    /// <list type="bullet">
+    /// <item><b>Green</b> ⇒ cleared. The roll proceeds and the clearance is logged with its
+    /// caveats.</item>
+    /// <item><b>Red</b> ⇒ REFUSED. The roll is held, every failing module is NAMED on
+    /// <c>Admin/UpdatePolicy</c> where the Updates tab reads it, and the refusal is logged at Error.
+    /// Re-evaluated from scratch every tick, so a re-verified candidate clears with nothing to
+    /// un-stick by hand.</item>
+    /// <item><b>NotVerifiable — and its sibling, no verdict at all</b> ⇒ NEITHER. It does not clear
+    /// (that would reproduce the outage, treating "we could not find out" as "all clear") and it
+    /// does not refuse (that would freeze every instance the moment this shipped, since producing a
+    /// verdict needs docker a pod does not have). The roll rests on the other gates, and the fact is
+    /// recorded on the check verdict and logged at Warning when a patch is actually issued — an
+    /// UNVERIFIED roll is a state an operator can see, never a silent one.</item>
+    /// </list>
+    /// </summary>
+    private IObservable<SelfUpdateVerdict> ComboThenApply(UpdatePolicyContent policy, string target)
+    {
+        var combo = ResolveComboGate();
+        return (combo is null
+                // Not registered is not a pass: it folds to NotVerified, which grants nothing.
+                ? Observable.Return(ComboVerificationGate.NotRegistered(target))
+                : combo.Clearance(policy, target, _options.PortalImage(target)))
+            .SelectMany(clearance =>
+            {
+                if (clearance.Refuses)
+                {
+                    _logger?.LogError(
+                        "[SelfUpdate] HOLDING update to {Tag} (staying on {Current}) — {Reason}",
+                        target, ShippedReleaseSeed.InstalledPlatformVersion, clearance.Reason);
+                    return RecordHold(target, ComboHold(clearance))
+                        .Catch(HoldWriteFailed(target))
+                        .IgnoreElements()
+                        .Select(_ => SelfUpdateVerdict.NoOutcome())
+                        .Concat(Observable.Return(
+                            SelfUpdateVerdict.ComboBlocked(target, clearance.Reason)));
+                }
+
+                if (clearance.IsCleared)
+                    _logger?.LogInformation(
+                        "[SelfUpdate] combo gate cleared {Tag}: {Reason}", target, clearance.Reason);
+
+                // Clearing is unconditional, exactly as on the availability path: a previous hold
+                // that no longer applies must disappear from the admin tab the moment it is
+                // resolved.
+                return RecordHold(target, null).Catch(HoldWriteFailed(target))
+                    .IgnoreElements()
+                    .Select(_ => SelfUpdateVerdict.NoOutcome())
+                    .Concat(Apply(target).Select(verdict => Qualify(verdict, clearance)));
+            });
+    }
+
+    /// <summary>
+    /// Carries a non-clearing combo answer onto the check verdict — the durable half — and raises
+    /// the log to Warning at the one moment the risk is actually TAKEN: a patch issued without
+    /// clearance. A deferred or detect-only check took no risk, so it says so without shouting.
+    /// </summary>
+    private SelfUpdateVerdict Qualify(SelfUpdateVerdict verdict, ComboClearance clearance)
+    {
+        if (clearance.IsCleared)
+            return verdict;
+        if (verdict.Outcome == SelfUpdateOutcome.Applied)
+            _logger?.LogWarning(
+                "[SelfUpdate] rolled {Tag} WITHOUT combo clearance — {Reason}",
+                clearance.CandidateTag, clearance.Reason);
+        return verdict.Unverified(clearance.Reason);
+    }
+
+    /// <summary>
+    /// The combo refusal expressed as the hold the admin surfaces already render: one blocker per
+    /// FAILING MODULE, so <c>HeldReason</c> names them all, and NOT indeterminate — the gate looked
+    /// and found an incompatibility, which is a candidate to re-verify rather than an availability
+    /// incident to fix.
+    /// </summary>
+    private static UpdatabilityVerdict ComboHold(ComboClearance clearance) =>
+        new(false,
+            [
+                .. (clearance.Verdict?.FailedModules ?? []).Select(module =>
+                    new PackageAvailability(
+                        module.ModuleId,
+                        PackageAvailabilityKind.ComboVerificationFailed,
+                        module.Failures.Count > 0 ? module.Failures[0] : clearance.Reason)),
+            ],
+            clearance.Reason);
 
     /// <summary>
     /// 🚨 <b>No gate is registered on this host — so the roll HOLDS.</b>
@@ -635,7 +760,7 @@ public class SelfUpdateHostedService : IHostedService
     /// set it in configuration, where it is visible, and the roll proceeds while saying so at
     /// Warning on every tick. It can never waive a gate that DID run.</para>
     /// </summary>
-    private IObservable<SelfUpdateVerdict> GateNotWired(string target) =>
+    private IObservable<SelfUpdateVerdict> GateNotWired(UpdatePolicyContent policy, string target) =>
         Observable.Defer(() =>
         {
             // 🚨 "CANNOT VERIFY" AND "VERIFIED AS NOTHING TO VERIFY" ARE DIFFERENT STATES, and only
@@ -657,12 +782,11 @@ public class SelfUpdateHostedService : IHostedService
                     + "(no gate is registered on this host either, which changes nothing here — "
                     + "there is nothing for it to check against).",
                     target, notApplicable);
-                // Clearing is unconditional, exactly as on the verdict path: a previous hold that
-                // no longer applies must disappear from the admin tab the moment it is resolved.
-                return RecordHold(target, null).Catch(HoldWriteFailed(target))
-                    .IgnoreElements()
-                    .Select(_ => SelfUpdateVerdict.NoOutcome())
-                    .Concat(Apply(target));
+                // 🚨 The COMBO gate still runs. "This deployment consumes no CI bakes" answers
+                // the availability question and nothing else: an instance can carry landed modules
+                // whose content the candidate cannot serve whatever its bundle root says, which is
+                // precisely the state #2274 was filed about.
+                return ComboThenApply(policy, target);
             }
 
             if (_options.AllowUnverifiedRoll)
@@ -673,7 +797,11 @@ public class SelfUpdateHostedService : IHostedService
                     + "whether the packages this environment deploys have artifacts for it. Unset "
                     + "that key to make the missing gate a hold again.",
                     target, SelfUpdateOptions.SectionName, nameof(SelfUpdateOptions.AllowUnverifiedRoll));
-                return Apply(target);
+                // 🚨 AllowUnverifiedRoll waives the AVAILABILITY gate that could not run. It is not
+                // a waiver of a gate that DID run, and the combo gate's Red is exactly that — so it
+                // still refuses here. A key that could wave away a produced refusal would be the
+                // skip-trapdoor this whole area exists to keep out.
+                return ComboThenApply(policy, target);
             }
 
             var verdict = UpdatabilityVerdict.Unavailable(
@@ -701,6 +829,18 @@ public class SelfUpdateHostedService : IHostedService
     /// </summary>
     protected virtual ReleaseAvailabilityService? ResolveAvailabilityGate() =>
         _hub.ServiceProvider.GetService<ReleaseAvailabilityService>();
+
+    /// <summary>
+    /// The combo gate (#2274), resolved from the mesh's services — the fourth documented injection
+    /// seam, so a test can pin what the poller DOES with a combo verdict without staging docker and
+    /// a module repository.
+    ///
+    /// <para>🚨 A null here is NOT a pass: <see cref="ComboThenApply"/> folds it into
+    /// <see cref="ComboVerificationGate.NotRegistered"/>, which grants no clearance. AddSelfUpdate
+    /// registers the gate unconditionally, so no host in this repo can reach the state at all.</para>
+    /// </summary>
+    protected virtual ComboVerificationGate? ResolveComboGate() =>
+        _hub.ServiceProvider.GetService<ComboVerificationGate>();
 
     /// <summary>
     /// The host's configuration, resolved from the mesh's services. Virtual for the same reason
