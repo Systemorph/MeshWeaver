@@ -182,36 +182,82 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         long refusedBaseVersion,
         Action<long> onStaleMirror,
         IScheduler? scheduler = null)
-        => refusedBaseVersion <= 0
-            // A first attempt reads the mirror exactly as it always did — the ordinary write path
-            // gains no filter, no timer and no second subscription.
-            ? mirror.Take(1)
-            : mirror
-                .Where(node => node.Version > refusedBaseVersion)
-                .Take(1)
-                .Timeout(
-                    ConflictRebaseBound,
-                    Observable.Defer(() =>
-                    {
-                        onStaleMirror(refusedBaseVersion);
-                        return mirror.Take(1);
-                    }),
-                    scheduler ?? Scheduler.Default)
-                // 🚨 An EMPTY completion must not reach the caller. Filtering introduces a
-                // completion the un-filtered shape could not produce: a mirror that ends (its hub
-                // torn down) while holding only the refused version completes this source with no
-                // value, the write's observer is never called, and the caller waits on a pipeline
-                // that has already finished. A source that cannot answer must SAY so — the same
-                // rule the compile pipeline's DefaultIfEmpty totality guard applies.
-                .Select(node => (MeshNode?)node)
-                .DefaultIfEmpty(null)
-                .SelectMany(node => node is null
-                    ? Observable.Throw<MeshNode>(new InvalidOperationException(
-                        $"Update aborted: the owner refused this write as stale at version "
-                        + $"{refusedBaseVersion} and the mirror ended before carrying anything "
-                        + "newer, so there is no state to re-apply against. The write did NOT "
-                        + "land; re-issue it."))
-                    : Observable.Return(node));
+        => RequireBaseState(
+            refusedBaseVersion <= 0
+                // A first attempt reads the mirror exactly as it always did — the ordinary write
+                // path gains no filter, no timer and no second subscription.
+                ? mirror.Take(1)
+                : mirror
+                    .Where(node => node.Version > refusedBaseVersion)
+                    .Take(1)
+                    .Timeout(
+                        ConflictRebaseBound,
+                        Observable.Defer(() =>
+                        {
+                            onStaleMirror(refusedBaseVersion);
+                            return mirror.Take(1);
+                        }),
+                        scheduler ?? Scheduler.Default),
+            refusedBaseVersion);
+
+    /// <summary>
+    /// 🚨 TOTALITY GUARD on a write's BASE READ — issue #3001. An EMPTY completion must never
+    /// reach the caller: it is the one source termination that produces NO terminal at all, so
+    /// the writer waits on a pipeline that has already finished.
+    ///
+    /// <para><b>The defect.</b> <see cref="UpdateRemote"/> subscribes its base read with
+    /// <c>Subscribe(onNext, onError)</c> — two of the three Rx terminations. Every verdict the
+    /// caller can receive is raised from inside one of those two callbacks, so a source that
+    /// completes WITHOUT a value settles nothing: no <c>OnNext</c>, no <c>OnError</c>, no
+    /// <c>OnCompleted</c> on the caller's observer, no patch posted, and not even the outer
+    /// <c>VERDICT_TIMEOUT</c> — that deadline is armed inside the response wait, which this write
+    /// never reaches. The writer hangs for the life of the process, silently.</para>
+    ///
+    /// <para><b>It is not hypothetical.</b> <c>Workspace.AcquireRemoteStreamUnchecked</c>
+    /// deliberately hands back a stream that was already dead when it resolved — "hand it back
+    /// with an empty lease and let the caller's subscribe collect the terminal" — and
+    /// <c>SynchronizationStream.Dispose</c> COMPLETES its store rather than disposing it
+    /// (<c>Store.OnCompleted()</c>, deliberately, per #1170/#1171), so a stream completed before it
+    /// ever carried a value replays exactly one thing: a bare <c>OnCompleted</c>. The same shape occurs
+    /// when the last lease on an evicted mirror is released mid-write (<c>ReclaimIfUnheld</c>
+    /// disposes it) and when the <c>Where(change =&gt; change.Value is not null)</c> filter drops
+    /// every emission the mirror had. Under N concurrent writers sharing one leased mirror, one
+    /// writer collecting that bare completion is exactly "N started, N-1 finished" — with nothing
+    /// logged, because from the message layer's point of view every request succeeded.</para>
+    ///
+    /// <para><b>Why an error and not a value.</b> No base means no diff, which means no
+    /// <c>PatchDataRequest</c> was ever posted: the write PROVABLY did not land. Emitting the
+    /// unchanged node would be the fail-open this write path has closed twice already (#2661) —
+    /// reporting "saved" for a write nobody attempted. The caller gets the same verdict shape it
+    /// gets for any other unlanded write, and the composed retry/log machinery above it works
+    /// unchanged.</para>
+    ///
+    /// <para>The message is chosen by <paramref name="refusedBaseVersion"/> so the CONFLICT
+    /// re-attempt keeps naming the version the owner refused, while a first attempt names the
+    /// mirror ending. Applied at the ONE seam every base read passes through, rather than restated
+    /// per branch — the previous shape guarded only the conflict branch, i.e. the rare one.</para>
+    /// </summary>
+    /// <param name="baseRead">The composed base read: mirror, filter, rebase.</param>
+    /// <param name="refusedBaseVersion">The version a CONFLICT re-attempt is rebasing off, or
+    /// <c>0</c> for a first attempt.</param>
+    internal static IObservable<MeshNode> RequireBaseState(
+        IObservable<MeshNode> baseRead,
+        long refusedBaseVersion)
+        => baseRead
+            .Select(node => (MeshNode?)node)
+            .DefaultIfEmpty(null)
+            .SelectMany(node => node is not null
+                ? Observable.Return(node)
+                : Observable.Throw<MeshNode>(new InvalidOperationException(
+                    refusedBaseVersion > 0
+                        ? $"Update aborted: the owner refused this write as stale at version "
+                            + $"{refusedBaseVersion} and the mirror ended before carrying anything "
+                            + "newer, so there is no state to re-apply against. The write did NOT "
+                            + "land; re-issue it."
+                        : "Update aborted: this hub's mirror ended without ever carrying the "
+                            + "node's state, so no patch was built and none was posted. The write "
+                            + "did NOT land; re-issue it. (The mirror was disposed or reclaimed "
+                            + "mid-write — see Workspace.AcquireRemoteStreamUnchecked.)")));
 
     /// <summary>
     /// 🚨 The base a QUEUED write diffs against — issues #2305 / #2291.
@@ -1398,10 +1444,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // sync stream. remoteStream.Update reads Current on the stream's own
             // serialized action block, applies the lambda, and ships the result
             // to the owner via the change feed — no PatchDataRequest.
-            var initialSub = remoteStream
-                .Timeout(TimeSpan.FromSeconds(30))
-                .Where(change => change.Value is not null)
-                .Take(1)
+            //
+            // 🚨 RequireBaseState for the same reason UpdateRemote needs it (#3001): this
+            // subscribe also handles only OnNext and OnError, so a mirror that completes without
+            // ever carrying the node — a stream already dead when AcquireRemoteStreamUnchecked
+            // resolved it, one reclaimed mid-write, or one whose every emission the null-filter
+            // drops — would settle nothing at all and park the caller forever.
+            var initialSub = RequireBaseState(
+                    remoteStream
+                        .Timeout(TimeSpan.FromSeconds(30))
+                        .Where(change => change.Value is not null)
+                        .Select(change => change.Value!)
+                        .Take(1),
+                    refusedBaseVersion: 0)
                 .Subscribe(
                     _ =>
                     {
