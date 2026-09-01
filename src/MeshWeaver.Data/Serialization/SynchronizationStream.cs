@@ -1550,6 +1550,21 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         var acceptRebasedFull = delivery.Message.ChangeType == ChangeType.Full
             && (Interlocked.Exchange(ref _acceptResubscribeFull, 0) == 1 || currentJson is null);
 
+        // 🚨🚨 DIRECTION, not just shape — Systemorph/MeshWeaver#2701. `Version` means TWO DIFFERENT
+        // THINGS depending on which way the message travels, and everything below turns on the
+        // difference:
+        //   • DataChangedEvent (OWNER → mirror) carries the OWNER's clock. It is comparable to
+        //     Current.Version, and it is the version this stream must adopt.
+        //   • PatchDataChangeRequest (SUBSCRIBER → owner) carries the BASE the subscriber last
+        //     APPLIED (StandardReducers.PatchJsonElement stamps `stream.Current?.Version`) — a
+        //     value that is BELOW the owner's clock by construction whenever an owner frame is in
+        //     flight. It is NOT comparable, and it must never become the owner's clock.
+        // This is the same asymmetry the frame-loss check further down already draws in so many
+        // words ("Applies to DataChangedEvent (owner→mirror) only: a PatchDataChangeRequest's chain
+        // is stamped by the SENDING mirror and is not comparable to this stream's applied
+        // version") — the version handling simply never got it.
+        var isOwnerFrame = delivery.Message is not PatchDataChangeRequest;
+
         // 🚨 Monotonicity guard — applies to PATCHES *and* FULLS. Version is ALWAYS the OWNER
         // hub's Version (BuildChangeItem/BuildFullChangeItem: the owner stamps its monotonic
         // Hub.Version — ++ per message, MessageHub.HandleMessageAsync — while a subscriber only
@@ -1564,7 +1579,20 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // subscriber never bumps ahead of the owner, a legitimate Full can never carry a version
         // BELOW Current — only a genuinely older snapshot can, and that is exactly what we drop —
         // EXCEPT the rebased-resubscribe Full latched above (a recycled owner's fresh snapshot).
-        if (Current is not null && delivery.Message.Version < Current.Version && !acceptRebasedFull)
+        //
+        // 🚨 …AND EXCEPT A SUBSCRIBER'S OWN WRITE (#2701). Every clause above reasons about a frame
+        // the OWNER produced. A PatchDataChangeRequest is the opposite direction: the base version
+        // it carries is older than the owner's clock precisely BECAUSE the write is optimistic —
+        // the contract this stream documents on Update() is "a subscriber carries the BASE version
+        // it last observed so the owner can fast-forward (base == current) or MERGE (base <
+        // current)". The guard was swallowing the merge case before the merge code could see it, at
+        // Debug, with no rollback Full and no failure to the writer: the user's edit was gone and
+        // the re-render it would have produced never happened, so the view sat silent forever. The
+        // measured shape is EditorTest.TestEditorWithDelayed — five UpdatePointer writes landing
+        // while the 100 ms delayed render's frame is in flight, and a control stream that then
+        // emits nothing at all. A subscriber patch that cannot be applied is not silently dropped
+        // here: the applier below throws and SyncFailed answers the writer.
+        if (isOwnerFrame && Current is not null && delivery.Message.Version < Current.Version && !acceptRebasedFull)
         {
             logger.LogDebug(
                 "[SYNC_STREAM] Dropping stale {ChangeType} for {StreamId}: incoming v{In} < current v{Cur}",
@@ -1585,10 +1613,16 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 // 🚨 Adopt the OWNER's Version (not local Host.Version) so the
                 // monotonicity guard above compares apples-to-apples and a later
                 // client write records the owner-version it was based on.
+                // 🚨 A SUBSCRIBER's full-state proposal (a PatchDataChangeRequest a subscriber
+                // sends as a Full because its own JSON cache was empty) carries the base it read,
+                // not the owner's clock — floor it, exactly as in the Patch branch below, so
+                // applying a subscriber write can never rewind this stream's version (#2701).
                 SetCurrent(hub, new ChangeItem<TStream>(
                     currentJson.Value.Deserialize<TStream>(Host.JsonSerializerOptions)!,
                     StreamId,
-                    delivery.Message.Version));
+                    isOwnerFrame || Current is null
+                        ? delivery.Message.Version
+                        : Math.Max(delivery.Message.Version, Current.Version)));
                 Set(currentJson);
                 // A Full re-established Current — any pending resync is satisfied;
                 // allow a future Patch-before-Full gap to resubscribe again, and clear the
@@ -1690,7 +1724,18 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 // 🚨 Adopt the OWNER's Version (the PatchFunction stamps the local
                 // stream.Hub.Version). Keeps Current.Version on the owner's clock so
                 // the monotonicity guard is consistent across Full and Patch.
-                changeItem = changeItem with { Version = delivery.Message.Version };
+                //
+                // 🚨 …but ONLY for an owner frame (#2701). A SUBSCRIBER's write carries the base it
+                // was computed on, which is BELOW this stream's clock exactly when the guard above
+                // now lets it through. Adopting it would move the OWNER's Current BACKWARDS — and
+                // the frame the owner then broadcasts would be stamped below what its other
+                // subscribers already hold, so their (correct) monotonicity guards would drop it:
+                // the same silent loss, one hop further out. The owner's clock is a FLOOR here, so
+                // applying a subscriber's write can only ever move it forward.
+                if (isOwnerFrame)
+                    changeItem = changeItem with { Version = delivery.Message.Version };
+                else if (changeItem.Version < Current!.Version)
+                    changeItem = changeItem with { Version = Current.Version };
 
                 SetCurrent(hub, changeItem);
             }

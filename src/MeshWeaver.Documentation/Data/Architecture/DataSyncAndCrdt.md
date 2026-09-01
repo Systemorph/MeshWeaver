@@ -85,14 +85,49 @@ always holds.
 
 ---
 
-## 3. The monotonicity guard — patches *and* Fulls
+## 3. The monotonicity guard — patches *and* Fulls, but OWNER frames only
 
-When a subscriber receives an owner frame (`UpdateStream`):
+When a subscriber receives an **owner frame** (`UpdateStream`):
 
 ```
-ANY FRAME (Patch or Full) : drop it if  Version < Current.Version
-                            …unless a Full is consuming the resubscribe latch (below)
+ANY OWNER FRAME (Patch or Full) : drop it if  Version < Current.Version
+                                  …unless a Full is consuming the resubscribe latch (below)
 ```
+
+### 🚨 `Version` means two different things, and the guard reads only one of them
+
+`UpdateStream` handles messages travelling in **both** directions, and the meaning of `Version`
+flips with the direction:
+
+| Message | Direction | What `Version` is | Guard? | Adopt as `Current.Version`? |
+|---|---|---|---|---|
+| `DataChangedEvent` | owner → mirror | the **owner's clock** | **yes** — comparable | **yes** |
+| `PatchDataChangeRequest` | subscriber → owner | the **base the writer last applied** | **no** — not comparable | **no** — it would rewind the owner |
+
+A subscriber's write is optimistic by definition: `StandardReducers.PatchJsonElement` stamps it
+with `stream.Current?.Version` — the frame the writer had in hand — so it is **below the owner's
+clock by construction** whenever an owner frame is in flight. §4 already names that case as the
+one the owner must *merge*. Comparing it against the owner's clock and dropping it therefore
+discards a legitimate write, silently: no rollback Full, no `DeliveryFailure`, one `Debug` line.
+
+That was Systemorph/MeshWeaver#2701. The measured shape is an editor whose re-render takes 100 ms:
+a burst of `UpdatePointer` writes lands while that render's frame is still on the wire, every one
+of them is dropped, and the control stream that should have carried the result **emits nothing at
+all** — indistinguishable from a slow machine, which is why it read as a flake for months. It is a
+data-loss bug, not a timing one: a user's edit typed while the server pushes an unrelated
+re-render was thrown away. Pinned by `StaleBaseSubscriberWriteTest`
+(`test/MeshWeaver.Layout.Test`).
+
+The same asymmetry was already drawn one block further down in the *frame-loss* check, which
+applies "to `DataChangedEvent` (owner→mirror) only: a `PatchDataChangeRequest`'s chain is stamped
+by the SENDING mirror and is not comparable to this stream's applied version". The version
+handling simply never got it.
+
+**Having applied a subscriber's write, the owner keeps its own clock.** Adopting the writer's base
+would move `Current.Version` *backwards*, and the frame the owner then broadcasts would be stamped
+below what its other subscribers already hold — so *their* (correct) guards would drop it, and the
+same loss reappears one hop out. The owner's version is a **floor**: applying a subscriber write
+can only ever move it forward.
 
 A **Patch** is a delta computed against a *specific base version*; applying a
 reordered older patch corrupts the mirror, so it is version-guarded.
@@ -380,8 +415,10 @@ mirror and the convergence rules above hold.
 |---|---|
 | Owner assigns strictly increasing versions per stream — including the init/base frame | `SynchronizationStream.OwnerVersion`; `StreamVersionMonotonicityTest` |
 | A subscriber never mints a version | `UpdateStream` adopt-only; `StreamUpdateIdentityTest` |
-| Stale **patch** AND stale **Full** dropped (`Version < Current`) | `SynchronizationStream.UpdateStream` guard |
+| Stale **patch** AND stale **Full** dropped (`Version < Current`) — **owner frames only** | `SynchronizationStream.UpdateStream` guard |
 | …except a Full consuming the version-gated resubscribe latch | `SynchronizationStream.ExpectResubscribeFull`; `TwoSiloRecycleConvergenceTest` |
+| A subscriber's write based on an EARLIER owner frame is merged, never dropped | `StaleBaseSubscriberWriteTest.ASubscriberWriteBasedOnAnEarlierOwnerFrame_IsMerged_NotDroppedAsStale` |
+| Applying a subscriber's write never rewinds the owner's clock | `StaleBaseSubscriberWriteTest.ApplyingASubscriberWrite_DoesNotRewindTheOwnersClock` |
 | A late layout-area subscriber gets its render content, not just the base frame | `DataChangeStreamUpdateTest.DataChangeRequest_ShouldUpdateLayoutAreaViews` |
 | Disjoint concurrent string edits merge | `StringDeltaTest`, `StreamConflictResolutionTest` |
 | A changed string field (incl. nested) ships only its splice | `StringDeltaPatchTest` |
