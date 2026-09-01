@@ -184,6 +184,10 @@ public static class SeoEndpoints
             .SelectMany(roots => roots.Count == 0
                 ? Observable.Return(new List<(MeshNode Node, string Url)>())
                 : roots
+                    // Boolean projection on purpose (#2901): a root the gate cannot decide on is
+                    // OMITTED from the sitemap, which is the same action as "not public" and the
+                    // fail-closed one. Omission states nothing, so there is nothing here to be
+                    // dishonest about; see AnonymousGate.AllowAnonymous.
                     .Select(root => AnonymousGate.AllowAnonymous(hub, root.Path)
                         .Take(1)
                         .SelectMany(allowed => allowed

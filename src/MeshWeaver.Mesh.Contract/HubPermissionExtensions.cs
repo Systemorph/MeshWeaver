@@ -177,6 +177,22 @@ public static class HubPermissionExtensions
     /// <see cref="CheckPermissionOutcome(IMessageHub,string,string,Permission)"/> for the full
     /// reasoning; identity is the only difference.</para>
     ///
+    /// <para><b>Violators of that ban, and where the last one is (issue #2901).</b> The rule was
+    /// stated here and then broken twice on the ANONYMOUS read path, which is the one place the
+    /// lie is most expensive: a visitor who may well be entitled gets bounced to <c>/login</c>, or
+    /// a public file answers "not found", while the actual fact is a degraded permission fold that
+    /// nobody logged.
+    /// <list type="bullet">
+    ///   <item><description><c>AnonymousGate</c> (<c>Mesh.Contract</c>) — <b>fixed</b>: it now
+    ///     returns the tri-state from <see cref="AnonymousGate.Evaluate"/>, and its boolean
+    ///     projection <c>AllowAnonymous</c> is documented as usable only where "unknown" and "not
+    ///     public" lead to the same action (sitemap, SEO metadata).</description></item>
+    ///   <item><description><c>BlazorHostingExtensions.AllowContentRead</c> — in
+    ///     <b>MeshWeaver.Plugins</b>, still on the swallow, and it is the half that makes
+    ///     <c>/api/content</c> answer 404 for a fold that never reached a verdict. It cannot be
+    ///     fixed from this repo; #2901 stays open until it is.</description></item>
+    /// </list></para>
+    ///
     /// <para>The identity is resolved INSIDE the deferred chain, so it is read at subscribe time
     /// (under the caller's ambient context) rather than when the observable was composed — and
     /// UNDER the classifier, because <c>ResolveUserId</c> touches <c>hub.ServiceProvider</c>, which
