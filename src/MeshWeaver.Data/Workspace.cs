@@ -940,17 +940,30 @@ public class Workspace : IWorkspace
                + "reference, or the data source it would reduce from has not been started.");
 
     /// <inheritdoc />
+    /// <remarks>Same diagnostic contract as <see cref="ReduceLocalStream{TReduced}"/>: the failure
+    /// names the collections and the owning hub, never a bare "Failed to create stream".</remarks>
     public ISynchronizationStream<EntityStore> GetStream(params Type[] types)
-        => (ISynchronizationStream<EntityStore>?)
-            ReduceManager.ReduceStream<EntityStore>(
-    this,
-    new CollectionsReference(types
-        .Select(t =>
-            DataContext.TypeRegistry.TryGetCollectionName(t, out var name)
-                ? name
-                : throw new ArgumentException($"Type {t.FullName} is unknown.")
-        ).ToArray()!),
-    x => x) ?? throw new InvalidOperationException("Failed to create stream");
+    {
+        // 🚨 `name is not null` is not belt-and-braces — it is what makes this a `string[]`.
+        // TryGetCollectionName's out parameter is `string?`, so without it the projection is
+        // `string?` and the array is `string?[]`, which CollectionsReference (an
+        // IReadOnlyCollection<string>) rejects with CS8620 — an error under CI's -warnaserror.
+        // Checking the invariant is the honest way to satisfy that; a `!` suppression would only
+        // assert it, and would let a `true` with a null name through as a null collection name.
+        var collections = types
+            .Select(t =>
+                DataContext.TypeRegistry.TryGetCollectionName(t, out var name) && name is not null
+                    ? name
+                    : throw new ArgumentException($"Type {t.FullName} is unknown.")
+            ).ToArray();
+        return (ISynchronizationStream<EntityStore>?)
+            ReduceManager.ReduceStream<EntityStore>(this, new CollectionsReference(collections), x => x)
+            ?? throw new InvalidOperationException(
+                $"Failed to create stream for collections [{string.Join(", ", collections)}] on "
+                + $"{Hub.Address}: the workspace's ReduceManager has no reducer producing an "
+                + "EntityStore from a CollectionsReference, or the data source it would reduce "
+                + "from has not been started.");
+    }
 
     /// <inheritdoc />
     public ReduceManager<EntityStore> ReduceManager => DataContext.ReduceManager;
