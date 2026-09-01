@@ -670,9 +670,18 @@ the value it compares simply never arrived, and every part of the system reporte
 > links above.
 
 **Producer and consumer must hash identically, or every good bundle is refused.** That equality is
-pinned by `BakeEquivalenceTest`, which bakes one content set both ways — through a real mesh (whose
+pinned twice. `BakeEquivalenceTest` bakes one content set both ways — through a real mesh (whose
 value *is* the consumer-side value) and through the mesh-free tree bake — and asserts the
-fingerprints are equal, non-empty, and different for different types.
+fingerprints are equal, non-empty, and different for different types. And the PR lane asserts it on
+the REAL trees: `bake-then-gate.sh` stages the bake and the gate from the same tree, so an
+`ADOPTION REFUSED` line in that run can only mean the two producers hash the same content
+differently, and `assert-bake-consumption.sh` fails on it by name.
+
+> 🚨 That second check exists because a false refusal is otherwise INVISIBLE in CI, in the same way
+> the original defect was. `Seed` returns `true`, the adopted/declared counts balance (the owner
+> refuses *afterwards*, when it stamps), the type flips to `Pending`, recompiles locally, and every
+> per-type verdict is green. Only the log says anything — and only because the refusal logs at
+> `Error`, above the gate's default level.
 
 #### Two things this deliberately does NOT do
 
