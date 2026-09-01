@@ -40,6 +40,28 @@ public class SyncStreamOptions
     public TimeSpan FirstHeartbeat { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// How long the recycle re-arm latch rests before re-asking an owner whose LAST rejection came
+    /// from the SAME activation that rejected the attempt before it.
+    ///
+    /// <para>🚨 This is the fix for #2986. The latch's join (<c>OwnerTeardownSettled</c>) exists so
+    /// each re-ask lands on a state that can answer, but it completes the instant the rejecting
+    /// activation has signalled <c>DisposalCompleted</c> — which, at <c>RunLevel=Dead</c>, has
+    /// ALREADY happened. When the address still resolves to that activation the join is a no-op,
+    /// so the whole <c>MaxRecycleReArms</c> budget was spent inside ONE teardown window: measured
+    /// on CI run 33523142249, three re-asks refused by activation <c>#017DA86C</c> within 1 ms,
+    /// after which the latch was disarmed for good and every reader of that node waited out its
+    /// full 60 s timeout. Three chances that all fall inside one millisecond are one chance.</para>
+    ///
+    /// <para>Not a watchdog and not a poll: nothing ticks unless a real rejection arrived, exactly
+    /// one re-ask is ever outstanding (the in-flight guard), and the whole ride-out is bounded by
+    /// <c>MaxSameActivationReAsks</c>. It is the same pacing
+    /// <c>MeshNodeStreamExtensions.GetMeshNodeOutcome</c> already applies to a recycling address
+    /// (#1701), at the same 500 ms, so the two riders on the <c>ShuttingDown</c> contract behave
+    /// alike. Tests set it far shorter so the behaviour is observable inside a test budget.</para>
+    /// </summary>
+    public TimeSpan RecycleReAskPace { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
     /// Coalescing window for change-feed-triggered resubscribes. The mesh change feed fires
     /// one event per owner write; high-frequency owner writes (e.g. a per-HTTP-request
     /// <c>_UserActivity</c> update) produce a BURST of events. A single resubscribe already
