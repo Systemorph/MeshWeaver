@@ -257,10 +257,14 @@
     <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
-    <!-- Import + GoogleMaps mirror the PORTAL's assembly surface: both portals reference them
-         PRECISELY so in-mesh sample/plugin source (Cornerstone/Pricing's Excel loader + map,
-         Northwind/Product) can compile at runtime. Without them the gate flags content the real
-         host compiles fine — the gate must judge against the surface content actually gets. -->
+    <!-- Import mirrors the PORTAL's assembly surface: both portals reference it PRECISELY so
+         in-mesh sample source (Northwind/Product's loader) can compile at runtime. Without it the
+         gate flags content the real host compiles fine — the gate must judge against the surface
+         content actually gets.
+         The map half of this note is gone with its subject: MeshWeaver.Maps is a MODULE now and
+         Cornerstone/Pricing, the one gated tree that bound MapControl, moved to MeshWeaver.Plugins
+         with it. A node repo whose content binds MapControl mounts the Maps module with the
+         tester's module flag, which is what that flag is for. -->
   </ItemGroup>
 
   <!-- ═════════ No module rides along any more — the AI engine left this repo (#2276) ═════════
