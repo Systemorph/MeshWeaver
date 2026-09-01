@@ -551,6 +551,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     ? typeProp.GetString()
                     : null;
 
+            // 🚨 Neither route has an INPUT: no stored discriminator and no NodeType means
+            // TryRecoverForNodeType has nothing to key on, now or ever. Arming here would leave a
+            // wait per degraded subscriber that no registration can ever complete — dead weight for
+            // the life of the subscription. Content this shape is free-form JSON by design (see
+            // ContentDiscriminatorValidator: "content WITHOUT a $type stays legal"), so this is a
+            // real state, not a corner case.
+            if (discriminator is null && string.IsNullOrEmpty(raw.NodeType))
+            {
+                _lateRetype.Disposable = Disposable.Empty;
+                return;
+            }
+
             _lateRetype.Disposable = contentTypeRegistry.Registrations
                 // 🚨 String compares only, BEFORE any deserialization. A boot registers every
                 // content type in the mesh, and without this each one would re-deserialize this
