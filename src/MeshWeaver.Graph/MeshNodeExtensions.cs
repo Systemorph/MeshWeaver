@@ -367,8 +367,17 @@ public static class MeshNodeExtensions
                 // so cross-hub RLS lets it land. See ActivityRunner for the canonical shape.
                 if (existing != null)
                 {
+                    // 🚨 `record.AccessCount` is the count derived from the EVENTUALLY-CONSISTENT
+                    // query snapshot above — it is NOT the count this write lands. The value that
+                    // is written comes from FoldOntoLive, which re-reads AccessCount off the LIVE
+                    // node inside the owner-serialised Update. Naming it `count=` made two
+                    // concurrent tracks that merely READ the same stale snapshot look like two
+                    // writers racing the same increment (#3001's second hypothesis, which the
+                    // owner's three-way merge in fact already prevents). Say which number it is.
                     logger?.LogDebug(
-                        "TrackActivity UPDATE: {Path} count={Count}", activityPath, record.AccessCount);
+                        "TrackActivity UPDATE: {Path} querySnapshotCount={SnapshotCount} "
+                        + "(the written count is folded off the live node inside the Update)",
+                        activityPath, record.AccessCount);
                     return Observable.Using(Impersonate, _ => stream.Update(FoldOntoLive));
                 }
 

@@ -110,6 +110,46 @@ are two moments where zero is knowable **without a clock**:
 > results actually pushed**, never the completion itself — a diagnostic keyed on "completed" reports
 > every healthy area and is worse than none.
 
+## Instance 3 — a write whose BASE READ ended without the node
+
+A cross-hub `stream.Update` reads the node off this hub's mirror, then diffs, posts and waits for the
+owner's verdict — and **every** verdict it can raise lives inside that read's `onNext` arm, because
+there is nothing to post until a base arrives. The read was subscribed with two arms:
+
+```csharp
+var initialSub = PatchBaseSource(RebaseSource(mirror, …), pendingSelfWrite)
+    .Subscribe(current => { /* diff, post, arm every deadline, raise every verdict */ },
+               ex      => { /* fail the caller */ });
+               // ← no onCompleted
+```
+
+A mirror that completes without carrying the node therefore settled nothing at all — and note the
+compounding detail that makes this the purest form of the shape: **not even the outer verdict
+deadline was armed**, because that timer is created inside the response wait a write with no base
+never reaches. Not "bounded by nothing" as an accident of `Timeout` semantics; bounded by nothing
+because the bound is downstream of the emission that never came.
+
+The empty completion is routine, not exotic — it is the disposal contract.
+`SynchronizationStream.Dispose` **completes** its store rather than disposing it
+(`Store.OnCompleted()`, deliberately, per #1170/#1171), so a stream completed before it ever carried
+a value replays exactly one thing to a new subscriber: a bare `OnCompleted`.
+`AcquireRemoteStreamUnchecked` hands back an
+already-dead stream on purpose ("let the caller's subscribe collect the terminal"), `ReclaimIfUnheld`
+disposes an evicted mirror the instant its last lease is released, and the write path's own
+`Where(change => change.Value is not null)` can drop every emission there was. Under concurrency the
+symptom is *N writes started, N−1 finished* — the writer that lost the shared mirror is the one that
+never answers.
+
+The guard is `MeshNodeStreamHandle.RequireBaseState`, move 2 below, at the one seam every base read
+passes through. It faults rather than substituting a value: no base means no patch was posted, so the
+write provably did not land and saying "saved" would be worse than the hang.
+See [Write Verdict Totality](/Doc/Architecture/WriteVerdictTotality).
+
+> **What made it survive review:** the rule was already written down *next to the fix*, on the
+> conflict re-attempt branch, whose filter makes an empty completion look possible. The first-attempt
+> branch was an unfiltered `mirror.Take(1)` and therefore looked like it could not end empty. It can —
+> a disposed source ends empty whatever you do to it. Apply the guard at the SEAM, never per branch.
+
 ## Guarding a chain
 
 Three moves, in order of preference.

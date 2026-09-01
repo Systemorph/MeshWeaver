@@ -75,6 +75,8 @@ not_refused_by_guard() {
 echo "── argument handling ─────────────────────────────────────────────"
 refuses "kv-ensure needs --vault"          "missing required flag --vault"      hosting-kv-ensure --namespace n
 refuses "kv-purge needs --vault"           "missing required flag --vault"      hosting-kv-purge --namespace n
+refuses "kv-rotate needs --vault"          "missing required flag --vault"      hosting-kv-rotate --namespace n
+refuses "kv-rotate needs --namespace"      "missing required flag --namespace"  hosting-kv-rotate --vault V
 refuses "pv-purge needs --namespace"       "missing required flag --namespace"  hosting-pv-purge
 refuses "pv-purge rejects unknown flags"   "unknown argument"                   hosting-pv-purge --namespace n --nope 1
 refuses "dns needs a mode"                 "must be 'upsert' or 'delete'"       hosting-dns --zone z --host h
@@ -122,11 +124,46 @@ refuses "federate refuses without a resource group" "AZ_RESOURCE_GROUP" \
   env -u AZ_RESOURCE_GROUP hosting-federate --identity i --namespace n
 
 echo
+echo "── the rotated key never leaves the process ──────────────────────"
+# 🚨 THE property of hosting-kv-rotate, and the only one whose failure is unrecoverable: a key that
+# reaches a job log has been disclosed to everyone who can read Actions, and rotating again does not
+# un-disclose it. The script's banner promises it "NEVER PRINTS THE KEY. Not on success, not on
+# failure." Promises in comments are what this repo keeps discovering were never true, so assert it.
+#
+# A dry run reaches the point where a real run would hold the minted key and reports what it WOULD
+# do — exactly the window in which a careless `echo` or a `set -x` would leak it. `mwi_` is the
+# scheme prefix (InstanceKeys.Generate), so its presence anywhere in the output is the leak.
+_rot_out="$(env HOSTING_DRY_RUN=true hosting-kv-rotate --vault V --namespace n --prefix memex- --synced-secret s 2>&1 || true)"
+case "$_rot_out" in
+  *mwi_*) bad "kv-rotate never prints the minted key" "a 'mwi_' token appeared in its output: ${_rot_out}" ;;
+  *)      ok  "kv-rotate never prints the minted key" ;;
+esac
+# And it must still report the HASH — the one thing that legitimately crosses back to the mesh. A
+# script that leaked nothing BECAUSE IT DID NOTHING would sail through the check above, so this arm
+# is what makes that one mean something.
+#
+# 🚨 Deliberately ONLY `::hosting:: key_hash=`. An earlier version also accepted the word "would",
+# which a dry run prints unconditionally from its very first step — so that arm could never fail,
+# and a regression that stopped emitting the hash entirely (the control plane then never adopts it,
+# and the pods restart onto a key the registry does not expect) would have passed. `hosting::say
+# key_hash` is outside the `hosting::dry` branch precisely so a rehearsal still reports it; assert
+# exactly that.
+case "$_rot_out" in
+  *"::hosting:: key_hash="*) ok "kv-rotate reports the key hash, even in a dry run" ;;
+  *) bad "kv-rotate reports the key hash, even in a dry run" "no '::hosting:: key_hash=' in: ${_rot_out}" ;;
+esac
+unset _rot_out
+
+echo
 echo "── command injection cannot ride in on a name ────────────────────"
 refuses_hard "namespace with a shell metacharacter" "is not a plain name" \
   hosting-kv-ensure --vault V --namespace 'n; rm -rf /'
 refuses_hard "pv-purge namespace with a metacharacter" "is not a plain name" \
   hosting-pv-purge --namespace 'n; kubectl delete pv --all'
+refuses_hard "kv-rotate namespace with a metacharacter" "is not a plain name" \
+  hosting-kv-rotate --vault V --namespace 'n; rm -rf /' --synced-secret s
+refuses_hard "kv-rotate prefix with a metacharacter"    "is not a plain name" \
+  hosting-kv-rotate --vault V --namespace n --prefix 'p`whoami`' --synced-secret s
 refuses_hard "database with a backtick"             "is not a plain name" \
   env HOSTING_DRY_RUN=true hosting-verify-restore --database 'd`whoami`' --server s
 refuses_hard "host with a space"                    "is not a hostname" \

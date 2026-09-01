@@ -182,36 +182,82 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         long refusedBaseVersion,
         Action<long> onStaleMirror,
         IScheduler? scheduler = null)
-        => refusedBaseVersion <= 0
-            // A first attempt reads the mirror exactly as it always did — the ordinary write path
-            // gains no filter, no timer and no second subscription.
-            ? mirror.Take(1)
-            : mirror
-                .Where(node => node.Version > refusedBaseVersion)
-                .Take(1)
-                .Timeout(
-                    ConflictRebaseBound,
-                    Observable.Defer(() =>
-                    {
-                        onStaleMirror(refusedBaseVersion);
-                        return mirror.Take(1);
-                    }),
-                    scheduler ?? Scheduler.Default)
-                // 🚨 An EMPTY completion must not reach the caller. Filtering introduces a
-                // completion the un-filtered shape could not produce: a mirror that ends (its hub
-                // torn down) while holding only the refused version completes this source with no
-                // value, the write's observer is never called, and the caller waits on a pipeline
-                // that has already finished. A source that cannot answer must SAY so — the same
-                // rule the compile pipeline's DefaultIfEmpty totality guard applies.
-                .Select(node => (MeshNode?)node)
-                .DefaultIfEmpty(null)
-                .SelectMany(node => node is null
-                    ? Observable.Throw<MeshNode>(new InvalidOperationException(
-                        $"Update aborted: the owner refused this write as stale at version "
-                        + $"{refusedBaseVersion} and the mirror ended before carrying anything "
-                        + "newer, so there is no state to re-apply against. The write did NOT "
-                        + "land; re-issue it."))
-                    : Observable.Return(node));
+        => RequireBaseState(
+            refusedBaseVersion <= 0
+                // A first attempt reads the mirror exactly as it always did — the ordinary write
+                // path gains no filter, no timer and no second subscription.
+                ? mirror.Take(1)
+                : mirror
+                    .Where(node => node.Version > refusedBaseVersion)
+                    .Take(1)
+                    .Timeout(
+                        ConflictRebaseBound,
+                        Observable.Defer(() =>
+                        {
+                            onStaleMirror(refusedBaseVersion);
+                            return mirror.Take(1);
+                        }),
+                        scheduler ?? Scheduler.Default),
+            refusedBaseVersion);
+
+    /// <summary>
+    /// 🚨 TOTALITY GUARD on a write's BASE READ — issue #3001. An EMPTY completion must never
+    /// reach the caller: it is the one source termination that produces NO terminal at all, so
+    /// the writer waits on a pipeline that has already finished.
+    ///
+    /// <para><b>The defect.</b> <see cref="UpdateRemote"/> subscribes its base read with
+    /// <c>Subscribe(onNext, onError)</c> — two of the three Rx terminations. Every verdict the
+    /// caller can receive is raised from inside one of those two callbacks, so a source that
+    /// completes WITHOUT a value settles nothing: no <c>OnNext</c>, no <c>OnError</c>, no
+    /// <c>OnCompleted</c> on the caller's observer, no patch posted, and not even the outer
+    /// <c>VERDICT_TIMEOUT</c> — that deadline is armed inside the response wait, which this write
+    /// never reaches. The writer hangs for the life of the process, silently.</para>
+    ///
+    /// <para><b>It is not hypothetical.</b> <c>Workspace.AcquireRemoteStreamUnchecked</c>
+    /// deliberately hands back a stream that was already dead when it resolved — "hand it back
+    /// with an empty lease and let the caller's subscribe collect the terminal" — and
+    /// <c>SynchronizationStream.Dispose</c> COMPLETES its store rather than disposing it
+    /// (<c>Store.OnCompleted()</c>, deliberately, per #1170/#1171), so a stream completed before it
+    /// ever carried a value replays exactly one thing: a bare <c>OnCompleted</c>. The same shape occurs
+    /// when the last lease on an evicted mirror is released mid-write (<c>ReclaimIfUnheld</c>
+    /// disposes it) and when the <c>Where(change =&gt; change.Value is not null)</c> filter drops
+    /// every emission the mirror had. Under N concurrent writers sharing one leased mirror, one
+    /// writer collecting that bare completion is exactly "N started, N-1 finished" — with nothing
+    /// logged, because from the message layer's point of view every request succeeded.</para>
+    ///
+    /// <para><b>Why an error and not a value.</b> No base means no diff, which means no
+    /// <c>PatchDataRequest</c> was ever posted: the write PROVABLY did not land. Emitting the
+    /// unchanged node would be the fail-open this write path has closed twice already (#2661) —
+    /// reporting "saved" for a write nobody attempted. The caller gets the same verdict shape it
+    /// gets for any other unlanded write, and the composed retry/log machinery above it works
+    /// unchanged.</para>
+    ///
+    /// <para>The message is chosen by <paramref name="refusedBaseVersion"/> so the CONFLICT
+    /// re-attempt keeps naming the version the owner refused, while a first attempt names the
+    /// mirror ending. Applied at the ONE seam every base read passes through, rather than restated
+    /// per branch — the previous shape guarded only the conflict branch, i.e. the rare one.</para>
+    /// </summary>
+    /// <param name="baseRead">The composed base read: mirror, filter, rebase.</param>
+    /// <param name="refusedBaseVersion">The version a CONFLICT re-attempt is rebasing off, or
+    /// <c>0</c> for a first attempt.</param>
+    internal static IObservable<MeshNode> RequireBaseState(
+        IObservable<MeshNode> baseRead,
+        long refusedBaseVersion)
+        => baseRead
+            .Select(node => (MeshNode?)node)
+            .DefaultIfEmpty(null)
+            .SelectMany(node => node is not null
+                ? Observable.Return(node)
+                : Observable.Throw<MeshNode>(new InvalidOperationException(
+                    refusedBaseVersion > 0
+                        ? $"Update aborted: the owner refused this write as stale at version "
+                            + $"{refusedBaseVersion} and the mirror ended before carrying anything "
+                            + "newer, so there is no state to re-apply against. The write did NOT "
+                            + "land; re-issue it."
+                        : "Update aborted: this hub's mirror ended without ever carrying the "
+                            + "node's state, so no patch was built and none was posted. The write "
+                            + "did NOT land; re-issue it. (The mirror was disposed or reclaimed "
+                            + "mid-write — see Workspace.AcquireRemoteStreamUnchecked.)")));
 
     /// <summary>
     /// 🚨 The base a QUEUED write diffs against — issues #2305 / #2291.
@@ -537,19 +583,47 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         /// </summary>
         private void ArmLateRetype(MeshNode raw, MeshNode typed)
         {
-            if (contentTypeRegistry is null || typed.Content is not JsonElement)
+            if (contentTypeRegistry is null || typed.Content is not JsonElement degraded)
+            {
+                _lateRetype.Disposable = Disposable.Empty;
+                return;
+            }
+
+            // Read the stored discriminator ONCE, here, so the per-registration filter below is a
+            // string compare and never touches the document again.
+            var discriminator = degraded.ValueKind == JsonValueKind.Object
+                && degraded.TryGetProperty("$type", out var typeProp)
+                && typeProp.ValueKind == JsonValueKind.String
+                    ? typeProp.GetString()
+                    : null;
+
+            // 🚨 Neither route has an INPUT: no stored discriminator and no NodeType means
+            // TryRecoverForNodeType has nothing to key on, now or ever. Arming here would leave a
+            // wait per degraded subscriber that no registration can ever complete — dead weight for
+            // the life of the subscription. Content this shape is free-form JSON by design (see
+            // ContentDiscriminatorValidator: "content WITHOUT a $type stays legal"), so this is a
+            // real state, not a corner case.
+            if (discriminator is null && string.IsNullOrEmpty(raw.NodeType))
             {
                 _lateRetype.Disposable = Disposable.Empty;
                 return;
             }
 
             _lateRetype.Disposable = contentTypeRegistry.Registrations
+                // 🚨 String compares only, BEFORE any deserialization. A boot registers every
+                // content type in the mesh, and without this each one would re-deserialize this
+                // node's whole JsonElement in every degraded subscription — N×M for nothing. The
+                // predicate mirrors exactly the two routes TryRecoverForNodeType can take, so a
+                // registration it drops is one that provably could not have resolved this node.
+                .Where(r => CouldResolve(r, raw, discriminator))
                 .Select(_ => System.Reactive.Unit.Default)
                 // 🚨 StartWith closes the gap between the conversion above and this Subscribe: a
                 // registration landing in that window would otherwise be missed, and the wait
                 // would hold out for a LATER one that may never come. It runs on the immediate
                 // scheduler, so the re-check is synchronous and — on the ordinary path, where
-                // nothing registered in the window — costs one failed lookup.
+                // nothing registered in the window — costs one failed lookup. It is placed AFTER
+                // the filter deliberately: the filter answers "could THIS registration matter",
+                // and the gap re-check has no registration to judge.
                 .StartWith(System.Reactive.Unit.Default)
                 .Select(_ => Retype(raw))
                 .Where(n => n is not null)
@@ -563,6 +637,35 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     // the defect this wait exists to end, so it must not be reintroduced here.
                     ex => _out.OnError(ex));
         }
+
+        /// <summary>
+        /// Could <paramref name="registration"/> possibly make this node resolvable? It mirrors the
+        /// TWO routes <c>TryRecoverForNodeType</c> takes, and nothing else:
+        /// <list type="number">
+        /// <item>the EXACT route — the registration was keyed on this node's own
+        /// <see cref="MeshNode.NodeType"/> (matched case-insensitively, as the registry's NodeType
+        /// map is keyed);</item>
+        /// <item>the NAME route — the registered type's short or full name IS the stored
+        /// <c>$type</c> (matched ordinally, as <c>ClaimDiscriminator</c> keys it).</item>
+        /// </list>
+        ///
+        /// <para>🚨 It must stay a superset of what could resolve, never a guess at what will: a
+        /// registration wrongly dropped here re-creates the exact defect this wait exists to end.
+        /// A node with neither a NodeType nor a <c>$type</c> matches nothing — correctly, because
+        /// neither route could ever have answered for it. The conversion still runs afterwards and
+        /// the answer is still kept only when it is genuinely typed; this only decides whether it
+        /// is worth ASKING.</para>
+        /// </summary>
+        private static bool CouldResolve(
+            MeshWeaver.Mesh.Services.MeshContentTypeRegistration registration,
+            MeshNode raw,
+            string? discriminator)
+            => (registration.NodeTypePath is { Length: > 0 } path
+                    && raw.NodeType is { Length: > 0 } nodeType
+                    && string.Equals(path, nodeType, StringComparison.OrdinalIgnoreCase))
+               || (discriminator is not null
+                    && (string.Equals(registration.ContentType.Name, discriminator, StringComparison.Ordinal)
+                        || string.Equals(registration.ContentType.FullName, discriminator, StringComparison.Ordinal)));
 
         /// <summary>Re-runs the conversion; null when it still degrades. Throws exactly what the
         /// primary path throws — the Subscribe above routes it to the subscriber.</summary>
@@ -1341,10 +1444,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // sync stream. remoteStream.Update reads Current on the stream's own
             // serialized action block, applies the lambda, and ships the result
             // to the owner via the change feed — no PatchDataRequest.
-            var initialSub = remoteStream
-                .Timeout(TimeSpan.FromSeconds(30))
-                .Where(change => change.Value is not null)
-                .Take(1)
+            //
+            // 🚨 RequireBaseState for the same reason UpdateRemote needs it (#3001): this
+            // subscribe also handles only OnNext and OnError, so a mirror that completes without
+            // ever carrying the node — a stream already dead when AcquireRemoteStreamUnchecked
+            // resolved it, one reclaimed mid-write, or one whose every emission the null-filter
+            // drops — would settle nothing at all and park the caller forever.
+            var initialSub = RequireBaseState(
+                    remoteStream
+                        .Timeout(TimeSpan.FromSeconds(30))
+                        .Where(change => change.Value is not null)
+                        .Select(change => change.Value!)
+                        .Take(1),
+                    refusedBaseVersion: 0)
                 .Subscribe(
                     _ =>
                     {
