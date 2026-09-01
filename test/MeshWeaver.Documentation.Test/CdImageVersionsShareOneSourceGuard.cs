@@ -137,7 +137,13 @@ public class CdImageVersionsShareOneSourceGuard
             + $"repository in {Workflow}; found {pins.Count}. Either they were renamed or the "
             + "matcher no longer recognises them — in both cases this guard checks nothing.");
 
-        var offenders = pins.Where(x => !x.Ref.Contains("needs.gate.outputs.plugins_sha", StringComparison.Ordinal)).ToList();
+        // 🚨 EQUALITY, not Contains (Copilot, #2967). `Contains` would accept
+        // `${{ needs.gate.outputs.plugins_sha || 'main' }}` — the pinned sha with the branch
+        // restored as a fallback, which is the regression itself wearing the fix's name. A
+        // fallback is not a safety net here: `gate` already fails RED on an unresolvable ref, so
+        // the only way the sha is empty is a gate that did not run, and then the job must not run
+        // either. Quoting and inner whitespace are tolerated; a second expression is not.
+        var offenders = pins.Where(x => !PinnedExactly.IsMatch(x.Ref)).ToList();
 
         Assert.True(offenders.Count == 0,
             "main-cd.yml reaches into a plugin repository at a ref it resolved for itself:\n  "
@@ -148,6 +154,10 @@ public class CdImageVersionsShareOneSourceGuard
             + "module bundles be sealed from a third. Use ${{ needs.gate.outputs.plugins_sha }}; "
             + "MW_PLUGINS_REF keeps steering the run through `gate`, which resolves it ONCE.");
     }
+
+    /// <summary>The one accepted ref: the sha <c>gate</c> resolved, and nothing else beside it.</summary>
+    private static readonly Regex PinnedExactly =
+        new(@"^[""']?\$\{\{\s*needs\.gate\.outputs\.plugins_sha\s*\}\}[""']?$", RegexOptions.Compiled);
 
     /// <summary>
     /// Every place CD names a plugin repository, paired with the ref that checkout or reusable call
