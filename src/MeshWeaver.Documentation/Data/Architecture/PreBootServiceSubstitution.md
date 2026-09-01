@@ -222,6 +222,18 @@ That placement is deliberate: the suites are `test/`-rooted, where `BlockingBrid
 ratchets every blocking bridge and may only shrink. **Putting the wait in the runner is what lets a
 migrated body be written with no bridge at all.**
 
+## 7a. It composes with the static lane's xUnit-shaped surface
+
+A case running against a DECLARED mesh gets everything a pure case gets — `TestContext.Current`
+(name + a token that trips just inside the budget), per-case `TestLog` capture attached to the case
+and printed when it fails, and **`SkipException` as its own `Outcome.Skipped`**, never folded into
+`Passed`. A suite that boots a whole mesh and then declines is exactly where "absence of evidence
+reads as green" would cost the most, so the two facilities are asserted together by
+`AMeshCaseThatDeclines_IsSkipped_NotPassedAndNotFailed`.
+
+That is also why `MeshTestSuite.Run` returns the **exception** rather than failure text: flattening
+it to a string here would fold a case that DECLINED into one that FAILED.
+
 ## 8. A boot failure is a FAILED case, never a skip
 
 `StaticTestRunner` reports a declaration that throws as a failed case **per affected method**, naming

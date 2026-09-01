@@ -242,17 +242,34 @@ public sealed class MeshTestSuite : IDisposable
     }
 
     /// <summary>
-    /// Runs one case against this mesh and returns its failure text, or null when it passed.
-    /// A case returning <see cref="IObservable{T}"/> of <see cref="Unit"/> is waited for through
-    /// the one sanctioned reactive→Task bridge; anything else is invoked and its return ignored.
+    /// Runs one case against this mesh and returns the exception that ended it, or null when it
+    /// passed. A case returning <see cref="IObservable{T}"/> of <see cref="Unit"/> is waited for
+    /// through the one sanctioned reactive→Task bridge; anything else is invoked and its return
+    /// ignored.
+    ///
+    /// <para>🚨 The EXCEPTION comes back, not a string, so the runner can tell a
+    /// <see cref="Testing.SkipException"/> from a failure. Flattening it to text here would fold a
+    /// case that DECLINED into one that FAILED — the distinction facility 4 exists to preserve.</para>
     /// </summary>
     /// <param name="method">The case.</param>
     /// <param name="budget">How long the case's stream may take to terminate.</param>
-    /// <returns>Failure text (innermost first), or null on success.</returns>
-    public string? Run(MethodInfo method, TimeSpan budget)
+    /// <returns>The exception that ended the case, or null on success.</returns>
+    public Exception? Run(MethodInfo method, TimeSpan budget)
     {
         ArgumentNullException.ThrowIfNull(method);
-        var returned = method.Invoke(null, Bind(method));
+        object? returned;
+        try
+        {
+            returned = method.Invoke(null, Bind(method));
+        }
+        catch (TargetInvocationException ex)
+        {
+            return ex.InnerException ?? ex;
+        }
+        catch (Exception ex)
+        {
+            return ex;
+        }
         if (returned is not IObservable<Unit> stream)
             return null;
 
@@ -266,15 +283,23 @@ public sealed class MeshTestSuite : IDisposable
             .ObserveCompletion(ex => lateFault = ex);
 
         // Bounded Task.Wait(TimeSpan) on this case's OWN dedicated thread (StaticTestRunner gives
-        // every case one and joins it): the parked thread is never a hub action block, a grain turn
-        // or an Rx trampoline, so it cannot self-deadlock, and expiry comes back as a bool rather
-        // than as a wedge. The same shape, for the same reason, as HubDisposalJoin's joined.Wait.
-        if (!settled.Wait(budget))
-            return $"TimeoutException: the case's stream did not terminate within "
-                   + $"{budget.TotalSeconds:F0}s";
-        if (settled.IsFaulted)
-            return Innermost(settled.Exception!);
-        return lateFault is null ? null : "late fault: " + Innermost(lateFault);
+        // every case one and joins it with a grace period): the parked thread is never a hub action
+        // block, a grain turn or an Rx trampoline, so it cannot self-deadlock, and expiry comes back
+        // as a bool rather than as a wedge. The same shape, for the same reason, as HubDisposalJoin's
+        // joined.Wait(budget).
+        try
+        {
+            if (!settled.Wait(budget))
+                return new TimeoutException(
+                    $"the case's stream did not terminate within {budget.TotalSeconds:F0}s");
+        }
+        catch (AggregateException ex)
+        {
+            // Unwrapped, so a SkipException raised inside the chain is still a SKIP and not a
+            // failure wearing an AggregateException's name.
+            return ex.InnerExceptions.Count == 1 ? ex.InnerExceptions[0] : ex;
+        }
+        return lateFault;
     }
 
     private static string Innermost(Exception ex)

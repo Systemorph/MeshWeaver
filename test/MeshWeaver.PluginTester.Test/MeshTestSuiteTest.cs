@@ -302,6 +302,58 @@ public class MeshTestSuiteTest(ITestOutputHelper output)
         Assert.Equal(3, run.Passed);
     }
 
+    /// <summary>
+    /// 🚨 The two facilities COMPOSE. A case running against a DECLARED mesh still gets everything
+    /// the pure lane gives it — <c>TestContext.Current</c>, per-case <c>TestLog</c> capture, and
+    /// <c>SkipException</c> as its OWN outcome. A mesh case that declines must never be folded into
+    /// <c>Passed</c>: it asserted nothing, and a suite that boots a whole mesh and then declines is
+    /// exactly where "absence of evidence reads as green" would cost the most.
+    /// </summary>
+    [Fact(Timeout = 300000)]
+    public void AMeshCaseThatDeclines_IsSkipped_NotPassedAndNotFailed()
+    {
+        var run = RunProbe("MeshSkip", """
+            using MeshWeaver.Graph.Configuration;
+            using MeshWeaver.Hosting.Monolith;
+            using MeshWeaver.Hosting.Persistence;
+            using MeshWeaver.Mesh;
+            using MeshWeaver.Testing;
+
+            namespace Probe;
+
+            public static class MeshSkipTests
+            {
+                public static MeshBuilder ConfigureMesh(MeshBuilder builder) => builder
+                    .UseMonolithMesh()
+                    .AddInMemoryPersistence()
+                    .AddGraph();
+
+                public static void ACaseThatDeclines(System.IServiceProvider services)
+                {
+                    TestLog.WriteLine("reached the declared mesh, then declined");
+                    throw new SkipException("no credential on this host");
+                }
+
+                public static void ACaseThatRuns(System.IServiceProvider services)
+                {
+                    if (services.GetService(typeof(MeshWeaver.Messaging.IMessageHub)) is null)
+                        throw new System.InvalidOperationException("no mesh hub in the container");
+                }
+            }
+            """);
+
+        Assert.Null(run.LoadError);
+        Assert.Equal(0, run.Failed);
+        Assert.Equal(0, run.NeedsMesh);
+        Assert.Equal(1, run.Passed);
+        Assert.Equal(1, run.Skipped);
+        var skipped = Assert.Single(run.Cases.Where(c => c.Outcome == StaticTestRunner.Outcome.Skipped));
+        Assert.Equal("no credential on this host", skipped.Error);
+        // TestLog is captured per case on the mesh lane too, not only on the pure one.
+        Assert.Contains(skipped.Log, l => l.Contains("then declined", StringComparison.Ordinal));
+        Assert.True(run.IsGreen, "declining is a legitimate answer and must not red the run");
+    }
+
     /// <summary>A declaration is found only in its exact shape; anything else is not one.</summary>
     [Fact]
     public void OnlyTheExactDeclarationShape_Counts()
