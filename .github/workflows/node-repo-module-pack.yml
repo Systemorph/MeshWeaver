@@ -1153,6 +1153,7 @@ jobs:
           VERSION: ${{ steps.identity.outputs.version }}
           FLOOR: ${{ steps.identity.outputs.floor }}
           COMPILER: ${{ steps.build.outputs.compiler }}
+          PACKDIR: ${{ steps.build.outputs.packdir }}
         run: |
           set -euo pipefail
           bundle="$RUNNER_TEMP/bundles/MeshWeaver.Plugin.$PACKAGE.$VERSION.module.nupkg"
@@ -1199,7 +1200,11 @@ jobs:
             # A non-MeshWeaver assembly is allowed ONLY with shelf provenance: the builder's
             # module-libs.txt names every ride it derived from the shelf's deps.json. Anything
             # else has no accountable closure and must fail — the 2026-08-19/20 outage shape.
-            shelf_manifest="$RUNNER_TEMP/module-build/$MODULE/module-libs.txt"
+            # 🚨 FROM THE BUILD STEP'S OWN packdir output — never a hard-coded layout. The global
+            # workspace moved the pack input to workspace-build/<Module>; this path still reading
+            # module-build/ made the allow-list EMPTY and failed all 8 shelf-consuming modules on
+            # the first coherent global-build lap (33472830308) with perfectly correct manifests.
+            shelf_manifest="$PACKDIR/module-libs.txt"
             allowed="$( [ -f "$shelf_manifest" ] && tr '\n' ';' < "$shelf_manifest" || true )"
             jq -e --arg allowed "$allowed" \
               '($allowed | split(";") | map(select(length > 0))) as $shelf
