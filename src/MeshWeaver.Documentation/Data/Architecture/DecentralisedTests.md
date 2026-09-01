@@ -69,11 +69,16 @@ not a substitute.
 | `HubTestBase` | 155 | 611 |
 | `GitHubSyncTestBase` | 29 | *(within Monolith)* |
 | `TestBase` (direct) | 14 | 31 |
-| `OrleansTestBase<T>` | **12** | **23** |
-| `OrleansSharedTestBase` | **12** | **24** |
+| `OrleansTestBase<T>` | **12** ⁽¹⁾ | **23** |
+| `OrleansSharedTestBase` | **12** | **27** ⁽¹⁾ |
 | `DataValidationTestBase` | 5 | 12 |
 | `TodoDataTestBase` | 2 | *(within Hub)* |
 | *no base at all* | — | **4,048** |
+
+⁽¹⁾ Re-measured by RUNNING the assembly during step 3: `OrleansSharedTestBase` reaches 27 cases,
+not 24, and the `OrleansTestBase<T>` row's twelfth "class" is the non-generic `OrleansTestBase`
+declaration — a base, not a suite. Eleven suites, 23 cases. Both bases together: **23 suites,
+50 cases**. Counting `[Fact]` declarations undercounts; only a run is evidence.
 
 🚨 **The first honest correction: the two bases in scope carry 2,139 of 6,841 cases — 31%.**
 **4,048 cases (59%) inherit no test base at all** — they are plain xunit unit tests that never boot a
@@ -187,6 +192,25 @@ not.** Measured by parsing every class body that transitively reaches each base 
 🚨 **`OrleansTestBase` is not a design, it is a hosting choice.** 20 of 23 subclasses override
 nothing. That is exactly the shape the bootstrap seam replaces: *which mesh do I boot* is a class-level
 parameter, not a second base class.
+
+> ✅ **DONE (step 3).** The two bases are now one, `OrleansMeshTestBase`. **Re-measured while doing
+> it, because two of the numbers above are wrong:** the two bases carry **23 classes / 50 cases**,
+> not 24 / 47 — `OrleansTestBase`'s family is 11 classes / 23 cases (the "12th class" the parser
+> counted is the non-generic `OrleansTestBase` declaration itself, which is a base, not a suite) and
+> `OrleansSharedTestBase`'s is 12 classes / **27** cases, not 24. The whole assembly executes **207**
+> cases, not the 192 the `[Fact]`-counting survey reported. Verdict before and after the conversion:
+> **207 passed / 0 failed**, 30 s → 26 s.
+>
+> 🚨 **And the step as written does not work.** "Convert the subclasses to `Bootstrap =>
+> MeshBootstrap.Orleans(…)`" reads as *make them `MonolithMeshTestBase` subclasses*. They cannot be:
+> a cluster is deployed ASYNCHRONOUSLY, in `InitializeAsync`, whereas `ConfigureMeshBase` — where
+> `Bootstrap.Bootstrap(builder)` is called — runs in the CONSTRUCTOR, before any cluster exists; and
+> 18 of these suites assert on `Cluster` or `SiloServices`, surfaces a base that must not reference
+> Orleans cannot expose. What the seam unifies is the **declaration**, not the boot. So the win is
+> the one the measurement actually supports: the two Orleans bases were the same machinery written
+> twice (deploy, client hub + `AccessContext` + routing registration, tracked teardown), differing
+> in three VALUES — silo configurator, silo count, leased-or-dedicated — and values do not need a
+> second base class.
 
 ### And what is inside `ConfigureMesh`?
 
@@ -513,7 +537,7 @@ it needs exists**.
 |---|---|---|
 | **1** | **Seam to core** (this change): `IMeshBootstrap` + `Bootstrap` virtual, default unchanged. | Every later step can say *which mesh*. Plugins' fork becomes deletable. |
 | **2** | **Delete Plugins' fork**, drop the fallback arms. | Removes the live two-homes hazard before anyone edits either copy. |
-| **3** | **Register the Orleans applicator** in `Hosting.Orleans.TestBase`; convert the 23 Orleans subclasses to `Bootstrap => MeshBootstrap.Orleans(…)`. 20 override nothing, so this is 23 one-line edits. | **`OrleansTestBase` and `OrleansSharedTestBase` are deletable — the first base class actually eliminated**, at 47 cases of risk. |
+| **3** ✅ | **Register the Orleans applicator** in `Hosting.Orleans.TestBase` (a `[ModuleInitializer]`, so the monolith base keeps its zero Orleans references); collapse `OrleansTestBase<T>` + `OrleansSharedTestBase` into **one** `OrleansMeshTestBase` whose cluster is a DECLARATION (`Bootstrap => MeshBootstrap.Orleans(…)` + `SiloConfiguratorType`); convert all 23 core subclasses. | **Done, 50 cases of blast radius, 207/207 green.** The two names remain ONLY as a bridge in `OrleansTestBaseCompat.cs`: MeshWeaver.Plugins derives from them in 11 places and its CI checks this repo out at *main*, unpinned, so deleting them here reds that trunk before its own conversion can land. **Step 3b** is that Plugins PR; **step 3c** deletes the bridge. |
 | **4** | **Substrate bootstraps**: `ClusterProvider`/`StorageProvider` gain a real PostgreSQL/Sqlite/Cosmos path so *"boot the container with this backend enabled"* is expressible. | `Persistence.Test` (99) and the six Plugins `Hosting.*` backend suites stop mocking the substrate. |
 | **5a** | **Wire the shim that is already landed**: `StaticTestRunner` calls `TestContext.Enter`, catches `SkipException`, gains `Outcome.Skipped`, and routes `TestLog` output. One file, no design work. | A gate that can say *skipped* instead of silently never skipping — and the migration idiom (`TestContext.Current.CancellationToken`) starts working. |
 | **5b** | **Generalise `Outcome.NeedsMesh`**: the parameter a hosted case takes becomes a test context carrying the mesh's `IServiceProvider` and hub, alongside `LayoutAreaHost`. Add `WithServices(…)` to `IMeshBootstrap`. | Facilities #2 and #3. Retires the 1,145-site container blocker and the ~50 test-double registrations. |
@@ -525,7 +549,8 @@ it needs exists**.
 | **9** | **Delete `MonolithMeshTestBase`.** | — |
 | **10** | Fold `HubTestBase` (611 cases) into the same shape, or leave it — it is out of the maintainer's scope and boots no mesh. | — |
 
-**Steps 1–3 eliminate one of the two named base classes for 47 cases of blast radius.** That is the
+**Steps 1–3 eliminate one of the two named base classes for 50 cases of blast radius (measured;
+the survey's 47 counted `[Fact]` declarations, not executed cases).** That is the
 whole argument for this ordering: the Orleans half is 2% of the estate and 100% of the second goal,
 and it needs **none** of the five facilities in §6 — the bootstrap seam alone is enough.
 `MonolithMeshTestBase` cannot follow until step 5c is green.

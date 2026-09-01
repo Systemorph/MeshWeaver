@@ -20,7 +20,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Uses standard CreateNodeRequest with nodeType=ApiToken — same satellite pattern
 /// as Thread/Comment. The RLS validator maps ApiToken → Permission.Api.
 /// </summary>
-public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
+public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
     private IMessageHub GetClient([CallerMemberName] string? name = null)
     {

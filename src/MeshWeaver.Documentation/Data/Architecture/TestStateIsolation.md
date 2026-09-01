@@ -133,7 +133,7 @@ Disposing at test end tears down the per-node hub cleanly: the `ActionBlock` com
 
 ```csharp
 public class MyOrleansTest(SharedOrleansFixture fixture, ITestOutputHelper output)
-    : OrleansTestBase(output), IAsyncLifetime
+    : OrleansMeshTestBase(output), IAsyncLifetime
 {
     private readonly List<string> _createdPaths = [];
 

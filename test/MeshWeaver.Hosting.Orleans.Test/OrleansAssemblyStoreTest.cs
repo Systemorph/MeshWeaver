@@ -9,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.TestingHost;
 using Xunit;
+using MeshWeaver.Hosting.Monolith.TestBase;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -22,13 +23,16 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// cross-replica consistency — which is why "status=Ok" on one replica now means the
 /// same thing on every other replica (same hash → same blob → same bytes).
 /// </summary>
-public class OrleansAssemblyStoreTest(ITestOutputHelper output) : OrleansTestBase(output)
+public class OrleansAssemblyStoreTest(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
+    /// <inheritdoc />
+    protected override Type SiloConfiguratorType => typeof(TestSiloConfigurator);
+
     /// <summary>
     /// Two silos so the Put-on-A / TryGet-on-B invariant can actually be exercised —
     /// the base default is 1, which would fail the <c>silos.Count &gt;= 2</c> assertion.
     /// </summary>
-    protected override short InitialSilosCount => 2;
+    protected override IMeshBootstrap Bootstrap => MeshBootstrap.Orleans(o => o.WithSilos(2));
 
     [Fact(Timeout = 30000)]
     public async Task Put_on_one_silo_is_visible_as_TryGet_hit_on_another()

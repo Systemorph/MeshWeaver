@@ -40,8 +40,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// times out at ~30 s. Post-fix: completes in &lt; 5 s.</para>
 /// </summary>
 public class PartitionRootActivationTest(ITestOutputHelper output)
-    : OrleansTestBase<PartitionRootSiloConfigurator>(output)
+    : OrleansMeshTestBase(output)
 {
+    /// <inheritdoc />
+    protected override Type SiloConfiguratorType => typeof(PartitionRootSiloConfigurator);
+
     /// <summary>
     /// Tight budget — pre-fix prod symptom was a 30 s Orleans response timeout
     /// because the grain's <c>_hubReady</c> never completed. Post-fix the

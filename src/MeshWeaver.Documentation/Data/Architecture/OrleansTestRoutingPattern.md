@@ -147,7 +147,7 @@ a useful extra label, not the isolation mechanism.
 For a test that creates a node via the client and then operates on it across the silo boundary:
 
 1. **Fixture setup** — hold the shared backing store as a fixture instance field (above) and configure both silo and client containers to close over it.
-2. **Test hub setup** — use `OrleansTestBase.GetClient(clientId?, userId)`. It is **synchronous** (there is no `GetClientAsync`) and it does the registration for you: `routingService.RegisterStream(client.Address, client.DeliverMessage)` at `client/{clientId}`. Don't target `Fixture.ClientMesh.Address`, whose hub is not the one registered for your test.
+2. **Test hub setup** — use `OrleansMeshTestBase.GetClient(clientId?, userId)`. It is **synchronous** (there is no `GetClientAsync`) and it does the registration for you: `routingService.RegisterStream(client.Address, client.DeliverMessage)` at `client/{clientId}`. Don't target `Fixture.ClientMesh.Address`, whose hub is not the one registered for your test.
 3. **Test message flow** — target every request at the registered hub's address. Responses route back through the memory-stream subscription that the registration created.
 4. **Cross-silo operations** such as `workspace.GetMeshNodeStream(remotePath).Update(…)` work because the silo can resolve the remote path via the shared backing store, and the reply reaches the process-unique cache hub described above.
 
@@ -167,7 +167,7 @@ For a test that creates a node via the client and then operates on it across the
 
 | Production | Test mirror |
 |---|---|
-| Each user circuit's `PortalApplication` creates `portal/{userId}` via `GetHostedHub` + auto-`RegisterStream`. | `OrleansTestBase.GetClient()` creates `client/{clientId}` and `RegisterStream`s it. |
+| Each user circuit's `PortalApplication` creates `portal/{userId}` via `GetHostedHub` + auto-`RegisterStream`. | `OrleansMeshTestBase.GetClient()` creates `client/{clientId}` and `RegisterStream`s it. |
 | All adapter instances (silo PG adapter + portal PG adapter) point at the same PG DB via shared connection string. | All `InMemoryStorageAdapter` instances (silo + client) close over one fixture-owned dictionary. |
 | Silo dispatches portal-bound messages via Orleans memory stream keyed by `portal/{userId}`. | Silo dispatches test-bound responses via the same memory-stream mechanism, since the test hub subscribed at `client/{clientId}`. |
 | Each process's `MeshNodeStreamCache` owns `cache/{meshHubId}`. | Same — silo and client each get their own, so replies cannot cross. |

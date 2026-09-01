@@ -34,7 +34,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// (RED); a surfaced placeholder/exception completes well inside the bound (GREEN). Runs on the real
 /// Orleans routing — the same surface the prod wedge traversed.</para>
 /// </summary>
-public class OrleansUnresolvableAreaNoWedgeTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
+public class OrleansUnresolvableAreaNoWedgeTest(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
     /// <summary>
     /// Subscribing to an UNKNOWN area on a node that HAS a layout (here the seeded <c>TestUser</c> node,

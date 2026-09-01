@@ -19,6 +19,7 @@ using Orleans.TestingHost;
 using Xunit;
 
 using MeshWeaver.Compiler;
+using MeshWeaver.Hosting.Monolith.TestBase;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
@@ -60,8 +61,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// cross-process flow with the actual probe (<see cref="GetCompilationPathRequest"/>).</para>
 /// </summary>
 public class OrleansDynamicCompilationTest(ITestOutputHelper output)
-    : OrleansTestBase<DynamicCompilationSiloConfigurator>(output)
+    : OrleansMeshTestBase(output)
 {
+    /// <inheritdoc />
+    protected override Type SiloConfiguratorType => typeof(DynamicCompilationSiloConfigurator);
+
     /// <summary>
     /// Resolves the silo's <see cref="IMeshService"/> via the in-process
     /// <see cref="InProcessSiloHandle"/> — same pattern used by
@@ -325,9 +329,13 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
 /// <see cref="IAssemblyStore"/>.</para>
 /// </summary>
 public class OrleansCrossSiloCompilationTest(ITestOutputHelper output)
-    : OrleansTestBase<CrossSiloFileSystemSiloConfigurator>(output)
+    : OrleansMeshTestBase(output)
 {
-    protected override short InitialSilosCount => 2;
+    /// <inheritdoc />
+    protected override Type SiloConfiguratorType => typeof(CrossSiloFileSystemSiloConfigurator);
+
+    /// <summary>Two silos: the subject is whether a compiled artifact is visible from BOTH.</summary>
+    protected override IMeshBootstrap Bootstrap => MeshBootstrap.Orleans(o => o.WithSilos(2));
 
     [Fact(Timeout = 60000)]
     public async Task CompiledArtifact_IsVisibleFromBothSilos()
