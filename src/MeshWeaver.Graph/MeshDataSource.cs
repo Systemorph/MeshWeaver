@@ -1742,7 +1742,7 @@ public static class MeshDataSourceExtensions
                                 if (matching?.HubConfiguration == null)
                                     return Observable.Empty<GetDataResponse>();
 
-                                var dummyAddress = new Address($"$schema-probe/{Guid.NewGuid():N}");
+                                var dummyAddress = new Address($"{TransientProbeAddresses.SchemaProbePrefix}{Guid.NewGuid():N}");
                                 // 🚨 AsTransientNodeProbe: built to answer one SchemaReference and
                                 // disposed in the Finally below. It must not install the per-node
                                 // control plane — those watchers would only open `sync/` sub-hubs

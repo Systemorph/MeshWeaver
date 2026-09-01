@@ -2762,7 +2762,7 @@ public class MeshOperations
 
         return ReadFromContentType(
             meshNode.NodeType!,
-            "_schema_validation",
+            TransientProbeAddresses.SchemaValidationProbePrefix,
             (probeHub, typeDefinition) =>
             {
                 var validationError = ValidateAgainst(meshNode, typeDefinition.Type);
@@ -2857,8 +2857,12 @@ public class MeshOperations
     /// probe, not two.</para>
     /// </summary>
     /// <param name="nodeType">NodeType path whose content type is being resolved.</param>
-    /// <param name="addressPrefix">Address prefix for the probe hub — kept distinct per call site
-    /// so a log line still names which path created it.</param>
+    /// <param name="addressPrefix">Address prefix for the probe hub, INCLUDING its trailing
+    /// slash — always one of the <see cref="TransientProbeAddresses"/> constants, never a literal.
+    /// Kept distinct per call site so a log line still names which path created it, and taken from
+    /// the shared constants so <see cref="TransientProbeAddresses.IsProbeAddress"/> stays
+    /// exhaustive: a probe minted under a prefix the predicate does not know is a probe whose
+    /// own-address reads are gated and routed like a real node's (#2894).</param>
     /// <param name="read">Reads the answer off the probe hub. Runs before the probe is disposed.</param>
     /// <param name="skipLogContext">What is being skipped, for the debug log on failure.</param>
     private IObservable<string?> ReadFromContentType(
@@ -2873,7 +2877,7 @@ public class MeshOperations
                 if (hubConfig == null) return null;
                 try
                 {
-                    var probeAddress = new Address($"{addressPrefix}/{Guid.NewGuid():N}");
+                    var probeAddress = new Address($"{addressPrefix}{Guid.NewGuid():N}");
                     // Stamp the NodeType path so a WithContentType reached from this probe records
                     // an EXACT registry entry rather than a bare-name one (see NodeTypePathHolder).
                     // startDataSources: false — this probe reads NOTHING but the type registry,
@@ -2948,7 +2952,7 @@ public class MeshOperations
     internal IObservable<string?> GetContentSchema(string nodeType)
         => ReadFromContentType(
             nodeType,
-            "_schema_lookup",
+            TransientProbeAddresses.SchemaLookupProbePrefix,
             (probeHub, typeDefinition) => GenerateSchema(probeHub, typeDefinition.Type),
             "Schema retrieval");
 
@@ -2965,7 +2969,7 @@ public class MeshOperations
 
         return ReadFromContentType(
             meshNode.NodeType!,
-            "_schema_validation",
+            TransientProbeAddresses.SchemaValidationProbePrefix,
             (_, typeDefinition) => ValidateAgainst(meshNode, typeDefinition.Type),
             "Schema validation");
     }
