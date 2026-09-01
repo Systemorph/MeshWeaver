@@ -17,6 +17,29 @@
 #     that is the intended way to say "not ready", rather than withholding the arm.
 #   * forks are skipped: arming a PR from a fork would let an outside branch merge itself the
 #     moment the required set passes.
+#
+# 🚨🚨 THE ARM CREDENTIAL IS LEAD, NOT TRIM — it decides whether main's push lanes run at all.
+# This lane armed with `secrets.GITHUB_TOKEN` for six hours on 2026-09-01, and the consequence was
+# measured on #2916: GitHub performs an auto-merge as the identity that ARMED it, so the merge
+# landed as `github-actions[bot]` — and a push created with `GITHUB_TOKEN` deliberately does not
+# trigger workflow runs. main's HEAD therefore got NO `push`-event run of anything:
+#
+#   8cc1cc6e  merged by rbuergi (human)   Build and Test ✅  Chart Gate ✅  Hosting Operator ✅
+#   19628536  merged by github-actions[bot]                 (nothing)
+#   b3e6ae65  merged by github-actions[bot]                 (nothing)
+#   04d25efa  merged by github-actions[bot]                 (nothing)
+#   dc6c5a45  merged by github-actions[bot]                 (nothing)
+#
+# No push run ⇒ no `Consolidate test results` on main's HEAD ⇒ `main-cd`'s readiness gate reads
+# `absent/none` and waits, on every tick, forever ⇒ NOTHING IS EVER PROMOTED and every
+# self-updating install stays on the previous image. Four commits' worth of delivery was lost
+# before anyone noticed, because the reconciler cannot tell "CI has not run YET" from "CI will
+# NEVER run" — both read `absent/none`. That is the AGENTS.md skip-trapdoor one level down: a
+# SUPPRESSED TRIGGER renders exactly like a slow one.
+#
+# So the arm runs on a minted GitHub App installation token, whose merges are ordinary pushes that
+# trigger everything. Never put `secrets.GITHUB_TOKEN` back here — see
+# `ArmedMergeMustTriggerMainsPushLanesGuard`, which fails the build if anyone does.
 name: Arm auto-merge
 
 on:
@@ -41,9 +64,57 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # No `if:` on any of the three steps below. They assert and fail; they do not decide whether
+      # to run. The ONE exemption is on the job, and it is a property of the EVENT (draft, fork),
+      # never a question about whether a credential happens to be set — invariant #3.
+      - name: The App credential, or a red run naming what to provision
+        env:
+          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        run: |
+          missing=()
+          [ -n "$MESHWEAVER_APP_ID" ]          || missing+=("secrets.MESHWEAVER_APP_ID           app id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet")
+          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::auto-arm cannot run — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "App credential present."
+
+      # 🚨 `gh pr merge --auto` is the `enablePullRequestAutoMerge` GraphQL mutation, so the token
+      # needs `Pull requests: write`; the merge it later performs needs `Contents: write`. Both are
+      # requested explicitly, so an installation that is missing either fails HERE — loudly, on a
+      # step whose name says what it wanted — rather than degrading to a token that arms fine and
+      # then merges in a way that starts no CI. There is deliberately no fallback: falling back to
+      # `secrets.GITHUB_TOKEN` is precisely the outage this file's header documents.
+      - name: Mint an installation token whose merges actually trigger workflows
+        id: arm-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      # PRESENT is not GRANTED. The mint above fails with a bare "not permitted" when the App is
+      # installed but lacks one of the two permissions, and that message names neither the App nor
+      # the grant — so say it here, where a reader lands. Diagnostics on a failed step, not a gate:
+      # this cannot make a red run green.
+      - name: Name the grant, if the mint could not get it
+        if: failure()
+        run: |
+          echo "::error::could not mint an installation token with Contents:write + PullRequests:write."
+          echo "The meshweaver-cloud App must carry BOTH. Check:"
+          echo "  gh api orgs/${{ github.repository_owner }}/installations --jq '.installations[] | \"\(.app_slug) \(.permissions|tojson)\"'"
+          echo "Grant 'Pull requests: Read and write' in the App's settings, then ACCEPT the new"
+          echo "permission on the org installation — a requested-but-unaccepted permission is not granted."
+
       - name: Arm it
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.arm-token.outputs.token }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |

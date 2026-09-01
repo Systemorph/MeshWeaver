@@ -163,6 +163,49 @@ the target as the tip of *this* repo's `main` through the API and re-check `Cons
 on it. A fork's code can never be the tip of `Systemorph/MeshWeaver`'s `main`, so the safety property
 is preserved by a stronger check rather than by a proxy.
 
+### 🚨 The third state the reconciler cannot see — a SUPPRESSED trigger
+
+The paragraph above distinguishes two readings of an absent conclusion: *running* and *never ran*.
+There is a third, and it is indistinguishable from the second by any amount of polling —
+**the push that would have started CI was suppressed, so the check will never exist.**
+
+GitHub performs an auto-merge as the identity that ARMED it, and **a push created with
+`GITHUB_TOKEN` deliberately does not trigger workflow runs** — the recursion guard that stops
+automation from re-triggering itself. So a lane that arms auto-merge with `secrets.GITHUB_TOKEN`
+produces merges that land normally and start *nothing*: no `MeshWeaver Build and Test`, no
+`Chart Gate`, no `Hosting Operator`. Measured on 2026-09-01 (#2916):
+
+| main commit | merged by | `push`-event runs |
+|---|---|---|
+| `8cc1cc6e` | rbuergi (human) | Build and Test, Chart Gate, Hosting Operator |
+| `19628536` · `b3e6ae65` · `04d25efa` · `dc6c5a45` | `github-actions[bot]` | **none** |
+
+`gh api repos/Systemorph/MeshWeaver/commits/dc6c5a45d/check-runs` answered `0`. The reconciler read
+`absent/none`, correctly declined to publish an untested tree, and waited — for six hours, across
+four commits, while every install stayed on the previous image and every dashboard stayed green.
+
+**This is the skip-trapdoor rule one level down.** `AGENTS.md` warns that GitHub paints a skipped
+job the same colour as a passed one; here a *suppressed trigger* renders exactly like a slow one.
+The absence is the symptom, and absence is the one thing polling cannot age out of, because
+"not yet" and "never" produce byte-identical readings.
+
+**The cure is at the credential, not at the gate.** Do not teach the reconciler to accept weaker
+evidence — the green-tree marker (`refs/ci-green/<tree>/<epoch>`) would let CD publish, but
+`Chart Gate` and `Hosting Operator` would stay silently dead, so that trades one invisible hole for
+two. The merge must simply be performed by an identity whose pushes trigger workflows: a minted
+GitHub App installation token (`actions/create-github-app-token`, requesting
+`permission-contents: write` **and** `permission-pull-requests: write` — arming is the
+`enablePullRequestAutoMerge` mutation, the merge itself writes to the branch). `auto-arm.yml` does
+this, fails RED naming the grant when the App lacks it, and never falls back;
+`ArmedMergeMustTriggerMainsPushLanesGuard` fails the build if anyone reintroduces `GITHUB_TOKEN`
+there.
+
+That guard reads configuration, which is normally the weak shape — deliberately, and the file says
+so. The outcome ("did the merge start main's push lanes?") is unobservable from a pull-request run
+by construction: it can only be seen on main, after the merge, and what you would inspect is
+precisely what is missing. The credential is the only place a pre-merge check can stand, and it is
+causal rather than correlated — with `GITHUB_TOKEN` the trigger is suppressed 100% of the time.
+
 ## The standing trap — verify the IMAGE, never the tick
 
 CD's `workflow_run` trigger reacts to a **real push**, and — more exactly — to one that
