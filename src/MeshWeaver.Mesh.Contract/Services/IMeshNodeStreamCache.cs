@@ -5,6 +5,11 @@ using System.Text.Json;
 // inject the caller hub's JsonSerializerOptions. Tests that exercise the cache contract directly
 // (or fake the interface) need to see these internal members.
 [assembly: InternalsVisibleTo("MeshWeaver.Graph.Test")]
+[assembly: InternalsVisibleTo("MeshWeaver.Graph")]
+[assembly: InternalsVisibleTo("MeshWeaver.Graph.Contract")]
+[assembly: InternalsVisibleTo("MeshWeaver.Compiler")]
+[assembly: InternalsVisibleTo("MeshWeaver.Compiler.Pipeline")]
+[assembly: InternalsVisibleTo("MeshWeaver.Compiler.Test")]
 [assembly: InternalsVisibleTo("MeshWeaver.Query.Test")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith.Test")]
 

@@ -123,12 +123,13 @@ WEIGHTS=$(cat <<'EOF'
 91 MeshWeaver.Data.Test
 76 MeshWeaver.Messaging.Hub.Test
 74 MeshWeaver.PluginTester.Test
-69 MeshWeaver.Graph.Test
+64 MeshWeaver.Graph.Test
 26 MeshWeaver.Layout.Test
 25 Memex.Portal.Shared.Test
 8 MeshWeaver.Hosting.Test
 7 MeshWeaver.ContentCollections.Test
 6 MeshWeaver.Documentation.Test
+5 MeshWeaver.Compiler.Pipeline.Test
 2 MeshWeaver.ContentCollections.Indexing.Test
 2 MeshWeaver.Markdown.Collaboration.Test
 2 MeshWeaver.Portal.E2E.Test

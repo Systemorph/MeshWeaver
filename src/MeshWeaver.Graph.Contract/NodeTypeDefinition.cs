@@ -6,7 +6,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Services.LanguageServer;
 
-using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
@@ -18,7 +17,7 @@ public record NodeTypeDefinition
 {
     /// <summary>
     /// Optional per-type override for the "+"/Create action. When set, the generic
-    /// <see cref="MeshWeaver.Graph.CreateLayoutArea"/> invokes this INSTEAD of building
+    /// <c>CreateLayoutArea</c> invokes this INSTEAD of building
     /// the standard type/name/namespace form and renders whatever control the observable
     /// yields — e.g. a <see cref="RedirectControl"/> to a bespoke composer (Thread opens
     /// the new-chat composer), or a validation/error control that refuses the create. The
@@ -47,7 +46,7 @@ public record NodeTypeDefinition
     /// <summary>
     /// Optional authored markdown home page for a PARTITION-ROOT node whose content is this
     /// NodeTypeDefinition (a plugin-package Space root — e.g. UWDeepfield, whose root's content
-    /// IS the partition-level compile config and therefore cannot be a <see cref="Space"/>).
+    /// IS the partition-level compile config and therefore cannot be a <c>Space</c>).
     /// The Space Overview renders it exactly like <c>Space.Body</c> (recovered in
     /// <c>SpaceLayoutAreas.ResolveSpace</c>'s foreign-typed probe). Declared as a first-class
     /// member so typed round-trips and compile write-backs (<c>with</c>-expressions on this
@@ -238,7 +237,7 @@ public record NodeTypeDefinition
     /// <summary>
     /// Locations of the Code nodes classified as tests for this NodeType. Same
     /// query syntax, <c>name=</c> grouping, and expansion rules as
-    /// <see cref="Sources"/> — see <see cref="CodeQueryResolver"/>. Shown under
+    /// <see cref="Sources"/> — see <c>CodeQueryResolver</c>. Shown under
     /// "Tests" in the NodeType side menu alongside Sources, and compiled together
     /// so tests can reference the NodeType's production code.
     /// </summary>
@@ -496,7 +495,7 @@ public record NodeTypeDefinition
     /// <summary>
     /// A REQUEST to the owning per-NodeType hub: "stamp <see cref="CompiledSources"/> from your own
     /// <see cref="CurrentSourceVersions"/>". Written by
-    /// <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string}, string)"/> when it adopts a prebuilt assembly; consumed —
+    /// <c>PrebuiltAssemblySeeder.Seed</c> when it adopts a prebuilt assembly; consumed —
     /// exactly once — on the owner, which clears it in the same write that applies the stamp.
     ///
     /// <para>🚨 <b>Why the value cannot be written by the adopter</b> (#1834). A bundle's own
@@ -530,7 +529,7 @@ public record NodeTypeDefinition
     /// The source fingerprint the PRODUCER recorded for the adopted bytes — a content hash over
     /// the Code/Test nodes the bundle was compiled from
     /// (<see cref="Mesh.PartitionSourceFingerprint"/>). Written by
-    /// <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string}, string)"/> beside <see cref="RequestedSourceStampAt"/>;
+    /// <c>PrebuiltAssemblySeeder.Seed</c> beside <see cref="RequestedSourceStampAt"/>;
     /// <c>null</c> for a locally-compiled build and for a LEGACY bundle published before producers
     /// recorded one.
     ///
@@ -689,7 +688,7 @@ public record NodeTypeDefinition
 
     /// <summary>
     /// The deployment's installed-MODULE fingerprint the assembly was compiled under —
-    /// <see cref="InstalledModulesFingerprint.Hash"/> (sorted module MVIDs; empty string = no
+    /// <c>InstalledModulesFingerprint.Hash</c> (sorted module MVIDs; empty string = no
     /// modules; null = stamped before the feature, or by a mesh without the fingerprint
     /// registered). Recorded by every successful compile (#1644 step 1) and DECISIVE since
     /// #1664 Slice A: <c>NodeTypeCompilationHelpers.HasUsableBuild</c> invalidates a build

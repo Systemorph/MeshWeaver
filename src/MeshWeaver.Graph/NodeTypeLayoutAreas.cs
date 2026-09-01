@@ -1320,7 +1320,7 @@ public static class NodeTypeLayoutAreas
             ?? Observable.Return(new QueryResultChange<MeshNode>());
         var isUpToDate = host.Workspace.GetMeshNodeStream()
             .CombineLatest(sourcesObs, (ownNode, sources) =>
-                MeshDataSourceExtensions.IsSourcesUpToDate(ownNode.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions), sources.Items))
+                NodeTypeBuildState.IsSourcesUpToDate(ownNode.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions), sources.Items))
             .DistinctUntilChanged();
 
         var releaseButton = (LayoutAreaHost h, RenderingContext rc) => isUpToDate

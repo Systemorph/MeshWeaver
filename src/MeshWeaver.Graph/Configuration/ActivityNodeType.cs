@@ -17,7 +17,7 @@ namespace MeshWeaver.Graph.Configuration;
 public static class ActivityNodeType
 {
     /// <summary>The node-type identifier string for Activity nodes.</summary>
-    public const string NodeType = "Activity";
+    public const string NodeType = GraphNodeTypeNames.Activity;
 
     /// <summary>
     /// Registers the Activity node type on the mesh builder: adds the MeshNode definition,

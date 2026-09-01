@@ -4,7 +4,7 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// How often ONE instance may recycle itself off a compilation overlay for ONE NodeType — the
-/// bound that lets <see cref="NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal"/> keep RE-EVALUATING a
+/// bound that lets <c>NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal</c> keep RE-EVALUATING a
 /// fault card without turning a degraded page into a recycle storm.
 ///
 /// <para><b>Why the watcher cannot bound itself.</b> The self-heal's whole action is to dispose the
