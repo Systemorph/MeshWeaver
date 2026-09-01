@@ -65,9 +65,14 @@ public class MessageService : IMessageService
     /// activation — either shape defeats the counter, in opposite directions). Every ShuttingDown
     /// NACK this service mints for a delivery the reader can re-probe must call this, not inline
     /// its own <c>RuntimeHelpers.GetHashCode</c>.</para>
+    ///
+    /// <para>🚨 …and the rendering itself now lives beside the PARSER
+    /// (<see cref="ShutdownNack"/>), in the contract assembly both riders reference. There are two
+    /// riders — <c>GetMeshNodeOutcome</c>'s paced re-probe loop and <c>JsonSynchronizationStream</c>'s
+    /// recycle re-arm latch — and a marker string written here but read in two other assemblies is
+    /// a silent-drift hazard by construction.</para>
     /// </summary>
-    private string ActivationTag() =>
-        $"activation #{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(hub):X8}";
+    private string ActivationTag() => ShutdownNack.FormatActivationTag(hub);
 
     /// <summary>
     /// The hub tree's handler-side trail for awaited requests (issue #981). Every stage recorded
