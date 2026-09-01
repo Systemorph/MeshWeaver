@@ -153,7 +153,13 @@ public class GateAllowEntrySubjectGuard
         Assert.Equal(2, lanes.Count);
 
         var samples = lanes.Single(l => l.AllowFile.EndsWith("samples-gate.allow", StringComparison.Ordinal));
-        Assert.True(samples.StagedPackages.Count >= 8,
+        // The floor is a NON-VACUITY check on the parse, not an inventory: it catches
+        // StagedPackagesPattern reading its own input as empty or near-empty. It therefore tracks
+        // the staged list and drops when a tree legitimately leaves — Cornerstone moved to
+        // MeshWeaver.Plugins with MeshWeaver.Maps, taking the list from 8 to 7. Lowering it in step
+        // with a deliberate removal is maintenance; lowering it to silence a parse that broke would
+        // be the opposite, which is what the message below is for.
+        Assert.True(samples.StagedPackages.Count >= 7,
             "expected stage-samples-gate.sh to name every staged package; parsed "
             + $"{samples.StagedPackages.Count}. If that script's `for name in …; do` line changed "
             + "shape, teach StagedPackagesPattern rather than letting the parse yield nothing — a "
@@ -161,6 +167,10 @@ public class GateAllowEntrySubjectGuard
         Assert.Contains("FutuRe", samples.StagedPackages);
         Assert.Contains("Northwind", samples.StagedPackages);
         Assert.DoesNotContain("Doc", samples.StagedPackages);
+        // Witnesses that the parse reflects the CURRENT script rather than a remembered one: Doc was
+        // never staged, and Cornerstone was until it moved out. A parse that answered from a stale
+        // copy would still contain it.
+        Assert.DoesNotContain("Cornerstone", samples.StagedPackages);
 
         var tree = Path.Combine(root, samples.TreeRoot);
 
