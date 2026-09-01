@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -36,6 +37,17 @@ namespace MeshWeaver.Graph;
 /// control plane; see <c>MeshOperations.ReadFromContentType</c>, whose probe this mirrors). Cost
 /// is a config build per type, once per process.</para>
 ///
+/// <para>🚨 "No control plane" was aspirational for one watcher until #2990: the Activity Control
+/// Plane is installed by the ADOPTER (<c>KernelContainer</c> and every Activity-shaped NodeType,
+/// from their own <c>WithInitialization</c>), not by <c>MeshDataSource</c>, so every sweep of such
+/// a type wrote an ERROR-level <c>ActivityControlPlane subscription faulted on
+/// content-type-registration/… — re-establishing</c> and armed a re-establish against a hub that
+/// was already gone. The guard now lives at the shared seam
+/// (<c>ActivityControlPlaneExtensions.WatchControlPlane</c>/<c>WatchSubmission</c>) and at the
+/// own-node read seam (<c>MeshNodeStreamHandle.Subscribe</c> answers a probe's own address with an
+/// empty stream), so an adopter cannot reinstate it. See
+/// <c>Doc/Architecture/TransientNodeProbes</c>.</para>
+///
 /// <para>Scope: the <see cref="ContentTypeRegistrationSweep"/> hosted service walks the STATIC
 /// definitions (<c>AddMeshNodes</c>) at start — which is where the measured defect lived: every
 /// commerce content type is a static definition. COMPILED (dynamic) types are deliberately NOT
@@ -67,7 +79,12 @@ public static class ContentTypeRegistration
     {
         try
         {
-            var probeAddress = new Address($"content-type-registration/{Guid.NewGuid():N}");
+            // 🚨 Minted FROM the shared constant, never as a literal: the read seams that answer a
+            // probe's own address directly (MeshNodeStreamCache.GetStreamRaw) key off
+            // TransientProbeAddresses.IsProbeAddress, and a producer whose prefix is not in that
+            // predicate is a producer those guards silently skip (#2894 → #2990).
+            var probeAddress = new Address(
+                $"{TransientProbeAddresses.ContentTypeRegistrationProbePrefix}{Guid.NewGuid():N}");
             var probeHub = meshHub.GetHostedHub(
                 probeAddress,
                 c => hubConfig(c.WithNodeTypePath(nodeTypePath))

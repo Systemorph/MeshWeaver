@@ -158,11 +158,20 @@ Faults are handled by `SubscribeWithReEstablish`, not by a bare log-and-die `OnE
 
 | Fault class | Behaviour |
 |---|---|
+| Own hub tearing down (`HubDisposingException` naming this watcher's own address) | **Terminal, and not an error.** From the first instant of `Dispose` the hub refuses hosted-hub creation, so the own-node stream cannot build its `sync/` sub-hub. The watcher is meant to die with its hub — a fresh activation installs a fresh one. Logged `Debug`; re-establishing here reported routine teardown as a prod `Error` and armed a timer rooted at the hub being collected. |
 | Own-node content cannot be deserialized (`MeshNodeStreamException` / `Deserialization`) | **Terminal.** The faulted stream would replay the same poisoned emission, so re-establishing is a 1 Hz poison loop. Logged `Critical` and surfaced through the optional `onPoisonedContent` sink; the watcher stays down until the content is repaired and the hub re-activates. |
 | Own node gone (routing `NotFound`) | **Terminal.** Re-subscribing re-issues a doomed cross-hub `SubscribeRequest` forever — the 2026-06-10 prod storm. Logged and stopped; the orphaned hub idle-disposes. |
 | Anything else | **Transient** — re-establish with a fresh subscription after ~1 s. |
 
 Faults log to the optional `ILogger` argument (or the `MeshWeaver.ActivityControlPlane` log category) so a broken control plane never disappears silently.
+
+> 🚨 **`WatchControlPlane` and `WatchSubmission` install nothing on a transient node probe.** A probe
+> hub applies a NodeType's instance configuration purely so the configuration is *built*, and is
+> disposed in the same breath — it has no mesh node, so a watcher of its own node has nothing to
+> observe and nothing to re-establish. Because the ACP is installed by the *adopter* (from its own
+> `WithInitialization`), the guard has to live at this shared seam rather than in each adopter: see
+> [Transient Node Probes](/Doc/Architecture/TransientNodeProbes) for the boot-time `Error` line this
+> removed and why the cure is not-installing rather than a quieter log level.
 
 ---
 
@@ -744,6 +753,8 @@ observation*, not a lock — fix the observer, don't bump the timeout.
 
 - [Request via Stream Update](/Doc/Architecture/RequestViaStreamUpdate) — the general rule this page
   is the activity-shaped instance of.
+- [Transient Node Probes](/Doc/Architecture/TransientNodeProbes) — the throwaway hubs this watcher is
+  deliberately not installed on, and the three own-address read seams that answer directly.
 - [Logon Actions](/Doc/Architecture/LogonActions) — per-user work at logon. Its run-once ledger is the
   same **claim-before-you-mutate** shape as the `Idle → StartingExecution` flip above, with the
   ledger key as the claim: the guard lives *inside* the update lambda so a rebased patch re-reads it

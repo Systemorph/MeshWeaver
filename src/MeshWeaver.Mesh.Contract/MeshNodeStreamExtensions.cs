@@ -387,6 +387,37 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     {
         try
         {
+            // ♻️ A TRANSIENT NODE PROBE HAS NO MESH NODE — so its OWN-node stream is EMPTY, and
+            // that is the truthful answer rather than a failure. This is the THIRD own-node read
+            // seam and the last one that was not saying it: `GetMeshNodeOutcome` answers a probe's
+            // own address `Absent` (#2468) and `MeshNodeStreamCache.GetStreamRaw` answers an empty
+            // stream (#2894); this one — the reduce-backed own-node stream every own-node WATCHER
+            // subscribes to — threw instead.
+            //
+            // What it threw was `InvalidOperationException("Failed to create stream")`, from
+            // `Workspace.ReduceLocalStream`: the probe is built `startDataSources: false`, so the
+            // own-MeshNode reduce has no started data source to reduce from and `ReduceStream`
+            // returns null. Watchers installed by a NodeType's own HubConfiguration —
+            // `WatchControlPlane` on every Activity-shaped type, `BuildNodeType`'s claim arbiter —
+            // then reported that as a TRANSIENT fault (a bare InvalidOperationException matches
+            // none of `SubscribeWithReEstablish`'s three terminal classifiers) and armed a 1 s
+            // re-establish against a hub that was already disposing: an ERROR-level line per swept
+            // NodeType on every mesh start, about a non-event. Where the reduce DID succeed the
+            // cost was the other face — `SynchronizationStream`'s constructor opening a `sync/`
+            // sub-hub into the probe's own disposal, the `ProbeHubCostTest` warning
+            // `startDataSources: false` exists to remove. Systemorph/MeshWeaver#2990.
+            //
+            // Completing empty is not a swallow: there is no node at a probe's synthetic address
+            // and there never will be (see TransientProbeAddresses), so a reader learns exactly
+            // what is true, immediately, instead of a diagnosis that names no reference and no
+            // owner. Scoped to the probe's OWN address — a probe reading any REAL path is
+            // untouched, and so is every write (Update never routes through AcquireStream).
+            if (IsOwn && _workspace.Hub.Configuration.Get<TransientNodeProbe>() is not null)
+            {
+                observer.OnCompleted();
+                return Disposable.Empty;
+            }
+
             var typedObserver = new TypedContentObserver(observer, _jsonOptions, _contentTypeRegistry);
             // 🚨 Cross-hub reads route through IMeshNodeStreamCache (when one is
             // registered): one shared process-wide upstream subscription per
