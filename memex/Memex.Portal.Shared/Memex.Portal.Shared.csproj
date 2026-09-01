@@ -44,7 +44,6 @@
          recurred here the moment the map packs left, and
          FrameworkBuildIdentityTest.CanonicalContentSurface_IsRecordedByEverySurfaceManifestHost
          is what caught it. No portal code uses these types — the reference IS the point. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Maps\MeshWeaver.Maps.csproj" />
     <!-- MeshWeaver.Blazor.EntityViews is deliberately NOT referenced (the Analysis/#1974 shape):
          it ships via the registry as a module, its EntityViewsViewPackModuleAttribute registers
          the views when the DLL is listed under Modules:Assemblies, and Modules:Required declares
@@ -91,8 +90,6 @@
     <!-- Content → vector index (core tech): chunk/embed/store on a separate Postgres vector DB,
          per-file Document nodes, chunk-search autocomplete. Inert unless ConnectionStrings:contentindex
          + embeddings are configured (so the monolith compiles it but never activates it). -->
-    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing\MeshWeaver.ContentCollections.Indexing.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing.Graph\MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
     <!-- MeshWeaver.ContentCollections.Indexing.PostgreSql is deliberately NOT referenced (#1644
          step 2): it ships via the modules/<Name>/ closure layout in MeshModulesPublish.targets
          and activates via Modules:Assemblies -> PostgresContentIndexingModuleAttribute (which
