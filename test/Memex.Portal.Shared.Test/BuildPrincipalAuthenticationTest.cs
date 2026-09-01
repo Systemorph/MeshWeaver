@@ -259,9 +259,21 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
             service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await());
         Assert.Equal(2, reads);
 
+        // 🚨 A ROTATION ARRIVING WHILE THE CACHE IS EMPTY. The fault above evicted the promise, so
+        // this refresh has nothing to replace — and must still start a real read rather than letting
+        // a null observable escape into the authenticator's SelectMany, where the failure would
+        // surface far from its cause (Copilot review, PR #2988).
         fail = false;
+        var afterFault = await service
+            .Refresh(new GitHubSigningKeys(
+                new Dictionary<string, GitHubSigningKey>(), now - TimeSpan.FromHours(1)), now)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        Assert.Single(afterFault.ByKeyId);
+        Assert.Equal(3, reads);
+
         var first = await service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         Assert.Single(first.ByKeyId);
+        // …and it was SHARED with the refresh above rather than starting a round trip of its own.
         Assert.Equal(3, reads);
 
         // A success is shared: a second caller inside the window costs no round trip.
