@@ -919,6 +919,14 @@ public class Workspace : IWorkspace
                 .Remove(new KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>(key, entry));
     }
 
+    /// <summary>
+    /// 🚨 The failure NAMES the reference and the owning hub. It used to throw a bare
+    /// <c>InvalidOperationException("Failed to create stream")</c> — no reference, no owner, no
+    /// inner cause — and that is exactly why three deliberate fault classifiers in
+    /// <c>SubscribeWithReEstablish</c> all missed it and reported a routine boot-time probe as a
+    /// transient prod ERROR (Systemorph/MeshWeaver#2990). A diagnostic that cannot be classified
+    /// costs more than the line it saves.
+    /// </summary>
     private ISynchronizationStream<TReduced> ReduceLocalStream<TReduced>(
         WorkspaceReference<TReduced> reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration)
@@ -926,7 +934,10 @@ public class Workspace : IWorkspace
                this,
                reference,
                configuration
-           ) ?? throw new InvalidOperationException("Failed to create stream");
+           ) ?? throw new InvalidOperationException(
+               $"Failed to create stream for {reference} on {Hub.Address}: the workspace's "
+               + $"ReduceManager has no reducer producing {typeof(TReduced).Name} from this "
+               + "reference, or the data source it would reduce from has not been started.");
 
     /// <inheritdoc />
     public ISynchronizationStream<EntityStore> GetStream(params Type[] types)

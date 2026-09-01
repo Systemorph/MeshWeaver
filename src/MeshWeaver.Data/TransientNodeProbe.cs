@@ -84,6 +84,20 @@ public static class TransientProbeAddresses
     public const string SchemaLookupProbePrefix = "_schema_lookup/";
 
     /// <summary>
+    /// Prefix of the boot-time content-type registration probe's address —
+    /// <c>ContentTypeRegistration.ProbeRegister</c> (MeshWeaver.Graph).
+    ///
+    /// <para>🚨 That producer minted the literal itself, which is precisely the drift this class
+    /// exists to prevent: it is a transient probe by every other measure — same
+    /// <c>AsTransientNodeProbe</c> marker, same create-and-dispose-in-one-breath lifetime, same
+    /// impossibility of ever carrying a node — yet <see cref="IsProbeAddress"/> did not recognise
+    /// it, so the one guard keyed off the ADDRESS rather than the configuration marker
+    /// (<c>MeshNodeStreamCache.GetStreamRaw</c>, #2894) silently did not fire for it. Added with
+    /// Systemorph/MeshWeaver#2990.</para>
+    /// </summary>
+    public const string ContentTypeRegistrationProbePrefix = "content-type-registration/";
+
+    /// <summary>
     /// True when <paramref name="path"/> is a transient probe hub's own synthetic address — a
     /// path that is not, and can never become, a mesh node.
     /// </summary>
@@ -94,5 +108,6 @@ public static class TransientProbeAddresses
            && (path.StartsWith(ModelProbePrefix, StringComparison.Ordinal)
                || path.StartsWith(SchemaProbePrefix, StringComparison.Ordinal)
                || path.StartsWith(SchemaValidationProbePrefix, StringComparison.Ordinal)
-               || path.StartsWith(SchemaLookupProbePrefix, StringComparison.Ordinal));
+               || path.StartsWith(SchemaLookupProbePrefix, StringComparison.Ordinal)
+               || path.StartsWith(ContentTypeRegistrationProbePrefix, StringComparison.Ordinal));
 }

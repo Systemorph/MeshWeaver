@@ -68,6 +68,9 @@ public static class ActivityControlPlaneExtensions
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.ActivityControlPlane");
 
+        if (SkipOnTransientProbe(hub, logger, "ActivityControlPlane subscription") is { } inert)
+            return inert;
+
         var workspace = hub.GetWorkspace();
 
         // Self-healing: a faulted control-plane subscription must NOT leave the
@@ -137,6 +140,9 @@ public static class ActivityControlPlaneExtensions
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.JobOrchestration");
 
+        if (SkipOnTransientProbe(hub, logger, "Submission watcher") is { } inert)
+            return inert;
+
         // Atomic single-flight guard. The upstream `GetMeshNodeStream` can emit
         // multiple distinct fingerprints before any single dispatch's async
         // commit (CreateNodeRequest + workspace.Update) has landed; without
@@ -176,6 +182,60 @@ public static class ActivityControlPlaneExtensions
             // Release the single-flight guard a faulted in-flight dispatch may have
             // left set, so the re-established watcher can dispatch.
             onTransientFault: () => System.Threading.Interlocked.Exchange(ref dispatching, 0));
+    }
+
+    /// <summary>
+    /// 🚨 <b>A TRANSIENT NODE PROBE HAS NO MESH NODE, so it must not run the node control
+    /// plane.</b> Returns an inert disposable when <paramref name="hub"/> is such a probe, and
+    /// <c>null</c> — meaning "carry on and install the watcher" — for every real hub.
+    ///
+    /// <para>A probe hub (<c>content-type-registration/{guid}</c>, <c>$model-probe/{guid}</c>,
+    /// <c>$schema-probe/{guid}</c>, …) exists so a NodeType's HubConfiguration can be BUILT —
+    /// registering its content type / snapshotting its type registry is the build's side effect —
+    /// and is disposed in the same breath. <c>AsTransientNodeProbe</c> states the contract
+    /// outright, and <c>MeshDataSource.SubscribeToOwnDeletionInit</c> already honours it for the
+    /// per-node watchers it installs. The Activity Control Plane is the one watcher that did not:
+    /// it is installed by the ADOPTER (<c>KernelContainer</c> and every Activity-shaped NodeType)
+    /// from its own <c>WithInitialization</c>, so a guard placed per-adopter is a guard the next
+    /// adopter will not have. It belongs here, at the seam they all go through.</para>
+    ///
+    /// <para><b>What it cost.</b> Every mesh start wrote one ERROR-level line per swept
+    /// Activity-shaped NodeType — <c>ActivityControlPlane subscription faulted on
+    /// content-type-registration/… — re-establishing</c>, carrying a bare
+    /// <c>InvalidOperationException("Failed to create stream")</c> — because the probe's own-node
+    /// reduce has no started data source to reduce from. <c>Information</c> and above ships to
+    /// Loki and <c>Error</c> is what operators alert on, so this was a per-boot false alarm about
+    /// a non-event. The classifier below could not save it: the three terminal branches test for
+    /// <c>HubDisposingException</c>, a deserialization <c>MeshNodeStreamException</c> and a
+    /// routing <c>NotFound</c>, and a causeless <c>InvalidOperationException</c> matches none, so
+    /// it fell through to "genuinely transient" — <c>LogError</c> plus a 1 s re-establish timer
+    /// armed against a hub that is already being disposed (the #991 TimerQueue-root shape, whose
+    /// only current safety is the ordering accident that <c>RegisterForDisposal</c> disposes a late
+    /// registrant immediately). A NodeType that also declares a content type got one step further
+    /// and opened a <c>sync/</c> sub-hub into the probe's own disposal instead — the
+    /// <c>ProbeHubCostTest</c> warning <c>startDataSources: false</c> exists to remove. One root,
+    /// two faces. Systemorph/MeshWeaver#2990.</para>
+    ///
+    /// <para>🚨 <b>Not a classification change.</b> "Transient" keeps meaning exactly what it
+    /// meant — <i>the node is alive and will come back</i>. The cure is that the watcher is never
+    /// installed on a hub for which that can never be true, not that its fault is reported more
+    /// quietly.</para>
+    /// </summary>
+    /// <param name="hub">The hub a watcher is about to be installed on.</param>
+    /// <param name="logger">Optional logger; the skip is recorded at Debug.</param>
+    /// <param name="context">Short name of the watcher, for the Debug line.</param>
+    /// <returns>An inert <see cref="IDisposable"/> to hand back to the caller when the hub is a
+    /// transient probe; <c>null</c> when the watcher must be installed normally.</returns>
+    private static IDisposable? SkipOnTransientProbe(IMessageHub hub, ILogger? logger, string context)
+    {
+        if (hub.Configuration.Get<TransientNodeProbe>() is null)
+            return null;
+
+        logger?.LogDebug(
+            "{Context} not installed on {Address}: a transient node probe has no mesh node, so a "
+            + "watcher of its own node has nothing to observe and nothing to re-establish (#2990)",
+            context, hub.Address);
+        return System.Reactive.Disposables.Disposable.Empty;
     }
 
     /// <summary>
