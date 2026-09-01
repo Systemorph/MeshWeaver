@@ -58,8 +58,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 19 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 19 (16 commands + run.sh + _common.sh + _audit.jq)."
+          if [ "$tracked" -lt 20 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 20 (17 commands + run.sh + _common.sh + _audit.jq)."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -121,7 +121,41 @@ jobs:
             echo "::error::A missing one fails INSIDE a running lifecycle Job — for a teardown, after the quiesce."
             exit 1
           fi
-          echo "all 16 commands present and executable"
+          echo "all $(grep -c . "$plan_src") plan commands present and executable"
+
+          # 🚨 THE REVERSE DIRECTION, and it is the half that actually rots.
+          #
+          # The check above asks "does every command the plan names exist?" — it can only fail when
+          # someone deletes a script. It is structurally blind to the opposite drift: a script that
+          # SHIPS in the image while no plan entry names it. That one is silent, because a list
+          # nobody compares against its subject simply stops describing it, and the gate goes on
+          # passing while its coverage narrows. Measured on 2026-09-01: `hosting-kv-rotate` had
+          # shipped, had zero behaviour tests, and was absent from the list above — so nothing in CI
+          # knew it existed.
+          #
+          # So every hosting-* that ships must be EITHER claimed by the plan above OR named here,
+          # deliberately, with the reason it is not yet wired. Adding a script without touching one
+          # of the two lists is now a red build rather than an unnoticed hole.
+          not_wired=$(mktemp)
+          cat > "$not_wired" <<'EOF'
+          # command                  why it ships without a plan entry
+          hosting-kv-rotate          its RotateRegistryKey verb lives in MeshWeaver.Plugins and is not emitted yet
+          EOF
+          unclaimed=()
+          for path in deploy/aks/operator/bin/hosting-*; do
+            cmd="${path##*/}"
+            grep -qx "$cmd" "$plan_src" && continue
+            grep -qE "^${cmd}([[:space:]]|$)" "$not_wired" && continue
+            unclaimed+=("$cmd")
+          done
+          if [ ${#unclaimed[@]} -gt 0 ]; then
+            echo "::error::these operator commands ship but no plan entry names them: ${unclaimed[*]}"
+            echo "::error::Either add each to the plan list above (and keep MeshWeaver.Plugins' InstanceActionPlan.cs in step),"
+            echo "::error::or declare it in the not-yet-wired list with the reason. A shipped command nobody claims is"
+            echo "::error::untested and unreachable, and nothing else in CI will say so."
+            exit 1
+          fi
+          echo "every shipped hosting-* command is either claimed by the plan or declared not-yet-wired"
           # hosting-audit is two files: the command and the jq program beside it. A command that
           # ships without its detection dies at "the detection program … is missing" inside a Job.
           [ -f deploy/aks/operator/bin/_audit.jq ] || { echo "::error::bin/_audit.jq is missing — hosting-audit cannot compute anything without it"; exit 1; }
