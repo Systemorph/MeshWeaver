@@ -24,9 +24,10 @@ namespace MeshWeaver.Documentation.Test;
 /// <c>OwnerUnreachable</c>. The literal sat at exactly the value that destroys the most
 /// information.</para>
 ///
-/// <para><b>Why a ratchet and not zero.</b> There are ~1,468 of these across the test tree in 287
-/// files; converting them is a long tail, and a guard that cannot pass today would simply be
-/// disabled. So the count may only ever go DOWN. 🚨 <b>Raising <see cref="Baseline"/> is not a fix
+/// <para><b>Why a ratchet and not zero.</b> There are ~401 of these across core's test tree
+/// (~1,468 in 287 files before 17 suites moved to MeshWeaver.Plugins, #2276); converting them is a
+/// long tail, and a guard that cannot pass today would simply be disabled. So the count may only
+/// ever go DOWN. 🚨 <b>Raising <see cref="Baseline"/> is not a fix
 /// — it is the defect.</b> If this fails, convert the sites you added rather than re-seeding: the
 /// number is in the diff precisely so that re-seeding is visible to a reviewer.</para>
 ///
@@ -62,20 +63,32 @@ public class TestTimeoutLiteralRatchetGuard
     ];
 
     /// <summary>
-    /// 🚨 Seeded from the tree on 2026-08-30, when it held <b>1470</b>. MAY ONLY DECREASE.
+    /// 🚨 Seeded from the tree on 2026-08-30 at <b>1490</b> (tree: 1470). MAY ONLY DECREASE.
     ///
-    /// <para><b>Why it is not seeded at exactly 1470.</b> The tree gained 4 literals in the hour
-    /// this guard was written — several sessions merge in parallel, and a PR already in flight
-    /// cannot know about a ratchet that did not exist when it was branched. A zero-slack baseline
-    /// would therefore red <c>main</c> for everyone within the hour, punishing authors for a rule
-    /// that post-dates their branch. The ~20 of headroom is a TRANSITIONAL allowance for exactly
-    /// that, and it is the only reason this number exceeds the tree.</para>
+    /// <para><b>2026-08-30 — lowered 1490 → 401 by SUBTRACTION, not by conversion.</b> Seventeen
+    /// test suites migrated to MeshWeaver.Plugins (#2276) and core stopped building them, so the
+    /// scanned tree lost ~1,069 literals in one commit without a single site being converted. The
+    /// number moved because the TREE shrank, not because the guard was wrong — and the literals
+    /// are not gone, they are being ratcheted in the repo that now owns them. Measured by running
+    /// this guard against the post-deletion tree with the baseline temporarily at 0 and reading
+    /// the count back out of the failure.</para>
+    ///
+    /// <para>The original seed carried ~20 of transitional headroom over the tree, for PRs already
+    /// in flight when the guard was written. That allowance is spent: this seed is EXACT, because
+    /// the deletion is not a change any in-flight branch could collide with.</para>
     ///
     /// <para>🚨 It is not a budget to spend. <see cref="TheBaselineStaysCloseToTheTree"/> caps the
     /// slack, so the allowance cannot quietly become permanent; the correct next edit to this
     /// number is DOWNWARD, in whichever change first converts a batch.</para>
+    ///
+    /// <para><b>2026-09-01 — 387 → 386 by CONVERSION.</b> <c>EditorTest.TestEditorWithDelayed</c>
+    /// waited on five sequential remote round-trips behind a literal <c>30.Seconds()</c> and failed
+    /// on MeshWeaver#2994 shard 5 with "the observable emitted nothing at all" — the anonymous
+    /// failure this guard's message predicts verbatim, at exactly 30 s. Converted to
+    /// <c>TestTimeouts.Convergence</c>. This is what a downward edit looks like: one site cured, one
+    /// off the count.</para>
     /// </summary>
-    private const int Baseline = 1490;
+    private const int Baseline = 386;
 
     [Fact]
     public void TheHandWrittenTimeoutCountOnlyEverGoesDown()

@@ -32,6 +32,14 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class AppIconAdoptionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>
+    /// One mesh for this class instead of one per case — the collection-scoped lifetime from
+    /// Doc/Architecture/CollectionScopedTestFixtures. These cases only READ adoption behaviour off
+    /// records they build themselves, so they neither depend on a pristine mesh nor leave one
+    /// behind; measured green 20/20 shared before this was turned on.
+    /// </summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private const string Generic = "/static/NodeTypeIcons/puzzlepiece.svg";
     private const string Real = "/static/NodeTypeIcons/chess.svg";
 

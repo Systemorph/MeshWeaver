@@ -94,7 +94,7 @@ Before writing a test, review the invariants every test must respect:
 > Listing children, counting matches, "namespace is empty" — all legitimate uses of `Query`. Reading a specific node's *content* is not.
 
 > **Rule 5 — No mocking of core services.**
-> Never mock `IMessageHub`, `IMeshService`, or `IMeshStorage`. Inherit `MonolithMeshTestBase` or `OrleansTestBase` and run the real services. A mock that passes while production is broken is worse than no test.
+> Never mock `IMessageHub`, `IMeshService`, or `IMeshStorage`. Inherit `MonolithMeshTestBase` or `OrleansMeshTestBase` and run the real services. A mock that passes while production is broken is worse than no test.
 
 > **Rule 6 — Let failures propagate.**
 > Timeouts, cancellations, and delivery failures are real test failures — the reactive assertion surface exposes them for you. Never wrap a read in `try { … } catch { return null; }`; that silently turns a flaky bug into a green-but-lying test. To assert an *expected* error, use `.Materialize()` (see below) rather than a swallowing `catch`.
@@ -160,7 +160,7 @@ public class MyFeatureTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
 - **`ReadNode(path)`** — the CQRS-correct single-node read, returning `IObservable<MeshNode?>`.
 - **Clean teardown** — the mesh is disposed after every test.
 
-`OrleansTestBase` (in `test/MeshWeaver.Hosting.Orleans.Test`) offers the same shape for distributed tests on an Orleans TestCluster.
+`OrleansMeshTestBase` (in `test/MeshWeaver.Hosting.Orleans.TestBase`) offers the same shape for distributed tests on an Orleans TestCluster. It is the ONE Orleans base: which cluster a suite gets is a DECLARATION on the class (`protected override IMeshBootstrap Bootstrap => MeshBootstrap.Orleans(o => o.WithSilos(2));` and `SiloConfiguratorType`), not a choice of base class. The retired `OrleansTestBase<T>` / `OrleansSharedTestBase` survive only as a cross-repo bridge; do not derive from them.
 
 > **Cold observables: `.Should()` is the subscribe.**
 > `NodeFactory.CreateNode(...)`, `UpdateNode`, `DeleteNode`, and `hub.Observe(...)` are **cold** — the side effect (the write, the request dispatch) runs on subscribe, not on call. `await ….Should().Emit()` subscribes, performs the work, and waits for it to land. A bare `NodeFactory.CreateNode(node);` with no `.Should()` / `.Subscribe()` does nothing at all — and an **un-awaited** `.Should().Emit()` subscribes but does not wait, which is just as wrong.
@@ -383,7 +383,7 @@ config.TypeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference
 return config.AddLayoutClient();   // GetDataRequest/Response + sub/unsub
 ```
 
-The shared `OrleansTestBase` exposes a synchronous `GetClient(clientId?, userId)` that wires this up (it calls `routingService.RegisterStream(client.Address, client.DeliverMessage)`) — there is **no** async client-acquisition; the test calls `GetClient()` directly. Symptom of a missing registration: `await client.Observe(GetDataRequest(...)).Should().Emit()` never emits and the assertion times out.
+The shared `OrleansMeshTestBase` exposes a synchronous `GetClient(clientId?, userId)` that wires this up (it calls `routingService.RegisterStream(client.Address, client.DeliverMessage)`) — there is **no** async client-acquisition; the test calls `GetClient()` directly. Symptom of a missing registration: `await client.Observe(GetDataRequest(...)).Should().Emit()` never emits and the assertion times out.
 
 ---
 
@@ -406,7 +406,7 @@ the Orleans suite the day this landed: **3 clusters booted instead of one per cl
   attribute in a referenced base library registers nothing, silently: the pool then never
   engages and every class quietly boots its own cluster again. The pool prints a one-line
   receipt (`OrleansMeshPool: N cluster(s) booted`) so an inactive pool is visible, not inferred.
-* `OrleansSharedTestBase` **leases** a running cluster (take-or-create, never wait — a waiting
+* `OrleansMeshTestBase` **leases** a running cluster (take-or-create, never wait — a waiting
   gate would be the hand-woven primitive `test/` forbids; the runner's own class-parallelism cap
   bounds the pool). The lease is exclusive; on class teardown the cluster returns to the pool.
 * **Isolation is by construction, not by process**: the seeded node repo is static and

@@ -288,6 +288,15 @@ to evaluate instead. A check there would be a guess; the combo run is an answer.
    available". Writes go through `UpdatePolicyNodeType.RecordVerification` (stream.Update, upsert
    by tag, bounded).
 
+5. **HONOUR the verdict in the roll decision — WIRED.** Recording a verdict that nothing consults
+   would leave the settings tab showing real answers while the instance rolled regardless, which
+   looks even more like a working gate than an empty one. `ComboVerificationGate` folds the verdict
+   into the self-update decision: **Red REFUSES the roll** (a hold naming every failing module),
+   **Green clears it**, and **NotVerifiable is neither** — it grants no clearance and takes no
+   refusal, and the check verdict says the roll was taken UNVERIFIED. See
+   [Combo Gate Wiring](/Doc/Architecture/ComboGateWiring) for the full decision table, the
+   producer/consumer split, and why "could not find out" must not fail closed here.
+
 #### Running the gate for one instance × one candidate
 
 ```bash
@@ -305,6 +314,8 @@ GITHUB_TOKEN=… mw-combo-verify combo.json meshweaver.azurecr.io/memex-portal-a
 # 3. Land the verdict where the instance's admins look: combo-verdict.json is a
 #    ComboVerification — merge it into Admin/UpdatePolicy → content.comboVerifications
 #    (upsert by candidateTag), e.g. via the meshweaver MCP: get → merge → patch.
+#    🚨 This is no longer only a report: the instance's next update check CONSULTS it, so a Red
+#    landed here REFUSES the roll (Doc/Architecture/ComboGateWiring).
 ```
 
 The verify job itself holds no portal credential — reading the combo (step 1) and landing the

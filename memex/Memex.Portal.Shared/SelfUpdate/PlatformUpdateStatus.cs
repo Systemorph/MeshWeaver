@@ -4,6 +4,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Hosting.SelfUpdate;
 
@@ -24,9 +25,11 @@ public enum PlatformUpdateAvailability
     UpdateAvailable,
 
     /// <summary>
-    /// A newer build exists but the release-availability gate (#1754) is HOLDING it: a package this
-    /// deployment runs has no usable artifact for that release. <see cref="PlatformUpdateStatus.LatestVersion"/>
-    /// still names the build.
+    /// A newer build exists but a gate is HOLDING it: the release-availability gate (#1754) found a
+    /// package this deployment runs with no usable artifact for that release, or the COMBO gate
+    /// (#2274) recorded a <see cref="ComboVerdictKind.Red"/> verdict — that image cannot serve the
+    /// modules this instance has landed. <see cref="PlatformUpdateStatus.LatestVersion"/> still
+    /// names the build.
     ///
     /// <para>🚨 This state exists so a hold cannot be silent. Rendering a held update as
     /// "update available" would leave an install looking normal while it never moves; rendering it
@@ -78,13 +81,27 @@ public record PlatformUpdateStatus(PlatformUpdateAvailability Availability, stri
     {
         var latest = policy.LatestAvailableTag;
         if (!string.IsNullOrEmpty(latest) && VersionSelect.IsNewer(latest, runningVersion))
+        {
             // A held update is still an available one — but saying only "available" about a build
             // this install has refused would make an indefinitely-frozen deployment look healthy.
+            //
+            // 🚨 BOTH refusals count. The availability hold is a poller BOOKKEEPING field, so a
+            // combo Red that blocked the roll before the hold write landed — or on a tick whose
+            // hold write failed — would otherwise render as an unqualified "update available"
+            // forever. The recorded verdict is the fact; IsHeld is the poller's note about it, and
+            // reading only the note is how a control ends up covering the empty state alone.
+            //
+            // 🚨 Red ONLY. A NotVerifiable verdict is not a hold: nothing refused that build, so
+            // rendering it as held would tell an operator to go fix an incompatibility that was
+            // never diagnosed. The Updates settings tab renders that state on its own terms.
+            var blocked = policy.VerificationFor(latest)?.Verdict == ComboVerdictKind.Red;
             return new(
-                policy.IsHeld(latest)
+                policy.IsHeld(latest) || blocked
                     ? PlatformUpdateAvailability.UpdateHeld
                     : PlatformUpdateAvailability.UpdateAvailable,
                 latest);
+        }
+
         return policy.Policy == UpdatePolicyKind.None
             ? Unknown
             : new(PlatformUpdateAvailability.UpToDate, null);

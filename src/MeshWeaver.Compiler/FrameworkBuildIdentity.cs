@@ -120,19 +120,37 @@ public static class FrameworkBuildIdentity
         // referencing AI types compiles wherever the AI module is installed (the bake host lands
         // it too), and an image shipping AI.dll in its app closure would 409 the registry module.
         "MeshWeaver.Compiler",
+        // The mesh-actor half of the compile pipeline, factored out of MeshWeaver.Graph. It is
+        // surface-hashed here rather than being part of MeshWeaver.Compiler, because MeshWeaver.
+        // Compiler is a full-MVID toolchain ROOT: folding the platform's highest-churn code into
+        // it would re-bake every NodeType on every mesh on every pipeline commit — exactly the
+        // property #1707 created the small toolchain assembly to get.
+        "MeshWeaver.Compiler.Pipeline",
         "MeshWeaver.ContentCollections",
-        "MeshWeaver.ContentCollections.Indexing",
-        "MeshWeaver.ContentCollections.Indexing.Graph",
+        // MeshWeaver.Maps left the content surface with them: MapControl is the Maps MODULE now,
+        // pre-installed so every portal still lands it, and the one gated tree that binds it
+        // (Cornerstone) moved to the plugins repo as a Store package that REQUIRES Maps — the
+        // "in-mesh content travels with the module" rule, applied.
+        // MeshWeaver.ContentCollections.Indexing and .Indexing.Graph left the content surface
+        // with the indexing carve-out, for the same reason MeshWeaver.Markdown.Collaboration did
+        // below: the chunking/embedding pipeline is the Indexing MODULE now, composed into
+        // content compiles per-mesh via CompileReferences.ComposeWithModules — never part of the
+        // framework identity. No in-mesh content binds it (verified across every gated sample
+        // tree); DocumentPaths, the one type the platform still needs, kept its namespace and
+        // moved to MeshWeaver.Mesh.Contract, which both remaining consumers already reference.
         "MeshWeaver.Data",
         "MeshWeaver.Data.Contract",
         "MeshWeaver.Domain",
         "MeshWeaver.GitSync",
         "MeshWeaver.Graph",
+        // The vocabulary the graph model and the compile pipeline share (NodeTypeDefinition,
+        // NodeSources' inputs, BuildState, NodeTypeRelease, ServedBuildIdentity, the synced-query
+        // helpers). Owned by neither half, so neither can close a cycle through the other.
+        "MeshWeaver.Graph.Contract",
         "MeshWeaver.Hosting",
         "MeshWeaver.Kernel",
         "MeshWeaver.Kernel.Hub",
         "MeshWeaver.Layout",
-        "MeshWeaver.Maps",
         "MeshWeaver.Markdown",
         // MeshWeaver.Markdown.Collaboration left the content surface with the collaboration
         // carve-out, for the same reason MeshWeaver.AI did above: comments and the tracked-change

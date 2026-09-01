@@ -37,15 +37,27 @@ internal static class NodeUpdatePipeline
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .Catch<MeshNode, Exception>(ex =>
-                // A non-existent / unreachable node surfaces either as a fast
-                // DeliveryFailureException ("No node found at …") from the owner/routing,
-                // or — if the per-node hub never completes its handshake — as the 10s
-                // Timeout. Both map to the documented "Node not found"
-                // InvalidOperationException; any other read error propagates unchanged.
-                Observable.Throw<MeshNode>(
-                    ex is DeliveryFailureException or TimeoutException
-                        ? new InvalidOperationException($"Node not found: {node.Path}")
-                        : ex))
+                // 🚨 A VERDICT AND A NON-VERDICT ARE NOT THE SAME ANSWER, and this seam used to
+                // report them as one. A DeliveryFailureException from the owner/routing IS a
+                // verdict — the mesh looked and there is no node there. The 10s Timeout is NOT:
+                // it means the per-node hub never completed its handshake, which is exactly what
+                // a node whose NodeType no longer resolves does. Collapsing both into
+                // "Node not found" told a caller that an EXISTING node was absent, and the only
+                // repair that reads as sensible from there is delete-and-recreate — on live
+                // content. This is the same lie the READ path was fixed for (#974), which is why
+                // MeshOperations.UnavailableMessage spells out "this is NOT 'not found'".
+                Observable.Throw<MeshNode>(ex switch
+                {
+                    DeliveryFailureException => new InvalidOperationException(
+                        $"Node not found: {node.Path}"),
+                    TimeoutException => new InvalidOperationException(
+                        $"Unavailable: {node.Path} — this update could not read the node's current "
+                        + "state, so it is UNKNOWN whether the node exists. This is NOT 'not "
+                        + "found': do not delete or recreate anything on the strength of it. A "
+                        + "node whose NodeType no longer resolves fails exactly this way. "
+                        + "Retry shortly.", ex),
+                    _ => ex
+                }))
             .SelectMany(existing => RunUpdateValidators(hub, node, existing, ctx)
                 .SelectMany(error => error is not null
                     ? Observable.Throw<MeshNode>(error)

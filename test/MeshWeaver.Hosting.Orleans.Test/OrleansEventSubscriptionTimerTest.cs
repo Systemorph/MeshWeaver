@@ -34,7 +34,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// post the moment it was scheduled. <see cref="FutureTimer_DoesNotFireEarly_AndFiresAtItsSlot"/>
 /// asserts the negative half first, which is the half that can actually be wrong.</para>
 /// </summary>
-public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
+public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
     private IMessageHub Mesh => Fixture.ClientMesh;
 

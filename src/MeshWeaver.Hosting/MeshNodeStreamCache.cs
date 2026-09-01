@@ -1478,6 +1478,44 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // wedged-thread / never-dispatching-watcher bug class.
     private IObservable<MeshNode> GetStreamRaw(string path)
     {
+        // ♻️ A TRANSIENT NODE PROBE HAS NO MESH NODE — and this is the SECOND seam a probe's
+        // own-address read arrives on. The first, MeshNodeStreamExtensions.GetMeshNodeOutcome,
+        // has answered such a read `Absent` since #2468; this one had no guard at all, and it is
+        // the seam that in-mesh NodeType content actually reaches for, because reading the OWN
+        // node through the process-wide cache is what the framework tells content to do (it is
+        // also the only own-node read that works during initialization — the hub's own-node
+        // stream only emits once the init gates open).
+        //
+        // A probe applies a NodeType's INSTANCE configuration, written for a REAL per-node hub
+        // where the hub's address IS its mesh path. `cache.GetStream(hub.Address.ToString(), …)`
+        // is therefore ordinary, correct content — and on the probe it collapses onto
+        // `$model-probe/{guid}`, a path no node will ever occupy. Unguarded it produced BOTH
+        // shapes reported in Systemorph/MeshWeaver#2894, from one line each:
+        //   • the per-user gate below evaluates permissions on the synthetic path, finds none,
+        //     and GateOnRead throws "User 'x' lacks Read permission on '$model-probe/…'";
+        //   • past the gate, the upstream SubscribeRequest routes to a node that does not exist
+        //     and the read dies on DeliveryFailure "No node found at '$model-probe/…'".
+        // Either one faults the virtual type source's provider, so VirtualDataSource logs
+        // "the provider for collection 'X' faulted … frozen at its last emission" and the probe
+        // serves a data model with that collection missing. Live example: the Store catalog's
+        // `store-packages` virtual source, whose provider reads its own node for the package
+        // source list — every non-privileged user opening a NodeType's Data model hit it.
+        //
+        // An EMPTY stream is the truthful answer and the stream-shaped twin of GetMeshNodeOutcome's
+        // `Absent`: no emission, because there is no node; immediate completion, because there
+        // never will be one. It costs no permission probe, no upstream subscribe, no cache entry
+        // and no breaker state — and it is scoped to the probe's synthetic address, so a probe
+        // reading any REAL path is untouched.
+        if (TransientProbeAddresses.IsProbeAddress(path))
+        {
+            logger.LogDebug(
+                "MeshNodeStreamCache.GetStream('{Path}') reads a transient node probe's own "
+                + "address — a probe has no mesh node, so this is answered with an empty stream "
+                + "rather than gated and routed.",
+                path);
+            return Observable.Empty<MeshNode>();
+        }
+
         // STORM BREAKER: while this path's negative-cache window is open, fast-fail
         // by replaying the cached owner error WITHOUT opening an upstream
         // SubscribeRequest. See _negative. Once the window elapses, drop the errored

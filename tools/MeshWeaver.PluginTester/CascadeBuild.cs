@@ -136,6 +136,13 @@ public static class CascadeBuild
 
         /// <summary>Cases left to the mesh lane.</summary>
         public int TestsNeedMesh => Types.Sum(t => t.Tests?.NeedsMesh ?? 0);
+
+        /// <summary>
+        /// Cases that ran and DECLINED. 🚨 Its own number, never added to
+        /// <see cref="TestsPassed"/>: a package line reading "12 passed" over a suite where three
+        /// threw <c>SkipException</c> asserts evidence that was never produced.
+        /// </summary>
+        public int TestsSkipped => Types.Sum(t => t.Tests?.Skipped ?? 0);
     }
 
     /// <summary>The whole build.</summary>
@@ -465,9 +472,12 @@ public static class CascadeBuild
                     // the consumer can prove the bytes match the source IT holds instead of taking
                     // the bundle's word for it. Over the RAW resolved set, exactly as the runtime's
                     // sources watcher does: NodeTypeSourceFingerprint applies the shaping fold
-                    // itself so the two callers cannot apply different ones.
+                    // itself so the two callers cannot apply different ones — plus the
+                    // `@@`-include closure the compile just resolved (#2948), which is where the
+                    // Code nodes no source query matched are accounted for.
                     SourceFingerprint = NodeTypeSourceFingerprint.Compute(
-                        resolution.Sources, candidate.Node.Path, options.Logger),
+                        resolution.Sources, candidate.Node.Path,
+                        compiled.Inputs.ResolvedIncludes, options.Logger),
                 });
             }
 
@@ -495,7 +505,8 @@ public static class CascadeBuild
                 + $"{compiled.Inputs.MatchedSourcePaths.Length} source(s))"
                 + (tests is null ? "" : tests.Cases.IsEmpty
                     ? " tests: no test classes in the assembly"
-                    : $" tests: {tests.Cases.Length} case(s) — {tests.Passed} passed, {tests.Failed} failed, {tests.NeedsMesh} needs-mesh")
+                    : $" tests: {tests.Cases.Length} case(s) — {tests.Passed} passed, {tests.Failed} failed, "
+                      + $"{tests.Skipped} skipped, {tests.NeedsMesh} needs-mesh")
                 + (binds.IsEmpty ? "" : $" binds-dependency-assembly: {string.Join(", ", binds)}"));
         }
         compileClock.Stop();
@@ -506,14 +517,19 @@ public static class CascadeBuild
         options.Output.WriteLine(
             $"{Stamp()} [{id}] {(result.IsGreen ? "GREEN" : "RED")} — compile {result.Compile.TotalSeconds:F1}s, "
             + $"tests {result.Tests.TotalSeconds:F1}s ({result.TestsPassed} passed, {result.TestsFailed} failed, "
-            + $"{result.TestsNeedMesh} needs-mesh)");
+            + $"{result.TestsSkipped} skipped, {result.TestsNeedMesh} needs-mesh)");
         return result;
     }
 
     private static Report Fatal(string frameworkIdentity, Stopwatch wall, string error) =>
         new(frameworkIdentity, [], [], wall.Elapsed, [], error);
 
-    private static void Print(
+    /// <summary>
+    /// The summary table and the build line. 🚨 <c>internal</c> so the columns can be PINNED by a
+    /// test: the header drifted out of alignment with the row format once already, and a column
+    /// that silently disappears is how a skip gets read as a pass.
+    /// </summary>
+    internal static void Print(
         TextWriter output, Report report, Func<string, IReadOnlyList<string>> dependenciesOf)
     {
         output.WriteLine();
@@ -522,7 +538,9 @@ public static class CascadeBuild
             output.WriteLine($"FATAL: {report.FatalError}");
             return;
         }
-        output.WriteLine("package                        verdict   ready    queued    work   compile   tests   types  passed failed mesh  note");
+        // 🚨 `skip` is a column of its own. It used to have nowhere to go, which meant a
+        // declining case was invisible in the one table a reader actually looks at.
+        output.WriteLine("package                        verdict    ready   queued    work  compile   tests  types passed failed  skip  mesh  note");
         foreach (var p in report.Packages.OrderBy(p => p.Finished))
         {
             var b = p.Result;
@@ -540,7 +558,8 @@ public static class CascadeBuild
             output.WriteLine(
                 $"{p.Id,-30} {Verdict(p.Outcome),-8} {p.Ready.TotalSeconds,7:F1} {p.Queued.TotalSeconds,8:F1} "
                 + $"{p.Work.TotalSeconds,7:F1} {(b?.Compile.TotalSeconds ?? 0),8:F1} {(b?.Tests.TotalSeconds ?? 0),7:F1} "
-                + $"{(b?.Types.Length ?? 0),6} {(b?.TestsPassed ?? 0),6} {(b?.TestsFailed ?? 0),6} {(b?.TestsNeedMesh ?? 0),4}  {note}");
+                + $"{(b?.Types.Length ?? 0),6} {(b?.TestsPassed ?? 0),6} {(b?.TestsFailed ?? 0),6} "
+                + $"{(b?.TestsSkipped ?? 0),5} {(b?.TestsNeedMesh ?? 0),5}  {note}");
         }
         output.WriteLine();
         var green = report.Packages.Count(p => p.IsGreen);
@@ -599,6 +618,7 @@ public static class CascadeBuild
                         loadError = t.Tests.LoadError,
                         passed = t.Tests.Passed,
                         failed = t.Tests.Failed,
+                        skipped = t.Tests.Skipped,
                         needsMesh = t.Tests.NeedsMesh,
                         cases = t.Tests.Cases.Select(c => new
                         {
@@ -606,6 +626,7 @@ public static class CascadeBuild
                             outcome = c.Outcome.ToString(),
                             ms = c.Elapsed.TotalMilliseconds,
                             error = c.Error,
+                            log = c.Log,
                         }),
                     },
                 }),

@@ -5,6 +5,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -147,6 +148,13 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
         if (rawToken is null)
             return Observable.Return(InstanceAuthResult.Resolved(null));
 
+        // 🚨 ONE verifier, TWO issuers, a trust node per issuer (#2483). The fork is on the token's
+        // `iss`, read UNVERIFIED — it can only send a forged token to a verifier that will reject
+        // it, and it grants nothing on its own. Everything below this line is unchanged: the HMAC
+        // leg still never honours a token's own `alg`, and the GitHub leg never sees the HMAC key.
+        if (GitHubActionsToken.IsGitHubIssued(rawToken))
+            return AuthenticateBuild(rawToken);
+
         var keys = hub.ServiceProvider.GetService<SyncTokenSigningKeyService>();
         if (keys is null)
         {
@@ -195,6 +203,169 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                 logger.LogWarning(ex, "Sync access token resolution UNAVAILABLE");
                 return Observable.Return(InstanceAuthResult.Unavailable(ex.Message));
             });
+    }
+
+    /// <summary>
+    /// The BUILD-PRINCIPAL leg (#2483): a GitHub Actions OIDC token, verified against GitHub's own
+    /// JWKS and then resolved to the <see cref="BuildPrincipal"/> node that says whether this mesh
+    /// trusts that repository at all.
+    ///
+    /// <para>🚨 <b>A verified signature is not an authorization.</b> Every workflow run on GitHub
+    /// carries a token signed by these same keys, so the signature establishes only WHICH repository
+    /// asked. No <see cref="BuildPrincipal"/> node ⇒ no caller ⇒ 401. This is the same shape as the
+    /// instance leg — the token is identity, the admin-owned node is authority — and it is why the
+    /// repository claim is re-compared against the record the path routed to.</para>
+    ///
+    /// <para><b>The NODE is read on every request — only the JWKS is cached.</b> That is what makes
+    /// a <see cref="BuildPrincipalActions.Revoke"/> take effect at once instead of when a verdict
+    /// cache expires. The instance leg caches its verdict for a minute because an install polls; a
+    /// build asks a handful of times per run, so there is nothing to buy and a revocation window to
+    /// lose.</para>
+    ///
+    /// <para>🚨 <b>Three outcomes, not two.</b> A key set that cannot be read is
+    /// <see cref="InstanceAuthResult.Unavailable"/> — a retryable 503, never "unknown token" and
+    /// never an admission. Collapsing an unreachable check into a boolean is the defect core #2901
+    /// exists to name; on an authentication path it is the difference between a build that retries
+    /// and a build that is told its perfectly good identity is unknown.</para>
+    /// </summary>
+    private IObservable<InstanceAuthResult> AuthenticateBuild(string rawToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var audiences = BuildPrincipalConfiguration.Audiences(
+            hub.ServiceProvider.GetService<IConfiguration>());
+        if (audiences.Count == 0)
+        {
+            // A CONFIGURATION verdict, not a transient one — retrying will not configure an
+            // audience — so it stays a denial. Accepting any audience here would trust every
+            // GitHub Actions run that ever pointed a token at anything.
+            logger.LogWarning(
+                "A GitHub Actions token was presented but no build-principal audience is configured "
+                + "({Key}) — refusing.", BuildPrincipalConfiguration.AudienceConfigKey);
+            return Observable.Return(InstanceAuthResult.Resolved(null));
+        }
+
+        var keyService = hub.ServiceProvider.GetService<GitHubOidcKeyService>();
+        if (keyService is null)
+        {
+            // Same rule as the sync-token leg: a registry that cannot verify a signature must refuse
+            // the token, never accept it unverified.
+            logger.LogWarning(
+                "A GitHub Actions token was presented but no {Service} is registered — refusing.",
+                nameof(GitHubOidcKeyService));
+            return Observable.Return(InstanceAuthResult.Resolved(null));
+        }
+
+        return keyService.Keys(now)
+            .SelectMany(keys =>
+            {
+                var verified = GitHubActionsToken.Verify(rawToken, now, audiences, keys.ByKeyId);
+                if (!verified.KeyUnknown)
+                    return BuildOutcome(verified, keys, keys, now);
+
+                // An unknown `kid` is the signal of a GitHub key rotation, so re-read ONCE. The
+                // service's own floor decides whether that re-read actually happens; when it does
+                // not, the set comes back unchanged and the verdict below stays UNDETERMINED rather
+                // than becoming a denial we did not earn.
+                return keyService.Refresh(keys, now)
+                    .SelectMany(refreshed => BuildOutcome(
+                        GitHubActionsToken.Verify(rawToken, now, audiences, refreshed.ByKeyId),
+                        keys, refreshed, now));
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "GitHub build-principal resolution UNAVAILABLE — answering retryable, never "
+                    + "'unknown token'");
+                return Observable.Return(InstanceAuthResult.Unavailable(ex.Message));
+            });
+    }
+
+    /// <summary>Turns a verification into the authenticator's outcome, keeping "the key set was
+    /// never re-read" apart from "GitHub does not publish that key".</summary>
+    private IObservable<InstanceAuthResult> BuildOutcome(
+        GitHubTokenVerification verified,
+        GitHubSigningKeys before,
+        GitHubSigningKeys after,
+        DateTimeOffset now)
+    {
+        if (verified.KeyUnknown)
+        {
+            // ReferenceEquals, not a value compare: a suppressed refresh hands back the very set it
+            // was given, so identity is the exact answer to "was anything re-read".
+            if (ReferenceEquals(before, after))
+            {
+                // The refresh floor suppressed the re-read, so NOTHING was established about this
+                // token. Retryable — the build asks again once the floor elapses.
+                logger.LogWarning(
+                    "A GitHub Actions token named a signing key absent from the set read at "
+                    + "{FetchedAt}, and the refresh floor suppressed a re-read — answering retryable",
+                    before.FetchedAt);
+                return Observable.Return(InstanceAuthResult.Unavailable(
+                    "GitHub's signing keys were not re-read within the refresh floor"));
+            }
+            // The set WAS re-read and still does not hold the key: GitHub does not publish it.
+            // That is a verdict.
+            logger.LogWarning(
+                "A GitHub Actions token named a signing key GitHub does not publish — refusing.");
+            return Observable.Return(InstanceAuthResult.Resolved(null));
+        }
+
+        return verified.Claims is { } claims
+            ? ResolveBuildPrincipal(claims, now)
+            : Observable.Return(InstanceAuthResult.Resolved(null));
+    }
+
+    /// <summary>
+    /// Resolves verified claims to the <see cref="BuildPrincipal"/> the mesh holds for that
+    /// repository. The path is a routing hint; the RECORD is the authority, so the repository claim
+    /// is compared again against what the node declares — exactly, never as a prefix.
+    /// </summary>
+    private IObservable<InstanceAuthResult> ResolveBuildPrincipal(
+        GitHubBuildClaims claims, DateTimeOffset now)
+    {
+        var path = BuildPrincipal.PathFor(claims.Repository);
+        if (path.Length == 0)
+            return Observable.Return(InstanceAuthResult.Resolved(null));
+
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        // One sealed System scope around the read, for the same reason as Resolve above: this IS
+        // the step that turns an anonymous HTTP caller into a known principal, so there is no
+        // identity to read with yet — and nothing downstream may inherit System.
+        return accessService.RunAsSystem(() => Read(path)
+            .Select(read =>
+            {
+                if (Unavailable(read, path, "GitHub build-principal resolution") is { } unavailable)
+                    return unavailable;
+
+                var principal = Content<BuildPrincipal>(read.Node);
+                if (principal is null)
+                {
+                    // The NORMAL negative: this mesh does not trust that repository. Definitive,
+                    // so the endpoint answers 401.
+                    logger.LogWarning(
+                        "A verified GitHub Actions token for {Repository} has no build principal at "
+                        + "{Path} — refusing.", claims.Repository, path);
+                    return InstanceAuthResult.Resolved(null);
+                }
+
+                if (!GitHubActionsToken.RepositoryEquals(principal.Repository, claims.Repository))
+                {
+                    logger.LogWarning(
+                        "Build principal {Path} declares repository {Declared} but the token claims "
+                        + "{Claimed} — refusing.", path, principal.Repository, claims.Repository);
+                    return InstanceAuthResult.Resolved(null);
+                }
+
+                if (!principal.IsActive(now))
+                {
+                    logger.LogWarning(
+                        "Build principal {Path} for {Repository} is revoked or out of term — refusing.",
+                        path, claims.Repository);
+                    return InstanceAuthResult.Resolved(null);
+                }
+
+                return InstanceAuthResult.ResolvedBuild(new AuthenticatedBuild(principal, claims, path));
+            }));
     }
 
     private IObservable<InstanceAuthResult> Resolve(string hash)
@@ -278,14 +449,15 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     /// <summary>The unavailable result for a read that reached no verdict, or null when it did.
     /// <see cref="NodeReadStatus.DeleteInProgress"/> counts as a verdict — the record is going away,
     /// so "unknown key" is the right answer and retrying would only delay it.</summary>
-    private InstanceAuthResult? Unavailable(NodeReadOutcome read, string path)
+    private InstanceAuthResult? Unavailable(
+        NodeReadOutcome read, string path, string what = "Instance key resolution")
     {
         if (read.Status != NodeReadStatus.Unavailable)
             return null;
         var reason = read.Failure?.Message ?? "the read reached no verdict";
         logger.LogWarning(
-            "Instance key resolution: {Path} was UNAVAILABLE ({Reason}) — answering retryable, "
-            + "never 'unknown key', and caching nothing", path, reason);
+            "{What}: {Path} was UNAVAILABLE ({Reason}) — answering retryable, "
+            + "never 'unknown key', and caching nothing", what, path, reason);
         return InstanceAuthResult.Unavailable($"{path}: {reason}");
     }
 
@@ -341,6 +513,15 @@ public sealed record InstanceAuthResult
     /// resolved, and carries no meaning at all when <see cref="IsUnavailable"/>.</summary>
     public AuthenticatedInstance? Instance { get; init; }
 
+    /// <summary>
+    /// The authenticated BUILD, when the caller presented a GitHub Actions OIDC token rather than an
+    /// instance credential (#2483). A build is a different CALLER CLASS from an installation — it
+    /// has no instance record, no plan and no <see cref="PluginGrant"/> — so it is a separate
+    /// property rather than an <see cref="AuthenticatedInstance"/> with empty fields, and every
+    /// surface that needs an installation keeps refusing it unchanged.
+    /// </summary>
+    public AuthenticatedBuild? Build { get; init; }
+
     /// <summary>Why no verdict was reached, or <c>null</c> when one was.</summary>
     public string? UnavailableReason { get; init; }
 
@@ -352,9 +533,60 @@ public sealed record InstanceAuthResult
     public static InstanceAuthResult Resolved(AuthenticatedInstance? instance) =>
         new() { Instance = instance };
 
+    /// <summary>The resolution completed and the caller is a trusted BUILD.</summary>
+    /// <param name="build">The authenticated build principal.</param>
+    /// <returns>A resolved outcome carrying <paramref name="build"/>.</returns>
+    public static InstanceAuthResult ResolvedBuild(AuthenticatedBuild build) =>
+        new() { Build = build };
+
     /// <summary>The resolution reached no verdict — answer retryable, and cache nothing.</summary>
     public static InstanceAuthResult Unavailable(string reason) =>
         new() { UnavailableReason = reason };
+}
+
+/// <summary>
+/// An authenticated BUILD: a GitHub Actions run whose OIDC token verified against GitHub's JWKS,
+/// together with the <see cref="Mesh.Security.BuildPrincipal"/> node this mesh holds for its
+/// repository (#2483).
+///
+/// <para>🚨 The claims contribute IDENTITY and CONTEXT, never authority. What the run may do is read
+/// from the live node on every request — so a <see cref="BuildPrincipalActions.Revoke"/> written a
+/// second ago takes effect now rather than when the token expires. Exactly the property the
+/// short-lived-token leg has, and for the same reason.</para>
+/// </summary>
+/// <param name="Principal">The admin-owned rule the repository resolved to.</param>
+/// <param name="Claims">The verified token claims.</param>
+/// <param name="PrincipalPath">Where the rule was read from — for the log and the ledger.</param>
+public sealed record AuthenticatedBuild(
+    BuildPrincipal Principal, GitHubBuildClaims Claims, string PrincipalPath)
+{
+    /// <summary>The repository this build speaks for, normalized to <c>owner/name</c>.</summary>
+    public string Repository => GitHubActionsToken.NormalizeRepository(Claims.Repository);
+
+    /// <summary>Whether this build may perform <paramref name="verb"/> on registry source
+    /// <paramref name="source"/> at <paramref name="now"/>.</summary>
+    /// <param name="verb">A <see cref="BuildVerbs"/> value.</param>
+    /// <param name="source">The registry source name.</param>
+    /// <param name="now">The instant to decide at.</param>
+    /// <returns>True when the principal allows it.</returns>
+    public bool Allows(string verb, string source, DateTimeOffset now) =>
+        Principal.Allows(Claims, verb, source, now);
+
+    /// <summary><see cref="Allows(string,string,DateTimeOffset)"/> right now — what a live request
+    /// means.</summary>
+    /// <param name="verb">A <see cref="BuildVerbs"/> value.</param>
+    /// <param name="source">The registry source name.</param>
+    /// <returns>True when the principal allows it.</returns>
+    public bool Allows(string verb, string source) => Allows(verb, source, DateTimeOffset.UtcNow);
+
+    /// <summary>Why the principal refuses, or null when it allows — for the LOG and the entitlement
+    /// ledger only, never for the HTTP body.</summary>
+    /// <param name="verb">A <see cref="BuildVerbs"/> value.</param>
+    /// <param name="source">The registry source name.</param>
+    /// <param name="now">The instant to decide at.</param>
+    /// <returns>The refusal reason, or null.</returns>
+    public string? Refuse(string verb, string source, DateTimeOffset now) =>
+        Principal.Refuse(Claims, verb, source, now);
 }
 
 /// <summary>An authenticated caller: which instance presented the key, and what it may pull.</summary>

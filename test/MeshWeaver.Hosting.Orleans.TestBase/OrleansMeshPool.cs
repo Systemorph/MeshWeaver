@@ -22,8 +22,8 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <para><b>Isolation.</b> By construction where it matters: a lease is EXCLUSIVE (no two
 /// classes share an instance concurrently), addresses derive from node paths, and a class that
 /// needs pristine cluster-wide state (kills silos, asserts global counters, custom silo
-/// config) simply keeps the dedicated-fixture path — <see cref="OrleansSharedTestBase"/> falls
-/// back to it automatically for custom fixtures. Client hubs are already cleaned per class
+/// config) simply keeps the dedicated-fixture path — <see cref="OrleansMeshTestBase"/> falls
+/// back to it automatically for a custom silo configurator. Client hubs are already cleaned per class
 /// (<see cref="SharedOrleansFixture.CleanupClientAsync"/>).</para>
 ///
 /// <para><b>Lifetime.</b> xUnit v3 constructs this assembly fixture once and disposes it after
@@ -37,19 +37,21 @@ public sealed class OrleansMeshPool : IAsyncDisposable
     /// <summary>The live pool for this test assembly; null outside the fixture's lifetime.</summary>
     public static OrleansMeshPool? Current { get; private set; }
 
-    // Pools are per FIXTURE TYPE: a derived fixture configures its silo differently, and a
-    // lease must never hand a class a cluster built by someone else's configurator.
-    private readonly ConcurrentDictionary<Type, ConcurrentBag<SharedOrleansFixture>> idleByType = new();
+    // Pools are per cluster SHAPE — silo configurator, client configurator, silo count, whether
+    // the client shares the silo's store, and the fixture class. A lease must never hand a class a
+    // cluster built by someone else's configurator, and since a suite can now DESCRIBE its cluster
+    // instead of subclassing a fixture for it, the fixture type alone no longer says what a
+    // cluster IS. See OrleansClusterShape.
+    private readonly ConcurrentDictionary<OrleansClusterShape, ConcurrentBag<SharedOrleansFixture>> idleByShape = new();
     private int created;
 
     public OrleansMeshPool() => Current = this;
 
-    /// <summary>Take an idle cluster of this exact fixture type, or create one. Never waits.</summary>
+    /// <summary>Take an idle cluster of this exact SHAPE, or create one. Never waits.</summary>
     public async ValueTask<SharedOrleansFixture> LeaseAsync(Func<SharedOrleansFixture> factory)
     {
         var probe = factory();
-        var type = probe.GetType();
-        if (idleByType.TryGetValue(type, out var bag) && bag.TryTake(out var pooled))
+        if (idleByShape.TryGetValue(probe.PoolKey, out var bag) && bag.TryTake(out var pooled))
             return pooled;
         await probe.InitializeAsync();
         System.Threading.Interlocked.Increment(ref created);
@@ -58,7 +60,7 @@ public sealed class OrleansMeshPool : IAsyncDisposable
 
     /// <summary>Hand a cluster back for the next class. The lease's clients are already cleaned.</summary>
     public void Return(SharedOrleansFixture fixture) =>
-        idleByType.GetOrAdd(fixture.GetType(), _ => new ConcurrentBag<SharedOrleansFixture>())
+        idleByShape.GetOrAdd(fixture.PoolKey, _ => new ConcurrentBag<SharedOrleansFixture>())
             .Add(fixture);
 
 
@@ -75,7 +77,7 @@ public sealed class OrleansMeshPool : IAsyncDisposable
         }
         catch { /* the console line above is the CI receipt; this file is for local verification */ }
         Current = null;
-        foreach (var (_, bag) in idleByType)
+        foreach (var (_, bag) in idleByShape)
             while (bag.TryTake(out var fixture))
                 await fixture.DisposeAsync();
     }

@@ -92,6 +92,77 @@ foreach (var node in serviceProvider.EnumerateStaticNodes()) { … }
 
 `StaticMeshNodeListProvider.GetStaticNodes()` applies the same `GroupBy(Path).Last()` de-dup the old dictionary used at build time. The semantic is preserved — just deferred to iteration.
 
+## 🚨 One path, one static node — the precedence rule
+
+More than one contributor can offer a node at the same path: a host calls `AddMeshNodes` for a path
+a platform provider already claims, or a node type registers its declaration twice (several do, on
+purpose — `AddPartitionType` seeds `CreateMeshNode()` *and* registers a provider that yields it
+again). Something has to decide who wins, and **every reader has to decide it the same way**.
+
+There is exactly one rule, implemented once, in
+`StaticNodeProviderExtensions.ResolveStaticNodes(providers)`:
+
+1. the `MeshBuilder.AddMeshNodes(...)` **seed wins every tie** — it is the host's own declaration,
+   and it is the bucket that carries registration-node semantics (suppressed under `context:search`
+   / `is:content`) at the query seam;
+2. among the remaining providers, **first registered wins**;
+3. within one provider, its own `GetStaticNodes()` order decides (the seed provider applies
+   last-write-wins by path before it yields).
+
+A **definition-only** entry still *claims* its path — it is not skipped in favour of a
+lower-precedence provider's served node. The host declared that path DB-backed; a second provider
+must not win it back. `FindServedStaticNode` takes the winner first and applies the
+`IsDefinitionOnly` test second, in that order.
+
+Both readers of "which static node is at this path" call that one resolution:
+`StaticNodeQueryProvider` (queries, autocomplete) and `FindStaticNode` /
+`FindServedStaticNode` (hub activation via `MeshDataSource.WithMeshNodes`, the create path's
+already-exists check, the persistence-sampler gate, the plugin installer's pre-flight).
+
+### Why this is a rule and not a detail
+
+They used to differ. The query provider gave the seed priority and excluded every other provider's
+node at a seed-claimed path; `FindServedStaticNode` took a bare `FirstOrDefault` **in DI-registration
+order**. Registration order is not something a host controls — a provider registered by
+`AddPersistence` lands before the mesh builder's own deferred registrations — so appending a second
+static node at a platform seed's path was **served by one reader and not the other, in one live
+process**:
+
+| reader | served |
+|---|---|
+| `StaticNodeQueryProvider` | the appended node |
+| `POST /api/mesh/get` → hub activation → `FindServedStaticNode` | the platform's node |
+
+Nothing errored. No warning, no ambiguity diagnostic, no last-one-wins log. The path simply resolved
+to different content depending on which way you arrived at it, and it made "override a platform
+default by appending a node at its path" look like a supported pattern — the append was accepted, so
+the natural conclusion was that it had worked (#2908).
+
+### A contested path is loud
+
+Overriding another contributor's node by adding a second one at its path is **not supported**, so a
+duplicate registration says so:
+
+```csharp
+// One line per path claimed by more than one provider WITH DIFFERENT CONTENT.
+foreach (var line in serviceProvider.DescribeStaticProviderCollisions())
+    logger.LogWarning(line);
+```
+
+`StaticNodeQueryProvider` runs this once per mesh at construction and logs each line as a warning
+naming the contested path, the winner, and the claimant that is being dropped.
+`DescribeStaticServeCollision(path)` carries the same detail, so a create refused at that path names
+it too.
+
+The comparison is **content**, not claim count: two claimants offering byte-identical declarations
+are redundant, not a dropped contribution, and warning on those would fire for every built-in type
+and be ignored within a week. Equality is
+`PartitionSourceFingerprint.ComputeNodeToken` — the repo's deterministic per-node source token,
+which excludes the un-serialisable `HubConfiguration` delegate (two calls to one factory produce
+different delegates and would otherwise never compare equal).
+
+Regression guard: `test/MeshWeaver.Hosting.Test/StaticNodePrecedenceTest.cs`.
+
 ## Adding a new built-in node
 
 Two paths are available, and the right choice depends on complexity:
@@ -151,7 +222,7 @@ When a `MeshNode` references `nodeType = "X"` and no provider returns a node at 
 > NodeType 'X' is not registered (referenced by instance '&lt;path&gt;').  
 > Either register the type via `AddXxxType()` in your mesh builder, or fix the instance's `NodeType` field. Activation cannot proceed.
 
-Before this probe existed, the slow path waited the full `SlowPathTimeout` (`NodeTypeEnrichmentHelpers` — **60 s** today) for a typeStream emission that would never come, and activation enriches the same node twice, so a second wait used to stack on top of the first. The stuck per-node hub then jammed the routing action block, cascading 10-second timeouts to every other activation posted through the same client. (The stacking is gone — a re-enrichment short-circuit returns once `HubConfiguration` is set; the regression guard is `NodeTypeEnrichmentDoubleCallTest`.)
+Before this probe existed, the slow path waited the full `SlowPathTimeout` (`NodeTypeEnrichmentHelpers` — **30 s** today, deliberately inside the 60 s hub `RequestTimeout` so the overlay can actually be delivered) for a typeStream emission that would never come, and activation enriches the same node twice, so a second wait used to stack on top of the first. The stuck per-node hub then jammed the routing action block, cascading 10-second timeouts to every other activation posted through the same client. (The stacking is gone — a re-enrichment short-circuit returns once `HubConfiguration` is set; the regression guard is `NodeTypeEnrichmentDoubleCallTest`.)
 
 See `test/MeshWeaver.Persistence.Test/UnregisteredNodeTypeTest.cs` for the regression guard.
 

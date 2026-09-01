@@ -1443,7 +1443,7 @@ public static class PackageInstaller
     ///
     /// <para>So: when a root is typed by a NodeType this very package installs, SKIP the warm
     /// unless that type currently has a build an instance could load
-    /// (<see cref="MeshDataSourceExtensions.AwaitLoadableBuild"/>, read once, bounded by
+    /// (<c>NodeTypeBuildState.AwaitLoadableBuild</c>, read once, bounded by
     /// <see cref="RootTypeProbeTimeout"/>). Skipping is the safe answer, and it is cheap: warming
     /// is only an optimisation against "the root stays dark until something touches it", whereas a
     /// warm into an unloadable type PINS the wrong configuration. The next real access — the gate's
@@ -3208,14 +3208,25 @@ public static class PackageInstaller
             return null;
         }
         var (id, ns) = NodeFileMapper.FromRelativePath(file.RelativePath);
-        return AsAuthored(parsed, file, logger, options) with
+        // 🚨 WithPath, not `with { Id/Namespace }`. MeshNode.MainNode is a STORED, non-nullable init
+        // property whose default is evaluated once at construction, so a plain record copy moves the
+        // computed Path and leaves MainNode naming the namespace the parser minted the node in — and
+        // the install then persists that as if it were deliberate (#2939: seven live Skill nodes at
+        // `Hosting/Skill/x` and friends carrying `MainNode = "Skill/x"`, Active, and dropped from
+        // `is:main` — SQL `n.main_node = n.path`). Restoring the pointer is one of TWO required
+        // halves for a decentral node to be searchable again; the other is #2942 (a query union
+        // whose legacy single-Query field carries only list[0], so a static node matched by the
+        // SECOND query is silently absent).
+        //
+        // This line used to read `MainNode = parsed.MainNode ?? (…)`, which is DEAD CODE: MainNode is
+        // non-nullable, so the right-hand side never ran and the parser's value was always kept. The
+        // intent — preserve an AUTHORED mainNode, because an _Access grant's mainNode IS its scope
+        // and the permission evaluator silently ignores a grant whose mainNode is wrong — is right
+        // and is preserved; a null check simply cannot express it. MeshNode.HasExplicitMainNode is
+        // the predicate built for the question, and WithPath is where it now lives so the next
+        // rebase site cannot get it wrong.
+        return AsAuthored(parsed, file, logger, options).WithPath(id, ns) with
         {
-            Id = id,
-            Namespace = ns,
-            // Preserve an AUTHORED mainNode: an _Access grant's mainNode IS its scope (the
-            // permission evaluator silently ignores a grant whose mainNode is wrong), so
-            // clobbering it with the path default breaks every access file a package ships.
-            MainNode = parsed.MainNode ?? (string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}"),
             State = MeshNodeState.Active,
         };
     }

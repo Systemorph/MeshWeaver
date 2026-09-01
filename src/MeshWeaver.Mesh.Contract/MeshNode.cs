@@ -149,6 +149,47 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     }
 
     /// <summary>
+    /// This node REBASED to <paramref name="ns"/> / <paramref name="id"/> — <b>the only correct way
+    /// to move a node's path on a record copy</b>, and the shape to reach for instead of
+    /// <c>with { Namespace = … }</c>.
+    ///
+    /// <para>🚨 <b>Why a plain <c>with</c> is a trap.</b> <see cref="Path"/> and <see cref="Segments"/>
+    /// are COMPUTED, so they follow a <c>with</c> copy. <see cref="MainNode"/> is STORED, and its
+    /// default is evaluated ONCE — at construction, from the namespace the node was BORN in. A
+    /// <c>with { Namespace = … }</c> therefore moves the path and leaves <c>MainNode</c> pointing at
+    /// the old partition, and because the field is non-nullable that stale value is indistinguishable
+    /// on the wire from a deliberate satellite pointer: <see cref="HasExplicitMainNode"/> reads
+    /// <c>true</c>, every upsert faithfully persists it, and the node drops out of <c>is:main</c>
+    /// (SQL <c>n.main_node = n.path</c>) — <c>get</c> returns it, <c>search</c> cannot see it, and
+    /// nothing errors or logs. That is Systemorph/MeshWeaver#2939 (seven live Skill nodes) and #2383
+    /// before it, and it has been written the wrong way at four independent sites. (Restoring the
+    /// pointer is NECESSARY BUT NOT SUFFICIENT for such a node to be searchable again — #2942 is an
+    /// independent defect with the identical symptom.)</para>
+    ///
+    /// <para>A MainNode the caller set DELIBERATELY (<see cref="HasExplicitMainNode"/>) is carried
+    /// across untouched — an <c>_Access</c> grant's MainNode IS its scope, and an install that
+    /// clobbered it with the path default would break every access file a package ships.</para>
+    /// </summary>
+    /// <param name="id">The rebased id.</param>
+    /// <param name="ns">The rebased namespace; null or empty puts the node at the root.</param>
+    public MeshNode WithPath(string id, string? ns) =>
+        HasExplicitMainNode
+            ? this with { Id = id, Namespace = ns }
+            : this with
+            {
+                Id = id,
+                Namespace = ns,
+                MainNode = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}",
+            };
+
+    /// <summary>
+    /// This node rebased into <paramref name="ns"/>, keeping its id — <see cref="WithPath"/> with the
+    /// id unchanged. Read that method's remarks before replacing it with <c>with { Namespace = … }</c>.
+    /// </summary>
+    /// <param name="ns">The rebased namespace; null or empty puts the node at the root.</param>
+    public MeshNode WithNamespace(string? ns) => WithPath(Id, ns);
+
+    /// <summary>
     /// A SATELLITE of the node at <paramref name="mainNode"/>: created with <see cref="MainNode"/>
     /// already pointing at its primary, which is what the doc on <see cref="MainNode"/> promises and
     /// what every listing relies on to keep satellites out of a node's contents (the catalog's

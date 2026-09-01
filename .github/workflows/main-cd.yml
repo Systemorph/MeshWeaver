@@ -842,15 +842,26 @@ jobs:
       # 🚨 The portal HOST lives in MeshWeaver.Plugins (#2293 removed it from here). This checkout is
       # what makes the image buildable at all; without it the publish below has no project.
       #
-      # ref defaults to `main` and is overridable by a repo variable, mirroring the plugins lane's
-      # own MW_PLATFORM_REF. The variable does not decouple "which plugins commit shipped with which
-      # core commit" — it makes that coupling STEERABLE, so pinning to a known-good plugins commit
-      # during an incident is a variable change rather than editing this file under pressure.
+      # 🚨 THE COMMIT `gate` RESOLVED, NOT `main`. Exactly the rule the line above follows for
+      # core's own checkout — "build the EXACT commit, not whatever main is now" — applied to the
+      # other half of the pair. It used to read `vars.MW_PLUGINS_REF || 'main'`, resolved fresh by
+      # every job that wanted it: `gate` resolved X for the identity, this job checked out whatever
+      # main was seconds later, `migration-image` resolved again, and the two reusable calls at the
+      # bottom of this file resolved three more times inside their own graphs. A plugins merge
+      # landing mid-run therefore produced an image built from Y while `promote` tagged it
+      # `<core>-pX` — the pair key (#2622) asserting a provenance that was never true — and, worse,
+      # a portal image and the module bundles baked beside it could come from DIFFERENT plugins
+      # commits, which is precisely the mixed set no host can serve.
+      #
+      # MW_PLUGINS_REF still steers: `gate` resolves `refs/heads/$MW_PLUGINS_REF` (default `main`)
+      # ONCE and fails RED if it resolves to nothing, so the variable remains the incident lever and
+      # the run remains internally consistent. Steerable AND pinned, which is what it always claimed
+      # to be.
       - name: Check out MeshWeaver.Plugins (holds the portal host)
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver.Plugins
-          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          ref: ${{ needs.gate.outputs.plugins_sha }}
           path: plugins-repo
           ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
           fetch-depth: 1
@@ -864,8 +875,25 @@ jobs:
       # compares to decide a rollout — so it MUST be the monotonic $(Version) (Directory.Build.props
       # derives the .ci.<n> suffix from $GITHUB_RUN_NUMBER). -getProperty:Version prints the computed
       # version without building; CIRun=true so it matches the version baked into the binaries below.
-      # It is NOT applied here: this job only pushes the staging tag, and `promote` applies this
-      # version (job output) once every leg has succeeded.
+      #
+      # 🚨 IT IS TWO DIFFERENT THINGS AND ONLY ONE OF THEM IS A TAG. As a TAG it is not applied
+      # here — this job pushes the staging tag only, and `promote` applies the version tag once
+      # every leg has succeeded. As the BAKED version it is applied here, via `-p:Version=` on the
+      # publish below, and that half was missing for a week (2026-08-25 → 09-01).
+      #
+      # Why it cannot be left to the project: the portal host lives in MeshWeaver.Plugins, whose
+      # src/Directory.Build.props does not import core's root props, so $(Version) there is the SDK
+      # default 1.0.0. The csproj bakes $(Version) into the image config as
+      # MESHWEAVER_PLATFORM_VERSION, which is the FIRST thing the running portal reads to identify
+      # itself — so the image was tagged 3.0.0-rc9.ci.<n> and reported 1.0.0. VersionSelect.IsNewer
+      # then called every registry tag newer than the running build, forever: the install could
+      # never reach "up to date" and re-rolled on every check floor, and the About page said
+      # `Version: 1.0.0` while /api/version answered correctly off a core-built assembly.
+      #
+      # edge-images.yml and release-images.yml have always passed it, and say why in the same words
+      # ("BAKED, not just tagged"). The step after the publish below reads the variable back out of
+      # the pushed image, so a future omission fails the run instead of shipping a portal that
+      # misreports itself — a tag is not evidence about the bytes under it.
       - name: Compute image version
         id: vars
         run: |
@@ -975,6 +1003,7 @@ jobs:
                  -c Release --no-self-contained -t:PublishContainer -p:PublishProfile= \
                  -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"' \
                  -p:CIRun=true \
+                 -p:Version=${{ steps.vars.outputs.version }} \
                  -p:MeshWeaverRoot=${{ github.workspace }} \
                  -p:ContainerRegistry=${{ env.ACR }} \
                  -p:ContainerRepository=memex-portal-ai \
@@ -1004,6 +1033,17 @@ jobs:
           done
           echo "::error::portal-ai publish failed on all 3 attempts with no compiler diagnostics — read the LAST attempt's output above. A registry blob-upload failure there (the CONTAINER-10xx family) means the connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
           exit 1
+      # 🚨 The publish SUCCEEDING is not evidence the image identifies itself correctly — that is
+      # exactly the state that shipped for a week (see the version note above). So the version is
+      # read back out of the pushed image config, per architecture, before anything selectable is
+      # applied to it: this runs BEFORE `promote`, so an image that misreports itself never gets a
+      # tag a consumer can roll to. Unconditional, and fail-closed on anything it cannot read — a
+      # skipped check and a passed one are indistinguishable in the UI.
+      - name: The published image must identify itself as this run's version
+        run: >
+          .github/scripts/check-image-build-identity.sh
+          "${{ needs.gate.outputs.staging_tag }}"
+          "${{ steps.vars.outputs.version }}"
 
   migration-image:
     name: "Build + push migration image"
@@ -1017,11 +1057,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
+      # The plugins commit `gate` resolved — see the portal leg's comment. Both images MUST come
+      # from one plugins commit: helm derives the migration tag from the portal image's tag, so a
+      # migration built from a different tree than the portal it migrates for is the 2026-08-27
+      # failure (#2555) wearing a different mask.
       - name: Check out MeshWeaver.Plugins (holds the migration worker)
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver.Plugins
-          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          ref: ${{ needs.gate.outputs.plugins_sha }}
           path: plugins-repo
           ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
           fetch-depth: 1
@@ -2091,6 +2135,13 @@ jobs:
   # satellite wakes, the upstream it consumes is already sealed for the identity it is told to
   # bake against. Both legs are the platform's reusable workflows pointed at the Plugins checkout
   # (content-repository); a node repo calling them with no content-repository behaves as before.
+  #
+  # 🚨 "the same plugins-repo commit the portal image was built from" is now ENFORCED rather than
+  # hoped for: `content-ref` is the sha `gate` resolved, the identical value the two image legs
+  # check out. It used to be `vars.MW_PLUGINS_REF || 'main'`, re-resolved inside each reusable
+  # graph (node-repo-module-pack checks the content repo out THREE times), so a plugins merge
+  # landing mid-run could seal bundles from a tree the shipped image does not contain — the one
+  # thing this section exists to guarantee, quietly not guaranteed.
   plugins-modules:
     name: "Plugins: pack the module bundles the bake composes"
     needs: [preflight, gate, promote]
@@ -2100,7 +2151,7 @@ jobs:
     uses: ./.github/workflows/node-repo-module-pack.yml
     with:
       content-repository: Systemorph/MeshWeaver.Plugins
-      content-ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+      content-ref: ${{ needs.gate.outputs.plugins_sha }}
       platform-ref: ${{ needs.gate.outputs.sha }}
       # The compose set the bake needs (the same two Plugins' own ci.yml passes as
       # module-artifacts); the rest of the catalog is content, baked below.
@@ -2173,7 +2224,7 @@ jobs:
     uses: ./.github/workflows/node-repo-publish-bake.yml
     with:
       content-repository: Systemorph/MeshWeaver.Plugins
-      content-ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+      content-ref: ${{ needs.gate.outputs.plugins_sha }}
       bake-source: plugins
       module-artifacts: module-bundle-MeshWeaver.{AI,Markdown.Collaboration}
       test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.plugin-test-image.outputs.version }}

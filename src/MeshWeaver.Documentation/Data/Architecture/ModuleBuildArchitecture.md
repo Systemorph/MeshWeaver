@@ -43,6 +43,47 @@ select ──► prepare (ONCE) ──► build (ONE workspace) ──► pack �
 5. **verify** — unconditionally pairs the selection against the receipts; a skipped pack with a
    non-zero selection is RED.
 
+## Every stage asserts its OWN postcondition — never the next one's
+
+A stage's exit code answers *"did my work throw?"*. It does not answer *"did I produce what the
+next stage requires?"*, and the two were read as one claim until it cost a day.
+
+**The build is where this bites.** `build` reported success and the pack matrix then died, seven
+jobs at once, with `the global workspace build produced no MeshWeaver.AI.OpenAI.dll` — on a pull
+request whose entire diff was one XML doc comment. The message was accurate and one job too late:
+the stage that knew the selection was the green one, and the stage that discovered the gap knew
+only its own module. Two enumerators — the projects handed to the build and the modules the matrix
+expands — were free to disagree, and nothing compared them.
+
+So the build now checks, before it uploads anything, exactly what its consumers demand, **per
+selected entry**:
+
+| the consumer demands | the producer now asserts |
+|---|---|
+| `<Module>/<Module>.dll` | present and non-empty (a truncated emit reads as "the file is there") |
+| `<Module>.closure.txt` | present — without it a pack job cannot know which in-tree siblings ride *this* bundle, and a glob would ride every other module's |
+| `platform AssemblyVersion` in the build log | readable — it is the expected side of the binding-identity check every pack job runs |
+
+Three properties make it a postcondition rather than a second opinion:
+
+* **The same enumerator on both sides.** It is fed the selection the matrix expands, not a
+  re-derivation and not a glob of the output directory. A postcondition derived from a *different*
+  enumerator is the original defect, one level up.
+* **A glob would pass the case it exists to catch.** The workspace legitimately holds every
+  entry's assemblies side by side, so "there are DLLs in there" is true in exactly the failure
+  being diagnosed. Only a per-selected-module check can see it.
+* **No `if:` on it, and its self-test runs first.** The selection-with-no-container-entries case
+  is handled *inside* the check (it asserts nothing and says so) rather than by a condition that
+  would render as a grey tick indistinguishable from a pass. An unproven postcondition is the
+  thing this section is about.
+
+It deliberately never asks the reverse question: the workspace carries in-tree dependencies of
+selected modules beside them, so "emitted but not selected" is normal and is not a finding.
+
+**The generalisation, for any stage you add to this lane:** name the artifacts the next stage
+opens, and assert them where they are produced. One accurate failure upstream is worth N accurate
+failures downstream, and a downstream failure can only ever describe its own shard.
+
 ## Content-addressed outputs in blob storage = incremental CI
 
 Build outputs are keyed by **(module source tree hash × tester-image digest × platform-image
@@ -73,6 +114,15 @@ Additional libraries resolve from the curated **module-libraries shelf**, and a
 `PackageReference`'s compile surface is its **transitive closure** from the shelf's deps.json —
 exactly what the SDK hands a consumer (`PackageReference Microsoft.Graph` lets code
 `using Microsoft.Kiota…`; anything less re-creates that gap as a CS0234 wall).
+
+🚨 **What a module COMPILES against and what its bundle CARRIES are two questions with two
+answers.** For the compile the image is authoritative — a module binds the assemblies of the host
+it is loaded into. For the bundle it is not: the image is a PORTAL, and a portal with a module
+compiled into it also carries that module's private package dependencies, so "`/app` has the file"
+is a fact about one host, never a platform guarantee. A bundle carries its own package closure
+minus the SHARED FRAMEWORK, exactly as the SDK lane's `--deps-closure` does — see
+[ModuleClosureAccounting](../ModuleClosureAccounting) for the rule and the two outages that came
+from conflating the two questions.
 
 ## Gates compile against IMPLEMENTATION frameworks
 
@@ -125,6 +175,7 @@ No component ever publishes from the mesh router — the router names a spokesma
 * **Self-hosted runners with a mounted git mirror + warm image store** (MeshWeaver#2926): bare
   mirror volume, `git worktree add` per run at the release ref, worktree deleted at job end.
 
-See also: [ModuleVersioning](../ModuleVersioning) ·
+See also: [ModuleClosureAccounting](../ModuleClosureAccounting) ·
+[ModuleVersioning](../ModuleVersioning) ·
 [NodeTypeCompilation](../NodeTypeCompilation) · [PluginBuildContract](../PluginBuildContract) ·
 [BuildProcess](../BuildProcess) · [InMeshBuildAndTest](../InMeshBuildAndTest).

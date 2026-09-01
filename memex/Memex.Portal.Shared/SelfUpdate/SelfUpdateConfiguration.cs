@@ -32,6 +32,15 @@ public static class SelfUpdateConfiguration
             // kubectl set image via /api/plugins/is-updatable), and a gate wired for only one of
             // them is not a gate. Platform-neutral (a query plus file-system reads).
             services.AddSingleton<ReleaseAvailabilityService>();
+            // 🚨 The COMBO gate (#2274): "can that image still serve the modules this instance has
+            // landed?" — the question an artifact check cannot answer, and the one that would have
+            // caught the memex.systemorph.com trap. Registered unconditionally and for the same
+            // reason as the availability gate: every path that rolls a version has to honour the
+            // same verdict. Producing one needs docker (see IComboGateRunner) and is therefore
+            // off-cluster; with no runner registered this gate CONSULTS the verdict landed on
+            // Admin/UpdatePolicy, and a candidate with no verdict clears nothing.
+            // Platform-neutral (a policy read plus, where a runner exists, file-system + process IO).
+            services.AddSingleton<ComboVerificationGate>();
             // Bind from configuration when the caller passes nothing. Without this the defaults were
             // baked into the image and a SelfUpdate__* value in the configmap silently did nothing —
             // the failure mode where an operator sets a knob, sees no effect, and concludes

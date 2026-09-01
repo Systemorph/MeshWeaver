@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>The MESH-ACTOR half of NodeType compilation: source discovery against the live
+      mesh, the compile actor and its activity, the assembly cache and its retention sweep, prebuilt
+      adoption, the park registry, the dependency graph and recompile closure, the bake status, the
+      LSP language service, and the per-NodeType hub's compile write-backs. It drives the pure
+      toolchain in MeshWeaver.Compiler.
+
+      🚨 It is a SEPARATE assembly from MeshWeaver.Compiler on purpose. MeshWeaver.Compiler is a
+      full-MVID toolchain ROOT (FrameworkBuildIdentity.ToolchainRoots), so a body-only change
+      anywhere inside it — or inside anything it references — re-bakes every NodeType on every mesh.
+      Issue #1707 factored the toolchain out of MeshWeaver.Graph precisely so that rule pins a
+      SMALL, LOW-CHURN assembly. This pipeline is the highest-churn code in the platform and sits
+      ABOVE the toolchain, so it is surface-hashed like MeshWeaver.Graph was, and the full-MVID
+      closure is unchanged by the split.</Description>
+    <RootNamespace>MeshWeaver.Graph</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Grants carried over from MeshWeaver.Graph with the pipeline's internals. -->
+    <InternalsVisibleTo Include="MeshWeaver.Graph" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting" />
+    <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.PluginCatalog.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Features" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Compiler\MeshWeaver.Compiler.csproj" />
+    <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Graph.Contract\MeshWeaver.Graph.Contract.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Kernel\MeshWeaver.Kernel.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+    <ProjectReference Include="..\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
+  </ItemGroup>
+
+</Project>

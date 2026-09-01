@@ -82,6 +82,50 @@ Two bugs that make a monitor lie, both hit in one session:
   of a PR with zero checks. Decide readiness by asserting the **required set is present and
   SUCCESS**, never by the absence of failures.
 
+## A green gate can be answering with evidence it did not produce
+
+The traps above are about a check that never *ran*. This one is worse: the check runs, does its
+accounting, and reports SUCCESS **from another job's evidence**.
+
+**Artifacts are RUN-wide, not call-wide.** A reusable workflow that a repo invokes twice in one run
+— `MeshWeaver.Plugins` calls `node-repo-module-pack.yml` as both `modules-floor` and `modules-rest`,
+on every run — puts both calls' artifacts in ONE namespace. Two uploads of the same name are
+*accepted*: Plugins run `33487032213` carried two artifacts literally named `workspace-build`
+(25.8 MB and 950 kB), and `download-artifact` resolved the name to one of them. The floor's pack job
+read the other call's workspace and died on *"the global build wrote no closure manifest for
+MeshWeaver.Markdown.Collaboration"* — a REQUIRED gate flipping green/red on `main` with **no source
+change**, alternating by which call won the name (Plugins#1077).
+
+**A discriminator with a shared default is not a discriminator.** The `lane-id` input existed for
+exactly this and did not close it, because its default was the same literal for both calls and
+neither caller set it. The fix is to *derive* the key rather than trust the caller: `select` now
+computes a lane key from the call's own `modules:` matrix — unique per call by construction, with no
+input a caller can forget — and every artifact the call drops is named and stamped with it.
+
+**Three rules generalise out of it:**
+
+1. **Name every artifact for the CALL, not the workflow.** If two invocations can coexist in one
+   run, the name must carry something that differs between them, derived — not an input someone
+   remembers to pass.
+2. **Scope the download to match, and check the stamp anyway.** A `pattern: foo-*` glob is one edit
+   from being widened back; the producer stamping its lane INTO the file means the consumer can
+   still refuse foreign evidence when it is.
+3. **An answer a gate composes must fail closed.** `bundles-built` is what a required gate depends
+   on, so zero evidence, foreign evidence and evidence that does not record what it attests are all
+   *false* — never a silent true. A marker saying "an artifact was uploaded" leaves
+   present-but-uncomposable reading as green, so the marker records the bundle it attests **and**
+   the closure the build resolved, and the verifier requires both.
+
+🚨 **Preserve the reason the evidence is dropped EARLY.** The built marker lands before the module's
+tests deliberately, so a red suite cannot read as "bundle missing" to a gate that only *composes*
+bundles (#2710, Plugins#937). Strengthening what the marker claims must not drag test results into
+it — "the bundle is complete and usable" and "the module's tests passed" are different questions,
+answered by different contexts.
+
+**And the acceptance criterion for a fix in this class is REPEATED green.** A defect that alternates
+run to run produces single greens by itself; one green run is what it looks like, not evidence it is
+gone.
+
 ## Reading a RED shard: the exit marker classifies it, the log text does not
 
 A red shard says *why* in exactly one place — the **exit marker** printed by "Fail on non-zero
@@ -297,6 +341,97 @@ and buries the real change.
 Note the RN job is **not** a required context in Plugins, so this reds PRs without blocking them —
 which is its own hazard: eleven PRs red on a known-benign check is exactly the noise a *real*
 failure hides in.
+
+## 🔗 Reading a red that came from ANOTHER repository
+
+The hardest reds to attribute are the ones a repo did not cause. On 2026-09-01 a single carve-out
+wave in core produced **five distinct failures in MeshWeaver.Plugins**, each hiding the next, and
+only one of them was an API change:
+
+| # | what broke | what a public-API gate would have said |
+|---|---|---|
+| 1 | a quoted phrase inside a C# `//` comment parsed as a canonical assembly | green — the API is unchanged |
+| 2 | a package's `category` disagreeing with its 11 siblings | green — not an API |
+| 3 | moved test suites arrived without their Testcontainers pre-pull | green — not code |
+| 4 | pin-vs-source skew: a type moved to a new assembly hours after the pinned image was cut | green — the type exists, just not in *that* image |
+| 5 | a type moving assemblies without a forwarder | red — the one shape a surface gate catches |
+
+**So the class is not "core changed its public surface." It is "anything downstream reads out of
+core's tree, at a version it does not control."** Prose, package data, CI infrastructure and image
+timing all belong to it.
+
+### A verdict about an unpinned checkout is a function of wall-clock time
+
+The cross-repo gates check core out with **no `ref:`**. Two people therefore measured the same
+downstream branch on the same day and got **opposite answers**, both correct — core's tip had moved
+between them. Failure #1 above landed in core at 08:01:19Z; every downstream run before that passed
+and every run after it failed, with no downstream commit in between.
+
+**The rule:** record the **core tip** alongside any cross-repo verdict, and resolve it once per run
+rather than per checkout step. A verdict without that stamp cannot be reproduced or disputed.
+
+### A grep hit is not a binder
+
+Twice in one day, prose was mistaken for the thing it described. A quoted phrase in a `//` comment
+became a demanded assembly; and two types looked *bound* by exactly one caller each — one a doc
+comment naming an example subscriber, the other a markdown page that `MeshWeaver.Documentation.dll`
+embeds as a **resource**, so it appears in a *binary* grep.
+
+**Before concluding a symbol is used, declared or bound, classify each hit.** Strip comments in the
+language actually being parsed, not another language's — a `<!--.*?-->` stripper is a complete no-op
+on C#, and that is precisely how a comment became a canonical assembly.
+
+### 🚨 Mutually blocking PRs — when "one concern per PR" inverts
+
+Two open PRs each failed a **required** context on exactly what the other fixed:
+
+| PR | required check A | required check B |
+|---|---|---|
+| the pin bump | ❌ the phantom assembly | ✅ fixes the build |
+| the parser fix | ✅ | ❌ the build the pin fixes |
+
+Neither could go green alone, so **a correct PR could not land however correct it was.** The house
+rule that a pin bump is *"deliberate, in its own PR"* is right for a healthy trunk and inverts the
+moment the pin is itself part of the breakage.
+
+**The rule:** when two required contexts each fail on the other's fix, separation is the thing
+preventing the repair — merge one branch into the other and say why in the body. Check for this
+explicitly before concluding a PR is "just flaky"; the signature is *two* red PRs whose failures are
+each other's subject.
+
+### The container lane sees a WIDER namespace surface than any local build
+
+A build that composes its references from the platform image's `/app` gives source a **strictly
+wider** namespace surface than a project-referenced build. Core compiles a project against its
+`ProjectReference` graph, so a transitive package's extension methods are visible only where
+something references it; the container build composes *everything in `/app`*, so every module sees
+them whether it references them or not.
+
+The visible consequence is an ambiguity that **cannot be reproduced locally**:
+
+```
+CS0121  The call is ambiguous between
+        'System.Linq.Enumerable.TakeLast<T>(IEnumerable<T>, int)' and
+        'System.Linq.EnumerableEx.TakeLast<T>(IEnumerable<T>, int)'
+```
+
+Two extension methods, same signature, same namespace — one from the BCL, one from Ix.NET, which is
+a legitimate pinned platform dependency that in-mesh source uses deliberately. Core never sees it;
+the container lane always does.
+
+**The rule:** a green local build is not evidence about the container lane, and "it compiles in core"
+is not an argument that a module will compile. When a compile error appears only in that lane,
+suspect the reference set's *width* before suspecting the source. And do not "fix" it by pruning the
+platform assembly — qualify the call, and only where the receiver's type actually makes it ambiguous
+(an `IObservable` receiver resolving through `System.Reactive.Linq` is not).
+
+### Fixing the first red can reveal a second that never ran
+
+A job stops at its first failing step, so every later step reports **SKIPPED** — which reads as
+"fine". Repairing failure #1 above let the job reach a step that had never executed on any branch,
+and it failed immediately on a real defect. **"Red for a known reason" is the cheapest state in
+which to miss a second regression**, and it is an argument for fixing the first red rather than
+routing around it. Expect the count of problems to go *up* when you fix one.
 
 ## Related
 
