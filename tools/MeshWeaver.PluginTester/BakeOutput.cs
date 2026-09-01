@@ -5,7 +5,6 @@ using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
@@ -232,11 +231,16 @@ public static class BakeOutput
         IWorkspace workspace, NodeTypeDefinition def, string typePath)
     {
         var access = workspace.Hub.ServiceProvider.GetService<AccessService>();
-        return Observable
-            .Using(
-                () => access?.ImpersonateAsSystem()
-                      ?? System.Reactive.Disposables.Disposable.Empty,
-                _ => NodeSources.GetSources(workspace, def, typePath))
+        // 🚨 RunAsSystem, NEVER Observable.Using(access.ImpersonateAsSystem, …). Impersonation is
+        // an AsyncLocal store/restore pair, and Rx runs Using's resource factory on the SUBSCRIBING
+        // thread while disposing it when the inner observable TERMINATES — a different thread for a
+        // cross-hub read like this one. The subscriber is then left running as System (#1790).
+        // RunAsSystem seals both ends inside the one Subscribe, so the cold read below still issues
+        // impersonated while nothing downstream inherits the identity.
+        // ImpersonationScopeSiteRatchetGuard fails a NEW site carrying the old shape, and this file
+        // is not on its allow list — deliberately, because it is new code.
+        return access
+            .RunAsSystem(() => NodeSources.GetSources(workspace, def, typePath))
             .Take(1)
             .Timeout(ReadBudget)
             .Select(sources => NodeTypeSourceFingerprint.Compute(sources, typePath));
