@@ -42,15 +42,24 @@
 # drifted the same way (Monolith 200→345, Data 25→73, PluginTester 60→8).
 #
 # The floor for ANY sharding is the heaviest single SCHEDULABLE UNIT — a project,
-# or one part of a split one. Today that is Hosting.Monolith.Test's three thirds
-# at ~221 s each. Adding shards below that buys nothing.
+# or one part of a split one. Today that is Hosting.Orleans.Test at 269 s, which
+# became the long pole when 17 suites moved to MeshWeaver.Plugins (#2276) and took
+# Hosting.Monolith.Test (663 s / 3 parts) and PluginCatalog.Test (348 s / 2) with
+# them. Adding shards below that floor buys nothing.
 #
 # SPLIT RULE — TWO independent triggers. Either one is sufficient.
 #
 #  (1) BALANCE. Solo weight exceeds the ideal shard load (sum ÷ SHARD_TOTAL,
-#      currently 2526 ÷ 6 ≈ 421 s), because only then is the project the binding
-#      floor. Monolith (663 s) qualifies. (AI.Test's split was dropped under this
-#      rule before the suite itself moved to MeshWeaver.Plugins, #2276.)
+#      currently 731 ÷ 6 ≈ 122 s), because only then is the project the binding
+#      floor. (AI.Test's split was dropped under this rule before the suite itself
+#      moved to MeshWeaver.Plugins, #2276; Monolith's three parts and
+#      PluginCatalog's two left with the same migration.)
+#
+#      🚨 The remaining table is small enough that this trigger now fires on the
+#      four heaviest entries at once. It is NOT an instruction to split them: the
+#      table is a stale measurement of a tree that just lost two thirds of its
+#      weight, so RE-MEASURE against a real run before acting on it. Trigger (2)
+#      is the one with teeth, and nothing currently breaches it.
 #
 #  (2) 🚨 HEADROOM AGAINST THE PER-PROJECT CAP (#2747). Solo weight exceeds ~60%
 #      of the `timeout 8m` = 480 s wall-clock cap each project runs under in
@@ -110,47 +119,20 @@ fi
 
 # "<seconds> <project-name>", heaviest first.
 WEIGHTS=$(cat <<'EOF'
-663 MeshWeaver.Hosting.Monolith.Test 3
-348 MeshWeaver.PluginCatalog.Test 2
 269 MeshWeaver.Hosting.Orleans.Test
 91 MeshWeaver.Data.Test
 76 MeshWeaver.Messaging.Hub.Test
 74 MeshWeaver.PluginTester.Test
 69 MeshWeaver.Graph.Test
-65 MeshWeaver.Persistence.Test
-65 MeshWeaver.Content.Test
-54 MeshWeaver.GitSync.Test
-53 MeshWeaver.Acme.Test
-51 MeshWeaver.FutuRe.Test
-50 MeshWeaver.Query.Test
-48 MeshWeaver.Autocomplete.Test
-46 MeshWeaver.Security.Test
-44 MeshWeaver.Auth.Test
 26 MeshWeaver.Layout.Test
 25 Memex.Portal.Shared.Test
-18 MeshWeaver.NodeOperations.Test
-13 MeshWeaver.Markdown.Test
-10 MeshWeaver.PathResolution.Test
-9 MeshWeaver.PythonDemo.Test
-9 MeshWeaver.ContentCollections.Indexing.Graph.Test
 8 MeshWeaver.Hosting.Test
 7 MeshWeaver.ContentCollections.Test
 6 MeshWeaver.Documentation.Test
-6 MeshWeaver.AccessControl.Test
-5 MeshWeaver.Todo.Test
-5 MeshWeaver.MathDemo.Test
-4 MeshWeaver.Serialization.Test
-3 MeshWeaver.Json.Test
 2 MeshWeaver.ContentCollections.Indexing.Test
-2 MeshWeaver.Kernel.Test
-2 MeshWeaver.Search.Test
 2 MeshWeaver.Markdown.Collaboration.Test
-2 MeshWeaver.PluginImage.Test
 2 MeshWeaver.Portal.E2E.Test
-2 MeshWeaver.Reactive.Assertions.Test
-1 MeshWeaver.TestDomain
 1 MeshWeaver.Data.TestDomain
-1 MeshWeaver.Hub.Fixture
 EOF
 )
 

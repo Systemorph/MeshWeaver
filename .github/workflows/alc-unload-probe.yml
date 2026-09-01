@@ -26,8 +26,9 @@
 # original blocking-only form exercised only a path on which no crash has been observed.
 # Full RCA: Doc/Architecture/DebuggingNativeCrashes → the 2026-08-06 section.
 #
-# Run from the Actions tab (workflow_dispatch). Re-dispatch with project=MeshWeaver.FutuRe.Test
-# to probe the other crasher.
+# Run from the Actions tab (workflow_dispatch). The default was MeshWeaver.Hosting.Monolith.Test
+# until that suite moved to MeshWeaver.Plugins (#2276); FutuRe.Test is the other observed crasher
+# and still lives here, so it is the default now. Re-dispatch with any other project name.
 name: ALC unload probe (manual)
 
 on:
@@ -36,7 +37,7 @@ on:
       project:
         description: "Test project NAME whose native host to loop under the probe"
         type: string
-        default: "MeshWeaver.Hosting.Monolith.Test"
+        default: "MeshWeaver.FutuRe.Test"
       iterations:
         description: "Max loop iterations (stops on the first native crash)"
         type: string
@@ -55,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      PROBE_PROJECT: ${{ inputs.project || 'MeshWeaver.Hosting.Monolith.Test' }}
+      PROBE_PROJECT: ${{ inputs.project || 'MeshWeaver.FutuRe.Test' }}
       PROBE_ITERS: ${{ inputs.iterations || '10' }}
       DOTNET_ENVIRONMENT: Development
       Logging__LogLevel__Default: Warning
