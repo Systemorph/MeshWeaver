@@ -146,15 +146,15 @@ public class OversizedStreamMessageRefusedTest
     public void A_payload_carrying_newlines_cannot_break_the_refusal_into_two_log_records()
     {
         var hostile = "{\"$type\":\"Evil\",\"x\":\"\nfail: Forged.Category[0]\n      forged\n"
-            + new string('y', StreamMessageSizeGuard.MemoryStreamBlockBytes) + "\"}";
+            + new string('y', MessageSizeGuard.MemoryStreamBlockBytes) + "\"}";
         var delivery = new MessageDelivery<RawJson>(
             Sender, new Address("portal", "user-1"), new RawJson(hostile),
             JsonSerializerOptions.Default) with
         { Id = "d-hostile" };
 
-        var refusal = StreamMessageSizeGuard.Describe(
+        var refusal = MessageSizeGuard.Describe(
             delivery, Target,
-            Encoding.UTF8.GetByteCount(hostile), StreamMessageSizeGuard.MemoryStreamBlockBytes);
+            Encoding.UTF8.GetByteCount(hostile), MessageSizeGuard.MemoryStreamBlockBytes);
 
         refusal.Split('\n').Should().HaveCount(1,
             "an unescaped newline in the payload would open what reads as a fresh `fail:` burst");
@@ -205,7 +205,7 @@ public class OversizedStreamMessageRefusedTest
         var logger = new RecordingLogger();
 
         await RoutingGrain.PostToStream(
-                delivery: DeliveryOf(StreamMessageSizeGuard.MemoryStreamBlockBytes - 1, "d-fits"),
+                delivery: DeliveryOf(MessageSizeGuard.MemoryStreamBlockBytes - 1, "d-fits"),
                 post: () => { posted++; return Task.CompletedTask; },
                 addressPath: Target,
                 sender: Sender,
@@ -233,10 +233,10 @@ public class OversizedStreamMessageRefusedTest
     {
         var oversized = DeliveryOf(IncidentPayloadBytes);
 
-        var echoed = StreamMessageSizeGuard.WithoutOversizedPayload(oversized);
+        var echoed = MessageSizeGuard.WithoutOversizedPayload(oversized);
 
-        StreamMessageSizeGuard.IsOversized(
-                echoed, StreamMessageSizeGuard.MemoryStreamBlockBytes, out var echoedBytes)
+        MessageSizeGuard.IsOversized(
+                echoed, MessageSizeGuard.MemoryStreamBlockBytes, out var echoedBytes)
             .Should().BeFalse(
                 "the DeliveryFailure that carries this echo goes back over the same memory stream — "
                 + "if the echo is still oversized, the report about the lost message is lost the "
@@ -261,7 +261,7 @@ public class OversizedStreamMessageRefusedTest
         // …and a report about an ordinary failure is unchanged: stripping happens only when
         // carrying the payload is what would lose the report.
         var small = DeliveryOf(1024, "d-small");
-        StreamMessageSizeGuard.WithoutOversizedPayload(small).Should().BeSameAs(small);
+        MessageSizeGuard.WithoutOversizedPayload(small).Should().BeSameAs(small);
     }
 
     /// <summary>
@@ -269,23 +269,23 @@ public class OversizedStreamMessageRefusedTest
     /// it too low and working traffic is refused; too high and the guard never fires. Rather than
     /// trust the comment in <c>MemoryAdapterFactory</c>, this asks the real
     /// <see cref="FixedSizeBuffer"/> Orleans allocates: a block of exactly
-    /// <see cref="StreamMessageSizeGuard.MemoryStreamBlockBytes"/> holds a segment of that size and
+    /// <see cref="MessageSizeGuard.MemoryStreamBlockBytes"/> holds a segment of that size and
     /// not one byte more. An Orleans upgrade that moved the block size therefore fails HERE, rather
     /// than silently mis-tuning the guard in production.
     /// </summary>
     [Fact]
     public void The_orleans_block_size_is_what_the_guard_is_calibrated_against()
     {
-        var block = new FixedSizeBuffer(StreamMessageSizeGuard.MemoryStreamBlockBytes);
+        var block = new FixedSizeBuffer(MessageSizeGuard.MemoryStreamBlockBytes);
 
-        block.TryGetSegment(StreamMessageSizeGuard.MemoryStreamBlockBytes + 1, out _)
+        block.TryGetSegment(MessageSizeGuard.MemoryStreamBlockBytes + 1, out _)
             .Should().BeFalse(
                 "Orleans allocates one fixed block per message and a cached message must fit it "
                 + "whole — this is the ceiling MemoryPooledCache.AddToCache reports as 'Message "
                 + "size is too big', and the guard's constant must be exactly it");
 
-        new FixedSizeBuffer(StreamMessageSizeGuard.MemoryStreamBlockBytes)
-            .TryGetSegment(StreamMessageSizeGuard.MemoryStreamBlockBytes, out _)
+        new FixedSizeBuffer(MessageSizeGuard.MemoryStreamBlockBytes)
+            .TryGetSegment(MessageSizeGuard.MemoryStreamBlockBytes, out _)
             .Should().BeTrue(
                 "a full block is the most a clean buffer can hold — so refusing AT the limit (not "
                 + "just above it) is the correct side to err on: the on-queue form also carries a "
@@ -308,18 +308,18 @@ public class OversizedStreamMessageRefusedTest
             new RawJson(string.Concat(Enumerable.Repeat("€", 400_000))),
             JsonSerializerOptions.Default);
 
-        StreamMessageSizeGuard.IsOversized(
-                multiByte, StreamMessageSizeGuard.MemoryStreamBlockBytes, out var bytes)
+        MessageSizeGuard.IsOversized(
+                multiByte, MessageSizeGuard.MemoryStreamBlockBytes, out var bytes)
             .Should().BeTrue("1.2 MB of UTF-8 is over the block regardless of how few chars it took");
         bytes.Should().Be(1_200_000);
 
         // A payload that is not RawJson is never measured — by the time a delivery reaches the
         // router it has been packaged, so anything else would mean serialising twice on the hot
         // path to answer a question that is almost always "no".
-        StreamMessageSizeGuard.IsOversized(
+        MessageSizeGuard.IsOversized(
                 new MessageDelivery<string>(Sender, new Address("portal", "user-1"),
                     new string('x', 4_000_000), JsonSerializerOptions.Default),
-                StreamMessageSizeGuard.MemoryStreamBlockBytes, out _)
+                MessageSizeGuard.MemoryStreamBlockBytes, out _)
             .Should().BeFalse("an unpackaged payload is not the routed shape and is not guessed at");
     }
 }
