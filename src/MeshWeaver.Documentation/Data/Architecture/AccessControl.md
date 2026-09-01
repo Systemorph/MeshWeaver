@@ -822,6 +822,102 @@ exact fold it ran before.
 
 ---
 
+# API tokens and the `Api` capability
+
+An API token (`mw_…`, used by MCP and every programmatic client) authenticates as its **owner** and
+gets that person's permissions — no more. On top of that it must clear one extra gate, the
+**API-token clamp** in `PermissionEvaluator`:
+
+```csharp
+// a Bearer context that cannot reach the API surface here gets NOTHING here
+if (currentContext?.IsApiToken == true && !p.HasFlag(Permission.Api)
+    && !PublicSurfaceCarriesApi(publicGrant, permissionCap))
+    p = Permission.None;
+```
+
+It zeroes the **whole** permission set, not just the `Api` bit — "may not use the API here" is not a
+partial answer. There are exactly two ways past it, and both are read live off the target path on
+every evaluation:
+
+1. **The caller's own node permissions carry `Api`.** Every built-in role carries it (`Viewer`,
+   `Commenter`, `Editor`, `Admin`), so an ordinary grant is enough; a *custom* `Role` that omits
+   `Api` is the case where a real grant still leaves the token outside.
+2. **This path's PUBLIC surface carries it** — a `PartitionAccessPolicy.PublicRead` scope or a
+   declared [`NodeTypeGate`](#type-declared-subtree-gates-nodetypegate) segment — *and* no policy on
+   the scope chain caps `Api` out. A page every anonymous browser may read is not secret from an API
+   client. This is what keeps tokens working on `Doc/`, `Agent/` and every installed package
+   partition, which `PackageInstaller` publishes through exactly that policy rather than through an
+   `AccessAssignment`.
+
+`PartitionAccessPolicy { Api = false }` is therefore meaningful in its own right: **"readable in a
+browser, not reachable through the API."** The public grant is ORed in *after* the cap so the page
+stays readable; the capability it confers is *not*, so the API surface closes.
+
+## 🚨 Why the mint-time role snapshot existed — and why trusting it was the bug
+
+`ApiToken.Roles` is a list of role ids captured **when the token was created**. It rides
+`ValidateTokenResponse.Roles` and is stamped onto `AccessContext.Roles` by `UserContextMiddleware`.
+Until 2026-09-01 the clamp's second escape hatch was that snapshot (`ClaimsCarryApi`), and the
+comments around it gave a reason:
+
+> per-node hubs intentionally don't register the synced `AccessAssignment` query (recursion
+> avoidance), so without the stamp an API-token request sees 0 roles → 0 perms → the gate strips →
+> DENY.
+
+**That reason had been obsolete for months, and the comment outlived the mechanism it described.**
+Two things had changed underneath it:
+
+* The fold moved onto the **process-wide `IMeshNodeStreamCache`**. `AddRowLevelSecurity` registers
+  no synced query at all any more — the mesh hub and every per-node hub run the *same*
+  `PermissionEvaluator` over the *same* cached `$security-*` queries. There is no hub on which a
+  grant is invisible, so there was nothing left for the stamp to compensate for.
+* The **2026-08-05 paywall fix** removed claim roles from node permissions outright (they had made
+  every claim a global, undeniable grant). After it, the snapshot's only remaining effect was this
+  one capability hatch.
+
+A snapshot answers a question about **now** with a fact from **then**, so it was wrong in both
+directions at once:
+
+| | What a stale snapshot does | Consequence |
+|---|---|---|
+| **Too restrictive** | It cannot see a grant made after the mint | A token minted before its owner held anything `Api`-bearing could not read a publicly-readable partition the same person's browser renders fine — and **no later grant could fix it**, because no later grant rewrites a minted token. Most IdPs emit no role claims at all, so `ApiToken.Roles` is usually empty: re-minting produced the same empty list and changed nothing. |
+| **Too permissive** | It cannot lose a capability revoked after the mint | A token whose mint-time claims carried an `Api`-bearing role name kept the API surface open **forever**, over the top of a `PartitionAccessPolicy` written afterwards that said `api: false`. Withdrawing API reach could not withdraw it from the tokens that already existed. |
+
+The second row is the security half, and it is the one that decided the design: **the failure that
+must not ship is a token retaining authority someone took away.**
+
+## The fix, and why this shape
+
+The capability is now derived from `(publicGrant, permissionCap)` — two values the fold **already
+computes for this path on every emission**. Concretely that buys freshness for free:
+
+* **No new data source.** No extra query, no extra subscription, nothing added to the hot path.
+* **No cross-schema fan-out.** "Does this person hold an `Api`-bearing role *anywhere*?" is the
+  unanchored, all-partitions question that
+  [Cross-schema fan-out elimination](/Doc/Architecture/CrossSchemaFanOutElimination) exists to
+  forbid — a 188-schema `UNION` is a measured lock bomb. The question actually worth asking is
+  path-scoped, and the scope walk already answers it.
+* **No recursion.** Resolving the token's roles inside token validation would have put a permission
+  read inside the authentication bootstrap. Nothing here re-enters the evaluator.
+* **Undetermined is not a grant.** The predicate is only consulted on a fold *emission*, where both
+  inputs are known. A fold leg that cannot reach a verdict terminates with an **error**, which
+  surfaces as `Undetermined` / `ErrorType.Unavailable` and refuses the delivery — never as a
+  permissive default. See [The fold can produce NO answer](#-the-fold-can-produce-no-answer-and-that-is-a-third-outcome).
+
+`AccessContext.Roles` is now read **nowhere** in `PermissionEvaluator`. It is still carried on a
+Bearer context, for two non-authority reasons: it is a useful diagnostic, and `AccessControlPipeline`
+uses a non-empty `Roles` list as its cue to restore the sender's `AccessContext` on a receiving hub.
+Neither is a permission decision — a future "just check the claims" is a regression, not a shortcut.
+
+> 🚨 **The general rule this is an instance of.** A credential must not carry a *copy* of an
+> authorization fact. Copies go stale silently and in both directions, and the permissive direction
+> has no expiry: the moment authority is snapshotted onto a token, revoking it stops working for
+> every token already minted. Authority is read from the authority, at the point of use.
+
+Pinned by `ApiTokenCapabilityFreshnessTest` (core) and `PaywallRealGateShapeTests` (plugins).
+
+---
+
 # Hierarchical access pattern
 
 ```mermaid
