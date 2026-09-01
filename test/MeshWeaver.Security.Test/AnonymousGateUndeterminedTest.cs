@@ -67,6 +67,18 @@ public class AnonymousGateUndeterminedTest(ITestOutputHelper output) : MonolithM
 
     private const string FaultMarker = "the permission fold faulted";
 
+    /// <summary>
+    /// The xunit wedge backstop, not a measurement — these assertions settle in milliseconds
+    /// because both degraded folds answer synchronously at subscribe time. Written as a constant
+    /// only because an attribute argument has to be one; the value is
+    /// <c>TestTimeouts.Convergence × 2</c> at the CI factor, i.e. the margin
+    /// <c>TestTimeouts.TestMilliseconds</c> applies. 🚨 NOT the copied literal 30 s, which is the
+    /// framework's OWN write bound (<c>LateResponseWatchBound</c> 30 s + <c>VerdictBoundGrace</c>
+    /// 1 s), so a test bounded there always gives up one second before the framework can say why
+    /// (#2819).
+    /// </summary>
+    private const int FactTimeoutMs = 240_000;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddMeshNodes(
@@ -101,7 +113,7 @@ public class AnonymousGateUndeterminedTest(ITestOutputHelper output) : MonolithM
     /// 🚨 THE REGRESSION PIN. Before the fix the only answer available here was <c>false</c>, and
     /// the caller had no way to tell it from a real denial — so it redirected to <c>/login</c>.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = FactTimeoutMs)]
     public async Task AFaultedFold_IsUndetermined_NotADenial()
     {
         var outcome = await AnonymousGate.Evaluate(Mesh, FaultingPath)
@@ -118,7 +130,7 @@ public class AnonymousGateUndeterminedTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>#2742's terminal, reached through the anonymous gate rather than the message gate.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = FactTimeoutMs)]
     public async Task ASilentFold_IsUndetermined_NotADenial()
     {
         var outcome = await AnonymousGate.Evaluate(Mesh, SilentPath)
@@ -135,7 +147,7 @@ public class AnonymousGateUndeterminedTest(ITestOutputHelper output) : MonolithM
     /// instead, which would serve private content to the internet. Both degraded paths, both
     /// surfaces (the tri-state AND the boolean projection every existing caller still uses).
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = FactTimeoutMs)]
     public async Task AnUndeterminedFold_DoesNotGrantAnonymousAccess()
     {
         foreach (var path in new[] { FaultingPath, SilentPath })
@@ -158,7 +170,7 @@ public class AnonymousGateUndeterminedTest(ITestOutputHelper output) : MonolithM
     /// If this flipped to undetermined, every gated page would start answering "temporarily
     /// unavailable" and retrying forever, which is the same lie pointed the other way.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = FactTimeoutMs)]
     public async Task AGenuineDenial_IsStillADefinitiveDenial()
     {
         var outcome = await AnonymousGate.Evaluate(Mesh, PrivatePath)
@@ -172,7 +184,7 @@ public class AnonymousGateUndeterminedTest(ITestOutputHelper output) : MonolithM
 
     /// <summary>The over-reach control: a fail-closed fix that refuses everything would pass every
     /// assertion above and still be broken.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = FactTimeoutMs)]
     public async Task AGenuineGrant_IsStillGranted()
     {
         var outcome = await AnonymousGate.Evaluate(Mesh, PublicPath)
