@@ -9,7 +9,9 @@ using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Concurrency;
+using Orleans.Configuration;
 using Orleans.Runtime;
 using Orleans.Streams;
 using Orleans.Streams.Core;
@@ -74,6 +76,16 @@ internal class RoutingGrain(
     // legs are not). Null on a host that did not register it — then nothing is held, as before.
     private readonly RoutingQuiescence? quiescence =
         meshHub.ServiceProvider.GetService<RoutingQuiescence>();
+
+    // 🚨 Issue #2897. The bound BOTH forward grain legs measure a delivery against before handing it
+    // to Orleans. Read the LIVE option rather than a compiled-in constant: this is the number the
+    // transport actually enforces, so a deployment that tuned MaxMessageBodySize is measured against
+    // its own limit and never gets a false refusal. The constant is only the fallback for a host that
+    // registered no messaging options at all, and it IS Orleans' default — the exact value the
+    // incident reported. Instance field: its lifetime is this activation's.
+    private readonly int grainBodyLimitBytes =
+        meshHub.ServiceProvider.GetService<IOptions<SiloMessagingOptions>>()?.Value.MaxMessageBodySize
+        ?? MessageSizeGuard.DefaultGrainTransportBodyBytes;
 
     /// <summary>
     /// Per-destination FIFO for the stream-routed branch. Instance field — its lifetime is this
@@ -455,6 +467,14 @@ internal class RoutingGrain(
         void PostVerdictToSender(string failureMessage, ErrorType errorType, bool targetUnserved) =>
             PostFailure(delivery, address, streamProvider, grainFactory, failureMessage, errorType,
                 targetUnserved: targetUnserved);
+
+        // 🚨 Issue #2897 — the pod-hub leg is a grain call too, and carries the SAME delivery, so it
+        // meets the same frame bound. Guarding only the IMessageHubGrain leg would leave the
+        // stream-routed half of the forward traffic on the unguarded path.
+        var oversized = RefuseOversizedGrainDispatch(
+            delivery, addressPath, addressPath, PostFailureToSender, logger, grainBodyLimitBytes);
+        if (oversized is not null)
+            return oversized;
 
         return DeliverToGrainObservable(
                 () => grainFactory.GetGrain<IPodHubGrain>(addressPath).Deliver(delivery),
@@ -843,6 +863,14 @@ internal class RoutingGrain(
                         return Observable.Return(Unit.Default);
                     }
 
+                    // 🚨 Issue #2897 — do not hand Orleans a body it cannot frame. A refusal here
+                    // is a TERMINAL answer for this delivery (the sender is NACK'd inside), so the
+                    // leg completes without ever reaching the grain call.
+                    var oversized = RefuseOversizedGrainDispatch(
+                        delivery, addressPath, grainKey, PostFailureToSender, logger, grainBodyLimitBytes);
+                    if (oversized is not null)
+                        return oversized;
+
                     logger.LogDebug("[ROUTE] Delivering {MessageType} to grain {GrainKey}", delivery.Message?.GetType().Name ?? "(null)", grainKey);
                     RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL id={delivery.Id} grainKey={grainKey}");
                     // 🚨 Deliver with a TRANSIENT-rejection retry. A node grain that is mid-DeactivateOnIdle
@@ -922,7 +950,7 @@ internal class RoutingGrain(
         // wall it is describing, silently (#1890). Strip an undeliverable payload down to a
         // description of itself; the sender matches a DeliveryFailure on RequestId, never on the
         // echoed payload. A payload that fits is echoed unchanged.
-        var echoedDelivery = StreamMessageSizeGuard.WithoutOversizedPayload(delivery);
+        var echoedDelivery = MessageSizeGuard.WithoutOversizedPayload(delivery);
         var failureDelivery = new MessageDelivery<DeliveryFailure>(
             new DeliveryFailure(echoedDelivery, failureMessage)
             {
@@ -1276,7 +1304,7 @@ internal class RoutingGrain(
         ILogger logger,
         TimeSpan timeout,
         IScheduler? scheduler = null,
-        int sizeLimitBytes = StreamMessageSizeGuard.MemoryStreamBlockBytes)
+        int sizeLimitBytes = MessageSizeGuard.MemoryStreamBlockBytes)
         => Observable.Defer(() =>
         {
             var deliveryId = delivery.Id;
@@ -1296,10 +1324,10 @@ internal class RoutingGrain(
             //
             // Refusing cannot break anything that works: the bound IS Orleans' own, so everything
             // it rejects was already being dropped. It is deliberately not an exact admission test
-            // — see StreamMessageSizeGuard.
-            if (StreamMessageSizeGuard.IsOversized(delivery, sizeLimitBytes, out var payloadBytes))
+            // — see MessageSizeGuard.
+            if (MessageSizeGuard.IsOversized(delivery, sizeLimitBytes, out var payloadBytes))
             {
-                var refusal = StreamMessageSizeGuard.Describe(
+                var refusal = MessageSizeGuard.Describe(
                     delivery, addressPath, payloadBytes, sizeLimitBytes);
                 logger.LogError(
                     "[ROUTE] REFUSED oversized stream-routed delivery to {Address}: {Bytes} bytes "
@@ -1453,6 +1481,54 @@ internal class RoutingGrain(
     /// all cover the delivery, its ≤6 retry timers and its NACK. <see cref="DeliverToGrainWithRetry"/>
     /// is the fire-and-forget subscription of the same leg, kept for the pure tests that drive it.</para>
     /// </summary>
+    /// <summary>
+    /// 🚨 REFUSE, LOUDLY, WHAT PROVABLY CANNOT BE WRITTEN TO AN ORLEANS FRAME — issue #2897.
+    ///
+    /// <para>The producer-side twin of the memory-stream refusal in <see cref="PostToStream"/>, for
+    /// the two FORWARD grain legs (<see cref="BuildGrainRoute"/>'s <c>IMessageHubGrain</c> call and
+    /// <see cref="BuildPodHubRoute"/>'s <c>IPodHubGrain</c> call). Dispatching a body over
+    /// <c>MaxMessageBodySize</c> does not fail this delivery politely: Orleans throws
+    /// <c>InvalidMessageFrameException</c> out of <c>Connection.ProcessOutgoing</c>, the
+    /// silo-to-silo connection is torn down, every unrelated message queued on it is collateral,
+    /// and the reconnect re-sends the same undeliverable body — a loop that cannot converge,
+    /// because the size is a property of the message and not of the attempt.</para>
+    ///
+    /// <para>Refusing cannot break anything that works: the bound is the transport's own, so
+    /// everything it rejects was already being dropped — only silently, and while taking a shared
+    /// connection down with it. NACKs the sender terminally (<see cref="ErrorType.Rejected"/>) so
+    /// its <c>Observe(...)</c> fires <c>OnError</c> instead of waiting out its budget on a message
+    /// that will never land.</para>
+    ///
+    /// <para>Returns a completed leg when the delivery is refused, and <c>null</c> when it fits and
+    /// the caller should dispatch — pure and static, so both the decision and its wording are
+    /// asserted without a cluster.</para>
+    /// </summary>
+    internal static IObservable<Unit>? RefuseOversizedGrainDispatch(
+        IMessageDelivery delivery,
+        string addressPath,
+        string grainKey,
+        Action<string, ErrorType> postFailureToSender,
+        ILogger logger,
+        int limitBytes)
+    {
+        if (!MessageSizeGuard.IsOversized(delivery, limitBytes, out var payloadBytes))
+            return null;
+
+        var refusal = MessageSizeGuard.DescribeGrainDispatch(
+            delivery, addressPath, payloadBytes, limitBytes);
+        logger.LogError(
+            "[ROUTE] REFUSED oversized grain-routed delivery to {Address}: {Bytes} bytes against "
+            + "the {Limit}-byte Orleans MaxMessageBodySize ({DeliveryId}, grainKey {GrainKey}, "
+            + "sender {Sender}) — NOT dispatched, because Orleans would refuse the frame and tear "
+            + "down the silo-to-silo connection, losing every unrelated message queued on it and "
+            + "then retrying the same undeliverable body. {Refusal}",
+            addressPath, payloadBytes, limitBytes, delivery.Id, grainKey, delivery.Sender, refusal);
+        RoutingGrainTrace.Write(
+            $"RoutingGrain.RouteMessage GRAIN_REFUSED_OVERSIZED addr={addressPath} id={delivery.Id} bytes={payloadBytes}");
+        postFailureToSender(refusal, ErrorType.Rejected);
+        return Observable.Return(Unit.Default);
+    }
+
     internal static IObservable<Unit> DeliverToGrainRoute(
         Func<Task<IMessageDelivery>> grainCall,
         string grainKey,
