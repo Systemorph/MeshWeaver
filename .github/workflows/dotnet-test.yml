@@ -473,6 +473,24 @@ jobs:
       # the gate explicit at the CI build step. NuGet restore advisories (NU19xx vulnerabilities) stay
       # warnings (WarningsNotAsErrors in Directory.Build.props) — handled via dependency overrides.
       run: dotnet build --no-restore -c Release -p:CIRun=true -warnaserror
+    - name: "Every test project is in the solution"
+      # 🚨 shard-assign.sh globs `find test -name '*.csproj'`, but the build builds
+      # MeshWeaver.slnx. A test project missing from the solution is therefore ASSIGNED to a
+      # shard and never BUILT: it produces no bin, contributes nothing to the tarball, and its
+      # tests run nowhere — the "absence of evidence" shape this workflow exists to refuse.
+      # Static, deterministic, and it names the offender instead of letting it surface as a
+      # packaging exit code. Found by PR #2966, which added two.
+      run: |
+        set -euo pipefail
+        missing=$(comm -23 \
+          <(find test -name '*.csproj' ! -path '*/bin/*' | sort) \
+          <(grep -oE 'test/[^"]+\.csproj' MeshWeaver.slnx | sort))
+        if [ -n "$missing" ]; then
+          echo "::error::these test projects are not in MeshWeaver.slnx, so they are never built and their tests never run:"
+          echo "$missing" | while read -r m; do echo "::error::  $m"; done
+          exit 1
+        fi
+        echo "All $(find test -name '*.csproj' ! -path '*/bin/*' | wc -l | tr -d ' ') test projects are solution members."
     - name: Package test outputs (one tarball per shard)
       env:
         SHARD_TOTAL: 6
@@ -509,7 +527,17 @@ jobs:
                 d="$(dirname "$csproj")/bin"
                 # A project that produced no output (helper with nothing to
                 # build) simply contributes nothing to its shard's tarball.
-                [ -d "$d" ] && echo "$d"
+                #
+                # 🚨 `if`, NOT `[ -d "$d" ] && echo "$d"`. A `while` loop's exit status is
+                # that of its LAST iteration, so under `set -e` the && form killed this
+                # whole step — bare `Process completed with exit code 1`, no message —
+                # whenever the last project ASSIGNED to a shard happened to have no bin.
+                # The empty-list guard below never got to speak, so the real cause (a test
+                # project absent from MeshWeaver.slnx, hence never built) surfaced four
+                # steps away as "No test results found in any shard — the suite did not
+                # run". Measured on PR #2966. The tolerance is deliberate; the exit-status
+                # poisoning was not.
+                if [ -d "$d" ]; then echo "$d"; fi
               done | sort -u > ".build-paths-$i.txt"
           # 🚨 Shard 0 additionally carries the PLUGIN TESTER — the ONE non-test bin that
           # travels. tools/MeshWeaver.PluginTester (mw-plugin-test.dll) is a TOOL, so the

@@ -180,6 +180,31 @@ it, and the test itself is untouched and still runs.
 sharing has its own opt-in turned off with the numbers written down — never by relaxing the test,
 and never by widening a timeout to hide it.
 
+## 🚨 Adding a test project: two places, or the suite runs nowhere
+
+`shard-assign.sh` globs `find test -name '*.csproj'`. The build builds **`MeshWeaver.slnx`**. Those
+are different lists, and a project in the first but not the second is **assigned to a shard and
+never built** — it contributes no `bin`, its tests execute nowhere, and nothing says so.
+
+That is what happened when this facility first landed (PR #2966). Worse, it did not surface as
+"project not built". The packaging step read:
+
+```bash
+[ -d "$d" ] && echo "$d"
+```
+
+A `while` loop's exit status is that of its **last iteration**, so under `set -euo pipefail` this
+killed the step whenever the last project *assigned to a shard* had no `bin` — a bare
+`Process completed with exit code 1`, no message, and the step's own empty-list guard never reached.
+Four steps later it read as *"No test results found in any shard — the suite did not run"*.
+
+It is a pure lottery on sort order: the same missing project one position earlier in the shard's
+list is silently tolerated, which is why the latent bug had never fired before. Both halves are now
+fixed — the loop uses `if`, so the real guard gets to speak, and a dedicated step fails RED naming
+any test project that is not a solution member.
+
+**When you add a test project, add it to `MeshWeaver.slnx` in the same commit.**
+
 ## Parallelism
 
 **Rows are not parallelised, and nothing here changes the parallelism model.** `TestCaseOrderer`
