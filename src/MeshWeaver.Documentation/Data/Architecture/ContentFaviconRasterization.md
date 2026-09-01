@@ -131,6 +131,30 @@ That makes this a two-repo change in the ordinary direction: **core merges first
 Plugins side lands the endpoint is live and correct but only one link is declared, i.e. exactly
 today's behaviour. Nothing half-lands.
 
+### 🚨 The residue: the IN-CIRCUIT head is a separate, narrower channel
+
+`SeoHead` renders for **anonymous requests only** — it returns early when
+`HttpContext.User.Identity.IsAuthenticated`. A signed-in user's tab icon comes instead from
+`ApplicationPage`'s circuit-side `<HeadContent>`, which declares one link from
+`MeshNodeImageHelper.ResolveIconLink`. **That path still declares SVG only**, so a signed-in Safari
+user's tab keeps the portal mark.
+
+It is deliberately not fixed here, because it is not the same problem wearing a different hat:
+
+- `ResolveIconLink` is **total** — a node with no icon of its own resolves to its NodeType glyph
+  (`/static/NodeTypeIcons/*.svg`) and finally a neutral box. `SeoResolver.ResolveIcon` is
+  deliberately **not**: the node's own mark or nothing. So the two do not resolve the same value,
+  and a raster link for the in-circuit path would have to answer for shipped glyphs too — those are
+  embedded resources in `MeshWeaver.Graph`, readable without an HTTP hop, so it is tractable, but it
+  is a *policy* question (does a NodeType stand-in deserve a rasterized tab icon?) rather than a
+  mechanical extension.
+- Safari's handling of a favicon link **inserted after load** is unreliable in a way the initial
+  response's is not, so the same three links added from the circuit may buy nothing.
+
+The reported defect — the anonymous, server-rendered head that crawlers and first paint read, and
+that every shared link resolves through — is fully covered. This residue is named so the next person
+measures it rather than rediscovering it from a screenshot.
+
 ## Verifying it
 
 ```bash
