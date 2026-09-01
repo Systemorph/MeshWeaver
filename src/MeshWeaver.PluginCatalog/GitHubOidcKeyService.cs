@@ -73,7 +73,16 @@ public sealed class GitHubOidcKeyService
     /// </summary>
     private sealed class Attempt
     {
-        public IObservable<GitHubSigningKeys> Promise = null!;
+        /// <summary>
+        /// LAZY on purpose. <c>IIoPool.Run</c> is EAGER — it subscribes and schedules the round trip
+        /// at CONSTRUCTION — so building it inside <see cref="gate"/> would start I/O from inside the
+        /// very lock its own fault handler has to take. Deferring means the slot is claimed under the
+        /// lock (cheap, allocation only) and the read starts after it is released, with
+        /// <see cref="Lazy{T}"/>'s default publication mode still guaranteeing exactly one execution.
+        /// Same reason <c>PromiseCache</c> wraps its entries in a <c>Lazy</c>.
+        /// </summary>
+        public Lazy<IObservable<GitHubSigningKeys>> Promise = null!;
+
         public GitHubSigningKeys? Value;
     }
 
@@ -102,11 +111,13 @@ public sealed class GitHubOidcKeyService
     /// <returns>A cold observable of the key set.</returns>
     public IObservable<GitHubSigningKeys> Keys(DateTimeOffset now)
     {
-        IObservable<GitHubSigningKeys> source;
+        Attempt live;
         lock (gate)
-            source = (attempt ??= CreateAttempt()).Promise;
+            live = attempt ??= CreateAttempt();
 
-        return source.SelectMany(keys =>
+        // 🚨 Forced OUTSIDE the lock — claiming the slot and starting the round trip are separate
+        // steps precisely so no I/O is scheduled while `gate` is held.
+        return live.Promise.Value.SelectMany(keys =>
             now - keys.FetchedAt < CacheDuration
                 ? Observable.Return(keys)
                 : Replace(keys));
@@ -148,22 +159,25 @@ public sealed class GitHubOidcKeyService
     /// <returns>The shared promise for the current attempt.</returns>
     private IObservable<GitHubSigningKeys> Replace(GitHubSigningKeys settled)
     {
+        Attempt live;
         lock (gate)
         {
-            // An attempt is live AND it is not the one that produced `settled` — either it is still
-            // in flight (Value is null) or it already produced something newer. Either way the work
-            // this caller wants is already happening; joining it is the whole point of the promise.
-            if (attempt is { } live && !ReferenceEquals(live.Value, settled))
-                return live.Promise;
-            attempt = CreateAttempt();
-            return attempt.Promise;
+            // An attempt is present AND it is not the one that produced `settled` — either it is
+            // still in flight (Value is null) or it already produced something newer. Either way the
+            // work this caller wants is already happening; joining it is the point of the promise.
+            live = attempt is { } existing && !ReferenceEquals(existing.Value, settled)
+                ? existing
+                : attempt = CreateAttempt();
         }
+
+        // Outside the lock, as in Keys: the slot is claimed under `gate`, the round trip is not.
+        return live.Promise.Value;
     }
 
     private Attempt CreateAttempt()
     {
         var created = new Attempt();
-        created.Promise = pool.Run(FetchAsync)
+        created.Promise = new Lazy<IObservable<GitHubSigningKeys>>(() => pool.Run(FetchAsync)
             .Do(keys =>
             {
                 lock (gate)
@@ -183,7 +197,7 @@ public sealed class GitHubOidcKeyService
                     "GitHub OIDC: could not read the signing keys — build-principal tokens are "
                     + "UNDETERMINED (retryable), never accepted");
                 return Observable.Throw<GitHubSigningKeys>(ex);
-            });
+            }));
         return created;
     }
 
