@@ -319,8 +319,28 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
 
             // 7b. The @@ include pulled in a Code node NO source query matches — so it is absent
             //     from the resolved set but present in the bytes.
+            //
+            //     🚨 THE ABSENCE FROM `sourceVersions` IS DELIBERATE AND STAYS (#2948 reconciled
+            //     this assertion rather than loosening it). `sourceVersions` mirrors the mesh's
+            //     NodeTypeDefinition.CompiledSources, which is folded over the RAW QUERY MATCH —
+            //     the same set on both producers, and the set BundleReader/PrebuiltAssemblySeeder
+            //     treat as provenance. Adding include targets to it would change a
+            //     producer/consumer contract (and 7d's whole point is that the two sets are not
+            //     interchangeable). What #2948 changed is the SOURCE FINGERPRINT, a different
+            //     field answering a different question — "were these bytes built from the source
+            //     this mesh holds?" — and THAT must cover the include, because the include is in
+            //     the bytes.
             Assert.DoesNotContain("Widget/Snippets/Greeting", thing.SourceVersions.Keys);
             Assert.Contains("Greeting", thingSurface);
+            // 7b'. …and it IS in the fingerprint's input: the compile-driven bake records the
+            //      include closure it substituted, and assertion 3b above proved the MESH bake —
+            //      which resolves the same include through a real workspace, with no NodeSet
+            //      anywhere — arrives at the identical hash. Without this line 3b's agreement
+            //      would be satisfiable by BOTH producers ignoring the include, which is exactly
+            //      the state #2948 found them in.
+            Assert.Contains(
+                "Widget/Snippets/Greeting",
+                treeReport.Types.Single(t => t.NodePath == "Widget/Thing").ResolvedIncludePaths);
 
             // 7c. The `nodeType:Code` filter excluded the Scope-typed .cs from the QUERY itself…
             Assert.DoesNotContain("Widget/Thing/Source/Scoped", thing.SourceVersions.Keys);
