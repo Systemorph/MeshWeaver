@@ -6,6 +6,11 @@
 # CLEAN and unarmed with an empty merge queue — nothing was failing, nothing was blocked, and
 # nothing was landing either. A green PR nobody arms is indistinguishable from a red one.
 #
+# 🚨 This file is IDENTICAL in every repo (MeshWeaver, MeshWeaver.Plugins, .SocialMedia,
+# .Reinsurance, .Manufacturing, .Education, .Crm). The repos are NOT identical — core runs a
+# merge queue and the others do not — so the arm step handles both shapes rather than the file
+# forking per repo. Divergent copies of a shared lane are a recorded failure mode here.
+#
 # Deliberately NOT here:
 #   * no `if: ${{ vars.X != '' }}` — invariant #3; a skipped job renders like a passed one.
 #   * drafts are skipped, which is the ONE opt-out. Mark a PR draft and it will not be armed;
@@ -50,11 +55,24 @@ jobs:
           # A merged/closed PR races us on `synchronize`; treat it as done, not as an error.
           state=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)
           if [ "$state" != "OPEN" ]; then echo "PR is $state — nothing to arm"; exit 0; fi
-          # 🚨 Failing to arm must be VISIBLE. It is not fatal to the PR — a human can still
-          # merge it — but a silent failure here recreates exactly the state this exists to
-          # fix: a green PR that never lands, with nothing saying why.
-          if ! out=$(gh pr merge "$PR" --repo "$REPO" --merge --auto 2>&1); then
+          # Two repo shapes, one file. A merge QUEUE owns the merge strategy (core's is
+          # SQUASH), so `--merge` is redundant there and some gh versions REJECT the
+          # combination outright; on a repo with no queue, gh refuses to arm at all unless a
+          # method is named. So name the method, then fall back to letting the queue decide.
+          if out=$(gh pr merge "$PR" --repo "$REPO" --merge --auto 2>&1); then
+            echo "arm requested (--merge): ${out:-ok}"
+          elif out=$(gh pr merge "$PR" --repo "$REPO" --auto 2>&1); then
+            echo "arm requested (strategy left to the merge queue): ${out:-ok}"
+          else
+            # 🚨 Failing to arm must be VISIBLE. It is not fatal to the PR — a human can still
+            # merge it — but a silent failure here recreates exactly the state this exists to
+            # fix: a green PR that never lands, with nothing saying why.
             echo "::warning::could not arm auto-merge on #$PR — $out"
             exit 0
           fi
-          echo "armed: #$PR will merge when the required contexts pass"
+          # Read it back. An exit code of 0 is the command's opinion; this is the evidence.
+          if gh pr view "$PR" --repo "$REPO" --json autoMergeRequest --jq '.autoMergeRequest != null' | grep -qx true; then
+            echo "armed: #$PR will merge when the required contexts pass"
+          else
+            echo "::warning::auto-merge still not set on #$PR after a clean arm — is 'Allow auto-merge' enabled on $REPO?"
+          fi
