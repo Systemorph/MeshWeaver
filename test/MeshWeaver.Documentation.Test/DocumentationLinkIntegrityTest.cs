@@ -86,7 +86,15 @@ public class DocumentationLinkIntegrityTest
         {
             var url = match.Groups[1].Value;
 
-            // Mirrors LinkUrlCleanupExtension.ResolveLinks:
+            // Mirrors LinkUrlCleanupExtension.ResolveLinks — with ONE deliberate difference,
+            // recorded here because it looks like an oversight (Copilot review, #2965).
+            // Production writes `url.StartsWith("http")`, the culture-sensitive overload; this
+            // uses Ordinal. The two can disagree only for a URL whose "http" is preceded by a
+            // culture-ignorable character, and they disagree in the SAFE direction: Ordinal skips
+            // FEWER links, so such a URL is checked rather than waved through. The worst case is a
+            // false RED naming the exact page and URL — never a broken link that slips past. The
+            // alternative would make a test's verdict depend on the runner's current culture,
+            // which is a flake source production does not have to care about and a gate does.
             var cleaned = url.TrimStart('@');
             if (cleaned.StartsWith("http", StringComparison.Ordinal)
                 || cleaned.StartsWith('#')

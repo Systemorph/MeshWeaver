@@ -200,6 +200,14 @@ public class PlatformNeverDependsOnPluginsGuard
         ActionableHits("          dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj\n")
             .Should().NotBeEmpty("building out of the checked-out tree is the point of the checkout");
 
+        ActionableHits("          repository: systemorph/meshweaver.plugins\n")
+            .Should().NotBeEmpty(
+                "GitHub resolves owner/repo case-insensitively, so a lowercased checkout is the "
+                + "same edge — a case-sensitive detector would go blind and report a clean tree");
+
+        ActionableHits("          dotnet publish Plugins-Repo/src/Memex.Portal.Distributed/x.csproj\n")
+            .Should().NotBeEmpty("…and so is a differently-cased checkout path");
+
         ActionableHits("# The portal HOST lives in MeshWeaver.Plugins (#2293 removed it from here).\n")
             .Should().BeEmpty("a comment naming the repo is documentation, not a dependency");
 
@@ -219,6 +227,13 @@ public class PlatformNeverDependsOnPluginsGuard
 
     private static readonly Regex CommentLine = new(@"^\s*#", RegexOptions.Compiled);
 
+    // 🚨 IgnoreCase throughout (Copilot review, #2965). GitHub resolves owner/repo
+    // case-insensitively, so `systemorph/meshweaver.plugins` or `Plugins-Repo` is the same
+    // checkout — and a case-sensitive detector would stop seeing its subject and report a clean
+    // tree, which is this guard's own failure mode turned on itself. The `.git` clone-URL probe
+    // below was already OrdinalIgnoreCase; the two regexes were the inconsistency.
+    private const RegexOptions Loose = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+
     private static ImmutableArray<string> ActionableHits(string yaml)
     {
         var lines = yaml.Replace("\r\n", "\n").Split('\n');
@@ -232,11 +247,11 @@ public class PlatformNeverDependsOnPluginsGuard
 
             var actionable =
                 // an actions/checkout, or a reusable workflow pointed at that repo's content
-                SatelliteRepos.Any(r => Regex.IsMatch(line, $@"(^|\s)(content-)?repository:\s*Systemorph/{Regex.Escape(r)}\b"))
+                SatelliteRepos.Any(r => Regex.IsMatch(line, $@"(^|\s)(content-)?repository:\s*Systemorph/{Regex.Escape(r)}\b", Loose))
                 // a clone URL — reaches the repo with no actions/checkout at all
                 || SatelliteRepos.Any(r => line.Contains($"Systemorph/{r}.git", StringComparison.OrdinalIgnoreCase))
                 // …and anything that reads the checked-out tree
-                || Regex.IsMatch(line, @"(^|[\s""'=/])plugins-repo([/\s""']|$)");
+                || Regex.IsMatch(line, @"(^|[\s""'=/])plugins-repo([/\s""']|$)", Loose);
 
             if (actionable)
                 hits.Add($"line {i + 1}: {line.Trim()}");
