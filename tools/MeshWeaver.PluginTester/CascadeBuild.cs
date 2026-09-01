@@ -459,7 +459,16 @@ public static class CascadeBuild
                     () => File.OpenRead(compiled.DllPath),
                     compiled.PdbPath is null ? null : () => File.OpenRead(compiled.PdbPath),
                     sourceVersions,
-                    compiled.Dependencies));
+                    compiled.Dependencies)
+                {
+                    // 🚨 #2813 — the CONTENT fingerprint of the sources this compile consumed, so
+                    // the consumer can prove the bytes match the source IT holds instead of taking
+                    // the bundle's word for it. Over the RAW resolved set, exactly as the runtime's
+                    // sources watcher does: NodeTypeSourceFingerprint applies the shaping fold
+                    // itself so the two callers cannot apply different ones.
+                    SourceFingerprint = NodeTypeSourceFingerprint.Compute(
+                        resolution.Sources, candidate.Node.Path, options.Logger),
+                });
             }
 
             StaticTestRunner.Run? tests = null;

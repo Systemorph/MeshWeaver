@@ -29,14 +29,31 @@ fail() { echo "::error::$1"; exit 1; }
 ls "$BAKE"/*.zip >/dev/null 2>&1 \
   || fail "$LABEL: the bake ran green but produced no bundles under $BAKE — the gate would then adopt nothing and pass vacuously."
 
-# ── 2. No compile FALLBACK ──────────────────────────────────────────────────────────────────────
+# ── 2. No compile FALLBACK, and no FALSE REFUSAL ────────────────────────────────────────────────
 # Each phrase means a consumer wanted prebuilt bytes, could not get them, and quietly compiled
 # instead. Green in every other signal; a delivery defect all the same.
+#
+# 🚨 "ADOPTION REFUSED" is the #2813 phrase, and it is here for the OPPOSITE failure to the others.
+# The refusal fires when a bundle's recorded source fingerprint disagrees with the source the mesh
+# holds — which, in THIS lane, cannot legitimately happen: the bake and the gate are staged from the
+# same tree by bake-then-gate.sh, so a disagreement means the two producers HASH THE SAME CONTENT
+# DIFFERENTLY. That is a false refusal, and shipping one refuses every good bundle in the fleet —
+# strictly worse than the staleness bug the refusal exists to catch. It is also invisible without
+# this line: `Seed` returns TRUE and the adopted/declared counts below still balance, because the
+# owner refuses AFTERWARDS, when it stamps; the type then flips to Pending, recompiles locally, and
+# every per-type verdict is green. The gate's own default log level is Warning and the refusal logs
+# at Error/Critical, so the phrase reaches the log without turning anything up.
 fallback_hit=0
 while IFS= read -r phrase; do
   [ -z "$phrase" ] && continue
   if grep -F -q -- "$phrase" "$BAKE_LOG" "$GATE_LOG" 2>/dev/null; then
-    echo "::error::$LABEL: compile fallback detected — \"$phrase\". A consumer declined the bake and compiled instead, so this run did not judge the bytes the bake shipped."
+    # The refusal phrase means something different from the rest, so it must not be reported as a
+    # fallback — a reader sent to look for a declined bundle would find a perfectly adopted one.
+    if [ "$phrase" = "ADOPTION REFUSED" ]; then
+      echo "::error::$LABEL: FALSE REFUSAL (#2813) — a NodeType refused the bake's own bytes as built from different source, but bake and gate were staged from the SAME tree. The compiler-driven producer and the runtime therefore hash the same content differently, which refuses every good bundle in the fleet. Fix NodeTypeSourceFingerprint (or whichever side moved) before shipping; do NOT relax this check."
+    else
+      echo "::error::$LABEL: compile fallback detected — \"$phrase\". A consumer declined the bake and compiled instead, so this run did not judge the bytes the bake shipped."
+    fi
     grep -F -n -- "$phrase" "$BAKE_LOG" "$GATE_LOG" 2>/dev/null | head -5
     fallback_hit=1
   fi
@@ -45,6 +62,7 @@ no prebuilt bundle
 carried no assemblies
 could resolve NO artifact
 no prebuilt assemblies adopted
+ADOPTION REFUSED
 PHRASES
 
 # ── 3. The gate CONSUMED the bake ───────────────────────────────────────────────────────────────

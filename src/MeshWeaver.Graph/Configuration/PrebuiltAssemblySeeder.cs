@@ -133,7 +133,7 @@ public static class PrebuiltAssemblySeeder
     /// <para>🚨 The counterpart to <see cref="DeclineReason(string?)"/>, and the reason both are
     /// public: <c>DeclineReason</c> answers "must we NOT adopt", this answers "need we adopt at
     /// all". Without it every boot re-adopts every bundle entry it holds — and adoption is not
-    /// cheap bookkeeping: <see cref="Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string})"/> opens the type's own mesh-node stream (which ACTIVATES
+    /// cheap bookkeeping: <see cref="Seed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string)"/> opens the type's own mesh-node stream (which ACTIVATES
     /// its per-node hub), re-uploads the assembly bytes to the shared store, and writes the node.
     /// Measured on memex-cloud 2026-08-17, that was 43 hub activations, 43 uploads and 43 writes —
     /// <b>13.5 s of a 101 s boot</b> — establishing that nothing had changed since the previous pod
@@ -159,7 +159,7 @@ public static class PrebuiltAssemblySeeder
     /// precisely what the bake would call <see cref="BakeState.Baked"/></b>.</para>
     ///
     /// <para>🚨 Note in particular what this does NOT compare: the NodeType MeshNode's CURRENT
-    /// version. <see cref="Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string})"/> uploads and stamps the version it read BEFORE its own write, and
+    /// version. <see cref="Seed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string)"/> uploads and stamps the version it read BEFORE its own write, and
     /// that write bumps the node — so after any adoption <c>LastCompiledVersion</c> is permanently
     /// one behind <c>node.Version</c>, and a naive equality check is unsatisfiable. That mismatch
     /// is also why today's unconditional re-adoption uploads the SAME bytes under a NEW store key
@@ -225,26 +225,34 @@ public static class PrebuiltAssemblySeeder
     }
 
     /// <summary>
-    /// Seeds <paramref name="assemblyBytes"/> as the build for <paramref name="nodeTypePath"/>.
+    /// 🚨 <b>THE TRAP-DOOR THAT MADE #2813's CURE INERT. Do not call it; pass the fingerprint.</b>
     ///
-    /// <para>Cold: the write runs on Subscribe. Emits <c>true</c> when the assembly was adopted and
-    /// <c>false</c> when it was declined — a decline is not an error, it is the caller's signal to
-    /// compile normally.</para>
+    /// <para>This overload defaulted <c>sourceFingerprint</c> to null, and BOTH production callers
+    /// bound to it — <c>PluginBundleClient</c> and <c>ShippedPrebuiltBundles</c>. So every adoption
+    /// on every mesh took the legacy "provenance unknown" branch, the three-way comparison in
+    /// <c>NodeTypeCompilationHelpers.ApplyAdoptedSourceStamp</c> could never reach its refusal, and
+    /// the whole mechanism sat armed and dead for months while the code implementing it looked
+    /// finished. A convenience overload whose default answer is "unverified" is not a convenience:
+    /// it is a silent opt-out of a safety check, taken by whoever writes the shortest call.</para>
+    ///
+    /// <para>Passing <c>null</c> is still legitimate — a legacy bundle genuinely records no
+    /// fingerprint — but it must be WRITTEN, at the call site, where a reviewer can see the claim
+    /// being waived. Use the eight-parameter
+    /// <see cref="Seed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string)"/>.</para>
+    ///
+    /// <para>🚨 <b>Why this is <c>Obsolete(error)</c> and not DELETED.</b> Deleting a public
+    /// framework method is a breaking change to in-mesh code no compiler can see, and AGENTS.md
+    /// requires sweeping the live mesh before doing it. That sweep could not be completed: content
+    /// indexing is inactive on both reachable deployments (<c>search_chunks</c> answers
+    /// <c>"searched": false</c>, which is a FAILED sweep, not a clean one). Both repos' node trees
+    /// were swept by hand and hold no caller. So the symbol stays — nothing already compiled can
+    /// break — while every source call site fails loudly, at the call, with the reason.</para>
     /// </summary>
-    /// <param name="hub">The calling hub.</param>
-    /// <param name="nodeTypePath">Mesh path of the NodeType this assembly implements.</param>
-    /// <param name="assemblyBytes">The compiled assembly.</param>
-    /// <param name="pdbBytes">Symbols, when the assembly does not embed them.</param>
-    /// <param name="frameworkMvid">The framework build identity the bytes were compiled against,
-    /// as recorded by the producer. <c>null</c> declines the seed.</param>
-    /// <param name="logger">Diagnostics. Every decline is logged with its reason — a silent decline
-    /// looks exactly like a successful adoption that later recompiles for no visible cause.</param>
-    /// <param name="dependencies">The producer's per-type DEPENDENCY RECORD for these bytes
-    /// (#1707 slice 2), when the bundle carries one: validated against THIS environment before
-    /// adoption (a module the type binds must be the exact build here too) and stamped onto
-    /// <see cref="NodeTypeDefinition.CompiledDependencies"/> on adopt so the ongoing validity
-    /// checks judge the adopted build the same way they judge a locally-compiled one. Null =
-    /// legacy bundle; the framework gate alone decides, and no record is stamped.</param>
+    [Obsolete(
+        "#2813: this overload silently adopts prebuilt bytes as UNVERIFIED. Call the eight-parameter "
+        + "Seed and pass the bundle's source fingerprint (BundleReader.Payload.SourceFingerprint), "
+        + "or an explicit null if the bundle genuinely records none.",
+        error: true)]
     public static IObservable<bool> Seed(
         IMessageHub hub,
         string nodeTypePath,
@@ -274,16 +282,18 @@ public static class PrebuiltAssemblySeeder
     /// <param name="dependencies">The producer's per-type dependency record, or <c>null</c> for a
     /// legacy bundle.</param>
     /// <param name="sourceFingerprint">🚨 <b>The producer's CONTENT fingerprint of the sources these
-    /// bytes were built from</b> (#2813) — <see cref="PartitionSourceFingerprint"/> shape. Stamped
-    /// onto the node, where the OWNER compares it against its own live source set before honouring
-    /// the adoption's <c>RequestedSourceStampAt</c>. <c>null</c> for a legacy bundle that records
-    /// none: the adoption still lands, but as <c>BuildProvenance.AdoptedUnverified</c> — never
-    /// silently as verified.
+    /// bytes were built from</b> — <c>NodeTypeSourceFingerprint.Compute</c> shape (#2813), which is
+    /// what <c>BundleReader.Payload.SourceFingerprint</c> carries. Stamped onto the node, where the
+    /// OWNER compares it against its own live source set before honouring the adoption's
+    /// <c>RequestedSourceStampAt</c>. <c>null</c> for a legacy bundle that records none: the
+    /// adoption still lands, but as <c>BuildProvenance.AdoptedUnverified</c> — never silently as
+    /// verified.
     ///
     /// <para>A separate OVERLOAD rather than an eighth optional parameter: the seven-parameter form
-    /// is public surface with shipped callers, and adding an optional parameter to it is a BINARY
-    /// break the compatibility gate is right to refuse. This parameter carries no default, so an
-    /// existing seven-argument call still binds unambiguously to the old form.</para></param>
+    /// is public surface, and adding an optional parameter to it is a BINARY break the compatibility
+    /// gate is right to refuse. This parameter carries no default, so the two forms stay distinct —
+    /// and the seven-argument one is now <c>Obsolete(error)</c>, because a call that silently means
+    /// "unverified" is exactly how the refusal above stayed unreachable.</para></param>
     public static IObservable<bool> Seed(
         IMessageHub hub,
         string nodeTypePath,

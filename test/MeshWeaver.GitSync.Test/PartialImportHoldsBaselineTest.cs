@@ -20,6 +20,15 @@ namespace MeshWeaver.GitSync.Test;
 /// this commit" for every later green build, and the Space's own UI read "up to date" the whole
 /// time. Nothing short of a new repo commit could ever land the missed node.</para>
 ///
+/// <para>🚨 <b>The example in this summary no longer HAPPENS — the guard it pins still must.</b>
+/// Issue #2556 removed the cause: the importer now writes a NodeType before the instances that
+/// name it (<c>ImportWriteOrder</c>), so a repo shipping an instance of a type it introduces lands
+/// in one pass instead of being refused and retried with the same ordering forever. A node whose
+/// type NO source carries is reported as a BLOCKED CREATE, which deliberately does not count as
+/// <c>Failed</c> — one unsatisfiable node must not freeze every later commit of the repo. What
+/// remains, and is what this test guards, is the general case: any per-file failure that COULD
+/// land next time still holds the baseline. See Doc/Architecture/ImportWriteOrdering.</para>
+///
 /// <para>The decision is pinned here as a PURE predicate rather than through a live import,
 /// because the defect is entirely in the decision: the importer had always tallied the per-file
 /// failures, and the caller had always thrown that tally away. Every branch is asserted, in both

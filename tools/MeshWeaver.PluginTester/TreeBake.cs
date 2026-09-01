@@ -378,7 +378,17 @@ public static class TreeBake
                     () => File.OpenRead(compiled.DllPath),
                     compiled.PdbPath is null ? null : () => File.OpenRead(compiled.PdbPath),
                     sourceVersions,
-                    compiled.Dependencies));
+                    compiled.Dependencies)
+                {
+                    // 🚨 #2813 — the CONTENT fingerprint of the sources this compile consumed.
+                    // `sourceVersions` above is provenance a reader SKIPS (its values are zeros);
+                    // this is the value the consumer's adoption is decided on, and it is taken over
+                    // the same RAW resolved set for the same reason: NodeTypeSourceFingerprint
+                    // applies the shaping fold, so the bake and the runtime cannot fork on which
+                    // files count.
+                    SourceFingerprint = NodeTypeSourceFingerprint.Compute(
+                        resolution.Sources, candidate.Node.Path, options.Logger),
+                });
 
                 results.Add(new TypeResult(
                     compiled.NodePath, candidate.Package, null, compiled.Inputs.MatchedSourcePaths));

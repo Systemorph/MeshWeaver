@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -11,6 +12,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Compiler;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -197,6 +199,250 @@ public class AdoptedBuildSourceStampTest(ITestOutputHelper output) : MonolithMes
             TryDelete(dir);
         }
     }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    //  #2813 — THE THREE-WAY, END TO END.
+    //
+    //  The comparison itself is unit-tested in MeshWeaver.Graph.Test (AdoptedBuildProvenanceTest,
+    //  a pure function over a staged definition). What those tests CANNOT see — and what let this
+    //  mechanism ship armed and inert for months — is whether a real bundle's fingerprint ever
+    //  reaches the comparison on a real mesh. It did not: both production callers bound to a
+    //  convenience overload that hard-coded `sourceFingerprint: null`, so every adoption in every
+    //  deployment took the legacy branch and the refusal could not fire. These three tests drive
+    //  the WHOLE path — BundleWriter → BundleReader → ShippedPrebuiltBundles → Seed → the owning
+    //  hub's stamp — and each of them fails if any link drops the value.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 🚨 <b>THE test for #2813.</b> The bundle states which sources its bytes were built from, and
+    /// they are NOT the ones this mesh holds — the exact shape of the incident: a sync pulled new
+    /// source for <c>Crm/Migration</c>, an assembly built from the PREVIOUS source was adopted over
+    /// it, and the next run executed last week's code and destroyed four client documents.
+    ///
+    /// <para>Asserted on the ONE write that records the refusal, observed through a subscription
+    /// armed BEFORE the seed — a later local compile supersedes that state within seconds, so
+    /// reading the node afterwards would be a race whose green is meaningless.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ABundleBuiltFromDifferentSource_IsRefused()
+    {
+        const string id = "StaleThing";
+        var typePath = $"{TestPartition}/{id}";
+
+        await CreateNodeType(id);
+        await CreateSource(typePath, "model",
+            "public record StaleThing { public string Title { get; init; } = string.Empty; }");
+
+        // What a producer that baked an OLDER revision of this file would have recorded. Computed
+        // with the same public function the bake uses — the point is that it is a HONEST
+        // fingerprint of DIFFERENT source, not a corrupt or random string, because a corrupt value
+        // would be refused for reasons that say nothing about staleness.
+        var staleFingerprint = FingerprintOf(
+            $"{typePath}/Source/model",
+            "public record StaleThing { public string Title { get; init; } = \"last week\"; }");
+
+        var dir = CreateBundleDirectory();
+        var refusal = ObserveDefinition(typePath,
+            d => d.BuildProvenance is BuildProvenance.AdoptionRefused);
+        using var subscription = refusal.Connect();
+        try
+        {
+            WriteBundle(
+                Path.Combine(dir, "shipped.zip"),
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream([0xDE, 0xAD, 0xBE, 0xEF]))
+                {
+                    SourceFingerprint = staleFingerprint,
+                });
+
+            await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
+                .FirstAsync()
+                .Await(TestContext.Current.CancellationToken);
+
+            var refused = await refusal.Await(TestContext.Current.CancellationToken);
+
+            refused.AdoptedSourceFingerprint.Should().Be(staleFingerprint,
+                "the bundle's fingerprint must survive the whole transport — writer, reader, Seed "
+                + "— or the comparison is made against nothing and silently degrades to "
+                + "AdoptedUnverified, which is the state this fix exists to leave");
+            refused.CurrentSourceFingerprint.Should().NotBeNullOrEmpty(
+                "the owner must have computed its OWN fingerprint, or the three-way answered its "
+                + "scariest branch on an absence rather than on a comparison");
+            refused.CurrentSourceFingerprint.Should().NotBe(staleFingerprint,
+                "the fixture is only meaningful if the two genuinely differ");
+            refused.CompiledSources.Should().BeNull(
+                "a refused adoption must not stamp CompiledSources — that write is exactly what "
+                + "makes IsDirty false by construction and is precisely the lie that made every "
+                + "health signal report green while stale bytes ran");
+            refused.CompilationStatus.Should().Be(CompilationStatus.Pending,
+                "the refusal must DRIVE a real local compile of the live source, not merely "
+                + "record a complaint");
+            refused.RequestedSourceStampAt.Should().BeNull(
+                "the stamp request is consumed by the refusal so it cannot re-fire");
+        }
+        finally
+        {
+            TryDelete(dir);
+        }
+    }
+
+    /// <summary>
+    /// The other side of the same gate, and the one whose failure would be an OUTAGE rather than a
+    /// bug: a bundle whose fingerprint MATCHES must adopt, be marked verified, and NOT recompile.
+    ///
+    /// <para>If the producer's hash and the consumer's hash disagreed in any way — a serializer
+    /// option, a node property, a shaping rule — every good bundle on every mesh would be refused
+    /// and every portal would recompile everything on every boot. This test is the reason the
+    /// fingerprint is taken over the compile INPUT (path + code text through
+    /// <c>NodeCompileShaping.CollectCompileSources</c>) rather than over the source nodes'
+    /// serialised content.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ABundleBuiltFromTheSameSource_AdoptsAsVerified_AndIsNotRecompiled()
+    {
+        const string id = "VerifiedThing";
+        var typePath = $"{TestPartition}/{id}";
+        const string code =
+            "public record VerifiedThing { public int Answer { get; init; } = 42; }";
+
+        await CreateNodeType(id);
+        await CreateSource(typePath, "model", code);
+
+        var dir = CreateBundleDirectory();
+        try
+        {
+            WriteBundle(
+                Path.Combine(dir, "shipped.zip"),
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream([0x0F, 0xF1, 0xCE]))
+                {
+                    // Computed by the TEST, from the source text alone, exactly as a bake computes
+                    // it from a checkout — never read back off the mesh, which would make the
+                    // assertion circular and prove nothing about cross-process equality.
+                    SourceFingerprint = FingerprintOf($"{typePath}/Source/model", code),
+                });
+
+            var adopted = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
+                .FirstAsync()
+                .Await(TestContext.Current.CancellationToken);
+            adopted.Should().Be(1, "the bundle names a type this mesh holds");
+
+            var def = await AwaitDefinition(typePath,
+                d => d.LatestAssemblyPath is { Length: > 0 }
+                     && d.RequestedSourceStampAt is null
+                     && d.CompiledSources is not null,
+                "the adoption was stamped by the owner");
+
+            def.BuildProvenance.Should().Be(BuildProvenance.AdoptedVerified,
+                "the producer's fingerprint and the owner's own must be EQUAL for identical "
+                + "source — if this is AdoptedUnverified the value never arrived, and if it is "
+                + "AdoptionRefused the two producers hash the same content differently, which "
+                + "would refuse every good bundle in the fleet");
+            def.CompiledSources!.Should().Equal(def.CurrentSourceVersions!,
+                "a verified adoption stamps the owner's live snapshot");
+            def.IsDirty.Should().BeFalse(
+                "a verified adoption is current by construction — reading dirty here means the "
+                + "next release request recompiles the build that was just proven correct");
+            def.CompilationStatus.Should().NotBe(CompilationStatus.Pending,
+                "nothing about a VERIFIED adoption may dispatch a compile");
+        }
+        finally
+        {
+            TryDelete(dir);
+        }
+    }
+
+    /// <summary>
+    /// The LEGACY path, asserted rather than assumed. A bundle from a producer that records no
+    /// fingerprint must still adopt — as <see cref="BuildProvenance.AdoptedUnverified"/>.
+    ///
+    /// <para>🚨 Refusing on an absence is the tempting and wrong answer: it would make every
+    /// legacy-bundle type dirty on arrival, so every install would recompile everything (the 43
+    /// activations / 13.5 s of boot the prebuilt lane exists to remove), and on a
+    /// <c>Modules:RequirePrebuilt</c> mesh — where a local compile is refused by design — it would
+    /// PARK every such type: an outage with no recovery path, self-inflicted by a guard. The
+    /// requirement for an unproven bundle is VISIBILITY, not refusal.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ALegacyBundleWithNoFingerprint_StillAdopts_ButAsUnverified()
+    {
+        const string id = "LegacyThing";
+        var typePath = $"{TestPartition}/{id}";
+
+        await CreateNodeType(id);
+        await CreateSource(typePath, "model",
+            "public record LegacyThing { public string Note { get; init; } = string.Empty; }");
+
+        var dir = CreateBundleDirectory();
+        try
+        {
+            WriteBundle(
+                Path.Combine(dir, "shipped.zip"),
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                // No SourceFingerprint — every bundle produced before #2813 looks exactly like this.
+                new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream([0x11, 0x22, 0x33])));
+
+            var adopted = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
+                .FirstAsync()
+                .Await(TestContext.Current.CancellationToken);
+            adopted.Should().Be(1);
+
+            var def = await AwaitDefinition(typePath,
+                d => d.LatestAssemblyPath is { Length: > 0 }
+                     && d.RequestedSourceStampAt is null
+                     && d.CompiledSources is not null,
+                "the adoption was stamped by the owner");
+
+            def.AdoptedSourceFingerprint.Should().BeNull("the bundle recorded none");
+            def.BuildProvenance.Should().Be(BuildProvenance.AdoptedUnverified,
+                "provenance is UNKNOWN, which is neither a clean bill of health nor a refusal");
+            def.CompiledSources!.Should().Equal(def.CurrentSourceVersions!,
+                "the stamp is KEPT deliberately — withholding it parks every legacy type on a "
+                + "RequirePrebuilt mesh");
+            def.CompilationStatus.Should().NotBe(CompilationStatus.Pending,
+                "an unproven bundle is not a refused one — it must not dispatch a compile");
+        }
+        finally
+        {
+            TryDelete(dir);
+        }
+    }
+
+    /// <summary>
+    /// What a PRODUCER computes for a one-file source set: the same public function the bake calls,
+    /// over a node built the way the tree loader builds one. Deliberately NOT read back off the
+    /// mesh — the whole claim under test is that a process holding only the source TEXT arrives at
+    /// the value a mesh holding the imported NODE arrives at.
+    /// </summary>
+    private static string FingerprintOf(string sourcePath, string code)
+        => NodeTypeSourceFingerprint.Compute(
+            [
+                new MeshNode(
+                    sourcePath[(sourcePath.LastIndexOf('/') + 1)..],
+                    sourcePath[..sourcePath.LastIndexOf('/')])
+                {
+                    NodeType = "Code",
+                    State = MeshNodeState.Active,
+                    Content = new CodeConfiguration { Code = code, Language = "csharp" },
+                },
+            ],
+            sourcePath[..sourcePath.IndexOf("/Source/", StringComparison.Ordinal)]);
+
+    /// <summary>
+    /// A connectable stream of the FIRST definition emission matching <paramref name="predicate"/>,
+    /// so a caller can ARM the observation before the write it is about to trigger. Waiting after
+    /// the fact would miss any state a later write supersedes — and the refusal is exactly such a
+    /// state, since it dispatches the compile that replaces it.
+    /// </summary>
+    private IConnectableObservable<NodeTypeDefinition> ObserveDefinition(
+        string typePath, Func<NodeTypeDefinition, bool> predicate)
+        => Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Select(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
+            .Where(d => d is not null && predicate(d))
+            .Select(d => d!)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(90))
+            .Replay(1);
 
     private async Task<NodeTypeDefinition> AwaitDefinition(
         string typePath, Func<NodeTypeDefinition, bool> predicate, string because)
