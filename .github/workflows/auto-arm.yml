@@ -1,0 +1,86 @@
+# Arm auto-merge on every non-draft PR, so a PR that goes green LANDS.
+#
+# 🚨 This does not weaken a single gate. Auto-merge waits for exactly the required contexts
+# branch protection already demands; it removes only the human round-trip between "green" and
+# "merged". The failure it fixes is the one measured on 2026-09-01: core had SIX PRs sitting
+# CLEAN and unarmed with an empty merge queue — nothing was failing, nothing was blocked, and
+# nothing was landing either. A green PR nobody arms is indistinguishable from a red one.
+#
+# 🚨 This file is IDENTICAL in every repo (MeshWeaver, MeshWeaver.Plugins, .SocialMedia,
+# .Reinsurance, .Manufacturing, .Education, .Crm). The repos are NOT identical — core runs a
+# merge queue and the others do not — so the arm step handles both shapes rather than the file
+# forking per repo. Divergent copies of a shared lane are a recorded failure mode here.
+#
+# Deliberately NOT here:
+#   * no `if: ${{ vars.X != '' }}` — invariant #3; a skipped job renders like a passed one.
+#   * drafts are skipped, which is the ONE opt-out. Mark a PR draft and it will not be armed;
+#     that is the intended way to say "not ready", rather than withholding the arm.
+#   * forks are skipped: arming a PR from a fork would let an outside branch merge itself the
+#     moment the required set passes.
+name: Arm auto-merge
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-arm-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  arm:
+    name: Arm auto-merge on this PR
+    runs-on: ubuntu-latest
+    # A draft is the opt-out, and a fork must never arm itself. Both are properties of the
+    # event, not configuration — there is no variable here to forget to set.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Arm it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Already armed is the common case on `synchronize` and is NOT a failure.
+          if gh pr view "$PR" --repo "$REPO" --json autoMergeRequest --jq '.autoMergeRequest != null' | grep -qx true; then
+            echo "already armed — nothing to do"; exit 0
+          fi
+          # A merged/closed PR races us on `synchronize`; treat it as done, not as an error.
+          state=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)
+          if [ "$state" != "OPEN" ]; then echo "PR is $state — nothing to arm"; exit 0; fi
+          # Two repo shapes, one file. A merge QUEUE owns the merge strategy (core's is
+          # SQUASH), so `--merge` is redundant there and some gh versions REJECT the
+          # combination outright; on a repo with no queue, gh refuses to arm at all unless a
+          # method is named. So name the method, then fall back to letting the queue decide.
+          if out=$(gh pr merge "$PR" --repo "$REPO" --merge --auto 2>&1); then
+            echo "arm requested (--merge): ${out:-ok}"
+          elif out=$(gh pr merge "$PR" --repo "$REPO" --auto 2>&1); then
+            echo "arm requested (strategy left to the merge queue): ${out:-ok}"
+          else
+            # 🚨 Failing to arm must be VISIBLE. It is not fatal to the PR — a human can still
+            # merge it — but a silent failure here recreates exactly the state this exists to
+            # fix: a green PR that never lands, with nothing saying why.
+            echo "::warning::could not arm auto-merge on #$PR — $out"
+            exit 0
+          fi
+          # Read it back. An exit code of 0 is the command's opinion; this is the evidence.
+          if gh pr view "$PR" --repo "$REPO" --json autoMergeRequest --jq '.autoMergeRequest != null' | grep -qx true; then
+            echo "armed: #$PR will merge when the required contexts pass"
+          elif [ "$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)" != "OPEN" ]; then
+            # 🚨 Arming a PR with nothing left to wait for MERGES IT ON THE SPOT, so there is no
+            # auto-merge request to read back. That is the lane working, not failing. Measured
+            # on MeshWeaver.Crm#43: "arm requested (--merge): ok" followed by an immediate merge,
+            # which the first draft of this read-back reported as 'is Allow auto-merge enabled?'
+            # — a warning blaming a setting that was never off. The whole design leans on this
+            # warning meaning something, so it must never cry wolf.
+            echo "landed: #$PR had nothing left to wait for and merged immediately"
+          else
+            echo "::warning::auto-merge still not set on #$PR after a clean arm — is 'Allow auto-merge' enabled on $REPO?"
+          fi
