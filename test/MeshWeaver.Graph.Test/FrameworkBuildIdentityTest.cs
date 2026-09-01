@@ -196,7 +196,12 @@ public class FrameworkBuildIdentityTest
         // A host missing a canonical assembly is a DIFFERENT surface reality — it must never
         // share an identity with a host that has it.
         var missing = new Dictionary<string, string>(BaselinePairs, StringComparer.Ordinal);
-        missing.Remove("MeshWeaver.Maps");
+        // 🚨 Assert the REMOVAL, not just the identities. This test named MeshWeaver.Maps until Maps
+        // left the content surface, at which point Remove() would have removed nothing and the two
+        // identities would have been compared as equals — a guard checking nothing. The name has to
+        // be one the baseline actually carries, and the only way to keep that true is to say so.
+        missing.Remove("MeshWeaver.Layout").Should().BeTrue(
+            "the assembly this test removes must be IN the baseline, or it proves nothing about absence");
         FrameworkBuildIdentity.ComputeSurfaceIdentity(missing, NoMvid)
             .Should().NotBe(FrameworkBuildIdentity.ComputeSurfaceIdentity(BaselinePairs, NoMvid));
     }
