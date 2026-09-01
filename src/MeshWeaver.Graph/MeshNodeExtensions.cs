@@ -235,7 +235,7 @@ public static class MeshNodeExtensions
         // Each hub has its OWN AccessService; the caller's per-delivery AccessContext
         // lives on the CALLING hub's. Capture it here (handler thread, where it is set)
         // and re-establish it on the write hubs' AccessServices across each cold write's
-        // Subscribe via Observable.Using — so the activity write is attributed to the
+        // Subscribe via RunAs (see AsCaller below) — so the activity write is attributed to the
         // acting user and owner-side RLS lets it land. Mirrors GitSync ActivityRunner's
         // per-write owner re-stamp; AsyncLocal does not survive the Rx scheduler hops.
         var callerAccess = hub.ServiceProvider.GetService<AccessService>();
@@ -244,17 +244,24 @@ public static class MeshNodeExtensions
         var trackingAccess = activityHub.ServiceProvider.GetService<AccessService>();
         var rootAccess = meshRoot.ServiceProvider.GetService<AccessService>();
 
-        IDisposable Impersonate()
-        {
-            if (callerCtx is null)
-                return System.Reactive.Disposables.Disposable.Empty;
-            var d = new System.Reactive.Disposables.CompositeDisposable();
-            if (trackingAccess is not null)
-                d.Add(trackingAccess.SwitchAccessContext(callerCtx));
-            if (rootAccess is not null && !ReferenceEquals(rootAccess, trackingAccess))
-                d.Add(rootAccess.SwitchAccessContext(callerCtx));
-            return d;
-        }
+        // 🚨 RunAs, NEVER `Observable.Using(() => access.SwitchAccessContext(ctx), …)` (#1444/#1790,
+        // and #3023 for this site). `Using` opens the AsyncLocal on the SUBSCRIBING thread and
+        // disposes it when the inner observable TERMINATES — which for a cross-hub write is
+        // whichever IoPool/response thread it finishes on, not the one that subscribed. The
+        // subscriber (an MCP session hub turn, the portal host hub behind a click) is then left
+        // latched as THIS caller for everything it does next, and AccessContext is what
+        // PermissionEvaluator reads: a wrong-principal condition that fails open in the direction
+        // of the previous user, silently. `ActivityRunner` carries the same warning verbatim.
+        //
+        // RunAs seals both ends inside one Subscribe (SubscribeScopedObservable). A null access
+        // service or a null identity runs the work unswitched and still deferred, so the old
+        // `callerCtx is null` short-circuit is preserved by construction rather than by a branch.
+        IObservable<T> AsCaller<T>(Func<IObservable<T>> work) =>
+            trackingAccess.RunAs(
+                callerCtx,
+                () => rootAccess is not null && !ReferenceEquals(rootAccess, trackingAccess)
+                    ? rootAccess.RunAs(callerCtx, work)
+                    : work());
 
         var encodedPath = req.NodePath.Replace("/", "_");
         // Activity records live under {userId}/_UserActivity/{id} — every user
@@ -298,16 +305,15 @@ public static class MeshNodeExtensions
         // WrapWithPerUserRls (SyncedQueryDataSourceExtensions) captures AccessService.Context
         // EAGERLY at the GetQuery(...) call — on the workspace's hub (the tracking hub) — so the
         // per-user RLS filter must see the caller's identity AT THAT CALL, not only at the write's
-        // subscribe. Observable.Using acquires Impersonate() BEFORE invoking the factory, so
+        // subscribe. RunAs enters the scope BEFORE invoking the work factory, so
         // GetQuery is called with the caller's context established on the tracking hub's
         // AccessService (fail-closed when callerCtx is null: no context ⇒ empty userId ⇒ the RLS
         // wrap yields no rows for the exact-path existence probe, and the subsequent write posts
-        // context-null and is rejected by PostPipeline). The inner per-write Observable.Using
-        // (Impersonate) still re-establish the identity on each write's own emission thread —
+        // context-null and is rejected by PostPipeline). The inner per-write AsCaller calls
+        // still re-establish the identity on each write's own emission thread —
         // AsyncLocal does not flow across Rx scheduler hops, so the outer scope alone is not enough.
-        var pipeline = Observable.Using(
-            Impersonate,
-            _ => workspace
+        var pipeline = AsCaller(
+            () => workspace
             .GetQuery($"UserActivity|{activityPath}", $"path:{activityPath} nodeType:UserActivity select:path,id,namespace,name,nodeType,content")
             .Take(1)
             .Select(nodes => nodes.FirstOrDefault(n =>
@@ -361,9 +367,10 @@ public static class MeshNodeExtensions
                     };
                 }
 
-                // Each write runs under the acting user via Observable.Using(Impersonate):
-                // the impersonation is acquired at the inner Subscribe (where the write
-                // primitive captures AccessContext) and held until the write terminates,
+                // Each write runs under the acting user via AsCaller/RunAs: the scope is
+                // entered at the inner Subscribe (where the write primitive captures
+                // AccessContext) and left on that same Subscribe rather than on whatever
+                // thread the write happens to terminate on,
                 // so cross-hub RLS lets it land. See ActivityRunner for the canonical shape.
                 if (existing != null)
                 {
@@ -378,10 +385,10 @@ public static class MeshNodeExtensions
                         "TrackActivity UPDATE: {Path} querySnapshotCount={SnapshotCount} "
                         + "(the written count is folded off the live node inside the Update)",
                         activityPath, record.AccessCount);
-                    return Observable.Using(Impersonate, _ => stream.Update(FoldOntoLive));
+                    return AsCaller(() => stream.Update(FoldOntoLive));
                 }
 
-                var rootProbe = Observable.Using(Impersonate, _ => storage != null
+                var rootProbe = AsCaller(() => storage != null
                         ? storage.Read(req.UserId, jsonOptions).Take(1)
                         : Observable.Return<MeshNode?>(null))
                     .Catch<MeshNode?, Exception>(probeEx =>
@@ -406,7 +413,7 @@ public static class MeshNodeExtensions
                     if (meshService != null)
                     {
                         logger?.LogDebug("TrackActivity CREATE: {Path}", activityPath);
-                        return Observable.Using(Impersonate, _ => meshService.CreateNode(saveNode))
+                        return AsCaller(() => meshService.CreateNode(saveNode))
                             // Race coalesce: a concurrent track for the same path beat us to
                             // CreateNode — fold our increment in via Update instead of throwing.
                             .Catch<MeshNode, InvalidOperationException>(ex =>
@@ -416,12 +423,12 @@ public static class MeshNodeExtensions
                                 logger?.LogDebug(
                                     "TrackActivity CREATE to UPDATE race for {Path}: another concurrent track won; folding via Update.",
                                     activityPath);
-                                return Observable.Using(Impersonate, _ => stream.Update(FoldOntoLive));
+                                return AsCaller(() => stream.Update(FoldOntoLive));
                             });
                     }
 
                     return storage != null
-                        ? Observable.Using(Impersonate, _ => storage.Write(saveNode, jsonOptions))
+                        ? AsCaller(() => storage.Write(saveNode, jsonOptions))
                         : Observable.Empty<MeshNode>();
                 });
             }));
