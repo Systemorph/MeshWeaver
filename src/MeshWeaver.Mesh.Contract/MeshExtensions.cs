@@ -2336,20 +2336,42 @@ public static class MeshExtensions
                 //    operation). Descendants are validated by their own per-node
                 //    hub when fan-out fires a non-recursive DeleteNodeRequest at
                 //    each leaf's address — never load all descendant nodes upfront.
-                return CheckDeletePermissionForNode(hub, senderUserId, rootNode, logger)
+                return CheckDeletePermissionForNode(
+                        hub, senderUserId, rootNode, capturedRequest, request.AccessContext, logger)
                     .TimeoutAtStage(budget, () => DeleteStageTimeout(
                         DeleteStage.CheckPermission,
                         $"the effective-permission fold for '{path}' did not settle within "
                         + $"{budget.TotalSeconds:0}s (user '{senderUserId}')"))
-                    .SelectMany(denied =>
+                    .SelectMany(preflight =>
                     {
-                        if (denied)
+                        if (preflight.Verdict is DeletePreflight.Denied)
                         {
                             logger.LogWarning("[DeleteNode] permission-denied path={Path}", path);
                             PostFailed(
                                 $"Delete permission denied for '{path}'",
                                 NodeDeletionRejectionReason.Unauthorized,
                                 [new LogMessage($"Delete permission denied for '{path}'", LogLevel.Error)],
+                                ImmutableList.Create(path));
+                            return Observable.Empty<System.Reactive.Unit>();
+                        }
+
+                        // 🚨 NOT a denial — no verdict was reached at all. Refused all the same
+                        // (fail-closed), but reported as Unavailable so nobody reads an availability
+                        // failure as a statement about the caller's rights and sends a
+                        // correctly-entitled user to request permissions they already hold (#1446).
+                        if (preflight.Verdict is DeletePreflight.Unestablished)
+                        {
+                            var unestablished =
+                                $"The delete permission check for '{path}' could not be established: "
+                                + $"{preflight.Detail}. This is an availability failure, NOT a decision "
+                                + "about your access — the delete was not evaluated and may be retried.";
+                            logger.LogWarning(
+                                "[DeleteNode] permission-unestablished path={Path}: {Detail}",
+                                path, preflight.Detail);
+                            PostFailed(
+                                unestablished,
+                                NodeDeletionRejectionReason.Unavailable,
+                                [new LogMessage(unestablished, LogLevel.Error)],
                                 ImmutableList.Create(path));
                             return Observable.Empty<System.Reactive.Unit>();
                         }
@@ -3300,10 +3322,142 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Check <see cref="Permission.Delete"/> for a single node's primary path.
-    /// Returns <c>true</c> if delete is denied.
+    /// What the delete pre-flight concluded for ONE node. Deliberately TRI-state: a check that
+    /// could not be established is neither a grant (unsafe) nor a denial (a lie that files an
+    /// availability incident as a policy decision) — same vocabulary and the same reasoning as
+    /// <see cref="NodeRejectionReason.Unavailable"/> and <c>PermissionCheckOutcome.Undetermined</c>.
+    /// Both non-<see cref="Allowed"/> verdicts refuse the delete; only the REPORT differs.
     /// </summary>
-    private static IObservable<bool> CheckDeletePermissionForNode(
+    private enum DeletePreflight
+    {
+        /// <summary>The caller may delete this node.</summary>
+        Allowed,
+
+        /// <summary>A verdict was reached and it is NO.</summary>
+        Denied,
+
+        /// <summary>No verdict was reached — the check faulted or produced nothing. Fail-CLOSED.</summary>
+        Unestablished
+    }
+
+    /// <summary>
+    /// The delete pre-flight for a single node: may <paramref name="userId"/> delete
+    /// <paramref name="node"/>?
+    ///
+    /// <para>🚨 <b>The node type's registered <see cref="INodeTypeAccessRule"/> decides when there is
+    /// one</b> — the SAME rule, resolved through the SAME <see cref="NodeTypeAccessRuleSet"/>, that
+    /// <c>RlsNodeValidator</c> consults for Read/Create/Update/Delete (issue #2913). This used to
+    /// demand <see cref="Permission.Delete"/> outright and never look at a rule, so a satellite's
+    /// lifecycle was governed by two disagreeing answers: <c>SatelliteAccessRule</c> maps a
+    /// satellite's Delete to <see cref="Permission.Update"/> on its <see cref="MeshNode.MainNode"/>
+    /// (creating a satellite is a modification of its main node, and so is removing it), while this
+    /// pre-flight demanded Delete. An <c>Editor</c> holds Update and not Delete — so an Editor
+    /// could PUBLISH a satellite and then be refused when erasing it. "I can turn it on but not
+    /// off" is the exact failure a revocable-consent feature exists to prevent.</para>
+    ///
+    /// <para><b>Nothing widens for a node type that has no rule.</b>
+    /// <see cref="NodeTypeAccessRuleSet.Find"/> returning null means "no rule has an opinion", and
+    /// the fallback below is byte-for-byte the previous check — <see cref="Permission.Delete"/> on
+    /// <see cref="MeshNode.MainNode"/> (or the node's own path). Closed by default, unchanged.</para>
+    ///
+    /// <para><b>A rule that faults denies.</b> Its fault becomes
+    /// <see cref="DeletePreflight.Unestablished"/> — the delete is refused. There is deliberately no
+    /// <c>.Catch(_ =&gt; true)</c> shape anywhere on this path: the identical instinct on the
+    /// security-fold twin is what made a group deny fail OPEN (#2011).</para>
+    ///
+    /// <para>The SYSTEM identity is decided before any rule is consulted, exactly as
+    /// <c>RlsNodeValidator.Validate</c> does — so a rule never sees, and can never refuse, the
+    /// cascade commit that runs as infrastructure. Behaviour is unchanged: the permission fold
+    /// already short-circuits System to <see cref="Permission.All"/>.</para>
+    /// </summary>
+    private static IObservable<(DeletePreflight Verdict, string? Detail)> CheckDeletePermissionForNode(
+        IMessageHub hub,
+        string userId,
+        MeshNode node,
+        DeleteNodeRequest request,
+        AccessContext? deliveryAccessContext,
+        ILogger logger)
+    {
+        if (userId == WellKnownUsers.System)
+            return Observable.Return((DeletePreflight.Allowed, (string?)null));
+
+        var accessRule = hub.ServiceProvider.GetService<NodeTypeAccessRuleSet>()
+            ?.Find(node.NodeType, NodeOperation.Delete);
+
+        return accessRule is null
+            ? CheckDeletePermissionByPath(hub, userId, node, logger)
+            : CheckDeletePermissionByRule(hub, userId, node, request, deliveryAccessContext, accessRule, logger);
+    }
+
+    /// <summary>
+    /// The rule-governed leg of <see cref="CheckDeletePermissionForNode"/>. The context is built
+    /// exactly as <see cref="RunDeletionValidatorsWithWarningsObs"/> builds it, so the rule sees the
+    /// same inputs on both paths — including the DELIVERY's AccessContext, which is the only copy
+    /// that survives the scheduler hops between handler entry and here.
+    /// </summary>
+    private static IObservable<(DeletePreflight Verdict, string? Detail)> CheckDeletePermissionByRule(
+        IMessageHub hub,
+        string userId,
+        MeshNode node,
+        DeleteNodeRequest request,
+        AccessContext? deliveryAccessContext,
+        INodeTypeAccessRule accessRule,
+        ILogger logger)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var context = new NodeValidationContext
+        {
+            Operation = NodeOperation.Delete,
+            Node = node,
+            Request = request,
+            AccessContext = deliveryAccessContext ?? accessService?.Context ?? accessService?.CircuitContext,
+            DeleteCascadeRootPath = request.CascadeRootPath ?? request.Path
+        };
+
+        return accessRule.HasAccess(context, userId)
+            // TakeDecisionOutsideGate for the reason spelled out in CheckDeletePermissionByPath:
+            // the rules reach the very same permission fold (SatelliteAccessRule calls
+            // hub.CheckPermission), and the caller chains the entire delete pipeline onto this.
+            .TakeDecisionOutsideGate()
+            .Select(allowed =>
+            {
+                if (!allowed)
+                    logger.LogDebug(
+                        "[DeleteNode] rule-denied for {User} on {Path} (the {NodeType} access rule refused)",
+                        userId, node.Path, node.NodeType);
+                return ((DeletePreflight Verdict, string? Detail)?)
+                    (allowed ? DeletePreflight.Allowed : DeletePreflight.Denied, null);
+            })
+            // 🚨 FAIL CLOSED, and say WHICH failure it was. A rule reaches the same starve-able
+            // permission fold every other check does, so it can fault — and a fault is not a
+            // refusal. Answering Unestablished refuses the delete (the caller posts a failure) while
+            // reporting an availability problem rather than a decision about the caller's rights.
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "[DeleteNode] the {NodeType} access rule for {Path} could not reach a verdict for "
+                    + "{User} — refusing the delete and reporting an availability failure, not a denial",
+                    node.NodeType, node.Path, userId);
+                return Observable.Return<(DeletePreflight Verdict, string? Detail)?>(
+                    (DeletePreflight.Unestablished,
+                        $"the '{node.NodeType}' access rule failed ({ex.GetType().Name}: {ex.Message})"));
+            })
+            // 🚨 THE THIRD TERMINAL — a chain can also COMPLETE WITHOUT EMITTING (the shape that
+            // made RlsNodeValidator's own fold read as "nothing objected", #2742). Built LAZILY via
+            // nullable + DefaultIfEmpty() + Select so the message is only ever composed when it is
+            // actually used.
+            .DefaultIfEmpty()
+            .Select(outcome => outcome
+                ?? (DeletePreflight.Unestablished,
+                    $"the '{node.NodeType}' access rule completed without producing a verdict"));
+    }
+
+    /// <summary>
+    /// The default leg of <see cref="CheckDeletePermissionForNode"/> — used when NO
+    /// <see cref="INodeTypeAccessRule"/> governs the node type. Demands
+    /// <see cref="Permission.Delete"/> on the node's primary path, i.e. closed by default.
+    /// </summary>
+    private static IObservable<(DeletePreflight Verdict, string? Detail)> CheckDeletePermissionByPath(
         IMessageHub hub,
         string userId,
         MeshNode node,
@@ -3316,7 +3470,7 @@ public static class MeshExtensions
         // Take(1) is still required (GetEffectivePermissions rides the live AccessAssignment
         // synced query and is hot, so without it the chain never completes and the handler
         // hangs), but it is NOT sufficient. HandleDeleteNodeRequest chains
-        // `.SelectMany(denied => <the entire delete pipeline>)` onto this, and on a warm
+        // `.SelectMany(verdict => <the entire delete pipeline>)` onto this, and on a warm
         // permission cache the fold emits synchronously during Subscribe while holding its
         // CombineLatest gate — so the validator run, the storage delete, the cache
         // invalidation and the change-feed publish ALL ran inside that lock. Two per-node
@@ -3336,8 +3490,19 @@ public static class MeshExtensions
                     logger.LogDebug(
                         "[DeleteNode] permission-denied for {User} on {Path} (effective={Perms})",
                         userId, node.Path, perms);
-                return denied;
-            });
+                return ((DeletePreflight Verdict, string? Detail)?)
+                    (denied ? DeletePreflight.Denied : DeletePreflight.Allowed, null);
+            })
+            // 🚨 A fold that COMPLETES WITHOUT EMITTING is not a grant — and it was not even a
+            // response: with no emission the caller's SelectMany ran nothing, so the delete posted
+            // NEITHER a DeleteNodeResponse nor a failure and the caller waited out its own timeout.
+            // Same third terminal RlsNodeValidator grew for the same fold (#2742). Lazy by
+            // construction so the message is composed only when it is used.
+            .DefaultIfEmpty()
+            .Select(outcome => outcome
+                ?? (DeletePreflight.Unestablished,
+                    $"the effective-permission read of '{pathToCheck}' completed without producing a "
+                    + "verdict (a source of the permission fold emitted nothing)"));
     }
 
     /// <summary>
