@@ -463,12 +463,27 @@ USING_DIRECTIVE_RE = re.compile(
 )
 
 
-def _directive_parts(m) -> tuple:
-    """(namespace-or-type used for filtering, directive body re-emitted after `global using `)."""
+def _directive_parts(m):
+    """(namespace-or-type used for filtering, directive re-emitted after `global using `).
+
+    Returns None for a directive that must NOT be hoisted.
+
+    🚨 An ALIAS is never hoisted, because of an asymmetry between this checker and the mesh. The
+    mesh CONCATENATES the source files and strips each file's own `using` lines
+    (GenerateAttributeSource -> userCodeWithoutUsings), so its hoist is a MOVE. Here the files are
+    compiled as-is and GlobalUsings.cs is added ALONGSIDE them, so a hoist is a COPY -- and while
+    duplicate namespace and `using static` imports are legal C#, a duplicate using ALIAS is
+    CS1537. Hoisting `using Snap = IssueDetectors.StatusSnapshot;` out of Hosting/Issue failed
+    that NodeType with exactly that error.
+
+    The cost is a narrower, KNOWN divergence: a sibling file or the configuration lambda cannot
+    see an alias the mesh would hoist. Closing it needs the alias stripped from the source copy
+    too -- the mesh's actual shape -- which is a larger change than this checker's contract.
+    """
     if m.group("static"):
         return m.group("staticname"), f"static {m.group('staticname')}"
     if m.group("alias"):
-        return m.group("target"), f"{m.group('alias')} = {m.group('target')}"
+        return None
     return m.group("name"), m.group("name")
 
 
@@ -490,8 +505,8 @@ def usings_union(cs_files, ai_available: bool) -> tuple:
             continue
         for line in text.splitlines():
             m = USING_DIRECTIVE_RE.match(line)
-            if m:
-                ns, directive = _directive_parts(m)
+            if m and (parts := _directive_parts(m)) is not None:
+                ns, directive = parts
                 if ns in EXTERNAL_USINGS or ns.startswith("Microsoft.Extensions.AI"):
                     if not ai_available:
                         needs_external = True
@@ -673,10 +688,10 @@ def _self_test() -> int:
         ("using static MeshWeaver.ContentCollections.ContentCollectionsExtensions;",
          ("MeshWeaver.ContentCollections.ContentCollectionsExtensions",
           "static MeshWeaver.ContentCollections.ContentCollectionsExtensions")),
-        ("using Snap = IssueDetectors.StatusSnapshot;",
-         ("IssueDetectors.StatusSnapshot", "Snap = IssueDetectors.StatusSnapshot")),
-        ("using LayoutOption=MeshWeaver.Layout.Option;",
-         ("MeshWeaver.Layout.Option", "LayoutOption = MeshWeaver.Layout.Option")),
+        # An alias must NOT be hoisted: GlobalUsings.cs sits ALONGSIDE source that still declares
+        # it, and a duplicate using alias is CS1537 (it failed Hosting/Issue).
+        ("using Snap = IssueDetectors.StatusSnapshot;", None),
+        ("using LayoutOption=MeshWeaver.Layout.Option;", None),
         # NOT directives — a `using` STATEMENT must never enter the global scope.
         ("using var stream = File.OpenRead(path);",    None),
         ("        using var scope = svc.CreateScope();", None),
