@@ -128,9 +128,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// <param name="builder">The mesh builder to configure.</param>
     /// <returns>The same builder, configured, for fluent chaining.</returns>
     protected MeshBuilder ConfigureMeshBase(MeshBuilder builder)
-        => builder
-            .UseMonolithMesh()
-            .AddInMemoryPersistence()
+        => Bootstrap.Bootstrap(builder)
             .AddRowLevelSecurity()
             .AddGraph()
             // Space is a core partition-owning NodeType (relocated from Blazor.Portal).
@@ -183,6 +181,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddMeshNodes(TestUsers.PublicAdminAccess());
+
+    /// <summary>
+    /// HOW this suite's mesh is stood up. Overriding it is the whole difference between an
+    /// in-process mesh and an Orleans cluster — see <see cref="IMeshBootstrap"/> for why that is a
+    /// seam rather than a second base class. Defaults to the simple in-process mesh, which is what
+    /// 23 of the 26 mesh-requiring suites want.
+    /// </summary>
+    protected virtual IMeshBootstrap Bootstrap => MonolithBootstrap.Instance;
 
     /// <summary>
     /// Initializes the test base, wiring xUnit output and building (or reusing, in shared-mesh mode)
