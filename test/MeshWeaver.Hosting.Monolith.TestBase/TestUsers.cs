@@ -85,6 +85,9 @@ public static class TestUsers
             CreateAccessNode("ACME", assignment),
             CreateAccessNode("FutuRe", assignment),
             CreateAccessNode("Northwind", assignment),
+            // Cornerstone's content and its suites live in MeshWeaver.Plugins now, but this file
+            // is the SHARED test-user fixture both repos build against ($(MeshWeaverRoot)/test),
+            // so the grant stays here — it is what those suites authenticate against.
             CreateAccessNode("Cornerstone", assignment),
             CreateAccessNode("MeshWeaver", assignment),
             CreateAccessNode("Doc", assignment),

@@ -240,6 +240,39 @@ regresses** — and put each assertion there. A test that follows its *instrumen
 compile once it arrives. If it will not split, that is a signal the seam is in the wrong place —
 not a licence to widen `InternalsVisibleTo`.
 
+## Moving a SAMPLE SPACE into a package
+
+Content moves differently from code, and the difference is not obvious until it bites.
+
+A sample partition in `samples/Graph/Data/<Name>` is a **disk-loaded Space**: its `index.md` carries
+`NodeType: Space` front matter and `AddPartitionedFileSystemPersistence` reads it off the file
+system. A plugin package is not that. **No package in `MeshWeaver.Plugins` ships a Space** — every
+one of the forty-odd package roots is `Store/Plugin`, and a plugin's partition is created by the
+`Store/Provision` node plus `SystemInstall`, with content arriving through that space's `_GitSync`.
+
+So the conversion, not a copy:
+
+1. **`index.md` becomes `index.json`.** The front matter (name, category, description, icon) folds
+   into the package declaration and the markdown body becomes `content.body`. Leaving both in place
+   is not an option — `index.md` and `index.json` would each claim the package's own path.
+2. **Declare what the content binds.** Cornerstone's RiskMap view binds `MapControl`, so the package
+   `requires` Maps. A content package's `requires` is not decoration; it is what makes the in-mesh
+   compile resolve.
+3. **🚨 Leave `_Access` behind.** A sample tree carries `AccessAssignment` nodes for its demo users.
+   Shipping those in a package injects named-user grants into *every mesh that installs it*, and no
+   other package does this — a synced space's access comes from provisioning. Tests get their grants
+   from the shared test-user fixture instead. See the `plugin-provisioning` skill: hand-creating a
+   Space grants its creator Admin, and every human-run `git_hub_sync` re-mints that grant, so the
+   access shape is a security decision rather than a detail.
+4. **The tests follow the CONTENT, not the subsystem.** Cornerstone's suites came from three
+   different platform test projects and became one project in the plugins repo, because what they
+   share is the partition they load. Tests that merely *mention* the content in a comment stay
+   where they are — moving them exports unrelated platform coverage.
+5. **Staging becomes two globs.** A suite that used to copy `samples/Graph/**` now assembles its
+   fixture from two repos: the platform's tree for the sibling partitions, this repo's for the moved
+   one. And any `Add<Name>()` helper in `SampleDataExtensions` leaves with the content — the moved
+   suites call `IncludePartition("<Name>")`, the primitive it wrapped.
+
 ## Related
 
 - [Module Build Architecture](../ModuleBuildArchitecture) — the unified build every repo follows
