@@ -1133,12 +1133,25 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 // the node will render empty and refuse content edits everywhere.
                 // Silent degradation here is exactly how the prod 2026-06-12
                 // '$type: MarkdownConfiguration' rows went undiagnosed.
+                //
+                // 🚨 The message must NOT assert corruption. For an in-mesh NodeType the
+                // very same line is printed while the type's Roslyn compile is still in
+                // flight — a state that ENDS — and reading it as "this row is broken"
+                // sent the #2952 investigation after the data for weeks. The two cases
+                // are indistinguishable from HERE (a compile that has not registered yet
+                // and one that never will look identical to a registry lookup), so the
+                // line names both and says which observation separates them.
                 _logger?.LogWarning(
                     "MeshNodeTypeSource[{HubPath}]: content discriminator '$type': '{TypeName}' " +
                     "is not a registered type on the owning hub — content stays an untyped " +
-                    "JsonElement (renders empty, not editable). The row needs repair: rewrite " +
-                    "the content with the NodeType's declared content type.",
-                    _hubPath, typeName);
+                    "JsonElement for now (renders empty, not editable). Two causes look identical " +
+                    "here: (a) the NodeType's runtime compile has not registered '{TypeName}' YET, " +
+                    "which is TRANSIENT — the read boundary re-types every live reader as soon as " +
+                    "the registration lands (IMeshContentTypeRegistry.Registrations); or (b) no " +
+                    "declaration will ever claim this discriminator, in which case the row needs " +
+                    "repair: rewrite the content with the NodeType's declared content type. If the " +
+                    "NodeType reaches CompilationStatus.Ok and this content is still untyped, it is (b).",
+                    _hubPath, typeName, typeName);
                 return node;
             }
         }

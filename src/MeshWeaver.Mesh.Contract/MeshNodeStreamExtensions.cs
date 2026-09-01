@@ -387,6 +387,37 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     {
         try
         {
+            // ♻️ A TRANSIENT NODE PROBE HAS NO MESH NODE — so its OWN-node stream is EMPTY, and
+            // that is the truthful answer rather than a failure. This is the THIRD own-node read
+            // seam and the last one that was not saying it: `GetMeshNodeOutcome` answers a probe's
+            // own address `Absent` (#2468) and `MeshNodeStreamCache.GetStreamRaw` answers an empty
+            // stream (#2894); this one — the reduce-backed own-node stream every own-node WATCHER
+            // subscribes to — threw instead.
+            //
+            // What it threw was `InvalidOperationException("Failed to create stream")`, from
+            // `Workspace.ReduceLocalStream`: the probe is built `startDataSources: false`, so the
+            // own-MeshNode reduce has no started data source to reduce from and `ReduceStream`
+            // returns null. Watchers installed by a NodeType's own HubConfiguration —
+            // `WatchControlPlane` on every Activity-shaped type, `BuildNodeType`'s claim arbiter —
+            // then reported that as a TRANSIENT fault (a bare InvalidOperationException matches
+            // none of `SubscribeWithReEstablish`'s three terminal classifiers) and armed a 1 s
+            // re-establish against a hub that was already disposing: an ERROR-level line per swept
+            // NodeType on every mesh start, about a non-event. Where the reduce DID succeed the
+            // cost was the other face — `SynchronizationStream`'s constructor opening a `sync/`
+            // sub-hub into the probe's own disposal, the `ProbeHubCostTest` warning
+            // `startDataSources: false` exists to remove. Systemorph/MeshWeaver#2990.
+            //
+            // Completing empty is not a swallow: there is no node at a probe's synthetic address
+            // and there never will be (see TransientProbeAddresses), so a reader learns exactly
+            // what is true, immediately, instead of a diagnosis that names no reference and no
+            // owner. Scoped to the probe's OWN address — a probe reading any REAL path is
+            // untouched, and so is every write (Update never routes through AcquireStream).
+            if (IsOwn && _workspace.Hub.Configuration.Get<TransientNodeProbe>() is not null)
+            {
+                observer.OnCompleted();
+                return Disposable.Empty;
+            }
+
             var typedObserver = new TypedContentObserver(observer, _jsonOptions, _contentTypeRegistry);
             // 🚨 Cross-hub reads route through IMeshNodeStreamCache (when one is
             // registered): one shared process-wide upstream subscription per
@@ -395,9 +426,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // making writes invisible to readers of the cached stream. See
             // Doc/GUI/ItemTemplateMeshNodeStreamBinding.
             if (_cache is not null && !IsOwn && _path is not null)
-                return _cache.GetStream(_path, _jsonOptions)
-                    .Where(n => n is not null)
-                    .Subscribe(typedObserver);
+                return new CompositeDisposable(
+                    _cache.GetStream(_path, _jsonOptions)
+                        .Where(n => n is not null)
+                        .Subscribe(typedObserver),
+                    // The observer holds the late-retype wait (see TypedContentObserver); it must
+                    // die with the subscription, not with the last emission.
+                    typedObserver);
 
             // 🚨 The lease lives exactly as long as this subscription. The shared mesh-node
             // cache's hydration comes through here, so its entry IS the declared holder of the
@@ -410,7 +445,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     .Where(change => change.Value != null)
                     .Select(change => change.Value!)
                     .Subscribe(typedObserver);
-                return new CompositeDisposable(subscription, lease);
+                return new CompositeDisposable(subscription, lease, typedObserver);
             }
             catch
             {
@@ -442,10 +477,39 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// up the producer stack where it would tear down unrelated streams.
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// 🚨 <b>A degrade here is PROVISIONAL, never terminal (Systemorph/MeshWeaver#2952).</b>
+    /// <see cref="EnsureTypedContent"/> can only answer with what is registered AT THAT INSTANT,
+    /// and for an in-mesh NodeType — <c>Source/*.cs</c> compiled by Roslyn at RUNTIME — "not
+    /// registered" is a state that ENDS a few hundred milliseconds later, when the compile calls
+    /// <c>MeshDataSource.WithContentType</c>. Nothing observed that, so a subscription that opened
+    /// on the losing side of the race held an untyped <see cref="JsonElement"/> for the life of the
+    /// hub: the node itself never changes, so no further emission ever arrives to re-convert, the
+    /// view renders empty and a reactive wait for the typed shape times out. So when the
+    /// conversion degrades, this observer WAITS on
+    /// <see cref="MeshWeaver.Mesh.Services.IMeshContentTypeRegistry.Registrations"/> and re-emits
+    /// the same node typed the moment a registration makes it resolvable.
+    ///
+    /// <para>It is a subscription to the actual EVENT, not a poll: no timer, no interval, no
+    /// re-subscribe. It arms only on the already-degraded path (so the typed hot path pays
+    /// nothing), at most one wait is armed at a time, and it disarms on the next emission, on a
+    /// terminal, and on dispose.</para>
+    /// </remarks>
     private sealed class TypedContentObserver(
         IObserver<MeshNode> inner, JsonSerializerOptions jsonOptions,
-        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry = null) : IObserver<MeshNode>
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry = null)
+        : IObserver<MeshNode>, IDisposable
     {
+        // 🚨 A late re-type is delivered off the registering thread (the registry's documented
+        // contract), so it can race a stream emission. Rx's own gate serialises the two — the
+        // IObserver grammar is not optional, and hand-rolling the lock here would be one more
+        // bespoke primitive to get wrong.
+        private readonly IObserver<MeshNode> _out = System.Reactive.Observer.Synchronize(inner);
+
+        // The ONE armed wait. Assigning a new value disposes the previous, so a fresh emission
+        // supersedes the node the old wait was holding.
+        private readonly SerialDisposable _lateRetype = new();
+
         public void OnNext(MeshNode value)
         {
             MeshNode typed;
@@ -455,13 +519,72 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             }
             catch (System.Exception ex)
             {
-                inner.OnError(ex);
+                _lateRetype.Disposable = Disposable.Empty;
+                _out.OnError(ex);
                 return;
             }
-            inner.OnNext(typed);
+            // Emit FIRST, then arm: the wait re-checks immediately on subscribe (see below), and
+            // emitting first is what guarantees the subscriber can never see the typed value
+            // before the untyped one it supersedes.
+            _out.OnNext(typed);
+            ArmLateRetype(value, typed);
         }
-        public void OnError(Exception error) => inner.OnError(error);
-        public void OnCompleted() => inner.OnCompleted();
+
+        /// <summary>
+        /// Arms (or clears) the wait for a content type that is not registered YET. Clearing on a
+        /// successful conversion matters as much as arming: a node that types fine must not leave
+        /// a subscription behind on every emission.
+        /// </summary>
+        private void ArmLateRetype(MeshNode raw, MeshNode typed)
+        {
+            if (contentTypeRegistry is null || typed.Content is not JsonElement)
+            {
+                _lateRetype.Disposable = Disposable.Empty;
+                return;
+            }
+
+            _lateRetype.Disposable = contentTypeRegistry.Registrations
+                .Select(_ => System.Reactive.Unit.Default)
+                // 🚨 StartWith closes the gap between the conversion above and this Subscribe: a
+                // registration landing in that window would otherwise be missed, and the wait
+                // would hold out for a LATER one that may never come. It runs on the immediate
+                // scheduler, so the re-check is synchronous and — on the ordinary path, where
+                // nothing registered in the window — costs one failed lookup.
+                .StartWith(System.Reactive.Unit.Default)
+                .Select(_ => Retype(raw))
+                .Where(n => n is not null)
+                .Take(1)
+                .Subscribe(
+                    n => _out.OnNext(n!),
+                    // NOT swallowed. Two things can fault here and both must be visible: the
+                    // notification channel (this node will now never be re-typed) and the
+                    // conversion itself (the same MeshNodeStreamException the primary path raises,
+                    // reaching the subscriber the same way). A silent never-recovers is precisely
+                    // the defect this wait exists to end, so it must not be reintroduced here.
+                    ex => _out.OnError(ex));
+        }
+
+        /// <summary>Re-runs the conversion; null when it still degrades. Throws exactly what the
+        /// primary path throws — the Subscribe above routes it to the subscriber.</summary>
+        private MeshNode? Retype(MeshNode raw)
+        {
+            var retyped = EnsureTypedContent(raw, jsonOptions, contentTypeRegistry);
+            return retyped.Content is JsonElement ? null : retyped;
+        }
+
+        public void OnError(Exception error)
+        {
+            _lateRetype.Disposable = Disposable.Empty;
+            _out.OnError(error);
+        }
+
+        public void OnCompleted()
+        {
+            _lateRetype.Disposable = Disposable.Empty;
+            _out.OnCompleted();
+        }
+
+        public void Dispose() => _lateRetype.Dispose();
     }
 
     /// <summary>
@@ -2909,21 +3032,17 @@ public static class MeshNodeStreamExtensions
     /// site has not been taught to embed one, keeps the count accurate in both directions: never
     /// inflated by per-delivery text, never fabricated from a NACK that carries no identity at
     /// all.</para>
+    ///
+    /// <para>🚨 Delegates to <see cref="ShutdownNack.ExtractActivationTag"/> rather than keeping a
+    /// private copy: the sync stream's recycle re-arm latch (<c>JsonSynchronizationStream</c>, in
+    /// <c>MeshWeaver.Data</c>) is a SECOND rider on the same token, and two parsers over a hand-
+    /// written marker is the drift this token exists to prevent. The formatter lives beside the
+    /// parser there too, so the minting side cannot wander off either.</para>
     /// </summary>
     /// <param name="message">A <see cref="DeliveryFailureException"/> message from a ShuttingDown NACK.</param>
     /// <returns>The hex activation id, or <c>null</c> when the message carries none.</returns>
     internal static string? ExtractActivationTag(string message)
-    {
-        const string marker = "activation #";
-        var start = message.IndexOf(marker, StringComparison.Ordinal);
-        if (start < 0)
-            return null;
-        start += marker.Length;
-        var end = start;
-        while (end < message.Length && Uri.IsHexDigit(message[end]))
-            end++;
-        return end > start ? message[start..end] : null;
-    }
+        => ShutdownNack.ExtractActivationTag(message);
 }
 
 /// <summary>
