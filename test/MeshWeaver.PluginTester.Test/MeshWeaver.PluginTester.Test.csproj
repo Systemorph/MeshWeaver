@@ -9,6 +9,12 @@
          🚨 This does NOT touch tools/MeshWeaver.PluginTester's own reference closure, which IS the
          framework build identity — this is the TEST project. -->
     <ProjectReference Include="..\..\tools\MeshWeaver.ComboVerifier\MeshWeaver.ComboVerifier.csproj" />
+    <!-- The DECENTRALISED suite MeshTestSuiteTest executes end to end (facility 5). It carries no
+         xunit and no test base: it declares its mesh with `public static MeshBuilder
+         ConfigureMesh(MeshBuilder)` and the runner boots it. Referenced so the test has its
+         assembly PATH — the runner loads it into its own collectible context exactly as it loads a
+         package's emitted assembly, so this is the real lane, not a simulation of it. -->
+    <ProjectReference Include="..\MeshWeaver.Security.MeshTest\MeshWeaver.Security.MeshTest.csproj" />
   </ItemGroup>
 
   <ItemGroup>

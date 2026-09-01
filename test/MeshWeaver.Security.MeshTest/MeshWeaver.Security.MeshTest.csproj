@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- 🚨 A DECENTRALISED suite: a plain library with NO xunit, NO test SDK and NO test base.
+         It is executed by the install-and-execute lane (`mw-plugin-test build` →
+         StaticTestRunner), which loads this assembly, boots the mesh each class DECLARES and
+         invokes the cases. MeshWeaverTestSupportLibrary opts out of the xunit package set that
+         test/Directory.Build.props adds to every other project here — a generated entry point in
+         a library duplicates its consumer's. -->
+    <MeshWeaverTestSupportLibrary>true</MeshWeaverTestSupportLibrary>
+    <OutputType>Library</OutputType>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The test tree's global `using ITestOutputHelper = Xunit.ITestOutputHelper` cannot resolve
+         here: MeshWeaverTestSupportLibrary drops the xunit package set, and a decentralised suite
+         must not carry one — being executable WITHOUT a test framework is the property under
+         proof. -->
+    <Using Remove="Xunit.ITestOutputHelper" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Exactly what the SUBJECT needs, and nothing that belongs to a test framework: the mesh
+         builder, the monolith host, in-memory persistence, the Graph node types and the access
+         pipeline under test. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+  </ItemGroup>
+</Project>
