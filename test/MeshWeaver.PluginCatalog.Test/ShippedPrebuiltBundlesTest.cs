@@ -316,7 +316,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
 
     /// <summary>
     /// One NodeType's files on the assembly store, relative and ordered — the race-free half of
-    /// "did Seed run". <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string})"/> uploads BEFORE it stamps the
+    /// "did Seed run". <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string}, string)"/> uploads BEFORE it stamps the
     /// record, and the upload is a local filesystem write, so this is settled the moment the
     /// seeding observable emits; the NODE, by contrast, is written through the owner and its
     /// mirror may not have caught up, so a regression could otherwise read as a pass. A

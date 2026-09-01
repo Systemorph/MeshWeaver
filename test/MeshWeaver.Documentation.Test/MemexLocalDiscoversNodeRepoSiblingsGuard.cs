@@ -69,6 +69,19 @@ public class MemexLocalDiscoversNodeRepoSiblingsGuard : IDisposable
 
         // Right depth, wrong node type — a content node, not a package root.
         NodeRepo("Not.A.Repo", "Thing", "Markdown");
+
+        // 🚨 A LINKED WORKTREE of a node repo. By content it IS a node repo — same course roots —
+        // and by git-origin it derives the SAME source name, so discovering both produced
+        // duplicate volumeMounts and a failed helm upgrade ("duplicate entries for key
+        // [mountPath=/plugin-repos/Education]", observed 2026-09-01). A linked worktree is
+        // identified by its `.git` being a FILE (a gitdir pointer), not a directory; auto-discovery
+        // serves primaries only, and serving a worktree stays possible via MEMEX_PLUGIN_REPOS.
+        NodeRepo("Acme.Courses-wt", "Course", "Store/Plugin");
+        File.WriteAllText(Path.Combine(root, "Acme.Courses-wt", ".git"),
+            "gitdir: ../Acme.Courses/.git/worktrees/wt\n");
+        // The primaries get a real .git DIRECTORY, as on disk.
+        Directory.CreateDirectory(Path.Combine(root, "Acme.Courses", ".git"));
+        Directory.CreateDirectory(Path.Combine(root, "Acme.Views", ".git"));
     }
 
     private void NodeRepo(string repo, string package, string nodeType)
@@ -136,6 +149,16 @@ public class MemexLocalDiscoversNodeRepoSiblingsGuard : IDisposable
 
         Assert.DoesNotContain("Platform", discovered);
         Assert.DoesNotContain("Platform-wt", discovered);
+    }
+
+    /// <summary>
+    /// 🚨 A node repo's linked worktree must not be discovered beside its primary: both derive the
+    /// same source name, and the duplicate mount fails the helm upgrade — the whole update dies.
+    /// </summary>
+    [Fact]
+    public void ALinkedWorktreeOfANodeRepo_IsNeverDiscoveredBesideItsPrimary()
+    {
+        Assert.DoesNotContain("Acme.Courses-wt", Discovered());
     }
 
     /// <summary>
