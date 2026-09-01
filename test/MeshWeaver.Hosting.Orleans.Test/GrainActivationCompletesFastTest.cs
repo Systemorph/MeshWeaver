@@ -35,8 +35,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// for address …") within ~1 s.</para>
 /// </summary>
 public class GrainActivationCompletesFastTest(ITestOutputHelper output)
-    : OrleansTestBase<DynamicCompilationSiloConfigurator>(output)
+    : OrleansMeshTestBase(output)
 {
+    /// <inheritdoc />
+    protected override Type SiloConfiguratorType => typeof(DynamicCompilationSiloConfigurator);
+
     /// <summary>
     /// Caps the test budget well below the 30 s grain <c>WaitAsync</c>. If
     /// activation hangs (the prod symptom), the cancellation token fires inside

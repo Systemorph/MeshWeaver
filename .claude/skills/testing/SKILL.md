@@ -120,8 +120,10 @@ first. Never rerun a hung test "to see".
   `AwaitResponseAsync(request, ...)` for request/response in tests.
 - **`HubTestBase`** — message routing / layout tests; await the observable directly, e.g. `await hub.Observe<TResponse>(request).FirstAsync().Timeout(30.Seconds())` — never `.ToTask()`.
 - **`MeshWeaver.Hosting.Orleans.TestBase`** — the core Orleans cluster machinery (test cluster,
-  disposal drain, shutdown-race suppression). The AI-flavoured Orleans rig (`OrleansTestBase`,
-  `OrleansSharedTestBase`, the swappable chat-client factory) ships with the AI engine in
+  disposal drain, shutdown-race suppression). `OrleansMeshTestBase` is the ONE base a suite
+  derives from; which cluster it gets is `Bootstrap => MeshBootstrap.Orleans(…)` plus
+  `SiloConfiguratorType`. The AI-flavoured Orleans rig (the derived fixture and the swappable
+  chat-client factory) ships with the AI engine in
   **MeshWeaver.Plugins**, not here (#2276).
 
 **Use `hub.Observe(...)`, not `RegisterCallback`/`AwaitResponse`** — those overloads are

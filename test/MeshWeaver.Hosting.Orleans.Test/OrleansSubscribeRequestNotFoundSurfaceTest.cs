@@ -41,7 +41,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///   which calls <c>Store.OnError</c>.</item>
 /// </list>
 /// </summary>
-public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
+public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
     // -------------------------------------------------------------------------
     // FAILURE path: non-existent address → OnError within a few seconds

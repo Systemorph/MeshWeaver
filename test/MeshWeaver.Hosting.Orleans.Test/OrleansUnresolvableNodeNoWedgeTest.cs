@@ -36,7 +36,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// the NotFound failure for <c>GetDataRequest</c> the way it already does for
 /// <c>SubscribeRequest</c>, it throws <c>DeliveryFailureException</c> well inside 10s (GREEN).</para>
 /// </summary>
-public class OrleansUnresolvableNodeNoWedgeTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
+public class OrleansUnresolvableNodeNoWedgeTest(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
     [Fact]
     public async Task GetDataRequest_ToUnresolvableChild_SurfacesProperException_DoesNotWedge()

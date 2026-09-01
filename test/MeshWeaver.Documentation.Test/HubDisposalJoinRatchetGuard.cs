@@ -40,7 +40,7 @@ namespace MeshWeaver.Documentation.Test;
 ///
 /// <para><b>Why the allow file is EMPTY, and must stay that way.</b> Every site in the covered
 /// surface was fixed in the change that added this guard — there were exactly four
-/// (<c>MonolithMeshTestBase.DisposeTestClients</c>, <c>OrleansTestBase.DisposeAsync</c>,
+/// (<c>MonolithMeshTestBase.DisposeTestClients</c>, <c>OrleansMeshTestBase.DisposeAsync</c>,
 /// <c>SharedOrleansFixture.CleanupSiloHubsWithPrefix</c>, <c>PluginGateRunner</c>'s render client).
 /// An allow file seeded with today's debt makes the debt permanent, so this one starts at zero and
 /// may only ever be at zero: <b>adding a line to it is not a fix</b>, and the total budget below is
