@@ -1204,7 +1204,16 @@ internal static class NodeTypeCompilationHelpers
                     // The owner has not published its snapshot yet — nothing authoritative to
                     // stamp FROM. The publication itself carries the stamp (InstallSourcesWatcher),
                     // so waiting here costs nothing and guessing here would cost correctness.
-                    && def.CurrentSourceVersions is not null),
+                    && def.CurrentSourceVersions is not null
+                    // 🚨 #2813 — the SAME rule applied to the fingerprint. The stamp request is
+                    // ONE-SHOT, so consuming it while the three-way is unanswerable spends the only
+                    // chance to refuse: the judgement records AdoptedUnverified and nothing ever
+                    // re-opens the question. An adopted fingerprint with no live counterpart yet is
+                    // precisely that state, and it is transient — only the sources watcher holds
+                    // the live source nodes, and its publication both computes the fingerprint and
+                    // carries the stamp. So wait for it here, exactly as we wait for the snapshot.
+                    && (def.AdoptedSourceFingerprint is not { Length: > 0 }
+                        || def.CurrentSourceFingerprint is { Length: > 0 })),
             node =>
             {
                 var observed = (NodeTypeDefinition)node!.Content!;
@@ -1447,34 +1456,56 @@ internal static class NodeTypeCompilationHelpers
                         // is the state a release request reads as dirty and recompiles.
                         var pendingStamp = def.RequestedSourceStampAt is not null;
 
-                        // Idempotent: no-op when CurrentSourceVersions already
-                        // matches the just-computed snapshot. IsDirty is a
-                        // computed property — derives from CurrentSourceVersions
-                        // vs CompiledSources — so no separate flag to write.
-                        // (A pending stamp still has to be consumed, so it never no-ops.)
-                        if (!pendingStamp
-                            && def.CurrentSourceVersions is not null
-                            && DictEquals(def.CurrentSourceVersions, snapshot))
-                            return curr;
-
-                        var updated = def with { CurrentSourceVersions = snapshot };
-
                         // 🚨 #2813 — the live CONTENT fingerprint, computed HERE because this is
                         // the one place that already holds the live source nodes, and written in
                         // the SAME update as the tick snapshot so a reader can never see one
                         // without the other.
                         //
-                        // Computed ONLY when it can be used: a type carrying an adopted
-                        // fingerprint, or a stamp request about to be judged against one. A
-                        // locally-compiled type has nothing to compare against, and hashing every
-                        // source node's serialised content on every source emission — a path that
-                        // today only reads timestamps — would be a real cost for no answer.
-                        if (pendingStamp || def.AdoptedSourceFingerprint is { Length: > 0 })
-                            updated = updated with
-                            {
-                                CurrentSourceFingerprint = PartitionSourceFingerprint.Compute(
-                                    published.Nodes, versioned: false, hub.JsonSerializerOptions),
-                            };
+                        // 🚨 UNCONDITIONALLY, and that is the fix (#2813 second half). It used to
+                        // be computed only when there was already something to compare it against
+                        // ("a pending stamp, or an adopted fingerprint on the node"), and that
+                        // condition is unsatisfiable in the ordering the incident actually took:
+                        // the owner publishes its snapshot FIRST, then the adoption's patch lands
+                        // carrying both the adopted fingerprint and the stamp request — and this
+                        // watcher does NOT re-run, because its DistinctUntilChanged keys on the
+                        // source QUERIES, which did not change. The judgement then read an absent
+                        // live value, took the "inconclusive" branch and degraded to
+                        // AdoptedUnverified. Every stale-adoption refusal was therefore reachable
+                        // only in the other ordering.
+                        //
+                        // The cost that condition was protecting against is gone with the shape:
+                        // NodeTypeSourceFingerprint hashes the compile INPUT (each source node's
+                        // code text), not every node's Content serialised through the hub's
+                        // polymorphic options. It is a SHA-256 over text this branch already holds
+                        // in memory, on a path that runs at hub activation and per source edit —
+                        // i.e. exactly where a Roslyn compile is about to cost four orders of
+                        // magnitude more.
+                        var fingerprint = NodeTypeSourceFingerprint.Compute(
+                            published.Nodes, hubPath, logger);
+
+                        // Idempotent: no-op when CurrentSourceVersions already
+                        // matches the just-computed snapshot. IsDirty is a
+                        // computed property — derives from CurrentSourceVersions
+                        // vs CompiledSources — so no separate flag to write.
+                        // (A pending stamp still has to be consumed, so it never no-ops.)
+                        //
+                        // 🚨 The fingerprint is part of the equality. Without it a node persisted
+                        // before this field existed — snapshot already current, fingerprint null —
+                        // would no-op forever and never acquire one, so the type could never be
+                        // judged again. The condition is what makes the field SELF-HEALING on the
+                        // first activation after an upgrade.
+                        if (!pendingStamp
+                            && def.CurrentSourceVersions is not null
+                            && DictEquals(def.CurrentSourceVersions, snapshot)
+                            && string.Equals(
+                                def.CurrentSourceFingerprint, fingerprint, StringComparison.Ordinal))
+                            return curr;
+
+                        var updated = def with
+                        {
+                            CurrentSourceVersions = snapshot,
+                            CurrentSourceFingerprint = fingerprint,
+                        };
 
                         if (pendingStamp)
                             updated = ApplyAdoptedSourceStampAndReport(updated, snapshot, hub, hubPath, logger);
@@ -1676,8 +1707,18 @@ internal static class NodeTypeCompilationHelpers
                         // reads dirty and recompiles the build that was just adopted. Reading the
                         // owner's own pair here is authoritative, so nothing is widened: the branch
                         // still requires a genuinely non-dirty definition.
+                        //
+                        // 🚨 #2813 — …but ONLY when the three-way can actually be answered. An
+                        // adopted fingerprint whose live counterpart the owner has not published
+                        // yet is inconclusive, and the request is one-shot: fulfilling it here
+                        // would spend the refusal on an absence and record AdoptedUnverified
+                        // permanently. Leaving it standing costs a recompile of a type that may
+                        // have been adoptable — the safe direction, and the one #1834 was
+                        // optimising away, not the one it was preventing.
                         if (def.RequestedSourceStampAt is not null
-                            && def.CurrentSourceVersions is { } liveSources)
+                            && def.CurrentSourceVersions is { } liveSources
+                            && (def.AdoptedSourceFingerprint is not { Length: > 0 }
+                                || def.CurrentSourceFingerprint is { Length: > 0 }))
                             def = ApplyAdoptedSourceStampAndReport(def, liveSources, hub, hubPath, logger);
                         // 🚨 Gate on the CARRIED triggerAt, NOT def.RequestedReleaseAt
                         // (which may have flapped back to an older value). Already
@@ -2314,6 +2355,16 @@ internal static class NodeTypeCompilationHelpers
             CompilationStatus = CompilationStatus.Ok,
             CompilationError = null,
             CompilationDiagnostics = null,
+            // 🚨 #2813 — Roslyn built these bytes HERE, from the source this mesh holds, so the
+            // provenance is Compiled and nothing about an earlier adoption survives. Without this
+            // the field was write-once-per-adoption: a type refused as stale and then successfully
+            // recompiled kept reading AdoptionRefused forever, and one refused adoption in a node's
+            // history would mark it permanently. That turns the operator signal the incident asked
+            // for into noise people learn to ignore, and it would make #2820's execute-time
+            // interlock refuse to run a type whose live source it had just compiled itself.
+            // ApplyCompileFailure deliberately does NOT do this: after a failed compile the bytes
+            // in place are still whatever the refusal left, so the refusal is still the true story.
+            BuildProvenance = Mesh.Services.BuildProvenance.Compiled,
             LastCompileSucceededAt = DateTimeOffset.UtcNow,
             // Stamp LastCompiledVersion to MATCH the version the IAssemblyStore upload used
             // (set by UploadToStoreIfNeeded — the captured node Version at compile kickoff).

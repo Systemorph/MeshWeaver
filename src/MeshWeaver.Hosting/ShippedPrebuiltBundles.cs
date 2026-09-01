@@ -435,7 +435,7 @@ public static class ShippedPrebuiltBundles
     /// node path and dependency record; the assemblies are the bundle's entire weight. Reading the
     /// manifest alone is enough to answer the whole adoption question, so a bundle whose types are
     /// all current is answered without decompressing a single assembly — on top of the per-type hub
-    /// activation and store upload that <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string})"/> would cost.</para>
+    /// activation and store upload that <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string}, string)"/> would cost.</para>
     ///
     /// <para>Emits the tally; folds its own faults to zero.</para>
     /// </summary>
@@ -621,7 +621,12 @@ public static class ShippedPrebuiltBundles
         Action<string>? onCovered = null)
         => assemblies
             .Select(a => PrebuiltAssemblySeeder
-                .Seed(mesh, a.NodePath, a.Assembly, a.Pdb, frameworkMvid, logger, a.Dependencies)
+                // 🚨 #2813 — a.SourceFingerprint is the producer's statement of which sources these
+                // bytes came from; the owning hub compares it against its own live set and refuses
+                // a provably-stale adoption. Null from a legacy bundle, which still adopts (as
+                // AdoptedUnverified).
+                .Seed(mesh, a.NodePath, a.Assembly, a.Pdb, frameworkMvid, logger, a.Dependencies,
+                    a.SourceFingerprint)
                 .Take(1)
                 .Timeout(SeedBudget)
                 .Do(adopted =>

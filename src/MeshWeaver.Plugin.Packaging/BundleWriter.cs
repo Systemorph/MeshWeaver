@@ -54,7 +54,29 @@ public static class BundleWriter
         Func<Stream> OpenAssembly,
         Func<Stream>? OpenPdb = null,
         IReadOnlyDictionary<string, long>? SourceVersions = null,
-        IReadOnlyDictionary<string, string>? Dependencies = null);
+        IReadOnlyDictionary<string, string>? Dependencies = null)
+    {
+        /// <summary>
+        /// 🚨 <b>The CONTENT fingerprint of the sources these bytes were compiled from</b> (#2813)
+        /// — <c>NodeTypeSourceFingerprint.Compute</c> over the type's resolved source+test set.
+        /// The consumer stamps it as <c>NodeTypeDefinition.AdoptedSourceFingerprint</c> and refuses
+        /// the adoption when its OWN live sources hash to something else: the whole point is that a
+        /// portal can prove the assembly it is about to run was built from the source it is
+        /// holding, which every other signal (<c>compiledSources</c> vs
+        /// <c>currentSourceVersions</c>, <c>compilationStatus: Ok</c>) reported healthy while being
+        /// false.
+        ///
+        /// <para>Null only for a producer that records none. Such a bundle still adopts — as
+        /// <c>BuildProvenance.AdoptedUnverified</c>, never silently as verified — because refusing
+        /// on an absence would park every legacy-bundle type at once.</para>
+        ///
+        /// <para>An INIT property rather than a sixth primary-constructor parameter: adding one to
+        /// a public record REPLACES the constructor signature, which is a binary break for every
+        /// module compiled against the old arity (<c>scripts/check-record-signatures.py</c> is
+        /// right to refuse it) and would take down a mixed fleet on the roll.</para>
+        /// </summary>
+        public string? SourceFingerprint { get; init; }
+    }
 
     /// <summary>
     /// One NODE-DEFINITION file destined for the bundle — the package's own tree (its
@@ -121,6 +143,10 @@ public static class BundleWriter
                     assembly = $"{a.NodePath}.dll",
                     sourceVersions = a.SourceVersions,
                     dependencies = a.Dependencies,
+                    // #2813. Unlike sourceVersions (provenance a reader skips), this one is READ
+                    // by BundleReader and carried to PrebuiltAssemblySeeder — it is the value the
+                    // consumer's refusal is decided on.
+                    sourceFingerprint = a.SourceFingerprint,
                 })
                 .ToList(),
             // DECLARED, never left to be discovered by enumerating the folder — the same rule the
