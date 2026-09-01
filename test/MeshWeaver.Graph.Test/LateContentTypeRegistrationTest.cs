@@ -184,6 +184,71 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
     }
 
     /// <summary>
+    /// 🚨 The case that could falsify the wait's cheap pre-filter. To avoid re-deserializing the
+    /// document for every unrelated registration, the seam first asks a string-only question — "could
+    /// THIS registration resolve THIS node?" — and a filter narrowed to the NodeType path alone would
+    /// look correct and silently re-open the whole defect for the NAME route.
+    ///
+    /// <para>So: the registration carries NO NodeType path (the <c>WithMeshType</c> / sweep-probe
+    /// shape), and the node's own NodeType names something else entirely. Only the bare <c>$type</c>
+    /// discriminator connects them — which is exactly what <c>TryRecover</c> resolves on, and exactly
+    /// what a path-only filter would drop.</para>
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ARegistrationWithNoNodeTypePath_StillRetypesByDiscriminator()
+    {
+        var registry = Mesh.ServiceProvider.GetRequiredService<IMeshContentTypeRegistry>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        var contentType = EmitCollectibleType("NamelessRouteGadget", "Label");
+        var partition = "lcn" + Guid.NewGuid().ToString("N")[..9];
+        var typePath = $"{partition}/Gadget";
+        var instancePath = $"{partition}/Live";
+
+        await meshService.CreateNode(new MeshNode("Gadget", partition)
+        {
+            Name = "Gadget",
+            NodeType = MeshNode.NodeTypePath,
+            State = MeshNodeState.Active,
+            Content = new NodeTypeDefinition { Description = "A NodeType with no compile lifecycle" }
+        }).Should().Within(TestTimeouts.Convergence).Emit();
+
+        var instance = Activator.CreateInstance(contentType)!;
+        contentType.GetProperty("Label")!.SetValue(instance, "by name only");
+        var stored = JsonSerializer.Deserialize<JsonElement>(
+            JsonSerializer.Serialize(instance, contentType, Mesh.JsonSerializerOptions));
+
+        await meshService.CreateNode(new MeshNode("Live", partition)
+        {
+            Name = "Live frame",
+            NodeType = typePath,
+            State = MeshNodeState.Active,
+            Content = stored
+        }).Should().Within(TestTimeouts.Convergence).Emit();
+
+        var live = Mesh.GetWorkspace().GetMeshNodeStream(instancePath)
+            .Where(n => n is not null)
+            .Replay(1);
+        using var connection = live.Connect();
+
+        (await live.FirstAsync().Should().Within(TestTimeouts.Convergence).Emit())
+            .Content.Should().BeOfType<JsonElement>("nothing resolves the discriminator yet");
+
+        // 🚨 No nodeTypePath — and the node's NodeType ($"{partition}/Gadget") is NOT it. The bare
+        // discriminator is the only link.
+        registry.Register(contentType);
+
+        var typed = await live.Where(n => n.Content is not JsonElement).FirstAsync()
+            .Should().Within(TestTimeouts.Convergence).Emit(
+                "the name route must re-type too — a wait that only listens for its own NodeType path "
+                + "would drop every WithMeshType / sweep-probe registration and leave the node untyped "
+                + "forever, which is the defect wearing a different hat");
+
+        typed.Content!.GetType().Should().Be(contentType);
+        contentType.GetProperty("Label")!.GetValue(typed.Content).Should().Be("by name only");
+    }
+
+    /// <summary>
     /// Emits a minimal public class with one string property into a COLLECTIBLE dynamic assembly —
     /// the CLR shape of a compiled dynamic-node content type without dragging Roslyn into the test.
     /// (Mirrors <c>ReimportTypedContentRecoveryTest.EmitCollectibleType</c>.)

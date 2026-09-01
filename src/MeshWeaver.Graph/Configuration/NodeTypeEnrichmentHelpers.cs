@@ -930,7 +930,17 @@ internal static class NodeTypeEnrichmentHelpers
     /// </summary>
     private const int MaxRecompileAttempts = 1;
 
-    private static IObservable<MeshNode> ApplyStreamResult(
+    /// <summary>
+    /// Decides what an activating instance BINDS, given the NodeType node the wait settled on.
+    ///
+    /// <para>Internal rather than private so the branch verdicts can be pinned by a test on the
+    /// decision itself — the same reason <see cref="IsCompileSettled"/>,
+    /// <see cref="IsRecompileSettled"/> and <see cref="PreferAuthoritative"/> are. Reaching this
+    /// through <see cref="EnrichWithNodeType"/> would mean driving a real compile, so the
+    /// assertion would measure the compiler's timing rather than this method's verdict — see
+    /// <c>NodeTypeFirstCompileKickoffTest</c>.</para>
+    /// </summary>
+    internal static IObservable<MeshNode> ApplyStreamResult(
         MeshNode typeNode,
         MeshNode node,
         string nodeType,
@@ -1020,6 +1030,53 @@ internal static class NodeTypeEnrichmentHelpers
                 || def.CompilationStatus == CompilationStatus.Unknown)
             && typeNode.HubConfiguration is null)
         {
+            // 🚨 #3006 — "a compile that will never start" is NOT the same state as "a compile
+            // that has not been KICKED OFF yet", and an absent CompilationStatus is all these two
+            // have in common. A NodeType loaded from a repo / JSON carries no status until
+            // InstallCompileWatcher's first-build kickoff stamps Pending; an instance that
+            // activates inside that window used to fall straight through here.
+            //
+            // What falling through costs is not a slower first paint — it is PERMANENT. The node
+            // is returned with HubConfiguration still null, so MeshNodeHubFactory composes
+            // MeshConfiguration.DefaultNodeHubConfiguration (Overview/Thumbnail/Settings/Search
+            // and nothing type-specific) and the grain is bound to it for its whole lifetime:
+            // EnrichWithNodeType short-circuits at the top once HubConfiguration is set, and
+            // NodeTypeRebindWatcher recycles only on a change of the INSTANCE's own NodeType —
+            // never on a compile transition, and it bails outright on a null config anyway. This
+            // branch also returned UNWRAPPED by WithOverlaySelfHeal, unlike every sibling branch,
+            // so nothing recycled the instance when the build later settled.
+            //
+            // 🚨 And it is the SAME configuration build that carries the areas. A NodeType's
+            // `configuration` is ONE expression — e.g. PandasExplorer's
+            // `config.WithContentType<PandasExplorer>().AddLayout(… WithDefaultArea("Explorer"))`
+            // — so an instance that bound it has BOTH the content type and the renderers, and one
+            // that did not has NEITHER. Re-typing the content afterwards (#2952) adds no renderer;
+            // the area-not-found half needs this cure, which is why #2952 deliberately left it out.
+            //
+            // So: a type that PARTICIPATES in compilation and is on a mesh that can actually run
+            // one takes the in-flight path instead — a live compile-progress page whose catch-all
+            // renderer answers every area (rather than the TERMINAL area-not-found verdict, where
+            // the transient compile-progress promise is the true one), wrapped by
+            // WithOverlaySelfHeal so the instance recycles onto the real configuration the moment
+            // the build lands.
+            //
+            // 🚨 The compilationService null-check is not belt-and-braces, it is the other half of
+            // the correctness argument: a test-seeded NodeType that carries a Configuration string
+            // on a mesh with NO IMeshNodeCompilationService must NOT be parked on a progress page
+            // for a build that will never run. There the old behaviour is right and is kept.
+            if (compilationService is not null
+                && NodeTypeDefinition.ParticipatesInCompilation(def))
+            {
+                logger?.LogInformation(
+                    "EnrichWithNodeType: NodeType '{NodeType}' has source to build but no compile "
+                    + "state recorded yet — its first-build kickoff has not stamped Pending. "
+                    + "Instance '{InstancePath}' serves the compile-progress overlay and self-heals "
+                    + "onto the real configuration when the build lands, instead of binding the "
+                    + "mesh default configuration for the rest of the grain's life.",
+                    nodeType, node.Path);
+                return WithCompilationInProgressOverlay(node, nodeType, typeNode, meshHub, logger);
+            }
+
             return Observable.Return(node);
         }
 
