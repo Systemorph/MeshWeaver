@@ -47,6 +47,27 @@ public static class SeoEndpoints
             ex, "{Route}: faulted after its HTTP response had already settled", route);
     }
 
+    /// <summary>
+    /// Sink for an AUTHORED icon whose markup will not parse. The route answers 404 either way, so
+    /// without this line a broken mark and a node with no mark are indistinguishable from outside —
+    /// and the broken one is the only one anybody can fix.
+    ///
+    /// <para>🚨 <c>GetRequiredService</c>, unlike <see cref="LateFault"/> above, and the difference
+    /// is the point: this sink IS the diagnostic. A null-conditional logger would make the one
+    /// signal that a mark is broken silently optional — the exact failure the method exists to
+    /// prevent — so a host with no logger factory must say so loudly rather than serve 404s that
+    /// mean nothing. Resolved ONCE per request, before the reactive chain, so the cost is not paid
+    /// per emission and a missing registration cannot surface as a swallowed 404.</para>
+    /// </summary>
+    private static Action<Exception> UnrenderableIcon(IMessageHub hub, string nodePath)
+    {
+        var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(SeoEndpoints));
+        return ex => logger.LogWarning(
+            ex, "The icon of '{Path}' is inline svg that will not render; serving no raster icon "
+                + "for it", nodePath);
+    }
+
     /// <summary>Node types whose top-level mains are sitemap candidates.</summary>
     private static readonly string[] CandidateNodeTypes = ["Store/Plugin", "Store/Catalog", "Space"];
 
@@ -76,6 +97,7 @@ public static class SeoEndpoints
         }).AllowAnonymous();
 
         MapShareCard(app);
+        MapNodeIcon(app);
         return app;
     }
 
@@ -116,6 +138,108 @@ public static class SeoEndpoints
                 .FirstAsync()
                 .ObserveCompletion(LateFault(hub, $"/api/og/{nodePath}"), ct)!;
         }).AllowAnonymous();
+
+    /// <summary>
+    /// 🚨 THE RASTER FAVICON — <c>/api/icon/{node}.png?size=N</c>.
+    ///
+    /// <para><b>Why a portal serves its own favicon as PNG.</b> A node page declares the node's own
+    /// icon in its head, and every store-package mark is authored inline <c>&lt;svg&gt;</c>. Safari
+    /// renders no SVG favicon at all, so on macOS and iOS the per-content favicon was invisible —
+    /// every tab wore the portal mark (issue #2075, item 3). This route renders the SAME svg
+    /// <see cref="SeoResolver.ResolveIcon"/> puts in the head, so the two are pictures of one
+    /// thing, and <see cref="SeoResolver.ResolveIconLinks"/> declares it beside the svg rather than
+    /// instead of it.</para>
+    ///
+    /// <para><b>Gated identically to the SEO head and the share card.</b> It resolves through
+    /// <see cref="SeoResolver.Resolve"/>, which returns null for anything the fail-closed
+    /// <see cref="AnonymousGate"/> refuses — so a private node's MARK cannot be lifted out of this
+    /// route, and a missing node, a private one and a node with no mark all answer the same 404.
+    /// There is no parallel permission rule here to drift from the page's.</para>
+    ///
+    /// <para><b>404 is the fallback, and nothing ever points at it.</b> A node with no icon of its
+    /// own gets no icon link in its head either (<see cref="SeoResolver.ResolveIconLinks"/> returns
+    /// empty), so the portal favicon stays — the same honest answer the head has always given.
+    /// Redirecting to the site favicon here would look like a fix while telling every consumer that
+    /// this node's mark IS the portal's.</para>
+    ///
+    /// <para><b>Sizes are an allow-list, not a range</b> (<see cref="IconRasterizer.SupportedSizes"/>):
+    /// the route is anonymous and shared-cacheable, so a free-form size parameter is an unbounded
+    /// number of distinct renders. An unsupported size is a 400 rather than a silent snap to 32 —
+    /// a caller asking for something this cannot serve should be told so.</para>
+    /// </summary>
+    private static void MapNodeIcon(IEndpointRouteBuilder app) =>
+        app.MapGet("/api/icon/{**path}", (
+            IMessageHub hub, HttpContext http, string path, CancellationToken ct) =>
+        {
+            var nodePath = (path ?? "").Trim('/');
+            if (nodePath.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+                nodePath = nodePath[..^4];
+            if (nodePath.Length == 0)
+                return Task.FromResult(Results.NotFound());
+
+            var size = IconRasterizer.FaviconSize;
+            var requested = http.Request.Query["size"].ToString();
+            if (requested.Length > 0
+                && (!int.TryParse(requested, System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out size)
+                    || !IconRasterizer.IsSupportedSize(size)))
+                return Task.FromResult(Results.BadRequest(
+                    $"size must be one of {string.Join(", ", IconRasterizer.SupportedSizes)}"));
+
+            var pixels = size;
+            var unrenderable = UnrenderableIcon(hub, nodePath);
+            return SeoResolver.Resolve(hub, nodePath)
+                .Select(data => data is null
+                    ? Results.NotFound()
+                    : IconResult(http, data.Node, pixels, unrenderable))
+                .Catch<IResult, Exception>(_ => Observable.Return(Results.NotFound()))
+                .FirstAsync()
+                .ObserveCompletion(LateFault(hub, $"/api/icon/{nodePath}"), ct)!;
+        }).AllowAnonymous();
+
+    /// <summary>
+    /// One node's rasterized mark, or 404 when it carries none this can draw. Internal so the
+    /// endpoint's own decision — not a re-implementation of it — is what the tests exercise.
+    /// </summary>
+    /// <param name="http">The request, for conditional-GET and response headers.</param>
+    /// <param name="node">The node, already gated as anonymous-readable by the caller.</param>
+    /// <param name="size">The square edge in pixels.</param>
+    /// <param name="onUnrenderable">Sink for markup that is present but cannot be drawn — an
+    /// AUTHORED icon that fails to parse is a content defect worth a line in the log, not something
+    /// to swallow into an indistinguishable 404.</param>
+    internal static IResult IconResult(
+        HttpContext http, MeshNode node, int size, Action<Exception>? onUnrenderable = null)
+    {
+        if (SeoResolver.ResolveIconSvg(node) is not { } svg)
+            return Results.NotFound();
+
+        byte[]? png;
+        try
+        {
+            png = IconRasterizer.Render(svg, size);
+        }
+        catch (Exception ex)
+        {
+            // Malformed authored markup is a 4xx-shaped fact about the CONTENT, not a fault in this
+            // route — but it is invisible from outside, so it is reported before the 404 is served.
+            onUnrenderable?.Invoke(ex);
+            return Results.NotFound();
+        }
+
+        if (png is null)
+            return Results.NotFound();
+
+        var etag = $"\"{Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(png))}\"";
+        if (string.Equals(http.Request.Headers.IfNoneMatch.ToString(), etag, StringComparison.Ordinal))
+            return Results.StatusCode(StatusCodes.Status304NotModified);
+
+        http.Response.Headers.ETag = etag;
+        // Shared-cacheable for the same reason the share card is: everything drawn here is already
+        // served to anonymous callers in the page's own head, and the strong ETag is the render's
+        // hash — so a node that changes its mark produces a new icon rather than a stale one.
+        http.Response.Headers.CacheControl = "public, max-age=86400";
+        return Results.File(png, "image/png");
+    }
 
     private static IResult CardResult(HttpContext http, OgCardRenderer renderer, SeoPageData data)
     {

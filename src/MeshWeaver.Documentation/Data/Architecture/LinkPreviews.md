@@ -40,6 +40,10 @@ Blazor circuit exists:
 3. **`SeoNoScriptBody`** serves the page's pre-rendered markdown inside `<noscript>`, so non-JS
    crawlers index actual content rather than an empty Blazor shell.
 
+The **node's own icon** is part of that head, and it is declared twice — as the node's `<svg>` mark
+and as a PNG rendered from it at `/api/icon/{path}.png`, because Safari renders no SVG favicon at
+all. See [Content Favicon Rasterization](../ContentFaviconRasterization).
+
 ## The one bit that decides everything: anonymous read
 
 **Only what an anonymous visitor may read gets a card.** `SeoResolver` gates every path through
