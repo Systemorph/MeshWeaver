@@ -41,8 +41,60 @@ public static class JsonSynchronizationStream
     /// degrades to the pre-existing orphaned-stream behaviour rather than becoming a resubscribe
     /// storm. It is not a budget to widen — if a stream needs more than this, the owner is
     /// recycling pathologically and THAT is the bug.
+    ///
+    /// <para>🚨 Counted per DISTINCT rejecting ACTIVATION since #2986, not per attempt. The
+    /// sentence above says what this bound is for — "an owner stuck in a recycle LOOP" — and a
+    /// loop is a succession of activations, each dying before it can answer. Three refusals from
+    /// ONE activation is not that: it is one teardown the join failed to wait through, and
+    /// charging it here spent the whole budget in 1 ms (CI 33523142249: activation
+    /// <c>#017DA86C</c>, three times, RunLevel=Dead, inside one millisecond) and disarmed the
+    /// latch for the life of the stream. The <c>ShuttingDown</c> NACK carries the activation
+    /// identity for exactly this discrimination (#2025, <see cref="ShutdownNack"/>); riding out
+    /// ONE dying activation is bounded separately by <see cref="MaxSameActivationReAsks"/>.</para>
     /// </summary>
     private const int MaxRecycleReArms = 3;
+
+    /// <summary>
+    /// How many consecutive re-asks one stream spends on the SAME dying activation before it stops
+    /// riding that teardown out.
+    ///
+    /// <para>This is the TIME axis of the ride-out, and it is a different bound from
+    /// <see cref="MaxRecycleReArms"/> (the ACTIVATION axis) — neither substitutes for the other.
+    /// Paired with <c>SyncStreamOptions.RecycleReAskPace</c> (500 ms) it covers the 8 s
+    /// <c>MessageHub.DisposalWatchdogTimeout</c>: past that window a wedged teardown is
+    /// force-torn-down and the address is gone, so a re-ask that still meets the same activation
+    /// after 8 s is meeting something no timer can rescue. At that point the latch says so
+    /// (one Warning naming the activation and the NACK) instead of going silent, which is what
+    /// made #2986 read as "slow" rather than "refused, N times, by a disposing hub".</para>
+    /// </summary>
+    private const int MaxSameActivationReAsks = 16;
+
+    /// <summary>
+    /// One "the owner told us it is going away" event on the recycle re-arm carrier: WHY (for the
+    /// log line) and WHICH ACTIVATION said so (for the budget).
+    ///
+    /// <para><paramref name="Activation"/> is <c>null</c> when the event carries no activation
+    /// identity — the owner's <c>StreamEndedEvent</c> announcement, or a NACK site that does not
+    /// embed one yet. Null is never treated as "the same corpse": it charges the activation budget
+    /// exactly as every rejection did before #2986, so a site that has not been taught to stamp an
+    /// identity degrades to the old accounting rather than to an unbounded ride-out.</para>
+    /// </summary>
+    /// <param name="Reason">Human-readable cause, logged with the re-ask.</param>
+    /// <param name="Activation">The rejecting activation's stable tag, or null when unknown.</param>
+    private sealed record RecycleRejection(string Reason, string? Activation);
+
+    /// <summary>
+    /// A rejection that has PAID for its re-ask, plus which of the two budgets paid — carried
+    /// downstream rather than re-derived, because the counters keep moving while an attempt waits
+    /// its turn in the re-arm <c>Concat</c>.
+    /// </summary>
+    /// <param name="Rejection">The rejection this attempt answers.</param>
+    /// <param name="RidingOutSameActivation">
+    /// True when the activation that refused us is the one that refused the PREVIOUS attempt — the
+    /// same teardown, still draining, so this attempt rests before it re-asks instead of returning
+    /// to the corpse microseconds later.
+    /// </param>
+    private sealed record ReArmDecision(RecycleRejection Rejection, bool RidingOutSameActivation);
 
     /// <summary>
     /// 🚨 THE ONE PLACE a C# subscriber mints a <see cref="SubscribeRequest"/>. Every post — the
@@ -436,7 +488,11 @@ public static class JsonSynchronizationStream
         // method reaches the re-arm — and a bare Subject drops an emission that has no subscriber
         // yet. That would resurrect the orphaned stream in exactly the fast local case this fix
         // exists for, and only sometimes: the classic invisible race.
-        var rejectedByRecycle = new System.Reactive.Subjects.ReplaySubject<string>(1);
+        // Carries the rejecting ACTIVATION alongside the reason (#2986). Without it the latch
+        // cannot tell "the same corpse refused me again — my join did not hold" from "a NEW
+        // activation refused me — the address really is recycling in a loop", and those are the two
+        // cases the budget below has to treat oppositely.
+        var rejectedByRecycle = new System.Reactive.Subjects.ReplaySubject<RecycleRejection>(1);
         // Apply an explicit identity SCOPE for the post — do NOT rely on the ambient AsyncLocal
         // still being set. The scope is entered at SUBSCRIBE time, and a sync re-subscribe /
         // keep-alive / Blazor re-render fan-out fires on a background Rx scheduler where AsyncLocal
@@ -496,7 +552,9 @@ public static class JsonSynchronizationStream
                         // orphaned stream became the visible symptom — a freshly installed root
                         // whose area never renders (StaleStampRootBindingTest, 120 s with the
                         // client sitting idle after the NACK landed).
-                        rejectedByRecycle.OnNext("rejected our SubscribeRequest while shutting down");
+                        rejectedByRecycle.OnNext(new RecycleRejection(
+                            "rejected our SubscribeRequest while shutting down",
+                            ShutdownNack.ExtractActivationTag(ex.Message)));
                         return;
                     }
 
@@ -557,7 +615,12 @@ public static class JsonSynchronizationStream
                     logger.LogDebug(
                         "Stream {StreamId}: owner {Owner} ended the server-side subscription — re-asking once its teardown settles.",
                         reduced.StreamId, owner);
-                    rejectedByRecycle.OnNext("ended our server-side subscription");
+                    // No activation identity on this carrier — the owner ANNOUNCED the end rather
+                    // than NACKing, so there is no NACK text to read one from. A null tag is
+                    // treated as "a distinct activation" by the budget below, i.e. exactly the
+                    // pre-#2986 accounting: never guessed, never free.
+                    rejectedByRecycle.OnNext(new RecycleRejection(
+                        "ended our server-side subscription", null));
                     return delivery.Processed();
                 },
                 d => reduced.StreamId.Equals(d.Message.StreamId)
@@ -582,6 +645,19 @@ public static class JsonSynchronizationStream
             // Declared HERE rather than beside its own subscription below so Resubscribe can clear
             // it — see the reset in the success arm.
             var recycleReArms = 0;
+            // The ride-out state for ONE dying activation (#2986): which activation last refused
+            // us, and how many consecutive re-asks we have spent on it. Both are INSTANCE locals
+            // captured by this stream's closures — never static, so they cannot bleed between
+            // streams or tests. Reset by the success arm exactly like recycleReArms.
+            string? lastRejectingActivation = null;
+            var sameActivationReAsks = 0;
+            // One-shot: the give-up is announced once, not once per later rejection. The change-feed
+            // latch can keep calling Resubscribe after the budgets are spent, and a Warning per
+            // rejection would turn one diagnosis into log noise.
+            var gaveUp = 0;
+            var recycleReAskPace = hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
+                ?.Value.RecycleReAskPace ?? TimeSpan.FromMilliseconds(500);
 
             void Resubscribe(string reason)
             {
@@ -637,21 +713,50 @@ public static class JsonSynchronizationStream
                                 // very symptom of #2191, merely deferred. The budget still bites
                                 // exactly where it should: consecutive unanswered attempts.
                                 Interlocked.Exchange(ref recycleReArms, 0);
+                                // …and the SAME reasoning for the ride-out counter: an answer ends
+                                // the teardown we were riding out, so the next one starts fresh.
+                                Interlocked.Exchange(ref sameActivationReAsks, 0);
+                                Volatile.Write(ref lastRejectingActivation, null);
+                                // …and re-arm the announcement with the latch. A stream that
+                                // recovered and later gives up again has given up TWICE, and the
+                                // second time is as much a diagnosis as the first.
+                                Interlocked.Exchange(ref gaveUp, 0);
                             },
                             ex =>
                             {
-                                logger.LogWarning(ex,
-                                    "Stream {StreamId}: resubscribe failed.",
-                                    reduced.StreamId);
+                                var isTransient =
+                                    ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown };
+                                var tag = isTransient ? ShutdownNack.ExtractActivationTag(ex.Message) : null;
+                                // 🚨 Warning ONCE per activation, Debug for the paced repeats at the
+                                // same corpse. The ride-out is bounded but can legitimately re-ask
+                                // MaxSameActivationReAsks times while ONE teardown drains, and a
+                                // Warning per attempt would ship 16 lines per stream to Loki for a
+                                // condition the first line already reported. The give-up below is a
+                                // Warning of its own, so nothing that ends badly ends quietly.
+                                var repeat = isTransient
+                                             && tag is not null
+                                             && tag == Volatile.Read(ref lastRejectingActivation);
+                                if (repeat)
+                                    logger.LogDebug(ex,
+                                        "Stream {StreamId}: resubscribe failed again at the same owner "
+                                        + "activation (#{Activation}) — still riding the teardown out.",
+                                        reduced.StreamId, tag);
+                                else
+                                    logger.LogWarning(ex,
+                                        "Stream {StreamId}: resubscribe failed.",
+                                        reduced.StreamId);
                                 Interlocked.Exchange(ref resubscribing, 0);
                                 // A re-ask that itself raced the SAME recycle window gets the same
                                 // transient ShuttingDown verdict — push it back through the re-arm
-                                // carrier so the next bounded attempt fires (shared MaxRecycleReArms
-                                // budget; measured in StaleStampRootBindingTest, where the first
-                                // re-ask can land while the teardown is still draining).
-                                if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
-                                    rejectedByRecycle.OnNext(
-                                        "re-ask was itself rejected while the owner was still shutting down");
+                                // carrier so the next bounded attempt fires (measured in
+                                // StaleStampRootBindingTest, where the first re-ask can land while
+                                // the teardown is still draining). The rejecting ACTIVATION rides
+                                // along so the carrier below can tell a still-draining teardown
+                                // from a fresh one.
+                                if (isTransient)
+                                    rejectedByRecycle.OnNext(new RecycleRejection(
+                                        "re-ask was itself rejected while the owner was still shutting down",
+                                        tag));
                             });
                 }
             }
@@ -702,15 +807,115 @@ public static class JsonSynchronizationStream
             // Concat, not SelectMany: attempt N+1's wait starts only after attempt N's has ended,
             // so two rejections arriving together can never sit on two teardowns at once and race
             // into Resubscribe's in-flight guard. One at a time, without a lock.
+            //
+            // 🚨 …AND THE JOIN CAN BE A NO-OP, WHICH IS #2986. DisposalCompleted is signalled AFTER
+            // `RunLevel = Dead`, so an activation that has already reached Dead answers the join
+            // instantly — and it can still be the instance routing resolves for the address. The
+            // re-ask then lands right back on the corpse, which NACKs it identically, and the loop
+            // runs at memory speed: CI run 33523142249 recorded three refusals from activation
+            // #017DA86C, RunLevel=Dead, inside ONE millisecond, after which the budget was spent,
+            // the latch was disarmed for the life of the stream, and the reader waited out its full
+            // 60 s for a bare TimeoutException that named none of this. Three chances that all fall
+            // inside one millisecond are one chance.
+            //
+            // So the accounting is split along the two axes the failure confused:
+            //
+            //   • ACTIVATION axis (MaxRecycleReArms, unchanged at 3) — a rejection from a NEW
+            //     activation is a new recycle, and a succession of those is the degenerate loop
+            //     this bound has always existed to stop.
+            //   • TIME axis (MaxSameActivationReAsks, paced by RecycleReAskPace) — a rejection from
+            //     the activation that ALREADY refused us is not a new recycle at all; it is the
+            //     same teardown, still draining, which the join failed to wait through. Charging it
+            //     against the activation budget is the bug. It is charged here instead, and the
+            //     next attempt RESTS first, so each of the bounded chances is a genuinely separate
+            //     opportunity rather than a microsecond-later retry at the same corpse.
+            //
+            // The pacing is not a watchdog and not a poll: no timer exists unless a real rejection
+            // arrived, exactly one re-ask is ever outstanding (Resubscribe's in-flight guard plus
+            // the Concat below), the whole ride-out is bounded, and it stops the instant the owner
+            // answers or its activation changes. It is the same treatment
+            // MeshNodeStreamExtensions.GetMeshNodeOutcome already gives a recycling address
+            // (#1701) at the same 500 ms, so both riders on the ShuttingDown contract behave alike.
             var recycleReArm = rejectedByRecycle
-                .Where(_ => Interlocked.Increment(ref recycleReArms) <= MaxRecycleReArms)
-                .Select(reason => OwnerTeardownSettled().Select(_ => reason))
+                .Select(ChargeReArmBudget)
+                .Where(decision => decision is not null)
+                .Select(decision => OwnerReadyForReAsk(decision!).Select(_ => decision!.Rejection.Reason))
                 .Concat()
                 .Subscribe(
                     reason => Resubscribe(reason),
                     ex => logger.LogDebug(ex,
                         "Stream {StreamId}: recycle re-arm stream faulted", reduced.StreamId));
             reduced.RegisterForDisposal(recycleReArm);
+
+            // Charges ONE of the two budgets and hands the decision downstream, or null when this
+            // rejection no longer buys a re-ask. The verdict is CARRIED rather than re-derived
+            // later: `sameActivationReAsks` and `lastRejectingActivation` keep moving as further
+            // rejections arrive, and an attempt waiting its turn in the Concat below must act on
+            // the state that charged IT, not on whatever the newest rejection left behind.
+            //
+            // The give-up says so ONCE, loudly. Silence is half of why #2986 read as "slow" rather
+            // than "refused": nothing in the failure said the read had been refused N times and
+            // stopped trying, so the caller saw only 60 s of nothing.
+            ReArmDecision? ChargeReArmBudget(RecycleRejection rejection)
+            {
+                var activation = rejection.Activation;
+                var previous = Volatile.Read(ref lastRejectingActivation);
+                // A rejection with NO activation identity (the StreamEndedEvent carrier, or a NACK
+                // site that embeds none) is never assumed to be the same corpse: it charges the
+                // activation budget, exactly as every rejection did before #2986.
+                var sameActivation = activation is not null && activation == previous;
+                Volatile.Write(ref lastRejectingActivation, activation);
+
+                // 🚨 The give-up lines report the OBSERVED counts, never the budget constants.
+                // A triage line whose number is a compile-time constant tells the reader nothing
+                // they could not have read in the source, and it goes silently wrong the moment
+                // the counting changes: "gave up after 3" while 4 rejections were seen is the
+                // shape that costs an hour. The budget is named too, as the CONTEXT for the
+                // observation — both, and labelled.
+                if (!sameActivation)
+                {
+                    Interlocked.Exchange(ref sameActivationReAsks, 0);
+                    var distinctActivations = Interlocked.Increment(ref recycleReArms);
+                    if (distinctActivations <= MaxRecycleReArms)
+                        return new ReArmDecision(rejection, RidingOutSameActivation: false);
+                    if (Interlocked.Exchange(ref gaveUp, 1) == 0)
+                        logger.LogWarning(
+                            "Stream {StreamId}: giving up on owner {Owner} — {DistinctActivations} DISTINCT "
+                            + "owner activations have refused this stream (budget {Budget}). The address is "
+                            + "recycling in a LOOP, not settling: each successor dies before it can answer. "
+                            + "Readers of this stream will now time out; the fix is at whatever is "
+                            + "requesting the recycles, not here.",
+                            reduced.StreamId, owner, distinctActivations, MaxRecycleReArms);
+                    return null;
+                }
+
+                var attemptsAtThisActivation = Interlocked.Increment(ref sameActivationReAsks);
+                if (attemptsAtThisActivation <= MaxSameActivationReAsks)
+                    return new ReArmDecision(rejection, RidingOutSameActivation: true);
+                if (Interlocked.Exchange(ref gaveUp, 1) == 0)
+                    logger.LogWarning(
+                        "Stream {StreamId}: giving up on owner {Owner} — the SAME activation #{Activation} "
+                        + "has refused {Attempts} re-subscribes as ShuttingDown (budget {Budget}) without "
+                        + "ever releasing the address. That is ONE WEDGED TEARDOWN at the owner, not a "
+                        + "recycle loop and not a slow reader: readers of this stream will now time out "
+                        + "with nothing to show for it. Look at that hub's disposal.",
+                        reduced.StreamId, owner, activation, attemptsAtThisActivation, MaxSameActivationReAsks);
+                return null;
+            }
+
+            // The wait a rejection buys. Deferred, so the probe is taken when this attempt is
+            // actually about to run — NOT when the rejection arrived. Select projects EAGERLY and
+            // Concat only defers SUBSCRIPTION, so without this Defer every rejection in a burst
+            // snapshots the owner's state at arrival time and the Concat replays those stale
+            // snapshots one by one.
+            IObservable<Unit> OwnerReadyForReAsk(ReArmDecision decision) =>
+                Observable.Defer(() => decision.RidingOutSameActivation
+                    // Riding out the SAME teardown: rest first. OwnerTeardownSettled was already
+                    // satisfied by this activation once (that is how we got here), so asking it
+                    // again would answer immediately and we would be back at the corpse within
+                    // microseconds — the #2986 burst.
+                    ? Observable.Timer(recycleReAskPace).Select(_ => Unit.Default)
+                    : OwnerTeardownSettled());
 
             // Completes once the teardown that just rejected us has finished, so the re-ask lands
             // on a fresh activation instead of racing the same dying instance. Event-driven: it
