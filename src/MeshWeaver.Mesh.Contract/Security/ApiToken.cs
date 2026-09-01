@@ -35,16 +35,19 @@ public record ApiToken
     public bool IsRevoked { get; init; }
 
     /// <summary>
-    /// Role IDs (e.g. "Admin", "Editor") captured at token-creation time from
-    /// the creating user's <c>AccessContext.Roles</c>. Returned in
-    /// <see cref="ValidateTokenResponse.Roles"/> at validation and stamped onto
-    /// the request's <c>AccessContext.Roles</c> by the auth middleware so that
-    /// SecurityService.GetEffectivePermissions can resolve them via the
-    /// claim-based role path on per-node hubs (where the synced
-    /// AccessAssignment query is intentionally not registered — see
-    /// SecurityServiceExtensions:44-50). Without this, API-token-bound requests
-    /// against per-node hubs see 0 roles → 0 perms → API gate strips, even
-    /// when the user is admin on the target scope.
+    /// Role IDs (e.g. "Admin", "Editor") captured at token-creation time from the creating user's
+    /// <c>AccessContext.Roles</c>, returned in <see cref="ValidateTokenResponse.Roles"/> at
+    /// validation and stamped onto the request's <c>AccessContext.Roles</c> by the auth middleware.
+    ///
+    /// <para>🚨 <b>NOT AUTHORITY — a diagnostic breadcrumb.</b> Nothing in
+    /// <c>PermissionEvaluator</c> reads it. A token's data permissions are folded from the live
+    /// <c>AccessAssignment</c> / <c>PartitionAccessPolicy</c> nodes on the target path, exactly
+    /// like a browser session's, and its <see cref="Permission.Api"/> capability is derived from
+    /// that path's own public grant and policy cap. Do not reintroduce it into a permission
+    /// decision: a value written when the token was minted cannot see a grant made afterwards and
+    /// cannot lose a capability revoked afterwards, so trusting it makes both a lockout and a
+    /// standing privilege permanent. See Doc/Architecture/AccessControl →
+    /// "API tokens and the Api capability".</para>
     /// </summary>
     public IReadOnlyCollection<string> Roles { get; init; } = [];
 }

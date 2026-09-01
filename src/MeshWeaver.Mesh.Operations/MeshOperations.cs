@@ -4644,7 +4644,13 @@ public class MeshOperations
                         {
                             status = "Error",
                             path = resolvedPath,
-                            submissionId,
+                            // EVERY Error reply carries an errorType, or the field is not a
+                            // discriminator at all — a caller cannot branch on a key that is
+                            // present on some refusals and absent on others. A stable token, like
+                            // the pre-flight's: the hub answered, so there is no exception here to
+                            // name, and inventing one would be a lie.
+                            errorType = "DispatchRefused",
+                            submissionId = response.SubmissionId ?? submissionId,
                             message = response.Error
                                 ?? "The Code node's hub refused the dispatch without a reason."
                         },
@@ -4660,9 +4666,16 @@ public class MeshOperations
                         {
                             status = "Error",
                             path = resolvedPath,
-                            submissionId,
+                            // 🚨 The one Error that is NOT side-effect free: the hub accepted the
+                            // submission, so a run may well be under way — it just cannot be
+                            // observed, because the path to its ActivityLog never came back. Named
+                            // distinctly so a caller does not retry it like a refusal.
+                            errorType = "NoActivityPath",
+                            submissionId = response.SubmissionId ?? submissionId,
                             message = "The dispatch succeeded but the Code node's hub "
-                                + "returned no activity path, so the run cannot be observed."
+                                + "returned no activity path, so the run cannot be observed. "
+                                + "The script MAY be running — check the node's activity history "
+                                + "before re-running it."
                         },
                         hub.JsonSerializerOptions);
 

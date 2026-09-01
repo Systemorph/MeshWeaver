@@ -15,6 +15,13 @@
          assembly PATH — the runner loads it into its own collectible context exactly as it loads a
          package's emitted assembly, so this is the real lane, not a simulation of it. -->
     <ProjectReference Include="..\MeshWeaver.Security.MeshTest\MeshWeaver.Security.MeshTest.csproj" />
+    <!-- The SDK lane's closure derivation (DepsClosure), so LaneClosuresAgreeTest can hold the two
+         lanes' answers against each other in one assertion. Converting a module from `sdk` to
+         `container` must not change what its bundle carries, and the only way to KNOW that is to
+         derive both from one package graph and compare — which is exactly the check that was
+         missing when the container flip emptied the AI bundle's closure (Plugins#1043).
+         🚨 The TEST project's references, not tools/MeshWeaver.PluginTester's own. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Build\MeshWeaver.Plugin.Build.csproj" />
   </ItemGroup>
 
   <ItemGroup>
