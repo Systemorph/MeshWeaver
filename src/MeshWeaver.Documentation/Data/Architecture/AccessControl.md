@@ -904,21 +904,21 @@ computes for this path on every emission**. Concretely that buys freshness for f
   surfaces as `Undetermined` / `ErrorType.Unavailable` and refuses the delivery — never as a
   permissive default. See [The fold can produce NO answer](#-the-fold-can-produce-no-answer-and-that-is-a-third-outcome).
 
-`AccessContext.Roles` is now read **nowhere** in `PermissionEvaluator`. It is still carried on a
-Bearer context, for two non-authority reasons: it is a useful diagnostic, and `AccessControlPipeline`
-uses a non-empty `Roles` list as its cue to restore the sender's `AccessContext` on a receiving hub.
-Neither is a permission decision — a future "just check the claims" is a regression, not a shortcut.
+`AccessContext.Roles` is now read **nowhere** in `PermissionEvaluator`, and **nowhere else that
+decides anything**. It is still carried on a Bearer context as a diagnostic, and that is all it is —
+a future "just check the claims" is a regression, not a shortcut.
 
-> ⚠️ **Known gap, named rather than papered over — that second use is itself a defect.**
-> `AccessControlPipeline` restores the sender's context only when `delivery.AccessContext` carries a
-> **non-empty** `Roles` list. A token minted with no claims (the ordinary case) therefore reaches a
-> per-node hub with no restored context at all, so `capturedContext` is null, `IsApiToken` is
-> unknown, and the clamp **does not run** on that path. It is not a hole in the read path — the
-> exact-read gate (`MeshNodeStreamCache.GetStreamRaw` → `ProbeEffectivePermissions`) captures the
-> caller's context directly and clamps correctly — but a message-routed check on a per-node hub can
-> miss it. The cure is to make the restore unconditional rather than role-shaped; it is a
-> context-propagation defect, not a staleness one, and it is tracked separately (issue #2976) so it
-> gets its own measurement on a hot path rather than riding along here.
+> ✅ **Closed by #2976 — the clamp reaches the routed path too.** Until that fix, `Roles` had one
+> remaining non-diagnostic use: `AccessControlPipeline` restored the sender's `AccessContext` on a
+> receiving per-node hub only when `delivery.AccessContext` carried a **non-empty** `Roles` list. A
+> token minted with no claims — the ordinary case — therefore arrived with no restored context at
+> all, `capturedContext` was null, `IsApiToken` was never seen, and the clamp **did not run** on a
+> message-routed check. It was never a hole in the read path (the exact-read gate
+> `MeshNodeStreamCache.GetStreamRaw` → `ProbeEffectivePermissions` captures the caller's context
+> itself and clamps correctly), which is why it survived unmeasured for so long. The restore is now
+> keyed on the delivery carrying a **real principal**, not on role claims — see
+> [Restoring the caller on the receiving hub](/Doc/Architecture/AccessContextPropagation#restoring-the-caller-on-the-receiving-hub).
+> Pinned by `RoutedApiTokenClampTest`.
 
 > 🚨 **The general rule this is an instance of.** A credential must not carry a *copy* of an
 > authorization fact. Copies go stale silently and in both directions, and the permissive direction

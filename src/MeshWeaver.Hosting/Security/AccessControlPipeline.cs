@@ -172,11 +172,43 @@ public static class AccessControlPipeline
 
                         userId = ResolveIdentity(delivery, accessService);
 
-                        // Restore the sender's AccessContext onto this scope's AccessService
-                        // so SecurityService.GetEffectivePermissions — which reads claim-based
-                        // roles from _accessService.Context.Roles — can resolve them. Trigger:
-                        // delivery carries non-empty user Roles (signed claim payload).
-                        if (delivery.AccessContext is { Roles: { Count: > 0 } } userCtx)
+                        // Restore the sender's AccessContext onto this scope's AccessService so
+                        // the permission fold snapshots the CALLER (PermissionEvaluator captures
+                        // `accessService.Context ?? accessService.CircuitContext` on this thread,
+                        // before any Rx scheduler hop). The fold reads exactly two flags off it:
+                        //   • IsApiToken — the API-token clamp, which zeroes the permission set
+                        //     for a Bearer context this path's live policy does not admit; and
+                        //   • IsHub — the hub-credential early return.
+                        // Neither has anything to do with Roles.
+                        //
+                        // 🚨 THE CONDITION USED TO BE `Roles: { Count: > 0 }` (issue #2976), and
+                        // that was the runtime form of the rule this file already states below:
+                        // the gate's own INPUT decided whether the gate ran, so "the clamp did not
+                        // run" and "the clamp passed" were indistinguishable. Its comment justified
+                        // itself in terms of claim-based role resolution — a mechanism that no
+                        // longer exists (the 2026-08-05 paywall fix took claim roles out of node
+                        // permissions; #2974 removed their last foothold, the API-token capability
+                        // hatch). AccessContext.Roles is read NOWHERE in PermissionEvaluator, so
+                        // the condition survived with its reason gone — and it was never the right
+                        // one: a token minted through an IdP that emits no role claims (the
+                        // ORDINARY case; ApiToken.Roles is usually empty) arrived here with
+                        // Roles = [], the restore was skipped, capturedContext was null, IsApiToken
+                        // was never seen and the Bearer delivery was evaluated as an interactive
+                        // session. The exact-read path was never exposed — MeshNodeStreamCache
+                        // .GetStreamRaw captures the caller itself — so the hole was precisely the
+                        // MESSAGE-ROUTED checks this pipeline gates. Pinned by
+                        // RoutedApiTokenClampTest.
+                        //
+                        // 🚨 A REAL PRINCIPAL, not "any context": a hub-shaped ObjectId (sync/,
+                        // mesh/, node/, activity/, portal/) is NOT a user identity and must never
+                        // be installed as one — the mesh-wide rule AccessService.SetContext's leak
+                        // tripwire, UserServiceDeliveryPipeline's `shouldStamp` and
+                        // MeshNodeStreamCache's pass-through all encode. Those keep falling back to
+                        // the hub/System rules exactly as before; only the empty-ObjectId anonymous
+                        // context is likewise skipped, since it names nobody to restore.
+                        if (delivery.AccessContext is { } userCtx
+                            && !string.IsNullOrEmpty(userCtx.ObjectId)
+                            && !AccessService.LooksLikeHubPrincipal(userCtx.ObjectId))
                         {
                             accessService.SetContext(userCtx);
                         }
