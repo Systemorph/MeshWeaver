@@ -4291,28 +4291,36 @@ public static class MeshExtensions
 
     /// <summary>
     /// The shape test behind <see cref="RepairStaleSelfDefaultMainNode"/>, split out so it can be
-    /// read (and asserted on) without a <see cref="MeshConfiguration"/>. Allocation-free: this runs
-    /// on every create and every upsert in the mesh.
+    /// read (and asserted on) without a <see cref="MeshConfiguration"/>.
+    ///
+    /// <para>Allocation-free, and deliberately so — this runs on every create and every upsert in
+    /// the mesh. <see cref="MeshNode.Path"/> is a computed interpolation, so materialising it here
+    /// would allocate a string per call on the hot path; the "is MainNode this node's own path"
+    /// question is asked through <see cref="MeshNode.HasExplicitMainNode"/> (which compares it
+    /// segment-wise against <c>Namespace</c>/<c>Id</c>), and the partition comparison runs on
+    /// <c>Namespace</c> directly, whose first segment IS the node's partition.</para>
     /// </summary>
     private static bool IsStaleSelfDefaultMainNode(MeshNode node)
     {
         var mainNode = node.MainNode;
         var id = node.Id;
-        if (string.IsNullOrEmpty(mainNode) || string.IsNullOrEmpty(id))
-            return false;
-        var path = node.Path;
-        if (string.Equals(mainNode, path, StringComparison.Ordinal))
+        // HasExplicitMainNode false ⇒ MainNode already IS this node's own path: nothing stale.
+        if (string.IsNullOrEmpty(mainNode) || string.IsNullOrEmpty(id) || !node.HasExplicitMainNode)
             return false;
         // (a) the bare-Id default — no namespace at construction time.
         if (string.Equals(mainNode, id, StringComparison.Ordinal))
             return true;
+        var ns = node.Namespace;
+        if (string.IsNullOrEmpty(ns))
+            return false;
         // (b) a namespaced default: MainNode's last segment is this node's own Id …
         if (mainNode.Length <= id.Length
             || mainNode[mainNode.Length - id.Length - 1] != '/'
             || !mainNode.AsSpan(mainNode.Length - id.Length).SequenceEqual(id.AsSpan()))
             return false;
-        // … and it was frozen in a DIFFERENT partition.
-        return !FirstSegment(mainNode).SequenceEqual(FirstSegment(path));
+        // … and it was frozen in a DIFFERENT partition. The partition is the first segment of the
+        // NAMESPACE, which is the first segment of Path without building Path.
+        return !FirstSegment(mainNode).SequenceEqual(FirstSegment(ns));
     }
 
     private static ReadOnlySpan<char> FirstSegment(string path)
