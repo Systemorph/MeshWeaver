@@ -20,6 +20,14 @@ namespace MeshWeaver.PluginTester;
 /// workload"; "do not try to import mesh nodes"), the hosted cases through the gate that seeds
 /// from this build's output.</para>
 ///
+/// <para>🚨 <b>…with ONE exception, and it is the pre-boot service-substitution seam.</b> A test
+/// class that DECLARES the mesh it needs — <c>public static MeshBuilder ConfigureMesh(MeshBuilder)</c>,
+/// see <see cref="MeshTestSuite"/> — gets that mesh booted for itself, once, and its
+/// <c>IServiceProvider</c>/<c>IMessageHub</c>-taking cases run against it. This is what lets a suite
+/// whose premise is a service that must be ABSENT run at all: an in-mesh <c>Tests</c> area boots
+/// INTO an already-composed host, and no additive registration can un-register anything. Classes
+/// with no declaration behave exactly as they did.</para>
+///
 /// <para><b>The xUnit-shaped surface a case may use.</b> There is no xUnit in this process, so the
 /// runner supplies the three things a migrated body actually reaches for, and nothing more:
 /// <see cref="Testing.TestContext"/><c>.Current</c> (the case's name and a token that trips just
@@ -156,21 +164,7 @@ public static class StaticTestRunner
 
             var cases = ImmutableArray.CreateBuilder<Case>();
             foreach (var type in types.Where(IsTestClass).OrderBy(t => t.FullName, StringComparer.Ordinal))
-            {
-                foreach (var method in TestMethods(type))
-                {
-                    var name = $"{type.Name}.{method.Name}";
-                    if (method.GetParameters().Length > 0)
-                    {
-                        cases.Add(new Case(name, Outcome.NeedsMesh, TimeSpan.Zero,
-                            "takes " + string.Join(", ", method.GetParameters().Select(p => p.ParameterType.Name))
-                            + " — a hosted case; the mesh lane runs it"));
-                        continue;
-                    }
-                    cases.Add(Invoke(name, method, perCaseTimeout));
-                    Report(output, cases[^1]);
-                }
-            }
+                RunClass(type, cases, perCaseTimeout, output);
             return new Run(assemblyPath, cases.ToImmutable(), null);
         }
         finally
@@ -178,6 +172,151 @@ public static class StaticTestRunner
             context.Unload();
         }
     }
+
+    /// <summary>
+    /// Runs one test class. When the class DECLARES a mesh
+    /// (<see cref="MeshTestSuite.FindDeclaration"/> — the pre-boot service-substitution seam), the
+    /// declared mesh is booted ONCE for the class, LAZILY, and every case whose whole signature
+    /// binds runs against it; the suite is torn down in a <c>finally</c> so a red case cannot leak a
+    /// mesh into the next class. A class with no declaration behaves exactly as before.
+    ///
+    /// <para>🚨 A boot FAILURE is reported as a failed case per affected method, never swallowed:
+    /// "the suite could not boot" and "the suite has no cases" must not look alike, which is the
+    /// same rule the gate applies to a <c>Tests</c> area that reports nothing — and the same rule
+    /// that gives <see cref="Outcome.Skipped"/> its own column.</para>
+    /// </summary>
+    private static void RunClass(
+        Type type, ImmutableArray<Case>.Builder cases, TimeSpan perCaseTimeout, TextWriter? output)
+    {
+        var declaration = MeshTestSuite.FindDeclaration(type);
+        MeshTestSuite? suite = null;
+        string? bootError = null;
+        try
+        {
+            foreach (var method in TestMethods(type))
+            {
+                if (method == declaration)
+                    continue; // the declaration composes the mesh; it is not a case
+                var name = $"{type.Name}.{method.Name}";
+                if (method.GetParameters().Length == 0)
+                {
+                    cases.Add(Invoke(name, method, perCaseTimeout));
+                    Report(output, cases[^1]);
+                    continue;
+                }
+                if (declaration is null || !MeshTestSuite.CanBind(method))
+                {
+                    cases.Add(new Case(name, Outcome.NeedsMesh, TimeSpan.Zero,
+                        "takes " + string.Join(", ", method.GetParameters().Select(p => p.ParameterType.Name))
+                        + (declaration is null
+                            ? " — a hosted case; the mesh lane runs it"
+                            : " — the declared mesh supplies IServiceProvider and IMessageHub only; "
+                              + "the mesh lane runs the rest")));
+                    continue;
+                }
+                if (suite is null && bootError is null)
+                {
+                    // Booted LAZILY: a class whose cases are all pure never pays for a mesh, and a
+                    // class with no runnable mesh case never boots one at all.
+                    var bootClock = Stopwatch.StartNew();
+                    try
+                    {
+                        suite = MeshTestSuite.Boot(declaration, output ?? TextWriter.Null);
+                        output?.WriteLine(
+                            $"      mesh  {type.Name}: declared mesh booted "
+                            + $"({bootClock.Elapsed.TotalMilliseconds:F0} ms)");
+                    }
+                    catch (Exception ex)
+                    {
+                        bootError = "the declared mesh did not boot — "
+                                    + Innermost(ex is TargetInvocationException { InnerException: { } inner }
+                                        ? inner
+                                        : ex);
+                    }
+                }
+                if (bootError is not null)
+                {
+                    cases.Add(new Case(name, Outcome.Failed, TimeSpan.Zero, bootError));
+                    Report(output, cases[^1]);
+                    continue;
+                }
+                cases.Add(InvokeInSuite(name, method, suite!, perCaseTimeout));
+                Report(output, cases[^1]);
+            }
+        }
+        finally
+        {
+            suite?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Invokes one case against a booted suite. Everything <see cref="Invoke"/> gives a pure case
+    /// applies here too — its own thread so a hang is NAMED, the budget as a
+    /// <c>TestContext.Current.CancellationToken</c>, per-case <c>TestLog</c> capture, and
+    /// <see cref="Testing.SkipException"/> as its own outcome — the only difference being that the
+    /// case is handed the declared mesh and may answer with an <c>IObservable&lt;Unit&gt;</c>.
+    /// The JOIN is deliberately looser than the stream budget so the INNER, named timeout reports.
+    /// </summary>
+    private static Case InvokeInSuite(
+        string name, MethodInfo method, MeshTestSuite suite, TimeSpan timeout)
+    {
+        var log = new List<string>();
+        void Capture(string line) { lock (log) log.Add(line); }
+        ImmutableArray<string> Captured() { lock (log) return [.. log]; }
+
+        var budget = new CancellationTokenSource();
+        var lead = timeout > TimeSpan.Zero
+            ? TimeSpan.FromMilliseconds(Math.Min(1000, timeout.TotalMilliseconds / 10))
+            : TimeSpan.Zero;
+
+        var clock = Stopwatch.StartNew();
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            using var _ = Testing.TestContext.Enter(
+                new Testing.TestContextData(name, budget.Token) { Log = Capture });
+            failure = suite.Run(method, timeout);
+        })
+        {
+            IsBackground = true,
+            Name = $"mesh-test:{name}",
+        };
+        thread.Start();
+        if (timeout > TimeSpan.Zero)
+            budget.CancelAfter(timeout - lead);
+        if (!thread.Join(timeout + JoinGrace))
+        {
+            // `budget` is deliberately NOT disposed — the abandoned thread still holds its token
+            // (same reason as Invoke's hung-case path).
+            return new Case(name, Outcome.Failed, clock.Elapsed,
+                $"did not return within {(timeout + JoinGrace).TotalSeconds:F0}s — a hung case "
+                + "against the declared mesh; the thread is abandoned and the build continues")
+            { Log = Captured() };
+        }
+        clock.Stop();
+        var expired = budget.IsCancellationRequested;
+        budget.Dispose();
+        var captured = Captured();
+        return failure switch
+        {
+            null => new Case(name, Outcome.Passed, clock.Elapsed, null) { Log = captured },
+            OperationCanceledException when expired =>
+                new Case(name, Outcome.Failed, clock.Elapsed,
+                    $"OperationCanceledException: the case budget ({timeout.TotalSeconds:F0}s) "
+                    + "expired and the case ended on TestContext.Current.CancellationToken")
+                { Log = captured },
+            Testing.SkipException skip =>
+                new Case(name, Outcome.Skipped, clock.Elapsed, skip.Reason) { Log = captured },
+            _ => new Case(name, Outcome.Failed, clock.Elapsed, Innermost(failure)) { Log = captured },
+        };
+    }
+
+    /// <summary>
+    /// How much longer the JOIN waits than the stream budget, so the inner wait's NAMED timeout is
+    /// the one that reports rather than the outer "abandoned" one.
+    /// </summary>
+    private static readonly TimeSpan JoinGrace = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Writes one case's line to the build log, and — for a FAILURE only — whatever the case wrote

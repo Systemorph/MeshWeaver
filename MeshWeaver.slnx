@@ -88,6 +88,7 @@
     <Project Path="test/MeshWeaver.PluginCatalog.Test/MeshWeaver.PluginCatalog.Test.csproj" />
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
     <Project Path="test/MeshWeaver.Security.Test/MeshWeaver.Security.Test.csproj" />
+    <Project Path="test/MeshWeaver.Security.MeshTest/MeshWeaver.Security.MeshTest.csproj" />
     <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj" />
     <Project Path="test/MeshWeaver.GitSync.Test/MeshWeaver.GitSync.Test.csproj" />
