@@ -191,11 +191,14 @@ internal static class PermissionEvaluator
             // ObserveOn — when the .Select lambdas in the fold land on TaskPool
             // (because cache.GetQuery uses SubscribeOn(TaskPoolScheduler)),
             // accessService.Context is null or contaminated. CircuitContext is
-            // mesh-global so it survives, but Bearer-token Roles claims live in
-            // AccessContext.Roles and we need that snapshot here. The Public leg
-            // of the fold evaluates under the SAME captured viewer context — it
-            // is the same viewer's check, and its API-token gate is subsumed by
-            // the outer one (own | pub is gated on the combined value).
+            // mesh-global so it survives, but the request-scoped context carries
+            // the two flags the fold reads — IsApiToken (the API-token clamp) and
+            // IsHub (the hub-credential early return) — so it has to be snapshotted
+            // here. 🚨 AccessContext.Roles is NOT read: a Bearer token's Roles are a
+            // mint-time snapshot and carry no authority anywhere in this evaluator.
+            // The Public leg of the fold evaluates under the SAME captured viewer
+            // context — it is the same viewer's check, and its API-token gate is
+            // subsumed by the outer one (own | pub is gated on the combined value).
             accessService?.Context,
             accessService?.CircuitContext);
     }
@@ -349,13 +352,33 @@ internal static class PermissionEvaluator
                     // the Rx schedulers cache.GetQuery uses).
                     var currentContext = capturedContext ?? capturedCircuitContext;
                     // API-token capability: the token may use the API surface when its NODE
-                    // permissions carry Api (a real Viewer/Editor grant) OR its claim roles do —
-                    // this is the ONE place claim roles act, and it is a CAPABILITY gate, never a
-                    // data grant (claims are excluded from roleIds above; see ComputeRoleState).
-                    // Without the claims half, removing claims from node permissions would zero
-                    // every MCP token on PublicRead-policy content (p = Read only, no Api bit).
+                    // permissions carry Api (a real Viewer/Editor grant) or when THIS path's
+                    // public surface does (see PublicSurfaceCarriesApi). Both halves are
+                    // recomputed from the live fold on every emission — nothing here reads the
+                    // token's own claims.
+                    //
+                    // 🚨 IT USED TO READ THEM, and that was a staleness hole with a security
+                    // side: the escape hatch was `ClaimsCarryApi(ctx)` over AccessContext.Roles,
+                    // which for a Bearer request is the role list captured on the ApiToken node
+                    // at MINT time (ApiToken.Roles → ValidateTokenResponse.Roles →
+                    // UserContextMiddleware). A snapshot answers a question about NOW with a fact
+                    // from THEN, and it is wrong in both directions:
+                    //   • too RESTRICTIVE — a token minted before its owner was granted anything
+                    //     (the ordinary case: most IdPs emit no role claims at all, so
+                    //     ApiToken.Roles is empty) could not read a PublicRead partition that the
+                    //     same person's browser renders fine, and NO later grant could fix it
+                    //     because no later grant rewrites a minted token;
+                    //   • too PERMISSIVE — the hatch outlived whatever produced it. A token whose
+                    //     mint-time claims carried an Api-bearing role name kept the API surface
+                    //     open FOREVER, over the top of a PartitionAccessPolicy that later said
+                    //     `api: false`. Taking API reach away could not take it away from the
+                    //     tokens that already existed.
+                    // Deriving the capability from (publicGrant, permissionCap) — both live,
+                    // both anchored to THIS path's scope chain — needs no extra query, no
+                    // cross-schema fan-out (Doc/Architecture/CrossSchemaFanOutElimination) and no
+                    // re-entry into the fold, so freshness costs nothing per request.
                     if (currentContext?.IsApiToken == true && !p.HasFlag(Permission.Api)
-                        && !ClaimsCarryApi(currentContext))
+                        && !PublicSurfaceCarriesApi(publicGrant, permissionCap))
                         p = Permission.None;
                     logger?.LogTrace("User {UserId} has permissions {Permissions} on node {NodePath} (cap: {Cap})",
                         userId, p, nodePath, permissionCap);
@@ -702,22 +725,50 @@ internal static class PermissionEvaluator
         // The access model (AGENTS.md, "Global admin"): a platform role grants the PLATFORM
         // gates, deliberately NOT cross-partition data access — it must not read a course it has
         // not bought. So node data permissions come from AccessAssignment nodes and policies
-        // ONLY, matching the SQL path row for row. Claim roles keep their legitimate job at the
-        // API-token capability check in GetEffectivePermissions (ClaimsCarryApi) — they decide
-        // whether the token may use the API surface, never what data it may read.
-        // Pinned by PaywallRealGateShapeTests (DbRoleClaim_DoesNotGrantNodeRead and siblings).
+        // ONLY, matching the SQL path row for row.
+        //
+        // 🚨 Claim roles now have NO job here at all. They kept one until 2026-09-01 — the
+        // API-token capability hatch in GetEffectivePermissionsCore — and that last foothold was
+        // itself a staleness hole, because a Bearer context's Roles are the snapshot taken when
+        // the token was MINTED: it could not see a grant made afterwards, and it could not lose a
+        // capability revoked afterwards. The capability is now derived from this path's own live
+        // public grant and policy cap (PublicSurfaceCarriesApi). AccessContext.Roles is read
+        // NOWHERE in this file; a future "just check the claims" is a regression, not a shortcut.
+        // Pinned by PaywallRealGateShapeTests (DbRoleClaim_DoesNotGrantNodeRead and siblings) and
+        // by ApiTokenCapabilityFreshnessTest.
         return (roleIds, permissionCap, publicGrant);
     }
 
     /// <summary>
-    /// True when the context's claim roles include a built-in role carrying
-    /// <see cref="Permission.Api"/> (Viewer, Commenter, Editor, Admin, …). Backs the API-token
-    /// capability gate — the only effect claim roles have on permission evaluation.
+    /// True when the PUBLIC surface of the path being evaluated carries the API capability —
+    /// the API-token clamp's only escape hatch besides a real <see cref="Permission.Api"/> in the
+    /// caller's own node permissions.
+    ///
+    /// <para>A public surface is a <c>PartitionAccessPolicy.PublicRead</c> scope or a declared
+    /// <c>NodeTypeGate</c> segment: content every anonymous browser already reads. It is public on
+    /// EVERY surface — a page anyone may read is not secret from an API client — so a Bearer
+    /// context is admitted to it even with no role of its own. That is what keeps MCP tokens
+    /// working on <c>Doc/</c>, <c>Agent/</c> and every installed package partition, which
+    /// <c>PackageInstaller</c> makes readable through exactly this policy and not through an
+    /// <c>AccessAssignment</c>.</para>
+    ///
+    /// <para>🚨 <paramref name="permissionCap"/> is what makes this a DECISION rather than a hole.
+    /// The public grant is ORed in after the cap on purpose (a public page stays readable to a
+    /// browser even on a capped partition), but the API capability it confers is NOT: a scope on
+    /// the chain that sets <c>api: false</c> means "not reachable through the API", and that must
+    /// bind here or the policy is decorative. The old claim-based hatch could not honour it — a
+    /// mint-time role snapshot knows nothing about a policy written afterwards.</para>
+    ///
+    /// <para>Undetermined is NOT a grant: this predicate is only ever consulted on a fold emission,
+    /// where both inputs are known. A fold that cannot reach a verdict terminates with an error
+    /// (see the leg-seeding note in <see cref="GetEffectivePermissionsCore"/>), which surfaces as
+    /// <c>Undetermined</c> / <c>ErrorType.Unavailable</c> and refuses the delivery — never as a
+    /// permissive default.</para>
     /// </summary>
-    private static bool ClaimsCarryApi(AccessContext ctx)
-        => ctx.Roles is not null
-           && ctx.Roles.Any(r =>
-               BuiltInRolePerms.TryGetValue(r, out var rp) && rp.HasFlag(Permission.Api));
+    /// <param name="publicGrant">The public grant folded for this path (Read, or None).</param>
+    /// <param name="permissionCap">The AND of every policy cap on this path's scope chain.</param>
+    private static bool PublicSurfaceCarriesApi(Permission publicGrant, Permission permissionCap)
+        => publicGrant.HasFlag(Permission.Read) && permissionCap.HasFlag(Permission.Api);
 
     private static List<string> GetScopeHierarchy(string nodePath)
     {
