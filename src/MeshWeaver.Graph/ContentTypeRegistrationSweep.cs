@@ -92,7 +92,14 @@ public static class ContentTypeRegistration
     /// <param name="definition">The NodeType definition node.</param>
     public static void EnsureRegisteredForCompiledDefinition(IMessageHub hub, MeshNode definition)
     {
-        if (definition.Content is not NodeTypeDefinition def
+        // 🚨 ContentAs, never `Content is T` — the CLR check is the documented trap-door: content
+        // can sit as an unmaterialized JsonElement (or a same-named type from another collectible
+        // assembly) and the pattern silently skips registration for exactly the nodes this exists
+        // for. Callers filter by node.NodeType == "NodeType" FIRST, so this deserializes only
+        // definition nodes (a static platform type), never arbitrary collectible content — the
+        // reflection-free constraint of the UpdateImpl pipeline stays intact.
+        var def = definition.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+        if (def is null
             || def.CompilationStatus != CompilationStatus.Ok
             || string.IsNullOrEmpty(def.LatestAssemblyPath))
             return;
