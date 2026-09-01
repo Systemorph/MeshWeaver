@@ -205,6 +205,101 @@ public class MeshTestSuiteTest(ITestOutputHelper output)
         Assert.Contains("the substitution could not be composed", failure.Error!, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// 🚨 POSITIVE substitution, and the ORDER that makes it work. The converted security suite
+    /// proves the ABSENCE half (a service that must not be registered); this proves the other half
+    /// — a double the suite REGISTERS is what the mesh's own container resolves — and, specifically,
+    /// that it beats the lane's own housekeeping. <see cref="MeshTestSuite.Boot"/> seeds an isolated
+    /// assembly store and an empty <c>IConfiguration</c> BEFORE invoking the declaration precisely
+    /// so the declaration is last and therefore wins; seeding after would silently override the
+    /// substitution the facility exists to deliver, with no error and no failing assertion.
+    ///
+    /// <para><c>IConfiguration</c> is not an arbitrary choice: at 46 sites across both repos it is
+    /// the single most substituted registration in the whole blocked population.</para>
+    /// </summary>
+    [Fact(Timeout = 300000)]
+    public void ADeclaredSubstitution_IsWhatTheMeshResolves_EvenOverTheLanesOwn()
+    {
+        var run = RunProbe("Substitution", """
+            using MeshWeaver.Graph.Configuration;
+            using MeshWeaver.Hosting.Monolith;
+            using MeshWeaver.Hosting.Persistence;
+            using MeshWeaver.Mesh;
+            using MeshWeaver.Mesh.Services;
+            using Microsoft.Extensions.Configuration;
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            namespace Probe;
+
+            public sealed class ProbeDouble { public string Value => "from the suite"; }
+
+            public sealed class ProbeAssemblyStore : IAssemblyStore
+            {
+                public System.IObservable<string?> TryGetAssemblyPath(string nodeTypePath, long version)
+                    => System.Reactive.Linq.Observable.Return<string?>(null);
+                public System.IObservable<string> Put(
+                    string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
+                    => System.Reactive.Linq.Observable.Return(string.Empty);
+            }
+
+            public static class SubstitutionTests
+            {
+                public static MeshBuilder ConfigureMesh(MeshBuilder builder) => builder
+                    .UseMonolithMesh()
+                    .AddInMemoryPersistence()
+                    .AddGraph()
+                    .ConfigureServices(s =>
+                    {
+                        // The substitution the LANE also registers for its own isolation. The
+                        // declaration runs last, so this must win.
+                        s.RemoveAll<IAssemblyStore>();
+                        return s.AddSingleton<IAssemblyStore>(new ProbeAssemblyStore());
+                    })
+                    .ConfigureServices(s => s
+                        .AddSingleton<ProbeDouble>()
+                        .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                            .AddInMemoryCollection(
+                                new System.Collections.Generic.Dictionary<string, string?>
+                                { ["Probe:Key"] = "from the suite" })
+                            .Build()));
+
+                public static void TheDoubleReachesTheMeshContainer(System.IServiceProvider services)
+                {
+                    if (services.GetService(typeof(ProbeDouble)) is not ProbeDouble)
+                        throw new System.InvalidOperationException(
+                            "the declared singleton never reached the mesh's container");
+                }
+
+                public static void TheSuitesStoreBeatsTheLanesOwnIsolation(System.IServiceProvider services)
+                {
+                    if (services.GetService(typeof(IAssemblyStore)) is not ProbeAssemblyStore)
+                        throw new System.InvalidOperationException(
+                            "the LANE's per-suite assembly store overrode the suite's substitution "
+                            + "— the declaration must be applied AFTER the lane's housekeeping, or "
+                            + "every suite that substitutes IAssemblyStore silently exercises the "
+                            + "lane's store instead of its own. Got: "
+                            + services.GetService(typeof(IAssemblyStore))?.GetType().Name);
+                }
+
+                public static void TheSuitesConfigurationBeatsTheLanes(System.IServiceProvider services)
+                {
+                    var configuration = (IConfiguration?)services.GetService(typeof(IConfiguration));
+                    if (configuration?["Probe:Key"] != "from the suite")
+                        throw new System.InvalidOperationException(
+                            "the LANE's IConfiguration won over the suite's — the declaration must "
+                            + "be applied last, or every substitution the lane also happens to "
+                            + "register is silently discarded. Got: " + configuration?["Probe:Key"]);
+                }
+            }
+            """);
+
+        Assert.Null(run.LoadError);
+        Assert.Equal(0, run.Failed);
+        Assert.Equal(0, run.NeedsMesh);
+        Assert.Equal(3, run.Passed);
+    }
+
     /// <summary>A declaration is found only in its exact shape; anything else is not one.</summary>
     [Fact]
     public void OnlyTheExactDeclarationShape_Counts()

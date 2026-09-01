@@ -176,21 +176,20 @@ public sealed class MeshTestSuite : IDisposable
         var runRoot = Path.Combine(Path.GetTempPath(),
             $"mw-mesh-suite-{Environment.ProcessId}-{Guid.NewGuid():N}");
 
-        var declared = declaration.Invoke(
-            null,
-            [new MeshBuilder(c => c.Invoke(services), AddressExtensions.CreateMeshAddress())])
-            as MeshBuilder
-            ?? throw new InvalidOperationException(
-                $"{declaration.DeclaringType?.Name}.{DeclarationName} returned null. The "
-                + "declaration must return the builder it configured — a null one composes "
-                + "nothing and would boot a mesh the suite never asked for, which is worse than "
-                + "not booting at all.");
-
-        // Per-SUITE isolation, applied after the declaration so a suite cannot accidentally share
-        // it: AddInMemoryPersistence TryAdds a process-pid-scoped IAssemblyStore, so without the
-        // REPLACE two suites compiling the same node path at a colliding version serve each other's
-        // bytes (the failure MonolithMeshTestBase documents at length for test CLASSES).
-        var builder = declared
+        // 🚨 Per-SUITE isolation, applied BEFORE the declaration — the ORDER is the whole point.
+        // MeshBuilder.ConfigureServices applies immediately, so whatever runs LAST wins.
+        //
+        //  * Running it first still isolates: AddInMemoryPersistence TryAdds a PROCESS-PID-scoped
+        //    IAssemblyStore, so a store already present makes that TryAdd a no-op. Without any
+        //    isolation, two suites compiling the same node path at a colliding version serve each
+        //    other's bytes (the failure MonolithMeshTestBase documents at length for test CLASSES).
+        //  * And it leaves the DECLARATION able to win. Running it AFTER would silently clobber a
+        //    suite that substitutes IAssemblyStore or CompilationCacheOptions on purpose —
+        //    core's HangingAssemblyStore suites do exactly that — with no error and no failing
+        //    assertion: the case would simply exercise the lane's store instead of its own. A
+        //    facility whose own housekeeping overrides the substitution it exists to deliver is
+        //    the silent-failure class this seam is supposed to end.
+        var seeded = new MeshBuilder(c => c.Invoke(services), AddressExtensions.CreateMeshAddress())
             .ConfigureServices(s =>
             {
                 s.RemoveAll<IAssemblyStore>();
@@ -198,6 +197,13 @@ public sealed class MeshTestSuite : IDisposable
             })
             .ConfigureServices(s => s.Configure<CompilationCacheOptions>(o =>
                 o.CacheDirectory = Path.Combine(runRoot, "compilation-cache")));
+
+        var builder = declaration.Invoke(null, [seeded]) as MeshBuilder
+            ?? throw new InvalidOperationException(
+                $"{declaration.DeclaringType?.Name}.{DeclarationName} returned null. The "
+                + "declaration must return the builder it configured — a null one composes "
+                + "nothing and would boot a mesh the suite never asked for, which is worse than "
+                + "not booting at all.");
 
         services.AddSingleton(builder.BuildHub);
         var provider = services.CreateMeshWeaverServiceProvider();

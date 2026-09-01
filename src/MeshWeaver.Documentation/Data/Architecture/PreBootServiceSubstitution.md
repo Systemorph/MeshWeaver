@@ -178,6 +178,26 @@ assemblies itself).
 
 ---
 
+## 6a. 🚨 The lane's own housekeeping runs BEFORE the declaration — order is the invariant
+
+`MeshBuilder.ConfigureServices` applies **immediately**, so whatever runs last wins.
+`MeshTestSuite.Boot` therefore seeds its per-suite assembly store and compilation cache **first**,
+and invokes the declaration **last**.
+
+Running it the other way round still *looks* right and still isolates — and it silently discards
+every substitution the lane happens to register too. Core has suites that substitute
+`IAssemblyStore` on purpose (`HangingAssemblyStore`); with the housekeeping applied afterwards, those
+cases would quietly exercise the lane's `FileSystemAssemblyStore` instead of their own double, with
+no exception, no red type and no failing assertion. **A facility whose own bookkeeping overrides the
+substitution it exists to deliver is exactly the silent-failure class this seam is meant to end.**
+
+Isolation is not lost by running first: `AddInMemoryPersistence` registers its process-pid-scoped
+store with `TryAddSingleton`, which no-ops when one is already present. The invariant is pinned by
+`MeshTestSuiteTest.ADeclaredSubstitution_IsWhatTheMeshResolves_EvenOverTheLanesOwn`, whose probe
+suite substitutes `IAssemblyStore` and an `IConfiguration` and asserts the mesh resolves **its**
+instances — and which fails with *"the LANE's per-suite assembly store overrode the suite's
+substitution … Got: FileSystemAssemblyStore"* the moment the order is reversed.
+
 ## 7. Where the case's wait happens, and why it is there
 
 A migrated case returns `IObservable<Unit>`; the **runner** waits, never the suite. `MeshTestSuite.Run`
