@@ -61,6 +61,15 @@ public static class MeshWeaverInstanceNodeType
     public const string ConsentPath = $"{ConsentNamespace}/{ConsentId}";
 
     /// <summary>
+    /// The node-type identifier for BUILD principals (<see cref="BuildPrincipal"/>) — the repository
+    /// rules a GitHub Actions OIDC token is checked against (#2483). Lives in the <b>Admin</b>
+    /// partition (<see cref="BuildPrincipal.Namespace"/>) for the same reason
+    /// <see cref="PluginGrant"/> does: the subject of an access decision must not be able to write
+    /// the decision, and the Admin partition IS the global-admin gate.
+    /// </summary>
+    public const string BuildPrincipalNodeType = "BuildPrincipal";
+
+    /// <summary>
     /// Registers both node types on the mesh builder and puts their content types in the hub's
     /// type registry so they serialize across silos (without this, a cross-silo create fails with
     /// "NodeType 'MeshWeaverInstance' is not registered" — same trap ApiToken hit).
@@ -69,10 +78,12 @@ public static class MeshWeaverInstanceNodeType
         where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(
-            CreateMeshNode(), CreateGrantMeshNode(), CreateRegistrationKeyMeshNode(), CreateConsentMeshNode());
+            CreateMeshNode(), CreateGrantMeshNode(), CreateRegistrationKeyMeshNode(), CreateConsentMeshNode(),
+            CreateBuildPrincipalMeshNode());
         // An instance is infrastructure identity, not content — keep all of these out of
         // autocomplete so they never surface as pickable nodes in the composer.
-        builder.AddAutocompleteExcludedTypes(NodeType, GrantNodeType, RegistrationKeyNodeType, ConsentNodeType);
+        builder.AddAutocompleteExcludedTypes(
+            NodeType, GrantNodeType, RegistrationKeyNodeType, ConsentNodeType, BuildPrincipalNodeType);
         builder.ConfigureHub(config => config
             .WithType<MeshWeaverInstance>(nameof(MeshWeaverInstance))
             .WithType<MeshWeaverInstanceIndex>(nameof(MeshWeaverInstanceIndex))
@@ -80,9 +91,27 @@ public static class MeshWeaverInstanceNodeType
             .WithType<PluginGrantEntry>(nameof(PluginGrantEntry))
             .WithType<RegistrationKey>(nameof(RegistrationKey))
             .WithType<RegistrationKeyIndex>(nameof(RegistrationKeyIndex))
-            .WithType<InstanceConsent>(nameof(InstanceConsent)));
+            .WithType<InstanceConsent>(nameof(InstanceConsent))
+            .WithType<BuildPrincipal>(nameof(BuildPrincipal)));
         return builder;
     }
+
+    /// <summary>
+    /// The <see cref="BuildPrincipal"/> node definition — one node per repository this mesh trusts
+    /// to act as a build, in the Admin partition so only a global admin can create or revoke one.
+    /// <c>search nodeType:BuildPrincipal</c> is the complete list, which is precisely what the Entra
+    /// federated credentials it replaces could not answer.
+    /// </summary>
+    /// <returns>The node definition.</returns>
+    public static MeshNode CreateBuildPrincipalMeshNode() => new(BuildPrincipalNodeType)
+    {
+        Name = "Build Principal",
+        IsSatelliteType = false,
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+        HubConfiguration = config => config
+            .AddMeshDataSource(source => source
+                .WithContentType<BuildPrincipal>())
+    };
 
     /// <summary>The <see cref="InstanceConsent"/> node definition. One record in the Admin
     /// partition; the partition's access control is what keeps everyone but a global admin from

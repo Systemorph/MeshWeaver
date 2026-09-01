@@ -215,19 +215,28 @@ published JWKS instead of the mesh's own keys. The portal already references
 `Microsoft.Identity.Web`, so the JWKS fetch and signature check are library calls, not new
 dependencies.
 
-**The rule lives on `Store/BuildPrincipal`** — a control node in the shape every admin action here
+**The rule lives on a `BuildPrincipal` node** — a control node in the shape every admin action here
 already takes (`Store/Provision`, `Store/Enrollment`). It records what a stored secret never could:
 
 | field | meaning |
 |---|---|
-| `repository` | `Systemorph/MeshWeaver.SocialMedia` — the `repository` claim it must match |
-| `events` | which `event_name`s may act — `push` on `main` may *publish*; `pull_request` may only *fetch* |
+| `repository` | `Systemorph/MeshWeaver.SocialMedia` — the `repository` claim it must match, exactly |
+| `repositoryId` | optional pin on GitHub's IMMUTABLE numeric id — a name can be renamed and re-registered, an id cannot |
+| `events` | which `event_name`s may act — `push` may *publish*; `pull_request` may only *fetch* |
+| `eventRefs` | optional per-event `ref` pin, so "`push` **on main** may publish" is expressible rather than merely intended |
 | `scopes` | `publish:socialmedia`, `fetch:plugins` — what this repo may bake INTO the registry and install FROM it |
 | `issuedBy` / `issuedAt` / `lastSeen` | the audit trail |
 
-A global admin `create`s it; `requestedAction: Revoke` ends it. `search nodeType:Store/BuildPrincipal`
+A global admin `create`s it; `requestedAction: Revoke` ends it. `search nodeType:BuildPrincipal`
 lists every repo the mesh trusts and exactly what each may do. There is no key to lose because
 there is no key.
+
+> 🚨 **It is a CORE node type, `BuildPrincipal`, at `Admin/_BuildPrincipal/{owner}--{repo}` — not a
+> `Store/…` one.** The issue drafted it under `Store/` beside the other control nodes, but the
+> verifier that reads it is the registry's own `InstanceRegistryAuthenticator`, which is platform C#
+> and cannot depend on a package's in-mesh node type. It sits in the **Admin partition** for the same
+> reason `PluginGrant` does: the subject of an access decision must not be able to write the
+> decision, and that partition's access control IS the global-admin gate.
 
 **The security tie is the scope split.** The identity that publishes a source is the identity that
 may fetch what it depends on, and it can do neither outside its scopes: SocialMedia's principal
@@ -258,9 +267,18 @@ The two are the same idea; the difference is **where the rule lives and who can 
 mesh owns is a rule the mesh can audit, list, and revoke as a node — and it cannot silently drift
 into the state the first `upstream-seed` run found, where every credential covered the wrong event.
 
-**Until this lands** the Azure route in `upstream-seed` works on `main` and fails on PRs
-(`AADSTS700213`); that is recorded on the PRs that hit it. Provisioning a `pull_request` credential
-in Entra would make it work — and would be one more rule in the wrong place.
+**What has landed.** The registry serves publications under its own authenticator (#2487), the
+verifier's GitHub leg and the `BuildPrincipal` node type shipped with #2483, and a build principal is
+admitted on the prebuilt routes requiring `fetch:<source>` — the full mechanics, the refusal matrix
+and the fail-closed rules are in
+[Access control](/Doc/Architecture/AccessControl) → *Build principals*.
+
+**What has not.** `upstream-seed` still logs in to Azure rather than presenting its run's OIDC token,
+so on a pull request it still hits `AADSTS700213`; that is recorded on the PRs that hit it. The
+workflow change is a satellite-repo edit (`ACTIONS_ID_TOKEN_REQUEST_URL` with
+`audience=<registry>` → `Authorization: Bearer` → the prebuilt GET), and the registry side is now
+waiting for it rather than the other way round. Provisioning a `pull_request` credential in Entra
+would also make it work — and would be one more rule in the wrong place.
 
 ---
 

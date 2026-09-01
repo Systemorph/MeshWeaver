@@ -77,6 +77,12 @@ public static class PluginCatalogConfigurationExtensions
                 // Mints (once, per registry) and rotates the key that signs short-lived sync access
                 // tokens. Mesh-scoped so its cache dies with the mesh, like the authenticator.
                 .AddSingleton<SyncTokenSigningKeyService>()
+                // The SECOND issuer's key source (#2483): GitHub's OIDC JWKS, read once an hour and
+                // shared. Mesh-scoped for the same reason as everything above — a key set held in a
+                // static field would outlive the mesh and bleed across tests and deployments. A
+                // fetch that fails FAILS CLOSED: the observable errors, so the authenticator answers
+                // "undetermined" (503 + Retry-After) rather than "unknown token", and never accepts.
+                .AddSingleton<GitHubOidcKeyService>()
                 // The plan ladder (Admin/Tiers/*) a plan-scoped grant entry is decided against —
                 // read once per minute, on the caller, by the authenticator above. Mesh-scoped so
                 // the cache dies with the mesh.
