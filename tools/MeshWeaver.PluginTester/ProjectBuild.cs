@@ -76,8 +76,13 @@ public static class ProjectBuild
     /// <summary>Options for one project build.</summary>
     public sealed record Options
     {
-        /// <summary>The <c>.csproj</c> to build, or a directory holding exactly one.</summary>
-        public required string EntryProject { get; init; }
+        /// <summary>
+        /// The <c>.csproj</c> entries to build (each may be a directory holding exactly one) — ONE
+        /// graph, one Roslyn workspace, however many roots: "just collect all under scope in
+        /// global process and discontinue any local build" (maintainer, 2026-09-01). Every entry
+        /// must share one source root; two trees are two builds.
+        /// </summary>
+        public required IReadOnlyList<string> EntryProjects { get; init; }
 
         /// <summary>Where the emitted assemblies land; a temp directory when null.</summary>
         public string? OutputDirectory { get; init; }
@@ -256,10 +261,12 @@ public static class ProjectBuild
         var wall = Stopwatch.StartNew();
         var sink = new Sink(options);
 
-        string entry;
+        ImmutableArray<string> entries;
         try
         {
-            entry = ResolveEntryProject(options.EntryProject);
+            entries = [.. options.EntryProjects.Select(ResolveEntryProject)];
+            if (entries.IsEmpty)
+                throw new InvalidOperationException("no entry projects given — a build of nothing is a failure, never a silent success");
         }
         catch (Exception ex)
         {
@@ -285,7 +292,7 @@ public static class ProjectBuild
         Graph graph;
         try
         {
-            graph = Graph.Discover(entry, container, options, sink);
+            graph = Graph.Discover(entries, container, options, sink);
         }
         catch (Exception ex) when (ex is ProjectFile.UnsupportedConstructException or InvalidOperationException)
         {
@@ -332,6 +339,29 @@ public static class ProjectBuild
                 var report = new Report(
                     container.AppDirectory, container.PlatformAssemblyVersion, results, wall.Elapsed,
                     sink.Seal(results.All(r => r.IsGreen)));
+                // Per-ENTRY closure manifests — the central-build contract. A shared workspace
+                // output holds EVERY entry's assemblies side by side, so a consumer classifying
+                // "what rides MY bundle" by globbing the output would ride every other module
+                // (closure pollution). Each entry's manifest names exactly the assemblies its own
+                // in-tree graph produced: the module itself first, its in-tree dependencies after.
+                if (results.All(r => r.IsGreen))
+                    foreach (var entryPath in entries)
+                    {
+                        var reachable = new List<string>();
+                        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        var walkStack = new Stack<string>();
+                        walkStack.Push(entryPath);
+                        while (walkStack.Count > 0)
+                        {
+                            var current = walkStack.Pop();
+                            if (!seen.Add(current) || !graph.Models.TryGetValue(current, out var m)) continue;
+                            reachable.Add(m.AssemblyName);
+                            foreach (var dep in graph.DependenciesOf(current))
+                                walkStack.Push(dep);
+                        }
+                        File.WriteAllLines(
+                            Path.Combine(workRoot, reachable[0] + ".closure.txt"), reachable);
+                    }
                 Print(options.Output, report);
                 return report;
             })
@@ -487,7 +517,7 @@ public static class ProjectBuild
             Edges.TryGetValue(id, out var deps) ? deps : [];
 
         internal static Graph Discover(
-            string entry, ContainerReferenceSet container, Options options, Sink sink)
+            ImmutableArray<string> entries, ContainerReferenceSet container, Options options, Sink sink)
         {
             var prebuilt = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var directory in options.PrebuiltDirectories)
@@ -504,16 +534,26 @@ public static class ProjectBuild
             if (prebuilt.Count > 0)
                 sink.Info($"prebuilt siblings: {prebuilt.Count} assembl(y|ies) — an in-root "
                     + "ProjectReference matching one resolves to it instead of rebuilding");
-            var sourceRoot = ProjectFile.FindNearest(Path.GetDirectoryName(entry)!, "Directory.Build.props") is { } props
+            // ONE source root for the whole workspace — derived from the first entry, asserted for
+            // the rest: a ProjectReference inside it builds, outside it comes from the container,
+            // and two entries with different roots would silently give the second one the wrong
+            // boundary.
+            var sourceRoot = ProjectFile.FindNearest(Path.GetDirectoryName(entries[0])!, "Directory.Build.props") is { } props
                 ? Path.GetDirectoryName(props)!
-                : Path.GetDirectoryName(entry)!;
+                : Path.GetDirectoryName(entries[0])!;
+            foreach (var other in entries.Skip(1))
+                if (!other.StartsWith(sourceRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"entry '{other}' lies outside the source root '{sourceRoot}' derived from "
+                        + $"'{entries[0]}' — one workspace has one root; build separate trees separately");
             sink.Info($"source root: {sourceRoot} (a ProjectReference inside it is built; outside it comes from the container)");
 
             var models = ImmutableDictionary.CreateBuilder<string, ProjectFile.Model>(StringComparer.OrdinalIgnoreCase);
             var edges = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
             var prebuiltReferences = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var pending = new Stack<string>();
-            pending.Push(entry);
+            foreach (var entry in entries)
+                pending.Push(entry);
 
             while (pending.Count > 0)
             {
@@ -588,6 +628,18 @@ public static class ProjectBuild
         IReadOnlyList<ProjectResult> dependencies)
     {
         var clock = Stopwatch.StartNew();
+        var name0 = model.AssemblyName;
+        // LIVENESS, not narration: after the quieting, a nullable-heavy project (MeshWeaver.AI:
+        // minutes of flow analysis) printed its start line and then NOTHING until the verdict —
+        // "it is completely blank" (maintainer, 2026-09-01), indistinguishable from a hang. One
+        // bounded heartbeat per half-minute of actual compiling; `using` disposes it on every
+        // return path, so a finished project can never keep ticking.
+        using var liveness = Observable
+            .Interval(TimeSpan.FromSeconds(30))
+            .Subscribe(_ => sink.Info(
+                $"[{name0}] still compiling — {clock.Elapsed.TotalSeconds:F0}s elapsed"
+                + (model.CompileItems.Length > 100
+                    ? " (nullable flow analysis dominates large projects)" : "")));
         var name = Path.GetFileNameWithoutExtension(model.ProjectPath);
         var razorGenerated = 0;
         sink.Info($"[{name}] start — {model.CompileItems.Length} source file(s)"

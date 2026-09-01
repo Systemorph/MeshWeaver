@@ -115,7 +115,7 @@ public class SdkGeneratorBuildTest : IDisposable
 
         var report = await Build(new()
         {
-            EntryProject = entry,
+            EntryProjects = [entry],
             AppDirectory = AppDirectory(),
             OutputDirectory = Path.Combine(_root, "out"),
             Output = TextWriter.Null,
