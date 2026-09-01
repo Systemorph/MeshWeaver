@@ -74,7 +74,11 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     /// </summary>
     /// <param name="providers">The static node providers (built-in roles, type definitions, etc.).</param>
     /// <param name="matches">Predicate deciding whether a scoped query's namespaces are owned by this provider.</param>
-    /// <param name="meshConfiguration">Optional mesh configuration supplying seed (<c>AddMeshNodes</c>) nodes and context-exclusion rules; may be <see langword="null"/>.</param>
+    /// <param name="meshConfiguration">Optional mesh configuration supplying the autocomplete /
+    /// context-exclusion rules; may be <see langword="null"/>. The seed (<c>AddMeshNodes</c>) nodes
+    /// come from <paramref name="providers"/> — <c>MeshBuilder</c> registers them as an
+    /// <see cref="IStaticNodeProvider"/> — so ONE resolution decides who serves a contested path
+    /// (<c>StaticNodeProviderExtensions.ResolveStaticNodes</c>, MeshWeaver#2908).</param>
     /// <param name="loggerFactory">Optional logger factory; diagnostics are suppressed when <see langword="null"/>.</param>
     public StaticNodeQueryProvider(
         IEnumerable<IStaticNodeProvider> providers,
@@ -88,28 +92,28 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
 
         var providerList = providers as IList<IStaticNodeProvider> ?? providers.ToList();
 
-        // MeshConfiguration.Nodes (AddMeshNodes seed) wins the "config" bucket —
-        // bridge providers like MeshConfigurationStaticNodeProvider re-emit those
-        // same nodes via IStaticNodeProvider, but they retain config-node
-        // semantics (search-context excluded). Without this priority, the
-        // bridged config nodes leak through QueryAsync's _providerNodes path
-        // which has no isSearch guard (caught by
+        // 🚨 The AddMeshNodes-seed-wins rule is NOT implemented here. It lives in
+        // StaticNodeProviderExtensions.ResolveStaticNodeBuckets, which is also what
+        // FindServedStaticNode / FindStaticNode resolve through — that shared call is the whole
+        // point (MeshWeaver#2908): a second static node at a path another contributor already
+        // claimed used to be served by this reader and NOT by hub activation's, silently, because
+        // each seam applied its own rule. The buckets stay separate because the two are treated
+        // differently BELOW (seed nodes are registration declarations, suppressed under
+        // context:search / is:content); who WINS a contested path is decided in one place.
+        //
+        // Seed priority also keeps a bridged copy of a seed node out of the provider bucket, which
+        // has no isSearch guard (caught by
         // StaticNodeQueryContextTests.SearchContext_ExcludesStaticNodes).
-        var configPaths = new HashSet<string>(
-            ((meshConfiguration?.AddMeshNodesList ?? Enumerable.Empty<MeshNode>()))
-                .Select(n => n.Path)
-                .Where(p => !string.IsNullOrEmpty(p)),
-            StringComparer.OrdinalIgnoreCase);
+        var (seedNodes, providedNodes) =
+            StaticNodeProviderExtensions.ResolveStaticNodeBuckets(providerList);
 
-        _providerNodes = providerList
-            .SelectMany(p => p.GetStaticNodes())
-            // Definition-only nodes (a DB-synced NodeType catalog's in-memory type-def) are NOT
-            // queryable — Postgres owns the runtime node at their path. Excluding them keeps the
-            // bare partition path (e.g. path:Harness) resolving to exactly the PG nodeType:NodeType
-            // root, with no second claimant. See Doc/Architecture/NodeTypeCatalogs.md.
-            .Where(n => !n.IsDefinitionOnly)
-            .Where(n => !configPaths.Contains(n.Path))
-            .ToArray();
+        // Definition-only nodes (a DB-synced NodeType catalog's in-memory type-def) are NOT
+        // queryable — Postgres owns the runtime node at their path. Excluding them keeps the
+        // bare partition path (e.g. path:Harness) resolving to exactly the PG nodeType:NodeType
+        // root, with no second claimant. They still CLAIMED their path in the resolution above,
+        // so no lower-precedence provider slips a served node underneath them.
+        // See Doc/Architecture/NodeTypeCatalogs.md.
+        _providerNodes = providedNodes.Where(n => !n.IsDefinitionOnly).ToArray();
         _logger?.LogDebug(
             "[StaticNodeQueryProvider] ctor: {Providers} provider(s) -> {Count} nodes; byType=[{ByType}]; byNamespace(top)=[{ByNs}]",
             providerList.Count,
@@ -117,10 +121,17 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             string.Join(", ", _providerNodes.GroupBy(n => n.NodeType ?? "(null)").Select(g => $"{g.Key}={g.Count()}")),
             string.Join(", ", _providerNodes.GroupBy(n => n.Namespace ?? "(null)").OrderByDescending(g => g.Count()).Take(5).Select(g => $"{g.Key}={g.Count()}")));
 
-        _configNodes = ((meshConfiguration?.AddMeshNodesList ?? Enumerable.Empty<MeshNode>()))
-            // See _providerNodes: a definition-only catalog type-def is never a query result.
-            .Where(n => !n.IsDefinitionOnly)
-            .ToArray();
+        // See _providerNodes: a definition-only catalog type-def is never a query result.
+        _configNodes = seedNodes.Where(n => !n.IsDefinitionOnly).ToArray();
+
+        // 🚨 LOUD, once per mesh: two providers claiming one path with DIFFERENT content means one
+        // of them is being dropped. Registration order is not something a host controls, so
+        // "append a node at the platform's path to override it" is not a supported pattern — and
+        // before this warning existed it looked like one, because the append was accepted and only
+        // half-honoured (MeshWeaver#2908).
+        if (_logger is not null)
+            foreach (var collision in StaticNodeProviderExtensions.DescribeStaticProviderCollisions(providerList))
+                _logger.LogWarning("[StaticNodeQueryProvider] {Collision}", collision);
 
         _allNodes = _providerNodes.Concat(_configNodes).ToArray();
 
