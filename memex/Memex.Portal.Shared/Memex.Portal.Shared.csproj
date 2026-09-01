@@ -128,6 +128,9 @@
          referenced here rather than only where the renderer is called. NoDependencies = no
          fontconfig/freetype link, so nothing has to be apt-installed into the portal base. -->
     <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" />
+    <!-- SkiaSharp draws but does not PARSE svg, and every node mark is authored svg — see
+         IconRasterizer and Doc/Architecture/ContentFaviconRasterization. -->
+    <PackageReference Include="Svg.Skia" />
   </ItemGroup>
 
   <ItemGroup>

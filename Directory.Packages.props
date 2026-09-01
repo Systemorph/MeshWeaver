@@ -140,8 +140,26 @@
          packages and the base image stays as it is — the font is supplied from an embedded
          resource instead. linux-x64 AND linux-arm64 natives ship in the package, which the
          multi-arch portal image requires. -->
-    <PackageVersion Include="SkiaSharp" Version="3.116.1" />
-    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.116.1" />
+    <PackageVersion Include="SkiaSharp" Version="3.119.2" />
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.2" />
+    <!-- 🚨 SkiaSharp DRAWS; it does not PARSE. The favicon rasterizer (IconRasterizer, issue
+         #2075) has to turn a node's AUTHORED &lt;svg&gt; mark into PNG bytes because Safari
+         renders no SVG favicon at all, so the whole per-content favicon feature was invisible on
+         that browser — and every one of the 56 store-package marks is inline svg, including the
+         issue's own repro (Chess's board). Drawing only the marks the portal GENERATES would have
+         shipped an endpoint that misses its own reproduction case.
+
+         Svg.Skia is MIT; its closure is MIT plus MS-PL (Svg.Custom, the SVG.NET fork), both on the
+         `Dependency licences` allowlist — see Doc/Architecture/DependencyLicensing.
+
+         🚨 It is what pins SkiaSharp at 3.119.2 (from 3.116.1): Svg.Skia 4.9.1 floors SkiaSharp at
+         3.119.2, and a lower central pin under a higher transitive floor is NU1605, not a silent
+         resolve. Moving Svg.Skia moves SkiaSharp with it — they are one decision.
+
+         The HarfBuzzSharp natives it brings are standalone (no fontconfig/freetype link), so the
+         NoDependencies posture above is preserved: the portal base image still needs no apt
+         packages. -->
+    <PackageVersion Include="Svg.Skia" Version="4.9.1" />
     <PackageVersion Include="System.CommandLine" Version="2.0.11" />
     <PackageVersion Include="System.Composition.AttributedModel" Version="10.0.10" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />

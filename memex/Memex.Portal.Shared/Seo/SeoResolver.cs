@@ -19,7 +19,13 @@ namespace Memex.Portal.Shared.Seo;
 /// <param name="Type">The media type to declare, or null when the value alone does not pin one
 /// down — declaring the WRONG type is worse than declaring none, and a consumer that ranks icons
 /// by type would then rank this one on a lie.</param>
-public sealed record PageIcon(string Href, string? Type);
+/// <param name="Rel">The link relation — <c>icon</c> for the tab strip, <c>apple-touch-icon</c> for
+/// Safari's bookmark / Add-to-Dock tile, which is a SEPARATE channel and never falls back to the
+/// favicon.</param>
+/// <param name="Sizes">The <c>sizes</c> attribute, for a raster icon that has exactly one pixel
+/// size. Null for a scalable (SVG) icon, where declaring a size would tell a browser ranking icons
+/// by size something untrue.</param>
+public sealed record PageIcon(string Href, string? Type, string Rel = "icon", string? Sizes = null);
 
 /// <summary>
 /// What the crawler-facing head needs to know about the requested page: the resolved node and
@@ -185,15 +191,15 @@ public static class SeoResolver
     /// <returns>Its own icon, or null when it carries none an <c>href</c> can point at.</returns>
     public static PageIcon? ResolveIcon(MeshNode node)
     {
-        var icon = MeshNodeImageHelper.ResolveContentPath(node.Icon, node.Path);
-        if (string.IsNullOrWhiteSpace(icon))
-            return null;
-
         // An inline <svg> is MARKUP, not a location, so it travels as a data URI — the same
         // mechanism App.razor already uses for the per-instance favicon. The svg itself is
         // untouched: it is the node's icon, byte for byte.
-        if (MeshNodeImageHelper.IsInlineSvg(icon))
-            return new PageIcon(SvgDataUri(icon), SvgMediaType);
+        if (ResolveIconSvg(node) is { } svg)
+            return new PageIcon(SvgDataUri(svg), SvgMediaType);
+
+        var icon = MeshNodeImageHelper.ResolveContentPath(node.Icon, node.Path);
+        if (string.IsNullOrWhiteSpace(icon))
+            return null;
 
         // A URL or data URI the node carries — used as written.
         if (MeshNodeImageHelper.IsImageUrl(icon))
@@ -202,6 +208,74 @@ public static class SeoResolver
         // Anything else (an emoji, a bare word) is a character, not a picture, and no href can
         // carry it. The portal favicon stays rather than inventing a graphic for it.
         return null;
+    }
+
+    /// <summary>
+    /// The node's own icon AS SVG SOURCE, or null when it carries none that is markup.
+    ///
+    /// <para>This is the exact value <see cref="ResolveIcon"/> percent-encodes into its
+    /// <c>data:image/svg+xml</c> href — one resolution, two consumers, so the
+    /// <see cref="PageIcon"/> in the head and the PNG the rasterizer serves for the SAME page can
+    /// never be pictures of different things.</para>
+    ///
+    /// <para>Only INLINE markup qualifies. An icon that is a URL (a content-collection file, a
+    /// shipped glyph) is a location this process would have to fetch — over its own
+    /// access-controlled route, from an anonymous request — to rasterize; a raster URL needs no
+    /// rasterizing at all, because Safari reads those already.</para>
+    /// </summary>
+    /// <param name="node">The node whose page is being served.</param>
+    public static string? ResolveIconSvg(MeshNode node)
+    {
+        var icon = MeshNodeImageHelper.ResolveContentPath(node.Icon, node.Path);
+        return MeshNodeImageHelper.IsInlineSvg(icon) ? icon : null;
+    }
+
+    /// <summary>The route the rasterized favicon of one node is served from.</summary>
+    /// <param name="nodePath">The node's mesh path, which is also its public URL path.</param>
+    /// <param name="size">The square edge in pixels.</param>
+    public static string RasterIconUrl(string nodePath, int size) =>
+        $"/api/icon/{nodePath}.png?size={size}";
+
+    /// <summary>
+    /// 🚨 EVERY icon link the page's head should carry, in declaration order.
+    ///
+    /// <para><b>Why more than one.</b> Safari renders no SVG favicon — not from a data URI, not
+    /// from a URL — so a page whose only icon link is the node's <c>&lt;svg&gt;</c> mark wore the
+    /// portal favicon on every Mac and iPhone, in and out of circuit (issue #2075, item 3). The
+    /// standards-based answer is not to give up the scalable icon: declare BOTH and let each
+    /// browser take the one it can read. A browser that understands SVG prefers it (scalable beats
+    /// a fixed 32 px on a retina tab strip); Safari skips it and takes the PNG.</para>
+    ///
+    /// <para><b>Why <c>apple-touch-icon</c> is separate.</b> It is a different channel with a
+    /// different job — the large bookmark / Start-Page / Add-to-Dock tile — and Safari does NOT
+    /// fall back to the favicon for it: with none declared it draws its own letter tile. So a node
+    /// with a mark needs one pointed at that mark, or its tile says nothing about it.</para>
+    ///
+    /// <para>Nothing is synthesised, exactly as <see cref="ResolveIcon"/> promises: a node with no
+    /// icon of its own yields NO links at all, and a node whose icon is already a raster image
+    /// yields the single link it always did — Safari reads those without help.</para>
+    /// </summary>
+    /// <param name="node">The node whose page is being served.</param>
+    /// <returns>The links to declare; empty when the node has no icon an <c>href</c> can carry.</returns>
+    public static IReadOnlyList<PageIcon> ResolveIconLinks(MeshNode node)
+    {
+        if (ResolveIcon(node) is not { } icon)
+            return [];
+        if (ResolveIconSvg(node) is null)
+            return [icon];
+        return
+        [
+            icon,
+            new PageIcon(
+                RasterIconUrl(node.Path, IconRasterizer.FaviconSize),
+                "image/png",
+                Sizes: $"{IconRasterizer.FaviconSize}x{IconRasterizer.FaviconSize}"),
+            new PageIcon(
+                RasterIconUrl(node.Path, IconRasterizer.AppleTouchSize),
+                "image/png",
+                Rel: "apple-touch-icon",
+                Sizes: $"{IconRasterizer.AppleTouchSize}x{IconRasterizer.AppleTouchSize}"),
+        ];
     }
 
     /// <summary>The media type an icon URL pins down by itself, or null when it does not — a
