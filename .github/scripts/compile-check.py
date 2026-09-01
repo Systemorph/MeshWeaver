@@ -443,6 +443,50 @@ def discover_ai_refs(search_roots):
 
 # ── compile ─────────────────────────────────────────────────────────────────────────────────────
 
+# 🚨 A using DIRECTIVE has THREE shapes, and the mesh keeps EVERYTHING after `using `
+# verbatim (MeshWeaver.Compiler/DynamicMeshNodeAttributeGenerator.cs: "Only a plain namespace
+# import can be promoted to `global using` verbatim; an alias/static form is emitted as-is").
+# Capturing only the dotted name and re-emitting `global using X.Y;` diverges from the mesh in
+# two ways, both of which were live in this repo's node source:
+#   * `using static X.Y.Type;`  -> re-emitted plain, and CS0138 because Type is not a namespace.
+#     This is a FALSE RED: the gate rejects source the mesh compiles (Cornerstone/Pricing).
+#   * `using Alias = X.Y.Type;` -> dropped from the union entirely, so a sibling file or the
+#     configuration lambda cannot see an alias the mesh DOES hoist. Latent, not yet fatal.
+# The alternation below deliberately still refuses a `using var x = ...;` STATEMENT: neither the
+# alias branch (no `=` directly after the identifier) nor the name branch (no `;`) can match it.
+USING_DIRECTIVE_RE = re.compile(
+    r"\s*using\s+"
+    r"(?:(?P<static>static)\s+(?P<staticname>[A-Za-z_][\w.]*)"
+    r"|(?P<alias>[A-Za-z_]\w*)\s*=\s*(?P<target>[A-Za-z_][\w.]*)"
+    r"|(?P<name>[A-Za-z_][\w.]*))"
+    r"\s*;"
+)
+
+
+def _directive_parts(m):
+    """(namespace-or-type used for filtering, directive re-emitted after `global using `).
+
+    Returns None for a directive that must NOT be hoisted.
+
+    🚨 An ALIAS is never hoisted, because of an asymmetry between this checker and the mesh. The
+    mesh CONCATENATES the source files and strips each file's own `using` lines
+    (GenerateAttributeSource -> userCodeWithoutUsings), so its hoist is a MOVE. Here the files are
+    compiled as-is and GlobalUsings.cs is added ALONGSIDE them, so a hoist is a COPY -- and while
+    duplicate namespace and `using static` imports are legal C#, a duplicate using ALIAS is
+    CS1537. Hoisting `using Snap = IssueDetectors.StatusSnapshot;` out of Hosting/Issue failed
+    that NodeType with exactly that error.
+
+    The cost is a narrower, KNOWN divergence: a sibling file or the configuration lambda cannot
+    see an alias the mesh would hoist. Closing it needs the alias stripped from the source copy
+    too -- the mesh's actual shape -- which is a larger change than this checker's contract.
+    """
+    if m.group("static"):
+        return m.group("staticname"), f"static {m.group('staticname')}"
+    if m.group("alias"):
+        return None
+    return m.group("name"), m.group("name")
+
+
 def usings_union(cs_files, ai_available: bool) -> tuple:
     """Return (union_usings sorted, needs_external bool).
 
@@ -460,14 +504,14 @@ def usings_union(cs_files, ai_available: bool) -> tuple:
         except OSError:
             continue
         for line in text.splitlines():
-            m = re.match(r"\s*using\s+(?:static\s+)?([A-Za-z_][\w.]*)\s*;", line)
-            if m:
-                ns = m.group(1)
+            m = USING_DIRECTIVE_RE.match(line)
+            if m and (parts := _directive_parts(m)) is not None:
+                ns, directive = parts
                 if ns in EXTERNAL_USINGS or ns.startswith("Microsoft.Extensions.AI"):
                     if not ai_available:
                         needs_external = True
                     continue
-                usings.add(ns)
+                usings.add(directive)
     return sorted(usings), needs_external
 
 
@@ -627,6 +671,54 @@ def read_allow():
 
 # ── main ───────────────────────────────────────────────────────────────────────────────────────
 
+def _self_test() -> int:
+    """The using-directive parser, against the shapes that actually occur in node source.
+
+    This exists because the parser silently produced WRONG output rather than failing: a
+    `using static` was re-emitted as a plain import (CS0138 — a false red on source the mesh
+    compiles) and an alias was dropped from the scope entirely. Both are shape bugs no
+    compile run can attribute back to the parser, so they get asserted here directly.
+    """
+    cases = [
+        # line,                                        expected (ns, directive) or None
+        ("using MeshWeaver.Data;",                     ("MeshWeaver.Data", "MeshWeaver.Data")),
+        ("    using MeshWeaver.Layout;",               ("MeshWeaver.Layout", "MeshWeaver.Layout")),
+        ("using static MeshWeaver.Layout.Controls;",   ("MeshWeaver.Layout.Controls",
+                                                        "static MeshWeaver.Layout.Controls")),
+        ("using static MeshWeaver.ContentCollections.ContentCollectionsExtensions;",
+         ("MeshWeaver.ContentCollections.ContentCollectionsExtensions",
+          "static MeshWeaver.ContentCollections.ContentCollectionsExtensions")),
+        # An alias must NOT be hoisted: GlobalUsings.cs sits ALONGSIDE source that still declares
+        # it, and a duplicate using alias is CS1537 (it failed Hosting/Issue).
+        ("using Snap = IssueDetectors.StatusSnapshot;", None),
+        ("using LayoutOption=MeshWeaver.Layout.Option;", None),
+        # NOT directives — a `using` STATEMENT must never enter the global scope.
+        ("using var stream = File.OpenRead(path);",    None),
+        ("        using var scope = svc.CreateScope();", None),
+        ("// using MeshWeaver.Fake;",                  None),
+    ]
+    failures = []
+    for line, expected in cases:
+        m = USING_DIRECTIVE_RE.match(line)
+        actual = _directive_parts(m) if m else None
+        if actual != expected:
+            failures.append(f"  {line!r}\n    expected {expected!r}\n    actual   {actual!r}")
+
+    # The end-to-end property: what lands in GlobalUsings.cs must be legal C#, i.e. a
+    # `using static` on a TYPE keeps its modifier. This is the exact CS0138 regression.
+    union, _ = usings_union([], ai_available=True)
+    emitted = [f"global using {u};" for u in union]
+    if any(u.startswith("global using static ") for u in emitted):
+        failures.append("  IMPLICIT_USINGS unexpectedly contains a static import")
+
+    if failures:
+        print("✗ using-directive parser self-test FAILED:")
+        print("\n".join(failures))
+        return 1
+    print(f"✓ using-directive parser: {len(cases)} shape(s) OK")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Compiling PR gate for the plugin node repos.")
     ap.add_argument("--refs", help="directory of framework ref assemblies (CI); "
@@ -634,9 +726,14 @@ def main() -> int:
     ap.add_argument("--image", action="store_true",
                     help="compile against the assemblies from the PLATFORM IMAGE (what CI uses and "
                          "what actually ships), cached per digest under ~/.cache/meshweaver/refs/ — see fetch-refs.py")
+    ap.add_argument("--self-test", action="store_true",
+                    help="check the using-directive parser against its known shapes and exit")
     ap.add_argument("--gen-allow", action="store_true",
                     help="regenerate scripts/compile-check.allow from the current failures")
     args = ap.parse_args()
+
+    if args.self_test:
+        return _self_test()
 
     refs_arg = args.refs
     if args.image:
