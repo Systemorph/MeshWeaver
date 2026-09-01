@@ -29,9 +29,9 @@ namespace MeshWeaver.PluginCatalog;
 /// <see cref="MinimumRefreshInterval"/>. Without that floor a caller presenting invented key ids
 /// would turn every unauthenticated request into an outbound fetch.</para>
 ///
-/// <para>Same promise-cache shape as <c>GitHubAppTokenService</c>: the in-flight fetch observable is
-/// held on an instance field so concurrent callers share ONE round trip, and a failure nulls it so
-/// the next caller starts a genuinely new attempt rather than replaying a latched
+/// <para>Same promise-cache shape as <c>GitHubAppTokenService</c>: the in-flight read is held on an
+/// instance field so concurrent callers share ONE round trip, and a failure evicts it — pair-exactly
+/// — so the next caller starts a genuinely new attempt rather than replaying a latched
 /// <c>OnError</c>.</para>
 /// </summary>
 public sealed class GitHubOidcKeyService
@@ -57,9 +57,34 @@ public sealed class GitHubOidcKeyService
     private readonly HttpClient http;
     private readonly ILogger<GitHubOidcKeyService>? logger;
 
-    // The promise-cache: the current fetch, replayed to every caller. Instance fields, never static.
+    // The promise-cache: the current read, replayed to every caller. Instance fields, never static.
     private readonly object gate = new();
-    private IObservable<GitHubSigningKeys>? cached;
+    private Attempt? attempt;
+
+    /// <summary>
+    /// One read of the key set: the promise, and the value it produced once it did.
+    ///
+    /// <para>The VALUE is what makes a refresh decidable. <see cref="Refresh"/> is handed the set a
+    /// caller found unusable and has to answer "has anyone already replaced this?" — a question about
+    /// a value, asked of a cache that holds a promise. Pairing the two on one holder answers it
+    /// without a second field that could drift, and it makes fault eviction PAIR-EXACT: a fault
+    /// removes the attempt that faulted, never a healthy replacement that started while it was
+    /// unwinding (the <c>PromiseCache</c> contract, in its single-slot form).</para>
+    /// </summary>
+    private sealed class Attempt
+    {
+        /// <summary>
+        /// LAZY on purpose. <c>IIoPool.Run</c> is EAGER — it subscribes and schedules the round trip
+        /// at CONSTRUCTION — so building it inside <see cref="gate"/> would start I/O from inside the
+        /// very lock its own fault handler has to take. Deferring means the slot is claimed under the
+        /// lock (cheap, allocation only) and the read starts after it is released, with
+        /// <see cref="Lazy{T}"/>'s default publication mode still guaranteeing exactly one execution.
+        /// Same reason <c>PromiseCache</c> wraps its entries in a <c>Lazy</c>.
+        /// </summary>
+        public Lazy<IObservable<GitHubSigningKeys>> Promise = null!;
+
+        public GitHubSigningKeys? Value;
+    }
 
     /// <summary>Creates the service against the mesh's HTTP I/O pool.</summary>
     /// <param name="hub">The hub whose service provider carries the pool registry and HTTP factory.</param>
@@ -86,14 +111,16 @@ public sealed class GitHubOidcKeyService
     /// <returns>A cold observable of the key set.</returns>
     public IObservable<GitHubSigningKeys> Keys(DateTimeOffset now)
     {
-        IObservable<GitHubSigningKeys> source;
+        Attempt live;
         lock (gate)
-            source = cached ??= CreateFetch();
+            live = attempt ??= CreateAttempt();
 
-        return source.SelectMany(keys =>
+        // 🚨 Forced OUTSIDE the lock — claiming the slot and starting the round trip are separate
+        // steps precisely so no I/O is scheduled while `gate` is held.
+        return live.Promise.Value.SelectMany(keys =>
             now - keys.FetchedAt < CacheDuration
                 ? Observable.Return(keys)
-                : Swap(source));
+                : Replace(keys));
     }
 
     /// <summary>
@@ -114,35 +141,65 @@ public sealed class GitHubOidcKeyService
             "GitHub OIDC: a token named a signing key absent from the set read at {FetchedAt} — re-reading the JWKS",
             stale.FetchedAt);
 
-        IObservable<GitHubSigningKeys> source;
-        lock (gate)
-            source = cached ?? CreateFetch();
-        return Swap(source);
+        return Replace(stale);
     }
 
-    /// <summary>Replaces a settled promise with a fresh fetch — once; concurrent refreshers share
-    /// the replacement rather than each starting a round trip of their own.</summary>
-    private IObservable<GitHubSigningKeys> Swap(IObservable<GitHubSigningKeys> settled)
+    /// <summary>
+    /// Starts a fresh read of the key set — unless someone has ALREADY replaced the set
+    /// <paramref name="settled"/> came from, in which case the caller joins that attempt instead of
+    /// opening a round trip of its own.
+    ///
+    /// <para>🚨 It always returns a real observable. The predecessor of this method could hand back
+    /// <c>null</c> when the cache had been evicted by a previous FAULT — precisely the moment a
+    /// refresh is most likely — and that null escaped into the authenticator's <c>SelectMany</c>,
+    /// where the failure surfaces nowhere near its cause. Creating the attempt and storing it are
+    /// one step under one lock, so there is no state in which a caller is handed nothing.</para>
+    /// </summary>
+    /// <param name="settled">The set the caller found unusable.</param>
+    /// <returns>The shared promise for the current attempt.</returns>
+    private IObservable<GitHubSigningKeys> Replace(GitHubSigningKeys settled)
     {
+        Attempt live;
         lock (gate)
         {
-            if (ReferenceEquals(cached, settled))
-                cached = CreateFetch();
-            return cached!;
+            // An attempt is present AND it is not the one that produced `settled` — either it is
+            // still in flight (Value is null) or it already produced something newer. Either way the
+            // work this caller wants is already happening; joining it is the point of the promise.
+            live = attempt is { } existing && !ReferenceEquals(existing.Value, settled)
+                ? existing
+                : attempt = CreateAttempt();
         }
+
+        // Outside the lock, as in Keys: the slot is claimed under `gate`, the round trip is not.
+        return live.Promise.Value;
     }
 
-    private IObservable<GitHubSigningKeys> CreateFetch() =>
-        pool.Run(FetchAsync)
-            .Catch((Exception ex) =>
+    private Attempt CreateAttempt()
+    {
+        var created = new Attempt();
+        created.Promise = new Lazy<IObservable<GitHubSigningKeys>>(() => pool.Run(FetchAsync)
+            .Do(keys =>
             {
                 lock (gate)
-                    cached = null;   // never cache a failure — the next caller starts a new attempt
+                    created.Value = keys;
+            })
+            .Catch((Exception ex) =>
+            {
+                // Never cache a failure — the next caller starts a genuinely new attempt rather than
+                // replaying a latched OnError. PAIR-EXACT: only this attempt is dropped, so a
+                // healthy replacement that started while this one was unwinding survives.
+                lock (gate)
+                {
+                    if (ReferenceEquals(attempt, created))
+                        attempt = null;
+                }
                 logger?.LogWarning(ex,
                     "GitHub OIDC: could not read the signing keys — build-principal tokens are "
                     + "UNDETERMINED (retryable), never accepted");
                 return Observable.Throw<GitHubSigningKeys>(ex);
-            });
+            }));
+        return created;
+    }
 
     // ── the HTTP leaf (runs inside the I/O pool) ─────────────────────────────
 
