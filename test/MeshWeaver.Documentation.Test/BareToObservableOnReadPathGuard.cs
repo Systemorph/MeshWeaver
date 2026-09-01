@@ -63,7 +63,7 @@ public class BareToObservableOnReadPathGuard
     /// </summary>
     private static readonly string[] ScannedFiles =
     [
-        "src/MeshWeaver.Graph/SyncedQueryDataSourceExtensions.cs",
+        "src/MeshWeaver.Graph.Contract/SyncedQueryDataSourceExtensions.cs",
     ];
 
     /// <summary>

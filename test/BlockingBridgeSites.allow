@@ -86,8 +86,8 @@ test/MeshWeaver.ContentCollections.Indexing.Test/ContentChunkSearchTest.cs	6
 test/MeshWeaver.ContentCollections.Indexing.Test/ContentSearchHitContractTest.cs	2
 test/MeshWeaver.ContentCollections.Test/ObservableCollectionSurfaceTest.cs	2
 test/MeshWeaver.Documentation.Test/BlockingBridgeSelfDeadlockMechanismTest.cs	1
-test/MeshWeaver.Graph.Test/NodeTypeAdoptionRegistryTest.cs	3
-test/MeshWeaver.Graph.Test/NodeTypeBakeStatusTest.cs	2
+test/MeshWeaver.Compiler.Pipeline.Test/NodeTypeAdoptionRegistryTest.cs	3
+test/MeshWeaver.Compiler.Pipeline.Test/NodeTypeBakeStatusTest.cs	2
 test/MeshWeaver.Hosting.Orleans.Test/OrleansEventSubscriptionTimerTest.cs	1
 test/MeshWeaver.Hosting.Test/AlcLeaseRegistryTest.cs	3
 test/MeshWeaver.Messaging.Hub.Test/SystemScopeDoesNotEscapeTest.cs	3
