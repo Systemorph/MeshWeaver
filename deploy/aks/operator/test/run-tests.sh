@@ -139,10 +139,18 @@ case "$_rot_out" in
   *)      ok  "kv-rotate never prints the minted key" ;;
 esac
 # And it must still report the HASH — the one thing that legitimately crosses back to the mesh. A
-# script that leaked nothing because it did nothing would pass the check above.
+# script that leaked nothing BECAUSE IT DID NOTHING would sail through the check above, so this arm
+# is what makes that one mean something.
+#
+# 🚨 Deliberately ONLY `::hosting:: key_hash=`. An earlier version also accepted the word "would",
+# which a dry run prints unconditionally from its very first step — so that arm could never fail,
+# and a regression that stopped emitting the hash entirely (the control plane then never adopts it,
+# and the pods restart onto a key the registry does not expect) would have passed. `hosting::say
+# key_hash` is outside the `hosting::dry` branch precisely so a rehearsal still reports it; assert
+# exactly that.
 case "$_rot_out" in
-  *"::hosting:: key_hash="*|*"would"*) ok "kv-rotate still reports its work in a dry run" ;;
-  *) bad "kv-rotate still reports its work in a dry run" "no key_hash and no dry-run report in: ${_rot_out}" ;;
+  *"::hosting:: key_hash="*) ok "kv-rotate reports the key hash, even in a dry run" ;;
+  *) bad "kv-rotate reports the key hash, even in a dry run" "no '::hosting:: key_hash=' in: ${_rot_out}" ;;
 esac
 unset _rot_out
 
