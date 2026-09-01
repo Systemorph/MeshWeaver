@@ -20,6 +20,48 @@ public static class EmitPipeline
     internal static CSharpParseOptions CreateParseOptions()
         => new(documentationMode: DocumentationMode.Diagnose);
 
+    /// <summary>
+    /// The warnings a SUCCESSFUL compile produced, formatted for the compile ACTIVITY.
+    ///
+    /// <para>🚨 They used to be dropped on the floor. <c>emitResult.Diagnostics</c> is read only
+    /// when <c>Success</c> is false, so on a green compile every warning the compiler produced was
+    /// discarded — measured from the outside: a deliberate <c>CS0219</c> (an unused local) added to
+    /// an in-mesh source compiled <c>ok</c> with zero warnings reported. That is the absence of a
+    /// report, not a clean build, and it is why in-mesh C# was not held to the standard the
+    /// compiled half is held to under <c>-warnaserror</c>: no unused-code warnings, and therefore
+    /// no doc-comment or cref ones either, even though <see cref="CreateParseOptions"/> has always
+    /// asked for <see cref="DocumentationMode.Diagnose"/>.</para>
+    ///
+    /// <para>Ordered and capped. A single bad using-directive can produce hundreds of identical
+    /// diagnostics, and an activity log that is 400 lines of the same warning is one nobody reads —
+    /// the cap is named in the last entry rather than applied silently.</para>
+    /// </summary>
+    internal static IReadOnlyList<string> Warnings(IEnumerable<Diagnostic> diagnostics)
+    {
+        var warnings = diagnostics
+            .Where(d => d.Severity == DiagnosticSeverity.Warning && !d.IsSuppressed)
+            .Select(d => $"{d.Id}: {d.GetMessage()}{Where(d)}")
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(text => text, StringComparer.Ordinal)
+            .ToList();
+        return warnings.Count <= MaxReportedWarnings
+            ? warnings
+            : warnings.Take(MaxReportedWarnings)
+                .Append($"… and {warnings.Count - MaxReportedWarnings} more warning(s) not listed.")
+                .ToList();
+    }
+
+    /// <summary>Where a diagnostic is, when the compiler knows — the generated source is one
+    /// concatenated tree, so the line is the only locator a reader gets.</summary>
+    private static string Where(Diagnostic diagnostic)
+        => diagnostic.Location.IsInSource
+            ? $" (line {diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1})"
+            : string.Empty;
+
+    /// <summary>How many distinct warnings reach the activity before the rest are counted instead
+    /// of listed.</summary>
+    internal const int MaxReportedWarnings = 50;
+
     /// <summary>The canonical compilation options every dynamic NodeType compile uses.</summary>
     internal static CSharpCompilationOptions CreateCompilationOptions()
         => new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
@@ -91,6 +133,35 @@ public static class EmitPipeline
     /// </summary>
     internal static EmittedArtifact EmitCompilationToDirectory(
         CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir, CancellationToken ct)
+        => EmitCompilationToDirectory(compilation, nodeName, nodePath, releaseDir, [], ct);
+
+    /// <summary>
+    /// The same verified emit, carrying MANAGED RESOURCES into the assembly — the shape
+    /// <c>mw-plugin-test build-project</c> needs to reproduce an SDK build of a project with
+    /// <c>&lt;EmbeddedResource&gt;</c> items.
+    ///
+    /// <para>🚨 <b>A separate overload rather than an optional parameter on the one above.</b>
+    /// Adding a parameter — even a defaulted one — REPLACES a method's signature, so an assembly
+    /// compiled against the old arity calls a method the new one does not have; that is the same
+    /// binary break <c>scripts/check-record-signatures.py</c> exists to refuse for records, and it
+    /// applies here for exactly the same reason. The overload leaves the four-argument entry point
+    /// byte-identical for <c>MeshNodeCompilationService</c> and <c>NodeSetCompiler</c>, which pass
+    /// no resources and never will: a dynamic NodeType is generated source, not a project.</para>
+    ///
+    /// <para>Nothing else differs. The emit is still to MEMORY first and the bytes written out, so
+    /// <see cref="EmittedArtifact"/> can prove the file on disk is the image that was emitted
+    /// (#1412), and this still does not log (the log-once contract).</para>
+    /// </summary>
+    /// <param name="compilation">The compilation to emit.</param>
+    /// <param name="nodeName">Base name for the emitted files.</param>
+    /// <param name="nodePath">Path reported in a <see cref="CompilationException"/>.</param>
+    /// <param name="releaseDir">Directory to write into.</param>
+    /// <param name="manifestResources">Managed resources to embed; empty for a dynamic NodeType.</param>
+    /// <param name="ct">Cancellation.</param>
+    /// <returns>The artifact descriptor, for the publisher to verify.</returns>
+    internal static EmittedArtifact EmitCompilationToDirectory(
+        CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir,
+        IReadOnlyCollection<ResourceDescription> manifestResources, CancellationToken ct)
     {
         var dllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
         var pdbPath = Path.Combine(releaseDir, $"{nodeName}.pdb");
@@ -109,6 +180,7 @@ public static class EmitPipeline
         {
             emitResult = compilation.Emit(
                 dllImage, pdbImage, xmlDocumentationStream: xmlDoc,
+                manifestResources: manifestResources.Count == 0 ? null : manifestResources,
                 options: emitOptions, cancellationToken: ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -137,7 +209,7 @@ public static class EmitPipeline
         var image = Bytes(dllImage);
         File.WriteAllBytes(dllPath, image);
 
-        return EmittedArtifact.For(dllPath, image);
+        return EmittedArtifact.For(dllPath, image, Warnings(emitResult.Diagnostics));
 
         // Expandable MemoryStreams created with the parameterless ctor expose their buffer, so the
         // common path hands out a span over it instead of copying a multi-megabyte image.
@@ -146,7 +218,7 @@ public static class EmitPipeline
     }
 
     /// <summary>
-    /// Key under which <see cref="EmitCompilationToDirectory"/> stamps the canary verdict on a
+    /// Key under which <see cref="EmitCompilationToDirectory(CSharpCompilation, string, string, string, CancellationToken)"/> stamps the canary verdict on a
     /// thrown-from-Emit exception, and under which
     /// <c>NodeTypeCompilationHelpers.SummarizeCompileError</c> reads it back.
     /// </summary>
@@ -630,7 +702,7 @@ public static class EmitPipeline
 
     /// <summary>
     /// Compiles and emits the assembly to memory (no disk I/O), returning the DLL + PDB bytes for
-    /// the caller to load. Like <see cref="EmitCompilationToDirectory"/>, a failed emit throws
+    /// the caller to load. Like <see cref="EmitCompilationToDirectory(CSharpCompilation, string, string, string, CancellationToken)"/>, a failed emit throws
     /// UNLOGGED — the pipeline's single <c>.Catch&lt;…, CompilationException&gt;</c> funnel is the
     /// one reporter of a compile failure.
     /// </summary>

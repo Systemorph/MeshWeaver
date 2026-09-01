@@ -50,7 +50,6 @@
     <Project Path="src/MeshWeaver.Hosting.Monolith/MeshWeaver.Hosting.Monolith.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Orleans/MeshWeaver.Hosting.Orleans.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Orleans.TestBase/MeshWeaver.Hosting.Orleans.TestBase.csproj" />
-    <Project Path="src/MeshWeaver.Hosting.Embeddings/MeshWeaver.Hosting.Embeddings.csproj" />
     <Project Path="src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj" />
     <Project Path="src/MeshWeaver.Kernel.Hub/MeshWeaver.Kernel.Hub.csproj" />
     <Project Path="src/MeshWeaver.Kernel/MeshWeaver.Kernel.csproj" />
@@ -62,7 +61,6 @@
     <Project Path="src/MeshWeaver.Messaging.Contract/MeshWeaver.Messaging.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />
     <Project Path="src/MeshWeaver.NuGet/MeshWeaver.NuGet.csproj" />
-    <Project Path="src/MeshWeaver.Observability.Contract/MeshWeaver.Observability.Contract.csproj" />
     <Project Path="src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj" />
     <Project Path="src/MeshWeaver.Plugin.Packaging/MeshWeaver.Plugin.Packaging.csproj" />
     <Project Path="src/MeshWeaver.PluginCatalog/MeshWeaver.PluginCatalog.csproj" />

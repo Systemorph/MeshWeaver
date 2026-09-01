@@ -1159,6 +1159,79 @@ For the common "predicate over `(context, userId)`" case you don't write a class
 - Other identities are denied — the standard AccessAssignment check is **not** performed for VUser nodes.
 - Delete operations are not covered by this rule and fall through to standard RLS.
 
+## 🚨 One question, ONE answer — every gate resolves the rule through `NodeTypeAccessRuleSet`
+
+**A rule only governs a node type if EVERY path that decides that node type's access consults it.**
+Until #2913 one did not, and the gap was invisible from either side.
+
+- `RlsNodeValidator` built its own `nodeType → rule` dictionary and routed Read / Create / Update /
+  **Delete** through it.
+- The delete handler's **pre-flight** — `MeshExtensions.CheckDeletePermissionForNode`, the first gate
+  a `DeleteNodeRequest` meets — demanded `Permission.Delete` on `MainNode ?? Path` outright and never
+  looked at a rule at all.
+
+Both are correct in isolation and both are on the same request. The effective policy was their
+**conjunction**, so wherever a rule was *more permissive* than `Permission.Delete` the rule silently
+did not apply. `SatelliteAccessRule` maps a satellite's Delete to `Permission.Update` on its
+`MainNode` — creating a satellite is a modification of its main node, and so is removing it — and
+`Role.Editor` holds Update and **not** Delete. So an Editor could **publish a satellite onto a node
+and then be refused when erasing it**: "I can turn it on but not off", the exact state a
+revocable-consent feature exists to prevent, reachable by an ordinary Editor. It surfaced only when
+someone *ran* the writer (session presence, MeshWeaver.Plugins#1031), never by reading either file.
+
+The fix is structural, not a second copy of the lookup: **`NodeTypeAccessRuleSet`
+(`src/MeshWeaver.Mesh.Contract/Services/NodeTypeAccessRuleSet.cs`) is the one index**, a mesh-scoped
+singleton registered in `MeshBuilder`, and both `RlsNodeValidator` and the delete pre-flight resolve
+their rule from it. Selection semantics live in one place: keyed by node type, case-insensitive,
+last registration wins, and a rule applies only when its `SupportedOperations` is empty or contains
+the operation.
+
+**What that widened, precisely — and what it did not:**
+
+| Case | Before | After |
+|---|---|---|
+| Node type with a Delete-supporting rule that ALLOWS | rule ∧ `Permission.Delete` | the rule (this is the fix) |
+| Node type with NO rule | `Permission.Delete` | `Permission.Delete` — unchanged, closed by default |
+| Rule that DENIES | refused | refused (now at the pre-flight, so `Unauthorized` rather than `ValidationFailed`) |
+| Rule that FAULTS or reaches no verdict | n/a | refused as `Unavailable` — **fail-closed** |
+| `WellKnownUsers.System` | allowed via the fold's `Permission.All` | allowed before any rule is consulted |
+
+The only types that gained anything are those whose rule *chose* a lighter demand: the
+`SatelliteAccessRule` family (`Comment`, `TrackedChange`, `Kernel`, `Activity`, `UserActivity`,
+`ActivityLogSegment`, and in MeshWeaver.Plugins `Thread`, `ThreadMessage`, `TokenUsage`, `Portal`),
+whose Delete is Update-on-`MainNode` by design. `Space` and `Partition` also carried
+`Update`-for-Delete in their rules — nobody could reach that, because the pre-flight's own
+`Permission.Delete` demand sat in front of it — so making the rule authoritative would have widened
+them. Both rules now say `Permission.Delete` for Delete explicitly, which is exactly the policy that
+was enforced before. **A disagreement between two gates resolves to the STRICTER of the two unless
+there is a stated reason for the looser one** — and for satellites the issue states it: publishing
+and erasing a satellite are the same act on its main node.
+
+**Fail-closed is not optional here.** A rule reaches the same starve-able permission fold every other
+check does, so it can fault or complete without emitting. Neither is permission to proceed: both
+produce `DeletePreflight.Unestablished`, the delete is refused, and the response says
+`NodeDeletionRejectionReason.Unavailable` rather than `Unauthorized` — an availability failure, not a
+statement about the caller's rights (`Unavailable`, above). There is deliberately no
+`.Catch(_ => true)` on this path: the identical instinct on the security-fold twin is what made a
+group deny fail OPEN.
+
+The caller-visible detail names the exception **type** and never its **message**. A rule is arbitrary
+code, and its exception text can carry an internal path, a connection string or another tenant's
+identifier — while the type is all a caller can act on ("retry, or ask an operator"). The full
+exception, message and stack, goes to the log where only an operator sees it.
+
+**What is still NOT routed through the rule, on purpose.** `DeleteNodeRequest` and
+`ValidateDeleteRequest` carry `[RequiresPermission(Permission.Delete)]`, so on a route that passes
+through a hub with the `AccessControlPipeline` (a per-node hub) the delivery gate still demands
+`Permission.Delete` on the *receiving hub's own path* before the handler runs. The off-router
+node-operation execution hub — where `IMeshService.DeleteNode` lands — carries no such pipeline, and
+that is the route the pre-flight governs. Widening the message-level gate is a separate decision with
+a much larger blast radius; it has not been made.
+
+Pinned by `DeleteHonoursNodeTypeAccessRuleTest` (`test/MeshWeaver.Security.Test`), whose four cases
+are the four rows of the table above — including the one that matters most, that an Editor still
+cannot delete a node whose type has no rule.
+
 ## End-to-end: portal hub creating a VUser
 
 ```mermaid

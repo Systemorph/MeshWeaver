@@ -56,13 +56,23 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     public int Failed { get; init; }
 
     /// <summary>
-    /// The node paths this import could NOT create because a claim (a <see cref="SyncBehavior"/> other
-    /// than <see cref="SyncBehavior.Include"/>, on the node or an ancestor) refuses them while the mesh
-    /// has no node there at all. Non-empty means the source declares content that can never appear, and
-    /// the <see cref="Outcome"/> is <c>ImportedWithBlockedCreates</c> — the import is recorded as a
-    /// Warning rather than a Succeeded marker, so the next boot re-attempts instead of inheriting a
-    /// green verdict for work that never happened (issue #2211). Empty for a partition the operator
-    /// decoupled wholesale ("sync: none" on its root), where declining everything IS the instruction.
+    /// The node paths this import could NOT create, for a reason no retry of the same pass can close,
+    /// while the mesh has no node there at all. Two causes, one meaning:
+    /// <list type="bullet">
+    ///   <item>a CLAIM (a <see cref="SyncBehavior"/> other than <see cref="SyncBehavior.Include"/>, on
+    ///     the node or an ancestor) refuses the create (issue #2211);</item>
+    ///   <item>the node's <c>NodeType</c> is carried by no source in this pass and is absent from the
+    ///     mesh, so the create pipeline would refuse it — the cross-partition/cross-repo case ordering
+    ///     cannot help with, and a cycle where two nodes type each other (issue #2556).</item>
+    /// </list>
+    /// Non-empty means the source declares content that can never appear, and the <see cref="Outcome"/>
+    /// is <c>ImportedWithBlockedCreates</c> — the import is recorded as a Warning rather than a
+    /// Succeeded marker, so the next boot re-attempts instead of inheriting a green verdict for work
+    /// that never happened. 🚨 It is deliberately NOT counted in <see cref="Failed"/>: a failure holds
+    /// the caller's sync baseline so the SAME commit is retried, which is right for a node that might
+    /// land next time and catastrophic for one that cannot — one unsatisfiable node would freeze every
+    /// LATER commit of the repo too. Empty for a partition the operator decoupled wholesale ("sync:
+    /// none" on its root), where declining everything IS the instruction.
     /// </summary>
     public ImmutableList<string> BlockedCreatePaths { get; init; } = ImmutableList<string>.Empty;
 }
@@ -979,11 +989,50 @@ public static class StaticRepoImporter
                     (target is not null && target.SyncBehavior != SyncBehavior.Include)
                     || excludedRoots.Any(root => IsAtOrUnder(path, root));
 
+                // 🚨 issue #2556 — TYPE BEFORE INSTANCE. The create pipeline refuses a node whose
+                // NodeType names nothing the mesh knows ("NodeType 'X' is not registered" — which is
+                // an IStorageAdapter.Exists probe on the type's PATH, not a TypeRegistry fact). The
+                // writes below used to go out in the source's own enumeration order, five at a time,
+                // so a repo shipping an instance of a type it introduces had that instance refused
+                // whenever enumeration happened to put it first. The #2229 baseline guard then held
+                // the sync baseline so a later pass would retry — and the retry re-ran the SAME
+                // ordering, so it failed identically, forever (memex-cloud: 6,902 refusals in 90
+                // minutes; one node refused 40 times in 120). The order was the defect, not the
+                // retry, so the fix is the order. See ImportWriteOrder for the two edges, the cycle
+                // policy, and why ordering is sufficient (the type write is commit-then-publish, so
+                // there is no registration lag left for it to merely postpone).
+                var plan = ImportWriteOrder.Plan(nodes);
+                if (plan.Cyclic.Count > 0)
+                    logger?.LogWarning(
+                        "[StaticRepoImport] {Partition}: {Count} node(s) form a NodeType dependency CYCLE, "
+                        + "so no write order can satisfy them all: {Paths}. They are written in path order "
+                        + "at the position their component becomes ready (never demoted to last, #1347); "
+                        + "any member the type check then refuses is reported as a blocked create.",
+                        source.Partition, plan.Cyclic.Count, string.Join(", ", plan.Cyclic));
+
                 // Per source node: skip claimed; otherwise UPSERT through the single canonical verb
                 // (CreateOrUpdateNodeRequest — the same path NodeCopyHelper uses). It creates absent
                 // nodes and updates existing ones (version re-stamped by the owner), materializing
                 // content + prerender through the real pipeline. Preserve owner identity on update.
-                var upserted = nodes
+                //
+                // 🚨 STAGED, not one flat fan-out: everything inside a stage still runs BatchSize-wide
+                // (the boot-load bound is unchanged), and a stage begins only once the previous one has
+                // COMPLETED — which for a create means committed, so the type is visible to the probe
+                // the next stage's instances run. A well-formed source is 2–3 stages, so this costs two
+                // barriers, not N round-trips.
+                return ProbeUnsatisfiableTypes(hub, nodes, plan, logger).SelectMany(unsatisfiableTypes =>
+                {
+                // A node whose NodeType this pass CANNOT put in place first — carried by no source and
+                // absent from the mesh, or carried but inside a cycle with it. Only when the node does
+                // not exist yet: an UPDATE never runs the create path's type check.
+                bool TypeCannotLand(MeshNode sourceNode, MeshNode? target) =>
+                    target is null
+                    && !string.IsNullOrEmpty(sourceNode.NodeType)
+                    && unsatisfiableTypes.Contains(sourceNode.NodeType!)
+                    && !ImportWriteOrder.TypeIsOrderedAhead(plan, sourceNode);
+
+                var upserted = Observable.Concat(plan.Stages
+                    .Select(stage => stage
                     .Select(sourceNode =>
                     {
                         var path = sourceNode.Path;
@@ -1008,6 +1057,36 @@ public static class StaticRepoImporter
                                 Written: (string?)null,
                                 Blocked: target is null ? (string?)path : null,
                                 Log: (LogMessage?)null));
+                        }
+
+                        // 🚨 A TYPE THIS PASS CANNOT PUT IN PLACE IS DRIFT, NOT A FAILURE TO RETRY
+                        // (#2556). Ordering fixes the case where the type is carried by this very
+                        // import; it cannot fix a type that arrives from ANOTHER partition/repo, nor a
+                        // cycle where two nodes type each other. Attempting the write anyway is what
+                        // produced the 6,902 refusals: the create is refused, the ⚠ counts as a per-file
+                        // FAILURE, and Failed>0 holds the git baseline — so one node whose type lives
+                        // elsewhere froze every LATER commit of the same repo as well, while the same
+                        // refusal was re-logged on every pass. Named as a BLOCKED CREATE instead: the
+                        // marker is stamped Warning (so the next boot re-attempts and it self-heals the
+                        // moment the defining source is installed), the path and the missing type are
+                        // reported, and the baseline is free to move on. No write is attempted, so the
+                        // refusal — and its log line — is not produced at all.
+                        if (TypeCannotLand(sourceNode, target))
+                        {
+                            logger?.LogWarning(
+                                "[StaticRepoImport] {Partition}: {Path} declares NodeType '{NodeType}', which "
+                                + "this source does not carry ahead of it and the mesh does not have — the "
+                                + "create would be refused. Recorded as a blocked create; import the source "
+                                + "that defines '{NodeType}', or drop the node.",
+                                source.Partition, path, sourceNode.NodeType, sourceNode.NodeType);
+                            return Observable.Return((
+                                Imported: 0, Failed: 0, Preserved: 0, Claimed: 0,
+                                Written: (string?)null,
+                                Blocked: (string?)path,
+                                Log: (LogMessage?)new LogMessage(
+                                    $"🚫 {path}: NodeType '{sourceNode.NodeType}' is not carried by this "
+                                    + "source and is absent from the mesh — no write order can create it.",
+                                    Microsoft.Extensions.Logging.LogLevel.Warning)));
                         }
 
                         // 🅶 Git-diff scope: when the caller supplied the changed-path set (a webhook /
@@ -1135,7 +1214,9 @@ public static class StaticRepoImporter
                             });
                     })
                     .ToObservable()
-                    .Merge(BatchSize)
+                    // The barrier is BETWEEN stages (Observable.Concat above); inside one it is the
+                    // same BatchSize fan-out the import always used.
+                    .Merge(BatchSize)))
                     // WrittenPaths ride along with the counts: only a node that really landed can
                     // leave a NodeType's assembly stale, so the recompile derivation downstream
                     // (GitHubSyncService → ReleaseAffectedNodeTypes) keys off exactly this list.
@@ -1315,13 +1396,15 @@ public static class StaticRepoImporter
                             // on. Bounded so a pathological source cannot write an unbounded log line.
                             var blockedNote = blockedCreates.Count > 0
                                 ? $" 🚫 {blockedCreates.Count} node(s) the source declares CANNOT BE CREATED — "
-                                  + "a claim (SyncBehavior other than Include, on the node or an ancestor) "
-                                  + "refuses them, and no boot can change that: "
+                                  + "either a claim (SyncBehavior other than Include, on the node or an "
+                                  + "ancestor) refuses them, or their NodeType is carried by no source and "
+                                  + "is absent from the mesh (the 🚫 lines above say which): "
                                   + string.Join(", ", blockedCreates.Take(BlockedPathsNamed))
                                   + (blockedCreates.Count > BlockedPathsNamed
                                       ? $", … (+{blockedCreates.Count - BlockedPathsNamed} more)"
                                       : "")
-                                  + ". Un-claim them to let the source seed them, or drop them from the source."
+                                  + ". Un-claim them, import the source that defines the missing NodeType, "
+                                  + "or drop them from the source."
                                 : "";
                             // The summary NAMES the pruned nodes (issue #604) — the count alone left
                             // a destructive import unauditable ("pruned 7" — which seven? unknown).
@@ -1343,9 +1426,10 @@ public static class StaticRepoImporter
                             if (blockedCreates.Count > 0)
                                 logger?.LogWarning(
                                     "[StaticRepoImport] {Partition}: {Blocked} node(s) the source declares can never be "
-                                    + "created — a claim (SyncBehavior != Include on the node or an ancestor) refuses "
-                                    + "them: {Paths}. Recorded as Warning at {Fingerprint} so the next boot re-attempts "
-                                    + "instead of short-circuiting on a green marker.",
+                                    + "created by this pass — a claim (SyncBehavior != Include on the node or an "
+                                    + "ancestor) refuses them, or their NodeType is carried by no source and is absent "
+                                    + "from the mesh: {Paths}. Recorded as Warning at {Fingerprint} so the next boot "
+                                    + "re-attempts instead of short-circuiting on a green marker.",
                                     source.Partition, blockedCreates.Count,
                                     string.Join(", ", blockedCreates.Take(BlockedPathsNamed)), fingerprint);
                             else if (count.Claimed > 0)
@@ -1371,6 +1455,7 @@ public static class StaticRepoImporter
                         });
                         }));
                     });
+                });
                 });
             })
             .Catch<StaticRepoImportResult, Exception>(ex =>
@@ -1635,6 +1720,60 @@ public static class StaticRepoImporter
         var baseDir = (targetPath ?? string.Empty).Replace('\\', '/').Trim('/');
         var rel = (filePath ?? string.Empty).Replace('\\', '/').TrimStart('/');
         return baseDir.Length == 0 ? rel : $"{baseDir}/{rel}";
+    }
+
+    /// <summary>
+    /// The NodeTypes this import pass CANNOT put in place before the nodes that name them (#2556) —
+    /// so a create that names one is guaranteed to be refused, and attempting it is pure loss.
+    ///
+    /// <para>Only the AT-RISK types are probed: a type this plan writes in a strictly earlier stage
+    /// than every node that needs it is satisfied by construction and is never asked about. What is
+    /// left is (a) a type carried by NO source in this pass — the cross-partition / cross-repo case
+    /// that a topological sort cannot help with by definition — and (b) a cycle member, whose type is
+    /// carried but not orderable ahead of it. Both are then checked with the SAME rule the create path
+    /// applies (<c>IStaticNodeProvider</c>, else <see cref="IStorageAdapter.Exists"/> on the type's
+    /// path), evaluated once per DISTINCT type rather than once per node — the shape
+    /// <c>PackageInstaller.ValidateBulkTypes</c> already uses.</para>
+    ///
+    /// <para>🚨 <see cref="IStorageAdapter.Exists"/>, deliberately, and NOT the eventually-consistent
+    /// query: a stale negative here would report a perfectly importable node as blocked. The steady
+    /// state is an EMPTY at-risk set, so a well-formed source pays nothing. A probe that faults
+    /// degrades to "nothing is known to be missing" — the pre-fix behaviour of attempting the write
+    /// and reporting whatever the create says — because a diagnostic must never be the thing that
+    /// stops an import.</para>
+    /// </summary>
+    private static IObservable<ImmutableHashSet<string>> ProbeUnsatisfiableTypes(
+        IMessageHub hub, IReadOnlyList<MeshNode> nodes, ImportWritePlan plan, ILogger? logger)
+    {
+        var none = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
+        var atRisk = nodes
+            .Where(n => !string.IsNullOrEmpty(n.NodeType))
+            .Where(n => !ImportWriteOrder.TypeIsOrderedAhead(plan, n))
+            .Select(n => n.NodeType!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(t => hub.ServiceProvider.FindStaticNode(t) is null)
+            .ToArray();
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (atRisk.Length == 0 || persistence is null)
+            return Observable.Return(none);
+
+        return atRisk
+            .Select(type => persistence.Exists(type).Take(1).Select(exists => (Type: type, Exists: exists)))
+            .ToObservable()
+            .Merge(BatchSize)
+            .ToList()
+            .Select(results => results
+                .Where(r => !r.Exists)
+                .Select(r => r.Type)
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase))
+            .Catch<ImmutableHashSet<string>, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[StaticRepoImport] could not probe {Count} NodeType(s) for existence; proceeding "
+                    + "without the blocked-create classification (a refused create is still reported).",
+                    atRisk.Length);
+                return Observable.Return(none);
+            });
     }
 
     /// <summary>Top-level partition segment of a path (the part before the first '/').</summary>

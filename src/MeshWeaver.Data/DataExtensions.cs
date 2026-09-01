@@ -453,9 +453,22 @@ public static class DataExtensions
     {
         try
         {
-            hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger(typeof(DataExtensions).FullName!)
-                .LogWarning(
+            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(DataExtensions).FullName!);
+            // 🚨 Level is TYPED, deliberately. A StreamEndedEvent to a subscriber whose stream is
+            // already gone is a semantic NO-OP — its entire meaning is "nothing more comes", which
+            // a departed subscriber knows by definition — and every recycled activity produced one
+            // WARN per released reader ("we get tons of this", maintainer, 2026-09-01; Information+
+            // ships to Loki). Every OTHER StreamMessage dropped here is real signal (a lost Full
+            // renders a region blank) and stays a warning.
+            if (message is StreamEndedEvent)
+                logger?.LogDebug(
+                    "Dropping StreamEndedEvent for stream {StreamId} on hub {Address}: the target "
+                    + "stream is already gone, and a terminal notice to a departed subscriber is a "
+                    + "no-op. Sender: {Sender}.",
+                    streamMessage.StreamId, hub.Address, request.Sender);
+            else
+                logger?.LogWarning(
                     "Dropping {MessageType} for stream {StreamId} on hub {Address}: no synchronization "
                     + "hub found on this hub or any parent — the target stream is gone (disposed circuit, "
                     + "released read stream, or never-created sync hub). Sender: {Sender}.",
@@ -892,6 +905,40 @@ public static class DataExtensions
                 Error = nodeErr.Message,
                 NodeError = nodeErr,
             };
+            // 🚨 Hand the verdict to the waiting caller DIRECTLY, before considering a post.
+            //
+            // The transport below is not the seam this NACK was designed to arrive on. A verdict
+            // that lands after UpdateRemote's ~2 s bounded wait has NO pending Observe callback,
+            // so the post is only ever a way to reach LatePatchResponseRegistry the long way round
+            // — routed to the caller, into the cache hub's PatchDataResponse handler, and finally
+            // Dispatch. That handler's own comment names this NACK as the thing it exists for.
+            // Inside one mesh the registry is a singleton both hubs already share, so asking it
+            // first reaches the same waiter with no hub woken and no message routed.
+            //
+            // 🚨 This is what makes the fix affordable. The obvious repair — walk the parent chain
+            // and post through the first ancestor that can still post — is correct about the
+            // caller and was MEASURED at ~10x on teardown: MeshWeaver.Content.Test went 29 s → 176 s,
+            // a uniform ~0.9 s per test, because every hub going down with a delivery outstanding
+            // now wakes callers mid-drain. It was implemented and reverted for that reason. A
+            // dictionary lookup that misses costs nothing, so the common teardown — nobody waiting
+            // — pays nothing at all.
+            //
+            // 🚨 And it replaces an assumption with a fact. The old guard's rationale was "during a
+            // whole-mesh teardown the parent is past that mark too, the post is skipped, and NOBODY
+            // IS WAITING". Nobody-is-waiting is not something that code could verify, and it was
+            // false precisely when it mattered: the caller whose wait outlives the start of
+            // teardown is still waiting, and it is the one guaranteed to get silence instead of its
+            // NACK, then to burn the full 31 s WriteVerdictBound (#2778). Dispatch RETURNS whether
+            // a caller was armed, so the question is now answered rather than assumed.
+            var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
+            if (lateVerdicts is not null && lateVerdicts.Dispatch(request.Id, resp))
+                return;
+
+            // No caller armed in THIS mesh. Either nobody is waiting — now a checked fact, and
+            // skipping is correct — or the caller is in another process, which the registry here
+            // cannot see. The existing post remains that case's only route, with its run-level
+            // guard unchanged: removing it is the ~10x regression above, and a cross-process
+            // caller during owner teardown is not the case #2778 reproduced.
             var parent = hub.Configuration.ParentHub;
             if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
                 parent.Post(resp, o => o.ResponseFor(request));
@@ -1018,6 +1065,16 @@ public static class DataExtensions
                 // request LOST (memex-cloud 2026-07-20 GitSync burst: every explicit Store/Plugin
                 // compile trigger was dropped while mirrors lagged the owner).
                 RebaseMonotonicTriggers(currentNode, patchNode, baseValues, jsonOpts, logger, hubPath);
+                // 🚨 …and the same resolution for the node's AUDIT STAMP, which is not caller data at
+                // all: MeshNodeStreamHandle stamps LastModified/LastModifiedBy onto EVERY cross-hub
+                // patch itself. So the moment two writers touch one node the second one's base stamp
+                // is stale by construction, the generic scalar rule refuses it, and — since a PARTIAL
+                // refusal nacks Conflict (#2463/#2840) — a write that fully landed is answered with
+                // "re-read and re-apply", which re-runs the caller's mutation. For a RELATIVE mutation
+                // that is a second application, not a no-op. LastModified is monotonic by construction
+                // (every writer sets it to UtcNow), so newest-wins is the correct merge, exactly as for
+                // RequestedReleaseAt — never a refusal.
+                RebaseAuditStamp(currentNode, patchNode, baseValues, jsonOpts, logger, hubPath);
                 var refused = 0;
                 Serialization.MeshNodePatchMerge.Apply(currentNode, patchNode, baseValues,
                     onRefuse: key =>
@@ -1147,6 +1204,73 @@ public static class DataExtensions
                 + "monotonically (newest wins) instead of being refused as a scalar conflict.",
                 hubPath, triggerKey, patchAt, liveAt);
             baseContent[triggerKey] = liveContent[triggerKey]!.DeepClone();
+        }
+    }
+
+    /// <summary>
+    /// 🚨 Audit-stamp resolution for the THREE-WAY merge path — the sibling of
+    /// <see cref="RebaseMonotonicTriggers"/> for the two TOP-LEVEL fields the write path stamps on
+    /// the caller's behalf: <c>MeshNode.LastModified</c> and <c>MeshNode.LastModifiedBy</c>.
+    ///
+    /// <para>These are framework metadata, never a value the caller's update lambda chose:
+    /// <c>MeshNodeStreamHandle.UpdateRemote</c> writes <c>LastModified = UtcNow</c> into every
+    /// cross-hub patch. That makes them the one pair guaranteed to differ from a lagging mirror's
+    /// base whenever ANY other writer touched the node first — so the generic "conflicting scalar ⇒
+    /// refuse" rule turns every concurrent cross-hub write into a refusal, and therefore (a partial
+    /// refusal being a refusal since #2463/#2840) into a Conflict NACK whose prescribed remedy is to
+    /// re-run the caller's mutation. Re-running a RELATIVE mutation applies it twice.</para>
+    ///
+    /// <para><c>LastModified</c> is monotonic by construction, so the conflict IS mergeable and the
+    /// resolution is the monotonic one: patch BEHIND live ⇒ drop the stamp from the patch (the live
+    /// stamp is the newer truth); patch AHEAD of live ⇒ rebase the writer's base onto the live value
+    /// so the three-way merge sees "unchanged since base" and lands it. <c>LastModifiedBy</c> travels
+    /// with whichever stamp wins — an author without its instant is meaningless — so it is dropped or
+    /// rebased in lockstep and likewise never refused.</para>
+    /// </summary>
+    internal static void RebaseAuditStamp(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        System.Text.Json.Nodes.JsonObject baseValues,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath)
+    {
+        var stampKey = jsonOpts.PropertyNamingPolicy?.ConvertName("LastModified") ?? "LastModified";
+        var authorKey = jsonOpts.PropertyNamingPolicy?.ConvertName("LastModifiedBy") ?? "LastModifiedBy";
+
+        if (!TryReadDateTimeOffset(patchNode, stampKey, out var patchAt)
+            || !TryReadDateTimeOffset(currentNode, stampKey, out var liveAt))
+            return;
+
+        if (patchAt < liveAt)
+        {
+            logger?.LogInformation(
+                "[MergeGuard] {HubPath}: dropping superseded audit stamp ({PatchAt:o} < live {LiveAt:o}) — "
+                + "the node was modified again after this writer stamped it; keeping the live stamp.",
+                hubPath, patchAt, liveAt);
+            patchNode.Remove(stampKey);
+            patchNode.Remove(authorKey);
+            return;
+        }
+
+        if (patchAt <= liveAt)
+            return; // equal — nothing to resolve, the generic merge sees no conflict
+
+        Rebase(stampKey);
+        Rebase(authorKey);
+
+        void Rebase(string key)
+        {
+            if (!patchNode.ContainsKey(key)
+                || !baseValues.TryGetPropertyValue(key, out var baseVal)
+                || baseVal is null
+                || System.Text.Json.Nodes.JsonNode.DeepEquals(baseVal, currentNode[key]))
+                return;
+            logger?.LogInformation(
+                "[MergeGuard] {HubPath}: rebasing audit field {Key} — the writer's base is stale but an "
+                + "audit stamp merges newest-wins rather than being refused as a scalar conflict.",
+                hubPath, key);
+            baseValues[key] = currentNode[key]?.DeepClone();
         }
     }
 
@@ -1284,6 +1408,32 @@ public static class DataExtensions
                             AckOnce(true);
                         return;
                     }
+
+                    // 🚨 A PARTIAL refusal is still a refusal (#2463). The check above only fires
+                    // when NOTHING landed; a patch where some fields applied and others were
+                    // refused fell through here and acked SUCCESS, so the caller believed its whole
+                    // write had landed and never re-applied the refused half. That is the #648
+                    // acked-write-loss in its partial form, and it is the harder one to see: the
+                    // node really did change, so every "did it commit?" check says yes.
+                    //
+                    // It has a name in the wild. RolePlay/Scenery compiled fine, the mesh phase
+                    // patched four compile-outcome fields, MergeGuard refused all four as
+                    // stale/reordered, another field in the same patch landed — so this path acked
+                    // Success, `IsDirty` never converged, and the gate read a status that was never
+                    // written and called it a compile failure. A false RED on the required check.
+                    //
+                    // AckOnce LATCHES, so nacking here and letting the commit proceed is
+                    // deliberate: the fields that were NOT in conflict are valid and keeping them
+                    // is right, while the caller re-reads and re-applies. The re-run re-diffs
+                    // against fresh state, so what already landed is a no-op and only the refused
+                    // fields are retried. Conflict is one of the provably-safe retried codes and
+                    // its budget is bounded, so this cannot spin.
+                    if (refusedKeys > 0)
+                        AckOnce(false, new MeshNodeError(
+                            MeshNodeErrorCode.Conflict, hubPath,
+                            $"cross-hub write PARTIALLY refused: {refusedKeys} field(s) changed on "
+                            + "the owner since the writer's base. What did not conflict was kept — "
+                            + "re-read and re-apply so the refused field(s) converge."));
 
                     // 🚨 The OWNER mints the new Version on apply.
                     // Per the owned-stream contract — SynchronizationStream
@@ -1635,6 +1785,33 @@ public static class DataExtensions
                             AckOnce(true);
                         return null;
                     }
+
+                    // 🚨 A PARTIAL refusal is still a refusal (#2463). The check above only fires
+                    // when NOTHING landed; a patch where some fields applied and others were
+                    // refused fell through here and acked SUCCESS, so the caller believed its whole
+                    // write had landed and never re-applied the refused half. That is the #648
+                    // acked-write-loss in its partial form, and it is the harder one to see: the
+                    // node really did change, so every "did it commit?" check says yes.
+                    //
+                    // It has a name in the wild. RolePlay/Scenery compiled fine, the mesh phase
+                    // patched four compile-outcome fields, MergeGuard refused all four as
+                    // stale/reordered, another field in the same patch landed — so this path acked
+                    // Success, `IsDirty` never converged, and the gate read a status that was never
+                    // written and called it a compile failure. A false RED on the required check.
+                    //
+                    // AckOnce LATCHES, so nacking here and letting the commit proceed is
+                    // deliberate: the fields that were NOT in conflict are valid and keeping them
+                    // is right, while the caller re-reads and re-applies. The re-run re-diffs
+                    // against fresh state, so what already landed is a no-op and only the refused
+                    // fields are retried. Conflict is one of the provably-safe retried codes and
+                    // its budget is bounded, so this cannot spin.
+                    if (refusedKeys > 0)
+                        AckOnce(false, new MeshNodeError(
+                            MeshNodeErrorCode.Conflict, hubPath,
+                            $"cross-hub write PARTIALLY refused: {refusedKeys} field(s) changed on "
+                            + "the owner since the writer's base. What did not conflict was kept — "
+                            + "re-read and re-apply so the refused field(s) converge."));
+
                     // The OWNER bumps the Version on apply (same rule as the deferred path).
                     // 🚨 Count from the PRE-MERGE node: the patch is client-supplied, and a
                     // `version` field in it has already been merged into currentNode — counting

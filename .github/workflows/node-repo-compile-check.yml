@@ -199,8 +199,17 @@ jobs:
           id=$(docker create "$IMAGE")
           mkdir -p refs
           docker cp "$id:/app/." refs/ >/dev/null
+          # 🚨 The platform's SHARED FRAMEWORKS ride into the reference set too. A container-built
+          # module (mw-plugin-test build-project compiles against /app) references
+          # System.Private.CoreLib's identity DIRECTLY — the SDK ref pack cannot resolve it, and
+          # the first run whose floor bundles were container-built failed 11 NodeTypes with
+          # CS0012 'System.Private.CoreLib not referenced' (Plugins#1032, 2026-09-01). With these
+          # present, compile-check.py switches itself to implementation-framework mode and
+          # compiles exactly the way the mesh does.
+          mkdir -p refs/shared-frameworks
+          docker cp "$id:/usr/share/dotnet/shared/." refs/shared-frameworks/ >/dev/null
           docker rm -v "$id" >/dev/null
-          echo "framework assemblies: $(find refs -name 'MeshWeaver.*.dll' | wc -l)"
+          echo "framework assemblies: $(find refs -maxdepth 1 -name 'MeshWeaver.*.dll' | wc -l) from /app; $(find refs/shared-frameworks -name '*.dll' | wc -l) implementation-framework assemblies"
           # The identity that addresses an upstream's sealed publication — only when one is seeded.
           if [ -n "${UPSTREAM_SEED:-}" ]; then
             line=$(docker run --rm --init --entrypoint /app/mw-plugin-test "$IMAGE" --print-framework-identity)
@@ -211,7 +220,7 @@ jobs:
           fi
       - name: Download this run's module-bundle artifacts
         if: inputs.module-artifacts != ''
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: ${{ inputs.module-artifacts }}
           path: ${{ runner.temp }}/ref-bundles
@@ -275,9 +284,27 @@ jobs:
           # state this input exists to leave.
           [ "$added" -gt 0 ] || { echo "::error::external modules were requested but none were added — the artifact pattern matched nothing and no registry bundle was fetched."; exit 1; }
           echo "reference set topped up from $added module bundle(s): $(find refs -name 'MeshWeaver.*.dll' | wc -l) assemblies"
+      # 🚨 ONE implementation, every repo ("centralize scripts as best as possible"): the check
+      # runs the PLATFORM's compile-check.py at the pinned ref — the caller keeps only its
+      # allow-file (policy). Fetched exactly like compose-sealed-modules.sh above: asserted RED
+      # when unavailable, never fallen back to a drifted per-repo copy (three satellite copies
+      # had already drifted apart when this centralization landed).
+      - name: Fetch the platform's compile-check at the pinned ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM_REF: ${{ inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the canonical compile-check.py has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compile-check.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/compile-check.py" \
+            || { echo "::error::could not fetch .github/scripts/compile-check.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/compile-check.py" | grep -q "compile-check" || { echo "::error::the fetched compile-check.py at ${PLATFORM_REF} does not look like the checker"; exit 1; }
       - name: Compile-check every NodeType
         working-directory: repo
+        env:
+          MW_REPO_ROOT: ${{ github.workspace }}/repo
+          MW_ALLOW_FILE: ${{ github.workspace }}/repo/scripts/compile-check.allow
         # --refs points at the assemblies unpacked from the platform image — a FLAT directory;
         # compile-check.py globs it recursively, dedupes by filename, and compiles each
-        # NodeType's resolved source-set.
-        run: python3 scripts/compile-check.py --refs ../refs
+        # NodeType's resolved source-set. The script is the PLATFORM's, fetched above.
+        run: python3 "$RUNNER_TEMP/compile-check.py" --refs ../refs

@@ -86,6 +86,8 @@ Whenever the user's permissions change *or* the node content changes, the combin
 | `hub.GetEffectivePermissions(path)` | `IObservable<Permission>` | Render a permission summary for the ambient user |
 | `hub.GetEffectivePermissions(path, userId)` | `IObservable<Permission>` | Inspect another user's effective rights |
 | `hub.CheckPermissionOutcome(path, userId, permission)` | `IObservable<PermissionCheckOutcome>` | You must tell **denied** apart from **could not decide** |
+| `AnonymousGate.Evaluate(hub, path)` | `IObservable<PermissionCheckOutcome>` | The visitor is logged OUT and the answer becomes a redirect, a status code or a message |
+| `AnonymousGate.AllowAnonymous(hub, path)` | `IObservable<bool>` | The visitor is logged OUT and "unknown" and "not public" lead to the SAME action (sitemap, SEO metadata) |
 
 ### "Denied" vs "couldn't decide"
 
@@ -98,6 +100,59 @@ The disposing-hub case is a lifecycle event, not a fault, and the fold treats it
 🚨 **It always produces exactly one outcome, and that is contract (#2742).** A fold has three terminals, not two: it can emit, it can fault, and it can *complete without ever emitting* — which is what one silent leg of the `CombineLatest` does to the whole fold. That third terminal used to pass straight through as an EMPTY stream, and an empty check is not a refusal anywhere downstream: `AccessControlPipeline` ends its decision chain in `.Take(1).Select(…).DefaultIfEmpty()`, whose `null` means "no check refused ⇒ every check was granted", so the message was delivered. `CheckPermissionOutcome` now materialises that terminal as `Undetermined` too. If you write your own consumer of the raw evaluator, apply the same rule: **treat "no outcome" as no verdict, never as consent.** See [AccessControl → The convergence contract](/Doc/Architecture/AccessControl).
 
 `Permission.None` is a special case in both overloads: it short-circuits to `true` without consulting the evaluator.
+
+### The anonymous gate is tri-state too (#2901)
+
+`AnonymousGate` is the one permission decision a **logged-out** visitor triggers — the SEO head, the sitemap, the content route at `/api/content`, and the Blazor navigation gate all ask it the same question: *may an anonymous visitor read this node?* It used to answer it with
+
+```csharp
+hub.CheckPermission(path, WellKnownUsers.Anonymous, Permission.Read)
+    .Catch<bool, Exception>(_ => Observable.Return(false));   // ❌ the shape this page forbids
+```
+
+which is exactly the swallow `CheckPermissionOutcome` exists to replace, sitting on the surface where it is most expensive. A faulted or silent fold became a bare `false`, and the caller — having nothing else to go on — redirected the visitor to `/login` or answered 404. Nothing was logged, nothing was retryable, and monitoring could not tell a degraded permission fold from a page that is simply private.
+
+**The direction of failure is not symmetric here, and that is the whole design.** This gate decides what *the public* may see, so the two wrong answers are wrong in different ways:
+
+| Fold outcome | Wrong answer | Why it is wrong | Correct answer |
+|---|---|---|---|
+| Undetermined | *granted* | serves private content to the internet | — |
+| Undetermined | *denied* | tells an entitled visitor the page is not for them, and hides a degraded dependency behind a routine-looking bounce | **unavailable, retryable** — serve nothing, assert nothing, 503 on an API route |
+| Denied | *unavailable* | every gated page starts answering "temporarily unavailable" and retrying forever | *denied* — `/login`, or 404 on a content route |
+
+So `AnonymousGate.Evaluate` returns the `PermissionCheckOutcome` and callers branch on `IsUndetermined` **before** they branch on `IsGranted`. `IsGranted` is `false` on the undetermined leg, so the fail-closed direction holds even for a caller that ignores the tri-state — which is what makes the boolean projection safe to keep:
+
+```csharp
+AnonymousGate.Evaluate(hub, path)
+    .Take(1)
+    .Subscribe(outcome =>
+    {
+        if (outcome.IsUndetermined) ServeUnavailable();   // 503 / retry — never /login
+        else if (outcome.IsGranted) Serve();
+        else RedirectToLogin();                            // a verdict was reached
+    });
+```
+
+`AllowAnonymous(hub, path)` stays as `Evaluate(...).Select(o => o.IsGranted)` — legitimate wherever "unknown" and "not public" lead to the same correct action and nothing is asserted to a human: **omitting** a page from the sitemap, **withholding** SEO metadata. Omission is not a lie; a redirect is.
+
+**No evaluator registered ⇒ `Denied`, definitively — not undetermined.** When no `EffectivePermissionsDelegate` is installed the gate still refuses, and that refusal *is* a verdict: an ungated mesh has no way to express an anonymous grant, so nothing on it is anonymous-readable and no retry changes that. Calling it undetermined would make every unsecured deployment answer a permanent 503 — the same lie pointed the other way. "Deliberately ungated" versus "somebody forgot `AddRowLevelSecurity()`" is a separate statement with its own type, `UnsecuredMeshDeclaration`.
+
+**The same shape was hiding in three more places, and a guard is how they surfaced.** The ratchet below was written to hold the tree at zero after the anonymous gate was fixed; widening its statement window (a review catch — the naive "up to the next `;`" truncated at a semicolon inside a block lambda, so `.Catch(ex => { logger.Log…; return Observable.Return(false); })` fell outside it) immediately reported three live ones:
+
+| Site | What the swallow produced | Now |
+|---|---|---|
+| `MeshOperations` — Recycle | *"Recycle requires Update permission… ask someone with write access"* — an actionable sentence, false, told to a caller who may hold Update | a distinct retryable answer, logged as no-verdict |
+| `MeshOperations` — Export | a node silently dropped from an export the user believes is complete | still omitted (fail closed), logged as a degraded dependency |
+| `MeshExtensions` — partition bootstrap probe | a skipped heal, indistinguishable from "not needed" | verdict path byte-identical; the trail records `BOOTSTRAP_PERM_UNDETERMINED` |
+
+Each of the three also documented a hole it could not close: the `.Timeout` guarding them faults on **silence**, so a fold that *completes without emitting* (#2742) sailed past every bound in the chain. `CheckPermissionOutcome` materialises that terminal, so moving to it closed the timeout's blind spot as a side effect of removing the swallow.
+
+🚨 The lesson is about the guard, not the sites: **a zero-tolerance scan with a blind spot is indistinguishable from a clean tree**, so the scanner's logic is covered by its own test (planting the hidden shape, the plain shape, and over-reach controls) rather than trusted. Its anti-vacuity floor is likewise a *measured* count of the call sites it inspects, not a guess — an earlier value came from a raw grep that also counted the two `CheckPermission` declarations, so it was never a count of anything the scan looked at.
+
+**One violator of the ban is left, and it is not in this repo.** `BlazorHostingExtensions.AllowContentRead` (MeshWeaver.Plugins) still carries the same `.Catch(_ => Observable.Return(false))` on the authenticated leg of `/api/content`, so a request whose permission fold reaches no verdict answers 404 — byte-identical to "no such file" — instead of the retryable 503 that route's own `ContentFailure` classifier already knows how to produce. Until it is ported, that surface keeps the behaviour this page describes as the bug. Tracked as MeshWeaver.Plugins#1078.
+
+This repo's `PermissionSwallowRatchetGuard` holds `src/`, `memex/` and `samples/` at zero occurrences of the shape and deliberately carries **no allow file**: anything that genuinely cannot reach a verdict already has a name for that, so an exemption could only ever be a request to keep lying. The guard cannot see the satellite repos, which is why the remaining violator is named here in prose — and why the claim was re-measured against `MeshWeaver.Plugins@origin/main` rather than copied from the issue that reported it.
+
 
 ## See also
 

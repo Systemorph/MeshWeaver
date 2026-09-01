@@ -52,6 +52,48 @@ result, so it belongs where a reader can see it. A gate that resolves its framew
 environment variable while advertising a branch name will eventually report a missing type against
 the wrong repository — which is exactly what happened on 2026-08-30.
 
+## Building a compiled project (`memex build project`)
+
+Compile a `.csproj` against a MeshWeaver image's own assemblies — **no dotnet SDK, no NuGet
+restore, no platform source checkout**:
+
+```bash
+memex build project ../MeshWeaver.Plugins/src/MeshWeaver.Import \
+  --image meshweaver.azurecr.io/memex-portal-ai:<tag> \
+  --extra-refs ./additional-libs --output ./out
+```
+
+The `.csproj` is evaluated without MSBuild, and every reference comes from the image's `/app`, its
+`.deps.json` and the shared frameworks installed in it. `ProjectReference`s inside the source root
+are built first in dependency order; a `ProjectReference` pointing outside it resolves to the
+assembly the image already carries. See
+[In-Mesh Build and Test](https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Documentation/Data/Architecture/InMeshBuildAndTest.md).
+
+| option | meaning |
+|---|---|
+| `--image <image>` | image to build against; pulled and pinned by digest. Omit ONLY when this command is itself running inside a MeshWeaver image — there is deliberately no local-SDK fallback |
+| `--output <dir>` | where the emitted assemblies land (default: a temp dir) |
+| `--root <dir>` | directory mounted as `/repo` (default: the nearest `Directory.Build.props` ancestor) |
+| `--extra-refs <dir>` | libraries ADDITIONAL to the platform — the only way to satisfy a `PackageReference` the image does not supply. Repeatable |
+| `--accept <construct>` | acknowledge one construct the evaluator cannot reproduce (`target:<Name>`, `embedded-resource`, `conditions`, `razor-css-scope`, `razor-not-compiled`). Repeatable |
+| `--accept <construct>` | acknowledge one construct the evaluator cannot reproduce (`target:<Name>`, `conditions`, `embedded-resource`, `embedded-resource:{resx,culture,dependent-upon,manifest-resource-name,build-output}`). Repeatable |
+| `--no-warn` / `--allow-warnings` | warnings fail the build (default); `--no-warn=false` or `--allow-warnings` opts out |
+| `--no-pull` | use the image the docker daemon already has, for one built locally |
+
+**Razor/Blazor compiles** (2026-08-31): the image ships the SDK's Razor source generator beside the
+builder, per RID, and `build-project` runs it for any project whose `Sdk` processes Razor items —
+`MeshWeaver.Blazor` (31 `.cs` + 42 `.razor`) builds green against `memex-portal-ai`. What it will
+not do quietly is skip a `.razor` file: a project with Razor input and no generator fails by name,
+and CSS isolation (`*.razor.css`) needs `--accept razor-css-scope` because the `b-…` scope comes
+from an MSBuild task this builder does not run.
+
+🚨 **Nothing is dropped in silence.** A project construct this builder cannot reproduce — an unknown
+element, an unevaluatable `Condition`, a `<Target>`, a resource whose SDK manifest name cannot be
+matched exactly — FAILS the run naming
+the construct and the file, and a `PackageReference` the container does not supply is reported by
+name rather than skipped. A silently dropped `Nullable` or `NoWarn` produces a build that looks green
+and is not the build the SDK would have produced.
+
 ### Before the package is published
 
 The verb ships in `MeshWeaver.Cli`, so `dotnet tool install -g MeshWeaver.Cli` needs a release that

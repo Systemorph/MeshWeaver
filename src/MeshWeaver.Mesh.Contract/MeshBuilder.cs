@@ -29,6 +29,13 @@ public record MeshBuilder
     {
         this.ServiceConfig = ServiceConfig;
         this.Address = Address;
+        // 🚨 "No one must ever publish from main hub": the router names its spokesman up front,
+        // so infrastructure that would otherwise post through the router (Workspace's recycle
+        // announcement) has a sanctioned non-router carrier — the same nodeops execution hub
+        // every node-CRUD path already hops onto. Resolve returns null only during teardown,
+        // which is exactly when the caller's own fallback applies.
+        ConfigureHub(config => config.Set(
+            new RouterCarrier(static router => router.NodeOperationExecutionHub())));
         Register();
     }
 
@@ -545,6 +552,13 @@ public record MeshBuilder
             // ever opened a scope on and silently passed every write under a subtree
             // being deleted (#839's write-guard test caught it).
             .AddSingleton<Services.RecentlyDeletedRegistry>()
+            // The mesh's INodeTypeAccessRule index — the ONE answer to "does a rule govern this
+            // (node type, operation)?", shared by RlsNodeValidator and the delete handler's
+            // pre-flight so the two cannot disagree again (#2913). Registered at the ROOT for the
+            // same reason the tombstone registry above is: the delete handler resolves it off a hub
+            // ServiceProvider that chains here, while the validator resolves it from its own scope,
+            // and every access rule in the fleet is registered on the MESH service collection.
+            .AddSingleton<Services.NodeTypeAccessRuleSet>()
             // The SAME instance, surfaced to the message pipeline (which sits below
             // MeshWeaver.Mesh.Contract in the reference graph and therefore cannot see the
             // registry type). MessageService reads it to classify a delivery abandoned by a

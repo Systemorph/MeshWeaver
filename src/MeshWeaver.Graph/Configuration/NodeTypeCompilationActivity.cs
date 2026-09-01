@@ -153,11 +153,26 @@ internal static class NodeTypeCompilationActivity
     }
 
     /// <summary>
-    /// Flip the activity content to <see cref="ActivityStatus.Succeeded"/>.
+    /// Flip the activity content to its settled OUTCOME — <see cref="ActivityStatus.Succeeded"/>,
+    /// unless the log already recorded an error, in which case <see cref="ActivityStatus.Failed"/>.
     /// No-op when <paramref name="activityPath"/> is <c>null</c>.
+    /// <para>🚨 Computed from the log, not pinned blind: this writer and the pipeline's
+    /// <c>ActivityLog.FinishByOutcome</c> must give the SAME answer for the same log, or the
+    /// activity node and the compile result disagree and a reader's status becomes a race
+    /// (the 2026-08-30 pin/fold split-brain). Warnings deliberately do not demote — the
+    /// compile lane's contract is "warnings are reported, never turn a green compile red".</para>
     /// </summary>
-    public static void MarkSucceeded(IMessageHub hub, string? activityPath, ILogger logger) =>
-        Update(hub, activityPath, ActivityStatus.Succeeded, error: null, logger);
+    public static void MarkSucceeded(IMessageHub hub, string? activityPath, ILogger logger)
+    {
+        if (string.IsNullOrEmpty(activityPath)) return;
+        Write(hub, activityPath, [],
+            log => log with
+            {
+                Status = log.HasErrors() ? ActivityStatus.Failed : ActivityStatus.Succeeded,
+                End = DateTime.UtcNow
+            },
+            logger, "MarkSucceeded");
+    }
 
     /// <summary>
     /// Flip the activity content to <see cref="ActivityStatus.Failed"/>, attaching

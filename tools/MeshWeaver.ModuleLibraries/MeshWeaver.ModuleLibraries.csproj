@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ═══════════════════ THE MODULE-LIBRARIES SHELF ═══════════════════
+       The curated ADDITIONAL libraries a container-built module may bind: packages its module
+       needs that the portal image deliberately does not load (provider SDKs, import/export
+       helpers). `mw-plugin-test build-project` resolves an otherwise-unsupplied PackageReference
+       from this shelf and makes the assemblies RIDE the bundle — with a closure DERIVED from this
+       project's own deps.json, which is the whole reason this is a csproj and not a folder of
+       DLLs: the 2026-08-19/20 outage was a bundle whose closure was guessed, and the lane's
+       no-extra-refs stance exists to make that impossible. One publish of this project is the
+       shelf, its deps.json is the provenance, and the central pins in Directory.Packages.props
+       are the single version decision (the same pins every SDK-path module compiled against).
+
+       🚨 CURATED, not open: a package joins this list with the module family that needs it,
+       named in the commit. Everything here is either already a platform pin or was one before
+       the SDK path smuggled it inside per-bundle closures.
+
+       Staged into the tester image as module-libs/ beside the builder by the plugin-test-image
+       CD job (the same handover pattern as razor-generators/ and sdk-generators/); a dev build
+       without the staging simply has no shelf, and a shelf-needing module then fails BY NAME
+       exactly as before. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- No source of its own: the references ARE the content. -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Every referenced assembly lands in the publish output — the publish IS the shelf. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- MeshWeaver.Import + MeshWeaver.Markdown.Export -->
+    <PackageReference Include="ClosedXML" />
+    <PackageReference Include="CsvHelper" />
+    <!-- MeshWeaver.AI.OpenAI -->
+    <PackageReference Include="OpenAI" />
+    <PackageReference Include="Azure.AI.OpenAI" />
+    <PackageReference Include="Microsoft.Agents.AI.OpenAI" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
+    <!-- MeshWeaver.AI.AzureFoundry -->
+    <PackageReference Include="Azure.AI.Inference" />
+    <PackageReference Include="Microsoft.Agents.AI.AzureAI" />
+    <PackageReference Include="Microsoft.Agents.AI.AzureAI.Persistent" />
+    <PackageReference Include="Azure.AI.Agents.Persistent" />
+    <PackageReference Include="Microsoft.Extensions.AI.AzureAIInference" />
+    <!-- MeshWeaver.AI.ClaudeCode -->
+    <PackageReference Include="ClaudeAgentSdk" />
+    <!-- MeshWeaver.AI.Copilot -->
+    <PackageReference Include="GitHub.Copilot.SDK" />
+    <!-- MeshWeaver.Mail.MicrosoftGraph -->
+    <PackageReference Include="Microsoft.Graph" />
+    <!-- MeshWeaver.Blazor.Radzen -->
+    <PackageReference Include="Radzen.Blazor" />
+  </ItemGroup>
+
+</Project>

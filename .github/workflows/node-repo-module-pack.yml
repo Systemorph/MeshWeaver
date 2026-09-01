@@ -72,6 +72,108 @@ name: node-repo module pack
 # A caller that ships neither scripts/affected-modules.py nor scripts/project-closure.py is simply
 # not narrowable: the scope script says FULL and says why. Nothing to opt into, nothing to skip.
 #
+# ─────────────────── Which compiler builds a module (`build`) ───────────────────
+# 🚨 "we want to use memex build plugin and not dotnet build" (maintainer, 2026-08-31).
+#
+# A module does not run against a source tree and it does not run against a feed: it is loaded into
+# the platform IMAGE and bound by the assemblies in there. So the honest compiler is that image's
+# own — `memex build project`, whose work is `mw-plugin-test build-project` from the pinned TESTER
+# image, compiling against the pinned PLATFORM image's /app
+# (MeshWeaver#2850). This lane runs the container form directly, because CI has already pulled and
+# digest-pinned the image; going through the `memex` CLI would add an SDK build in order to remove
+# one.
+#
+# It is DECLARED PER ENTRY, and it is deliberately not yet the default:
+#
+#     {"package":"Import","module":"MeshWeaver.Import",
+#      "project":"src/MeshWeaver.Import/MeshWeaver.Import.csproj",
+#      "build":"container","accept":"targets"}
+#
+# #2850's own sweep over all 54 non-test projects in MeshWeaver.Plugins/src compiled 12 green. The
+# rest need what a RUNTIME image does not carry: SDK source generators (15 — they live in the SDK),
+# Razor/Blazor (15 — the image ships none of the three Razor assemblies), `<Protobuf>` (3),
+# additional libraries (5), portal hosts (3). A blanket swap would therefore break most bundles, so
+# the split is deliberate, per module, visible, and expected to SHRINK — `verify` prints the count
+# every run for exactly that reason.
+#
+# 🚨 THERE IS NO FALLBACK BETWEEN THE TWO, and that is the point. A lane that tries the container
+# and quietly drops back to the SDK makes "the container built it" and "the SDK built it"
+# indistinguishable in a green log. A declared mode that cannot run FAILS; an unknown mode FAILS.
+# The mode is printed by the build step, written into the built marker and the receipt, and
+# summarised by `verify`.
+#
+# What the container path needs from the caller:
+#   * `platform-image` + `platform-image-digest` — the image IS the reference set, so an entry that
+#     asks for `container` without them fails RED rather than building against anything else.
+#   * `tester-image` + `tester-image-digest` — the image that CARRIES the builder (and, beside it,
+#     the generators the SDK would have supplied). The platform image ships no /app/mw-plugin-test
+#     and the tester image's /app is not the full reference surface, so the build runs the tester
+#     image against the platform image's extracted /app; both pins move together, from one CD wave.
+#   * the `acr-username`/`acr-password` secrets, to pull them.
+#   * `accept` for every construct the evaluator refuses. MeshWeaver.Plugins' own
+#     `src/Directory.Build.props` carries a `<Target>` (the AssemblyVersion contract check), so its
+#     entries need at least `"accept": "targets"`.
+#
+# What it deliberately does NOT support:
+#   * `--extra-refs`. An "additional library" is one the image does not carry; with no deps.json to
+#     derive a private closure from, bundling it would be guesswork and NOT bundling it would land a
+#     module that faults at first use (the 2026-08-19/20 outage). build-project refuses such a
+#     PackageReference BY NAME, which is the right answer: that module stays on the `sdk` path.
+#   * `--deps-closure`, for the same reason there is nothing to derive it from. The container
+#     bundle's closure is complete BY CONSTRUCTION — every reference resolved from the image the
+#     bundle lands into — and the bundle inspection ASSERTS that claim by refusing any
+#     non-MeshWeaver assembly in a container-built bundle.
+#
+# 🚨 PRECONDITIONS BEFORE ANY ENTRY MAY DECLARE `container` — both are checked at runtime, loudly,
+# but they are cheaper to read here:
+#   1. The PINNED image must carry the `build-project` verb (MeshWeaver#2850 merged AND an image
+#      built from it AND `platform-image-digest` moved to that image). Before that, the container
+#      run exits non-zero on an unknown argument.
+#   2. `build-project` must stamp the project's <AssemblyVersion>. It runs no MSBuild targets, so
+#      the SDK's GenerateAssemblyInfo does not happen and Roslyn's default identity is emitted —
+#      shipping 0.0.0.0 into a 3.0.0.0 process is MeshWeaver#143 exactly: it does not fail at build,
+#      it fails at runtime binding, in another repo, naming a version nobody wrote down. The build
+#      step compares the emitted identity against the one the builder itself read out of the image
+#      and FAILS on drift, so this cannot ship silently — but until the builder honours the
+#      property, that check is what a `container` entry will hit.
+#
+# ──────────── The .NET SDK is a DECLARED need (`dotnet-sdk`) ────────────
+# 🚨 "make installing dotnet sdk a feature flag" (maintainer, 2026-08-31).
+#
+# `actions/setup-dotnet` used to run in this job the way it runs in every job in the fleet: as a
+# reflex, before anyone asked whether the job compiles anything. That is the wrong shape the moment
+# a module can be compiled by the platform IMAGE instead (`"build": "container"`, see above) —
+# because "the SDK is here" then silently answers a question nobody put: an unconverted step keeps
+# working on a runner SDK that the converted lane was supposed to have removed.
+#
+# So the install is now DECLARED, in two halves that must both be read to know what happened:
+#
+#   * `dotnet-sdk: install` (the DEFAULT) — install it, unconditionally. A caller that says nothing
+#     gets exactly today's behaviour, and a lane ADDED tomorrow inherits it. Opting out is a
+#     deliberate edit; drifting out is impossible.
+#   * `dotnet-sdk: by-declaration` — install it only if this job's own declared consumers still
+#     need it. Today they are: the compiler for any entry that is not `build: container`; the
+#     module-pack tool, which is `dotnet build` + `dotnet run` in EVERY mode; a `build: container`
+#     entry's binding-identity probe; and the module's own `dotnet test` suite when it ships one.
+#     🚨 So NO entry can drop the SDK yet, container or not — the packer alone keeps every pack job
+#     on it. That is not a placeholder, it is the measured state, and the log says it every run.
+#     The lane converts when the packer moves inside the platform image, not before.
+#   * anything else, the empty string included — RED. A flag that cannot be read resolving to
+#     "skip" is precisely the trapdoor this whole family of gates exists to forbid.
+#
+# 🚨 IT IS NOT A SKIP-TRAPDOOR, and three things make that structural rather than hoped-for:
+#   1. The DECISION step is unconditional — it runs on every event, in every mode, and it FAILS on
+#      an unreadable policy. Only `actions/setup-dotnet` itself carries an `if:`, and skipping an
+#      installer is not skipping a check: every build, pack, inspect and test step below still runs
+#      and still gates. The flag chooses a COMPILER; it never chooses whether to verify.
+#   2. When the answer is "no SDK", the job does not merely decline to install one — it PUTS A
+#      FAILING `dotnet` ON PATH. GitHub's ubuntu runners ship an SDK of their own, so "we skipped
+#      setup-dotnet" would otherwise mean "we quietly built against whatever .NET the image happens
+#      to carry", which is the same class of lie as a skipped gate rendering a green tick.
+#   3. The path taken is printed in the log AND in the job summary on EVERY run, with the consumers
+#      enumerated by name — including when the answer is "install", so the two outcomes cannot be
+#      told apart only by what is missing.
+#
 # Republishing is SAFE to repeat, which is why the schedule may simply publish rather than
 # first proving something changed: the registry is keyed by `{package}@{version}` from
 # `manifest.lock`, so a rebuild of an unchanged version overwrites the same slot with equivalent
@@ -87,6 +189,15 @@ on:
           JSON array of {package, module, project}: the Store package id, the module's entry
           assembly name, and the csproj to build. e.g.
           [{"package":"SocialMedia","module":"MeshWeaver.Social","project":"src/MeshWeaver.Social/MeshWeaver.Social.csproj"}]
+
+
+          Two OPTIONAL fields choose the COMPILER, per entry (see "Which compiler builds a module"
+          below): `"build": "container"` compiles with `memex build project` inside the pinned
+          platform image — no .NET SDK, no NuGet restore, no platform source checkout — and
+          `"accept": "targets embedded-resource"` acknowledges, one by one, the MSBuild constructs
+          that builder deliberately refuses to reproduce silently. Omitted, `build` is `sdk`: today's
+          `dotnet build` + `dotnet publish` on the runner. There is no third value and no fallback
+          between them.
         required: true
         type: string
       platform-ref:
@@ -132,6 +243,45 @@ on:
         type: string
         required: false
         default: ''
+      tester-image:
+        description: >
+          The image that CARRIES the builder (meshweaver.azurecr.io/mw-plugin-test) for entries
+          declaring "build":"container". 🚨 Two images, two roles, deliberately split: the PORTAL
+          image has no /app/mw-plugin-test (measured on memex-portal-ai@7e8c0b20, 331 files, none of
+          them the tester), and the TESTER image's /app lacks the Blazor/Hosting.AspNetCore half of
+          the reference surface (the platform-image doc above) — so the container build runs THIS
+          image's builder against THAT image's extracted /app. The two are published by the same CD
+          run and tagged in step by construction; pin them from the same wave. Empty (the default)
+          leaves container entries failing RED by name.
+        type: string
+        required: false
+        default: ''
+      lane-id:
+        description: >
+          Distinguishes this CALL's global-build artifact when one workflow invokes the lane
+          more than once in the same run (floor + rest): both calls uploading 'workspace-build'
+          collide, and half the packs then download the OTHER call's workspace — measured on
+          Plugins#1044 (run 33475…, 'produced no MeshWeaver.Teams.dll' while the build had 35/35
+          ok). Callers with multiple invocations MUST set distinct values.
+        type: string
+        required: false
+        default: 'main'
+      prebuilt-modules:
+        description: >
+          DEPRECATED, ignored. The global build-workspace job replaced per-job prebuilt
+          artifacts — every container entry compiles ONCE, centrally, in one Roslyn workspace
+          ("we want one central build, no per project build", maintainer, 2026-09-01). Accepted
+          so pinned callers keep parsing; passing it does nothing.
+        type: string
+        required: false
+        default: ''
+      tester-image-digest:
+        description: >
+          The digest (sha256:…) of tester-image, pulled as linux/amd64. Same immutability rule as
+          platform-image-digest; move the two pins together, from one CD wave.
+        type: string
+        required: false
+        default: ''
       registry-source:
         description: >
           The registry SOURCE these packages belong to ("Plugins", "Education", …) — it stamps the
@@ -157,6 +307,24 @@ on:
         required: false
         type: string
         default: ''
+      dotnet-sdk:
+        description: >
+          FEATURE FLAG — whether the pack job installs the .NET SDK on the runner. See "The .NET
+          SDK is a DECLARED need" at the top of this file.
+
+          `install` — the DEFAULT, and what a caller that says nothing inherits: setup-dotnet runs
+          unconditionally, exactly as it always has.
+
+          `by-declaration` — install it only when a consumer in THIS job still needs it. The
+          consumers are enumerated in the log and the job summary on every run, whichever way the
+          decision goes, so a green log can never leave "the SDK compiled it" and "the image
+          compiled it" indistinguishable.
+
+          Any other value — the empty string included — is RED. A flag that cannot be read must
+          never resolve to "skip".
+        required: false
+        type: string
+        default: install
     secrets:
       publish-token:
         description: The registry's Plugins:Registry:PublishToken. Required when publish is true.
@@ -229,7 +397,7 @@ jobs:
       - name: Mint a read token for the content repository
         id: content-token
         if: inputs.content-repository != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.content-app-id }}
           private-key: ${{ secrets.content-app-private-key }}
@@ -291,9 +459,273 @@ jobs:
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
             --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" > "$RUNNER_TEMP/scope.json"
 
+  # ─────────────────── THE SHARED BUILD ENVIRONMENT, WARMED ONCE ───────────────────
+  # "see we update *once at beginning for everyone* and not by module" (maintainer, 2026-08-31).
+  # Everything every pack job consumes identically is produced HERE, once per run, never once per
+  # module:
+  #   * the PLATFORM IMAGE, as a per-digest zstd tarball in the actions cache (GitHub's own
+  #     blob storage, colocated with the runners) — the matrix `docker load`s it instead of each
+  #     job pulling the same bytes from ACR (~52s/job measured on Plugins#1032; on a fresh digest
+  #     EVERY job used to pull at once — the stampede that helped beat the registry into
+  #     `connection refused` on 2026-08-31);
+  #   * the platform /app extraction and the TESTER APP extraction (the same per-digest caches the
+  #     matrix already reads) — warmed here so a fresh digest costs ONE trip to the registry per
+  #     run, not one per job;
+  #   * the MODULE-PACK TOOL, published once per platform pin and handed over as an artifact
+  #     (~5s download) instead of `dotnet build` in every job (48–79s/job measured).
+  # On a warm digest the matrix touches NO registry at all — an ACR outage cannot red a run whose
+  # images are already in the cache. This is deliberately NOT a gate: a cache miss in a pack job
+  # falls back to the pull of the SAME digest-pinned bytes, loudly — both paths build identically.
+  prepare:
+    name: Warm the shared build environment (once)
+    needs: select
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Systemorph/MeshWeaver at the pinned ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: meshweaver
+      - name: Restore the module-pack tool (per-platform-pin cache)
+        id: tool-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/pack-tool
+          key: pack-tool-${{ inputs.platform-ref }}
+      - uses: actions/setup-dotnet@v6
+        if: steps.tool-cache.outputs.cache-hit != 'true'
+        with:
+          dotnet-version: "10.0.x"
+      - name: Publish the module-pack tool (once for every pack job)
+        if: steps.tool-cache.outputs.cache-hit != 'true'
+        run: dotnet publish meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o "$RUNNER_TEMP/pack-tool"
+      - name: Hand the tool to the matrix
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-pack-tool
+          path: ${{ runner.temp }}/pack-tool
+          retention-days: 1
+      - name: Restore the platform image tarball (per-digest cache)
+        if: inputs.platform-image-digest != ''
+        id: image-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/platform-image
+          key: platform-image-${{ inputs.platform-image-digest }}
+      - name: Restore the platform image's assemblies from cache
+        if: inputs.platform-image-digest != ''
+        id: refs-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/platform-refs
+          key: platform-refs-${{ inputs.platform-image-digest }}
+      - name: Restore the tester app (per-digest cache)
+        if: inputs.tester-image-digest != ''
+        id: tester-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/tester-app
+          key: tester-app-${{ inputs.tester-image-digest }}
+      - name: Fill whichever cache is cold — the run's ONE trip to the registry
+        if: >-
+          inputs.platform-image-digest != ''
+          && (steps.image-cache.outputs.cache-hit != 'true'
+              || steps.refs-cache.outputs.cache-hit != 'true'
+              || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
+        env:
+          IMAGE: ${{ inputs.platform-image }}
+          DIGEST: ${{ inputs.platform-image-digest }}
+          TESTER_IMAGE: ${{ inputs.tester-image }}
+          TESTER_DIGEST: ${{ inputs.tester-image-digest }}
+          IMAGE_HIT: ${{ steps.image-cache.outputs.cache-hit }}
+          REFS_HIT: ${{ steps.refs-cache.outputs.cache-hit }}
+          TESTER_HIT: ${{ steps.tester-cache.outputs.cache-hit }}
+          ACR_USERNAME: ${{ secrets.acr-username }}
+          ACR_PASSWORD: ${{ secrets.acr-password }}
+        run: |
+          set -euo pipefail
+          [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::platform-image-digest is set but the acr-username/acr-password secrets are not passed — the cold caches cannot be filled"; exit 1; }
+          echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+          case "${IMAGE##*/}" in *:*) NOTAG="${IMAGE%:*}" ;; *) NOTAG="$IMAGE" ;; esac
+          pinned="${NOTAG}@${DIGEST}"
+          if [ "$IMAGE_HIT" != "true" ] || [ "$REFS_HIT" != "true" ]; then
+            docker pull -q --platform linux/amd64 "$pinned"
+          fi
+          if [ "$IMAGE_HIT" != "true" ]; then
+            mkdir -p "$RUNNER_TEMP/platform-image"
+            # `docker load` of a digest-pulled save keeps no RepoDigests, so the matrix runs the
+            # image by ID — content-addressed, i.e. exactly as pinned as the digest itself.
+            docker inspect --format '{{.Id}}' "$pinned" > "$RUNNER_TEMP/platform-image/image-id.txt"
+            docker save "$pinned" | zstd -T0 -3 -o "$RUNNER_TEMP/platform-image/image.tar.zst"
+            ls -lh "$RUNNER_TEMP/platform-image/image.tar.zst"
+          fi
+          if [ "$REFS_HIT" != "true" ]; then
+            cid=$(docker create --platform linux/amd64 "$pinned")
+            mkdir -p "$RUNNER_TEMP/platform-refs"
+            docker cp "$cid:/app/." "$RUNNER_TEMP/platform-refs/"
+            docker rm "$cid" >/dev/null
+            shopt -s nullglob
+            dlls=("$RUNNER_TEMP"/platform-refs/*.dll)
+            [ "${#dlls[@]}" -gt 50 ] || { echo "::error::the image's /app yielded ${#dlls[@]} assemblies — not a platform image"; exit 1; }
+          fi
+          if [ -n "$TESTER_DIGEST" ] && [ "$TESTER_HIT" != "true" ]; then
+            case "${TESTER_IMAGE##*/}" in *:*) TNOTAG="${TESTER_IMAGE%:*}" ;; *) TNOTAG="$TESTER_IMAGE" ;; esac
+            tester_pinned="${TNOTAG}@${TESTER_DIGEST}"
+            docker pull -q --platform linux/amd64 "$tester_pinned"
+            rm -rf "$RUNNER_TEMP/tester-app"
+            tcid=$(docker create --platform linux/amd64 "$tester_pinned")
+            docker cp -q "$tcid:/app" "$RUNNER_TEMP/tester-app"
+            docker rm "$tcid" >/dev/null
+            [ -f "$RUNNER_TEMP/tester-app/mw-plugin-test.dll" ] || { echo "::error::the tester image's /app carries no mw-plugin-test.dll — not a tester image"; exit 1; }
+          fi
+
+  # ─────────────────────── ONE GLOBAL BUILD — LOCAL BUILDS ARE DISCONTINUED ───────────────────────
+  # "we want *one* central build *no* per project build … just collect all under scope in global
+  # process and discontinue any local build … one global one and finish … and only play with
+  # parameters what's rebuilt" (maintainer, 2026-09-01). Every SELECTED container entry compiles
+  # HERE, in one Roslyn workspace (shared references, single body pass, fail-fast), inside the
+  # pinned platform container. What is rebuilt is exactly the selection's parameters — nothing
+  # else. The pack matrix only CONSUMES this job's artifact: a module missing from it is RED
+  # there, never rebuilt locally.
+  build-workspace:
+    name: Build the workspace (one global build)
+    needs: [select, prepare]
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve the content repository's credential
+        id: content-repo
+        if: inputs.content-repository != ''
+        env:
+          REPO: ${{ inputs.content-repository }}
+          APP_ID: ${{ secrets.content-app-id }}
+          APP_KEY: ${{ secrets.content-app-private-key }}
+        run: |
+          set -euo pipefail
+          [ -n "$APP_ID" ]  || { echo "::error::content-repository is '$REPO' but secrets.content-app-id is empty — the caller's GITHUB_TOKEN cannot read another repository."; exit 1; }
+          [ -n "$APP_KEY" ] || { echo "::error::content-repository is '$REPO' but secrets.content-app-private-key is empty."; exit 1; }
+          echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${REPO#*/}"   >> "$GITHUB_OUTPUT"
+      - name: Mint a read token for the content repository
+        id: content-token
+        if: inputs.content-repository != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.content-app-id }}
+          private-key: ${{ secrets.content-app-private-key }}
+          owner: ${{ steps.content-repo.outputs.owner }}
+          repositories: ${{ steps.content-repo.outputs.name }}
+          permission-contents: read
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.content-repository || github.repository }}
+          ref: ${{ inputs.content-ref || github.sha }}
+          token: ${{ steps.content-token.outputs.token || github.token }}
+      - name: Restore the platform image tarball (per-digest cache)
+        if: ${{ inputs.platform-image-digest != '' }}
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/platform-image
+          key: platform-image-${{ inputs.platform-image-digest }}
+      - name: Restore the tester app (per-digest cache)
+        if: ${{ inputs.tester-image-digest != '' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/tester-app
+          key: tester-app-${{ inputs.tester-image-digest }}
+      - name: Build every selected container entry in ONE workspace
+        id: build
+        env:
+          MODULES: ${{ needs.select.outputs.modules }}
+          IMAGE: ${{ inputs.platform-image }}
+          DIGEST: ${{ inputs.platform-image-digest }}
+          TESTER_IMAGE: ${{ inputs.tester-image }}
+          TESTER_DIGEST: ${{ inputs.tester-image-digest }}
+          ACR_USERNAME: ${{ secrets.acr-username }}
+          ACR_PASSWORD: ${{ secrets.acr-password }}
+        run: |
+          set -euo pipefail
+          mapfile -t projects < <(jq -r '.[] | select(.build == "container") | .project' <<< "$MODULES")
+          if [ "${#projects[@]}" -eq 0 ]; then
+            echo "no container entries in the selection — the global build has nothing to do (sdk-only selection)"
+            echo "built=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # ONE accept contract for the whole workspace: --accept applies to every entry of a
+          # build-project invocation, so entries must agree. A divergent accept is a per-entry
+          # contract this job cannot honour — make them uniform rather than letting one entry's
+          # acknowledgment quietly cover another's construct.
+          accepts_distinct=$(jq -r '[.[] | select(.build == "container") | (.accept // "")] | unique | length' <<< "$MODULES")
+          [ "$accepts_distinct" = "1" ] || { echo "::error::container entries declare DIFFERENT accept sets — the global build applies one accept contract to the whole workspace; make them uniform."; exit 1; }
+          ACCEPT=$(jq -r '[.[] | select(.build == "container") | (.accept // "")] | unique | .[0]' <<< "$MODULES")
+          if [ -z "$IMAGE" ] || [ -z "$DIGEST" ] || [ -z "$TESTER_IMAGE" ] || [ -z "$TESTER_DIGEST" ]; then
+            echo "::error::container entries are selected, but platform-image / platform-image-digest / tester-image / tester-image-digest are not all set — there is nothing sound to compile with, and deliberately no local-SDK fallback."
+            exit 1
+          fi
+          case "${IMAGE##*/}" in *:*) IMAGE_NOTAG="${IMAGE%:*}" ;; *) IMAGE_NOTAG="$IMAGE" ;; esac
+          pinned="${IMAGE_NOTAG}@${DIGEST}"
+          case "${TESTER_IMAGE##*/}" in *:*) TESTER_NOTAG="${TESTER_IMAGE%:*}" ;; *) TESTER_NOTAG="$TESTER_IMAGE" ;; esac
+          tester_pinned="${TESTER_NOTAG}@${TESTER_DIGEST}"
+          # Warm digest ⇒ ZERO registry trips: prepare staged the image as a per-digest tarball in
+          # the actions cache (blob). The fallback pull fetches the SAME digest-pinned bytes,
+          # loudly — a perf fallback, never a verification one.
+          if [ -f "$RUNNER_TEMP/platform-image/image.tar.zst" ]; then
+            echo "platform image: cache HIT for $DIGEST — docker load, no ACR"
+            zstd -dc "$RUNNER_TEMP/platform-image/image.tar.zst" | docker load
+            img="$(cat "$RUNNER_TEMP/platform-image/image-id.txt")"
+            docker image inspect "$img" >/dev/null 2>&1 || { echo "::error::the cached tarball loaded but image id $img is absent — delete the platform-image-$DIGEST cache entry and rerun"; exit 1; }
+          else
+            [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::image cache MISS and no acr credentials — the image cannot be fetched."; exit 1; }
+            echo "platform image: cache MISS for $DIGEST — pulling from ACR (same bytes, only slower)"
+            echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+            docker pull -q --platform linux/amd64 "$pinned"
+            img="$pinned"
+          fi
+          tester_app="$RUNNER_TEMP/tester-app"
+          if [ ! -f "$tester_app/mw-plugin-test.dll" ]; then
+            [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::tester cache MISS and no acr credentials."; exit 1; }
+            echo "tester-app cache MISS for $TESTER_DIGEST — extracting once"
+            echo "$ACR_PASSWORD" | docker login "${TESTER_IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+            docker pull -q --platform linux/amd64 "$tester_pinned"
+            rm -rf "$tester_app"
+            tcid=$(docker create --platform linux/amd64 "$tester_pinned")
+            docker cp -q "$tcid:/app" "$tester_app"
+            docker rm "$tcid" >/dev/null
+          else
+            echo "tester-app cache HIT for $TESTER_DIGEST"
+          fi
+          out="$RUNNER_TEMP/module-build"
+          rm -rf "$out"; mkdir -p "$out"; chmod 777 "$out"
+          accepts=()
+          for construct in $ACCEPT; do accepts+=(--accept "$construct"); done
+          args=()
+          for prj in "${projects[@]}"; do args+=("/repo/$prj"); done
+          echo "global build: ${#projects[@]} container entr(y|ies) in ONE workspace — ${projects[*]}"
+          # AS THE RUNNER'S UID (a root-owned /out is unwritable to later steps); HOME=/tmp keeps
+          # runtime probes off read-only image paths. No --extra-refs, ever, on this lane.
+          docker run --rm --init --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$GITHUB_WORKSPACE:/repo:ro" \
+            -v "$tester_app:/tester:ro" \
+            -v "$out:/out" \
+            --entrypoint dotnet "$img" \
+            /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out ${accepts[@]+"${accepts[@]}"} 2>&1 | tee "$out/workspace-build.log"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+      - name: Hand the workspace to the matrix
+        if: steps.build.outputs.built == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: workspace-build-${{ inputs.lane-id }}
+          path: ${{ runner.temp }}/module-build
+          retention-days: 1
+          if-no-files-found: error
+
   pack:
     name: Module bundle (${{ matrix.entry.module }})
-    needs: select
+    needs: [select, prepare, build-workspace]
     runs-on: ubuntu-latest
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
     # a matrix with no vectors, so an empty selection has to express itself as "this job does not
@@ -303,7 +735,10 @@ jobs:
     # (`select.result` too, not just the count: a FAILED select emits no count at all, and
     # `'' != '0'` is true — the matrix would then fail to evaluate instead of the verify job
     # naming the real cause.)
-    if: needs.select.result == 'success' && needs.select.outputs.count != '0'
+    # (An explicit `if:` replaces the implicit all-needs-succeeded check, so prepare's result
+    # is asserted by name — a failed prepare must stop the matrix, not strand 30 jobs at their
+    # artifact downloads.)
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success' && needs.build-workspace.result == 'success'
     strategy:
       # One module's failure must not hide the rest — a sweep wants every verdict in one run.
       fail-fast: false
@@ -332,7 +767,7 @@ jobs:
       - name: Mint a read token for the content repository
         id: content-token
         if: inputs.content-repository != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.content-app-id }}
           private-key: ${{ secrets.content-app-private-key }}
@@ -350,7 +785,99 @@ jobs:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: meshweaver
+      # ═══════ THE .NET SDK — INSTALLED BECAUSE SOMETHING DECLARED IT, NOT BY REFLEX ═══════
+      # 🚨 "make installing dotnet sdk a feature flag" (maintainer, 2026-08-31). The rationale and
+      # the anti-trapdoor argument are at the top of this file, under "The .NET SDK is a DECLARED
+      # need"; what follows is the decision itself.
+      #
+      # ONE step, UNCONDITIONAL, that always says which way it went and why. It enumerates the
+      # consumers this job would hand to a runner SDK, applies the caller's policy, and — when the
+      # answer is "none" — makes the absence REAL, because the runner ships an SDK of its own and a
+      # silent fallback to it is the same class of lie as a skipped gate rendering a green tick.
+      - name: Does this job need the .NET SDK?
+        id: sdk
+        env:
+          POLICY: ${{ inputs.dotnet-sdk }}
+          MODE: ${{ matrix.entry.build || 'sdk' }}
+          MODULE: ${{ matrix.entry.module }}
+          PROJECT: ${{ matrix.entry.project }}
+          RUN_TESTS: ${{ matrix.entry.test != false }}
+        run: |
+          set -euo pipefail
+          # EVERY consumer this job would hand to a runner SDK, named one by one and evaluated
+          # against this entry — not a summary, an inventory. `build: container` (MeshWeaver#2854)
+          # removes the COMPILER from it and NOTHING ELSE: the container path still reads the
+          # emitted assembly's identity with a `dotnet run` file-based app, the packer is a
+          # `dotnet build` + `dotnet run` in every mode, and a module that ships a test suite is a
+          # `dotnet test` the image's build-project cannot do at all. An omission here is exactly
+          # what would let a converted lane skip an install it needs and then blame the shim four
+          # steps later, so the list is deliberately complete rather than convenient.
+          consumers=()
+          if [ "$MODE" = "container" ]; then
+            echo "compiler: NOT a consumer — $MODULE declares build=container, so the pinned platform image compiles it"
+            consumers+=("the binding-identity probe — the container path reads ${MODULE}.dll's AssemblyVersion with a 'dotnet run' file-based app")
+          else
+            consumers+=("the compiler for $MODULE — its matrix entry declares build=$MODE, i.e. 'dotnet build' + 'dotnet publish' on this runner")
+          fi
+          consumers+=("the module-pack tool — prebuilt once by the prepare job, but 'dotnet <dll>' still takes the runner's dotnet; a pack-module verb inside the image would remove this last every-mode consumer")
+          # Resolved against the tree, exactly as the test step below resolves it, so a module with
+          # no suite does not carry a consumer it does not have.
+          tests="$(dirname "$PROJECT").Test"
+          if [ "$RUN_TESTS" = "true" ] && [ -d "$tests" ]; then
+            consumers+=("the module's own suite — 'dotnet test $tests', a verb the image's build-project does not have at all")
+          fi
+          case "$POLICY" in
+            install)
+              install=true
+              verdict="policy 'install' (the default) — installed whatever the consumers say"
+              ;;
+            by-declaration)
+              if [ "${#consumers[@]}" -gt 0 ]; then install=true; else install=false; fi
+              verdict="policy 'by-declaration' — ${#consumers[@]} declared consumer(s) in this job"
+              ;;
+            *)
+              echo "::error::inputs.dotnet-sdk is '$POLICY'. The only values are 'install' (the default) and 'by-declaration'. An unreadable flag must NEVER resolve to 'do not install' — that is a skipped check wearing a green tick."
+              exit 1
+              ;;
+          esac
+          echo "declared consumers of a runner SDK in this job:"
+          for consumer in ${consumers[@]+"${consumers[@]}"}; do echo "  • $consumer"; done
+          if [ "$install" = true ]; then
+            headline=".NET SDK on the runner: INSTALLED"
+            echo "$headline — $verdict"
+          else
+            headline=".NET SDK on the runner: NOT INSTALLED"
+            echo "$headline — $verdict; the pinned platform image is the only compiler in this job"
+            # 🚨 Make the absence REAL. ubuntu-latest ships its own SDK, so declining to install one
+            # is not the same as not having one: without this, a consumer nobody declared would
+            # quietly build against whatever .NET the runner image happens to carry, and the log of
+            # a converted lane would be indistinguishable from the log of an unconverted one.
+            shim="$RUNNER_TEMP/no-dotnet"
+            mkdir -p "$shim"
+            cat > "$shim/dotnet" <<'SHIM'
+          #!/usr/bin/env bash
+          echo "::error::a step invoked 'dotnet $*', but this job declared dotnet-sdk: by-declaration and named no consumer that needs the .NET SDK, so none was installed. Either add that consumer to the 'Does this job need the .NET SDK?' step, or set dotnet-sdk: install on the caller. Falling back to the runner's preinstalled SDK is deliberately not an option — it would make a converted lane and an unconverted one look identical in a green log."
+          exit 97
+          SHIM
+            chmod +x "$shim/dotnet"
+            echo "$shim" >> "$GITHUB_PATH"
+            echo "a FAILING 'dotnet' shim is on PATH ($shim) — nothing in this job can quietly use the runner's preinstalled SDK"
+          fi
+          echo "install=$install" >> "$GITHUB_OUTPUT"
+          {
+            echo "### $headline"
+            echo
+            echo "- flag: \`dotnet-sdk: $POLICY\` (default \`install\`)"
+            echo "- compiler for \`$MODULE\`: \`$MODE\`"
+            echo "- declared consumers of a runner SDK:"
+            for consumer in ${consumers[@]+"${consumers[@]}"}; do echo "  - $consumer"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+      # 🚨 The ONE `if:` this flag introduces, and it guards an INSTALLER, not a gate. Every build,
+      # pack, inspect and test step below still runs and still gates whichever way it goes; when it
+      # is skipped, the step above has already put a failing `dotnet` on PATH, so an undeclared
+      # consumer goes RED naming the flag rather than silently using the runner's own SDK.
       - uses: actions/setup-dotnet@v6
+        if: steps.sdk.outputs.install == 'true'
         with:
           dotnet-version: "10.0.x"
 
@@ -381,7 +908,7 @@ jobs:
       - name: Restore the platform image's assemblies from cache
         if: inputs.platform-image-digest != ''
         id: platform-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/platform-refs
           key: platform-refs-${{ inputs.platform-image-digest }}
@@ -413,50 +940,214 @@ jobs:
           n=${#dlls[@]}
           [ "$n" -gt 50 ] || { echo "::error::the image's /app yielded $n assemblies — not a platform image"; exit 1; }
           echo "platform refs: $n assemblies from ${IMAGE_NOTAG}@${DIGEST}"
-      - name: Build the module (Release, warnings-as-errors)
+      # ══════════ THE COMPILER — the CONTAINER or the SDK, and the log says WHICH ══════════
+      # 🚨 "we want to use memex build plugin and not dotnet build" (maintainer, 2026-08-31). A
+      # module does not run against a source tree and it does not run against a feed: it is loaded
+      # into the platform IMAGE and bound by the assemblies in there. So the honest compiler is
+      # that image's own — `memex build project`, whose work is `mw-plugin-test build-project`
+      # INSIDE the pinned image: no .NET SDK, no NuGet restore, no platform source checkout. The
+      # `docker run … --entrypoint /app/mw-plugin-test … build-project` below IS that verb; the
+      # `memex` half is only the trip into the container, and CI has already pinned the image by
+      # digest, so reaching for the tool would add an SDK build to remove one.
+      #
+      # 🚨 IT IS NOT YET A BLANKET SWAP, AND PRETENDING OTHERWISE WOULD BREAK MOST BUNDLES. The
+      # builder's own sweep over all 54 non-test projects in MeshWeaver.Plugins/src compiled 12
+      # green (MeshWeaver#2850); the rest need what a RUNTIME image does not carry — SDK source
+      # generators (15), Razor/Blazor (15), `<Protobuf>` (3), additional libraries (5), portal
+      # hosts (3). So the compiler is chosen PER ENTRY and DECLARED by the caller
+      # (`"build": "container"`), never guessed.
+      #
+      # 🚨 AND NEVER A FALLBACK. A lane that tries the container and quietly drops back to the SDK
+      # makes "the container built it" and "the SDK built it" indistinguishable in a green log —
+      # the one thing a gate in this family may not do. A declared mode that cannot run FAILS.
+      #
+      # ONE step, not two `if:`-guarded ones: two guards can BOTH skip, and a skipped step renders
+      # with the same tick as a passed one. This step always runs, always prints the compiler it
+      # used, records it in the receipt, and refuses a mode it does not know.
+      # The tester's extracted /app, cached by DIGEST — one extraction per digest per repo,
+      # every later job restores it in seconds instead of pulling the tester image at all.
+      # The global workspace build's outputs — every container entry's assemblies, closure
+      # manifests and the one build log. Container packs consume THIS; sdk entries ignore it.
+      - name: Fetch the global workspace build
+        if: ${{ (matrix.entry.build || 'sdk') == 'container' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: workspace-build-${{ inputs.lane-id }}
+          path: ${{ runner.temp }}/workspace-build
+      - name: Build the module — and say which compiler produced it
+        id: build
         env:
+          MODE: ${{ matrix.entry.build || 'sdk' }}
+          ACCEPT: ${{ matrix.entry.accept || '' }}
+          PROJECT: ${{ matrix.entry.project }}
+          MODULE: ${{ matrix.entry.module }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          IMAGE: ${{ inputs.platform-image }}
+          DIGEST: ${{ inputs.platform-image-digest }}
+          TESTER_IMAGE: ${{ inputs.tester-image }}
+          TESTER_DIGEST: ${{ inputs.tester-image-digest }}
+          # For `gh run download` of sibling module-dll artifacts (the prebuilt lane).
+          GH_TOKEN: ${{ github.token }}
+          ACR_USERNAME: ${{ secrets.acr-username }}
+          ACR_PASSWORD: ${{ secrets.acr-password }}
           REFS: ${{ inputs.platform-image-digest != '' && format('{0}/platform-refs', runner.temp) || '' }}
-        run: >
-          dotnet build "${{ matrix.entry.project }}" -c Release -warnaserror
-          -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
-          -p:Version=${{ steps.identity.outputs.version }}
-          ${REFS:+-p:MeshWeaverRefs=$REFS}
+        run: |
+          set -euo pipefail
+          # The closure arguments are written HERE and read by the pack step, so the compiler that
+          # ran is the one that says what rides: the SDK path derives the private closure from the
+          # deps.json only it produces (--deps-closure), the container path names the module-owned
+          # siblings it actually emitted (--with). One producer, one reader, no re-derivation.
+          packargs="$RUNNER_TEMP/pack-args"
+          : > "$packargs"
+          case "$MODE" in
+            sdk)
+              compiler="dotnet SDK on the runner"
+              echo "compiler: dotnet SDK $(dotnet --version) on the runner — the LEGACY path"
+              echo "🚧 $MODULE has not been converted to \`memex build project\` yet. Declare"
+              echo "🚧 \`\"build\": \"container\"\` on its \`modules:\` entry once it compiles against the image."
+              dotnet build "$PROJECT" -c Release -warnaserror \
+                -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" \
+                -p:Version="$VERSION" \
+                ${REFS:+-p:MeshWeaverRefs=$REFS}
+              # Publish materializes the module's PACKAGE dependencies beside the entry DLL — the
+              # SDK's own answer to the runtime closure (framework-trimmed packages excluded,
+              # everything else included), which --deps-closure selects from. A
+              # -p:CopyLocalLockFileAssemblies=true build was tried first and copied NOTHING on the
+              # CI SDK while copying everything on a dev machine (2026-08-20, 12/14 jobs) — publish
+              # does not depend on that flag at all.
+              # 🚨 The SAME reference set as the build: --no-build re-evaluates the project, and
+              # without -p:MeshWeaverRefs the platform ProjectReferences the build had dropped come
+              # back — publish then copies their outputs, which were never built ("MSB3030: Could
+              # not copy meshweaver/src/MeshWeaver.Graph/bin/Release/net10.0/MeshWeaver.Graph.dll",
+              # Plugins #940).
+              dotnet publish "$PROJECT" -c Release --no-build \
+                -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" \
+                -p:Version="$VERSION" \
+                ${REFS:+-p:MeshWeaverRefs=$REFS}
+              packdir="$GITHUB_WORKSPACE/$(dirname "$PROJECT")/bin/Release/net10.0/publish"
+              printf '%s\n' --deps-closure >> "$packargs"
+              ;;
+            container)
+              compiler="memex build project (ONE global workspace build)"
+              # 🚨 LOCAL BUILDS ARE DISCONTINUED ("we want *one* central build *no* per project
+              # build … one global one and finish", maintainer, 2026-09-01). The build-workspace
+              # job compiled every selected container entry in ONE Roslyn workspace inside the
+              # pinned platform container; this job only CONSUMES its artifact. A module missing
+              # from it is RED here — by design there is no local rebuild to slide into, exactly
+              # as there is no SDK fallback.
+              ws="$RUNNER_TEMP/workspace-build"
+              log="$ws/workspace-build.log"
+              packdir="$ws/$MODULE"
+              if [ ! -f "$packdir/$MODULE.dll" ]; then
+                echo "::error::the global workspace build produced no $MODULE.dll under $packdir. Local builds are discontinued: if build-workspace was green without this module, the selection or this entry is wrong — fix that, never rebuild here."
+                exit 1
+              fi
+              closure_file="$ws/$MODULE.closure.txt"
+              if [ ! -f "$closure_file" ]; then
+                echo "::error::the global build wrote no closure manifest for $MODULE — without it this job cannot know which in-tree siblings ride THIS bundle (a shared workspace output holds every entry's assemblies side by side, and globbing it would ride every other module)."
+                exit 1
+              fi
+              echo "compiler: CONTAINER — consumed from the ONE global workspace build (no docker, no registry, no compile in this job)"
+              # MODULE-OWNED in-tree siblings (from THIS module's closure manifest, never a glob of
+              # the shared output) MUST ride; image-shipped ones must NOT (same-identity duplicate
+              # beside /app's copy — the #143 family). Same script as packer + inspection.
+              own="$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src")"
+              while IFS= read -r name; do
+                { [ -n "$name" ] && [ "$name" != "$MODULE" ]; } || continue
+                dir="$ws/$name"
+                [ -d "$dir" ] || continue   # resolved from the image, nothing emitted — nothing to ride
+                case "$name" in
+                  MeshWeaver.*) ;;
+                  *)
+                    echo "::error::the global build emitted '$name' in $MODULE's closure. Only MeshWeaver.* siblings can be classified as platform-carried or module-owned — build $MODULE on the sdk path until this lane can decide."
+                    exit 1
+                    ;;
+                esac
+                if printf '%s' ";$own;" | grep -qF ";$name;"; then
+                  cp "$dir/$name.dll" "$packdir/"
+                  if [ -f "$dir/$name.pdb" ]; then cp "$dir/$name.pdb" "$packdir/"; fi
+                  printf '%s\n%s\n' --with "$name.dll" >> "$packargs"
+                  echo "closure: $name.dll RIDES — module-owned (its source is in this repo's src/, so it is nowhere in the image's /app)"
+                else
+                  echo "closure: $name.dll does NOT ride — the image ships it (src/platform-shipped.txt); bundling it would land a same-identity duplicate beside /app's copy"
+                fi
+              done < "$closure_file"
+              # The SHELF rides: module-libs.txt is the builder-written provenance.
+              if [ -f "$packdir/module-libs.txt" ]; then
+                while IFS= read -r ride; do
+                  [ -n "$ride" ] || continue
+                  printf '%s\n%s\n' --with "$ride" >> "$packargs"
+                  echo "closure: $ride RIDES — module-libraries shelf (deps.json-derived; the image does not carry it)"
+                done < "$packdir/module-libs.txt"
+              fi
+              echo "closure: NO --deps-closure on the container path — there is no SDK deps.json to derive one from."
+              echo "closure: complete BY RECORD instead — every reference resolved from the image, its shared frameworks, or the module-libraries shelf; the builder refuses BY NAME anything none of them supplies, and this lane passes no --extra-refs."
+              # 🚨 THE BINDING IDENTITY, CHECKED (MeshWeaver#143): the expected value is the one
+              # the global builder read out of the image, so it cannot drift from what the portals
+              # run. The global build log carries it once for the whole workspace.
+              platform_version="$(sed -n 's/.*platform AssemblyVersion \([0-9][0-9.]*\).*/\1/p' "$log" | head -1)"
+              if [ -z "$platform_version" ]; then
+                echo "::error::could not read 'platform AssemblyVersion' out of the global build log ($log). The binding-identity check cannot run, and a check that quietly does not run reads exactly like one that passed."
+                exit 1
+              fi
+              printf '%s\n' 'Console.WriteLine(System.Reflection.AssemblyName.GetAssemblyName(args[0]).Version);' > "$RUNNER_TEMP/asmver.cs"
+              module_version="$(DOTNET_NOLOGO=1 dotnet run "$RUNNER_TEMP/asmver.cs" -- "$packdir/$MODULE.dll" | tail -1)"
+              if [ "$module_version" != "$platform_version" ]; then
+                echo "::error::binding identity drift: $MODULE.dll was emitted as AssemblyVersion $module_version, but every MeshWeaver.* assembly in the platform image carries $platform_version — a runtime FileNotFoundException, not a build error (MeshWeaver#143)."
+                exit 1
+              fi
+              echo "identity: $MODULE.dll AssemblyVersion $module_version == the image's $platform_version"
+              ;;
+            *)
+              echo "::error::matrix entry '$MODULE' declares build='$MODE'. The only values are 'container' (memex build project, inside the pinned platform image) and 'sdk' (dotnet build on the runner — the default). A typo must not silently pick either one."
+              exit 1
+              ;;
+          esac
+          echo "compiler=$MODE" >> "$GITHUB_OUTPUT"
+          echo "packdir=$packdir" >> "$GITHUB_OUTPUT"
+          {
+            echo "### \`$MODULE\` — compiled by **$compiler**"
+            echo
+            echo "- mode: \`$MODE\` (\`container\` = memex build project inside the pinned image; \`sdk\` = dotnet build on the runner)"
+            echo "- pack input: \`$packdir\`"
+            echo "- closure args: \`$( (tr '\n' ' ' < "$packargs") || true )\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      # Publish materializes the module's PACKAGE dependencies beside the entry DLL — the SDK's
-      # own answer to the runtime closure (framework-trimmed packages excluded, everything else
-      # included), which the pack step's --deps-closure derivation selects from. A
-      # -p:CopyLocalLockFileAssemblies=true build was tried first and copied NOTHING on the CI
-      # SDK while copying everything on a dev machine (2026-08-20, 12/14 jobs) — publish does not
-      # depend on that flag at all.
-      # 🚨 The SAME reference set as the build: --no-build re-evaluates the project, and without
-      # -p:MeshWeaverRefs the platform ProjectReferences the build had dropped come back — publish
-      # then copies their outputs, which were never built ("MSB3030: Could not copy
-      # meshweaver/src/MeshWeaver.Graph/bin/Release/net10.0/MeshWeaver.Graph.dll", Plugins #940).
-      - name: Publish the module (the closure the pack selects from)
-        env:
-          REFS: ${{ inputs.platform-image-digest != '' && format('{0}/platform-refs', runner.temp) || '' }}
-        run: >
-          dotnet publish "${{ matrix.entry.project }}" -c Release --no-build
-          -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
-          -p:Version=${{ steps.identity.outputs.version }}
-          ${REFS:+-p:MeshWeaverRefs=$REFS}
-
-      - name: Build the module-pack tool
-        run: dotnet build meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release
+      # Published ONCE by the prepare job — `dotnet build` here cost 48–79s in EVERY job (measured
+      # across Plugins#1032). A missing artifact fails this download RED rather than quietly
+      # rebuilding a maybe-different tool.
+      - name: Fetch the module-pack tool (built once by prepare)
+        uses: actions/download-artifact@v8
+        with:
+          name: module-pack-tool
+          path: ${{ runner.temp }}/pack-tool
 
       - name: Pack the module bundle
         env:
-          PROJECT: ${{ matrix.entry.project }}
-        run: >
-          dotnet run --project meshweaver/src/MeshWeaver.Plugin.Build -c Release --no-build --
-          module-pack "$GITHUB_WORKSPACE/$(dirname "$PROJECT")/bin/Release/net10.0/publish"
-          --deps-closure
-          --module-name "${{ matrix.entry.module }}"
-          --plugin "${{ matrix.entry.package }}"
-          --package-version "${{ steps.identity.outputs.version }}"
-          --min-mesh-version "${{ steps.identity.outputs.floor }}"
-          --own-platform "$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src")"
-          --out "$RUNNER_TEMP/bundles"
+          PACKDIR: ${{ steps.build.outputs.packdir }}
+          COMPILER: ${{ steps.build.outputs.compiler }}
+          PACKAGE: ${{ matrix.entry.package }}
+          MODULE: ${{ matrix.entry.module }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          FLOOR: ${{ steps.identity.outputs.floor }}
+        run: |
+          set -euo pipefail
+          # 🚨 The closure flags come from the COMPILER THAT RAN, written to a file by the step
+          # above rather than re-derived here — the SDK path derives the private closure from its
+          # own deps.json (--deps-closure), the container path names the module-owned siblings it
+          # emitted (--with). Re-deriving here would be a second opinion about what ships.
+          closure=()
+          while IFS= read -r flag; do closure+=("$flag"); done < "$RUNNER_TEMP/pack-args"
+          echo "packing $MODULE from $PACKDIR (compiler: $COMPILER); closure flags: ${closure[*]:-<none>}"
+          dotnet "$RUNNER_TEMP/pack-tool/MeshWeaver.Plugin.Build.dll" \
+            module-pack "$PACKDIR" \
+            ${closure[@]+"${closure[@]}"} \
+            --module-name "$MODULE" \
+            --plugin "$PACKAGE" \
+            --package-version "$VERSION" \
+            --min-mesh-version "$FLOOR" \
+            --own-platform "$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src")" \
+            --out "$RUNNER_TEMP/bundles"
 
       # A bundle that PACKED is not yet a bundle that LANDS: assert the closure and the manifest a
       # consumer's landing gate will read, loudly, instead of trusting the packer's exit code.
@@ -465,8 +1156,14 @@ jobs:
         env:
           PACKAGE: ${{ matrix.entry.package }}
           MODULE: ${{ matrix.entry.module }}
+          # The staticAssets assertion reads the PROJECT's source tree (wwwroot/, *.razor.css) —
+          # measured missing on the first 31-entry acceptance run: every container inspection died
+          # `PROJECT: unbound variable` AFTER a GREEN build, because only the build step carried it.
+          PROJECT: ${{ matrix.entry.project }}
           VERSION: ${{ steps.identity.outputs.version }}
           FLOOR: ${{ steps.identity.outputs.floor }}
+          COMPILER: ${{ steps.build.outputs.compiler }}
+          PACKDIR: ${{ steps.build.outputs.packdir }}
         run: |
           set -euo pipefail
           bundle="$RUNNER_TEMP/bundles/MeshWeaver.Plugin.$PACKAGE.$VERSION.module.nupkg"
@@ -501,6 +1198,48 @@ jobs:
              | length == 0' \
             "$manifest" > /dev/null \
             || { echo "::error::bundle carries platform (MeshWeaver.*) assemblies beside the module"; exit 1; }
+          # 🚨 The container path's closure claim, ASSERTED rather than asserted-in-prose. It packs
+          # no --deps-closure because there is no SDK deps.json to derive one from; what makes that
+          # sound is that build-project resolved every reference from the image's /app (it refuses
+          # by name any PackageReference the image does not supply, and this lane passes no
+          # --extra-refs). A NON-MeshWeaver assembly in such a bundle would contradict exactly that
+          # — it could only have come from somewhere this lane cannot account for — so it is a
+          # refusal, not a curiosity. The SDK path is untouched: its private closure legitimately
+          # carries package assemblies.
+          if [ "$COMPILER" = "container" ]; then
+            # A non-MeshWeaver assembly is allowed ONLY with shelf provenance: the builder's
+            # module-libs.txt names every ride it derived from the shelf's deps.json. Anything
+            # else has no accountable closure and must fail — the 2026-08-19/20 outage shape.
+            # 🚨 FROM THE BUILD STEP'S OWN packdir output — never a hard-coded layout. The global
+            # workspace moved the pack input to workspace-build/<Module>; this path still reading
+            # module-build/ made the allow-list EMPTY and failed all 8 shelf-consuming modules on
+            # the first coherent global-build lap (33472830308) with perfectly correct manifests.
+            shelf_manifest="$PACKDIR/module-libs.txt"
+            allowed="$( [ -f "$shelf_manifest" ] && tr '\n' ';' < "$shelf_manifest" || true )"
+            jq -e --arg allowed "$allowed" \
+              '($allowed | split(";") | map(select(length > 0))) as $shelf
+               | [.module.assemblies[]
+                  | select(startswith("MeshWeaver.") | not)
+                  | select(. as $a | $shelf | index($a) | not)]
+               | length == 0' \
+              "$manifest" > /dev/null \
+              || { echo "::error::the container-built bundle carries a non-MeshWeaver assembly with NO shelf provenance (not in the builder's module-libs.txt) — its closure cannot be accounted for, so the pack fails rather than landing a module that faults at first use"; exit 1; }
+            echo "container path: closure is entry + module-owned MeshWeaver siblings + shelf-manifested rides, as recorded"
+            # 🚨 The STATIC-ASSET half, asserted — because its absence is the one failure with no
+            # symptom at any later gate: the publish 200s, the module lands and loads, every page
+            # renders, only UNSTYLED (#2221's exact signature; PluginBundlePublishAssetsTest names
+            # it). The packer nulls `staticAssets` when the pack input has no wwwroot, and nothing
+            # downstream distinguishes "this module ships no assets" from "the compiler forgot
+            # them" — so this lane distinguishes it HERE, from the source of truth: a project that
+            # has *.razor.css or wwwroot/ in its tree must produce a bundle that declares assets.
+            src_dir="$GITHUB_WORKSPACE/$(dirname "$PROJECT")"
+            if [ -d "$src_dir/wwwroot" ] \
+               || find "$src_dir" -name '*.razor.css' -not -path '*/bin/*' -not -path '*/obj/*' -print -quit | grep -q .; then
+              jq -e '(.module.staticAssets // []) | length > 0' "$manifest" > /dev/null \
+                || { echo "::error::$MODULE has wwwroot/ or *.razor.css in its source tree, but the container-built bundle declares NO staticAssets — it would land, load, and render unstyled with nothing in any log (#2221). The builder must emit wwwroot/ (its .styles.css aggregate included) into the pack input."; exit 1; }
+              echo "container path: staticAssets declared ($(jq '(.module.staticAssets // []) | length' "$manifest") file(s)) for a source tree that has assets"
+            fi
+          fi
           echo "path=$bundle" >> "$GITHUB_OUTPUT"
           echo "bundle OK:"; jq . "$manifest"
 
@@ -509,6 +1248,7 @@ jobs:
         with:
           name: module-bundle-${{ matrix.entry.module }}
           path: ${{ runner.temp }}/bundles/*.module.nupkg
+          retention-days: 3
           if-no-files-found: error
 
       # ───────────── THE BUILT MARKER — "the bundle exists", and nothing more ─────────────
@@ -523,13 +1263,15 @@ jobs:
           mkdir -p "$RUNNER_TEMP/built"
           jq -n --arg p "${{ matrix.entry.package }}" --arg m "${{ matrix.entry.module }}" \
                 --arg v "${{ steps.identity.outputs.version }}" \
-             '{package:$p, module:$m, version:$v}' \
+                --arg c "${{ steps.build.outputs.compiler }}" \
+             '{package:$p, module:$m, version:$v, compiler:$c}' \
              > "$RUNNER_TEMP/built/${{ matrix.entry.module }}.json"
       - name: Upload the built marker
         uses: actions/upload-artifact@v7
         with:
           name: module-built-${{ matrix.entry.module }}
           path: ${{ runner.temp }}/built/*.json
+          retention-days: 1
           if-no-files-found: error
 
       # 🚨 Only when THIS diff reaches the module (or on a full run): a floor-only entry — built
@@ -538,6 +1280,7 @@ jobs:
       # (~13 min, 1,600 tests) ran on every PR that never touched AI until 2026-08-29.
       # Runs AFTER the bundle artifact and its built marker exist and BEFORE the hand-over: a
       # failing suite never publishes — and never un-builds.
+      # The built module DLL as a run-scoped artifact, IMMEDIATELY — this is what lets a
       - name: Run the module's tests, when it ships any
         if: ${{ matrix.entry.test != false }}
         env:
@@ -647,8 +1390,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/receipts"
           jq -n --arg p "${{ matrix.entry.package }}" --arg m "${{ matrix.entry.module }}" \
                 --arg v "${{ steps.identity.outputs.version }}" \
+                --arg c "${{ steps.build.outputs.compiler }}" \
                 --argjson pub '${{ inputs.publish }}' \
-             '{package:$p, module:$m, version:$v, published:$pub}' \
+             '{package:$p, module:$m, version:$v, compiler:$c, published:$pub}' \
              > "$RUNNER_TEMP/receipts/${{ matrix.entry.module }}.json"
           cat "$RUNNER_TEMP/receipts/${{ matrix.entry.module }}.json"
       - name: Upload the receipt
@@ -656,6 +1400,7 @@ jobs:
         with:
           name: module-pack-receipt-${{ matrix.entry.module }}
           path: ${{ runner.temp }}/receipts/*.json
+          retention-days: 1
           if-no-files-found: error
 
   # ═══════════════ THE COUNT GATE — one STABLE context, on every run ═══════════════
@@ -688,14 +1433,14 @@ jobs:
       # Absent receipts are the finding, so a download that matches nothing must NOT fail here —
       # it must reach the verifier, which says which module is missing. That is the whole point.
       - name: Collect the receipts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           pattern: module-pack-receipt-*
           merge-multiple: true
           path: ${{ runner.temp }}/receipts
       - name: Collect the built markers
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           pattern: module-built-*
@@ -745,3 +1490,48 @@ jobs:
             --declared "$DECLARED" \
             --built "$RUNNER_TEMP/built" \
             --github-output "$GITHUB_OUTPUT"
+
+      # ─────────── WHICH COMPILER BUILT WHAT — a NUMBER, on every run ───────────
+      # 🚨 The split between `memex build project` (the container: no SDK, no NuGet, the image's own
+      # assemblies) and the legacy `dotnet build` is meant to SHRINK, and a split nobody counts is a
+      # split that becomes permanent. So it is reported every run, from the receipts the verifier
+      # just accounted for, filtered to THIS call's declared matrix (artifacts are run-wide). It is
+      # a report, never a gate: `if: always()` so a red verifier does not also hide the number.
+      - name: Report the compiler split
+        if: always()
+        # A REPORT, not a gate: it must never be the reason this required context goes red, and it
+        # must still print when the verifier above failed.
+        continue-on-error: true
+        env:
+          DECLARED: ${{ inputs.modules }}
+        run: |
+          set -euo pipefail
+          mine="$(jq -r '[.[].module] | @json' <<< "$DECLARED")"
+          shopt -s nullglob
+          receipts=("$RUNNER_TEMP"/receipts/*.json)
+          if [ ${#receipts[@]} -eq 0 ]; then
+            echo "no receipts to read — the pack job produced none, which the verifier above judges."
+            exit 0
+          fi
+          split="$(jq -s --argjson mine "$mine" -r '
+              [ .[] | select(.module as $m | $mine | index($m)) ]
+              | (map(select(.compiler == "container")) | length) as $c
+              | (length) as $n
+              | "\($c) of \($n)"' "${receipts[@]}")"
+          containers="$(jq -s --argjson mine "$mine" -r '
+              [ .[] | select((.module as $m | $mine | index($m)) and .compiler == "container") | .module ]
+              | sort | join(", ")' "${receipts[@]}")"
+          legacy="$(jq -s --argjson mine "$mine" -r '
+              [ .[] | select((.module as $m | $mine | index($m)) and .compiler != "container") | .module ]
+              | sort | join(", ")' "${receipts[@]}")"
+          echo "compiler split: $split module bundle(s) built by \`memex build project\` in the platform image"
+          echo "  container: ${containers:-<none>}"
+          echo "  dotnet SDK: ${legacy:-<none>}"
+          {
+            echo "### Compiler split"
+            echo
+            echo "**$split** built by \`memex build project\` (inside the pinned platform image — no SDK, no NuGet restore)."
+            echo
+            echo "- container: ${containers:-_none yet_}"
+            echo "- dotnet SDK (legacy): ${legacy:-_none_}"
+          } >> "$GITHUB_STEP_SUMMARY"

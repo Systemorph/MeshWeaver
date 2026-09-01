@@ -7,6 +7,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -1524,28 +1525,33 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             var baseValues = MeshNodePatchMerge.ExtractBaseValues(currentNode, patch);
 
                             var capturedContext = capturedContextAtEntry;
-                            var delivery = _workspace.Hub.Post(
-                                new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson))
-                                {
-                                    BaseValues = baseValues is null
-                                        ? null
-                                        : new RawJson(baseValues.ToJsonString(jsonOpts))
-                                },
-                                o =>
-                                {
-                                    o = o.WithTarget(new Address(_path!));
-                                    return capturedContext is null
-                                        ? o
-                                        : o.WithAccessContext(capturedContext);
-                                });
-                            if (delivery == null)
+                            // 🚨 NOT posted here any more (#2882). The old shape was
+                            // Post(...) → arm the late watch → Observe(delivery), which registers
+                            // the response subject only AFTER the delivery is on its way. The hub
+                            // DROPS a response whose id has no registered subject yet ("No subject
+                            // found for response … treating as processed", HandleCallbacks), and a
+                            // WARM owning per-node hub answers in sub-millisecond time — so a
+                            // thread-pool preemption between Post and Observe lost the verdict and
+                            // the caller waited out the full 31 s WriteVerdictBound with a trail
+                            // that could only say REGISTERED_AFTER_POST. The read path had the
+                            // identical defect and the identical fix (GetMeshNode's Issue(), pinned
+                            // by GetMeshNode_WarmOwner_DropsResponse_WhenSubjectRegisteredAfterPost).
+                            // The request and options are built here; the post happens inside
+                            // Observe(request, options, requestId) below, AFTER the late watch is
+                            // armed and the subject is registered.
+                            var patchRequest = new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson))
                             {
-                                observer.OnError(new MeshNodeStreamException(new MeshNodeError(
-                                    MeshNodeErrorCode.OwnerUnreachable,
-                                    _path!,
-                                    "Post of PatchDataRequest returned null — owner address could not be resolved")));
-                                return;
-                            }
+                                BaseValues = baseValues is null
+                                    ? null
+                                    : new RawJson(baseValues.ToJsonString(jsonOpts))
+                            };
+                            Func<PostOptions, PostOptions> patchPostOptions = o =>
+                            {
+                                o = o.WithTarget(new Address(_path!));
+                                return capturedContext is null
+                                    ? o
+                                    : o.WithAccessContext(capturedContext);
+                            };
 
                             // 🚨 EXACTLY-ONCE caller terminal (#2661). The verdict can now reach
                             // the caller on FOUR seams — the bounded response wait, the late
@@ -1652,7 +1658,10 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // code are never retried. See LatePatchResponseRegistry.
                             var lateRegistry = _workspace.Hub.ServiceProvider
                                 .GetService<LatePatchResponseRegistry>();
-                            var requestId = delivery.Id;
+                            // 🚨 Minted BEFORE the post — the whole point of the #2882 seam. The
+                            // late watch below and the response subject are both keyed by this id,
+                            // and both must exist before anything can answer.
+                            var requestId = Guid.NewGuid().AsString();
                             lateRegistry?.Register(requestId, _path!, resp =>
                             {
                                 // 🚨 EVERY branch below now settles the CALLER too (#2661). Before,
@@ -1802,7 +1811,22 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // Every terminal below disarms the late watch (Complete); ONLY the
                             // TimeoutException branch leaves it armed — that is the one case where
                             // the owner's verdict is still outstanding.
-                            var responseSub = _workspace.Hub.Observe(delivery)
+                            // Registers the subject under requestId, THEN posts (#2882). Null =
+                            // the owner address could not be resolved — nothing was posted and
+                            // nothing will answer, so disarm the watch armed above and fail the
+                            // caller exactly as the old Post-returned-null branch did.
+                            var responseObservable = _workspace.Hub.Observe(
+                                patchRequest, patchPostOptions, requestId);
+                            if (responseObservable is null)
+                            {
+                                lateRegistry?.TryComplete(requestId);
+                                FailTerminal(new MeshNodeStreamException(new MeshNodeError(
+                                    MeshNodeErrorCode.OwnerUnreachable,
+                                    _path!,
+                                    "Post of PatchDataRequest returned null — owner address could not be resolved")));
+                                return;
+                            }
+                            var responseSub = responseObservable
                                 .Timeout(UpdateResponseWaitBound)
                                 .Take(1)
                                 .Subscribe(

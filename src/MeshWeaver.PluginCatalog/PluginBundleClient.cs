@@ -128,7 +128,10 @@ public sealed class PluginBundleClient
 
             var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
-                throw new InvalidOperationException(
+                // Carries the status (see RegistryResponseException): the index read shares the
+                // registry's availability, so a caller deciding whether to re-ask must be able to
+                // tell a refusal from a transient 5xx without reading the message text.
+                throw new RegistryResponseException(resp.StatusCode,
                     $"Bundle index fetch failed ({(int)resp.StatusCode}): {json}");
 
             return JsonSerializer.Deserialize<BundleIndex>(json, Json) ?? new BundleIndex(null, []);
@@ -522,7 +525,14 @@ public sealed class PluginBundleClient
                 return assemblies
                     .Select(a => PrebuiltAssemblySeeder.Seed(
                         _hub, a.NodePath, a.Assembly, a.Pdb, manifest!.FrameworkMvid, _logger,
-                        a.Dependencies))
+                        a.Dependencies,
+                        // 🚨 #2813 — the producer's source fingerprint, or null from a legacy
+                        // bundle. It is what lets the owning hub REFUSE bytes that were not built
+                        // from the source this mesh holds. Dropping it here is not a degradation
+                        // that shows up anywhere: the adoption still succeeds, the node still reads
+                        // compilationStatus Ok with matching compiledSources, and last week's code
+                        // runs against today's data.
+                        a.SourceFingerprint))
                     .Concat()
                     .Count(adopted => adopted)
                     .Do(count =>

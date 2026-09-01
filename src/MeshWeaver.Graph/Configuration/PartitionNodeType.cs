@@ -86,7 +86,9 @@ public static class PartitionNodeType
     };
 
     /// <summary>
-    /// Access rule: Read for all authenticated users, Create/Update/Delete for Admin only.
+    /// Access rule: Read for all authenticated users; Create/Update require
+    /// <see cref="Permission.Update"/> and Delete requires <see cref="Permission.Delete"/> —
+    /// i.e. admins only.
     /// </summary>
     private class PartitionAccessRule(IMessageHub hub) : INodeTypeAccessRule
     {
@@ -103,7 +105,14 @@ public static class PartitionNodeType
             if (string.IsNullOrEmpty(userId))
                 return Observable.Return(false);
 
-            // Only admins can create/update/delete partitions
+            // 🚨 Delete demands Permission.Delete, not Update — the same demand the delete
+            // handler's pre-flight used to add on top of this rule. Now that the pre-flight routes
+            // THROUGH the rule (#2913) the rule is the only place the decision is taken, so it has
+            // to carry it. Unchanged outcome for every caller.
+            if (context.Operation == NodeOperation.Delete)
+                return hub.CheckPermission(context.Node.Path, userId, Permission.Delete);
+
+            // Only admins can create/update partitions
             return hub.CheckPermission(context.Node.Path, userId, Permission.Update);
         }
     }

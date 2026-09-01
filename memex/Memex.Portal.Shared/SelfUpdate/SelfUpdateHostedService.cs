@@ -55,6 +55,15 @@ public class SelfUpdateHostedService : IHostedService
     /// </summary>
     private int _buildEventsSeen;
 
+    /// <summary>
+    /// 1 once the live policy read has produced a value — i.e. once the gate every trigger waits on
+    /// has opened. Chooses the retry cadence for a faulted watch (see
+    /// <see cref="SelfUpdateOptions.PolicyRetryDelay"/>): before it, the poller is inert and a fault
+    /// must be retried quickly; after it, the long interval paces re-establishment. An instance
+    /// field — its lifetime is this service's — never static.
+    /// </summary>
+    private int _policyEstablished;
+
     public SelfUpdateHostedService(
         IMessageHub hub,
         IAcrTagLister acr,
@@ -307,6 +316,8 @@ public class SelfUpdateHostedService : IHostedService
             .Take(1)
             .SelectMany(_ => Observable
                 .Defer(ReadPolicyStream)
+                // The gate has opened: from here a fault costs freshness, not the feature.
+                .Do(_ => Interlocked.Exchange(ref _policyEstablished, 1))
                 .RetryWhen(ResubscribeAfterRetryInterval("policy stream")))
             .DistinctUntilChanged(c => (c.Policy, c.RequireCiGreen)); // <-- re-switch only on a REAL policy change
     }
@@ -414,9 +425,22 @@ public class SelfUpdateHostedService : IHostedService
     private Func<IObservable<Exception>, IObservable<long>> ResubscribeAfterRetryInterval(string stage) =>
         faults => faults.SelectMany(ex =>
         {
+            // 🚨 The cadence depends on whether a policy has EVER been read, because the two states
+            // cost completely different things. Before the first read the poller is INERT — every
+            // trigger, the safety net included, is gated on that first emission — so a fault there
+            // takes the whole feature out; after it, the last policy is retained and checks keep
+            // running, so a fault costs only freshness and the long interval is right. Pacing both
+            // at RetryInterval is what left memex-cloud ~400 builds behind (see
+            // SelfUpdateOptions.PolicyEstablishRetryInterval for the measurement).
+            var established = Volatile.Read(ref _policyEstablished) == 1;
+            var delay = _options.PolicyRetryDelay(established);
             _logger?.LogWarning(ex,
-                "[SelfUpdate] {Stage} faulted; re-establishing in {Interval}.", stage, _options.RetryInterval);
-            return Observable.Timer(_options.RetryInterval);
+                "[SelfUpdate] {Stage} faulted; re-establishing in {Interval} ({State}).",
+                stage, delay,
+                established
+                    ? "a policy has been read — checks continue against it meanwhile"
+                    : "NO policy read yet — every check is gated on it, so this install is inert until it succeeds");
+            return Observable.Timer(delay);
         });
 
     /// <summary>One evaluation: list tags → pick target per policy → gate target &gt; current →

@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using MeshWeaver.Compiler;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -184,25 +185,66 @@ public static class BakeOutput
                                 $"bake: '{typePath}' claims a usable build at v{version} but the "
                                 + "run's assembly store has NO bytes for it — refusing to write a "
                                 + "bundle that ships less than the gate verdict claims");
-                        // STREAMED, never buffered: the entry carries open-stream FACTORIES, so the
-                        // bytes flow disk → zip inside BundleWriter (which opens and disposes each
-                        // stream per entry) instead of the whole bake's DLL set sitting in byte[]s
-                        // at once — that is the entire point of AssemblyEntry's factory shape.
-                        // The factories run inside the zip-writing InvokeBlocking, on the same
-                        // files pool as this existence probe.
-                        return pool.InvokeBlocking(_ =>
-                        {
-                            var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
-                            var hasPdb = File.Exists(pdbPath);
-                            return new BundleWriter.AssemblyEntry(
-                                typePath,
-                                () => File.OpenRead(dllPath),
-                                hasPdb ? () => File.OpenRead(pdbPath) : null,
-                                def.CompiledSources,
-                                def.CompiledDependencies);
-                        });
+                        // 🚨 #2813 — the CONTENT fingerprint of the sources these bytes came from,
+                        // read through the SAME shared query the runtime's sources watcher reads
+                        // (NodeSources.GetSources, System-scoped for the same reason: source-set
+                        // discovery is framework infrastructure, and a per-user read routes a
+                        // CheckPermission back into the grain being read). Computing it here rather
+                        // than folding def.CompiledSources is the whole point — CompiledSources is
+                        // path→ticks, and ticks are the consumer's install clock, not content.
+                        return SourceFingerprintOf(workspace, def, typePath)
+                            .SelectMany(fingerprint => pool.InvokeBlocking(_ =>
+                            {
+                                // STREAMED, never buffered: the entry carries open-stream
+                                // FACTORIES, so the bytes flow disk → zip inside BundleWriter
+                                // (which opens and disposes each stream per entry) instead of the
+                                // whole bake's DLL set sitting in byte[]s at once — that is the
+                                // entire point of AssemblyEntry's factory shape. The factories run
+                                // inside the zip-writing InvokeBlocking, on the same files pool as
+                                // this existence probe.
+                                var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
+                                var hasPdb = File.Exists(pdbPath);
+                                return new BundleWriter.AssemblyEntry(
+                                    typePath,
+                                    () => File.OpenRead(dllPath),
+                                    hasPdb ? () => File.OpenRead(pdbPath) : null,
+                                    def.CompiledSources,
+                                    def.CompiledDependencies)
+                                {
+                                    SourceFingerprint = fingerprint,
+                                };
+                            }));
                     });
             });
+
+    /// <summary>
+    /// The live source set's fingerprint for one NodeType (#2813) — the mesh-driven producer's half
+    /// of the value a consumer compares against its own.
+    ///
+    /// <para>Reads the CANONICAL shared query rather than re-deriving a source set: this is the
+    /// same <c>Replay(1).RefCount()</c> upstream the owning hub's sources watcher already holds
+    /// open, so the value computed here is by construction the value THAT hub computes into
+    /// <c>NodeTypeDefinition.CurrentSourceFingerprint</c>. <c>BakeEquivalenceTest</c> is what pins
+    /// the compiler-driven bake to it.</para>
+    /// </summary>
+    private static IObservable<string> SourceFingerprintOf(
+        IWorkspace workspace, NodeTypeDefinition def, string typePath)
+    {
+        var access = workspace.Hub.ServiceProvider.GetService<AccessService>();
+        // 🚨 RunAsSystem, NEVER Observable.Using(access.ImpersonateAsSystem, …). Impersonation is
+        // an AsyncLocal store/restore pair, and Rx runs Using's resource factory on the SUBSCRIBING
+        // thread while disposing it when the inner observable TERMINATES — a different thread for a
+        // cross-hub read like this one. The subscriber is then left running as System (#1790).
+        // RunAsSystem seals both ends inside the one Subscribe, so the cold read below still issues
+        // impersonated while nothing downstream inherits the identity.
+        // ImpersonationScopeSiteRatchetGuard fails a NEW site carrying the old shape, and this file
+        // is not on its allow list — deliberately, because it is new code.
+        return access
+            .RunAsSystem(() => NodeSources.GetSources(workspace, def, typePath))
+            .Take(1)
+            .Timeout(ReadBudget)
+            .Select(sources => NodeTypeSourceFingerprint.Compute(sources, typePath));
+    }
 
     /// <summary>Package ids are top-level folder names, but the bundle FILE name must be safe on
     /// every filesystem the artifact travels through.</summary>

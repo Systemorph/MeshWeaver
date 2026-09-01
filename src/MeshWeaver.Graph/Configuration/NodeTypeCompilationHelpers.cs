@@ -740,31 +740,30 @@ internal static class NodeTypeCompilationHelpers
             // mismatch on a framework-matching build (#1664 step 11), a bytes-hit for the live
             // framework IS the very stale build we are trying to replace, and skipping on it
             // would wedge the type forever. For that case, skip the probe and rebuild.
-            .SelectMany(node =>
+            // 🚨 THE RE-EVALUATION LANE (#1976) — see ResolveStaleBuildAction for which branch may
+            // act on the comparison and, crucially, which one may not.
+            .SelectMany(node => ResolveStaleBuildAction(
+                hub, hubPath, node, guards, compilationService, logger))
+            .Subscribe(outcome =>
             {
-                var stampedFramework = DefinitionOf(hub, node)?.CompiledFrameworkVersion;
-                if (string.Equals(stampedFramework, FrameworkVersion, StringComparison.Ordinal))
-                    return Observable.Return((Node: node, HasBytes: false));
-                return ResolveAssemblyStore(hub)
-                    .TryGetAssemblyPath(hubPath, DefinitionOf(hub, node)?.LastCompiledVersion ?? node.Version)
-                    .Take(1)
-                    .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
-                    .Select(path => (Node: node, HasBytes: !string.IsNullOrEmpty(path)));
-            })
-            .Where(probe =>
-            {
-                if (!probe.HasBytes)
-                    return true;
-                logger?.LogInformation(
-                    "Framework-stale kickoff SKIPPED for {HubPath}: its record names framework {Compiled} "
-                    + "but the assembly store already holds a build for the live framework {Live} — "
-                    + "nothing to rebuild",
-                    hubPath, DefinitionOf(hub, probe.Node)?.CompiledFrameworkVersion ?? "(null)", FrameworkVersion);
-                return false;
-            })
-            .Select(probe => probe.Node)
-            .Subscribe(node =>
-            {
+                if (outcome.Action is StaleBuildAction.RestampDependencyRecord)
+                {
+                    RestampCarriedForwardBuild(hub, workspace, hubPath, guards, outcome.Detail, logger);
+                    return;
+                }
+                if (outcome.Action is StaleBuildAction.Skip)
+                {
+                    // The pre-lane behaviour, preserved exactly: the store holds bytes for the
+                    // live framework, so nothing is rebuilt — and nothing is restamped either.
+                    logger?.LogInformation(
+                        "Framework-stale kickoff SKIPPED for {HubPath}: its record names framework "
+                        + "{Compiled} but the assembly store already holds a build for the live "
+                        + "framework {Live} — nothing to rebuild ({Detail})",
+                        hubPath, DefinitionOf(hub, outcome.Node)?.CompiledFrameworkVersion ?? "(null)",
+                        FrameworkVersion, outcome.Detail ?? "no re-evaluation was possible");
+                    return;
+                }
+                var node = outcome.Node;
                 // Name the ACTUAL staleness cause: on a modules-only update the stamped and live
                 // framework are EQUAL, and a framework-shaped message would read as a no-op.
                 var staleDef = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
@@ -1204,7 +1203,16 @@ internal static class NodeTypeCompilationHelpers
                     // The owner has not published its snapshot yet — nothing authoritative to
                     // stamp FROM. The publication itself carries the stamp (InstallSourcesWatcher),
                     // so waiting here costs nothing and guessing here would cost correctness.
-                    && def.CurrentSourceVersions is not null),
+                    && def.CurrentSourceVersions is not null
+                    // 🚨 #2813 — the SAME rule applied to the fingerprint. The stamp request is
+                    // ONE-SHOT, so consuming it while the three-way is unanswerable spends the only
+                    // chance to refuse: the judgement records AdoptedUnverified and nothing ever
+                    // re-opens the question. An adopted fingerprint with no live counterpart yet is
+                    // precisely that state, and it is transient — only the sources watcher holds
+                    // the live source nodes, and its publication both computes the fingerprint and
+                    // carries the stamp. So wait for it here, exactly as we wait for the snapshot.
+                    && (def.AdoptedSourceFingerprint is not { Length: > 0 }
+                        || def.CurrentSourceFingerprint is { Length: > 0 })),
             node =>
             {
                 var observed = (NodeTypeDefinition)node!.Content!;
@@ -1447,34 +1455,56 @@ internal static class NodeTypeCompilationHelpers
                         // is the state a release request reads as dirty and recompiles.
                         var pendingStamp = def.RequestedSourceStampAt is not null;
 
-                        // Idempotent: no-op when CurrentSourceVersions already
-                        // matches the just-computed snapshot. IsDirty is a
-                        // computed property — derives from CurrentSourceVersions
-                        // vs CompiledSources — so no separate flag to write.
-                        // (A pending stamp still has to be consumed, so it never no-ops.)
-                        if (!pendingStamp
-                            && def.CurrentSourceVersions is not null
-                            && DictEquals(def.CurrentSourceVersions, snapshot))
-                            return curr;
-
-                        var updated = def with { CurrentSourceVersions = snapshot };
-
                         // 🚨 #2813 — the live CONTENT fingerprint, computed HERE because this is
                         // the one place that already holds the live source nodes, and written in
                         // the SAME update as the tick snapshot so a reader can never see one
                         // without the other.
                         //
-                        // Computed ONLY when it can be used: a type carrying an adopted
-                        // fingerprint, or a stamp request about to be judged against one. A
-                        // locally-compiled type has nothing to compare against, and hashing every
-                        // source node's serialised content on every source emission — a path that
-                        // today only reads timestamps — would be a real cost for no answer.
-                        if (pendingStamp || def.AdoptedSourceFingerprint is { Length: > 0 })
-                            updated = updated with
-                            {
-                                CurrentSourceFingerprint = PartitionSourceFingerprint.Compute(
-                                    published.Nodes, versioned: false, hub.JsonSerializerOptions),
-                            };
+                        // 🚨 UNCONDITIONALLY, and that is the fix (#2813 second half). It used to
+                        // be computed only when there was already something to compare it against
+                        // ("a pending stamp, or an adopted fingerprint on the node"), and that
+                        // condition is unsatisfiable in the ordering the incident actually took:
+                        // the owner publishes its snapshot FIRST, then the adoption's patch lands
+                        // carrying both the adopted fingerprint and the stamp request — and this
+                        // watcher does NOT re-run, because its DistinctUntilChanged keys on the
+                        // source QUERIES, which did not change. The judgement then read an absent
+                        // live value, took the "inconclusive" branch and degraded to
+                        // AdoptedUnverified. Every stale-adoption refusal was therefore reachable
+                        // only in the other ordering.
+                        //
+                        // The cost that condition was protecting against is gone with the shape:
+                        // NodeTypeSourceFingerprint hashes the compile INPUT (each source node's
+                        // code text), not every node's Content serialised through the hub's
+                        // polymorphic options. It is a SHA-256 over text this branch already holds
+                        // in memory, on a path that runs at hub activation and per source edit —
+                        // i.e. exactly where a Roslyn compile is about to cost four orders of
+                        // magnitude more.
+                        var fingerprint = NodeTypeSourceFingerprint.Compute(
+                            published.Nodes, hubPath, logger);
+
+                        // Idempotent: no-op when CurrentSourceVersions already
+                        // matches the just-computed snapshot. IsDirty is a
+                        // computed property — derives from CurrentSourceVersions
+                        // vs CompiledSources — so no separate flag to write.
+                        // (A pending stamp still has to be consumed, so it never no-ops.)
+                        //
+                        // 🚨 The fingerprint is part of the equality. Without it a node persisted
+                        // before this field existed — snapshot already current, fingerprint null —
+                        // would no-op forever and never acquire one, so the type could never be
+                        // judged again. The condition is what makes the field SELF-HEALING on the
+                        // first activation after an upgrade.
+                        if (!pendingStamp
+                            && def.CurrentSourceVersions is not null
+                            && DictEquals(def.CurrentSourceVersions, snapshot)
+                            && string.Equals(
+                                def.CurrentSourceFingerprint, fingerprint, StringComparison.Ordinal))
+                            return curr;
+
+                        var updated = def with
+                        {
+                            CurrentSourceVersions = snapshot,
+                            CurrentSourceFingerprint = fingerprint,
+                        };
 
                         if (pendingStamp)
                             updated = ApplyAdoptedSourceStampAndReport(updated, snapshot, hub, hubPath, logger);
@@ -1676,8 +1706,18 @@ internal static class NodeTypeCompilationHelpers
                         // reads dirty and recompiles the build that was just adopted. Reading the
                         // owner's own pair here is authoritative, so nothing is widened: the branch
                         // still requires a genuinely non-dirty definition.
+                        //
+                        // 🚨 #2813 — …but ONLY when the three-way can actually be answered. An
+                        // adopted fingerprint whose live counterpart the owner has not published
+                        // yet is inconclusive, and the request is one-shot: fulfilling it here
+                        // would spend the refusal on an absence and record AdoptedUnverified
+                        // permanently. Leaving it standing costs a recompile of a type that may
+                        // have been adoptable — the safe direction, and the one #1834 was
+                        // optimising away, not the one it was preventing.
                         if (def.RequestedSourceStampAt is not null
-                            && def.CurrentSourceVersions is { } liveSources)
+                            && def.CurrentSourceVersions is { } liveSources
+                            && (def.AdoptedSourceFingerprint is not { Length: > 0 }
+                                || def.CurrentSourceFingerprint is { Length: > 0 }))
                             def = ApplyAdoptedSourceStampAndReport(def, liveSources, hub, hubPath, logger);
                         // 🚨 Gate on the CARRIED triggerAt, NOT def.RequestedReleaseAt
                         // (which may have flapped back to an older value). Already
@@ -1917,8 +1957,16 @@ internal static class NodeTypeCompilationHelpers
         if (guards is null)
             return true;
         if (def.CompiledDependencies is { } record && guards.DependencyIdOf is not null)
-            return Compiler.CompiledDependencies.FindMismatch(
-                record, guards.DependencyIdOf, guards.ToolchainId) is null;
+            // 🚨 The RE-EVALUATION LANE's read half (#1976). With no live digest on the guards
+            // this is byte-for-byte the metadata-only rule it replaced: LiveContentKeyOf returns
+            // null, FindMismatchAfterReevaluation demotes nothing, and the toolchain entry decides
+            // exactly as before. With one, the content key answers directly — and it is decisive
+            // in BOTH directions (a moved generated input invalidates a record whose metadata
+            // entries all still match, which no other check in the framework can see).
+            return Compiler.CompiledDependencies.FindMismatchAfterReevaluation(
+                record, guards.DependencyIdOf, guards.ToolchainId,
+                Compiler.CompiledDependencies.LiveContentKeyOf(
+                    record, guards.DependencyIdOf, guards.LiveGeneratedInputDigest)) is null;
         return guards.ModulesHash is null
             || def.CompiledModulesHash is null
             || string.Equals(def.CompiledModulesHash, guards.ModulesHash, StringComparison.Ordinal);
@@ -1929,10 +1977,275 @@ internal static class NodeTypeCompilationHelpers
     /// resolver + toolchain id (#1707 slice 2) and the legacy installed-module fingerprint.
     /// Resolve once per watcher install via <see cref="GuardsOf"/>.
     /// </summary>
+    /// <summary>What the re-evaluation lane decided to do with a build the cheap, metadata-only
+    /// predicates have already called stale — see <see cref="DecideStaleBuildAction"/>.</summary>
+    internal enum StaleBuildAction
+    {
+        /// <summary>Compile. The pre-lane default, and every inconclusive case that is not
+        /// covered by <see cref="Skip"/>.</summary>
+        Rebuild,
+
+        /// <summary>The dependency record's reserved <c>!toolchain</c> entry is restamped and no
+        /// compile is dispatched — the demotion, made durable.</summary>
+        RestampDependencyRecord,
+
+        /// <summary>Neither: the store already holds bytes for the live framework, so nothing is
+        /// rebuilt — and nothing is restamped either.</summary>
+        Skip,
+    }
+
+    private sealed record StaleBuildOutcome(
+        MeshNode Node, StaleBuildAction Action, string? Detail);
+
+    /// <summary>
+    /// 🚨 THE BRANCH RULE, pure — the safety property of the whole lane as a checkable table
+    /// rather than a shape you have to read the pipeline to see. Same split, and the same reason,
+    /// as <see cref="NodeTypeBakeStatus.Classify"/>: <see cref="ResolveStaleBuildAction"/> gathers
+    /// the four facts (one node read, one store probe, one regeneration) and this decides.
+    ///
+    /// <para>🚨 <b>The invariant: a restamp is licensed ONLY when the framework held still.</b>
+    /// There, the build the record describes is addressed under THIS tag, so the record and the
+    /// bytes are the same thing and the content key's verdict is about exactly them. When the
+    /// framework moved, a store hit resolves a DIFFERENT file — the record names a build under the
+    /// previous tag, and nothing here has hashed what the live tag returned. Restamping on that
+    /// would assert validity for bytes the lane never examined and would suppress the
+    /// instance-activation self-heal that corrects the case today
+    /// (<c>FrameworkStaleAssembly_SelfHealsOnInstanceActivation</c> went red the one time this
+    /// rule was relaxed). Binding a record to bytes it does not name needs the store sidecar
+    /// (#1707 residual 1).</para>
+    /// </summary>
+    /// <param name="frameworkHeldStill">The stamped <c>CompiledFrameworkVersion</c> equals the
+    /// live one, so the staleness is a DEPENDENCY drift rather than a roll.</param>
+    /// <param name="storeHasLiveFrameworkBytes">The assembly store resolved bytes for this type
+    /// under the LIVE framework tag. Only consulted when the framework moved (with it held still
+    /// the record's own build is the addressable one).</param>
+    /// <param name="verdict">What <see cref="ContentKeyReevaluation.Reevaluate"/> concluded.</param>
+    /// <param name="usableAfterReevaluation">
+    /// <see cref="HasUsableBuild(MeshNode, NodeTypeDefinition, BuildGuards?)"/> re-asked with the
+    /// regenerated digest on the guards — the production predicate itself, so the lane and the
+    /// predicate can never disagree about what it just proved.</param>
+    internal static StaleBuildAction DecideStaleBuildAction(
+        bool frameworkHeldStill,
+        bool storeHasLiveFrameworkBytes,
+        ReevaluationVerdict verdict,
+        bool usableAfterReevaluation)
+    {
+        if (frameworkHeldStill)
+            return verdict is ReevaluationVerdict.CarryForward && usableAfterReevaluation
+                ? StaleBuildAction.RestampDependencyRecord
+                : StaleBuildAction.Rebuild;
+
+        // 🚨 The framework moved: NO path here returns RestampDependencyRecord.
+        if (!storeHasLiveFrameworkBytes)
+            return StaleBuildAction.Rebuild;
+        return verdict is ReevaluationVerdict.Rebuild
+            ? StaleBuildAction.Rebuild
+            : StaleBuildAction.Skip;
+    }
+
+    /// <summary>
+    /// 🚨 THE RE-EVALUATION LANE (#1976) — decide what to do with a NodeType the cheap predicates
+    /// have already called stale. It is a SECOND predicate behind a decision that had already been
+    /// taken, after <c>Take(1)</c>, so it runs at most once per hub lifetime and only for a type
+    /// the framework was already about to act on.
+    ///
+    /// <para>🚨 <b>The two branches carry DIFFERENT evidence, and only one of them licenses a
+    /// restamp.</b> This distinction is the whole safety argument, and getting it wrong is how a
+    /// re-evaluation turns into a stale serve.</para>
+    ///
+    /// <list type="number">
+    ///   <item><b>The framework HELD STILL</b> (the staleness is a dependency drift). The build the
+    ///   record describes is addressed under THIS tag, so the record and the bytes are the same
+    ///   thing, and the content key's verdict is about exactly them. A <c>CarryForward</c> here is
+    ///   confirmed against the production predicate itself —
+    ///   <see cref="HasUsableBuild(MeshNode, NodeTypeDefinition, BuildGuards?)"/> re-asked with the
+    ///   regenerated digest on the guards — and then the record is restamped. Anything else
+    ///   compiles, exactly as before.</item>
+    ///
+    ///   <item><b>The framework MOVED.</b> The store is probed under the LIVE tag, as before. A
+    ///   MISS compiles. A HIT used to skip unconditionally; it now re-evaluates, and a
+    ///   <c>Rebuild</c> verdict COMPILES — a genuinely new invalidation, because the kickoff is
+    ///   <c>Take(1)</c>, so a type whose generated input had moved kept serving the old bytes
+    ///   forever. 🚨 But a <c>CarryForward</c> here must NOT restamp. The evidence is about the
+    ///   build the RECORD names, which lives under the PREVIOUS tag; the bytes the store just
+    ///   resolved are a different file, produced by whoever compiled under the live framework, and
+    ///   nothing here has hashed them. Restamping <c>CompiledFrameworkVersion</c> on that would
+    ///   assert validity for bytes the lane never examined AND suppress the instance-activation
+    ///   self-heal that corrects exactly this case today. Binding the two needs the store sidecar
+    ///   (#1707 residual 1) or a cross-generation read — both deliberately out of scope. So the
+    ///   branch keeps its pre-lane behaviour: skip, and change nothing.</item>
+    /// </list>
+    /// </summary>
+    private static IObservable<StaleBuildOutcome> ResolveStaleBuildAction(
+        IMessageHub hub,
+        string hubPath,
+        MeshNode node,
+        BuildGuards guards,
+        IMeshNodeCompilationService compilationService,
+        ILogger? logger)
+    {
+        var def = DefinitionOf(hub, node);
+        if (string.Equals(def?.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal))
+            return Reevaluate(hub, hubPath, node, def!, guards, compilationService, logger)
+                .Select(r => new StaleBuildOutcome(
+                    node,
+                    DecideStaleBuildAction(
+                        frameworkHeldStill: true,
+                        storeHasLiveFrameworkBytes: false,
+                        r.Result.Verdict,
+                        HasUsableBuild(
+                            node, def!, guards with { LiveGeneratedInputDigest = r.Digest })),
+                    r.Result.Detail));
+
+        return ResolveAssemblyStore(hub)
+            .TryGetAssemblyPath(hubPath, def?.LastCompiledVersion ?? node.Version)
+            .Take(1)
+            .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
+            .SelectMany(path => string.IsNullOrEmpty(path)
+                ? Observable.Return(new StaleBuildOutcome(
+                    node,
+                    DecideStaleBuildAction(false, false, ReevaluationVerdict.Inconclusive, false),
+                    null))
+                : Reevaluate(hub, hubPath, node, def, guards, compilationService, logger)
+                    .Select(r => new StaleBuildOutcome(
+                        node,
+                        DecideStaleBuildAction(
+                            frameworkHeldStill: false,
+                            storeHasLiveFrameworkBytes: true,
+                            r.Result.Verdict,
+                            usableAfterReevaluation: false),
+                        r.Result.Detail)));
+    }
+
+    /// <summary>
+    /// Regenerate this NodeType's compile input and ask <see cref="ContentKeyReevaluation"/> what
+    /// it means. Never throws and never blocks: a fault, an unestablished source set or a host
+    /// with no regenerating compilation service all yield <see cref="ReevaluationVerdict.Inconclusive"/>,
+    /// which restamps nothing.
+    /// </summary>
+    private static IObservable<(Reevaluation Result, string? Digest)> Reevaluate(
+        IMessageHub hub,
+        string hubPath,
+        MeshNode node,
+        NodeTypeDefinition? def,
+        BuildGuards guards,
+        IMeshNodeCompilationService compilationService,
+        ILogger? logger)
+    {
+        if (def?.CompiledDependencies is not { } record)
+            return Observable.Return((new Reevaluation(
+                ReevaluationVerdict.Inconclusive,
+                "no dependency record is stamped on this build"), (string?)null));
+
+        // The concrete service, not IMeshNodeCompilationService: regeneration is a Graph-internal
+        // capability of the compile path, and putting it on the contract interface would make
+        // every implementer owe an entry point that only this lane consumes. A host running a
+        // different implementation gets INCONCLUSIVE — never a carry-forward.
+        if (compilationService is not MeshNodeCompilationService compiler)
+            return Observable.Return((new Reevaluation(
+                ReevaluationVerdict.Inconclusive,
+                "this host's compilation service cannot regenerate a compile input"),
+                (string?)null));
+
+        return compiler.RegenerateGeneratedInputDigest(node)
+            .Select(digest => (
+                Result: ContentKeyReevaluation.Reevaluate(
+                    record, guards.DependencyIdOf, guards.ToolchainId, digest),
+                Digest: digest))
+            .Catch<(Reevaluation Result, string? Digest), Exception>(ex =>
+            {
+                logger?.LogInformation(ex,
+                    "Re-evaluation for {HubPath} could not complete — the build keeps the "
+                    + "metadata-only verdict", hubPath);
+                return Observable.Return((
+                    new Reevaluation(
+                        ReevaluationVerdict.Inconclusive, "the re-evaluation faulted"),
+                    (string?)null));
+            });
+    }
+
+    /// <summary>
+    /// 🚨 THE RESTAMP (#1976): the dependency record's reserved <c>!toolchain</c> entry is moved to
+    /// the live value, because the regenerated compile input proved the proxy it stands for has not
+    /// moved. Reached ONLY from the framework-held-still branch of
+    /// <see cref="ResolveStaleBuildAction"/>.
+    ///
+    /// <para><b>What is asserted, and what is not.</b> The claim is exactly "the toolchain's MVID
+    /// moved but this build's generated input did not, and every assembly it binds still resolves
+    /// identically" — which is what the content-key comparison measured, about the build this
+    /// record names, under the tag it is addressed by. Nothing else moves:
+    /// <c>CompiledFrameworkVersion</c>, the assembly coordinates, the source snapshot and the
+    /// compile status are untouched, and the <c>!input</c> entry and the assembly entries — the
+    /// evidence — are carried through verbatim. This is not a compile and it does not pretend to
+    /// be one.</para>
+    ///
+    /// <para><b>Why it is worth writing at all.</b> Without it the lane would have to regenerate
+    /// on every activation to reach the same verdict; with it, every metadata-only reader
+    /// (<c>HasUsableBuild</c>, the bake probe, the prebuilt seeder) answers correctly on its own.
+    /// The trigger re-arms by itself: the next toolchain move mismatches the restamped entry
+    /// again.</para>
+    /// </summary>
+    private static void RestampCarriedForwardBuild(
+        IMessageHub hub,
+        IWorkspace workspace,
+        string hubPath,
+        BuildGuards guards,
+        string? detail,
+        ILogger? logger)
+    {
+        logger?.LogInformation(
+            "Re-evaluation CARRIED FORWARD the build for {HubPath}: the toolchain moved but the "
+            + "regenerated compile input did not ({Detail}) — restamping '{Key}' instead of "
+            + "recompiling",
+            hubPath, detail ?? "content key unchanged", Compiler.CompiledDependencies.ToolchainKey);
+
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        using var systemScope = access?.ImpersonateAsSystem();
+        workspace.GetMeshNodeStream().Update(curr =>
+        {
+            if (curr?.Content is not NodeTypeDefinition def) return curr!;
+            // Don't clobber an in-flight compile — a concurrent release request or enrichment
+            // self-heal may have flipped Pending/Compiling since the verdict was formed, and its
+            // write-back is authoritative over this one.
+            if (def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling)
+                return curr;
+            if (def.CompiledDependencies is not { } record) return curr;
+            // 🚨 Re-check the exact state the verdict was formed on, with NO reliance on the
+            // demoted rule: the framework must still be the live one (a roll between the verdict
+            // and this write would put us on the other branch, where a restamp is not licensed),
+            // and the entry must still be the stale one (a genuine rebuild may have landed first).
+            if (!string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal))
+                return curr;
+            if (!record.TryGetValue(Compiler.CompiledDependencies.ToolchainKey, out var stamped)
+                || string.Equals(stamped, guards.ToolchainId, StringComparison.Ordinal))
+                return curr;
+            return curr with
+            {
+                Content = def with
+                {
+                    CompiledDependencies = Compiler.CompiledDependencies.RestampToolchain(
+                        record, guards.ToolchainId),
+                },
+            };
+        }).Subscribe(_ => { },
+            ex => logger?.LogWarning(ex,
+                "Re-evaluation: restamp Update failed for {HubPath}", hubPath));
+    }
+
+    /// <param name="ModulesHash">The legacy instance-wide installed-module fingerprint.</param>
+    /// <param name="DependencyIdOf">The live surface-id resolver for the per-type record.</param>
+    /// <param name="ToolchainId">The live toolchain id for the record's reserved entry.</param>
+    /// <param name="LiveGeneratedInputDigest">🚨 The stage-1 digest of THIS NodeType's compile
+    /// input as REGENERATED now (#1976), or null — the overwhelmingly common case — when the
+    /// caller did not regenerate. Null means the metadata-only rule applies unchanged; it never
+    /// means "unchanged". Only the re-evaluation lane
+    /// (<see cref="ResolveStaleBuildAction"/>) supplies it, and only for the ONE type its guards
+    /// describe, which is why this rides on the per-hub guards rather than being a resolver.</param>
     internal sealed record BuildGuards(
         string? ModulesHash,
         Func<string, string?>? DependencyIdOf,
-        string ToolchainId);
+        string ToolchainId,
+        string? LiveGeneratedInputDigest = null);
 
     /// <summary>The ONE resolver every call site goes through, so "which live environment" can
     /// never fork between the usable check and the stale check.</summary>
@@ -2314,6 +2627,16 @@ internal static class NodeTypeCompilationHelpers
             CompilationStatus = CompilationStatus.Ok,
             CompilationError = null,
             CompilationDiagnostics = null,
+            // 🚨 #2813 — Roslyn built these bytes HERE, from the source this mesh holds, so the
+            // provenance is Compiled and nothing about an earlier adoption survives. Without this
+            // the field was write-once-per-adoption: a type refused as stale and then successfully
+            // recompiled kept reading AdoptionRefused forever, and one refused adoption in a node's
+            // history would mark it permanently. That turns the operator signal the incident asked
+            // for into noise people learn to ignore, and it would make #2820's execute-time
+            // interlock refuse to run a type whose live source it had just compiled itself.
+            // ApplyCompileFailure deliberately does NOT do this: after a failed compile the bytes
+            // in place are still whatever the refusal left, so the refusal is still the true story.
+            BuildProvenance = Mesh.Services.BuildProvenance.Compiled,
             LastCompileSucceededAt = DateTimeOffset.UtcNow,
             // Stamp LastCompiledVersion to MATCH the version the IAssemblyStore upload used
             // (set by UploadToStoreIfNeeded — the captured node Version at compile kickoff).

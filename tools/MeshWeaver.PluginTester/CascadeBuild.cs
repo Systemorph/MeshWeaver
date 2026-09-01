@@ -169,7 +169,27 @@ public static class CascadeBuild
         return Observable.Defer(() => RunCore(options))
             .Catch((Exception ex) => Observable.Return(
                 new Report(PrebuiltAssemblySeeder.LiveFrameworkMvid, [], [], TimeSpan.Zero, [],
-                    $"{ex.GetType().Name}: {ex.Message}")));
+                    // The full exception, stack included — this string is the ONLY trace a fatal
+                    // leaves, and "TypeName: message" was not enough to locate the first real one.
+                    ex.ToString())))
+            // 🚨 A FATAL is NEVER silent. Every early exit — LoadSync throwing, no packages, an
+            // unknown package id, LoadExternalModules refusing, the Catch above — returns its
+            // Report BEFORE the pipeline reaches Finish, so Print never sees it and Program only
+            // turns it into an exit code. Measured on the staging-7f99ee5 image (2026-08-30):
+            // `build /repo OgCard` died with exit 70 and ZERO bytes on stdout AND stderr — CI's
+            // cascade step would render that as "fatal (exit 70) — see build.log" over an EMPTY
+            // log, a signal that cannot distinguish "crashed before it could speak" from "ran and
+            // produced nothing". Print at the one seam every report passes; Finish never sets
+            // FatalError, so nothing prints twice. The report file is written too when asked —
+            // a fatal must be machine-readable to the lane, not only human-readable in the log.
+            .Do(report =>
+            {
+                if (report.FatalError is null)
+                    return;
+                options.Output.WriteLine($"FATAL: {report.FatalError}");
+                if (options.ReportPath is { } reportPath)
+                    WriteJson(reportPath, report);
+            });
     }
 
     private static IObservable<Report> RunCore(Options options)
@@ -186,7 +206,8 @@ public static class CascadeBuild
         }
         catch (Exception ex)
         {
-            return Observable.Return(Fatal(frameworkIdentity, wall, $"{ex.GetType().Name}: {ex.Message}"));
+            // Full exception — the fatal string is the only trace this run leaves (see Run's Do).
+            return Observable.Return(Fatal(frameworkIdentity, wall, ex.ToString()));
         }
         return LocalNodeRepo.DiscoverPackages(snapshot)
             .Take(1)
@@ -438,7 +459,16 @@ public static class CascadeBuild
                     () => File.OpenRead(compiled.DllPath),
                     compiled.PdbPath is null ? null : () => File.OpenRead(compiled.PdbPath),
                     sourceVersions,
-                    compiled.Dependencies));
+                    compiled.Dependencies)
+                {
+                    // 🚨 #2813 — the CONTENT fingerprint of the sources this compile consumed, so
+                    // the consumer can prove the bytes match the source IT holds instead of taking
+                    // the bundle's word for it. Over the RAW resolved set, exactly as the runtime's
+                    // sources watcher does: NodeTypeSourceFingerprint applies the shaping fold
+                    // itself so the two callers cannot apply different ones.
+                    SourceFingerprint = NodeTypeSourceFingerprint.Compute(
+                        resolution.Sources, candidate.Node.Path, options.Logger),
+                });
             }
 
             StaticTestRunner.Run? tests = null;

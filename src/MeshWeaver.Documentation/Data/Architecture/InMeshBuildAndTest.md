@@ -260,6 +260,50 @@ answers "everything" satisfies rule 3 trivially and rebuilds the world; one that
 is a gate that tests nothing. Both look identical on a green day. Whatever replaces it must keep
 that self-test **and run it in CI**.
 
+## The test shape: no dependencies, not even ours
+
+**Maintainer, 2026-08-30: *"we are about to remove all nuget dependencies — for tests. All repos.
+Check plugins how we do it."***
+
+Checked, and the Plugins idiom is stricter than "no xUnit" — **a test carries no dependencies at
+all**, measured across all 206 in-mesh test node sets (`using Xunit`: **0** occurrences):
+
+- **Plain C#, throws on failure.** A test case is a `public static void` method; the assertion
+  surface is a local four-line helper, per file, owned by the test:
+
+  ```csharp
+  private static void Expect(bool condition, string message)
+  {
+      if (!condition) throw new Exception("CourseCatalogTests failed: " + message);
+  }
+  ```
+
+  No xUnit, no FluentAssertions — and deliberately not even `MeshWeaver.Reactive.Assertions`. The
+  test compiles against exactly what the image's framework provides plus its own type's `Source`,
+  so there is nothing to restore, nothing to version, and nothing that can drift against the
+  framework under test.
+
+- **A `TestsArea` is the runner.** It enumerates `(name, Action)` cases and renders a pass/fail
+  table as the type's `Tests` layout area. Registered with a **literal** `.WithView("Tests", …)`
+  in the configuration lambda — literal, because the gate reads that field as *text*, and an area
+  registered only inside an extension method reports `tests=skipped` and asserts nothing.
+
+- **The gate is the executor.** It creates a probe instance and runs the area; `tests=ok 7/7` in
+  the gate log is the verdict, and the Tests-area ratchet holds the population (a type that skips
+  its area is new debt, red).
+
+This resolves the open question stated further down ("deciding what the in-mesh unit-test surface
+is" for module tests): the surface exists, it is this, and it has 206 production instances. What
+retires with the compiled test projects is therefore not just `MeshWeaver.Fixture` — it is the
+whole test-dependency graph: xUnit v3, FluentAssertions, the runner, the `.trx` machinery, and the
+restore step that feeds them.
+
+**What is deliberately given up, stated so it is a decision rather than a discovery:** parametrised
+theories, per-test isolation of the runner process, IDE test-explorer integration, and `.trx`
+artifacts. The gate log and the rendered pass/fail table are the record instead. For the fleet's
+test population — behaviour checks against a live mesh — that trade has already been paid 206
+times without a request for any of the four back.
+
 ## What retires: the compiled test scaffolding
 
 **Maintainer, 2026-08-30: *"we want to discontinue fixture project overall."***
@@ -282,7 +326,9 @@ has no callers left.
 `AutoTestLoggingAttribute`, `FreshThread`, `FaultRecordBudget`, and the `IMeshQuery` /
 `IStorageAdapter` test extensions — all of it machinery for constructing and tearing down a mesh
 around a `[Fact]`. Alongside it sit `MeshWeaver.Hosting.Monolith.TestBase` (31 of the Plugins
-references) and `MeshWeaver.Hosting.Orleans.TestBase`.
+references) and `MeshWeaver.Hosting.Orleans.TestBase` — and behind all of it, the NuGet test
+dependencies themselves (xUnit v3, FluentAssertions, the runner), which retire with it per the
+no-test-dependencies shape above.
 
 🚨 **This is the cross-repo coupling, and it dissolves rather than being ported.** Those 39 Plugins
 projects reach into a core checkout through `$(MeshWeaverRoot)` *because* their tests are compiled.
@@ -309,6 +355,62 @@ static assets, native interop, or a portal host has nothing to hang a `Tests` ar
 explicit exemption recorded here, not a quiet `ProjectReference` that survives because nobody
 noticed it.
 
+## The runner's .NET SDK is a DECLARED need, not a reflex
+
+> *"make installing dotnet sdk a feature flag"* — maintainer, 2026-08-31
+
+Every CI job in the fleet installed `actions/setup-dotnet` the same way: as a reflex, before anyone
+asked whether the job compiles anything with it. That is the wrong shape the moment the platform
+**image** can be the compiler, because "the SDK is here" then silently answers a question nobody
+put — an unconverted step keeps working on a runner SDK the conversion was supposed to have
+removed, and the migration cannot be measured by anything but reading every step.
+
+So the install is declared, with the *safe* direction as the default:
+
+| value | behaviour |
+|---|---|
+| **`install`** (the **DEFAULT**) | install unconditionally. A lane that says nothing — including one added tomorrow — inherits it. |
+| `by-declaration` | install only if a consumer in **that** job still needs one. |
+| anything else, **the empty string included** | **RED**. A flag that cannot be read must never resolve to "skip". |
+
+It is carried by `dotnet-sdk:` on `node-repo-module-pack.yml` (the shared lane every node repo
+calls) and by a `DOTNET_SDK` job env plus a `CONSUMERS` list in a caller's own jobs. **A lane
+converts by EMPTYING its consumer list, never by editing the decision.**
+
+### Why it is not a skip-trapdoor
+
+Three properties, structural rather than hoped-for — this repo's CI invariants #3 and #4 forbid
+anything weaker:
+
+1. **The decision step is unconditional** and fails on an unreadable flag. The only `if:` is on
+   `actions/setup-dotnet` itself, and skipping an *installer* is not skipping a check: every build,
+   pack, inspect and test step still runs and still gates. **The flag chooses a COMPILER; it never
+   chooses whether to verify.**
+2. **"No SDK" is ENFORCED, not merely declined.** GitHub's ubuntu runners ship an SDK of their own,
+   so declining to install one is not the same as not having one. The job puts a **failing `dotnet`
+   on PATH** (exit 97, `::error::` naming the flag), so a consumer nobody declared goes red naming
+   the cause instead of quietly binding against whatever .NET the runner image carries.
+3. **The verdict and every consumer are printed** to the log *and* the job summary on **every** run,
+   including when the answer is *install* — so the two outcomes are never told apart only by what is
+   missing.
+
+### What blocks conversion today — measured, not assumed
+
+**Nothing can opt out yet, and that is the honest state.** The blockers, per lane:
+
+| lane | blocked on |
+|---|---|
+| `node-repo-module-pack.yml` → `pack` | the **module-pack tool** (`src/MeshWeaver.Plugin.Build`) is `dotnet build` + `dotnet run` in *every* mode, `container` included; a module that ships a suite is blocked again by `dotnet test`. Converting the lane means moving the packer inside the platform image. |
+| MeshWeaver.Plugins `portal-hosts` | Razor/Blazor hosts, 14 `dotnet build` projects and ~30 `dotnet test` suites |
+| MeshWeaver.Plugins `memex-template` | its subject is a `dotnet new` template, asserted through `dotnet test` |
+
+`build-project`'s own sweep over all 54 non-test projects in `MeshWeaver.Plugins/src` compiles **10
+green** on the portal-image basis; **Razor (15)** and **SDK source generators (14)** are the two
+largest refusal classes, and `dotnet test` is not a verb it has at all. The flag therefore buys no
+runner time today — what it buys is that each of those facts is now **declared next to the job it
+constrains**, and stated in that job's log on every run, instead of being an assumption nobody
+wrote down.
+
 ## What blocks "any plugin" today
 
 1. **44 module test projects** with no in-mesh equivalent. Each needs its module's source expressible
@@ -332,3 +434,236 @@ project — the repo has spent enough on guards that check nothing.
 
 🚨 **Do not "achieve" no-NuGet by pinning a package.** There are zero `MeshWeaver.*` package
 references today; the direction is to keep it that way, not to replace ProjectReferences with pins.
+
+## Building a COMPILED project without an SDK — `memex build project` (2026-08-31)
+
+> *"The platform builds dll completely without any external dotnet kit or nuget."* — maintainer,
+> 2026-08-30
+
+The sections above are about NodeTypes, whose sources already compile in the portal. This one is
+about the other half — the ~54 compiled projects under `MeshWeaver.Plugins/src`, which until now
+needed a .NET SDK, a NuGet restore and a platform SOURCE checkout to build at all.
+
+`memex build project <csproj|dir> --image <image>` builds one of them with **no SDK and no
+restore**: the `.csproj` is evaluated without MSBuild, and every reference is resolved from the
+image's own `/app` plus the shared frameworks installed in it. The verb is a thin trip into the
+container; the work is `mw-plugin-test build-project`, which is already in the image and shares the
+platform's own `EmitPipeline` for the emit.
+
+### Why the container is the reference set
+
+A module does not run against the platform's SOURCE and it does not run against a feed: it is loaded
+into the platform IMAGE and bound by the assemblies in there. So the honest reference set is what
+that image ships, and the honest package versions are the ones its `.deps.json` records — what
+SHIPPED, not what a source tree would resolve today. This is the same rule
+`MeshWeaver.Plugins/scripts/container-refs.py` derives for the MSBuild path, ported to C# and read
+from `/app` directly instead of from an extracted image.
+
+**A `PackageReference` the image supplies resolves to the image's assembly. One it does not supply
+is an ADDITIONAL library** — additional to the platform — and it is reported by name and refused,
+never skipped. `--extra-refs <dir>` is the one way to supply one, so what a build needed beyond the
+platform is always visible in the command that ran it.
+
+### Nothing is dropped in silence
+
+The evaluator FAILS the load on any construct it cannot reproduce, naming the construct and the file
+— an unknown element or item type, a `Condition` outside its grammar, an `<Import>` of a missing
+file, a `<Target>` (which it cannot execute), an embedded-resource construct whose SDK manifest name
+it cannot match exactly. `--accept <construct>` acknowledges one deliberately. The reason is that the alternative is worse
+than no build: a silently dropped `Nullable`, `NoWarn` or `DefineConstants` produces a green build
+that is *not the build the SDK would have produced*, and nothing downstream can tell.
+
+The same rule governs the reference set: an unreadable `/app`, a missing or ambiguous `.deps.json`,
+or MeshWeaver assemblies that disagree on their binding identity (MeshWeaver#143's failure, caught in
+the image instead of at run time) each stop the run RED.
+
+### The diagnostic standard is the SDK's
+
+Nullable reference analysis follows the project; `DocumentationMode.Diagnose` is on ALWAYS, so
+doc-QUALITY defects surface (CS1574 unresolved cref, CS0419 ambiguous cref, CS1570 malformed XML) —
+while the doc-COMPLETENESS family (CS1591/CS1573/CS1712) is suppressed exactly when the project did
+not ask for a doc file, which is when csc itself would not raise it. The SDK's own default
+`NoWarn` (`1701;1702`) is seeded before any `Directory.Build.props` appends to `$(NoWarn)`. Warnings
+fail the build by default; `--allow-warnings` is the deliberate opt-out.
+
+### Measured, 2026-08-31 — the sweep, before and after embedded resources
+
+Over every non-test project in `MeshWeaver.Plugins/src` (54 of them), against the portal image
+`memex-portal-ai@sha256:6f38db08…` (the pin `MeshWeaver.Plugins/.github/workflows/ci.yml` carries),
+with `--accept targets` and no `--extra-refs`. Both columns come from the SAME image, so the delta is
+the change and nothing else.
+
+| | count | why |
+|---|---|---|
+| **green** | **12** | incl. `MeshWeaver.Import` — 90 source files, 0 warnings under warnings-as-errors |
+| Razor/Blazor (CS0115) | 15 | *fixed 2026-08-31 — see below* |
+| source generators (CS8795) | 15 | `[GeneratedRegex]` / `[LoggerMessage]` / `[JsonSerializable]` |
+| gRPC `<Protobuf>` | 3 | protoc codegen is a build task, not a compile |
+| additional libraries | 5 | Snowflake.Data, Microsoft.Data.Sqlite, Azure.Cosmos, … — supply with `--extra-refs` |
+| portal hosts | 3 | an `<Import>` above the mount; Aspire's `<Sdk>` ELEMENT |
+| | before | after | |
+|---|---|---|---|
+| **green** | **9** | **10** | |
+| `<EmbeddedResource>` refused | **19** | **0** | the gap is closed |
+| Razor/Blazor (CS0115) | 12 | 15 | `.razor` is not compiled — fixed separately |
+| source generators (CS8795) | 3 | 14 | they live in the SDK, not a runtime image |
+| additional libraries | 5 | 8 | supply with `--extra-refs` |
+| gRPC `<Protobuf>` | 2 | 3 | protoc codegen is a build task |
+| `<Import>` above the mount | 2 | 2 | portal hosts |
+| Aspire `<Sdk>` ELEMENT | 1 | 1 | |
+| other | 1 | 1 | pre-existing compile errors |
+
+🚨 **Read the two columns together, not the green count alone.** Nineteen projects were failing on
+the resource refusal and NOTHING ELSE WAS KNOWN ABOUT THEM — a refusal stops the load, so it MASKS
+every gap behind it. Closing it moved one project to green and revealed the real blocker for the
+other eighteen: ten of them want SDK source generators, three want Razor, three want an additional
+library, one wants protoc. That is why the "before" column undercounts source generators by a factor
+of four. **No project regressed**, and no project fails on an embedded resource any more.
+
+The lesson generalises: in a builder whose whole design is to refuse rather than guess, a failure
+ranking is a ranking of FIRST refusals, and removing the top one does not add its count to the green
+column — it redistributes it.
+
+## The container compiles Razor (2026-08-31)
+
+Razor was the biggest single category above, and it was one missing file rather than a missing
+feature: **Razor compilation in the .NET SDK is a Roslyn source generator**
+(`Microsoft.CodeAnalysis.Razor.Compiler`) that turns each `.razor` into the partial class carrying
+its generated `BuildRenderTree` override. A runtime image ships no SDK, so without the generator
+every component compiled to a class with nothing to override — a wall of CS0115 that reads exactly
+like broken source.
+
+The image now carries it, in `razor-generators/` beside the builder, and `build-project` finds and
+runs it automatically for any project whose `Sdk` processes Razor items.
+
+### The dependency closure, measured
+
+Exactly **two** assemblies, established by reading the compiler's own assembly references and then
+proving it by deleting one:
+
+| assembly | why |
+|---|---|
+| `Microsoft.CodeAnalysis.Razor.Compiler` | carries `RazorSourceGenerator`, the `[Generator]` type |
+| `Microsoft.AspNetCore.Razor.Utilities.Shared` | its one private dependency — with it absent the compiler loads, its types enumerate, and every call into it throws |
+
+Everything else it references — `netstandard`, `Microsoft.CodeAnalysis(.CSharp)`,
+`System.Collections.Immutable`, `System.Memory`, `System.Buffers` — binds to the assemblies the
+image already has. 🚨 **`Microsoft.Extensions.ObjectPool` is NOT needed**, though an older Razor
+compiler build referenced it; the belief that it was is exactly why the closure was measured rather
+than assumed.
+
+### Two traps, both of which fail at run time and nowhere else
+
+🚨 **The generator is built against the SDK's Roslyn, not the image's.** SDK 10.0.400's copy
+references `Microsoft.CodeAnalysis` **5.9.0.0** while the image carries this repo's pin, **5.6.0**.
+The default load context binds by name *and refuses a lower version*, so a plain `Assembly.LoadFrom`
+fails — and a generator loader that treats "cannot load" as "not a generator" then produces a build
+indistinguishable from one where nobody asked for Razor. The generator is therefore loaded into a
+context that binds every assembly the HOST already has to the host's copy, version ignored. That is
+also what keeps `ISourceGenerator` ONE type: a second Roslyn in that context would give the
+generator a different interface than the driver expects.
+
+🚨 **The generator is ReadyToRun-compiled for the SDK's own RID.** The same SDK 10.0.400 file carries
+PE machine `0xFD1D` on linux-x64, `0xD11D` on linux-arm64 and `0xEC20` on osx-arm64 (the target
+machine XOR'd with the operating system's R2R marker), and the wrong one throws
+`BadImageFormatException`. `mw-plugin-test` publishes BOTH architectures from ONE x64 build host, so
+copying the build machine's SDK once would have shipped an arm64 image that cannot compile a single
+Blazor project. CD stages one directory per RID (`razor-generators/<rid>/`, the arm64 copy read out
+of the dotnet/sdk image of the same SDK version with `docker create` + `docker cp`, so no emulation
+is involved), and the builder picks the directory for the RID it is running on.
+
+### What it refuses, and why
+
+- **A project with Razor files and no generator.** One named failure that says what the CS0115 wall
+  would have been, not the wall.
+- **A generator that ran and emitted nothing.** Not a compile error — a generator that did not
+  recognise its input, which otherwise fails four steps later as CS0115.
+- **CSS isolation (`*.razor.css`).** The `b-…` scope identifier comes from the SDK's
+  `ComputeCssScope`/`ApplyCssScopes` tasks, and this builder runs no MSBuild task, so the components
+  would compile without their scope attributes. `--accept razor-css-scope` builds them anyway (the
+  assembly is valid; only the isolated stylesheet stops applying). Reproducing the scope hash from
+  memory is the guess this evaluator exists to avoid.
+- **`.razor` under a project whose `Sdk` does not process Razor.** The SDK's build ignores them too,
+  so the outcome matches — but it is stated rather than skipped. `--accept razor-not-compiled`.
+
+### Measured, 2026-08-31 — 10 of the 11 Razor projects
+
+Every `Microsoft.NET.Sdk.Razor` project in `MeshWeaver.Plugins/src`, built against
+`memex-portal-ai@sha256:6f38db08…` with the builder mounted, `--accept targets --accept
+razor-css-scope --accept embedded-resource`:
+
+| | count | |
+|---|---|---|
+| **green, no extra help** | **7** | Blazor (31 `.cs` + **42 `.razor`**), Blazor.EntityViews, Blazor.Graph, Blazor.Analysis, Blazor.OpenStreetMap, Blazor.GoogleMaps, Blazor.AppleMaps |
+| green with `--generators` (the SDK's regex generator) | +2 | Blazor.Views, Blazor.Portal — they were blocked by `[GeneratedRegex]` in `MeshWeaver.Markdown.Collaboration`, not by Razor |
+| green with `--extra-refs` | +1 | Blazor.Radzen — `Radzen.Blazor` is an additional library |
+| still red | 1 | `Memex.Portal.Gui` — a transitive `MeshWeaver.Hosting.Grpc` carries `<Protobuf>`; protoc is a build task, not a compile |
+
+**Razor is no longer what blocks any of them.** The two remaining categories are the pre-existing
+ones — SDK source generators and `<Protobuf>`.
+
+### What it does NOT do, and what each would take
+
+- **Source generators.** They live in the .NET **SDK**, and a MeshWeaver image ships the **runtime**.
+  `--generators <dir|dll>` loads them when supplied; with none, the builder names the generator that
+  did not run rather than leaving a wall of CS8795 that reads like broken source.
+- **`<Protobuf>`**, **MSBuild `<Target>`s** and **`<Sdk>` elements** — each a named failure with an
+  `--accept` where one is meaningful.
+
+### Embedded resources — supported, under the SDK's own manifest names
+
+**`<EmbeddedResource>` items are embedded**, each under the name the SDK's own
+`CreateCSharpManifestResourceName` would have produced. That was the single biggest coverage gap
+measured over `MeshWeaver.Plugins/src` — 15 projects failed on nothing but
+`<EmbeddedResource Include="Data\**\*.md">`.
+
+🚨 **Fidelity of the NAME is the whole problem, because getting it wrong is SILENT.** The assembly
+compiles, ships, loads, and `Assembly.GetManifestResourceStream(name)` returns `null` at run time in
+some other process — no error, no failing test, nothing for a review to catch. Core's own
+`MeshWeaver.Messaging.Hub.csproj` already carries a comment describing exactly that outcome ("the
+build succeeds, the main assembly carries ZERO manifest resources, every lookup falls through to the
+key-fallback path, and the UI renders raw `chat.new` tokens"). So no rule below was recalled: each
+was established by building a probe project with the real .NET SDK and reading the manifest-resource
+table back out of the emitted PE.
+
+**The pipeline, reproduced step for step.** `AssignTargetPath` assigns each item a `%(TargetPath)`
+(Microsoft.Common.CurrentVersion.targets says so out loud: *"AssignTargetPath generates TargetPath
+metadata that is consumed by CreateManifestResourceNames target for manifest name generation"*),
+`AssignCulture` routes the culture-carrying items towards SATELLITE assemblies, and
+`CreateCSharpManifestResourceName` turns the survivors into
+`$(RootNamespace).<mangled directory>.<file name>`.
+
+| rule | measured |
+|---|---|
+| the default name | `$(RootNamespace)` + the directory with separators as dots + the file name |
+| the DIRECTORY is mangled | `Data\with-dash\Three.md` → `…Data.with_dash.Three.md` |
+| the FILE NAME is **not** | `Weird-File.Name.md` → `…Weird-File.Name.md`, hyphen and dot intact |
+| a leading digit is PREFIXED | `9digits` → `_9digits` (never `_digits`) |
+| a dot in a directory is a SEPARATOR | `Dot.9Dir` → `Dot._9Dir`; each half mangled on its own |
+| a segment reducing to one `_` DOUBLES | `--` and `_` both → `__` — sibling dirs so named fail the real SDK build with `CS1508` |
+| `$(RootNamespace)` defaults to the PROJECT name | not `$(AssemblyName)`; empty means no prefix at all |
+| `LogicalName` replaces the name outright | attribute or child element |
+| `TargetPath` beats `Link` beats the item spec | a `Link` renames a file that is already inside the project |
+| a file OUTSIDE the project loses its directory | `..\shared\Shared.md` → `<ns>.Shared.md` |
+| resources are emitted PUBLIC | `ManifestResourceAttributes.Public`, every one |
+| a missing LITERAL include is `CS1566` | a glob matching nothing is legal |
+
+**Refused BY NAME rather than guessed**, each with its own `--accept` token, because a plausible
+wrong name is worse than no build:
+
+| construct | why |
+|---|---|
+| `.resx` / `.restext` | the NAME is reproducible; the CONTENT needs resgen (`GenerateResource`), and this builder runs no MSBuild tasks. Embedding the XML under the `.resources` name compiles green and throws at run time. The SDK's default glob `**/*.resx` is reproduced so a stray one is a refusal rather than a silent omission |
+| a CULTURE in the file name | the SDK routes it into a satellite assembly (`de/…resources.dll`) and OUT of the main one, and an explicit `LogicalName` does **not** rescue it — measured. This builder emits one assembly. `WithCulture="false"` on the item is the project-side fix and needs no acceptance |
+| `DependentUpon` | replaces the name with the first CLASS declared in that file, fully qualified — extracted by MSBuild's own C# tokenizer, which skips `struct`/`interface`/`enum`, takes `record`, and drops generic arity |
+| `ManifestResourceName` | makes the SDK skip its own naming task, which is also what sets `%(LogicalName)`, so csc falls back to the bare file name — the metadata does not do what it appears to do |
+| the build's OWN OUTPUT | `Include="bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml"` builds green under the real SDK from a clean tree (csc writes `/doc:` and reads `/resource:` in one invocation); this builder writes its doc file elsewhere, so it is named and skipped rather than failing the project |
+
+Under invariant globalization the runtime reports no predefined culture even for `de`, so the culture
+question cannot be answered at all — the capability is PROBED, and any dotted-basename resource is
+refused rather than embedded under a guessed name.
+
+**The boundary is the point.** This is not an MSBuild reimplementation and must not become one: it
+evaluates the subset a library project under this organisation's `Directory.Build.props` actually
+uses, and everything outside that subset is visible in the output as a refusal rather than
+discovered later as a wrong answer.

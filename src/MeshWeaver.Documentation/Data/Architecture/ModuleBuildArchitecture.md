@@ -1,0 +1,130 @@
+---
+nodeType: Markdown
+name: Module Build Architecture
+category: Architecture
+description: THE unified build process — every repo, one shape. The platform image is the compiler and the reference set, everything shared is staged once per run, one Roslyn workspace builds the graph fail-fast, outputs are content-addressed in blob storage so unchanged means no compile, and every gate compiles against implementation frameworks.
+icon: /static/NodeTypeIcons/code.svg
+---
+
+# Module Build Architecture
+
+**This is THE build process, unified across every repo** (maintainer directives, 2026-08-31 →
+2026-09-01: *"we want the memex to take care of the build"*, *"update once at beginning for
+everyone"*, *"create one roslyn workspace, all plugins to be rebuilt plus dependencies"*,
+*"maybe put in blob storage for build"*, *"unify buildprocess"*). The platform repo carries the
+mechanics — the reusable lanes, the builder, this page; a consuming repo carries ONLY policy
+(which modules, which pins). A repo whose CI deviates from this page is behind, not different.
+Never hand-roll a repo's build.
+
+## The pipeline, end to end
+
+```
+select ──► prepare (ONCE) ──► build (ONE workspace) ──► pack ─┬─► verify
+                                                      tests ──┘
+```
+
+1. **select** — which bundles this diff can reach. The selector can say "these" or
+   "everything", never "skip"; a workflow/pin change legitimately selects everything, because
+   the compiler itself changed.
+2. **prepare, once per run** — everything every job consumes identically is staged here, never
+   per module: the platform image as a per-digest zstd tarball in the **actions cache (GitHub's
+   blob storage, colocated with the runners)**, the tester-app and platform-refs extractions,
+   the module-pack tool. On a warm digest the run touches **no registry at all** — measured
+   live: `platform image: cache HIT — docker load, no ACR`. A cache miss falls back to pulling
+   the same digest-pinned bytes, loudly: a perf fallback, never a verification fallback.
+3. **build — one Roslyn workspace.** The builder compiles the selected modules **plus their
+   in-repo dependencies as one graph**: every project shares the same
+   `PortableExecutableReference` per path (each assembly read from the filesystem once), one
+   body pass like csc (parse+declaration diagnostics up front, body diagnostics from the single
+   `Emit`), **fail-fast** (the first red blocks every not-yet-started node by name — a sweep
+   that must enumerate every verdict opts out of fail-fast instead).
+4. **pack and tests fan out from the build's outputs** — they consume, they never recompile.
+   Tests are the honest per-module cost and parallelize across jobs.
+5. **verify** — unconditionally pairs the selection against the receipts; a skipped pack with a
+   non-zero selection is RED.
+
+## Content-addressed outputs in blob storage = incremental CI
+
+Build outputs are keyed by **(module source tree hash × tester-image digest × platform-image
+digest)** in the actions cache. Consumers restore by key; producers publish once.
+
+Two consequences, both load-bearing:
+
+* **"Build only what changed" falls out for free, below the selector**: an unchanged module on
+  unchanged toolchain digests is a pure cache hit — the restore IS the build, zero compile.
+  This composes with (does not replace) diff selection.
+* **No producer/consumer races**: downstream jobs `needs:` the build job and restore its
+  outputs — no artifact polling, no bounded waits.
+
+Own-account blob storage would add auth and distance for nothing; the actions cache is the
+same Azure blob, colocated, already carrying the images.
+
+## The compiler is the platform image
+
+A module never runs against a source tree or a NuGet feed: it is loaded into the platform
+IMAGE and bound by the assemblies in there. So the honest compiler is that image's own —
+`mw-plugin-test build-project` runs INSIDE the pinned platform container; its `/app` is the
+reference set, its runtime is the shared-framework surface. No SDK, no restore, no platform
+source checkout. A declared mode that cannot run FAILS — there is deliberately no SDK
+fallback, because a fallback makes "the container built it" and "the SDK built it"
+indistinguishable in a green log.
+
+Additional libraries resolve from the curated **module-libraries shelf**, and a
+`PackageReference`'s compile surface is its **transitive closure** from the shelf's deps.json —
+exactly what the SDK hands a consumer (`PackageReference Microsoft.Graph` lets code
+`using Microsoft.Kiota…`; anything less re-creates that gap as a CS0234 wall).
+
+## Gates compile against IMPLEMENTATION frameworks
+
+Every compile-check extracts the image's `/usr/share/dotnet/shared` beside `/app` and, seeing
+`System.Private.CoreLib.dll`, drops the SDK ref pack entirely: the check compiles exactly what
+the mesh compiles. This is not a preference — a container-built module references
+`System.Private.CoreLib`'s identity directly, which the ref pack cannot resolve (11 NodeTypes
+false-red with CS0012 the moment the floor bundles were container-built) and which CS0433-s
+beside it. Measured: 80/80 NodeTypes in 44s vs 161s + 11 false regressions.
+
+## CI is silent — warn/error plus verdicts
+
+Per-item narration (resource names, per-package resolutions) sits behind `--verbose`; the
+default log carries verdicts (start/OK/FAIL, phase timings, the compiler declaration, test
+names), warnings, and errors. Docker pulls are `-q`. In-run artifacts expire in 1–3 days.
+No component ever publishes from the mesh router — the router names a spokesman
+(`RouterCarrier` → the nodeops execution hub) and infrastructure speaks through it.
+
+## Measured (2026-09-01, the night the shape landed)
+
+| | before | after |
+|---|---|---|
+| MeshWeaver.AI compile (builder) | 161s local / 559s CI (double pass) | **80.6s local** (single pass); ~97% of the remainder is nullable flow analysis in a few very large methods — source-side work |
+| NodeType gate | 161s + 11 false CS0012 reds | **80/80 in 44s** (implementation frameworks) |
+| Registry trips per warm run | 2 pulls × N jobs (the `connection refused` stampede) | **0** |
+| Module pack tool | 48–79s `dotnet build` × N jobs | ~5s download, built once |
+| Orleans test suite | ~90 silo boots + disposal drain | **3 clusters** (the mesh pool; see WritingTests § The Mesh Pool) |
+
+## Adoption contract (every repo)
+
+1. Pin the reusable lanes (`node-repo-*.yml`) at a MeshWeaver main SHA — never copy them.
+2. **Scripts are centralized**: the lane fetches the platform's `.github/scripts/compile-check.py`
+   at the pin and runs it against the caller's tree — a repo keeps ONLY its
+   `scripts/compile-check.allow` (policy). Per-repo script copies are retired; three had
+   already drifted apart when this landed. (*"We can ship in hosting"* — the endgame is a
+   `compile-check` verb inside the tester image itself, where the reference set is the
+   container's by construction; the fetched-script stage is the unified interim.)
+3. Reference this page from the repo's AGENTS.md — the build section defers here.
+4. Repo-specific policy (module lists, always-modules, allow-files, registry consumption)
+   stays in the caller; mechanics never do.
+
+## Roadmap (agreed, in flight)
+
+* **The one-workspace lane** — the builder takes every selected module as entries of one graph
+  (it already graph-builds with shared references and fail-fast); the per-module compile jobs
+  collapse into one `build-workspace` job publishing content-addressed outputs; pack/tests fan
+  out from it. *"After global build ⇒ run tests."*
+* **`pack-module`, `compile-check` and test verbs inside the tester** — the last runner-side
+  `dotnet`/python uses move into the image the fleet already ships.
+* **Self-hosted runners with a mounted git mirror + warm image store** (MeshWeaver#2926): bare
+  mirror volume, `git worktree add` per run at the release ref, worktree deleted at job end.
+
+See also: [ModuleVersioning](../ModuleVersioning) ·
+[NodeTypeCompilation](../NodeTypeCompilation) · [PluginBuildContract](../PluginBuildContract) ·
+[BuildProcess](../BuildProcess) · [InMeshBuildAndTest](../InMeshBuildAndTest).

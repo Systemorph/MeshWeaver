@@ -1,11 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using MeshWeaver.Compiler;
-using MeshWeaver.Observability;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -38,6 +36,14 @@ namespace MeshWeaver.Graph.Test;
 /// <para>These tests pin the invariant that fixes it: <b>the compiler's verdict appears inside the
 /// evidence budget, whatever the size of the source set</b>, and the part that scales with the
 /// input is bounded in the log and kept in full where nothing truncates it.</para>
+///
+/// <para><b>Where the halves live.</b> Everything that is a property of the REPORT is pinned here,
+/// next to the formatter, so a regression in it reds the compiler's own CI — including the budget
+/// measured on the console-rendered burst, which is the form the log actually carries. What the
+/// watcher does with a burst that exceeds the budget (the truncation, the burst boundaries, the
+/// incident identity) is the watcher's subject and is pinned in MeshWeaver.Plugins, next to the
+/// aggregator. Neither side reaches across the boundary: this test needs no observability type,
+/// and the aggregator's tests need no compiler internal.</para>
 /// </summary>
 public class CompileFailureReportOrderTest : IDisposable
 {
@@ -49,7 +55,7 @@ public class CompileFailureReportOrderTest : IDisposable
     /// </summary>
     private const int MaxSampleLength = 2000;
 
-    /// <summary>The log category the incident was filed under.</summary>
+    /// <summary>The log category the incident was filed under — the console header names it.</summary>
     private const string Category = "MeshWeaver.Graph.Configuration.MeshNodeCompilationService";
 
     /// <summary>The node from the incident.</summary>
@@ -125,34 +131,6 @@ public class CompileFailureReportOrderTest : IDisposable
     ];
 
     /// <summary>
-    /// 🚨 THE regression test, and it reproduces the incident end to end: the console burst the
-    /// portal writes → the watcher's burst aggregation → the evidence sample the ticket carries.
-    /// The sample must name a <c>CS####</c>.
-    ///
-    /// <para>Against <c>origin/main</c> this fails with the sample ending <c>…[truncated]</c> inside
-    /// the matched-node listing — byte-for-byte the evidence pasted into #1840.</para>
-    /// </summary>
-    [Fact]
-    public void The_incidents_evidence_sample_carries_the_compiler_diagnostics()
-    {
-        var failure = RealCompilationFailure();
-        var sample = EvidenceSampleFor(failure);
-
-        sample.Should().Contain("CS0246",
-            "the compiler's verdict is the only part of a compile failure an operator can act on, "
-            + "so it must survive the watcher's 2000-character evidence budget — the whole point of "
-            + "#1840, where 26 matched node paths pushed it out and the ticket said remote "
-            + "diagnosis was impossible");
-        sample.Should().Contain("NorthwindRow",
-            "naming the symbol that failed to resolve is what turns the ticket into a fix");
-        sample.Should().Contain(NodePath,
-            "the report must name the node whose compile failed");
-        sample.Should().Contain("scope:subtree nodeType:Code",
-            "the source queries explain an empty or surprising source set and are small enough to "
-            + "keep in full — they belong inside the budget too");
-    }
-
-    /// <summary>
     /// The ordering rule stated directly, independent of any particular budget: the compiler's
     /// verdict precedes the source-discovery context. Everything downstream of a logger truncates
     /// from the END, so ordering by actionability is what makes a budget survivable at all.
@@ -171,6 +149,48 @@ public class CompileFailureReportOrderTest : IDisposable
         diagnosticsAt.Should().BeLessThan(discoveryAt,
             "a failure report is ordered by ACTIONABILITY — the verdict first, the context after, "
             + "because the context is what scales with the input and the tail is what gets cut");
+    }
+
+    /// <summary>
+    /// The invariant stated in the units the INCIDENT is filed in, which is the only unit #1840 was
+    /// ever about: after <c>SimpleConsoleFormatter</c> has rendered the failure to pod stdout —
+    /// header line, then every message line indented six spaces — the verdict is still inside the
+    /// watcher's evidence budget, so the filed ticket names a <c>CS####</c> instead of ending
+    /// <c>…[truncated]</c>.
+    ///
+    /// <para><b>The margin is large, and that is the fix working rather than a weak assertion.</b>
+    /// Measured on this input the verdict renders at index <b>299</b> of the 2000-character budget,
+    /// because ordering by actionability puts it near the front and the indent then costs only six
+    /// characters per preceding line. Before #1840 the source-discovery report led and the verdict
+    /// followed 26 node paths, which is how it ended up outside the budget. So this test is the
+    /// ORDERING rule measured end to end: break the order, or put anything unbounded ahead of the
+    /// verdict, and the index crosses 2000 and this fails — which the two assertions above would
+    /// also catch, but not in the units an operator reads.</para>
+    ///
+    /// <para>What the watcher does with a burst that DOES exceed the budget — the truncation
+    /// itself, the burst boundaries, the incident identity — is the watcher's subject and is pinned
+    /// in MeshWeaver.Plugins next to the aggregator. This test deliberately needs no observability
+    /// type, so neither repo reaches into the other.</para>
+    /// </summary>
+    [Fact]
+    public void The_verdict_survives_the_budget_once_the_console_formatter_has_indented_it()
+    {
+        var report = CompileDiagnostics.FormatCompileFailureReport(
+            NodePath, RealCompilationFailure().Message, IncidentQueries(), IncidentMatchedPaths());
+
+        // Exactly how SimpleConsoleFormatter renders `LogError(ex, "{CompileFailure}", report)` to
+        // pod stdout: the scope header, then every message line indented by six.
+        var rendered = string.Join(
+            "\n",
+            new[] { $"fail: {Category}[0]" }
+                .Concat(report.Replace("\r\n", "\n").Split('\n').Select(line => "      " + line)));
+
+        rendered.IndexOf("CS0246", StringComparison.Ordinal)
+            .Should().BeInRange(0, MaxSampleLength,
+                "the rendered burst is what the incident actually carries, and the verdict has to "
+                + "be inside the evidence budget there — it renders at ~299 of 2000 with the "
+                + "ordering fix in place, and crosses the budget if anything unbounded is put ahead "
+                + "of it again, which is exactly how #1840 was filed with …[truncated] and no CS####");
     }
 
     /// <summary>
@@ -236,36 +256,5 @@ public class CompileFailureReportOrderTest : IDisposable
             "a failure with no Roslyn diagnostics still has a verdict, and the report carries it");
         verdictAt.Should().BeLessThan(report.IndexOf("Executed source queries", StringComparison.Ordinal),
             "the verdict leads whatever kind of failure it is");
-    }
-
-    /// <summary>
-    /// Renders the burst exactly as <c>SimpleConsoleFormatter</c> writes it to pod stdout — the
-    /// header, the six-space-indented message, then the exception — and runs it through the
-    /// watcher's own aggregation, returning the evidence line the incident would carry.
-    /// </summary>
-    private static string EvidenceSampleFor(CompilationException failure)
-    {
-        // The message the funnel logs. `LogError(ex, "{CompileFailure}", report)` renders to
-        // exactly `report`, so this IS the production message — not a re-spelling of it.
-        var message = CompileDiagnostics.FormatCompileFailureReport(
-            NodePath, failure.Message, IncidentQueries(), IncidentMatchedPaths());
-
-        var at = DateTimeOffset.Parse("2026-08-18T13:37:59Z", System.Globalization.CultureInfo.InvariantCulture);
-        var lines = ImmutableList.CreateBuilder<LogLine>();
-        lines.Add(new LogLine(at, "memex-cloud", "memex-portal-676f69bc68-4c9gs", $"fail: {Category}[0]"));
-        foreach (var line in message.Replace("\r\n", "\n").Split('\n'))
-            lines.Add(new LogLine(at, "memex-cloud", "memex-portal-676f69bc68-4c9gs", "      " + line));
-        foreach (var line in failure.ToString().Replace("\r\n", "\n").Split('\n'))
-            lines.Add(new LogLine(at, "memex-cloud", "memex-portal-676f69bc68-4c9gs", "      " + line));
-
-        var aggregation = BurstAggregator.Aggregate(
-            lines.ToImmutable(), maxSamples: 10, maxSampleLength: MaxSampleLength);
-
-        var report = aggregation.Reports.Should().ContainSingle(
-            "the burst is one fault and must file as one incident").Which;
-        report.ExceptionType.Should().Contain("CompilationException",
-            "the exception IS printed — the issue's premise that it was discarded before logging "
-            + "is wrong, and the evidence table on #1840 names the type for exactly this reason");
-        return report.Samples[0].Line;
     }
 }

@@ -1,0 +1,64 @@
+# Synthetic prod probe — the detection half of "can we prevent a broken portal" (#2895 prevention ask 4).
+#
+# WHAT it probes and WHY exactly this:
+#   /api/content/{node}/content/{file} is the ONE cheap endpoint that crosses the cross-silo
+#   content hop (collection-config GetDataRequest to the owning node's hub) — the transport that
+#   actually wedges in the incidents we have had (#1729, the 2026-08-31 store outage). /api/og/…
+#   is the documented NEGATIVE control (it proves gate+resolver, crosses nothing) and is
+#   deliberately NOT used here. The Store page adds a Blazor-shell 200 as a secondary signal.
+#
+# HOW it fails (no skip-trapdoors, per AGENTS "a gate never tests its own inputs"):
+#   - no secrets, no `if:` on configuration — the probe always runs;
+#   - 3 samples per endpoint, fail on ≥2 failures — a single transient blip does not page,
+#     the #1729-class wedge (5/10 hangs) reliably does;
+#   - every terminal state is loud: the job fails RED naming the exact URL, samples and codes.
+#   A failed scheduled run e-mails the workflow's last committer; the run summary carries the
+#   evidence. Silence == all portals healthy, and (unlike a log-based watcher) a probe that
+#   cannot reach the portal at all is a FAILURE, never a skip.
+name: Prod synthetic probe
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - portal: memex.meshweaver.cloud
+            content: /api/content/AgenticEngineering/content/og.png
+          - portal: memex.systemorph.com
+            content: /api/content/AgenticPrimer/content/og.png
+    steps:
+      - name: Probe content route (3 samples, fail on >=2 bad)
+        run: |
+          set -u
+          url="https://${{ matrix.portal }}${{ matrix.content }}"
+          bad=0
+          for i in 1 2 3; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url" || echo 000)
+            echo "sample $i: $code  $url" | tee -a "$GITHUB_STEP_SUMMARY"
+            if [ "$code" != "200" ]; then bad=$((bad+1)); fi
+            sleep 2
+          done
+          if [ "$bad" -ge 2 ]; then
+            echo "::error::content route unhealthy on ${{ matrix.portal }} — $bad/3 samples failed for $url"
+            exit 1
+          fi
+      - name: Probe Store page
+        run: |
+          set -u
+          url="https://${{ matrix.portal }}/Store"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url" || echo 000)
+          echo "Store: $code  $url" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$code" != "200" ]; then
+            echo "::error::Store page returned $code on ${{ matrix.portal }}"
+            exit 1
+          fi

@@ -45,17 +45,24 @@ namespace MeshWeaver.Compiler;
 /// <param name="DllPath">Path the emit wrote the assembly to (inside the staging directory).</param>
 /// <param name="Sha256">SHA-256 of the emitted image, taken from the bytes in memory.</param>
 /// <param name="Length">Length in bytes of the emitted image.</param>
-internal readonly record struct EmittedArtifact(string DllPath, byte[] Sha256, long Length)
+/// <param name="Warnings">Diagnostics the SUCCESSFUL compile produced. They travel with the
+/// artifact rather than being logged at the emit — <c>EmitPipeline</c> deliberately does not log
+/// (the log-once contract), so the diagnostics reach the compile ACTIVITY through the same single
+/// funnel a failure does.</param>
+internal readonly record struct EmittedArtifact(
+    string DllPath, byte[] Sha256, long Length, IReadOnlyList<string> Warnings)
 {
     /// <summary>Fingerprints an in-memory image.</summary>
     /// <param name="dllPath">Path the image was written to.</param>
     /// <param name="image">The emitted bytes.</param>
+    /// <param name="warnings">Warnings the compile produced, for the activity.</param>
     /// <returns>The artifact descriptor to hand to the publisher.</returns>
-    public static EmittedArtifact For(string dllPath, ReadOnlySpan<byte> image)
+    public static EmittedArtifact For(
+        string dllPath, ReadOnlySpan<byte> image, IReadOnlyList<string>? warnings = null)
     {
         var hash = new byte[SHA256.HashSizeInBytes];
         SHA256.HashData(image, hash);
-        return new EmittedArtifact(dllPath, hash, image.Length);
+        return new EmittedArtifact(dllPath, hash, image.Length, warnings ?? []);
     }
 
     /// <summary>

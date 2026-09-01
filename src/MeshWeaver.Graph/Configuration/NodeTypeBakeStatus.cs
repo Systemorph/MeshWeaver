@@ -194,6 +194,11 @@ public static class NodeTypeBakeStatus
     /// <see cref="NodeTypeCompilationHelpers.FrameworkVersion"/> so tests can stage a
     /// framework roll without rebuilding the framework.
     /// </param>
+    // 🚨 THE PUBLIC ARITY IS FROZEN. A caller compiled against a five-parameter Classify emits a
+    // call to a method a six-parameter one does not have, and that break is invisible to every
+    // compiler in this repo — the same hazard scripts/check-record-signatures.py exists for on the
+    // record side. The re-evaluation lane's live content key (#1976) therefore rides on the
+    // INTERNAL ClassifyDetailed, which every in-repo caller already goes through.
     public static BakeState Classify(
         NodeTypeDefinition definition,
         bool storeHasBytes,
@@ -215,12 +220,17 @@ public static class NodeTypeBakeStatus
     /// investigations across three repos could not tell an ordinary framework roll from a module
     /// drift because of it. The verdict is unchanged; only the diagnostics are recovered.</para>
     /// </summary>
+    /// <param name="liveGeneratedInputDigest">🚨 The stage-1 digest of this type's compile input as
+    /// REGENERATED now (#1976), or null — the default, and every caller today — when it was not.
+    /// Null means the metadata-only rule applies unchanged; it never means "unchanged". See
+    /// <see cref="Compiler.ContentKeyReevaluation"/>.</param>
     internal static (BakeState State, string? DependencyMismatch) ClassifyDetailed(
         NodeTypeDefinition definition,
         bool storeHasBytes,
         string liveFrameworkVersion,
         Func<string, string?>? liveDependencyIdOf = null,
-        string? liveToolchainId = null)
+        string? liveToolchainId = null,
+        string? liveGeneratedInputDigest = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
@@ -246,8 +256,15 @@ public static class NodeTypeBakeStatus
         // never a stale serve.
         if (definition.CompiledDependencies is { } record
             && liveDependencyIdOf is not null
-            && Compiler.CompiledDependencies.FindMismatch(
-                record, liveDependencyIdOf, liveToolchainId ?? "") is { } mismatch)
+            // 🚨 The RE-EVALUATION LANE's read half (#1976). Without a regenerated digest
+            // LiveContentKeyOf returns null and this is byte-for-byte the metadata-only
+            // FindMismatch it replaced; with one, the reserved '!toolchain' entry demotes from an
+            // invalidation unit to a trigger and the store's bytes-win rule below is allowed to
+            // decide. An absent or inconclusive key NEVER reads as a match.
+            && Compiler.CompiledDependencies.FindMismatchAfterReevaluation(
+                record, liveDependencyIdOf, liveToolchainId ?? "",
+                Compiler.CompiledDependencies.LiveContentKeyOf(
+                    record, liveDependencyIdOf, liveGeneratedInputDigest)) is { } mismatch)
             // 🚨 ATTRIBUTE THE MISMATCH TO THE FRAMEWORK WHEN THE FRAMEWORK EXPLAINS IT.
             // The reserved '!toolchain' entry is a hash over the FullMvidAssemblies closure's
             // implementation MVIDs, and FrameworkVersion folds those SAME MVIDs (every closure

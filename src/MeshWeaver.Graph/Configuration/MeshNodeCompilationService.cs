@@ -278,7 +278,13 @@ internal class MeshNodeCompilationService(
     /// of the fully generated input that produced them (#1707 slice 4 — see
     /// <see cref="GeneratedInputIdentity"/>).
     /// </summary>
-    private readonly record struct CompileEmit(string? Path, string? InputDigest);
+    /// <param name="Path">Where the assembly landed.</param>
+    /// <param name="InputDigest">The generated-input digest the cache key folds.</param>
+    /// <param name="Warnings">Diagnostics the compile produced — carried up so they reach the
+    /// compile ACTIVITY. The emit deliberately does not log them itself (the log-once contract),
+    /// so this is how they travel to the one funnel that reports.</param>
+    private readonly record struct CompileEmit(
+        string? Path, string? InputDigest, IReadOnlyList<string> Warnings);
 
     /// <summary>
     /// One compile attempt's outcome: the assembly path (null on failure), the CONTENT KEY digest
@@ -335,7 +341,7 @@ internal class MeshNodeCompilationService(
             logger.LogDebug("Node {NodePath} has no NodeType, skipping assembly compilation", node.Path);
             return Observable.Return(new CompileAttempt(null, null,
                 AppendInfo(log, $"Skipped — node '{node.Path}' has no NodeType.")
-                    .Finish((int)hub.Version, ActivityStatus.Succeeded),
+                    .FinishByOutcome((int)hub.Version),
                 Array.Empty<MeshNode>()));
         }
 
@@ -417,7 +423,7 @@ internal class MeshNodeCompilationService(
                                 null,
                                 AppendInfo(log,
                                     $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).")
-                                    .Finish((int)hub.Version, ActivityStatus.Succeeded),
+                                    .FinishByOutcome((int)hub.Version),
                                 sources));
                         }
                     }
@@ -867,28 +873,7 @@ internal class MeshNodeCompilationService(
             .SelectMany(codeFiles =>
                 ValidateCellSurfaceSingleHome(node.Path, selfPath, matchedCodePaths)
                     .Select(_ => codeFiles))
-            .SelectMany(codeFiles =>
-            {
-                // Stage: resolve @@ include references reactively. Each include lookup
-                // composes via ResolveCodeIncludes (already an IObservable<string>). No await.
-                if (codeFiles.Count == 0)
-                    return Observable.Return(codeFiles);
-
-                IObservable<List<CodeConfiguration>> includeChain =
-                    Observable.Return(new List<CodeConfiguration>(codeFiles.Count));
-                foreach (var codeFile in codeFiles)
-                {
-                    var cf = codeFile;
-                    includeChain = includeChain.SelectMany(acc =>
-                        ResolveCodeIncludes(cf.Code!, new HashSet<string>(), node.Path)
-                            .Select(resolvedCode =>
-                            {
-                                acc.Add(resolvedCode != cf.Code ? cf with { Code = resolvedCode } : cf);
-                                return acc;
-                            }));
-                }
-                return includeChain;
-            })
+            .SelectMany(codeFiles => ResolveIncludesForCodeFiles(codeFiles, node.Path))
             .SelectMany(codeFiles =>
             {
                 // Final stage: combine + compile. The Roslyn `Compile` call itself is
@@ -947,6 +932,14 @@ internal class MeshNodeCompilationService(
                         var actualPath = emit.Path;
                         ActivityLog finalLog;
                         string? finalPath;
+                        // 🚨 DIAGNOSTICS GO TO THE ACTIVITY. A compile's warnings belong on the
+                        // record of that compile — the activity is what a reader opens, what the
+                        // Tests/Overview areas render and what the runner streams, so a warning
+                        // that only reached a server log reached nobody. Appended BEFORE the
+                        // outcome line so the log reads in the order it happened; Warning severity
+                        // never flips ActivityLog.Finish's terminal status, so surfacing them
+                        // cannot turn a green compile red on its own.
+                        discoveryLog = emit.Warnings.Aggregate(discoveryLog, AppendWarning);
                         if (cacheService.IsDiskCacheEnabled)
                         {
                             if (actualPath != null && File.Exists(actualPath))
@@ -975,7 +968,7 @@ internal class MeshNodeCompilationService(
                                 $"Compiled assembly loaded in-memory ({actualPath}).");
                         }
                         return (finalPath, emit.InputDigest,
-                            finalLog.Finish((int)hub.Version, ActivityStatus.Succeeded));
+                            finalLog.FinishByOutcome((int)hub.Version));
                     })
                     // 🚨 THE SINGLE REPORTER of a compile failure. Every CompilationException —
                     // Roslyn diagnostics from the disk emit (EmitCompilationToDirectory) or the
@@ -1165,15 +1158,16 @@ internal class MeshNodeCompilationService(
                             node, assemblyLocation, log, snapshot, attempt.InputDigest)),
                     _cacheOptions.AssemblyLoadTimeout, "assembly-load", node.Path))
                 // Re-Finish the log after CompileResultFromAssembly. CompileCore already
-                // Finished it Succeeded, but CompileResultFromAssembly's downstream steps
+                // finished it, but CompileResultFromAssembly's downstream steps
                 // (assembly load, MeshNodeProviderAttribute reflection) can append fresh
                 // Error messages — those need to flip Status to Failed.
-                // ActivityLog.Finish(version, override) takes MAX(override, GetFinalStatus
-                // from Messages), so an Error message appended after the first Finish
-                // bumps Status to Failed automatically.
+                // FinishByOutcome re-reads the log: an Error appended after the first
+                // finish flips Status to Failed; warnings stay in the transcript without
+                // demoting a green compile (the pin/fold split-brain fix — see
+                // ActivityLog.FinishByOutcome).
                 .Select(result => result is null
                     ? result
-                    : result with { Log = result.Log?.Finish((int)hub.Version, ActivityStatus.Succeeded) })
+                    : result with { Log = result.Log?.FinishByOutcome((int)hub.Version) })
                 .SelectMany(result => UploadToStoreIfNeeded(result, node));
         });
 
@@ -1303,7 +1297,7 @@ internal class MeshNodeCompilationService(
         {
             result = result with
             {
-                Log = (result.Log ?? log).Finish((int)hub.Version, ActivityStatus.Succeeded)
+                Log = (result.Log ?? log).FinishByOutcome((int)hub.Version)
             };
         }
         return Observable.Return(result);
@@ -1592,6 +1586,165 @@ internal class MeshNodeCompilationService(
     }
 
     /// <summary>
+    /// Stage: resolve <c>@@</c> include references reactively, file by file, preserving order.
+    /// Each include lookup composes via <see cref="ResolveCodeIncludes"/> (already an
+    /// <c>IObservable&lt;string&gt;</c>) — no await.
+    ///
+    /// <para>Shared by the EMIT path (<see cref="CompileCore"/>) and the re-evaluation lane's
+    /// regeneration (<see cref="RegenerateGeneratedInputDigest"/>) so the two cannot resolve
+    /// includes differently — a regenerated input that expanded includes differently from the
+    /// compile would produce a content key that never matches, i.e. a permanent rebuild.</para>
+    /// </summary>
+    private IObservable<List<CodeConfiguration>> ResolveIncludesForCodeFiles(
+        List<CodeConfiguration> codeFiles, string anchorPath)
+    {
+        if (codeFiles.Count == 0)
+            return Observable.Return(codeFiles);
+
+        IObservable<List<CodeConfiguration>> includeChain =
+            Observable.Return(new List<CodeConfiguration>(codeFiles.Count));
+        foreach (var codeFile in codeFiles)
+        {
+            var cf = codeFile;
+            includeChain = includeChain.SelectMany(acc =>
+                ResolveCodeIncludes(cf.Code!, new HashSet<string>(), anchorPath)
+                    .Select(resolvedCode =>
+                    {
+                        acc.Add(resolvedCode != cf.Code ? cf with { Code = resolvedCode } : cf);
+                        return acc;
+                    }));
+        }
+        return includeChain;
+    }
+
+    /// <summary>
+    /// The generated compilation input as TEXT, plus the <c>#r "nuget:"</c> references extracted
+    /// from it — everything the skeleton generator and the directive parser decide, and nothing
+    /// that touches the network or the disk.
+    ///
+    /// <para>Strips <c>#r "nuget:…"</c> directives: Roslyn compilation (unlike scripting) does not
+    /// process them. The BusinessRules scope generator is pulled in ONLY when the node Source
+    /// EXPLICITLY declares <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> — no auto-injection
+    /// heuristic (that forced generator resolution on the compile path for any node merely
+    /// mentioning IScope). Explicit <c>#r</c> → resolved by the caller → discovered + run by
+    /// <c>RunSourceGenerators</c>. The legacy built-in-generator <c>#r</c> is stripped here too
+    /// (the same strip <c>AssembleCompilationInputs</c> makes; resolving it hard-fails now that the
+    /// mesh-local feed is gone).</para>
+    ///
+    /// <para>🚨 <b>Shared with the re-evaluation lane</b> (#1976): the content key is a hash of
+    /// THIS text, so the lane's regeneration and the compile MUST produce it from the same code.
+    /// Two implementations would drift into a key that never matches, and a key that never matches
+    /// is a permanent rebuild — the failure this whole mechanism exists to remove.</para>
+    /// </summary>
+    private (string Source, NuGetPackageReference[] NuGetReferences) PrepareGeneratedSource(
+        MeshNode node,
+        CodeConfiguration? codeFile,
+        string? hubConfiguration,
+        IReadOnlyList<ContentCollectionConfig>? contentCollections)
+    {
+        var rawSource = _attributeGenerator.GenerateAttributeSource(
+            node, codeFile, hubConfiguration, contentCollections);
+        var (source, extractedRefs) = NuGetDirectiveParser.Extract(rawSource);
+        var nugetRefList = extractedRefs.ToList();
+        GeneratorPipeline.StripBuiltInScopeGeneratorRef(
+            nugetRefList, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
+        return (source, [.. nugetRefList]);
+    }
+
+    /// <summary>
+    /// 🚨 THE CONTENT KEY's first stage (#1707 slice 4) — the last point at which the fully
+    /// generated input exists as text, and before a single Roslyn call. It keys the exact thing the
+    /// toolchain's full-MVID proxy stands in for: what Roslyn is actually fed. The NuGet-resolved
+    /// assemblies ride in as generator candidates, so a change in what a <c>#r "nuget:"</c>
+    /// resolves to moves the key (<see cref="GeneratorPipeline.EffectiveGeneratorPaths"/> is the
+    /// same set <c>RunSourceGenerators</c> loads — one resolution, no drift).
+    ///
+    /// <para>ONE function, called by the compile that STAMPS the key and by the re-evaluation lane
+    /// that READS it (#1976) — see <see cref="PrepareGeneratedSource"/>.</para>
+    /// </summary>
+    private static string GeneratedInputDigestOf(
+        string assemblyName, string source, IReadOnlyList<string> nugetAssemblyPaths)
+        => GeneratedInputIdentity.OfGeneratedInput(
+            assemblyName,
+            source,
+            EmitPipeline.OptionsFingerprint,
+            GeneratedInputIdentity.CompilerIdentity,
+            GeneratedInputIdentity.AssemblyFileIdentities(
+                GeneratorPipeline.EffectiveGeneratorPaths(nugetAssemblyPaths)));
+
+    /// <summary>
+    /// 🚨 THE RE-EVALUATION LANE's regeneration entry point (#1976): the stage-1 CONTENT-KEY
+    /// digest of what a compile of <paramref name="node"/> would be handed RIGHT NOW — without
+    /// compiling, without emitting, and without touching the assembly store.
+    ///
+    /// <para><b>Why this has to exist as its own entry point.</b> The digest was taken INLINE,
+    /// three statements before Roslyn, so the only way to learn a type's live content key was to
+    /// compile it — which is precisely the work the key exists to avoid. Every rebuild-or-not
+    /// consumer in the framework is deliberately metadata-only, so the key was stamped on every
+    /// compile and compared by nothing (#1707 residual 2, "the guard that cannot fail"). This is
+    /// the missing half.</para>
+    ///
+    /// <para><b>It runs the SAME code the compile runs</b> — source discovery, the shaping fold,
+    /// <c>@@</c>-include expansion (<see cref="ResolveIncludesForCodeFiles"/>), the skeleton
+    /// generator and the <c>#r</c> strip (<see cref="PrepareGeneratedSource"/>), and the digest
+    /// itself (<see cref="GeneratedInputDigestOf"/>) — because a second implementation would drift
+    /// into a key that never matches, and a key that never matches is a permanent rebuild.</para>
+    ///
+    /// <para>🚨 <b>100% reactive — NO <c>await</c>, and no Roslyn.</b> This is the
+    /// <c>AssembleCompilationInputs</c> shape, not the emit shape: the only async leaf is the NuGet
+    /// restore (network IO), it runs ONLY when a <c>#r "nuget:"</c> directive is actually present,
+    /// and it is bridged through <see cref="IIoPool"/> exactly as that method's is — the common
+    /// case never leaves the observable chain. The emit path's deliberate <c>OnThreadPool</c>
+    /// exception does NOT apply here: it exists because the synchronous, multi-second Roslyn Emit
+    /// parked on the compile pool's own gate, and there is no Emit on this path.</para>
+    ///
+    /// <para>Emits <c>null</c> for INCONCLUSIVE, never an exception: an unestablished source set,
+    /// a dead discovery query, a NuGet resolve that will not answer inside the bound. Null is the
+    /// safe direction — <see cref="ContentKeyReevaluation"/> reads it as "cannot compare" and the
+    /// caller keeps whatever it would have done without the lane. It is emphatically NOT a
+    /// swallow: the reason is logged, and an inconclusive answer can never carry a build
+    /// forward.</para>
+    ///
+    /// <para>Cold: nothing is regenerated until the caller subscribes.</para>
+    /// </summary>
+    /// <param name="node">The NodeType's own MeshNode.</param>
+    internal IObservable<string?> RegenerateGeneratedInputDigest(MeshNode node)
+    {
+        var ntDef = node.ContentAs<NodeTypeDefinition>(JsonOptions);
+        if (ntDef is null)
+            return Observable.Return<string?>(null);
+
+        var assemblyName = $"DynamicNode_{cacheService.SanitizeNodeName(node.Path)}";
+        return BoundLeg(
+                _ => SnapshotSources(ntDef, node.Path, sourcesOverride: null)
+                    .Select(matches =>
+                        NodeCompileShaping.CollectCompileSources(matches, node.Path, logger).Sources)
+                    .SelectMany(codeFiles => ResolveIncludesForCodeFiles(codeFiles, node.Path))
+                    .Select(codeFiles => PrepareGeneratedSource(
+                        node, NodeCompileShaping.CombineSources(codeFiles),
+                        ntDef.Configuration, ntDef.ContentCollections))
+                    .SelectMany(prepared => prepared.NuGetReferences.Length == 0
+                        ? Observable.Return(
+                            GeneratedInputDigestOf(assemblyName, prepared.Source, []))
+                        : _ioPool
+                            .Run(ct => nugetResolver.ResolveAsync(
+                                prepared.NuGetReferences, targetFramework: null, ct))
+                            .Select(resolved => GeneratedInputDigestOf(
+                                assemblyName, prepared.Source, resolved.AssemblyPaths)))
+                    .Take(1),
+                _cacheOptions.RoslynCompileTimeout, "regenerate-content-key", node.Path)
+            .Select(digest => (string?)digest)
+            .Catch<string?, Exception>(ex =>
+            {
+                logger.LogInformation(ex,
+                    "Re-evaluation for {NodePath}: the compile input could not be regenerated, so "
+                    + "the content key has no live counterpart — the build is judged by the "
+                    + "metadata-only rule, exactly as before", node.Path);
+                return Observable.Return<string?>(null);
+            });
+    }
+
+    /// <summary>
     /// Compiles CodeConfiguration into an assembly using Roslyn.
     /// Supports both disk-based and in-memory compilation.
     /// </summary>
@@ -1647,22 +1800,11 @@ internal class MeshNodeCompilationService(
 
         ct.ThrowIfCancellationRequested();
 
-        // Generate full source with MeshNodeProviderAttribute (including content collections)
-        var rawSource = _attributeGenerator.GenerateAttributeSource(node, codeFile, hubConfiguration, contentCollections);
-
-        // Strip #r "nuget:..." directives — Roslyn compilation (unlike scripting) does not process them.
-        // The BusinessRules scope generator is pulled in ONLY when the node Source EXPLICITLY declares
-        // `#r "nuget:MeshWeaver.BusinessRules.Generator"` — no auto-injection heuristic (that forced
-        // generator resolution on the compile path for any node merely mentioning IScope). Explicit
-        // #r → resolved here → discovered + run by RunSourceGenerators from the resolved assemblies.
-        var (source, extractedRefs) = NuGetDirectiveParser.Extract(rawSource);
-        // 🚨 Same legacy-#r strip as AssembleCompilationInputs — this path previously lacked it
-        // (see the release-folder compile below for the full story: resolving the legacy
-        // generator #r hard-fails now that the mesh-local feed is gone).
-        var nugetRefList = extractedRefs.ToList();
-        GeneratorPipeline.StripBuiltInScopeGeneratorRef(
-            nugetRefList, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
-        var nugetRefs = nugetRefList.ToArray();
+        // Generate full source with MeshNodeProviderAttribute (including content collections) and
+        // extract/strip the `#r "nuget:"` directives — see PrepareGeneratedSource, which the
+        // re-evaluation lane shares so a regenerated content key cannot drift from a stamped one.
+        var (source, nugetRefs) = PrepareGeneratedSource(
+            node, codeFile, hubConfiguration, contentCollections);
         IEnumerable<MetadataReference> references = References;
         IReadOnlyList<string> nugetAssemblyPaths = [];
         if (nugetRefs.Length > 0)
@@ -1689,19 +1831,9 @@ internal class MeshNodeCompilationService(
         // embedded (critical for PDB source linking); canonical options; generators applied.
         var assemblyName = $"DynamicNode_{nodeName}";
 
-        // 🚨 THE CONTENT KEY's first stage (#1707 slice 4), taken HERE — the last point at which
-        // the fully generated input exists as text, and before a single Roslyn call. It keys the
-        // exact thing the toolchain's full-MVID proxy stands in for: what Roslyn is actually fed.
-        // The NuGet-resolved assemblies ride in as generator candidates, so a change in what a
-        // `#r "nuget:"` resolves to moves the key (GeneratorPipeline.EffectiveGeneratorPaths is
-        // the same set RunSourceGenerators loads — one resolution, no drift).
-        var generatedInputDigest = GeneratedInputIdentity.OfGeneratedInput(
-            assemblyName,
-            source,
-            EmitPipeline.OptionsFingerprint,
-            GeneratedInputIdentity.CompilerIdentity,
-            GeneratedInputIdentity.AssemblyFileIdentities(
-                GeneratorPipeline.EffectiveGeneratorPaths(nugetAssemblyPaths)));
+        // The content key's first stage, taken HERE — see GeneratedInputDigestOf.
+        var generatedInputDigest =
+            GeneratedInputDigestOf(assemblyName, source, nugetAssemblyPaths);
         var compilation = GeneratorPipeline.RunSourceGenerators(
             EmitPipeline.CreateEmitCompilation(
                 source,
@@ -1712,20 +1844,30 @@ internal class MeshNodeCompilationService(
             nugetAssemblyPaths, logger, ct);
 
         string? actualPath;
+        // The compile's own diagnostics, on the way to the activity. Empty is a real answer here —
+        // it means the compiler produced none, not that nobody looked.
+        IReadOnlyList<string> warnings = [];
         if (cacheService.IsDiskCacheEnabled)
         {
+            var emitted = default(EmittedArtifact);
             actualPath = EmitPipeline.EmitToDiskWithRetry(
                 cacheService.CacheDirectory, nodeName, EmitPipeline.DiskEmitAttempts, logger,
-                releaseDir => EmitPipeline.EmitCompilationToDirectory(compilation, nodeName, node.Path, releaseDir, ct));
+                releaseDir => emitted = EmitPipeline.EmitCompilationToDirectory(
+                    compilation, nodeName, node.Path, releaseDir, ct));
+            warnings = emitted.Warnings;
         }
         else
         {
+            // The in-memory path compiles the same tree, so it must report the same diagnostics —
+            // a warning that appears only when the disk cache is on would be a warning that depends
+            // on a deployment's caching mode, which is exactly the kind of difference nobody finds.
+            warnings = EmitPipeline.Warnings(compilation.GetDiagnostics(ct));
             var (assemblyBytes, pdbBytes) = EmitPipeline.EmitToMemory(compilation, node.Path, ct);
             cacheService.LoadAssemblyFromBytes(nodeName, assemblyBytes, pdbBytes);
             actualPath = $"memory://{nodeName}";
         }
 
         logger.LogInformation("Successfully compiled assembly for {NodePath} to {ActualPath}", node.Path, actualPath);
-        return new CompileEmit(actualPath, generatedInputDigest);
+        return new CompileEmit(actualPath, generatedInputDigest, warnings);
     }
 }

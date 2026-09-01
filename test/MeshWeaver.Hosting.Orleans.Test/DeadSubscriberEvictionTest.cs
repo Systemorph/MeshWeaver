@@ -45,6 +45,13 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class DeadSubscriberEvictionTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
+    // 🚨 This class asserts the OWNER-GLOBAL eviction counter — the documented opt-out category
+    // for the mesh pool (WritingTests.md § The Mesh Pool). On a pooled cluster the counter moves
+    // for reasons this class does not control: CI measured its own ordinary traffic evicting a
+    // STALE subscriber left by an earlier class (correct router behaviour, delta = 1, test red).
+    // A dedicated cluster makes the counter's frame of reference the class itself again.
+    protected override bool UsePooledMesh => false;
+
     private static readonly Address Owner = new("TestUser");
     private static readonly LayoutAreaReference Reference = new("Overview");
 
@@ -122,6 +129,11 @@ public class DeadSubscriberEvictionTest(ITestOutputHelper output) : OrleansShare
         var workspace = await OwnerWorkspace();
         workspace.GetClientSubscription(client.Address, stream.StreamId, Reference).Should().NotBeNull(
             "the owner must still hold the server-side stream of a subscriber it can reach");
+        // Owner-global and sound ONLY on this class's dedicated cluster (UsePooledMesh => false
+        // above): a pooled cluster carries other classes' history — CI measured this test's own
+        // traffic evicting a STALE earlier-class subscriber (correct router behaviour, count 1) —
+        // and snapshotting the counter before the first subscription just times out, because
+        // nothing has materialised the owner workspace yet.
         workspace.ClientSubscriptionsEvicted.Should().Be(0,
             "eviction is the router's verdict on an UNSERVED address, never a reaction to ordinary "
             + "traffic to a live one");
