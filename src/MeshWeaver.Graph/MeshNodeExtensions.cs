@@ -111,6 +111,61 @@ public static class MeshNodeExtensions
     }
 
     /// <summary>
+    /// 🚨 THE PARTITION ROOT OF A NODE, LIVE — the one read package-mark inheritance needs
+    /// (<see cref="MeshNodeImageHelper.ResolveNodeIcon(MeshNode?, MeshNode?)"/>, issue #2075 item 2).
+    ///
+    /// <para><b>Why a stream and not a lookup.</b> The icon resolver is deliberately pure, total and
+    /// synchronous over ONE node, so the root has to reach it from outside. This is the seam that
+    /// fetches it, and it is an <see cref="IObservable{T}"/> like every other read in the mesh: a
+    /// page CombineLatests it beside the node's own stream, so re-marking a package re-paints every
+    /// page under it with no invalidation to write.</para>
+    ///
+    /// <para><b>A point read that is legitimate.</b> Reading one node by exact path is only ever
+    /// correct for a path known to exist — a point read of an absent node answers a routing NotFound
+    /// that opens the storm-breaker on it. A partition root exists for every node that has one, by
+    /// construction: it is the namespace the node lives in. And when there is no distinct root
+    /// (<see cref="MeshNodeImageHelper.PartitionRootPath"/> null — the node IS a root) NOTHING is
+    /// read at all; the stream is a constant null.</para>
+    ///
+    /// <para><b>Starts null, upgrades.</b> The page renders on the node's own stream immediately and
+    /// the mark arrives when the root does — the root read can never delay, or gate, a page that
+    /// does not depend on it.</para>
+    ///
+    /// <para>🚨 <b>One fault is a STATE, not an error.</b> Access to a node does not imply access to
+    /// its partition root — an <c>AccessAssignment</c> can share a single node out of a partition
+    /// the viewer is not a member of — so a denial here means "this viewer inherits nothing", the
+    /// same normal state <c>MeshNodeThumbnailControl.ShouldSurfaceStreamError</c> already names for
+    /// the same reason. It is classified by
+    /// <see cref="MeshWeaver.Layout.AreaErrorClassifier.IsExpectedUserActionFailure"/> and nothing
+    /// else is caught: a genuine infrastructure fault propagates to the page, because a decoration
+    /// quietly swallowing infrastructure faults is how a broken mesh renders as a working one.</para>
+    /// </summary>
+    /// <param name="workspace">The workspace to read through.</param>
+    /// <param name="nodePath">🚨 A MESH NODE path — the guarantee above ("a partition root exists
+    /// for every node that has one") is a statement about node paths, and only about those. A
+    /// layout area passes <c>host.Hub.Address.Path</c>, which is the same value it already treats as
+    /// the node path for permissions and URLs.</param>
+    /// <returns>The partition root as it changes, starting with null; constant null when the node
+    /// has no distinct partition root.</returns>
+    public static IObservable<MeshNode?> ObservePartitionRoot(this IWorkspace workspace, string? nodePath)
+    {
+        if (MeshNodeImageHelper.PartitionRootPath(nodePath) is not { } rootPath)
+            return Observable.Return<MeshNode?>(null);
+
+        return workspace.GetMeshNodeStream(rootPath)
+            .Select(root => (MeshNode?)root)
+            .Catch<MeshNode?, Exception>(ex =>
+                MeshWeaver.Layout.AreaErrorClassifier.IsExpectedUserActionFailure(ex)
+                    ? Observable.Return<MeshNode?>(null)
+                    : Observable.Throw<MeshNode?>(ex))
+            .StartWith((MeshNode?)null)
+            // Only the two fields inheritance reads. The root node emits on every touch of it
+            // (LastModified, content edits, children); without this every such emission would
+            // re-render every page in the partition for an icon that did not change.
+            .DistinctUntilChanged(root => (root?.Path, root?.Icon));
+    }
+
+    /// <summary>
     /// Gets the primary node path for this node.
     /// For satellite nodes, returns the MainNode path.
     /// For regular nodes, returns the node's own path.
@@ -312,8 +367,17 @@ public static class MeshNodeExtensions
                 // so cross-hub RLS lets it land. See ActivityRunner for the canonical shape.
                 if (existing != null)
                 {
+                    // 🚨 `record.AccessCount` is the count derived from the EVENTUALLY-CONSISTENT
+                    // query snapshot above — it is NOT the count this write lands. The value that
+                    // is written comes from FoldOntoLive, which re-reads AccessCount off the LIVE
+                    // node inside the owner-serialised Update. Naming it `count=` made two
+                    // concurrent tracks that merely READ the same stale snapshot look like two
+                    // writers racing the same increment (#3001's second hypothesis, which the
+                    // owner's three-way merge in fact already prevents). Say which number it is.
                     logger?.LogDebug(
-                        "TrackActivity UPDATE: {Path} count={Count}", activityPath, record.AccessCount);
+                        "TrackActivity UPDATE: {Path} querySnapshotCount={SnapshotCount} "
+                        + "(the written count is folded off the live node inside the Update)",
+                        activityPath, record.AccessCount);
                     return Observable.Using(Impersonate, _ => stream.Update(FoldOntoLive));
                 }
 

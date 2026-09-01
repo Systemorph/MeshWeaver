@@ -1,4 +1,7 @@
 using System.Collections.Concurrent;
+using System.Reactive.Concurrency;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
@@ -12,6 +15,15 @@ using Microsoft.Extensions.Logging;
 // here: NodeType source stored in the mesh is compiled at RUNTIME and is invisible to `dotnet build`,
 // so renaming a public namespace is a breaking change no build or test in this repo can catch.
 namespace MeshWeaver.Mesh.Services;
+
+/// <summary>
+/// One content type becoming KNOWN to the mesh — the announcement
+/// <see cref="IMeshContentTypeRegistry.Registrations"/> carries.
+/// </summary>
+/// <param name="ContentType">The CLR type that was just registered.</param>
+/// <param name="NodeTypePath">The NodeType path it was registered under, when the registrar knew
+/// one (the EXACT route — see <see cref="IMeshContentTypeRegistry.TryResolveByNodeType"/>).</param>
+public sealed record MeshContentTypeRegistration(Type ContentType, string? NodeTypePath);
 
 /// <summary>
 /// Process-wide (mesh singleton) map from a dynamically-compiled NodeType's content
@@ -69,6 +81,35 @@ public interface IMeshContentTypeRegistry
     /// <see cref="TryResolveByDiscriminator"/>.</para>
     /// </summary>
     void Register(Type contentType, string? nodeTypePath = null);
+
+    /// <summary>
+    /// 🚨 <b>Registration is an EVENT, not just a side effect</b> — one emission per
+    /// <see cref="Register"/> call.
+    ///
+    /// <para><b>The defect this closes (Systemorph/MeshWeaver#2952).</b> Every degrade seam
+    /// resolves a node's content ONCE, on the emission it is handed: it asks this registry, and
+    /// when the answer is "unknown" it emits the content as an untyped <see cref="JsonElement"/>
+    /// and moves on. For an in-mesh NodeType — <c>Source/*.cs</c> compiled by Roslyn at RUNTIME —
+    /// "unknown" is a state that ENDS: the type becomes known the moment its compile registers it
+    /// here, typically a few hundred milliseconds later. Nothing observed that, so a node whose
+    /// content loaded on the losing side of that race stayed untyped for the life of the hub: it
+    /// rendered empty, refused content edits, and every reactive wait on its typed shape timed
+    /// out. Nothing about it was random — it was a race whose loser never recovered, which is
+    /// exactly why re-running "fixed" it.</para>
+    ///
+    /// <para><b>Contract: delivered OFF the registering thread.</b> <see cref="Register"/> is
+    /// called from inside a <c>MessageHubConfiguration</c> build
+    /// (<c>MeshDataSource.WithContentType</c>, at a per-node hub's cold activation), so a
+    /// subscriber that renders a view or reads another node must never run on that thread — it
+    /// would re-enter the hub construction that is registering the type. Subscribers therefore see
+    /// notifications on the task pool, the same way a storage change notification arrives.</para>
+    ///
+    /// <para>Announcement only: it carries no content and resolves nothing. A subscriber
+    /// re-asks <see cref="TryRecoverForNodeType"/> (or its own conversion) and keeps the answer
+    /// only when it is now typed — so a registration for an unrelated type is a cheap no-op, and
+    /// the notification can never make a read WORSE than it already was.</para>
+    /// </summary>
+    IObservable<MeshContentTypeRegistration> Registrations { get; }
 
     /// <summary>
     /// Resolves a <c>$type</c> discriminator (short or full name) to its CLR type — and REFUSES
@@ -151,6 +192,33 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
     private readonly ConcurrentDictionary<string, DiscriminatorClaim> _byDiscriminator = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Type> _byNodeType = new(StringComparer.OrdinalIgnoreCase);
 
+    // Instance subject — the registry is a mesh-scoped singleton, so its lifetime IS the mesh's
+    // and no process-wide state leaks across meshes (NoStaticState.md).
+    //
+    // 🚨 NOT a Replay/BehaviorSubject. This is an EDGE ("a type just became known"), not a value: a
+    // subscriber that wants the current state asks the maps, which are always readable. A
+    // ReplaySubject would also latch a terminal — and this subject never gets one (a registry has
+    // no completion), so latching one transient fault forever (#1369) is a hazard with no upside.
+    //
+    // 🚨 Subject.Synchronize because Register IS called concurrently: every per-node hub activation
+    // that runs WithContentType publishes here, and a post-roll recompile storm activates many at
+    // once on different threads. A bare Subject's OnNext is not safe under that, and the IObserver
+    // grammar it would break is the one every downstream operator relies on. Rx's own gate, the
+    // same choice ModuleDiscoveryService / MeshNodeStreamCache made for the same reason.
+    private readonly ISubject<MeshContentTypeRegistration> _registrations =
+        Subject.Synchronize(new Subject<MeshContentTypeRegistration>());
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 <c>ObserveOn</c> is the CONTRACT, not tuning: <see cref="Register"/> runs inside a hub
+    /// configuration build, and a subscriber re-typing a node emits onward into whatever is bound
+    /// to that node (a layout area, a Blazor view). Handing that work to the registering thread
+    /// would re-enter hub construction from inside itself. Per-subscription by design — each
+    /// subscriber gets its own queue, so one slow consumer cannot stall another.
+    /// </remarks>
+    public IObservable<MeshContentTypeRegistration> Registrations
+        => _registrations.ObserveOn(TaskPoolScheduler.Default);
+
     /// <summary>
     /// WHO declared a content type — the NodeType path when the caller knows it, otherwise the
     /// declaring assembly's simple name. For a runtime-compiled NodeType that assembly name is
@@ -175,6 +243,11 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
             ClaimDiscriminator(fullName, contentType, declaration);
         if (!string.IsNullOrEmpty(nodeTypePath))
             _byNodeType[nodeTypePath] = contentType;
+
+        // 🚨 ANNOUNCE LAST — after BOTH maps carry the entry. A subscriber's first act is to
+        // re-ask this registry, so publishing earlier would hand it the very "unknown" answer the
+        // notification exists to retract, and the retry would be spent on nothing.
+        _registrations.OnNext(new MeshContentTypeRegistration(contentType, nodeTypePath));
     }
 
     private void ClaimDiscriminator(string discriminator, Type contentType, string declaration)
