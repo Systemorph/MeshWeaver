@@ -4608,11 +4608,31 @@ public class MeshOperations
     /// (<c>status</c> / <c>path</c> / <c>errorType</c> / <c>message</c>) so a caller has one shape
     /// to read regardless of which side answered. <c>errorType</c> is a stable token here rather
     /// than an exception type name — there is no exception, and inventing one would be a lie.
+    ///
+    /// <para>🚨 #841 — IT ALSO LEAVES THE TRACE. The refusal envelope is only half of that issue's
+    /// contract: a dispatch that ends without an Activity node must reach the CALLER <b>and</b> the
+    /// OPERATOR, which is why <c>CodeNodeType.HandleExecuteScript</c>'s own sink (<c>RefuseDispatch</c>)
+    /// does both things in one place. The pre-flight (#2918) moved two of those three verdicts —
+    /// "no readable node" and "not a runnable Code node" — from the owning hub to here, where the
+    /// answer is cheaper; it did not bring the log line with it, so from that change onward exactly
+    /// the picture #841 exists to prevent came back for the commonest refusals: the caller is told,
+    /// and the pod emits nothing at Warning or above. The level is the one the hub-side sink already
+    /// uses, for the same reason: an operation the caller asked for and was denied is a Warning, and
+    /// operators grep this channel for refused runs.</para>
+    ///
+    /// <para>The log lives on this funnel rather than on each branch of
+    /// <see cref="DescribeUnrunnableTarget"/> so that a verdict added there cannot be silent — the
+    /// same reason the hub keeps one sink instead of logging at each <c>return</c>.</para>
     /// </summary>
-    private string PreflightError(string resolvedPath, string errorType, string message) =>
-        JsonSerializer.Serialize(
+    private string PreflightError(string resolvedPath, string errorType, string message)
+    {
+        logger.LogWarning(
+            "ExecuteScript refused for {Path} ({ErrorType}): {Error} No Activity node was created.",
+            resolvedPath, errorType, message);
+        return JsonSerializer.Serialize(
             new { status = "Error", path = resolvedPath, errorType, message },
             hub.JsonSerializerOptions);
+    }
 
     /// <summary>
     /// The dispatch itself — unchanged behaviour, lifted out of <see cref="ExecuteScript"/> so the

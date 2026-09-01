@@ -1,13 +1,19 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.AI;   // MeshOperations — its namespace is a frozen binary contract (#2370)
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -31,9 +37,26 @@ namespace Memex.Portal.Shared.Test;
 /// generous dispatch budget and asserts the answer arrives in a small fraction of it: on the old
 /// code the observable emits only when the budget elapses, so the stopwatch is the discriminator.
 /// </para>
+///
+/// <para><b>And what the pre-flight must not lose.</b> Answering the caller is only half of what
+/// the dispatch it replaced did: #841's contract is that a run which ends without an Activity node
+/// is visible to the OPERATOR too. That half is pinned by
+/// <see cref="ExecuteScript_PreflightRefusal_IsVisibleToTheOperator_NotJustToTheCaller"/>, which
+/// asserts on the mesh's own logger rather than on elapsed time.</para>
 /// </summary>
 public class ExecuteScriptPreflightTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>
+    /// Captures what the mesh's own <see cref="ILoggerFactory"/> emits, so "the refusal is visible
+    /// at Warning+" is an assertion rather than a claim. Instance-owned — its lifetime is this
+    /// test's mesh — never static state.
+    /// </summary>
+    private readonly CapturingLoggerProvider logs = new();
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services => services.AddSingleton<ILoggerProvider>(logs));
+
     /// <summary>
     /// The dispatch budget handed to <c>ExecuteScript</c>. Large enough that "waited it out" and
     /// "answered from the pre-flight" cannot be confused for one another.
@@ -100,6 +123,54 @@ public class ExecuteScriptPreflightTest(ITestOutputHelper output) : MonolithMesh
             $"the refusal must say WHAT is wrong with the target. Got: {result}");
     }
 
+    /// <summary>
+    /// 🚨 #841's OTHER half, which the pre-flight silently dropped.
+    ///
+    /// <para>A dispatch that ends without an Activity node must reach the CALLER <b>and</b> the
+    /// OPERATOR — that is why <c>CodeNodeType.HandleExecuteScript</c>'s refusal sink does both
+    /// things in one place, and why every test in the engine's dispatch-diagnostics suite asserts
+    /// the Warning+ trace as well as the verdict. The pre-flight above moved two of those three
+    /// verdicts — "no readable node" and "not a runnable Code node" — from the owning hub to the
+    /// caller, where the answer is cheaper; the log line did not come with them. From that change
+    /// onward the commonest refusals reproduced #841's reported picture exactly: the caller is
+    /// told, and the pod emits NOTHING at Warning or above.</para>
+    ///
+    /// <para>Both pre-flight branches are exercised, because they are two <c>return</c>s in
+    /// <c>DescribeUnrunnableTarget</c> and a trace on one says nothing about the other. The
+    /// assertion is on the mesh's own <see cref="ILoggerFactory"/>, not on test output, so it
+    /// measures what an operator would actually see in Loki.</para>
+    /// </summary>
+    [Theory(Timeout = 180000)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExecuteScript_PreflightRefusal_IsVisibleToTheOperator_NotJustToTheCaller(
+        bool absentPath)
+    {
+        var path = absentPath
+            ? $"{TestPartition}/NoSuchScript-{Guid.NewGuid():N}"
+            : TestPartition;
+
+        var (result, _) = await Run(path);
+        result.GetProperty("status").GetString().Should().Be("Error", result.ToString());
+
+        var refusals = logs.Records
+            .Where(r => r.Level >= LogLevel.Warning
+                && r.Message.Contains("ExecuteScript refused", StringComparison.Ordinal))
+            .ToArray();
+
+        refusals.Should().NotBeEmpty(
+            "a refused dispatch must leave a Warning+ trace naming the target — the caller's JSON "
+            + "is not evidence anybody but the caller can see, and an operator with no trace is "
+            + "the whole of #841. Captured at Warning+: [{0}]",
+            string.Join(" | ", logs.Records
+                .Where(r => r.Level >= LogLevel.Warning)
+                .Select(r => $"{r.Level} {r.Category}: {r.Message}")));
+
+        refusals.Should().Contain(r => r.Message.Contains(path, StringComparison.Ordinal),
+            "the trace must name the PATH that was refused, or an operator reading it cannot tell "
+            + "which run died");
+    }
+
     // ── helpers ──
 
     /// <summary>
@@ -120,5 +191,38 @@ public class ExecuteScriptPreflightTest(ITestOutputHelper output) : MonolithMesh
 
         Output.WriteLine($"ExecuteScript('{path}') answered in {stopwatch.Elapsed.TotalSeconds:F2}s: {json}");
         return (JsonDocument.Parse(json).RootElement.Clone(), stopwatch.Elapsed);
+    }
+
+    // ── log capture ──
+
+    private sealed record CapturedLog(
+        LogLevel Level, string Category, string Message, Exception? Exception);
+
+    /// <summary>
+    /// An <see cref="ILoggerProvider"/> that keeps every record the mesh emits. The backing queue
+    /// is an INSTANCE field on an instance the test's mesh owns — the no-static-state rule applies
+    /// to test infrastructure exactly as it does to <c>src/</c>.
+    /// </summary>
+    private sealed class CapturingLoggerProvider : ILoggerProvider
+    {
+        private readonly ConcurrentQueue<CapturedLog> records = new();
+
+        public IReadOnlyList<CapturedLog> Records => records.ToArray();
+
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(categoryName, records);
+
+        public void Dispose() { }
+
+        private sealed class CapturingLogger(string category, ConcurrentQueue<CapturedLog> sink) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+                Exception? exception, Func<TState, Exception?, string> formatter)
+                => sink.Enqueue(new CapturedLog(
+                    logLevel, category, formatter(state, exception), exception));
+        }
     }
 }
