@@ -135,17 +135,18 @@ measurement — **harness** (the code that *boots* the mesh, which cannot run in
 
 | bucket | projects | cases | share |
 |---|---:|---:|---:|
-| framework primitive | 11 | 2,150 | 31% |
-| substrate | 6 | 1,502 | 22% |
-| harness (boots the thing under test) | 4 | 301 | 4% |
-| plugin (installable module) | 12 | 518 | 8% |
-| host composition | 2 | 488 | 7% |
-| compiler/build core (`Graph.Test`) | 1 | 1,332 | 19% |
-| not-a-mesh-thing (pure) | 3 | 115 | 2% |
-| *(support libraries, 0–1 cases)* | 5 | 1 | – |
+| framework primitive | 10 | 2,107 | 30.8% |
+| **substrate** | 6 | **1,982** | 29.0% |
+| compiler/build core (`Graph.Test`) | 1 | 1,332 | 19.5% |
+| **plugin (installable module)** | 12 | **515** | 7.5% |
+| host composition | 2 | 488 | 7.1% |
+| harness (boots the thing under test) | 4 | 301 | 4.4% |
+| not-a-mesh-thing (pure) | 3 | 115 | 1.7% |
+| *(support libraries)* | 5 | 1 | – |
+| **total** | **43** | **6,841** | |
 
-🚨 **The second honest correction: "anything which is a plugin does not stay xunit" removes 518
-cases, 8% of core's estate.** Core is a framework repo — almost nothing in it ships as an installable
+🚨 **The second honest correction: "anything which is a plugin does not stay xunit" removes 515
+cases, 7.5% of core's estate.** Core is a framework repo — almost nothing in it ships as an installable
 module. The volume is in *framework primitive* and *substrate*, and the maintainer is right that
 **substrate is migratable**: booting a mesh **on** PostgreSQL and asserting from inside is a more
 faithful test than a mock, not a less faithful one. That is what the bootstrap seam exists to say.
@@ -518,9 +519,9 @@ it needs exists**.
 | **5b** | **Generalise `Outcome.NeedsMesh`**: the parameter a hosted case takes becomes a test context carrying the mesh's `IServiceProvider` and hub, alongside `LayoutAreaHost`. Add `WithServices(…)` to `IMeshBootstrap`. | Facilities #2 and #3. Retires the 1,145-site container blocker and the ~50 test-double registrations. |
 | **5c** | 🚨 **Build data cases** — `[Theory]`/`[InlineData]`/`[MemberData]` equivalents with **per-row verdicts**, in Lane B's reflection discovery and in the `N/M passed` frame contract Lane A classifies. | Facility #1. **Do not start step 6 before this is green**; migrating a theory-heavy suite without it destroys per-case verdicts irreversibly. |
 | **5d** | Prove 5a–5c on **ONE** decentralised suite end to end, measured against its xunit executed-case count (not its `[Fact]` count). | Everything after this. |
-| **6** | **Migrate the `plugin` bucket** (518 cases, 12 projects) — smallest, most clearly in scope, and the maintainer's rule says they must not stay xunit. | Validates install-and-execute on real modules. |
-| **7** | **Migrate the `substrate` bucket** (1,502 cases) — `Hosting.Monolith`, `PluginCatalog`, `GitSync`, `Persistence`, `Hosting`. | Removes the bulk of `MonolithMeshTestBase`'s 2,092 cases. |
-| **8** | **Migrate the `framework primitive` bucket** (2,150 cases) to `{Assembly}/Test/`, co-located, still executed in-mesh where a mesh helps and as plain xunit where it does not. | The last `MonolithMeshTestBase` subclass. |
+| **6** | **Migrate the `plugin` bucket** (515 cases, 12 projects) — smallest, most clearly in scope, and the maintainer's rule says they must not stay xunit. | Validates install-and-execute on real modules. |
+| **7** | **Migrate the `substrate` bucket** (1,982 cases) — `Hosting.Monolith`, `PluginCatalog`, `GitSync`, `Persistence`, `Hosting`. | Removes the bulk of `MonolithMeshTestBase`'s 2,092 cases. |
+| **8** | **Migrate the `framework primitive` bucket** (2,107 cases) to `{Assembly}/Test/`, co-located, still executed in-mesh where a mesh helps and as plain xunit where it does not. | The last `MonolithMeshTestBase` subclass. |
 | **9** | **Delete `MonolithMeshTestBase`.** | — |
 | **10** | Fold `HubTestBase` (611 cases) into the same shape, or leave it — it is out of the maintainer's scope and boots no mesh. | — |
 
