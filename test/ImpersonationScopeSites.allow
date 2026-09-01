@@ -60,7 +60,6 @@ src/MeshWeaver.Graph/Configuration/SpaceNodeType.cs	1
 src/MeshWeaver.Graph/Configuration/WebhookEventNodeType.cs	1
 src/MeshWeaver.Graph/DeckSlidesCache.cs	1
 src/MeshWeaver.Compiler.Pipeline/NodeTypeBuildState.cs	1
-src/MeshWeaver.Graph/MeshNodeExtensions.cs	6
 src/MeshWeaver.Graph/NodeTypeReleaseExtensions.cs	1
 src/MeshWeaver.Graph/StaticRepoImporter.cs	1
 src/MeshWeaver.Hosting/MeshNodeStreamCache.cs	1
