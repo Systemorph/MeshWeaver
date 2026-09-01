@@ -50,6 +50,16 @@ about it.
 The set is produced by **`SeoResolver.ResolveIconLinks`** (`memex/Memex.Portal.Shared/Seo/`).
 `ResolveIcon` — the single-icon accessor — is unchanged and still returns the first of them.
 
+🚨 **`PageIcon` gained `Rel` and `Sizes` as `init` PROPERTIES, not as primary-constructor
+parameters** — and that is not a style choice. A record's primary constructor is a **binary
+contract** with every module already compiled against it: adding a parameter replaces the
+signature *even when it carries a default*, so a published module calls a constructor the new
+platform no longer has and the host aborts at boot, in both directions. There is no image that can
+serve a mixed set. `scripts/check-record-signatures.py` is the gate that says so, and it caught the
+positional version of exactly this change — a red worth having, because nothing about
+`PageIcon(Href, Type, Rel = "icon", Sizes = null)` *looks* breaking from the call site. A new
+property is additive and cannot split an image.
+
 ## `/api/icon/{node}.png?size=N`
 
 `SeoEndpoints.MapNodeIcon`, beside `/api/og/{node}.png`. Four properties matter:

@@ -19,13 +19,26 @@ namespace Memex.Portal.Shared.Seo;
 /// <param name="Type">The media type to declare, or null when the value alone does not pin one
 /// down — declaring the WRONG type is worse than declaring none, and a consumer that ranks icons
 /// by type would then rank this one on a lie.</param>
-/// <param name="Rel">The link relation — <c>icon</c> for the tab strip, <c>apple-touch-icon</c> for
-/// Safari's bookmark / Add-to-Dock tile, which is a SEPARATE channel and never falls back to the
-/// favicon.</param>
-/// <param name="Sizes">The <c>sizes</c> attribute, for a raster icon that has exactly one pixel
-/// size. Null for a scalable (SVG) icon, where declaring a size would tell a browser ranking icons
-/// by size something untrue.</param>
-public sealed record PageIcon(string Href, string? Type, string Rel = "icon", string? Sizes = null);
+public sealed record PageIcon(string Href, string? Type)
+{
+    /// <summary>
+    /// The link relation — <c>icon</c> for the tab strip, <c>apple-touch-icon</c> for Safari's
+    /// bookmark / Add-to-Dock tile, which is a SEPARATE channel and never falls back to the
+    /// favicon.
+    ///
+    /// <para>🚨 An <c>init</c> PROPERTY, deliberately not a third primary-constructor parameter.
+    /// A record's primary constructor is a BINARY contract with every module already compiled
+    /// against it — adding a parameter replaces the signature even when it carries a default, and
+    /// the host aborts at boot on the mismatch in both directions. A new property is additive, so
+    /// this cannot split an image; <c>scripts/check-record-signatures.py</c> is what says so.</para>
+    /// </summary>
+    public string Rel { get; init; } = "icon";
+
+    /// <summary>The <c>sizes</c> attribute, for a raster icon that has exactly one pixel size. Null
+    /// for a scalable (SVG) icon, where declaring a size would tell a browser that ranks icons by
+    /// size something untrue. Same <c>init</c> reasoning as <see cref="Rel"/>.</summary>
+    public string? Sizes { get; init; }
+}
 
 /// <summary>
 /// What the crawler-facing head needs to know about the requested page: the resolved node and
@@ -266,15 +279,15 @@ public static class SeoResolver
         return
         [
             icon,
-            new PageIcon(
-                RasterIconUrl(node.Path, IconRasterizer.FaviconSize),
-                "image/png",
-                Sizes: $"{IconRasterizer.FaviconSize}x{IconRasterizer.FaviconSize}"),
-            new PageIcon(
-                RasterIconUrl(node.Path, IconRasterizer.AppleTouchSize),
-                "image/png",
-                Rel: "apple-touch-icon",
-                Sizes: $"{IconRasterizer.AppleTouchSize}x{IconRasterizer.AppleTouchSize}"),
+            new PageIcon(RasterIconUrl(node.Path, IconRasterizer.FaviconSize), "image/png")
+            {
+                Sizes = $"{IconRasterizer.FaviconSize}x{IconRasterizer.FaviconSize}",
+            },
+            new PageIcon(RasterIconUrl(node.Path, IconRasterizer.AppleTouchSize), "image/png")
+            {
+                Rel = "apple-touch-icon",
+                Sizes = $"{IconRasterizer.AppleTouchSize}x{IconRasterizer.AppleTouchSize}",
+            },
         ];
     }
 
