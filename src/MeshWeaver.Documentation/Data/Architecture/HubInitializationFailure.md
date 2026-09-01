@@ -70,6 +70,74 @@ This **generalizes** the per-context guard that already lived in `DataContext.Op
 (which opens its own `DataContextInit` gate even on fault) up to the hub level, so **every**
 BuildupAction — not just the DataContext one — fails gracefully.
 
+## 🚨 A hub's init runs BEFORE its creator's constructor has returned
+
+`MessageHubConfiguration.Build` ends with `StartMessageProcessing()`, and that method **posts
+`InitializeHubRequest`**. So a hub is already draining its own init turn — on its own turn
+scheduler, i.e. another thread — while the code that asked for it is still inside
+`GetHostedHub(...)`.
+
+Anything the BuildupActions reach back into must therefore be **fully bound before `Build`
+starts message processing**, not on the creator's return path. There are exactly two safe
+places:
+
+| Where | Runs | Use it for |
+|---|---|---|
+| a **synchronous** `WithInitialization(Action<IMessageHub>)` | inside `Build`, *before* `StartMessageProcessing` | binding the creator's own fields onto the new hub |
+| the creator, after `WithDeferredInitialization()` + an explicit `Post(new InitializeHubRequest())` | whenever the creator says so | when the creator cannot finish before `Build` (e.g. `LayoutAreaHost`, whose init lambda reads a property assigned after the constructor returns) |
+
+**Assigning on the return path is a race, and it fails SILENTLY.** `SynchronizationStream`'s
+constructor used to do exactly that:
+
+```csharp
+var syncHub = Host.GetHostedHub(SynchronizationAddress.Create(ClientId), ConfigureSynchronizationHub, …);
+…
+Hub = syncHub;              // ← too late: the sub-hub's init may already have faulted
+```
+
+A data source whose initial load faults *synchronously* (`Observable.Throw`) reaches
+`SynchronizationStream.OnError` inside that window. `OnError`'s `if (Hub is not null)` guard then
+skipped **both** `Hub.FailStartup(error)` and `Hub.OpenGate(SynchronizationGate)` — so:
+
+* `SynchronizationGate` never opened ⇒ the sub-hub never reached `Started`;
+* `Hub.Started` never settled ⇒ `IDataSource.Initialized` (a `WhenAll` over those tasks) hung;
+* `DataContext`'s `DataContextInit` gate was never given its answer ⇒ **every** request to the
+  owning hub deferred until an unrelated deadline expired.
+
+The tell is a log that says the hub failed and then goes quiet: `sync/… initialization failed —
+a BuildupAction faulted` at ~4 ms, followed by **no** `DataContext initialization failed for …`
+and a caller that waits out its whole budget. That was CI flake
+[#2625](https://github.com/Systemorph/MeshWeaver/issues/2625), unreproducible in 25 local runs
+because the window is a few instructions wide and only CI-shard thread pressure lands in it.
+
+The fix is the first row of the table: `ConfigureSynchronizationHub` now starts with
+`.WithInitialization(BindHub)`, so `Hub` is bound on the constructing thread before the sub-hub
+can process anything. The same window was a latent `NullReferenceException` on the *success*
+path too — `Initialize`'s `SetCurrent(hub, new ChangeItem<TStream>(init, StreamId, OwnerVersion()))`
+reads `Hub.Version` for an owner-side stream.
+
+**The general rule: a "not yet available, skip it" guard on an initialization path is a wedge,
+never a no-op.** Skipping `FailStartup` does not degrade the failure — it converts a fast, typed
+rejection into an unbounded wait with nothing logged. Where such a guard must stay (here: a
+stream whose constructor refused before binding a hub), it logs at **Error** and names what will
+never be settled.
+
+### How to reproduce an ordering like this deterministically
+
+`HostedHubsCollection` publishes `HubAdded` **twice** per hosted hub, and the two emissions
+straddle exactly this window:
+
+1. from `HostedHubsCollection.Add`, called by `Build` *before* `SyncBuildupActions` and before
+   `StartMessageProcessing` — nothing can have faulted yet;
+2. from `GetHub`'s creation `Lazy`, called *after* `Build` returned (so after the init request was
+   posted) and *before* `GetHostedHub` returns to the caller's constructor.
+
+Subscribing on the second emission and holding that thread until the sub-hub records its
+`InitializationError` pins the interleaving with no timing luck at all — see
+`DataContextFaultedInitBeforeStreamHubBoundTest`. This beats a repeat-until-it-flakes loop: 25
+runs at `DOTNET_PROCESSOR_COUNT=4` produced 0 failures, the parked run produces the defect every
+time.
+
 ## How it shows on the GUI
 
 Because the failure is now a `DeliveryFailure` flowing back through the subscriber rather than a silent
@@ -102,6 +170,11 @@ handler. That is an ordinary wedge — see
 faulting BuildupAction answers a probe request with a `DeliveryFailureException` carrying
 `"initialization failed: <reason>"` **fast** (a `TimeoutException` would mean the gate never opened —
 the regression), and exposes the `InitializationError` status marker.
+
+`test/MeshWeaver.Data.Test/DataContextInitWatchdogTest.cs` pins the DataContext side — the
+watchdog's four terminal outcomes, plus
+`DataContextFaultedInitBeforeStreamHubBoundTest`, which stages the construction-window ordering
+above deterministically and asserts that the faulted arm still settles the gate.
 
 ## Related
 
