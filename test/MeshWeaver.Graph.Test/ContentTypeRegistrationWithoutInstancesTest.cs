@@ -1,5 +1,4 @@
 using System;
-using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -8,7 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshWeaver.Fixture;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.Graph.Test;
 
 /// <summary>
 /// 🚨 <b>A NodeType's content type must register WITHOUT a single instance existing.</b>

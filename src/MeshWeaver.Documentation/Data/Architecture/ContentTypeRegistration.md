@@ -89,6 +89,111 @@ carrying its discriminator — so there is nothing for the registry's absence to
 bites built-in types, whose content is written by installers and other partitions, and those are
 precisely the static definitions the sweep covers.
 
+## 🚨 Registration is an EVENT — a degrade must never be terminal
+
+The sweep above answers *"the type is defined but nothing instantiates it"*. It does not answer the
+other way a read can find the registry empty: **the type is not registered YET**.
+
+A compiled NodeType registers its content type when its instance hub cold-activates, and that
+happens only once Roslyn has produced the assembly. Loading nodes and compiling NodeTypes are
+concurrent, so an instance's content can be read a few hundred milliseconds **before** its own type
+exists. Every read seam handles that correctly for the emission in front of it — it asks the
+registry, gets "unknown", and emits the content as an untyped `JsonElement`, which is the honest
+answer at that instant.
+
+The defect was what happened next: **nothing**. `Register` was a silent side effect — no event, no
+observable — so a subscription that opened on the losing side of the race held the untyped value for
+the life of the hub. The node itself never changes, so no further emission ever arrives to
+re-convert it. The view renders empty, `edit_content` refuses the content, and every reactive wait
+for the typed shape times out. Nothing about it is random; it is a race whose loser never recovers,
+which is exactly why re-running a failing test "fixed" it
+([#2952](https://github.com/Systemorph/MeshWeaver/issues/2952)).
+
+**`IMeshContentTypeRegistry.Registrations` makes registration observable**, and the read boundary
+waits on it:
+
+```csharp
+// MeshNodeStreamHandle.TypedContentObserver — arms only when the conversion DEGRADED
+contentTypeRegistry.Registrations
+    .StartWith(Unit.Default)          // closes the gap between the conversion and this Subscribe
+    .Select(_ => TryRetype(raw))      // re-ask; keep the answer only if it is now typed
+    .Where(n => n is not null)
+    .Take(1)
+    .Subscribe(n => observer.OnNext(n!), observer.OnError);
+```
+
+Four properties are load-bearing, and each of them is the reason a *different* wrong shape was not
+used:
+
+- **It is a subscription to the real EVENT, not a poll.** No timer, no interval, no re-subscribe
+  loop. A watchdog that re-checked "has the type shown up yet" would be the band-aid; the type
+  becoming known is an actual thing that happens, so it is published.
+- **It arms only on the already-degraded path**, and at most one wait exists per subscription. A
+  node that types on the first try pays nothing, and the wait is disarmed by the next emission, by a
+  terminal, and by disposal.
+- **It re-asks; it never force-fits.** The notification carries no content. The seam re-runs its own
+  conversion and keeps the result only when it is genuinely typed, so a registration for an
+  unrelated type is a no-op and an unresolvable discriminator stays an untyped `JsonElement`,
+  exactly as before.
+- **Notifications are delivered OFF the registering thread.** `Register` runs inside a
+  `MessageHubConfiguration` build; handing a subscriber's render to that thread would re-enter hub
+  construction from inside itself. `Registrations` therefore observes on the task pool, the same way
+  a storage change notification arrives.
+
+### Where the wait lives, and why one place is enough
+
+`MeshNodeStreamHandle.Subscribe` is the single boundary every `workspace.GetMeshNodeStream(path)`
+read passes through — own-hub and cross-hub, server-side and Blazor — and every emission already
+goes through its `TypedContentObserver`. Putting the wait there covers both the cache read
+(`MeshNodeStreamCache.GetStream`, whose conversion runs *upstream* of the handle and hands the
+handle a still-degraded `JsonElement`) and the owning hub's own read of its workspace copy.
+
+Two seams are deliberately left alone:
+
+- **`MeshNodeTypeSource.ResolveJsonElementContent`** stores the degraded node in the owning hub's
+  workspace, which is where the untyped value physically lives. It is *not* re-materialised there,
+  because putting a repaired instance back into the workspace is a WRITE: it mints a version for
+  what was only ever a read, and that is the `#1432`/`#2008` phantom-revision class. Every consumer
+  of that copy reads it through the handle above, which now re-types on the way out.
+- **`MeshNodeStreamCache.GetQuery`** is a query snapshot, not a node binding. Its consumers re-issue
+  the query; a single held emission is not the shape of the defect.
+
+### 🚨 What the late re-type does NOT fix — the same race at the ENRICHMENT seam
+
+Content typing and layout-area registration are **two side effects of one configuration build**. A
+compiled NodeType's `configuration` is a single expression:
+
+```json
+"configuration": "config => config.WithContentType<PandasExplorer>().AddLayout(layout => layout.AddPandasExplorerLayoutAreas().WithDefaultArea(\"Explorer\"))"
+```
+
+So an instance hub that did not bind the compiled configuration has **neither** the content type
+**nor** the areas — and re-typing the content afterwards does not add a renderer. The two symptoms
+travel together and have a common cause, but they need different cures, and only the first is fixed
+here.
+
+The second cure belongs at `NodeTypeEnrichmentHelpers.ApplyStreamResult`
+(`src/MeshWeaver.Graph/Configuration/NodeTypeEnrichmentHelpers.cs`). Its "no compile lifecycle
+attached" branch —
+
+```csharp
+if ((def.CompilationStatus is null || def.CompilationStatus == CompilationStatus.Unknown)
+    && typeNode.HubConfiguration is null)
+    return Observable.Return(node);        // bare node: no overlay, no WithOverlaySelfHeal
+```
+
+— returns the instance **unwrapped by `WithOverlaySelfHeal`**, unlike every sibling branch
+(in-flight compile, missing bytes, execution refused). The instance falls to the mesh default hub
+chain, and the re-enrichment short-circuit at the top of `EnrichWithNodeType`
+(`if (node.HubConfiguration != null) return …`) pins it there for the grain's lifetime;
+`NodeTypeRebindWatcher` recycles only on a change of `MeshNode.NodeType`, never on a compile
+transition. A type whose first build has not been *kicked off* yet is therefore indistinguishable
+from one that will never compile — and the framework already has a predicate for the difference (a
+`Configuration`/`HubConfiguration` source string, or a recorded `CompilationStatus`, is what
+`NodeTypeLayoutAreas.AppendSweepSummary` counts as "participates in compilation"). Until that branch
+uses it, an instance that activates before its type's first build is stamped is answered with the
+TERMINAL `area-not-found` where the transient `compile-progress` is true.
+
 ## Diagnosing a suspected miss
 
 1. **Symptom**: a view that should render structured content renders empty, or a `ContentAs<T>`
