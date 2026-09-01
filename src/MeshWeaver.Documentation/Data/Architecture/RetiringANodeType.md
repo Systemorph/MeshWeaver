@@ -1,7 +1,7 @@
 ---
 Name: Retiring a NodeType
 Category: Architecture
-Description: How to withdraw an in-mesh NodeType, and the prune asymmetry that strands its definition on every two-way-synced partition — the source nodes are deleted, the definition is kept, and the type is parked in CompileError forever.
+Description: How to withdraw an in-mesh NodeType, and the prune asymmetry that strands its definition on every two-way-synced partition — the source nodes are deleted, the definition is kept, and the type is parked at compilationStatus Error forever.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
 ---
 
@@ -12,7 +12,7 @@ content record and a definition class in `src/`. This page is about the other ki
 NodeType, shipped by a package or a node repo as `{Type}.json` plus `{Type}/Source/*.cs`, compiled
 at runtime by [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation). Withdrawing one is not
 the mirror image of adding one: the package can stop shipping the type, and the live mesh keeps it
-anyway — as a permanent `CompileError` nobody authored.
+anyway — pinned at `compilationStatus: "Error"` by a failure nobody authored.
 
 ## The rule
 
@@ -20,7 +20,7 @@ anyway — as a permanent `CompileError` nobody authored.
 > package stops shipping it.** Deleting `{Type}.json` and `{Type}/Source/**` in one commit removes
 > the sources from every deployment and leaves the definition standing on the two-way-synced ones.
 > What remains is a `configuration` lambda naming types that no longer have source: a permanent
-> `CompileError` no re-import can clear.
+> `compilationStatus: "Error"` no re-import can clear.
 
 ## What a retirement has to remove
 
