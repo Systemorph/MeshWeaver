@@ -256,6 +256,16 @@ on:
         type: string
         required: false
         default: ''
+      lane-id:
+        description: >
+          Distinguishes this CALL's global-build artifact when one workflow invokes the lane
+          more than once in the same run (floor + rest): both calls uploading 'workspace-build'
+          collide, and half the packs then download the OTHER call's workspace — measured on
+          Plugins#1044 (run 33475…, 'produced no MeshWeaver.Teams.dll' while the build had 35/35
+          ok). Callers with multiple invocations MUST set distinct values.
+        type: string
+        required: false
+        default: 'main'
       prebuilt-modules:
         description: >
           DEPRECATED, ignored. The global build-workspace job replaced per-job prebuilt
@@ -708,7 +718,7 @@ jobs:
         if: steps.build.outputs.built == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: workspace-build
+          name: workspace-build-${{ inputs.lane-id }}
           path: ${{ runner.temp }}/module-build
           retention-days: 1
           if-no-files-found: error
@@ -962,7 +972,7 @@ jobs:
         if: ${{ (matrix.entry.build || 'sdk') == 'container' }}
         uses: actions/download-artifact@v8
         with:
-          name: workspace-build
+          name: workspace-build-${{ inputs.lane-id }}
           path: ${{ runner.temp }}/workspace-build
       - name: Build the module — and say which compiler produced it
         id: build
