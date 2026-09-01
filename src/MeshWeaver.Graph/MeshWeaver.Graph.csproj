@@ -71,6 +71,8 @@
          framework identity) lives in MeshWeaver.Compiler (#1707), namespace MeshWeaver.Compiler;
          this project keeps the mesh-actor half (discovery, impersonation, status write-backs). -->
     <ProjectReference Include="..\MeshWeaver.Compiler\MeshWeaver.Compiler.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Compiler.Pipeline\MeshWeaver.Compiler.Pipeline.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Graph.Contract\MeshWeaver.Graph.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
     <ProjectReference Include="..\MeshWeaver.Kernel\MeshWeaver.Kernel.csproj" />

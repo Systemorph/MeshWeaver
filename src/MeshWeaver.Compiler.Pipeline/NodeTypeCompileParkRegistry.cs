@@ -358,15 +358,26 @@ public sealed class NodeTypeCompileParkRegistry
         // bell partition — or the failing type's read-only partition, e.g. Doc — admits no ambient
         // user write). Infrastructure observability under the System notification category. When
         // recipient is null (System-driven build), it falls to the failing type (in-app only).
-        NotificationService.Dispatch(
+        // Inverted through ICompileFailureNotifier (the graph/compiler split): delivery is
+        // NotificationService in MeshWeaver.Graph, which reads the Notification* node types this
+        // assembly must not depend on. OPTIONAL by design — a hub composed without AddGraph has no
+        // notification model, and that must stay a missing bell rather than a faulted compile.
+        var notifier = hub.ServiceProvider.GetService<ICompileFailureNotifier>();
+        if (notifier is null)
+        {
+            logger?.LogDebug(
+                "No ICompileFailureNotifier registered; skipping compile-failure notification for {NodeTypePath}.",
+                nodeTypePath);
+            return;
+        }
+
+        notifier.NotifyCompileFailed(
                 hub,
                 recipient: recipient,
                 mainNodePath: mainNodePath,
                 title: title,
                 message: message,
-                type: NotificationType.System,
-                targetNodePath: nodeTypePath,
-                createdBy: "system")
+                targetNodePath: nodeTypePath)
             .Subscribe(
                 _ => logger?.LogInformation(
                     "Emitted compile-failure notification for {NodeTypePath} (recipient {Recipient})",

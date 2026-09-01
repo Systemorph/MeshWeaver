@@ -5,6 +5,9 @@ using System.Text.Json;
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor.Test")]
 [assembly: InternalsVisibleTo("MeshWeaver.Blazor.Portal")]
 [assembly: InternalsVisibleTo("MeshWeaver.Graph")]
+[assembly: InternalsVisibleTo("MeshWeaver.Graph.Contract")]
+[assembly: InternalsVisibleTo("MeshWeaver.Compiler")]
+[assembly: InternalsVisibleTo("MeshWeaver.Compiler.Pipeline")]
 [assembly: InternalsVisibleTo("MeshWeaver.AI")]
 [assembly: InternalsVisibleTo("Memex.Portal.Shared")]
 // The notification triage watcher observes ALL users' Notification nodes and their rules — a

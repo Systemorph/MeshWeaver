@@ -106,7 +106,7 @@ public record NodeTypeRelease
     /// concern — which release, which identity, where its bytes are — and it makes that a queryable
     /// property of the release rather than an index a consumer has to poll. A consumer resolves it
     /// with <see cref="ReleaseArtifactResolver.Resolve"/> against its OWN
-    /// <see cref="PrebuiltAssemblySeeder.LiveFrameworkMvid"/> and
+    /// <c>PrebuiltAssemblySeeder.LiveFrameworkMvid</c> and
     /// <see cref="ReleaseArchitecture.Live"/>, and adopts only on an exact hit.</para>
     ///
     /// <para>Normally ONE entry — the process that compiled the release stamps its own identity and
