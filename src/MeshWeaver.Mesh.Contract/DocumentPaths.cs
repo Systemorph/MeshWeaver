@@ -3,8 +3,16 @@ using System.Text;
 namespace MeshWeaver.ContentCollections.Indexing;
 
 /// <summary>
-/// Deterministic, url-safe mesh-node path for a file's <c>Document</c> node. Lives in the
-/// storage-agnostic indexing core (no <c>MeshWeaver.Graph</c> dependency) so both the indexing
+/// Deterministic, url-safe mesh-node path for a file's <c>Document</c> node. It keeps the
+/// <c>MeshWeaver.ContentCollections.Indexing</c> NAMESPACE while living in this assembly: the
+/// indexing pipeline moved to MeshWeaver.Plugins as a module, and this is the one type the
+/// platform still needs (MeshWeaver.Mesh.Operations resolves document paths). Splitting it out
+/// this way is what let the pipeline leave without core taking a dependency on a module.
+/// It sits in Mesh.Contract because BOTH remaining consumers — Mesh.Operations here and the
+/// indexing pipeline in the plugins repo — already reference it, so the split adds no edge to
+/// the graph; putting it in ContentCollections would have given the pipeline a new dependency
+/// on Layout and Markdown, which is exactly what its "storage-agnostic core" note rules out.
+/// No <c>MeshWeaver.Graph</c> dependency, so both the indexing
 /// service and the Graph-side <c>IDocumentSink</c> compute the SAME path for a given
 /// <c>(collectionPath, filePath)</c> pair.
 ///

@@ -47,7 +47,7 @@ public static class TreeNodeLoader
     ///     a stock <c>JsonStringEnumConverter</c>. Enums persist as strings
     ///     (<c>"compilationStatus": "Ok"</c>) and web defaults do not convert them, so every
     ///     NodeType carrying a compile stamp failed to deserialize: 28 of them across ACME,
-    ///     Cornerstone, FutuRe and Northwind.</item>
+    ///     FutuRe and Northwind.</item>
     ///   <item><c>ReadCommentHandling</c> / <c>AllowTrailingCommas</c> — copied off the hub's own
     ///     options for the same reason <c>JsonFileParser</c> copies them: a node file that parses
     ///     under a hub must parse here, or the bake resolves a smaller tree than the runtime.</item>
