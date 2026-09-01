@@ -875,8 +875,25 @@ jobs:
       # compares to decide a rollout — so it MUST be the monotonic $(Version) (Directory.Build.props
       # derives the .ci.<n> suffix from $GITHUB_RUN_NUMBER). -getProperty:Version prints the computed
       # version without building; CIRun=true so it matches the version baked into the binaries below.
-      # It is NOT applied here: this job only pushes the staging tag, and `promote` applies this
-      # version (job output) once every leg has succeeded.
+      #
+      # 🚨 IT IS TWO DIFFERENT THINGS AND ONLY ONE OF THEM IS A TAG. As a TAG it is not applied
+      # here — this job pushes the staging tag only, and `promote` applies the version tag once
+      # every leg has succeeded. As the BAKED version it is applied here, via `-p:Version=` on the
+      # publish below, and that half was missing for a week (2026-08-25 → 09-01).
+      #
+      # Why it cannot be left to the project: the portal host lives in MeshWeaver.Plugins, whose
+      # src/Directory.Build.props does not import core's root props, so $(Version) there is the SDK
+      # default 1.0.0. The csproj bakes $(Version) into the image config as
+      # MESHWEAVER_PLATFORM_VERSION, which is the FIRST thing the running portal reads to identify
+      # itself — so the image was tagged 3.0.0-rc9.ci.<n> and reported 1.0.0. VersionSelect.IsNewer
+      # then called every registry tag newer than the running build, forever: the install could
+      # never reach "up to date" and re-rolled on every check floor, and the About page said
+      # `Version: 1.0.0` while /api/version answered correctly off a core-built assembly.
+      #
+      # edge-images.yml and release-images.yml have always passed it, and say why in the same words
+      # ("BAKED, not just tagged"). The step after the publish below reads the variable back out of
+      # the pushed image, so a future omission fails the run instead of shipping a portal that
+      # misreports itself — a tag is not evidence about the bytes under it.
       - name: Compute image version
         id: vars
         run: |
@@ -986,6 +1003,7 @@ jobs:
                  -c Release --no-self-contained -t:PublishContainer -p:PublishProfile= \
                  -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"' \
                  -p:CIRun=true \
+                 -p:Version=${{ steps.vars.outputs.version }} \
                  -p:MeshWeaverRoot=${{ github.workspace }} \
                  -p:ContainerRegistry=${{ env.ACR }} \
                  -p:ContainerRepository=memex-portal-ai \
@@ -1015,6 +1033,17 @@ jobs:
           done
           echo "::error::portal-ai publish failed on all 3 attempts with no compiler diagnostics — read the LAST attempt's output above. A registry blob-upload failure there (the CONTAINER-10xx family) means the connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
           exit 1
+      # 🚨 The publish SUCCEEDING is not evidence the image identifies itself correctly — that is
+      # exactly the state that shipped for a week (see the version note above). So the version is
+      # read back out of the pushed image config, per architecture, before anything selectable is
+      # applied to it: this runs BEFORE `promote`, so an image that misreports itself never gets a
+      # tag a consumer can roll to. Unconditional, and fail-closed on anything it cannot read — a
+      # skipped check and a passed one are indistinguishable in the UI.
+      - name: The published image must identify itself as this run's version
+        run: >
+          .github/scripts/check-image-build-identity.sh
+          "${{ needs.gate.outputs.staging_tag }}"
+          "${{ steps.vars.outputs.version }}"
 
   migration-image:
     name: "Build + push migration image"
