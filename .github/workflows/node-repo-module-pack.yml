@@ -946,15 +946,39 @@ jobs:
                 echo "tester-app cache HIT for $TESTER_DIGEST"
               fi
               # PREBUILT siblings: consume what this run already built — never rebuild the mesh.
+              # 🚨 Wait ONLY for modules in THIS entry's transitive ProjectReference closure. The
+              # first activated run proved the indiscriminate wait pathological: every job —
+              # consumers and non-consumers alike — sat the full bounded wait for every wanted
+              # module, and with the producers' uploads broken that was a uniform ~680s of pure
+              # idling per job (Plugins run 33451338438). A module that does not reference
+              # MeshWeaver.AI has no business waiting for MeshWeaver.AI's artifact.
               # Bounded wait; the fallback builds from source with a LOUD line (same compiler,
               # same verification, only slower — not a verification fallback).
               prebuilt_dir="$RUNNER_TEMP/prebuilt"
               rm -rf "$prebuilt_dir"; mkdir -p "$prebuilt_dir"
               if [ -n "${PREBUILT_MODULES:-}" ]; then
+                closure=$(python3 - "$GITHUB_WORKSPACE/$PROJECT" <<'PYEOF'
+          import re, sys
+          from pathlib import Path
+          seen, stack = set(), [Path(sys.argv[1]).resolve()]
+          while stack:
+              proj = stack.pop()
+              if proj in seen or not proj.exists():
+                  continue
+              seen.add(proj)
+              for ref in re.findall(r'ProjectReference\s+Include="([^"]+)"', proj.read_text()):
+                  stack.append((proj.parent / ref.replace("\\", "/")).resolve())
+          print("\n".join(p.stem for p in seen))
+          PYEOF
+                )
                 IFS=',' read -ra wanted <<< "$PREBUILT_MODULES"
                 for m in "${wanted[@]}"; do
                   m="${m// /}"
                   { [ -n "$m" ] && [ "$m" != "$MODULE" ]; } || continue
+                  if ! grep -qxF "$m" <<< "$closure"; then
+                    echo "prebuilt: $m is not in $MODULE's ProjectReference closure — not waiting for it"
+                    continue
+                  fi
                   for attempt in 1 2 3 4 5 6 7 8; do
                     if gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" -n "module-dll-$m" -D "$prebuilt_dir/$m" 2>/dev/null; then
                       echo "prebuilt: $m consumed from this run's artifact"
