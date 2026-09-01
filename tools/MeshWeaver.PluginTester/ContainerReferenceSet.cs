@@ -42,13 +42,17 @@ public sealed class ContainerReferenceSet
         string appDirectory,
         ImmutableDictionary<string, string> packageVersions,
         ImmutableDictionary<string, ImmutableArray<string>> packageAssemblies,
+        ImmutableDictionary<string, ImmutableArray<string>> packageDependencies,
         ImmutableDictionary<string, string> assembliesByName,
+        ImmutableHashSet<string> frameworkAssemblyNames,
         string platformAssemblyVersion)
     {
         AppDirectory = appDirectory;
         PackageVersions = packageVersions;
         PackageAssemblies = packageAssemblies;
+        PackageDependencies = packageDependencies;
         AssembliesByName = assembliesByName;
+        FrameworkAssemblyNames = frameworkAssemblyNames;
         PlatformAssemblyVersion = platformAssemblyVersion;
     }
 
@@ -61,8 +65,27 @@ public sealed class ContainerReferenceSet
     /// <summary>Package id → the assembly simple names it contributes, per the image's deps.json.</summary>
     public ImmutableDictionary<string, ImmutableArray<string>> PackageAssemblies { get; }
 
+    /// <summary>Package id → the package ids it depends on, per the image's deps.json. The
+    /// record the private-closure walk follows (<see cref="PrivateClosure"/>) — never a guess.</summary>
+    public ImmutableDictionary<string, ImmutableArray<string>> PackageDependencies { get; }
+
     /// <summary>Assembly simple name → the file backing it (case-insensitive).</summary>
     public ImmutableDictionary<string, string> AssembliesByName { get; }
+
+    /// <summary>
+    /// The assembly simple names the container's SHARED FRAMEWORKS supply
+    /// (<c>Microsoft.NETCore.App</c>, <c>Microsoft.AspNetCore.App</c>, …).
+    ///
+    /// <para>🚨 This — and ONLY this — is what a module bundle may leave out of its own closure.
+    /// The shared framework travels with every host that can load the module at all, so an
+    /// assembly it supplies is a genuine platform guarantee. <c>/app</c> is NOT: it is one
+    /// PORTAL's composition, and a portal that happens to carry a module compiled in also carries
+    /// that module's private package dependencies. Reading <c>/app</c> as a guarantee is what
+    /// dropped <c>Microsoft.Agents.AI</c> out of the AI bundle and made every consumer that is not
+    /// that exact image fail with <c>ReflectionTypeLoadException</c>
+    /// (MeshWeaver.Plugins#1043).</para>
+    /// </summary>
+    public ImmutableHashSet<string> FrameworkAssemblyNames { get; }
 
     /// <summary>The one <c>AssemblyVersion</c> every <c>MeshWeaver.*</c> assembly in the image carries.</summary>
     public string PlatformAssemblyVersion { get; }
@@ -107,7 +130,7 @@ public sealed class ContainerReferenceSet
                 + "is a failure rather than an empty build.");
 
         var deps = DepsFile(app);
-        var (packageVersions, packageAssemblies, platformVersion) = ReadDeps(deps);
+        var (packageVersions, packageAssemblies, packageDependencies, platformVersion) = ReadDeps(deps);
 
         // The reference set is the union of three things the container supplies, in increasing
         // priority: the SHARED FRAMEWORKS installed in it, the assemblies this process was
@@ -121,8 +144,13 @@ public sealed class ContainerReferenceSet
         //    modules reported Microsoft.AspNetCore.Components.Web "not supplied" against an image
         //    that ships it. This is the C# form of Directory.PlatformRefs.targets'
         //    <FrameworkReference Include="Microsoft.AspNetCore.App" />.
+        var frameworkNames = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in SharedFrameworkAssemblies(sharedFrameworksRoot))
-            byName.TryAdd(Path.GetFileNameWithoutExtension(path), path);
+        {
+            var simple = Path.GetFileNameWithoutExtension(path);
+            frameworkNames.Add(simple);
+            byName.TryAdd(simple, path);
+        }
 
         // 2. This process's own closure.
         var tpa = trustedPlatformAssemblies
@@ -143,7 +171,9 @@ public sealed class ContainerReferenceSet
             app,
             packageVersions,
             packageAssemblies,
+            packageDependencies,
             byName.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase),
+            frameworkNames.ToImmutable(),
             platformVersion);
     }
 
@@ -216,6 +246,7 @@ public sealed class ContainerReferenceSet
 
     private static (ImmutableDictionary<string, string> Versions,
                     ImmutableDictionary<string, ImmutableArray<string>> Assemblies,
+                    ImmutableDictionary<string, ImmutableArray<string>> Dependencies,
                     string PlatformAssemblyVersion)
         ReadDeps(string path)
     {
@@ -260,14 +291,23 @@ public sealed class ContainerReferenceSet
 
             var assemblies = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(
                 StringComparer.OrdinalIgnoreCase);
+            var dependencies = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(
+                StringComparer.OrdinalIgnoreCase);
             var bindingIdentities = new SortedSet<string>(StringComparer.Ordinal);
             foreach (var entry in runtimeTarget.EnumerateObject())
             {
+                var entrySlash = entry.Name.IndexOf('/');
+                var entryId = entrySlash > 0 ? entry.Name[..entrySlash] : entry.Name;
+                // The dependency edges are read for EVERY node, runtime assets or not: a
+                // metapackage carries no runtime of its own and is exactly the node a closure walk
+                // has to pass THROUGH rather than stop at.
+                if (entry.Value.TryGetProperty("dependencies", out var edges)
+                    && edges.ValueKind == JsonValueKind.Object)
+                    dependencies[entryId] = [.. edges.EnumerateObject().Select(d => d.Name)];
                 if (!entry.Value.TryGetProperty("runtime", out var runtime)
                     || runtime.ValueKind != JsonValueKind.Object)
                     continue;
-                var slash = entry.Name.IndexOf('/');
-                var id = slash > 0 ? entry.Name[..slash] : entry.Name;
+                var id = entryId;
                 var names = ImmutableArray.CreateBuilder<string>();
                 foreach (var file in runtime.EnumerateObject())
                 {
@@ -291,7 +331,8 @@ public sealed class ContainerReferenceSet
                     + "). That is the drift the AssemblyVersion contract exists to prevent; refusing "
                     + "to emit a reference set.");
 
-            return (versions.ToImmutable(), assemblies.ToImmutable(), bindingIdentities.Single());
+            return (versions.ToImmutable(), assemblies.ToImmutable(), dependencies.ToImmutable(),
+                bindingIdentities.Single());
         }
     }
 
@@ -338,4 +379,31 @@ public sealed class ContainerReferenceSet
     /// <returns>The file path, or null.</returns>
     public string? FindAssembly(string assemblyName) =>
         AssembliesByName.GetValueOrDefault(assemblyName);
+
+    /// <summary>
+    /// Whether the container's SHARED FRAMEWORK supplies this assembly — the one thing a module
+    /// bundle may leave out of its own closure, because it travels with every host that can load
+    /// the module at all. Deliberately NOT "is it in <c>/app</c>": see
+    /// <see cref="FrameworkAssemblyNames"/>.
+    /// </summary>
+    /// <param name="assemblyName">The assembly's simple name.</param>
+    /// <returns>True when a shared framework in this container carries it.</returns>
+    public bool IsFrameworkSupplied(string assemblyName) =>
+        FrameworkAssemblyNames.Contains(assemblyName);
+
+    /// <summary>
+    /// The assembly simple names a package contributes, per the image's own deps.json — falling
+    /// back to <c>&lt;id&gt;</c> for a package the image never resolved, which is the same rule
+    /// <see cref="Resolve"/> applies.
+    /// </summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>The simple names.</returns>
+    public ImmutableArray<string> AssembliesOf(string packageId) =>
+        PackageAssemblies.TryGetValue(packageId, out var names) ? names : [packageId];
+
+    /// <summary>The package ids a package depends on, per the image's deps.json.</summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>The dependency ids, empty when the image does not know the package.</returns>
+    public ImmutableArray<string> DependenciesOf(string packageId) =>
+        PackageDependencies.TryGetValue(packageId, out var deps) ? deps : [];
 }
