@@ -67,7 +67,16 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
     /// into a shared mesh.</summary>
     private const string LateGrantPartition = "LateGrantSpace";
 
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// 🚨 <see cref="TestTimeouts.Quick"/>, never a literal. Every wait in this suite settles a
+    /// LOCAL, in-memory fold over cached queries — the case that property names — and the value is
+    /// CI-scaled, so the bound is not a guess about how fast one laptop is
+    /// (<c>TestTimeoutLiteralRatchetGuard</c>). It also stays strictly BELOW each case's
+    /// <c>[Fact(Timeout = 60_000)]</c> on CI as well as locally (12 s local / 36 s CI vs 60 s), so
+    /// a wait that does not converge loses first and reports WHAT it was waiting for, instead of
+    /// xunit killing the method and reporting an anonymous timeout.
+    /// </summary>
+    private static TimeSpan Budget => TestTimeouts.Quick;
 
     // 🚨 ConfigureMeshBase, not base.ConfigureMesh: the latter chains PublicAdminAccess(), which
     // grants Public the Admin role in every default partition — under it every identity carries
