@@ -261,7 +261,6 @@
          PRECISELY so in-mesh sample/plugin source (Cornerstone/Pricing's Excel loader + map,
          Northwind/Product) can compile at runtime. Without them the gate flags content the real
          host compiles fine — the gate must judge against the surface content actually gets. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Maps\MeshWeaver.Maps.csproj" />
   </ItemGroup>
 
   <!-- ═════════ No module rides along any more — the AI engine left this repo (#2276) ═════════
