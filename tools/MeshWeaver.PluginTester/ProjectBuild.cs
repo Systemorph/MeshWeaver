@@ -363,7 +363,12 @@ public static class ProjectBuild
                 {
                     var byProject = results
                         .Where(r => r.Result is not null)
-                        .ToDictionary(r => r.Result!.ProjectPath, r => r.Result!, StringComparer.Ordinal);
+                        // 🚨 OrdinalIgnoreCase, like Graph.Models and the walk that produces the
+                        // keys looked up here. An Ordinal lookup would silently MISS a reachable
+                        // project whose path differs only in casing, and the symptom would be a
+                        // bundle quietly short of part of its closure — the very failure this
+                        // union exists to prevent.
+                        .ToDictionary(r => r.Result!.ProjectPath, r => r.Result!, StringComparer.OrdinalIgnoreCase);
                     foreach (var entryPath in entries)
                     {
                         var reachableProjects = InTreeClosure(graph, entryPath);
