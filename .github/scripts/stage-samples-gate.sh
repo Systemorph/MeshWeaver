@@ -9,7 +9,10 @@ mkdir -p "$STAGE"
 # Brand, Architecture) are deliberately not gated — they hold no compilable content.
 # User is NOT gated: the gate mesh serves 'User' from a static node provider (AddMeshNodes), and
 # installing over a static-provider-served path is refused by design (MeshWeaver#1209).
-for name in ACME Northwind Cornerstone FutuRe PensionFund MathDemo PythonDemo Systemorph; do
+# Cornerstone is NOT here any more: it moved to MeshWeaver.Plugins as a Store package when
+# MeshWeaver.Maps left the content surface — its RiskMap view binds MapControl, so the content
+# had to travel with the module. Its suites moved with it and run there.
+for name in ACME Northwind FutuRe PensionFund MathDemo PythonDemo Systemorph; do
   if [ ! -d "$SRC/$name" ]; then echo "::error::samples gate: expected tree '$name' is missing"; exit 1; fi
   mkdir -p "$STAGE/$name"
   cp -R "$SRC/$name/." "$STAGE/$name/"
