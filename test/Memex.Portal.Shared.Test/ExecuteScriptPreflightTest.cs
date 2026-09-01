@@ -1,13 +1,19 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.AI;   // MeshOperations — its namespace is a frozen binary contract (#2370)
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -39,6 +45,17 @@ public class ExecuteScriptPreflightTest(ITestOutputHelper output) : MonolithMesh
     /// "answered from the pre-flight" cannot be confused for one another.
     /// </summary>
     private const int DispatchBudgetSeconds = 45;
+
+    /// <summary>
+    /// Captures what the mesh's own <see cref="ILoggerFactory"/> emits, so "the refusal is visible
+    /// at Warning+" is an assertion rather than a claim. Instance-owned — its lifetime is this
+    /// test's mesh — never static.
+    /// </summary>
+    private readonly CapturingLoggerProvider logs = new();
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services => services.AddSingleton<ILoggerProvider>(logs));
 
     /// <summary>
     /// The bar the answer must beat. The pre-flight's own read is bounded at 10 s (and only
@@ -100,6 +117,41 @@ public class ExecuteScriptPreflightTest(ITestOutputHelper output) : MonolithMesh
             $"the refusal must say WHAT is wrong with the target. Got: {result}");
     }
 
+    /// <summary>
+    /// 🚨 THE PRE-FLIGHT MUST NOT MAKE THE POD GO QUIET. #841's guarantee is not "the caller is
+    /// told" — it is "the caller is told AND a Warning+ trace is left", because a dispatch that
+    /// creates no Activity node otherwise produces no evidence anywhere, which is what made that
+    /// issue undiagnosable in production. Both branches this pre-flight now answers BEFORE carry
+    /// that trace (<c>CodeNodeType.RefuseDispatch</c>'s <c>ExecuteScript refused on {Hub}</c>, and
+    /// the dispatch's own <c>ExecuteScript dispatch refused for {Path}</c>) — so making the
+    /// guaranteed failure FAST must not also make it silent.
+    ///
+    /// <para>Measured rather than assumed: without the log line in <c>PreflightError</c> this
+    /// verdict comes back correctly and the pod emits nothing at Warning or above, which is
+    /// exactly the pre-#841 condition. MeshWeaver.Plugins'
+    /// <c>ExecuteScriptDispatchDiagnosticsTest</c> caught it from the satellite side; this pins it
+    /// where the code lives.</para>
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task APreflightRefusal_LeavesAWarningTrace_notOnlyACallerVerdict()
+    {
+        var absent = $"{TestPartition}/NoSuchScript-{Guid.NewGuid():N}";
+
+        var (result, _) = await Run(absent);
+
+        result.GetProperty("status").GetString().Should().Be("Error");
+
+        logs.Records
+            .FirstOrDefault(r => r.Level >= LogLevel.Warning
+                                 && r.Message.Contains("ExecuteScript refused", StringComparison.Ordinal))
+            .Should().NotBeNull(
+                "a dispatch that creates no Activity node must leave a Warning+ trace containing "
+                + "'ExecuteScript refused' — answering from the pre-flight skips the two sinks "
+                + "that carried that guarantee (#841), so it has to carry it itself. Captured: ["
+                + string.Join(" | ", logs.Records.Select(r => $"{r.Level} {r.Category}: {r.Message}"))
+                + "]");
+    }
+
     // ── helpers ──
 
     /// <summary>
@@ -120,5 +172,30 @@ public class ExecuteScriptPreflightTest(ITestOutputHelper output) : MonolithMesh
 
         Output.WriteLine($"ExecuteScript('{path}') answered in {stopwatch.Elapsed.TotalSeconds:F2}s: {json}");
         return (JsonDocument.Parse(json).RootElement.Clone(), stopwatch.Elapsed);
+    }
+
+    private sealed record CapturedLog(LogLevel Level, string Category, string Message);
+
+    private sealed class CapturingLoggerProvider : ILoggerProvider
+    {
+        // Instance field on an instance owned by the test's mesh — never static state.
+        private readonly ConcurrentQueue<CapturedLog> records = new();
+
+        public IReadOnlyList<CapturedLog> Records => records.ToArray();
+
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(categoryName, records);
+
+        public void Dispose() { }
+
+        private sealed class CapturingLogger(string category, ConcurrentQueue<CapturedLog> sink) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+                Exception? exception, Func<TState, Exception?, string> formatter)
+                => sink.Enqueue(new CapturedLog(logLevel, category, formatter(state, exception)));
+        }
     }
 }

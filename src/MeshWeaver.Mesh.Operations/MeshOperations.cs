@@ -4609,10 +4609,26 @@ public class MeshOperations
     /// to read regardless of which side answered. <c>errorType</c> is a stable token here rather
     /// than an exception type name — there is no exception, and inventing one would be a lie.
     /// </summary>
-    private string PreflightError(string resolvedPath, string errorType, string message) =>
-        JsonSerializer.Serialize(
+    private string PreflightError(string resolvedPath, string errorType, string message)
+    {
+        // 🚨 #841's guarantee is not "the caller is told" — it is "the caller is told AND the pod
+        // leaves a Warning+ trace", because a dispatch that produced no Activity node produced no
+        // evidence anywhere, and that is what made the original issue undiagnosable in production.
+        // Both branches that used to answer these three refusals carry that trace
+        // (CodeNodeType.RefuseDispatch's "ExecuteScript refused on {Hub}", and DispatchScript's
+        // "ExecuteScript dispatch refused for {Path}"). This pre-flight now answers BEFORE either
+        // of them, so it has to carry it too — otherwise making the guaranteed failure FAST
+        // silently made the pod go quiet again for exactly the cases #841 was about. Caught by
+        // MeshWeaver.Plugins' ExecuteScriptDispatchDiagnosticsTest, which asserts the trace rather
+        // than the verdict.
+        logger.LogWarning(
+            "ExecuteScript refused for {Path}: {ErrorType}: {Error} No Activity node was created "
+            + "(refused before dispatch).",
+            resolvedPath, errorType, message);
+        return JsonSerializer.Serialize(
             new { status = "Error", path = resolvedPath, errorType, message },
             hub.JsonSerializerOptions);
+    }
 
     /// <summary>
     /// The dispatch itself — unchanged behaviour, lifted out of <see cref="ExecuteScript"/> so the
