@@ -283,8 +283,11 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
     /// <summary>
     /// The structural anti-regression: on the two paths where the old evaluator DID diverge on
     /// claims, the verdict is now identical with and without them. <c>AccessContext.Roles</c> is
-    /// carried for diagnostics and for <c>AccessControlPipeline</c>'s context-restore cue — a
-    /// future "just check the claims" is a regression, not a shortcut.
+    /// carried for DIAGNOSTICS ONLY — nothing reads it to decide anything. It was
+    /// <c>AccessControlPipeline</c>'s context-restore cue until #2976, which is precisely what made
+    /// a claimless token escape the clamp on every message-routed check
+    /// (<c>RoutedApiTokenClampTest</c>); a future "just check the claims" is a regression, not a
+    /// shortcut.
     /// </summary>
     [Fact(Timeout = 60_000)]
     public async Task ClaimRoles_ChangeNoVerdict()
