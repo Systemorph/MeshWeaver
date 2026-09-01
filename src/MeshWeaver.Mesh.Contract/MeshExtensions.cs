@@ -710,27 +710,13 @@ public static class MeshExtensions
                 {
                     node = NormalizeSatelliteMainNode(node, meshConfig);
                 }
-                // 1b'. Repair a STALE BARE-ID self-default MainNode on a MAIN (non-satellite) node.
-                // MainNode is a STORED property: unlike the computed Path/Segments it does NOT follow
-                // a `with { Namespace = … }` rebase. A node first built BARE
-                // (`new MeshNode("Datenextraktion")` → MainNode defaults to the bare Id
-                // "Datenextraktion") and only LATER given a namespace keeps that stale bare MainNode
-                // while its Path becomes the full path. Persisted, the bare value flows
-                // Node.MainNode → NavigationContext.PrimaryPath → NavigationService.CurrentNamespace →
-                // the chat composer's StartThread namespace → a thread created under the NON-EXISTENT
-                // "Datenextraktion" partition (the agent's short id) → Postgres 42P01
-                // (`relation "datenextraktion.mesh_nodes" does not exist`). Re-stamp it to the node's
-                // real Path so a main node is never persisted pointing at a phantom partition.
-                // Trigger is deliberately the EXACT bug shape — MainNode == the bare Id on a namespaced
-                // node — NOT a blanket `MainNode != Path`: a non-satellite node may legitimately point
-                // MainNode at a PARENT path (e.g. GitHubSyncConfig's `MainNode = spacePath`), which is
-                // never equal to its own Id and so is left untouched. Satellites are handled in 1b.
-                else if (!string.IsNullOrEmpty(node.NodeType)
-                    && !string.IsNullOrEmpty(node.Namespace)
-                    && !meshConfig.IsSatelliteNodeType(node.NodeType)
-                    && node.MainNode == node.Id)
+                // 1b'. Repair a STALE SELF-DEFAULT MainNode on a MAIN (non-satellite) node — a
+                // MainNode frozen at the namespace the node was BORN in, which a record rebase does
+                // not move. The rule, both shapes it covers and why each needs its exact trigger live
+                // on RepairStaleSelfDefaultMainNode; this is the `else` of the chain whose `if` is 1b.
+                else
                 {
-                    node = node with { MainNode = node.Path };
+                    node = RepairStaleSelfDefaultMainNode(node, meshConfig);
                 }
 
                 // 1c. SELF-HEALING PARTITION BOOTSTRAP. Ensure the partition's Space root +
@@ -1329,14 +1315,10 @@ public static class MeshExtensions
                     .Select(n => n.Path).ToImmutableList();
                 var toCreate = nodes
                     .Where(n => !existing.Contains(n.Path))
-                    // The 1b' stale-bare-Id MainNode repair from the singular path (satellites are
-                    // refused above, so the satellite normalization does not apply here).
-                    .Select(n => !string.IsNullOrEmpty(n.NodeType)
-                                 && !string.IsNullOrEmpty(n.Namespace)
-                                 && !meshConfig.IsSatelliteNodeType(n.NodeType)
-                                 && n.MainNode == n.Id
-                        ? n with { MainNode = n.Path }
-                        : n)
+                    // The 1b' stale-self-default MainNode repair from the singular path — the SAME
+                    // helper, not a second copy of the rule (satellites are refused above, so the
+                    // satellite normalization does not apply here).
+                    .Select(n => RepairStaleSelfDefaultMainNode(n, meshConfig))
                     .ToImmutableList();
 
                 if (toCreate.Count == 0)
@@ -4116,7 +4098,7 @@ public static class MeshExtensions
                     DispatchInnerCreate();
                     return;
                 }
-                if (IsNoOpUpsert(existing, node, hub.JsonSerializerOptions))
+                if (IsNoOpUpsert(existing, node, hub.JsonSerializerOptions, upsertMeshConfig))
                 {
                     SkipNoOpIfAuthorized(existing);
                     return;
@@ -4313,15 +4295,24 @@ public static class MeshExtensions
                 // the write forward by construction, so the repair lands on the first attempt.
                 // Content is untouched by this: it still comes from `live`.
                 hub.GetMeshNodeStream(node.Path)
-                    .Update(live => UpdateAccordingToSourceNode(live, node, hub.JsonSerializerOptions) with
-                    {
-                        Version = Math.Max(live.Version, existing.Version),
-                        // Identity fields the merge is meant to PRESERVE — recovered from the
-                        // durable row when the live snapshot has none, so a repaired node keeps
-                        // its own lineage instead of being reborn with a default creation stamp.
-                        CreatedDate = live.CreatedDate == default ? existing.CreatedDate : live.CreatedDate,
-                        CreatedBy = live.CreatedBy ?? existing.CreatedBy,
-                    })
+                    // 1b', on the MERGED node. The create path repairs a stale self-default MainNode
+                    // before it is ever stored; the update path has to repair it AFTERWARDS, because
+                    // the stale value lives on `live` and a full-instance source provably cannot move
+                    // a MainNode back onto the node's own path. Running it on the merge result is
+                    // what makes a re-import heal the six Skill nodes #2939 measured — a
+                    // GetMeshNodeStream patch CAN express it, which is the route MeshNode.MainNode's
+                    // remarks name as the only one that restores a main node.
+                    .Update(live => RepairStaleSelfDefaultMainNode(
+                        UpdateAccordingToSourceNode(live, node, hub.JsonSerializerOptions) with
+                        {
+                            Version = Math.Max(live.Version, existing.Version),
+                            // Identity fields the merge is meant to PRESERVE — recovered from the
+                            // durable row when the live snapshot has none, so a repaired node keeps
+                            // its own lineage instead of being reborn with a default creation stamp.
+                            CreatedDate = live.CreatedDate == default ? existing.CreatedDate : live.CreatedDate,
+                            CreatedBy = live.CreatedBy ?? existing.CreatedBy,
+                        },
+                        upsertMeshConfig))
                     .Subscribe(
                         saved => PostOk(saved, isCreate: false, $"Updated node at '{node.Path}'"),
                         ex =>
@@ -4421,6 +4412,95 @@ public static class MeshExtensions
             : node;
 
     /// <summary>
+    /// <b>1b′.</b> Repair a STALE SELF-DEFAULT <see cref="MeshNode.MainNode"/> on a MAIN
+    /// (non-satellite) node. <b>The one copy of the rule</b> — it used to be pasted into the singular
+    /// and the batch create paths, and a third copy was needed for the update path, which is exactly
+    /// how two guards drift apart.
+    ///
+    /// <para><see cref="MeshNode.MainNode"/> is a STORED property: unlike the computed
+    /// <see cref="MeshNode.Path"/>/<c>Segments</c> it does NOT follow a <c>with { Namespace = … }</c>
+    /// rebase, and its default is evaluated ONCE at construction. A node built in one namespace and
+    /// moved to another therefore keeps a MainNode naming the namespace it was BORN in — and because
+    /// the field is non-nullable, that stale value is indistinguishable on the wire from a deliberate
+    /// satellite pointer (<see cref="MeshNode.HasExplicitMainNode"/> reads <c>true</c>), so every
+    /// upsert faithfully persists it. The node then drops out of <c>is:main</c> — SQL
+    /// <c>n.main_node = n.path</c> — while <c>get</c> still returns it, <c>Active</c> and fully
+    /// formed. Nothing errors, nothing logs, no status flips (#2939).</para>
+    ///
+    /// <para><b>Two shapes, and the second needs BOTH of its halves.</b></para>
+    /// <list type="number">
+    /// <item><description><b>The bare-Id default.</b> A node first built BARE
+    /// (<c>new MeshNode("Datenextraktion")</c> → MainNode defaults to the bare Id) and only LATER
+    /// given a namespace. Persisted, the bare value flows Node.MainNode → NavigationContext.PrimaryPath
+    /// → NavigationService.CurrentNamespace → the chat composer's StartThread namespace → a thread
+    /// created under the NON-EXISTENT "Datenextraktion" partition → Postgres 42P01
+    /// (<c>relation "datenextraktion.mesh_nodes" does not exist</c>).</description></item>
+    /// <item><description><b>The namespaced default frozen in ANOTHER PARTITION</b> —
+    /// <c>Skill/deployment</c> on <c>Hosting/Skill/deployment</c>, six live nodes on
+    /// memex.meshweaver.cloud. Matching requires that MainNode's LAST SEGMENT is this node's own Id
+    /// (which is what makes it a self-default rather than a pointer at some other node) AND that it
+    /// names a different PARTITION (first segment). Either half alone over-reaches: a non-satellite
+    /// node may legitimately point MainNode at a parent inside its own partition
+    /// (<c>GitHubSyncConfig</c>'s <c>MainNode = spacePath</c>; a <c>~/Threads</c> app tile's
+    /// <c>{owner}/Threads</c> target, whose last segment IS the tile's id), and it may legitimately
+    /// point at another partition under a different id (an app tile targeting
+    /// <c>Store/Foo</c> with id <c>Store-Foo</c>). Both are left untouched.</description></item>
+    /// </list>
+    ///
+    /// <para>Satellites are handled by <see cref="NormalizeSatelliteMainNode"/> (1b) and excluded
+    /// here. A null <paramref name="meshConfig"/> means the satellite question cannot be answered, so
+    /// nothing is repaired — the same fail-safe the call sites already applied.</para>
+    /// </summary>
+    private static MeshNode RepairStaleSelfDefaultMainNode(MeshNode node, MeshConfiguration? meshConfig) =>
+        meshConfig is not null
+        && !string.IsNullOrEmpty(node.NodeType)
+        && !string.IsNullOrEmpty(node.Namespace)
+        && !meshConfig.IsSatelliteNodeType(node.NodeType)
+        && IsStaleSelfDefaultMainNode(node)
+            ? node with { MainNode = node.Path }
+            : node;
+
+    /// <summary>
+    /// The shape test behind <see cref="RepairStaleSelfDefaultMainNode"/>, split out so it can be
+    /// read (and asserted on) without a <see cref="MeshConfiguration"/>.
+    ///
+    /// <para>Allocation-free, and deliberately so — this runs on every create and every upsert in
+    /// the mesh. <see cref="MeshNode.Path"/> is a computed interpolation, so materialising it here
+    /// would allocate a string per call on the hot path; the "is MainNode this node's own path"
+    /// question is asked through <see cref="MeshNode.HasExplicitMainNode"/> (which compares it
+    /// segment-wise against <c>Namespace</c>/<c>Id</c>), and the partition comparison runs on
+    /// <c>Namespace</c> directly, whose first segment IS the node's partition.</para>
+    /// </summary>
+    private static bool IsStaleSelfDefaultMainNode(MeshNode node)
+    {
+        var mainNode = node.MainNode;
+        var id = node.Id;
+        // HasExplicitMainNode false ⇒ MainNode already IS this node's own path: nothing stale.
+        if (string.IsNullOrEmpty(mainNode) || string.IsNullOrEmpty(id) || !node.HasExplicitMainNode)
+            return false;
+        // (a) the bare-Id default — no namespace at construction time.
+        if (string.Equals(mainNode, id, StringComparison.Ordinal))
+            return true;
+        var ns = node.Namespace;
+        if (string.IsNullOrEmpty(ns))
+            return false;
+        // (b) a namespaced default: MainNode's last segment is this node's own Id …
+        if (mainNode.Length <= id.Length
+            || mainNode[mainNode.Length - id.Length - 1] != '/'
+            || !mainNode.AsSpan(mainNode.Length - id.Length).SequenceEqual(id.AsSpan()))
+            return false;
+        // … and it was frozen in a DIFFERENT partition. The partition is the first segment of the
+        // NAMESPACE, which is the first segment of Path without building Path.
+        return !FirstSegment(mainNode).SequenceEqual(FirstSegment(ns));
+    }
+
+    private static ReadOnlySpan<char> FirstSegment(string path)
+    {
+        var slash = path.IndexOf('/');
+        return slash < 0 ? path.AsSpan() : path.AsSpan(0, slash);
+    }
+
+    /// <summary>
     /// True when applying <paramref name="sourceNode"/> onto <paramref name="existing"/> via
     /// <see cref="UpdateAccordingToSourceNode"/> would change nothing but the churn stamps
     /// (LastModified/Version) — the write can then be skipped entirely. MUST mirror that merge
@@ -4434,8 +4514,19 @@ public static class MeshExtensions
     /// shape — reports "changed", which merely takes today's write path. Conservative by
     /// construction: it can only ever under-skip, never over-skip.
     /// </summary>
-    private static bool IsNoOpUpsert(MeshNode existing, MeshNode sourceNode, JsonSerializerOptions options)
+    private static bool IsNoOpUpsert(
+        MeshNode existing, MeshNode sourceNode, JsonSerializerOptions options,
+        MeshConfiguration? meshConfig)
     {
+        // 🚨 The STORED row may itself need the 1b' repair, and then this write is not a no-op even
+        // when every field matches. A stale self-default MainNode cannot be moved by the incoming
+        // node — a full instance can express "point elsewhere" but never "point back at myself"
+        // (see MeshNode.HasExplicitMainNode's residual limitation), so a re-import of a corrupted
+        // node compares equal, skips, and the row stays invisible to `is:main` forever. Taking the
+        // write path lets the merge below heal it; once healed this reads false again and the skip
+        // resumes, so the cost is exactly one write per corrupted node.
+        if (!ReferenceEquals(RepairStaleSelfDefaultMainNode(existing, meshConfig), existing))
+            return false;
         // Mirror the merge's operational-ownership rule (PreserveMeshOwnedOperational) BEFORE
         // comparing, or the skip could never fire for a NodeType node: the incoming copy's stale
         // bookkeeping would read as a content difference on every re-import, take the write path,
