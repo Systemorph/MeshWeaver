@@ -53,6 +53,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private readonly IObservable<MeshNode?>? _ownNodeStream;
     private readonly MeshDataSourceExtensions.OwnNodeCache? _ownNodeCache;
     private InstanceCollection _lastSaved = new();
+    private bool _gateOpenAnnounced;
 
     // Highest own-node Version this hub has adopted — from the activation seed, from a routing
     // emission, AND from a local write committed through UpdateImpl. Own-node emissions below it
@@ -307,7 +308,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 .FirstOrDefault(n => n.Path == _hubPath);
             if (ownNode is { State: MeshNodeState.Active or MeshNodeState.Transient })
             {
-                _logger?.LogDebug("MeshNodeTypeSource: Opening gate for {HubPath} — node {State} via update", _hubPath, ownNode.State);
+                // OpenGate is idempotent and called on EVERY update — the announcement is not:
+                // the same "Opening gate" line repeated per heartbeat was pure console flood
+                // ("lots of this stuff", maintainer, 2026-09-01). Say it on the transition, once.
+                if (!_gateOpenAnnounced)
+                {
+                    _gateOpenAnnounced = true;
+                    _logger?.LogDebug("MeshNodeTypeSource: Opening gate for {HubPath} — node {State} via update", _hubPath, ownNode.State);
+                }
                 _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
             }
         }
@@ -347,8 +355,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             .Select(x => (MeshNode)x.Value)
             .ToArray();
 
-        _logger?.LogDebug("MeshNodeTypeSource.UpdateImpl: adds={Adds}, updates={Updates}, deletes={Deletes}",
-            adds.Length, updates.Length, deletes.Length);
+        // Per-beat counts are TRACE-grade narration (version re-stamps make updates=1 on nearly
+        // every emission); Debug speaks only when the SHAPE of the set changed.
+        if (adds.Length > 0 || deletes.Length > 0)
+            _logger?.LogDebug("MeshNodeTypeSource.UpdateImpl: adds={Adds}, updates={Updates}, deletes={Deletes}",
+                adds.Length, updates.Length, deletes.Length);
+        else
+            _logger?.LogTrace("MeshNodeTypeSource.UpdateImpl: adds=0, updates={Updates}, deletes=0",
+                updates.Length);
 
         // Creates: enqueue for the debounce flush. Dict semantics collapse a
         // burst of UpdateImpl emissions for the same path into a single
