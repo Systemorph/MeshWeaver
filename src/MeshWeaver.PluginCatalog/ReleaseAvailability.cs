@@ -207,6 +207,18 @@ public enum PackageAvailabilityKind
     /// reported as an incompatibility: this is the answer when the catalogue is unreachable or the
     /// target release has no resolvable framework identity.</summary>
     Indeterminate,
+
+    /// <summary>
+    /// The COMBO gate ran this module's content inside the candidate image and it did not survive
+    /// — it failed to install, to compile, to render, or its Tests area went red
+    /// (<see cref="ComboVerdictKind.Red"/>). A definite incompatibility, like
+    /// <see cref="ModuleFloorExceedsTarget"/> and unlike <see cref="Indeterminate"/>: the gate
+    /// looked, and the answer is about the release rather than about our ability to see it.
+    ///
+    /// <para>🚨 Appended, never inserted: every member before it keeps its ordinal, so a verdict
+    /// serialized by an older build still deserializes correctly.</para>
+    /// </summary>
+    ComboVerificationFailed,
 }
 
 /// <summary>One package's answer.</summary>
