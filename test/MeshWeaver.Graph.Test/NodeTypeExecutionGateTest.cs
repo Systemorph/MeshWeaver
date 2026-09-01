@@ -143,6 +143,7 @@ public class NodeTypeExecutionGateTest
     /// added. <c>LocalizationTest</c> cannot see a string that never became a key; this can.
     /// </summary>
     [Theory]
+    [InlineData(NodeTypeEnrichmentHelpers.ExecutionRefusedSummaryKey)]
     [InlineData(NodeTypeEnrichmentHelpers.ExecutionRefusedIntroKey)]
     [InlineData(NodeTypeEnrichmentHelpers.ExecutionRefusedGuidanceKey)]
     [InlineData(NodeTypeEnrichmentHelpers.NoCodeChangeNeededKey)]
@@ -160,5 +161,83 @@ public class NodeTypeExecutionGateTest
         LocalizationCatalog.Get(key, "de").Should().NotBe(
             LocalizationCatalog.Get(key, "en"),
             "a German viewer must not be shown the English sentence");
+    }
+
+    /// <summary>
+    /// 🚨 The page's headline is CATALOG COPY with the three facts as arguments — not
+    /// <see cref="NodeTypeExecutionGate.RefusalSummary"/>, whose English belongs to the log line and
+    /// the delivery NACK. This is the split that keeps a German viewer from reading an English
+    /// sentence while the operator-facing surfaces stay greppable in one language.
+    /// </summary>
+    [Fact]
+    public void ThePageHeadline_IsCatalogCopy_WithTheThreeFactsSubstituted()
+    {
+        var def = With(BuildProvenance.AdoptionRefused);
+        var (adopted, live) = NodeTypeExecutionGate.Fingerprints(def);
+
+        foreach (var locale in new[] { "en", "de" })
+        {
+            var rendered = LocalizationCatalog.Get(
+                NodeTypeEnrichmentHelpers.ExecutionRefusedSummaryKey, locale,
+                "Acme/Widget", adopted, live);
+
+            rendered.Should().Contain("Acme/Widget", "the node path is a wire identifier — verbatim");
+            rendered.Should().Contain(adopted, "the bundle's fingerprint is opaque — verbatim");
+            rendered.Should().Contain(live, "and so is the live one");
+            rendered.Should().NotContain("{0}", "every placeholder must be filled");
+            rendered.Should().NotContain("PROVEN stale",
+                "the page must not fall back to the English log sentence");
+        }
+    }
+
+    /// <summary>
+    /// 🚨 THE WIRING, not just the catalog. With an ECHO localizer every user-visible string this
+    /// page supplies comes back as its own dotted KEY — so an English literal, or a regression that
+    /// pipes <see cref="NodeTypeExecutionGate.RefusalSummary"/> straight onto the page again,
+    /// stands out as prose among keys. Asserting the catalog alone would not catch either: the keys
+    /// can be perfectly translated while nothing reads them.
+    /// </summary>
+    [Fact]
+    public void EveryStringTheRefusalPageSupplies_ComesFromTheCatalog()
+    {
+        var markdown = NodeTypeEnrichmentHelpers.BuildExecutionRefusedMarkdown(
+            localize: (key, _) => key,
+            nodeType: "Acme/Widget",
+            fingerprints: ("aaaaaaaaaaaa", "bbbbbbbbbbbb"),
+            activityPath: "Acme/Widget/_Activity/compile");
+
+        foreach (var key in new[]
+                 {
+                     NodeTypeEnrichmentHelpers.ExecutionRefusedSummaryKey,
+                     NodeTypeEnrichmentHelpers.ExecutionRefusedIntroKey,
+                     NodeTypeEnrichmentHelpers.ExecutionRefusedGuidanceKey,
+                     NodeTypeEnrichmentHelpers.NoCodeChangeNeededKey,
+                     "ui.viewCompileLog",
+                 })
+            markdown.Should().Contain(key,
+                $"'{key}' must be read through the localizer, not baked in English");
+
+        markdown.Should().NotContain("PROVEN stale",
+            "the log/NACK sentence must never reach the page — that is the hard-coded-UI-string bug");
+        markdown.Should().NotContain("Recompile this type",
+            "and neither must the operator-facing recovery verb, which is English by design");
+    }
+
+    /// <summary>The fingerprints are shortened identically wherever they are reported, so the page,
+    /// the log line and the NACK all name the same twelve characters.</summary>
+    [Fact]
+    public void Fingerprints_AreShortenedTheSameWayEverywhere()
+    {
+        var (adopted, live) = NodeTypeExecutionGate.Fingerprints(With(BuildProvenance.AdoptionRefused));
+
+        adopted.Should().Be("aaaaaaaaaaaa");
+        live.Should().Be("bbbbbbbbbbbb");
+        NodeTypeExecutionGate.RefusalSummary("Acme/Widget", With(BuildProvenance.AdoptionRefused))
+            .Should().Contain(adopted).And.Contain(live);
+
+        NodeTypeExecutionGate.Fingerprints(new NodeTypeDefinition())
+            .Should().Be(("(none)", "(none)"),
+                "an absent fingerprint reads as absent, never as an empty string a reader would "
+                + "mistake for a match");
     }
 }

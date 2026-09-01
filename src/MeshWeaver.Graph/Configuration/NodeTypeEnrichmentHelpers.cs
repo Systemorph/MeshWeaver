@@ -995,7 +995,9 @@ internal static class NodeTypeEnrichmentHelpers
             return Observable.Return(
                 WithOverlaySelfHeal(
                     WithExecutionRefusedOverlay(
-                        node, nodeType, summary, def.LastCompilationActivityPath),
+                        node, nodeType, summary,
+                        NodeTypeExecutionGate.Fingerprints(def),
+                        def.LastCompilationActivityPath),
                     meshHub, nodeType, typeNode.Version, logger));
         }
 
@@ -2541,19 +2543,17 @@ internal static class NodeTypeEnrichmentHelpers
         MeshNode node,
         string nodeType,
         string summary,
+        (string Adopted, string Live) fingerprints,
         string? activityPath)
     {
         Func<MessageHubConfiguration, MessageHubConfiguration> overlay =
             config => config.AddLayout(layout =>
                 layout.WithView(MeshNodeLayoutAreas.OverviewArea, (host, _) =>
-                    Observable.Return<UiControl?>(
-                        BuildCompilationErrorMarkdown(
-                            errorMessage: summary,
-                            guidance: host.Localize(ExecutionRefusedGuidanceKey),
-                            intro: host.Localize(ExecutionRefusedIntroKey),
-                            callToAction: host.Localize(NoCodeChangeNeededKey),
-                            activityPath: activityPath,
-                            activityLinkLabel: host.Localize("ui.viewCompileLog")))));
+                    Observable.Return<UiControl?>(Controls.Stack
+                        .WithStyle(CompilationErrorCardStyle)
+                        .WithView(Controls.Markdown(BuildExecutionRefusedMarkdown(
+                            (key, args) => host.Localize(key, args),
+                            nodeType, fingerprints, activityPath))))));
 
         var nack = new UnhandledMessageNack(
             $"{summary} {NodeTypeExecutionGate.RecoveryVerb}",
@@ -2564,6 +2564,10 @@ internal static class NodeTypeEnrichmentHelpers
             HubConfiguration = config => overlay(config).Set(nack)
         };
     }
+
+    /// <summary>Localization key for the refusal overlay's headline sentence — takes the NodeType
+    /// path, the bundle's source fingerprint and the live one as <c>{0}</c>/<c>{1}</c>/<c>{2}</c>.</summary>
+    internal const string ExecutionRefusedSummaryKey = "ui.executionRefusedSummary";
 
     /// <summary>Localization key for the refusal overlay's lead-in.</summary>
     internal const string ExecutionRefusedIntroKey = "ui.executionRefusedIntro";
@@ -2850,6 +2854,39 @@ internal static class NodeTypeEnrichmentHelpers
                         activityPath, host.Localize("ui.viewCompileLog")))));
     }
 
+    /// <summary>The emergency page's card chrome — shared by every overlay cause so the refusal page
+    /// and the compile-error page cannot drift apart visually.</summary>
+    internal const string CompilationErrorCardStyle =
+        "max-width: 820px; margin: 1.5rem auto; padding: 24px 28px; "
+        + "border: 1px solid var(--error, #d13438); border-left: 4px solid var(--error, #d13438); "
+        + "border-radius: 8px; background: var(--neutral-layer-2);";
+
+    /// <summary>
+    /// The refusal page's markdown, with EVERY user-visible string taken from
+    /// <paramref name="localize"/> — a <c>Func</c> rather than a <c>LayoutAreaHost</c> so the
+    /// wording is assertable with an echo localizer and no hub, circuit or rendered area
+    /// (the <c>UserPreferencesLocalizationTest</c> pattern).
+    ///
+    /// <para>🚨 This is what stops <see cref="NodeTypeExecutionGate.RefusalSummary"/> — the English
+    /// sentence built for the log line and the delivery NACK — from reaching a viewer. The three
+    /// facts it needs travel as ARGUMENTS (the node path and the two fingerprints are a wire
+    /// identifier and two opaque hashes, so they are verbatim in every language); the sentence
+    /// around them comes from the catalog.</para>
+    /// </summary>
+    internal static string BuildExecutionRefusedMarkdown(
+        Func<string, object?[], string> localize,
+        string nodeType,
+        (string Adopted, string Live) fingerprints,
+        string? activityPath)
+        => BuildCompilationErrorMarkdownText(
+            errorMessage: localize(ExecutionRefusedSummaryKey,
+                [nodeType, fingerprints.Adopted, fingerprints.Live]),
+            guidance: localize(ExecutionRefusedGuidanceKey, []),
+            intro: localize(ExecutionRefusedIntroKey, []),
+            callToAction: localize(NoCodeChangeNeededKey, []),
+            activityPath: activityPath,
+            activityLinkLabel: localize("ui.viewCompileLog", []));
+
     private static UiControl BuildCompilationErrorMarkdown(
         string errorMessage, string? guidance, string? intro = null, string? callToAction = null,
         string? activityPath = null, string? activityLinkLabel = null)
@@ -2858,10 +2895,7 @@ internal static class NodeTypeEnrichmentHelpers
             // width and generous padding so a broken instance gets a real
             // "here's what went wrong and how to fix it" PAGE — not a blank
             // spinner or a terse one-liner.
-            .WithStyle(
-                "max-width: 820px; margin: 1.5rem auto; padding: 24px 28px; " +
-                "border: 1px solid var(--error, #d13438); border-left: 4px solid var(--error, #d13438); " +
-                "border-radius: 8px; background: var(--neutral-layer-2);")
+            .WithStyle(CompilationErrorCardStyle)
             .WithView(Controls.Markdown(
                 BuildCompilationErrorMarkdownText(
                     errorMessage, guidance, intro, callToAction, activityPath, activityLinkLabel)));

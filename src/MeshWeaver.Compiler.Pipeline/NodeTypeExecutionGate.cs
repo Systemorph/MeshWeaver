@@ -103,10 +103,26 @@ public static class NodeTypeExecutionGate
         => Evaluate(definition) is BuildExecutionVerdict.Refused;
 
     /// <summary>
-    /// The operator-facing one-liner for a refusal — used in the log line, in the delivery NACK and
-    /// as the overlay's error summary, so an operator meets the SAME sentence wherever they first
-    /// hit it. It names both fingerprints because the pair is what makes the verdict checkable
-    /// against the bundle by hand.
+    /// The bundle's recorded source fingerprint and this mesh's live one, shortened to the first
+    /// twelve characters — enough to identify a build, short enough for a log line and a page.
+    /// The PAIR is what makes a refusal checkable against the bundle by hand, so every surface
+    /// that reports one carries both.
+    ///
+    /// <para>Separated from <see cref="RefusalSummary"/> so a user-visible surface can format its
+    /// OWN localized sentence around these three facts instead of rendering an English one: the
+    /// refusal page reads <c>ui.executionRefusedSummary</c> with exactly these arguments.</para>
+    /// </summary>
+    public static (string Adopted, string Live) Fingerprints(NodeTypeDefinition definition)
+        => (Short(definition.AdoptedSourceFingerprint), Short(definition.CurrentSourceFingerprint));
+
+    /// <summary>
+    /// The refusal as ONE English sentence, for the LOG line and the delivery NACK — the two
+    /// machine/operator-facing surfaces, which stay English by house rule (log lines ship to Loki;
+    /// a NACK reason is read by developers and tools, not rendered to a viewer).
+    ///
+    /// <para>🚨 NOT for the page. What a viewer reads is built at render time from
+    /// <c>ui.executionRefusedSummary</c> plus <see cref="Fingerprints"/>, so a German reader gets a
+    /// German sentence. Passing this string into an overlay would be the hard-coded-UI-string bug.</para>
     /// </summary>
     public static string RefusalSummary(string nodeTypePath, NodeTypeDefinition definition)
         => $"Execution refused for NodeType '{nodeTypePath}': its adopted build was PROVEN stale "

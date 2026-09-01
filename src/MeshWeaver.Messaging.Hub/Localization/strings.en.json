@@ -464,6 +464,7 @@
   "ui.compileStateUnknown": "Last compile: state could not be determined",
   "ui.viewCompileLog": "View full compile log →",
   "ui.noCodeChangeNeeded": "**No code change is needed for this.** ",
+  "ui.executionRefusedSummary": "Refused to run the installed build of node type “{0}”: it was built from different source than this portal holds (package fingerprint {1}, current source {2}).",
   "ui.executionRefusedIntro": "This item’s type has a build, but the platform refused to run it, so its page couldn’t be built. This is not a **compilation** error in the source.",
   "ui.executionRefusedGuidance": "The prebuilt package this type was installed from records which sources it was built from, and they are not the sources this mesh holds — so those bytes are older code over current data, and running them is what this refusal prevents. Click **Recompile** (or call `compile` via MCP) to build the live source instead. If this deployment only accepts prebuilt packages, no local build is possible: the package has to be rebuilt and republished, then released.",
   "ui.compileTypesReady": "{0} of {1} types compiled",
