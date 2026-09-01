@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -14,6 +15,7 @@ using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -78,6 +80,143 @@ public class NodeTypeModelProbeTest(ITestOutputHelper output) : MonolithMeshTest
                             .GetMeshNode(workspace.Hub.Address.ToString(), TimeSpan.FromSeconds(10))
                             .Select(node => (IEnumerable<ProbeSelfRead>)
                                 [new ProbeSelfRead("1", node?.Path ?? "absent")]))));
+
+    /// <summary>
+    /// The verdict of the probe's own-address read through the stream cache, reported by the
+    /// provider itself. A POSITIVE signal both ways: <c>"empty"</c> when the read completed with
+    /// no node (the contract), <c>"fault: …"</c> carrying the exception when it did not. Without
+    /// it the test could only sample the log and hope — and the correct behaviour produces no log
+    /// line at all, so an assertion on the log's absence passes whenever it runs before the fault,
+    /// which is most of the time (measured: it passed on the unfixed build).
+    ///
+    /// <para>Instance field on the test, never static — it dies with the test class.</para>
+    /// </summary>
+    private readonly AsyncSubject<string> selfReadVerdict = new();
+
+    /// <summary>
+    /// The SECOND own-node read seam, and the one in-mesh NodeType content actually reaches for:
+    /// the process-wide <see cref="IMeshNodeStreamCache"/>. This is a faithful copy of the Store
+    /// catalog's <c>store-packages</c> provider (<c>StoreManifestSource.Sources</c>) — read the
+    /// hub's own address through the cache, project the node's content, and hand the virtual
+    /// collection an initialization value so the hub is up instantly. Correct code on a real
+    /// per-node hub, where the hub's address IS its mesh path; on the probe it collapses onto
+    /// <c>$model-probe/{guid}</c>.
+    /// </summary>
+    private MessageHubConfiguration CacheSelfReadingInstanceConfig(MessageHubConfiguration config)
+        => config
+            .AddMeshDataSource(source => source.WithContentType<ProbeOrder>())
+            .AddData(data => data
+                .WithVirtualDataSource("cache-self-read", vds =>
+                    vds.WithVirtualType<ProbeSelfRead>(workspace =>
+                    {
+                        var hub = workspace.Hub;
+                        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                        return cache.GetStream(hub.Address.ToString(), hub.JsonSerializerOptions)
+                            .Do(_ => { },
+                                ex => Report($"fault: {ex.GetType().Name}: {ex.Message}"),
+                                () => Report("empty"))
+                            .Select(node => (IEnumerable<ProbeSelfRead>)
+                                [new ProbeSelfRead("1", node.Path)])
+                            .StartWith((IEnumerable<ProbeSelfRead>)
+                                [new ProbeSelfRead("1", "initial")]);
+                    })));
+
+    private void Report(string verdict)
+    {
+        selfReadVerdict.OnNext(verdict);
+        selfReadVerdict.OnCompleted();
+    }
+
+    /// <summary>
+    /// 🚨 <b>A probe's own-address read through the STREAM CACHE must be answered, not faulted</b>
+    /// — Systemorph/MeshWeaver#2894.
+    ///
+    /// <para><see cref="MeshNodeStreamExtensions.GetMeshNodeOutcome"/> has answered a probe's read
+    /// of its own address <c>Absent</c> since #2468, but the cache seam had no guard at all — and
+    /// the cache is what content uses, because it is the only own-node read that answers before
+    /// the hub's init gates open. Unguarded, that read either evaluated the caller's permissions
+    /// on the synthetic address ("User 'rsalzmann' lacks Read permission on '$model-probe/…'", the
+    /// reported line) or routed and died on "No node found at '$model-probe/…'" (the sister
+    /// incident on the same pod, same second). Either fault reaches <c>VirtualDataSource</c>'s
+    /// error arm, which logs <c>"the provider for collection 'X' faulted … frozen at its last
+    /// emission"</c> and leaves the probe serving a data model with that collection missing.</para>
+    ///
+    /// <para>In-process — where routing DOES find the probe's hosted hub — the same read produces
+    /// the third shape instead: the subscribe is delivered to the probe itself and parks behind
+    /// the <c>DataContextInit</c> gate that the probe's own initialization opens, so the read
+    /// never ends at all and the collection is simply never filled. That is what this test
+    /// measured on the unfixed build: the provider reported NO verdict within 20 s.</para>
+    ///
+    /// <para>The probe itself completes either way — it completed on the unfixed build too, just
+    /// with a broken model and an error per affected user. So the assertion is the provider's OWN
+    /// verdict on its read, not the snapshot and not the absence of a log line.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ProbeInstanceModel_OwnAddressReadThroughTheStreamCache_DoesNotFaultTheCollection()
+    {
+        var model = await NodeTypeDataModelAreas
+            .ProbeInstanceModel(Mesh, CacheSelfReadingInstanceConfig)
+            .Should().Within(40.Seconds()).Emit();
+
+        model.Should().NotBeNull(
+            "content that reads its own address through the cache must not stop the snapshot");
+        model!.ContentTypeName.Should().Be(nameof(ProbeOrder));
+
+        var verdict = await selfReadVerdict.Should().Within(20.Seconds())
+            .Emit("the provider always reports how its own-address read ended");
+
+        Output.WriteLine($"own-address read through the stream cache ended: {verdict}");
+
+        verdict.Should().Be("empty",
+            "a probe has no mesh node, so reading its own address through the stream cache is "
+            + "answered with an empty stream — never a permission denial and never a routing "
+            + "NotFound, both of which freeze the virtual collection that issued the read (#2894)");
+    }
+
+    /// <summary>
+    /// The same guard, measured DIRECTLY on the seam rather than through a probe hub, and under a
+    /// real user identity.
+    ///
+    /// <para>🚨 What the failure is depends on how far the read gets, and both ends are #2894. On a
+    /// portal with row-level security installed the cache's per-user gate runs first: a probe
+    /// address is not a partition-rooted path, so the evaluator answers <c>Permission.None</c> and
+    /// <c>GateOnRead</c> throws <c>UnauthorizedAccessException</c> naming the triggering user —
+    /// the reported line. This fixture registers no <c>EffectivePermissionsDelegate</c>, so the
+    /// gate is skipped and the read reaches the upstream instead, where routing answers
+    /// <c>DeliveryFailureException: No node found at '$model-probe/…'</c> — the SISTER incident,
+    /// logged on the same production pod in the same second. Measured on the unfixed build, this
+    /// case fails with exactly that exception in 212 ms.</para>
+    ///
+    /// <para>An empty stream is the stream-shaped twin of <c>NodeReadStatus.Absent</c>: no
+    /// emission, because there is no node; immediate completion, because there never will be one.
+    /// It is reached before either the permission probe or the upstream subscribe, so it removes
+    /// both shapes at once.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task StreamCache_ReadOfAProbeOwnAddress_CompletesEmptyForAnUnprivilegedUser()
+    {
+        var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var probePath = $"{TransientProbeAddresses.ModelProbePrefix}{Guid.NewGuid():N}";
+
+        IObservable<MeshNode> stream;
+        // The gate captures the caller's identity synchronously, on the calling thread — so the
+        // scope has to be open across the GetStream CALL, not across the subscribe.
+        using (access.SwitchAccessContext(new AccessContext
+               {
+                   ObjectId = "probe-viewer",
+                   Name = "Probe Viewer",
+               }))
+        {
+            stream = cache.GetStream(probePath, Mesh.JsonSerializerOptions);
+        }
+
+        var emitted = await stream.ToArray().Timeout(20.Seconds()).Await();
+
+        emitted.Should().BeEmpty(
+            "there is no node at a probe's synthetic address and there never will be — the read "
+            + "is answered without a permission probe and without an upstream subscribe (#2894)");
+    }
 
     [Fact(Timeout = 60000)]
     public async Task ProbeInstanceModel_SnapshotsContentTypeAndSchema()
