@@ -27,8 +27,9 @@ per-test limit at all).
 
 **That check was in a different file from the configuration it was checking.** The two are picked up
 independently, so a project could take the configuration without taking the check — and every
-repository built on top of the platform did exactly that. They got the setup and not the assurance
-that it had worked: the check covered roughly fifteen test projects and missed more than seventy-five.
+repository that takes the configuration did exactly that. They got the setup and not the assurance
+that it had worked: the check covered the platform's own fifteen or so test projects and missed the
+seventy-nine built on top of it.
 
 **The check now lives in the same file as the thing it checks**, so taking one always means taking the
 other, with no change needed in any of the repositories that build on the platform. A separate test

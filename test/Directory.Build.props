@@ -158,9 +158,11 @@
        Owning both branches here (rather than leaving the local copy to each .csproj) is what
        makes them mutually exclusive; the per-project `<Content Include="appsettings.json">`
        declarations were removed in the same change. The `VerifyXunitRunnerConfigCopied` target
-       in Directory.Build.targets guards BOTH files — despite its name it now errors if either
+       AT THE BOTTOM OF THIS FILE guards BOTH files — despite its name it errors if either
        xunit.runner.json or appsettings.json fails to reach $(TargetDir), which is what stops
-       either two-branch selection from silently picking neither. -->
+       either two-branch selection from silently picking neither. (It used to live in
+       Directory.Build.targets; see the comment on the target itself for why that made it
+       unreachable for every satellite and why it must stay in THIS file.) -->
   <ItemGroup Condition="!Exists('$(MSBuildProjectDirectory)/appsettings.json')">
     <Content Include="$(MSBuildThisFileDirectory)\appsettings.json">
       <Link>%(RecursiveDir)%(Filename)%(Extension)</Link>

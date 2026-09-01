@@ -14,12 +14,14 @@ namespace MeshWeaver.Documentation.Test;
 /// default vs project-local override), and <c>VerifyXunitRunnerConfigCopied</c> — the target that
 /// errors when the selection picks NEITHER — sat in the sibling
 /// <c>test/Directory.Build.targets</c>. MSBuild auto-imports those two files independently, so a
-/// consumer can take one without the other, and every satellite repository does: MeshWeaver.Plugins,
-/// .Education, .Reinsurance and .SocialMedia each import
+/// consumer can take one without the other, and every satellite that consumes the plumbing does:
+/// MeshWeaver.Plugins (78 <c>*.Test</c> projects) and MeshWeaver.SocialMedia (1) each import
 /// <c>$(MeshWeaverRoot)/test/Directory.Build.props</c> explicitly from their own
-/// <c>src/Directory.Build.props</c>, and <b>not one of them imports the targets file</b> (measured
-/// 2026-09-01: zero hits for <c>test/Directory.Build.targets</c> across all four checkouts). The
-/// guard therefore covered this repository's ~15 test projects and none of the fleet's ~75+.</para>
+/// <c>src/Directory.Build.props</c>, and <b>neither imports the targets file</b>. Measured
+/// 2026-09-01: <b>zero of the five satellite checkouts</b> (.Plugins, .Education, .Reinsurance,
+/// .SocialMedia, .Manufacturing) reference <c>test/Directory.Build.targets</c> at all — the other
+/// three import neither file. The guard therefore covered this repository's ~15 test projects and
+/// none of the 79 satellite ones.</para>
 ///
 /// <para><b>Why it is a correctness problem, not tidiness.</b> When the two-branch selection picks
 /// neither, the build still succeeds and the tests still run — under xUnit's OWN defaults:
@@ -83,11 +85,22 @@ public class DirectoryBuildGuardTravelsWithItsSubjectTest
     /// includes; if those includes were renamed or removed, both would still pass while nothing was
     /// being guarded. This pins that the subject still exists in the same file — the failure this
     /// repository hits most often is a guard whose subject moved out from under it.
+    ///
+    /// <para>Matched against the file with XML comments STRIPPED. The props file documents its own
+    /// plumbing and quotes these item shapes in prose, so a raw-text match would be satisfied by the
+    /// comment describing an <c>ItemGroup</c> that had been deleted — an anti-vacuity check that is
+    /// itself vacuous.</para>
     /// </summary>
     [Fact]
     public void ThePlumbingTheGuardChecksStillLivesInThatFile()
     {
-        var props = Read(PropsPath);
+        // 🚨 COMMENTS STRIPPED FIRST, and that is the whole point of this method. This file
+        // *explains* its own plumbing at length, and that prose quotes the very item shapes matched
+        // below — `<Content Include="appsettings.json">` appears verbatim inside a comment. Matching
+        // the raw text would therefore keep passing after the real ItemGroup was deleted: the guard
+        // would be satisfied by the documentation of the thing it is supposed to be guarding. (A
+        // grep hit is not a binder — comments, embedded docs and resource strings all match.)
+        var props = StripComments(Read(PropsPath));
 
         Assert.True(
             Regex.IsMatch(props, @"Content\s+Include=""[^""]*xunit\.runner\.json"""),
