@@ -80,8 +80,15 @@ public class TestTimeoutLiteralRatchetGuard
     /// <para>🚨 It is not a budget to spend. <see cref="TheBaselineStaysCloseToTheTree"/> caps the
     /// slack, so the allowance cannot quietly become permanent; the correct next edit to this
     /// number is DOWNWARD, in whichever change first converts a batch.</para>
+    ///
+    /// <para><b>2026-09-01 — 387 → 386 by CONVERSION.</b> <c>EditorTest.TestEditorWithDelayed</c>
+    /// waited on five sequential remote round-trips behind a literal <c>30.Seconds()</c> and failed
+    /// on MeshWeaver#2994 shard 5 with "the observable emitted nothing at all" — the anonymous
+    /// failure this guard's message predicts verbatim, at exactly 30 s. Converted to
+    /// <c>TestTimeouts.Convergence</c>. This is what a downward edit looks like: one site cured, one
+    /// off the count.</para>
     /// </summary>
-    private const int Baseline = 387;
+    private const int Baseline = 386;
 
     [Fact]
     public void TheHandWrittenTimeoutCountOnlyEverGoesDown()

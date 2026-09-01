@@ -172,10 +172,18 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             area.UpdatePointer(i, editor.DataContext!, new("x"));
         }
 
-        // Wait up to the method timeout for the stream to reach the final "5" render — five sequential
-        // UpdatePointer round-trips through the remote JsonElement sync stream, each render blocked by
-        // Thread.Sleep(100) plus serialization, can take several seconds on a slow CI runner.
-        var controls = await controlStream.Where(x => x is not null).ToArray().Should().Within(30.Seconds()).Emit();
+        // Wait for the stream to reach the final "5" render — five sequential UpdatePointer
+        // round-trips through the remote JsonElement sync stream, each render blocked by
+        // Thread.Sleep(100) plus serialization.
+        //
+        // 🚨 TestTimeouts.Convergence, never a 30 s literal (#2819). This test HAD one, and it is the
+        // failure the ratchet guard's own docstring predicts: 30 s is below the framework's write
+        // bound (LateResponseWatchBound 30 s + VerdictBoundGrace 1 s), and CI is ~1.7× slower than
+        // the box the number was chosen on — so under runner contention it gave up at exactly 30 s
+        // with "the observable emitted nothing at all", a failure that cannot say why. Observed on
+        // MeshWeaver#2994, shard 5.
+        var controls = await controlStream.Where(x => x is not null).ToArray()
+            .Should().Within(TestTimeouts.Convergence).Emit();
         // The NUMBER of intermediate emissions is timing-dependent: the delayed editor coalesces updates
         // that arrive during a render, so a fast box sees ~2 while a slow CI runner — where the updates
         // spread past the 100ms render window — sees more. Asserting a count (was `<= 3`) races CI load;
