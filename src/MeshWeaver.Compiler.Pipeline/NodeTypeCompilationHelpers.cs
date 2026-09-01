@@ -1306,6 +1306,9 @@ internal static class NodeTypeCompilationHelpers
         // changed" path). Same mesh-scoped singleton the compile watcher's parked short-circuit
         // uses; null in the rare host that does not register it (no auto-retry, unchanged before).
         var parkRegistry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>();
+        // #2948 — the mesh read the source fingerprint's `@@`-include walk needs. Built once per
+        // watcher; it issues nothing at all for a source set with no `@@` in it.
+        var includeReader = SourceFingerprintIncludeReader.For(hub, logger);
 
         // Outer subscription: discover the source path set via the shared
         // synced query (NodeSources.GetSources). When the path set changes
@@ -1400,7 +1403,36 @@ internal static class NodeTypeCompilationHelpers
                 // adopted fingerprint to compare it against. The nodes are already materialised
                 // here; the hash is what costs, and it is paid only where it is used.
                 return (Snapshot: (IReadOnlyDictionary<string, long>)snap, Nodes: sources);
-            }),
+            })
+            // 🚨 #2948 — the CONTENT fingerprint now covers the `@@`-include closure, and resolving
+            // that needs mesh READS, so it happens HERE (an observable step) rather than inside the
+            // pure Update lambda below. Cost: `CollectIncludeClosure` scans each source's text for
+            // "@@" and issues NOTHING when there is none — which is nearly every type — so the
+            // reads are paid only by the types that actually have includes.
+            //
+            // 🚨 Switch(), not SelectMany: a newer source set must SUPERSEDE an in-flight include
+            // resolution, or a slow read could publish a fingerprint for a set that is already gone.
+            //
+            // 🚨 An include the mesh could not READ (a stall, an unavailable owner) is INCONCLUSIVE,
+            // never "absent". Degrading it to absence shortens the hashed set, which is
+            // indistinguishable from a stale bundle and refuses a perfectly good adoption — on a
+            // Modules:RequirePrebuilt mesh that is terminal. So the fingerprint is dropped for this
+            // emission (null) and the previously published value stands; the judgement then takes
+            // ApplyAdoptedSourceStamp's "nothing has been compared" branch (AdoptedUnverified),
+            // which is the honest answer and the same #890 rule the emit canary follows.
+            .Select(published => NodeTypeSourceFingerprint
+                .Compute(published.Nodes, hubPath, includeReader, logger)
+                .Select(fingerprint => (published.Snapshot, Fingerprint: (string?)fingerprint))
+                .Catch((SourceIncludeUnavailableException ex) =>
+                {
+                    logger?.LogWarning(ex,
+                        "SourcesWatcher: the @@-include closure for {HubPath} could not be "
+                        + "established, so CurrentSourceFingerprint is left at its previous value "
+                        + "for this emission — an unreadable include must never read as an absent "
+                        + "one", hubPath);
+                    return Observable.Return((published.Snapshot, Fingerprint: (string?)null));
+                }))
+            .Switch(),
                 published =>
                 {
                     var snapshot = published.Snapshot;
@@ -1479,8 +1511,13 @@ internal static class NodeTypeCompilationHelpers
                         // in memory, on a path that runs at hub activation and per source edit —
                         // i.e. exactly where a Roslyn compile is about to cost four orders of
                         // magnitude more.
-                        var fingerprint = NodeTypeSourceFingerprint.Compute(
-                            published.Nodes, hubPath, logger);
+                        //
+                        // 🚨 #2948 — it is now resolved UPSTREAM (the include closure needs mesh
+                        // reads, which cannot happen inside this pure lambda), and it can be NULL:
+                        // null means the closure could not be established, NOT that there is
+                        // nothing to hash. The previous value stands in that case — inventing one
+                        // from a short closure is a false refusal.
+                        var fingerprint = published.Fingerprint;
 
                         // Idempotent: no-op when CurrentSourceVersions already
                         // matches the just-computed snapshot. IsDirty is a
@@ -1492,18 +1529,22 @@ internal static class NodeTypeCompilationHelpers
                         // before this field existed — snapshot already current, fingerprint null —
                         // would no-op forever and never acquire one, so the type could never be
                         // judged again. The condition is what makes the field SELF-HEALING on the
-                        // first activation after an upgrade.
+                        // first activation after an upgrade. An INCONCLUSIVE emission (fingerprint
+                        // null) drops out of the comparison entirely: it has nothing to say about
+                        // the field, so it must neither force a write nor block the snapshot's.
                         if (!pendingStamp
                             && def.CurrentSourceVersions is not null
                             && DictEquals(def.CurrentSourceVersions, snapshot)
-                            && string.Equals(
-                                def.CurrentSourceFingerprint, fingerprint, StringComparison.Ordinal))
+                            && (fingerprint is null
+                                || string.Equals(
+                                    def.CurrentSourceFingerprint, fingerprint,
+                                    StringComparison.Ordinal)))
                             return curr;
 
                         var updated = def with
                         {
                             CurrentSourceVersions = snapshot,
-                            CurrentSourceFingerprint = fingerprint,
+                            CurrentSourceFingerprint = fingerprint ?? def.CurrentSourceFingerprint,
                         };
 
                         if (pendingStamp)

@@ -239,11 +239,16 @@ public static class BakeOutput
         // impersonated while nothing downstream inherits the identity.
         // ImpersonationScopeSiteRatchetGuard fails a NEW site carrying the old shape, and this file
         // is not on its allow list — deliberately, because it is new code.
+        // #2948 — and the `@@`-include closure is resolved through the SAME mesh read the owning
+        // hub's watcher uses, so an included-only snippet is inside the hash on both sides. The
+        // walk issues no read at all for a source set with no `@@` in it.
+        var includeReader = SourceFingerprintIncludeReader.For(workspace.Hub);
         return access
             .RunAsSystem(() => NodeSources.GetSources(workspace, def, typePath))
             .Take(1)
             .Timeout(ReadBudget)
-            .Select(sources => NodeTypeSourceFingerprint.Compute(sources, typePath));
+            .SelectMany(sources =>
+                NodeTypeSourceFingerprint.Compute(sources, typePath, includeReader));
     }
 
     /// <summary>Package ids are top-level folder names, but the bundle FILE name must be safe on

@@ -472,9 +472,12 @@ public static class CascadeBuild
                     // the consumer can prove the bytes match the source IT holds instead of taking
                     // the bundle's word for it. Over the RAW resolved set, exactly as the runtime's
                     // sources watcher does: NodeTypeSourceFingerprint applies the shaping fold
-                    // itself so the two callers cannot apply different ones.
+                    // itself so the two callers cannot apply different ones — plus the
+                    // `@@`-include closure the compile just resolved (#2948), which is where the
+                    // Code nodes no source query matched are accounted for.
                     SourceFingerprint = NodeTypeSourceFingerprint.Compute(
-                        resolution.Sources, candidate.Node.Path, options.Logger),
+                        resolution.Sources, candidate.Node.Path,
+                        compiled.Inputs.ResolvedIncludes, options.Logger),
                 });
             }
 

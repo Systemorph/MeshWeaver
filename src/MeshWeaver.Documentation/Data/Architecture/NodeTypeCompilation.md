@@ -576,9 +576,10 @@ fingerprint over ticks would never match and every adoption would be refused.
 **What exactly is hashed — `NodeTypeSourceFingerprint` (in `MeshWeaver.Compiler`).** The fingerprint
 is taken over the *compile input*: the `NodeCompileShaping.CollectCompileSources` fold — deduplicated
 ordinal-ignore-case, executable cells and blank files dropped — reduced to
-`(node path, SHA-256 of the code text)`, folded with `PartitionSourceFingerprint`, which sorts by
-path so enumeration order cannot reach the result. Both the runtime and the bake call *that* fold
-already, so they cannot fork on which files count.
+`(node path, SHA-256 of the code text)`, **plus the `@@`-include closure** as
+`(@@{resolved path}, SHA-256 of the code text)`, folded with `PartitionSourceFingerprint`, which
+sorts by path so enumeration order cannot reach the result. Both the runtime and the bake call
+*that* fold already, so they cannot fork on which files count.
 
 The obvious alternative — hashing the source MeshNodes' serialised content — is unusable across
 processes, and each of its three failure modes produces a **false refusal**, which is an outage
@@ -695,14 +696,75 @@ differently, and `assert-bake-consumption.sh` fails on it by name.
 > per-type verdict is green. Only the log says anything — and only because the refusal logs at
 > `Error`, above the gate's default level.
 
+#### 🚨 The fingerprint covers the `@@`-include closure — both sides resolve before hashing
+
+An `@@` include pulls a Code node that **no source query matches**. It reaches the emitted assembly
+(`NodeSetCompiler.ResolveInputs` substitutes it after the fold) and it used to be absent from the
+hash — so editing an included-only snippet moved neither `AdoptedSourceFingerprint` nor
+`CurrentSourceFingerprint`, and a prebuilt assembly baked *before* that edit still adopted as
+`AdoptedVerified`.
+
+That is the worst of the three rows to be wrong on. `AdoptedUnverified` says "nobody established
+where these bytes came from", and an operator reads it as the warning it is. `AdoptedVerified` is an
+**assertion** that the shipped bytes match the source this mesh holds — standing over source that
+was never hashed, it is a *false verification*, which is the #2813 incident one layer in. So both
+halves now resolve includes first (#2948):
+
+- **The producer** already substituted them, so it simply keeps what it pulled in.
+  `NodeCompileShaping.ResolveCodeIncludes` takes an optional collector and records
+  `resolved path → code text` at the point it consumes each include; `ResolveInputs` hands that back
+  on `CompileInputs.ResolvedIncludes`, and `TreeBake` / `CascadeBuild` fold it straight into the
+  fingerprint. **No second walk, no second read, and no new blocking bridge** at a synchronous build
+  step.
+- **The consumer** resolves it through the mesh, in the one place that already holds the live source
+  nodes: the sources watcher (`NodeTypeCompilationHelpers.InstallSourcesWatcher`). Resolving a closure
+  means mesh READS, which a pure `Update` lambda cannot make — so the fingerprint moved *out* of that
+  lambda into an observable step ahead of it — composed with `Switch()`, so a newer source set supersedes an in-flight
+  resolution rather than racing it.
+
+The cost is bounded by the shape of the walk, not by the size of the mesh:
+`CollectIncludeClosure` scans each source's text for `@@` and **issues no read at all** when there
+is none, which is almost every type. Only a type that actually has includes pays, and it pays the
+same reads its own compile would.
+
+**Why the walk is order-stable and cycle-safe.** A fingerprint that moves when nothing changed is
+*phantom staleness* — endless recompiles, or a false refusal — so three properties are load-bearing:
+
+1. **Order cannot reach the result.** The closure is keyed by *resolved path* and returned sorted
+   (ordinal); `PartitionSourceFingerprint` then sorts again. The roots are walked in
+   `CollectCompileSources` order — itself ordinal by node path — and **serially**, one `SelectMany`
+   chain and never a `Merge`, so there is no read interleaving to observe either.
+2. **Suppression is result-preserving.** The per-root visited set skips a path that root already
+   walked. Skipping a re-read of the *same* anchored path can only re-derive an entry that is
+   already present, so which parent reached a shared snippet first cannot change the closure.
+3. **A cycle terminates.** `A → B → A` adds each path to the visited set once; the second visit
+   takes the already-added branch, reads nothing and recurses no further. A self-include is the same
+   case with one hop.
+
+**And an unreadable include is INCONCLUSIVE, never absent.** This is the direction that would hurt.
+The producer's lookup is in-memory and never stalls; a consumer that quietly treated a stalled read
+as "the include is gone" would hash a *shorter* closure, which is indistinguishable from a stale
+bundle — so a perfectly good adoption is **refused**, and on a `Modules:RequirePrebuilt` mesh that
+is terminal and needs a human to rebake. `SourceFingerprintIncludeReader` therefore uses
+`GetMeshNodeOutcome` and keeps the three states apart: `Present` contributes, `Absent` contributes
+nothing (it contributes nothing to the bytes either — the directive stays verbatim, so both sides
+agree), and `Unavailable` / `DeleteInProgress` / a timeout raise
+`SourceIncludeUnavailableException`. The watcher catches exactly that, logs it, and **leaves the
+previously published `CurrentSourceFingerprint` standing** — the judgement then takes the "nothing
+has been compared" branch (`AdoptedUnverified`). Same rule as the emit canary (#890): a probe must
+not answer its scariest branch on its own inability to run.
+
 #### Two things this deliberately does NOT do
 
-- **`@@` includes are outside the fingerprint.** An `@@` include pulls a Code node that no source
-  query matches, so a change to an included-only snippet does not move the hash. That is not a new
-  hole: it is the same set `CompiledSources` records, so `IsDirty` has always missed it too. Closing
-  it means resolving includes on the live side (a mesh read per include) and is tracked separately —
-  but it is stated, because a guard whose coverage is assumed rather than named is exactly how this
-  mechanism went inert the first time.
+- **The include closure is NOT added to `CompiledSources` / `CurrentSourceVersions`.** So
+  `IsDirty` still does not notice an included-only edit, and the sources watcher — which re-runs on
+  its source *query* — does not re-publish until the type's own source set moves or its hub
+  reactivates. That is the recompile-*trigger* half, and it is a different mechanism: a change feed,
+  not a hash. It is also a producer/consumer contract — the bundle manifest's `sourceVersions`
+  mirrors the RAW query match on both bakes, which `BakeEquivalenceTest` pins deliberately (an
+  include target is asserted *absent* from `sourceVersions` and *present* in the emitted surface and
+  in the fingerprint's input). What #2948 closes is the **verified claim**, which is decided by the
+  two fingerprints and nothing else.
 - **Refusing to LOAD is the second line of defence.** The damage needs two ingredients — stale bytes
   *and something armed to run them*. A type that renders read-only pages from unverified bytes is a
   degraded system; a type that WRITES from them is the incident. The execute-time half is
