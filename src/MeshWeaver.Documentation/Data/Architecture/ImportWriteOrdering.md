@@ -73,6 +73,21 @@ The graph is then peeled by `NodeTypeDependencyGraph.TopologicalOrder` — the *
 
 Within a stage the source's own enumeration order is preserved. **The ordering moves only what the dependency graph actually constrains** — a partition whose nodes have no type relationships is written exactly as it always was.
 
+### Only the *core* is condensed
+
+Reusing that peel has one trap worth naming. `NodeTypeDependencyGraph` condenses strongly-connected components by computing a reachability closure per vertex and then grouping — **O(V²)**, which is right for the few hundred dynamic NodeTypes it was written for and wrong for a graph with one vertex per *imported node*. Measured on the shape a real import actually has (thousands of instances of one type):
+
+| nodes | naive | core-only |
+|---:|---:|---:|
+| 500 | 17 ms | 4 ms |
+| 2,000 | 112 ms | 3 ms |
+| 5,000 | 688 ms | — |
+| 10,000 | **2,668 ms** | **22 ms** |
+
+So the peel runs over the **core** — the paths something *else* depends on — and not over the whole set. This is exact, not an approximation, on two properties: the core is closed under dependencies (if `p` is depended upon and `p` depends on `q`, then `p` depends on `q`, so `q` is depended upon), and **a path with no dependents can never be part of a cycle** — so every cycle is inside the core and the reported set stays complete. Everything else is a *leaf*: nothing waits on it, its own dependencies are all core and therefore already staged, so its stage follows directly. In practice the core is the type nodes plus their compile inputs — a handful — whatever the node count.
+
+`ImportWriteOrderScaleTest` pins this as a complexity class, not a performance target: its bound sits two orders of magnitude above the post-fix time and below the pre-fix time, so only an algorithmic regression can trip it.
+
 ## Decision 1 — the cycle policy
 
 `A` typed by `B` while `B` is typed by `A` is a defect **in the source**, not a state of the mesh, and no write order can satisfy it. The policy:
@@ -138,7 +153,7 @@ Also unchanged: root-first (`EnsureRoot` before any child), the claimed-node and
 | The shared peel (SCC condensation, #1347) | `src/MeshWeaver.Graph/Configuration/NodeTypeDependencyGraph.cs` |
 | The refusal itself | `src/MeshWeaver.Mesh.Contract/MeshExtensions.cs`, create step 3 |
 | The baseline guard this unblocks | `src/MeshWeaver.GitSync/GitHubSyncService.cs` (`MayAdvanceBaseline`) |
-| Tests | `test/MeshWeaver.Graph.Test/ImportWriteOrderTest.cs` (pure) · `ImportTypeBeforeInstanceTest.cs` (real mesh) |
+| Tests | `test/MeshWeaver.Graph.Test/ImportWriteOrderTest.cs` (pure) · `ImportWriteOrderScaleTest.cs` (complexity) · `ImportTypeBeforeInstanceTest.cs` (real mesh) |
 
 ## Related
 

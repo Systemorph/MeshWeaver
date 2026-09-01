@@ -7,6 +7,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -49,8 +50,11 @@ public class ImportTypeBeforeInstanceTest(ITestOutputHelper output) : MonolithMe
 
         var source = new FakeRepoSource(partition) { Root = Space(partition), Nodes = nodes };
 
+        // 🚨 .Await(), never a bare `await source`: Rx's own awaiter resumes the continuation
+        // INLINE on the signalling thread, still inside the trampoline, and every later await in
+        // the method inherits that scheduler — the .ToTask() defect wearing different clothes.
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(180.Seconds());
+            .FirstAsync().Timeout(180.Seconds()).Await();
         Output.WriteLine(
             $"outcome={result.Outcome} count={result.Count} failed={result.Failed} "
             + $"blocked=[{string.Join(", ", result.BlockedCreatePaths)}]");
@@ -84,8 +88,11 @@ public class ImportTypeBeforeInstanceTest(ITestOutputHelper output) : MonolithMe
             ],
         };
 
+        // 🚨 .Await(), never a bare `await source`: Rx's own awaiter resumes the continuation
+        // INLINE on the signalling thread, still inside the trampoline, and every later await in
+        // the method inherits that scheduler — the .ToTask() defect wearing different clothes.
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(180.Seconds());
+            .FirstAsync().Timeout(180.Seconds()).Await();
         Output.WriteLine(
             $"outcome={result.Outcome} count={result.Count} failed={result.Failed} "
             + $"blocked=[{string.Join(", ", result.BlockedCreatePaths)}]");
@@ -105,7 +112,7 @@ public class ImportTypeBeforeInstanceTest(ITestOutputHelper output) : MonolithMe
     {
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null)
-            .FirstAsync().Timeout(60.Seconds());
+            .FirstAsync().Timeout(60.Seconds()).Await();
         return node.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content ?? "";
     }
 
