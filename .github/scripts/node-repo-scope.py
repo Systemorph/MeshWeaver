@@ -34,12 +34,24 @@ gate exists.
   * modules — the baseline a publishing run must diff against is its own PUBLICATION, never
     `github.event.before`, which silently under-builds after ANY run that did not publish
     (cancelled, superseded, red, re-run). The bake HAS such a marker (`source-commit.txt` sealed
-    beside its bundles; bake-scope.sh reads it). THE MODULE LANE HAS NONE: the registry is keyed
-    `{package}@{version}` from `manifest.lock`, and that version identifies only the CONTENT half
-    — a `src/`-only change repacks the same version with different bytes, so "the registry already
-    serves this version" is NOT evidence the published bundle matches HEAD. (That is the same
-    blind spot Plugins #878 records on the delivery side.) Until this lane stamps a source commit
-    into what it publishes, a push packs everything.
+    beside its bundles; bake-scope.sh reads it). THE MODULE LANE HAS NONE, and the registry's
+    `{package}@{version}` key is NOT a substitute for one.
+
+    🚨 The reason that key fails has MOVED, and reading the old one wastes a day. It used to be
+    "the version identifies only the CONTENT half" — true until Plugins#878 landed, after which
+    `gen-manifests.py` hashes a mixed package's own `src/` project into its `moduleVersion` too.
+    What remains is narrower and still fatal: the version covers the module's OWN project, while
+    the CONTAINER pack path copies every MODULE-OWNED `MeshWeaver.*` sibling INTO the bundle
+    (`module-owned-platform.sh`: in this repo's `src/`, absent from `src/platform-shipped.txt`,
+    therefore nowhere in the image's `/app`). Measured on MeshWeaver.Plugins 2026-09-01:
+    `MeshWeaver.Blazor` rides in SEVEN published bundles and not one of their `manifest.lock`s
+    hashes a byte of it. So version equality still does not imply byte equality, and "the registry
+    already serves this version" is still NOT evidence the published bundle matches HEAD.
+
+    Until this lane stamps a SOURCE COMMIT into what it publishes — the analogue of the bake's
+    marker, diffed with `project-closure.py`, which walks transitive in-repo ProjectReferences and
+    therefore sees riders for free — a push packs everything. Narrowing on the version instead
+    would under-publish exactly those seven. See Doc/Architecture/ModuleVersioning.
 
 So the whole win sits on `pull_request` / `merge_group`, which is exactly where the cost is: a PR
 pushes many times, a trunk commit lands once.
@@ -99,11 +111,12 @@ NARROWABLE = {"pull_request", "merge_group"}
 FULL_REASONS = {
     "modules": {
         "push": "a push PUBLISHES, and the only sound baseline is its own publication — which the "
-                "module lane does not record (the registry is keyed {package}@{version}, and a "
-                "version identifies only the CONTENT half, so a src/-only change repacks the same "
-                "version with different bytes). Diffing github.event.before instead would silently "
-                "skip every module whose commit belonged to a cancelled, superseded or red run. "
-                "Packing every module.",
+                "module lane does not record. The registry's {package}@{version} key is not a "
+                "substitute: the version covers the module's OWN project (Plugins#878), while the "
+                "container pack path copies every module-owned MeshWeaver.* sibling INTO the "
+                "bundle, so a sibling's change moves the bundle's bytes and not its version. "
+                "Diffing github.event.before instead would silently skip every module whose commit "
+                "belonged to a cancelled, superseded or red run. Packing every module.",
         "repository_dispatch": "a framework-release dispatch moves the platform pin every module is "
                                "built against — every bundle must be rebuilt and republished or "
                                "every portal reads FrameworkDeclined and adopts nothing "
