@@ -128,6 +128,29 @@ internal sealed class CellSurfaceAssemblyProvider(
                 StringComparison.Ordinal))
             return Observable.Return<CellSurfaceAssembly?>(null);
 
+        // ── #2820 — the execute-time interlock, second enforcement site. ──────────────────────
+        // This one is NOT reachable from the per-instance-hub gate in NodeTypeEnrichmentHelpers:
+        // the cell surface loads the assembly straight through NodeAssemblyLoadContext, with no
+        // enrichment and no HubConfiguration, and from that moment every script submission in the
+        // session can call the pack's functions by bare name — with full write access through the
+        // ordinary mesh APIs available to scripts. It is the most directly "armed" surface there
+        // is, so it gets its own check rather than an inherited one.
+        //
+        // 🚨 Refuses ONE state (AdoptionRefused). AdoptedUnverified joins normally — a legacy
+        // bundle's provenance is unknown, not proven stale, and refusing it would silently empty
+        // the cell surface of every pack published before producers recorded a fingerprint.
+        if (NodeTypeExecutionGate.RefusesExecution(definition))
+        {
+            // Error, not Warning: the surrounding per-entry skips are availability problems that
+            // resolve themselves; this one is a verdict about the bytes that only a rebuild or a
+            // rebake changes.
+            logger.LogError(
+                "{Summary} It is NOT being joined into this kernel session's cell surface. {Recovery}",
+                NodeTypeExecutionGate.RefusalSummary(node.Path, definition),
+                NodeTypeExecutionGate.RecoveryVerb);
+            return Observable.Return<CellSurfaceAssembly?>(null);
+        }
+
         if (definition.CompilationStatus is not CompilationStatus.Ok
             || definition.LastCompiledVersion is null)
         {

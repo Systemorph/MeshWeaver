@@ -236,7 +236,27 @@ public enum ErrorType
     /// upstream by pattern-matching a message string, which drifts the moment someone rewords an
     /// exception. Same rule as <c>IdentityReadOutcome</c> on the identity side (#947, #970).</para>
     /// </summary>
-    Unavailable
+    Unavailable,
+    /// <summary>
+    /// The target's NodeType HAS a build, and the framework REFUSED TO RUN IT: the prebuilt bundle
+    /// it was adopted from records which sources it was built from, and they are not the sources
+    /// this mesh holds (<c>BuildProvenance.AdoptionRefused</c> — Systemorph/MeshWeaver#2813 /
+    /// #2820). The bytes are last week's code over today's data, so the per-instance hub was never
+    /// armed with them.
+    ///
+    /// <para>🚨 Deliberately NOT <see cref="CompilationFailed"/>. Nothing failed to compile and no
+    /// source change will help; a caller told "compilation failed" goes and edits code Roslyn never
+    /// rejected — the exact mis-signalling #641 cost an hour to. Nor is it
+    /// <see cref="Unavailable"/>: a verdict WAS reached, and repeating the request will not change
+    /// it (#2818's lesson — a refusal that reports as "not finished yet" is read as slowness).
+    /// The remedy is a forced recompile of the live source, or — on a
+    /// <c>Modules:RequirePrebuilt</c> mesh, where no local compile is possible — a rebake and
+    /// republish of the package.</para>
+    ///
+    /// <para><see cref="DeliveryFailure.NodeTypePath"/> names the refused type, exactly as it does
+    /// for <see cref="CompilationInProgress"/>, so a client can data-bind the type's own page.</para>
+    /// </summary>
+    ExecutionRefused
 }
 
 
