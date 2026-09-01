@@ -195,12 +195,18 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
     // Instance subject — the registry is a mesh-scoped singleton, so its lifetime IS the mesh's
     // and no process-wide state leaks across meshes (NoStaticState.md).
     //
-    // 🚨 A plain Subject, deliberately NOT a Replay/BehaviorSubject. This is an EDGE ("a type just
-    // became known"), not a value: a subscriber that wants the current state asks the maps, which
-    // are always readable. A ReplaySubject would also latch a terminal — and this subject never
-    // gets one (a registry has no completion), so latching one transient fault forever (#1369) is
-    // a hazard with no upside here.
-    private readonly Subject<MeshContentTypeRegistration> _registrations = new();
+    // 🚨 NOT a Replay/BehaviorSubject. This is an EDGE ("a type just became known"), not a value: a
+    // subscriber that wants the current state asks the maps, which are always readable. A
+    // ReplaySubject would also latch a terminal — and this subject never gets one (a registry has
+    // no completion), so latching one transient fault forever (#1369) is a hazard with no upside.
+    //
+    // 🚨 Subject.Synchronize because Register IS called concurrently: every per-node hub activation
+    // that runs WithContentType publishes here, and a post-roll recompile storm activates many at
+    // once on different threads. A bare Subject's OnNext is not safe under that, and the IObserver
+    // grammar it would break is the one every downstream operator relies on. Rx's own gate, the
+    // same choice ModuleDiscoveryService / MeshNodeStreamCache made for the same reason.
+    private readonly ISubject<MeshContentTypeRegistration> _registrations =
+        Subject.Synchronize(new Subject<MeshContentTypeRegistration>());
 
     /// <inheritdoc />
     /// <remarks>
