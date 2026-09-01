@@ -7,9 +7,9 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Markdown Fence Extensions
 
-A MeshWeaver document is markdown, and some of its fenced blocks are *alive*: a ` ```csharp --render`
-fence runs and shows the control it produced, a ` ```layout` fence embeds a live layout area, a
-` ```mermaid` fence draws a diagram. This page is about the seam that makes that possible, and about
+A MeshWeaver document is markdown, and some of its fenced blocks are *alive*: a ```` ```csharp --render ```` fence
+runs and shows the control it produced, a ```` ```layout ```` fence embeds a live layout area, a
+```` ```mermaid ```` fence draws a diagram. This page is about the seam that makes that possible, and about
 the one thing everybody gets wrong on first contact with it: **a fence is never rendered by the code
 that parses it.**
 
@@ -76,7 +76,7 @@ vocabulary. There are only two shapes, and a new fence should reuse one rather t
 
 | Marker | Emitted for | What a client makes of it |
 |---|---|---|
-| `<div class='layout-area' data-address=… data-area=… data-id=…>` | ` ```layout` fences, and the result pane of every `--render` block | A live layout area — the general-purpose escape hatch: **anything expressible as a `UiControl` reaches every client through it** |
+| `<div class='layout-area' data-address=… data-area=… data-id=…>` | ```` ```layout ```` fences, and the result pane of every `--render` block | A live layout area — the general-purpose escape hatch: **anything expressible as a `UiControl` reaches every client through it** |
 | `md-code-cell` / `code-content` / `md-code-cell-toolbar` (+ `data-submission-id`, `data-language`) | an executable block that shows its code | The notebook cell: editor, output pane, Run bar on the bottom edge |
 
 The layout-area marker is the powerful one. A fence that can be expressed as *"render this
@@ -100,7 +100,7 @@ marker so an un-hydrated client still shows the text.
 
 ## Worked example: the `prompt` fence (#2511)
 
-Course pages author suggested AI prompts as ` ```prompt` fences. Today no extension claims the
+Course pages author suggested AI prompts as ```` ```prompt ```` fences. Today no extension claims the
 `prompt` language, so they render as static fenced code: readable, but not editable and not
 runnable. The request is that such a fence become a **composer pre-filled with the authored text**,
 whose Submit starts a real agent thread and opens it **full-page**.
@@ -140,7 +140,7 @@ is exactly the degradation the rule above forbids. **Land them together, platfor
 The platform half is testable in this repository (the fence produces the expected marker; the layout
 area produces a `ThreadChatControl` carrying the authored text). The half that matters is not —
 there is no Blazor in this repository — so the acceptance check is a **rendered page**, not a
-platform unit test: open a course lesson that ships a ` ```prompt` fence, confirm the composer shows
+platform unit test: open a course lesson that ships a ```` ```prompt ```` fence, confirm the composer shows
 the authored text, edit it, submit, and land on the full-page thread. A green platform build says
 nothing about any of that.
 
