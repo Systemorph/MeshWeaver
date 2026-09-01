@@ -37,10 +37,12 @@ namespace MeshWeaver.Graph.Test;
 /// there is no extra query, no cross-schema fan-out and no re-entry into the evaluator. Nothing in
 /// the evaluator reads <c>AccessContext.Roles</c> any more.</para>
 ///
-/// <para>🚨 Every case below is written so it CAN fail: <see cref="StaleClaimRoles_CannotDefeat"/>
-/// and <see cref="TokenWithNoClaims_ReadsAPubliclyReadablePartition"/> both FAIL on the pre-fix
-/// evaluator (verified by restoring the claim hatch), and the two "still works" cases fail if the
-/// clamp is simply deleted.</para>
+/// <para>🚨 Every case below is written so it CAN fail, and that was measured rather than assumed.
+/// Restoring the claim hatch reds exactly <see cref="StaleClaimRoles_CannotDefeat"/>,
+/// <see cref="TokenWithNoClaims_ReadsAPubliclyReadablePartition"/> and
+/// <see cref="ClaimRoles_ChangeNoVerdict"/> while the "must still work" cases stay green; deleting
+/// the clamp outright reds <see cref="StaleClaimRoles_CannotDefeat"/>, so the clamp is still
+/// load-bearing and this change did not merely neuter it.</para>
 /// </summary>
 public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -59,6 +61,11 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
 
     /// <summary>No public surface and no grant — the control arm.</summary>
     private const string ForeignPartition = "ForeignSpace";
+
+    /// <summary>Starts with no grant; one is WRITTEN AT RUNTIME, long after the token existed.
+    /// Its own partition so it cannot perturb the control arm above even if this suite ever opts
+    /// into a shared mesh.</summary>
+    private const string LateGrantPartition = "LateGrantSpace";
 
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
 
@@ -85,7 +92,10 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
                 AssignmentNodeFactory.UserRole(TokenUser, "Editor", GrantedPartition),
 
                 new MeshNode(ForeignPartition) { Name = "Foreign Space", NodeType = "Markdown" },
-                new MeshNode("Page", ForeignPartition) { Name = "Foreign Page", NodeType = "Markdown" });
+                new MeshNode("Page", ForeignPartition) { Name = "Foreign Page", NodeType = "Markdown" },
+
+                new MeshNode(LateGrantPartition) { Name = "Late Grant Space", NodeType = "Markdown" },
+                new MeshNode("Page", LateGrantPartition) { Name = "Late Grant Page", NodeType = "Markdown" });
 
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
@@ -215,6 +225,50 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
             "the grant is read live off the target path — a token never needs re-minting to see it");
         perms.HasFlag(Permission.Api).Should().BeTrue(
             "Editor carries Api, so the capability comes from the grant itself");
+    }
+
+    /// <summary>
+    /// 🚨 THE ISSUE'S CASE, END TO END AND IN TIME ORDER: the token exists FIRST, the grant is
+    /// written AFTERWARDS, and the same token — never re-minted, never re-validated — sees it.
+    ///
+    /// <para>The negative half is asserted first and is what makes it a measurement rather than an
+    /// assumption: the very same read is refused before the grant lands. Nothing about the token
+    /// changes between the two reads; only the mesh does.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AGrantWrittenAfterTheTokenExists_IsSeenWithoutReminting()
+    {
+        BecomeToken();
+
+        // Before: no grant anywhere on this path, no public surface.
+        (await Effective($"{LateGrantPartition}/Page"))
+            .Should().Be(Permission.None, "the control arm — this token is refused here");
+
+        // The grant lands, written by an administrator long after the token was minted.
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var assignment = AssignmentNodeFactory.UserRole(TokenUser, "Editor", LateGrantPartition);
+        await Observable.Create<MeshNode>(observer =>
+            {
+                // As System: writing an AccessAssignment is an administrative act, and the point
+                // under test is what the TOKEN sees afterwards, not who may write the grant.
+                using (Access.ImpersonateAsSystem())
+                    return meshService.CreateNode(assignment).Subscribe(observer);
+            })
+            .FirstAsync()
+            .Timeout(Budget)
+            .Await(TestContext.Current.CancellationToken);
+
+        // Re-assert the token identity: ImpersonateAsSystem above is scoped, but being explicit
+        // means a leaked System scope cannot make this pass while proving nothing.
+        BecomeToken();
+
+        // After: the SAME token, unchanged, on the SAME path. The fold re-emits when the grant
+        // lands, so this is a wait on the condition — never a sleep.
+        await Mesh.GetEffectivePermissions($"{LateGrantPartition}/Page", TokenUser)
+            .Where(p => p.HasFlag(Permission.Read))
+            .FirstAsync()
+            .Timeout(Budget)
+            .Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>
