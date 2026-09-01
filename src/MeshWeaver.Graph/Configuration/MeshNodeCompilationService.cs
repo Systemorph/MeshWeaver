@@ -1690,6 +1690,14 @@ internal class MeshNodeCompilationService(
     /// itself (<see cref="GeneratedInputDigestOf"/>) — because a second implementation would drift
     /// into a key that never matches, and a key that never matches is a permanent rebuild.</para>
     ///
+    /// <para>🚨 <b>100% reactive — NO <c>await</c>, and no Roslyn.</b> This is the
+    /// <c>AssembleCompilationInputs</c> shape, not the emit shape: the only async leaf is the NuGet
+    /// restore (network IO), it runs ONLY when a <c>#r "nuget:"</c> directive is actually present,
+    /// and it is bridged through <see cref="IIoPool"/> exactly as that method's is — the common
+    /// case never leaves the observable chain. The emit path's deliberate <c>OnThreadPool</c>
+    /// exception does NOT apply here: it exists because the synchronous, multi-second Roslyn Emit
+    /// parked on the compile pool's own gate, and there is no Emit on this path.</para>
+    ///
     /// <para>Emits <c>null</c> for INCONCLUSIVE, never an exception: an unestablished source set,
     /// a dead discovery query, a NuGet resolve that will not answer inside the bound. Null is the
     /// safe direction — <see cref="ContentKeyReevaluation"/> reads it as "cannot compare" and the
@@ -1706,18 +1714,25 @@ internal class MeshNodeCompilationService(
         if (ntDef is null)
             return Observable.Return<string?>(null);
 
-        var nodeName = cacheService.SanitizeNodeName(node.Path);
-        var assemblyName = $"DynamicNode_{nodeName}";
-        return SnapshotSources(ntDef, node.Path, sourcesOverride: null)
-            .Select(matches =>
-                NodeCompileShaping.CollectCompileSources(matches, node.Path, logger).Sources)
-            .SelectMany(codeFiles => ResolveIncludesForCodeFiles(codeFiles, node.Path))
-            .SelectMany(codeFiles => BoundLeg(
-                ct => OnThreadPool(() => RegenerateDigestAsync(
-                    node, NodeCompileShaping.CombineSources(codeFiles),
-                    ntDef.Configuration, ntDef.ContentCollections, assemblyName, ct)),
-                _cacheOptions.RoslynCompileTimeout, "regenerate-content-key", node.Path))
-            .Take(1)
+        var assemblyName = $"DynamicNode_{cacheService.SanitizeNodeName(node.Path)}";
+        return BoundLeg(
+                _ => SnapshotSources(ntDef, node.Path, sourcesOverride: null)
+                    .Select(matches =>
+                        NodeCompileShaping.CollectCompileSources(matches, node.Path, logger).Sources)
+                    .SelectMany(codeFiles => ResolveIncludesForCodeFiles(codeFiles, node.Path))
+                    .Select(codeFiles => PrepareGeneratedSource(
+                        node, NodeCompileShaping.CombineSources(codeFiles),
+                        ntDef.Configuration, ntDef.ContentCollections))
+                    .SelectMany(prepared => prepared.NuGetReferences.Length == 0
+                        ? Observable.Return(
+                            GeneratedInputDigestOf(assemblyName, prepared.Source, []))
+                        : _ioPool
+                            .Run(ct => nugetResolver.ResolveAsync(
+                                prepared.NuGetReferences, targetFramework: null, ct))
+                            .Select(resolved => GeneratedInputDigestOf(
+                                assemblyName, prepared.Source, resolved.AssemblyPaths)))
+                    .Take(1),
+                _cacheOptions.RoslynCompileTimeout, "regenerate-content-key", node.Path)
             .Select(digest => (string?)digest)
             .Catch<string?, Exception>(ex =>
             {
@@ -1727,24 +1742,6 @@ internal class MeshNodeCompilationService(
                     + "metadata-only rule, exactly as before", node.Path);
                 return Observable.Return<string?>(null);
             });
-    }
-
-    private async Task<string> RegenerateDigestAsync(
-        MeshNode node,
-        CodeConfiguration? codeFile,
-        string? hubConfiguration,
-        IReadOnlyList<ContentCollectionConfig>? contentCollections,
-        string assemblyName,
-        CancellationToken ct)
-    {
-        var (source, nugetRefs) = PrepareGeneratedSource(
-            node, codeFile, hubConfiguration, contentCollections);
-        IReadOnlyList<string> nugetAssemblyPaths = [];
-        if (nugetRefs.Length > 0)
-            nugetAssemblyPaths =
-                (await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct))
-                .AssemblyPaths;
-        return GeneratedInputDigestOf(assemblyName, source, nugetAssemblyPaths);
     }
 
     /// <summary>

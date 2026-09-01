@@ -740,50 +740,21 @@ internal static class NodeTypeCompilationHelpers
             // mismatch on a framework-matching build (#1664 step 11), a bytes-hit for the live
             // framework IS the very stale build we are trying to replace, and skipping on it
             // would wedge the type forever. For that case, skip the probe and rebuild.
-            .SelectMany(node =>
-            {
-                var stampedFramework = DefinitionOf(hub, node)?.CompiledFrameworkVersion;
-                if (string.Equals(stampedFramework, FrameworkVersion, StringComparison.Ordinal))
-                    return Observable.Return((Node: node, StorePath: (string?)null));
-                return ResolveAssemblyStore(hub)
-                    .TryGetAssemblyPath(hubPath, DefinitionOf(hub, node)?.LastCompiledVersion ?? node.Version)
-                    .Take(1)
-                    .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
-                    .Select(path => (Node: node, StorePath: path));
-            })
-            // 🚨 THE RE-EVALUATION LANE (#1976) — the SECOND predicate, and it runs ONLY where the
-            // store already holds bytes under the LIVE framework tag, i.e. where the first
-            // predicate was about to skip. See ReevaluateStaleBuild for what each verdict means and
-            // why an inconclusive one changes nothing.
-            .SelectMany(probe => string.IsNullOrEmpty(probe.StorePath)
-                ? Observable.Return(
-                    (probe.Node, probe.StorePath,
-                     Verdict: ReevaluationVerdict.Rebuild, Detail: (string?)null,
-                     Digest: (string?)null))
-                : ReevaluateStaleBuild(
-                    hub, hubPath, probe.Node, guards, compilationService, logger)
-                    .Select(r => (
-                        probe.Node, StorePath: (string?)probe.StorePath, r.Result.Verdict,
-                        Detail: (string?)r.Result.Detail, r.Digest)))
+            // 🚨 THE RE-EVALUATION LANE (#1976) — see ResolveStaleBuildAction for which branch may
+            // act on the comparison and, crucially, which one may not.
+            .SelectMany(node => ResolveStaleBuildAction(
+                hub, hubPath, node, guards, compilationService, logger))
             .Subscribe(outcome =>
             {
-                if (outcome.Verdict is ReevaluationVerdict.CarryForward)
+                if (outcome.Action is StaleBuildAction.RestampDependencyRecord)
                 {
-                    RestampCarriedForwardBuild(
-                        hub, workspace, hubPath, outcome.StorePath,
-                        // 🚨 The guards the in-lambda re-check runs on carry the digest the lane
-                        // just regenerated, so that re-check judges the dependency clause by the
-                        // DEMOTED rule — the same evidence this restamp is being made on. Without
-                        // it the re-check would re-apply the proxy the verdict has disproved.
-                        guards with { LiveGeneratedInputDigest = outcome.Digest },
-                        outcome.Detail, logger);
+                    RestampCarriedForwardBuild(hub, workspace, hubPath, guards, outcome.Detail, logger);
                     return;
                 }
-                if (outcome.Verdict is ReevaluationVerdict.Inconclusive)
+                if (outcome.Action is StaleBuildAction.Skip)
                 {
                     // The pre-lane behaviour, preserved exactly: the store holds bytes for the
-                    // live framework, and nothing could be proven either way — so nothing is
-                    // rebuilt, and nothing is restamped.
+                    // live framework, so nothing is rebuilt — and nothing is restamped either.
                     logger?.LogInformation(
                         "Framework-stale kickoff SKIPPED for {HubPath}: its record names framework "
                         + "{Compiled} but the assembly store already holds a build for the live "
@@ -2006,42 +1977,162 @@ internal static class NodeTypeCompilationHelpers
     /// resolver + toolchain id (#1707 slice 2) and the legacy installed-module fingerprint.
     /// Resolve once per watcher install via <see cref="GuardsOf"/>.
     /// </summary>
-    /// <summary>
-    /// 🚨 THE RE-EVALUATION LANE (#1976) — regenerate this NodeType's compile input and ask
-    /// <see cref="ContentKeyReevaluation"/> what it means.
-    ///
-    /// <para><b>Where it runs, and why exactly there.</b> Only inside the framework-stale kickoff,
-    /// only after <c>Take(1)</c>, and only on the branch where the assembly store ALREADY holds
-    /// bytes for this type under the LIVE framework tag. Two consequences, both deliberate:</para>
-    /// <list type="bullet">
-    ///   <item>It can never ADD work. It is a second predicate behind a decision that had already
-    ///   been taken, so its cost is paid at most once per hub lifetime and only for a type the
-    ///   framework was already reasoning about. Regeneration is a source-discovery read plus a
-    ///   hash — far cheaper than the Roslyn pass it can avoid, but not free, which is why it does
-    ///   not run on every emission.</item>
-    ///   <item>It never has to carry bytes across a framework generation. The store key contains
-    ///   the framework tag, so a previous generation's bytes are unaddressable
-    ///   (<c>FileSystemAssemblyStore</c> globs the live tag) — carrying a build across that
-    ///   boundary is the 2026-06-20 cross-generation-load hazard and a maintainer scope call,
-    ///   recorded on #1976. Here the bytes are already AT the live key; only the record is stale.
-    ///   </item>
-    /// </list>
-    ///
-    /// <para><b>What each verdict does.</b> <see cref="ReevaluationVerdict.CarryForward"/>
-    /// restamps (<see cref="RestampCarriedForwardBuild"/>) and dispatches no compile.
-    /// <see cref="ReevaluationVerdict.Rebuild"/> flips <c>Pending</c> — which is a NEW
-    /// invalidation, not merely a preserved one: today a bytes-hit skips unconditionally, so a
-    /// type whose GENERATED input moved (a generator body edit, an option flip, an
-    /// <c>@@</c>-included snippet no source-version snapshot records) keeps serving the old bytes
-    /// forever, because <c>Take(1)</c> means nothing re-drives it.
-    /// <see cref="ReevaluationVerdict.Inconclusive"/> leaves the pre-lane behaviour exactly as it
-    /// was: skip, and — decisively — do NOT restamp. An absence must never read as equality.</para>
-    /// </summary>
-    private static IObservable<(Reevaluation Result, string? Digest)> ReevaluateStaleBuild(
-        IMessageHub hub, string hubPath, MeshNode node, BuildGuards guards,
-        IMeshNodeCompilationService compilationService, ILogger? logger)
+    /// <summary>What the re-evaluation lane decided to do with a build the cheap, metadata-only
+    /// predicates have already called stale — see <see cref="DecideStaleBuildAction"/>.</summary>
+    internal enum StaleBuildAction
     {
-        if (DefinitionOf(hub, node)?.CompiledDependencies is not { } record)
+        /// <summary>Compile. The pre-lane default, and every inconclusive case that is not
+        /// covered by <see cref="Skip"/>.</summary>
+        Rebuild,
+
+        /// <summary>The dependency record's reserved <c>!toolchain</c> entry is restamped and no
+        /// compile is dispatched — the demotion, made durable.</summary>
+        RestampDependencyRecord,
+
+        /// <summary>Neither: the store already holds bytes for the live framework, so nothing is
+        /// rebuilt — and nothing is restamped either.</summary>
+        Skip,
+    }
+
+    private sealed record StaleBuildOutcome(
+        MeshNode Node, StaleBuildAction Action, string? Detail);
+
+    /// <summary>
+    /// 🚨 THE BRANCH RULE, pure — the safety property of the whole lane as a checkable table
+    /// rather than a shape you have to read the pipeline to see. Same split, and the same reason,
+    /// as <see cref="NodeTypeBakeStatus.Classify"/>: <see cref="ResolveStaleBuildAction"/> gathers
+    /// the four facts (one node read, one store probe, one regeneration) and this decides.
+    ///
+    /// <para>🚨 <b>The invariant: a restamp is licensed ONLY when the framework held still.</b>
+    /// There, the build the record describes is addressed under THIS tag, so the record and the
+    /// bytes are the same thing and the content key's verdict is about exactly them. When the
+    /// framework moved, a store hit resolves a DIFFERENT file — the record names a build under the
+    /// previous tag, and nothing here has hashed what the live tag returned. Restamping on that
+    /// would assert validity for bytes the lane never examined and would suppress the
+    /// instance-activation self-heal that corrects the case today
+    /// (<c>FrameworkStaleAssembly_SelfHealsOnInstanceActivation</c> went red the one time this
+    /// rule was relaxed). Binding a record to bytes it does not name needs the store sidecar
+    /// (#1707 residual 1).</para>
+    /// </summary>
+    /// <param name="frameworkHeldStill">The stamped <c>CompiledFrameworkVersion</c> equals the
+    /// live one, so the staleness is a DEPENDENCY drift rather than a roll.</param>
+    /// <param name="storeHasLiveFrameworkBytes">The assembly store resolved bytes for this type
+    /// under the LIVE framework tag. Only consulted when the framework moved (with it held still
+    /// the record's own build is the addressable one).</param>
+    /// <param name="verdict">What <see cref="ContentKeyReevaluation.Reevaluate"/> concluded.</param>
+    /// <param name="usableAfterReevaluation">
+    /// <see cref="HasUsableBuild(MeshNode, NodeTypeDefinition, BuildGuards?)"/> re-asked with the
+    /// regenerated digest on the guards — the production predicate itself, so the lane and the
+    /// predicate can never disagree about what it just proved.</param>
+    internal static StaleBuildAction DecideStaleBuildAction(
+        bool frameworkHeldStill,
+        bool storeHasLiveFrameworkBytes,
+        ReevaluationVerdict verdict,
+        bool usableAfterReevaluation)
+    {
+        if (frameworkHeldStill)
+            return verdict is ReevaluationVerdict.CarryForward && usableAfterReevaluation
+                ? StaleBuildAction.RestampDependencyRecord
+                : StaleBuildAction.Rebuild;
+
+        // 🚨 The framework moved: NO path here returns RestampDependencyRecord.
+        if (!storeHasLiveFrameworkBytes)
+            return StaleBuildAction.Rebuild;
+        return verdict is ReevaluationVerdict.Rebuild
+            ? StaleBuildAction.Rebuild
+            : StaleBuildAction.Skip;
+    }
+
+    /// <summary>
+    /// 🚨 THE RE-EVALUATION LANE (#1976) — decide what to do with a NodeType the cheap predicates
+    /// have already called stale. It is a SECOND predicate behind a decision that had already been
+    /// taken, after <c>Take(1)</c>, so it runs at most once per hub lifetime and only for a type
+    /// the framework was already about to act on.
+    ///
+    /// <para>🚨 <b>The two branches carry DIFFERENT evidence, and only one of them licenses a
+    /// restamp.</b> This distinction is the whole safety argument, and getting it wrong is how a
+    /// re-evaluation turns into a stale serve.</para>
+    ///
+    /// <list type="number">
+    ///   <item><b>The framework HELD STILL</b> (the staleness is a dependency drift). The build the
+    ///   record describes is addressed under THIS tag, so the record and the bytes are the same
+    ///   thing, and the content key's verdict is about exactly them. A <c>CarryForward</c> here is
+    ///   confirmed against the production predicate itself —
+    ///   <see cref="HasUsableBuild(MeshNode, NodeTypeDefinition, BuildGuards?)"/> re-asked with the
+    ///   regenerated digest on the guards — and then the record is restamped. Anything else
+    ///   compiles, exactly as before.</item>
+    ///
+    ///   <item><b>The framework MOVED.</b> The store is probed under the LIVE tag, as before. A
+    ///   MISS compiles. A HIT used to skip unconditionally; it now re-evaluates, and a
+    ///   <c>Rebuild</c> verdict COMPILES — a genuinely new invalidation, because the kickoff is
+    ///   <c>Take(1)</c>, so a type whose generated input had moved kept serving the old bytes
+    ///   forever. 🚨 But a <c>CarryForward</c> here must NOT restamp. The evidence is about the
+    ///   build the RECORD names, which lives under the PREVIOUS tag; the bytes the store just
+    ///   resolved are a different file, produced by whoever compiled under the live framework, and
+    ///   nothing here has hashed them. Restamping <c>CompiledFrameworkVersion</c> on that would
+    ///   assert validity for bytes the lane never examined AND suppress the instance-activation
+    ///   self-heal that corrects exactly this case today. Binding the two needs the store sidecar
+    ///   (#1707 residual 1) or a cross-generation read — both deliberately out of scope. So the
+    ///   branch keeps its pre-lane behaviour: skip, and change nothing.</item>
+    /// </list>
+    /// </summary>
+    private static IObservable<StaleBuildOutcome> ResolveStaleBuildAction(
+        IMessageHub hub,
+        string hubPath,
+        MeshNode node,
+        BuildGuards guards,
+        IMeshNodeCompilationService compilationService,
+        ILogger? logger)
+    {
+        var def = DefinitionOf(hub, node);
+        if (string.Equals(def?.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal))
+            return Reevaluate(hub, hubPath, node, def!, guards, compilationService, logger)
+                .Select(r => new StaleBuildOutcome(
+                    node,
+                    DecideStaleBuildAction(
+                        frameworkHeldStill: true,
+                        storeHasLiveFrameworkBytes: false,
+                        r.Result.Verdict,
+                        HasUsableBuild(
+                            node, def!, guards with { LiveGeneratedInputDigest = r.Digest })),
+                    r.Result.Detail));
+
+        return ResolveAssemblyStore(hub)
+            .TryGetAssemblyPath(hubPath, def?.LastCompiledVersion ?? node.Version)
+            .Take(1)
+            .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
+            .SelectMany(path => string.IsNullOrEmpty(path)
+                ? Observable.Return(new StaleBuildOutcome(
+                    node,
+                    DecideStaleBuildAction(false, false, ReevaluationVerdict.Inconclusive, false),
+                    null))
+                : Reevaluate(hub, hubPath, node, def, guards, compilationService, logger)
+                    .Select(r => new StaleBuildOutcome(
+                        node,
+                        DecideStaleBuildAction(
+                            frameworkHeldStill: false,
+                            storeHasLiveFrameworkBytes: true,
+                            r.Result.Verdict,
+                            usableAfterReevaluation: false),
+                        r.Result.Detail)));
+    }
+
+    /// <summary>
+    /// Regenerate this NodeType's compile input and ask <see cref="ContentKeyReevaluation"/> what
+    /// it means. Never throws and never blocks: a fault, an unestablished source set or a host
+    /// with no regenerating compilation service all yield <see cref="ReevaluationVerdict.Inconclusive"/>,
+    /// which restamps nothing.
+    /// </summary>
+    private static IObservable<(Reevaluation Result, string? Digest)> Reevaluate(
+        IMessageHub hub,
+        string hubPath,
+        MeshNode node,
+        NodeTypeDefinition? def,
+        BuildGuards guards,
+        IMeshNodeCompilationService compilationService,
+        ILogger? logger)
+    {
+        if (def?.CompiledDependencies is not { } record)
             return Observable.Return((new Reevaluation(
                 ReevaluationVerdict.Inconclusive,
                 "no dependency record is stamped on this build"), (string?)null));
@@ -2074,46 +2165,40 @@ internal static class NodeTypeCompilationHelpers
     }
 
     /// <summary>
-    /// 🚨 THE RESTAMP (#1976): the build is carried forward, so the record stops claiming a
-    /// staleness that has been DISPROVED.
+    /// 🚨 THE RESTAMP (#1976): the dependency record's reserved <c>!toolchain</c> entry is moved to
+    /// the live value, because the regenerated compile input proved the proxy it stands for has not
+    /// moved. Reached ONLY from the framework-held-still branch of
+    /// <see cref="ResolveStaleBuildAction"/>.
     ///
-    /// <para><b>What is being asserted, precisely.</b> The store holds bytes for this type at this
-    /// version under the LIVE framework tag — so they were emitted by a process running the live
-    /// framework, which is the same premise the bytes-win rule already stakes everything on — and
-    /// the regenerated compile input hashes to the content key the record stamped, so nothing the
-    /// emitted bytes depend on has moved. The record is therefore updated to say what is true:
-    /// this build is valid here.</para>
+    /// <para><b>What is asserted, and what is not.</b> The claim is exactly "the toolchain's MVID
+    /// moved but this build's generated input did not, and every assembly it binds still resolves
+    /// identically" — which is what the content-key comparison measured, about the build this
+    /// record names, under the tag it is addressed by. Nothing else moves:
+    /// <c>CompiledFrameworkVersion</c>, the assembly coordinates, the source snapshot and the
+    /// compile status are untouched, and the <c>!input</c> entry and the assembly entries — the
+    /// evidence — are carried through verbatim. This is not a compile and it does not pretend to
+    /// be one.</para>
     ///
-    /// <para><b>Only the entries the evidence covers move.</b> The reserved <c>!toolchain</c>
-    /// entry (the PROXY the content key just answered directly) and
-    /// <c>CompiledFrameworkVersion</c>. <c>LatestAssemblyMvid</c> is re-read from the bytes the
-    /// store actually resolved, so the served-build identity names what is on the volume rather
-    /// than the previous generation's file. Every other field — the source snapshot, the assembly
-    /// coordinates, the compile status — is left exactly as it was: this is not a compile.</para>
-    ///
-    /// <para><b>Why this is strictly safer than what it replaces.</b> Before the lane, this branch
-    /// SKIPPED silently: the bytes were served from the store on the next activation while the
-    /// record went on naming a framework that had rolled, forever (the kickoff is
-    /// <c>Take(1)</c>). Which bytes get served is unchanged by the restamp; what changes is that
-    /// the record stops lying about them, and it only does so on evidence the old path did not
-    /// have at all.</para>
+    /// <para><b>Why it is worth writing at all.</b> Without it the lane would have to regenerate
+    /// on every activation to reach the same verdict; with it, every metadata-only reader
+    /// (<c>HasUsableBuild</c>, the bake probe, the prebuilt seeder) answers correctly on its own.
+    /// The trigger re-arms by itself: the next toolchain move mismatches the restamped entry
+    /// again.</para>
     /// </summary>
     private static void RestampCarriedForwardBuild(
         IMessageHub hub,
         IWorkspace workspace,
         string hubPath,
-        string? storePath,
         BuildGuards guards,
         string? detail,
         ILogger? logger)
     {
         logger?.LogInformation(
             "Re-evaluation CARRIED FORWARD the build for {HubPath}: the toolchain moved but the "
-            + "regenerated compile input did not ({Detail}) — restamping the record for framework "
-            + "{Live} instead of recompiling",
-            hubPath, detail ?? "content key unchanged", FrameworkVersion);
+            + "regenerated compile input did not ({Detail}) — restamping '{Key}' instead of "
+            + "recompiling",
+            hubPath, detail ?? "content key unchanged", Compiler.CompiledDependencies.ToolchainKey);
 
-        var servedMvid = ServedBuildIdentity.OfFile(storePath);
         var access = hub.ServiceProvider.GetService<AccessService>();
         using var systemScope = access?.ImpersonateAsSystem();
         workspace.GetMeshNodeStream().Update(curr =>
@@ -2125,17 +2210,21 @@ internal static class NodeTypeCompilationHelpers
             if (def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling)
                 return curr;
             if (def.CompiledDependencies is not { } record) return curr;
-            // Re-check inside the lambda: a genuine rebuild may have refreshed the record between
-            // the verdict and this write, in which case there is nothing to restamp.
-            if (!HasStaleFrameworkBuild(def, guards)) return curr;
+            // 🚨 Re-check the exact state the verdict was formed on, with NO reliance on the
+            // demoted rule: the framework must still be the live one (a roll between the verdict
+            // and this write would put us on the other branch, where a restamp is not licensed),
+            // and the entry must still be the stale one (a genuine rebuild may have landed first).
+            if (!string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal))
+                return curr;
+            if (!record.TryGetValue(Compiler.CompiledDependencies.ToolchainKey, out var stamped)
+                || string.Equals(stamped, guards.ToolchainId, StringComparison.Ordinal))
+                return curr;
             return curr with
             {
                 Content = def with
                 {
-                    CompiledFrameworkVersion = FrameworkVersion,
                     CompiledDependencies = Compiler.CompiledDependencies.RestampToolchain(
                         record, guards.ToolchainId),
-                    LatestAssemblyMvid = servedMvid ?? def.LatestAssemblyMvid,
                 },
             };
         }).Subscribe(_ => { },
@@ -2150,7 +2239,7 @@ internal static class NodeTypeCompilationHelpers
     /// input as REGENERATED now (#1976), or null — the overwhelmingly common case — when the
     /// caller did not regenerate. Null means the metadata-only rule applies unchanged; it never
     /// means "unchanged". Only the re-evaluation lane
-    /// (<see cref="ReevaluateStaleBuild"/>) supplies it, and only for the ONE type its guards
+    /// (<see cref="ResolveStaleBuildAction"/>) supplies it, and only for the ONE type its guards
     /// describe, which is why this rides on the per-hub guards rather than being a resolver.</param>
     internal sealed record BuildGuards(
         string? ModulesHash,

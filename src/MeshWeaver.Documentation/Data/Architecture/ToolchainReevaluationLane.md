@@ -60,20 +60,42 @@ lane that regenerates.
 ```
        a stale-build verdict has already been formed (metadata-only, cheap)
                                    │
-                     the store already holds bytes
-                     under the LIVE framework tag?
-                        ┌──────────┴──────────┐
-                       no                    yes
-                        │                     │
-                    compile          REGENERATE the compile input
-                                              │
-                                    compare with the stamped !input
-                        ┌─────────────────────┼─────────────────────┐
-                     EQUAL                DIFFERENT            INCONCLUSIVE
-                        │                     │                     │
-              restamp; no compile          compile          pre-lane behaviour;
-                                                             never a restamp
+                        did the FRAMEWORK move?
+                 ┌─────────────────┴──────────────────┐
+                no                                   yes
+      (a dependency drift)                    (the ordinary roll)
+                 │                                    │
+     REGENERATE the compile input          store holds bytes at the LIVE tag?
+                 │                            ┌───────┴────────┐
+      compare with stamped !input            no               yes
+     ┌───────────┼────────────┐               │                │
+  EQUAL      DIFFERENT   INCONCLUSIVE     compile     REGENERATE and compare
+     │            │            │                        ┌──────┴───────┐
+ restamp      compile      compile                  DIFFERENT     EQUAL / INCONCL.
+ !toolchain                                             │                │
+ no compile                                          compile     skip — and change
+                                                                  NOTHING
 ```
+
+🚨 **The two branches carry different evidence, and only the left one licenses a restamp.** This
+distinction is the whole safety argument.
+
+- **Framework held still.** The build the record describes is addressed under *this* tag, so the
+  record and the bytes are the same thing and the content key's verdict is about exactly them. A
+  carry-forward is confirmed against the production predicate itself — `HasUsableBuild` re-asked
+  with the regenerated digest on its guards — and only then is the record restamped.
+- **Framework moved.** A store hit resolves a *different file*: the record names a build under the
+  previous tag, and the bytes the live tag returns were produced by whoever compiled under the live
+  framework. Nothing here has hashed them. Restamping `CompiledFrameworkVersion` on that evidence
+  would assert validity for bytes the lane never examined **and** suppress the instance-activation
+  self-heal that corrects exactly this case today. So the branch keeps its pre-lane behaviour: skip,
+  and change nothing. The only new thing it does is **compile** on a `DIFFERENT` verdict.
+
+That rule was not free. The first cut of this lane did restamp `CompiledFrameworkVersion` on the
+right-hand branch, and `OrleansCompileActivityAccessTest.FrameworkStaleAssembly_SelfHealsOnInstanceActivation`
+went red on CI within minutes: it stages a bogus framework stamp over live bytes, and the restamp
+healed the node before the activation path it exists to guard could run. A guard whose subject was
+stolen — and the right fix was the design, not the test.
 
 Three pieces:
 
@@ -81,8 +103,9 @@ Three pieces:
 |---|---|
 | The decision, pure and unit-testable | `ContentKeyReevaluation.Reevaluate` (`MeshWeaver.Compiler`) |
 | The demotion itself | `CompiledDependencies.FindMismatchAfterReevaluation` + `LiveContentKeyOf` |
+| The restamp | `CompiledDependencies.RestampToolchain` — moves the `!toolchain` entry and nothing else |
 | The regeneration entry point | `MeshNodeCompilationService.RegenerateGeneratedInputDigest` |
-| The wiring | the framework-stale kickoff in `NodeTypeCompilationHelpers` |
+| The branch rule and the wiring | `NodeTypeCompilationHelpers.ResolveStaleBuildAction`, at the framework-stale kickoff |
 
 ### How a non-compiling caller forms the live key
 
@@ -134,7 +157,8 @@ decisive: it compiles.
 
 ## 🚨 The half that is still gated
 
-The lane does **not** demote the framework version, and that is a decision, not an omission.
+The lane does **not** demote the framework version, and that is a decision, not an omission — the
+right-hand branch above is exactly this gate.
 
 A build's bytes are addressed in the assembly store under a key carrying the framework identity's
 first eight characters. After a framework roll the previous generation's bytes are still on the
@@ -151,10 +175,10 @@ drop, the CRLF→LF fold, and the two normalised wall-clock lines). Betting the 
 mode on them is a maintainer call, recorded on the issue rather than taken by an implementing
 session.
 
-So the lane acts **only where the bytes are already addressable under the live tag** — the designed
-pre-bake flow, where a platform release fills the share and portals adopt rather than compiling.
-There it needs no byte carry at all: the bytes are at the live key, and only the record is stale.
-Closing the remaining half needs one of:
+There is a second, sharper reason the store-hit branch cannot restamp even though the bytes it found
+*are* addressable: they are not the bytes the record names. The record describes a build under the
+previous tag; the live tag returned a file produced by whoever compiled under the live framework,
+and the content key says nothing about it. Closing the remaining half needs one of:
 
 - **the cross-generation read** — `IAssemblyStore` gaining a fetch by `(collection, contentPath)` or
   by explicit tag, which is one method behind the decision above; or

@@ -261,6 +261,91 @@ public class ContentKeyReevaluationTest
             .Should().BeTrue();
     }
 
+    // ---- the branch rule -------------------------------------------------------------------------
+
+    /// <summary>
+    /// 🚨 THE SAFETY INVARIANT, exhaustively: when the FRAMEWORK MOVED, no combination of the
+    /// remaining facts licenses a restamp. There the record names a build under the PREVIOUS store
+    /// tag, so anything the live tag resolves is a different file that nothing has hashed.
+    /// </summary>
+    [Fact]
+    public void DecideStaleBuildAction_NeverRestampsAcrossAFrameworkRoll()
+    {
+        foreach (var storeHit in new[] { false, true })
+        foreach (var verdict in Enum.GetValues<ReevaluationVerdict>())
+        foreach (var usable in new[] { false, true })
+            NodeTypeCompilationHelpers.DecideStaleBuildAction(
+                    frameworkHeldStill: false, storeHasLiveFrameworkBytes: storeHit,
+                    verdict, usableAfterReevaluation: usable)
+                .Should().NotBe(
+                    NodeTypeCompilationHelpers.StaleBuildAction.RestampDependencyRecord,
+                    "a build stamped under a previous image is addressed under a different store "
+                    + $"tag (storeHit={storeHit}, verdict={verdict}, usable={usable})");
+    }
+
+    /// <summary>The rest of the table, stated rather than implied.</summary>
+    [Theory]
+    // framework HELD STILL — a dependency drift, where the record's own build IS the addressable
+    // one, so a proven carry-forward may restamp.
+    [InlineData(true, false, ReevaluationVerdict.CarryForward, true,
+        NodeTypeCompilationHelpers.StaleBuildAction.RestampDependencyRecord)]
+    // …but only when the production predicate agrees it is now usable.
+    [InlineData(true, false, ReevaluationVerdict.CarryForward, false,
+        NodeTypeCompilationHelpers.StaleBuildAction.Rebuild)]
+    [InlineData(true, false, ReevaluationVerdict.Rebuild, false,
+        NodeTypeCompilationHelpers.StaleBuildAction.Rebuild)]
+    [InlineData(true, false, ReevaluationVerdict.Inconclusive, false,
+        NodeTypeCompilationHelpers.StaleBuildAction.Rebuild)]
+    // framework MOVED, store MISS — compile, exactly as before the lane existed.
+    [InlineData(false, false, ReevaluationVerdict.CarryForward, true,
+        NodeTypeCompilationHelpers.StaleBuildAction.Rebuild)]
+    // framework MOVED, store HIT — the branch that used to skip unconditionally. A moved input is
+    // now a NEW invalidation…
+    [InlineData(false, true, ReevaluationVerdict.Rebuild, false,
+        NodeTypeCompilationHelpers.StaleBuildAction.Rebuild)]
+    // …and everything else keeps the pre-lane behaviour: skip, and change nothing.
+    [InlineData(false, true, ReevaluationVerdict.CarryForward, true,
+        NodeTypeCompilationHelpers.StaleBuildAction.Skip)]
+    [InlineData(false, true, ReevaluationVerdict.Inconclusive, false,
+        NodeTypeCompilationHelpers.StaleBuildAction.Skip)]
+    internal void DecideStaleBuildAction_TheWholeTable(
+        bool frameworkHeldStill,
+        bool storeHit,
+        ReevaluationVerdict verdict,
+        bool usable,
+        NodeTypeCompilationHelpers.StaleBuildAction expected)
+        => NodeTypeCompilationHelpers.DecideStaleBuildAction(
+                frameworkHeldStill, storeHit, verdict, usable)
+            .Should().Be(expected);
+
+    /// <summary>
+    /// 🚨 THE LINE THE LANE DOES NOT CROSS, and the one a live CI run caught it crossing.
+    ///
+    /// <para>The content key never demotes the FRAMEWORK VERSION. A build stamped under a previous
+    /// image stays unusable even when its regenerated input hashes to the stamped key: its bytes
+    /// are addressed under the PREVIOUS store tag, so anything the store resolves under the live
+    /// tag is a different file that nothing here has hashed — and declaring it valid would also
+    /// suppress the instance-activation self-heal that corrects exactly this case
+    /// (<c>OrleansCompileActivityAccessTest.FrameworkStaleAssembly_SelfHealsOnInstanceActivation</c>,
+    /// which went red the one time this rule was relaxed). Binding a record to bytes it does not
+    /// name needs the store sidecar (#1707 residual 1); until then the framework version is an
+    /// independent, undemoted gate.</para>
+    /// </summary>
+    [Fact]
+    public void TheContentKey_NeverDemotesTheFrameworkVersion()
+    {
+        var record = StampedRecord();
+
+        NodeTypeCompilationHelpers.HasUsableBuild(
+                Node, Def(record, framework: "s-the-previous-image"), Guards(Digest))
+            .Should().BeFalse(
+                "a build from a previous image is addressed under a different store tag — the "
+                + "content key says nothing about the bytes the live tag resolves");
+        NodeTypeCompilationHelpers.HasStaleFrameworkBuild(
+                Def(record, framework: "s-the-previous-image"), Guards(Digest))
+            .Should().BeTrue("so the framework-stale re-drive still owns that case");
+    }
+
     /// <summary>
     /// 🚨 The same three outcomes at the BAKE probe — where the demotion is what lets the store's
     /// bytes-win rule decide, instead of a stale record preempting it and rebaking the world on
