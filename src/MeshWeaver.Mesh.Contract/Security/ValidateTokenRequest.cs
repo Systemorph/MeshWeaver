@@ -40,13 +40,14 @@ public record ValidateTokenResponse
     public string? UserEmail { get; init; }
 
     /// <summary>
-    /// Roles captured on the <see cref="ApiToken"/> at creation time. The auth
-    /// middleware copies these into <see cref="AccessContext.Roles"/> so
-    /// SecurityService can resolve permissions via the claim-based role path
-    /// even on per-node hubs (where the synced AccessAssignment query is
-    /// intentionally not registered — see SecurityServiceExtensions:44-50).
-    /// Empty for tokens created before this field existed — those tokens
-    /// must be re-created to pick up non-claim role data.
+    /// Roles captured on the <see cref="ApiToken"/> at creation time; the auth middleware copies
+    /// them into <see cref="AccessContext.Roles"/>.
+    ///
+    /// <para>🚨 <b>Carried, never trusted.</b> No permission decision reads this — see
+    /// <see cref="ApiToken.Roles"/>. It is deliberately harmless that the value is a snapshot,
+    /// and deliberately harmless that it is empty on tokens minted before the field existed: a
+    /// token NEVER needs re-creating to pick up a grant, because grants are read live off the
+    /// target path on every request.</para>
     /// </summary>
     public IReadOnlyCollection<string> Roles { get; init; } = [];
 
@@ -74,9 +75,9 @@ public record ValidateTokenResponse
         => new() { UserId = userId, UserName = userName, UserEmail = userEmail };
 
     /// <summary>
-    /// Creates a successful validation response carrying the token's role set so
-    /// the auth middleware can stamp <see cref="AccessContext.Roles"/> for
-    /// downstream permission checks.
+    /// Creates a successful validation response carrying the token's mint-time role set so the
+    /// auth middleware can stamp <see cref="AccessContext.Roles"/>. Diagnostic only — see
+    /// <see cref="Roles"/>.
     /// </summary>
     public static ValidateTokenResponse Ok(string userId, string userName, string userEmail,
         IReadOnlyCollection<string> roles)

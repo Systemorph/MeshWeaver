@@ -449,13 +449,27 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                         ObjectId = response.UserId,
                         Name = response.UserName ?? "",
                         Email = response.UserEmail!,
-                        // Stamp the roles captured on the ApiToken at creation time so
-                        // SecurityService.GetEffectivePermissions can resolve permissions via
-                        // its claim-based role path (lines 166-174). Without this, API-token
-                        // requests against per-node hubs see 0 roles → 0 perms → the
-                        // IsApiToken gate strips → DENY — because per-node hubs intentionally
-                        // don't register the synced AccessAssignment query
-                        // (SecurityServiceExtensions:44-50, recursion avoidance).
+                        // 🚨 NOT AUTHORITY. These are the role ids captured on the ApiToken node
+                        // when the token was MINTED, and PermissionEvaluator reads them nowhere:
+                        // a token's permissions are folded from the live AccessAssignment /
+                        // PartitionAccessPolicy nodes on the target path exactly like a browser
+                        // session's, and its API capability from that path's own public grant and
+                        // policy cap (PermissionEvaluator.PublicSurfaceCarriesApi). They are
+                        // stamped only as a diagnostic and because AccessControlPipeline uses a
+                        // non-empty Roles list as its cue to restore the sender's AccessContext on
+                        // a receiving hub.
+                        //
+                        // The comment this replaces claimed the stamp was load-bearing — "per-node
+                        // hubs intentionally don't register the synced AccessAssignment query
+                        // (recursion avoidance), so without this a token sees 0 roles → 0 perms →
+                        // DENY". That stopped being true when the fold moved onto the process-wide
+                        // IMeshNodeStreamCache: AddRowLevelSecurity registers no synced query at
+                        // all any more, every hub (mesh and per-node alike) runs the SAME
+                        // PermissionEvaluator over the SAME cached queries, and claim roles were
+                        // removed from node permissions outright by the 2026-08-05 paywall fix.
+                        // The stale rationale outlived the mechanism it described by months and
+                        // kept a mint-time snapshot in the authority path — see
+                        // Doc/Architecture/AccessControl → "API tokens and the Api capability".
                         Roles = response.Roles,
                         IsApiToken = true,
                     }, null)
