@@ -455,9 +455,14 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                         // PartitionAccessPolicy nodes on the target path exactly like a browser
                         // session's, and its API capability from that path's own public grant and
                         // policy cap (PermissionEvaluator.PublicSurfaceCarriesApi). They are
-                        // stamped only as a diagnostic and because AccessControlPipeline uses a
-                        // non-empty Roles list as its cue to restore the sender's AccessContext on
-                        // a receiving hub.
+                        // stamped as a DIAGNOSTIC and nothing else. 🚨 They were also
+                        // AccessControlPipeline's cue to restore the sender's AccessContext on a
+                        // receiving hub until #2976 — and because the ordinary token's list is
+                        // EMPTY (most IdPs emit no role claims), that cue skipped the restore, the
+                        // fold never saw IsApiToken, and the API-token clamp did not run on any
+                        // message-routed check. The restore is now keyed on a real principal; see
+                        // Doc/Architecture/AccessContextPropagation → "Restoring the caller on the
+                        // receiving hub".
                         //
                         // The comment this replaces claimed the stamp was load-bearing — "per-node
                         // hubs intentionally don't register the synced AccessAssignment query

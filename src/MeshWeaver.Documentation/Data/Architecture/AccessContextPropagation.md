@@ -255,6 +255,61 @@ Both wrap their inner work in `try/finally` so the previous value is restored wh
 
 After this phase, application code runs with `AccessService.Context = delivery.AccessContext`.
 
+#### Restoring the caller on the receiving hub
+
+There is a **third** restore site, and it exists because it runs *before* the two above.
+`AccessControlPipeline` — the `[RequiresPermission]` gate — is added with `AddDeliveryPipeline`,
+and the pipeline list composes outside-in (`Aggregate`), so the gate is the **outermost** wrapper
+and `UserServiceDeliveryPipeline` the innermost. At the moment the gate evaluates, Phase 4 has not
+happened yet: `AccessService.Context` still holds whatever the action-block thread was left with —
+typically `system-security` from the hub's own bootstrap `ImpersonateAsSystem`, or nothing at all.
+
+That matters because the permission fold snapshots the caller on the *calling* thread
+(`PermissionEvaluator.ResolveFoldServices` captures `accessService.Context ?? accessService.CircuitContext`,
+because `AsyncLocal` does not flow through the Rx schedulers `cache.GetQuery` uses), and it reads
+exactly two flags off that snapshot:
+
+| Flag | What it decides |
+|---|---|
+| `IsApiToken` | The API-token clamp — zeroes the permission set for a Bearer context this path's live policy does not admit (`api: false`). |
+| `IsHub` | The hub-credential early return — a hub reading its own vertical chain. |
+
+So the gate restores `delivery.AccessContext` itself, before subscribing the fold. Two rules:
+
+- **The cue is a REAL PRINCIPAL, never a payload shape.** The restore is keyed on the delivery
+  carrying a context with a non-empty `ObjectId` that is not
+  [hub-shaped](#debug-aid-the-hub-shape-error-log). It is deliberately *not* keyed on anything the
+  caller happens to have filled in.
+- **Hub-shaped ids keep the mesh-wide treatment.** A `sync/…`, `mesh/…`, `node/…`, `activity/…` or
+  `portal/…` id is not a user identity and is never installed as one — the same rule
+  `AccessService.SetContext`'s leak tripwire, `UserServiceDeliveryPipeline`'s `shouldStamp` and
+  `MeshNodeStreamCache`'s pass-through all encode.
+
+> 🚨 **Why this is written down: the gate's own input used to decide whether the gate ran (#2976).**
+> The condition was `delivery.AccessContext is { Roles: { Count: > 0 } }` — restore only when the
+> caller carries **role claims**. Its comment justified that in terms of claim-based role
+> resolution, a mechanism that no longer exists (the 2026-08-05 paywall fix took claim roles out of
+> node permissions; #2974 removed their last foothold). `AccessContext.Roles` is read nowhere in
+> `PermissionEvaluator` — so the condition outlived its reason, and it was never the right one.
+>
+> The consequence was silent and permissive. Most identity providers emit no role claims, so
+> `ApiToken.Roles` is normally empty; such a token reached a per-node hub with `Roles = []`, the
+> restore was skipped, `capturedContext` was null, `IsApiToken` was never seen, **and the clamp did
+> not run** — the Bearer delivery was evaluated as an interactive session. The exact-read path was
+> never exposed (`MeshNodeStreamCache.GetStreamRaw` captures the caller itself and wraps the
+> evaluation in `SwitchAccessContext`), so `api: false` held for a read that named the page and was
+> skipped for every **message-routed** check against it.
+>
+> This is the runtime cousin of the CI rule in AGENTS.md — *a gate never tests its own inputs* —
+> because "the check did not run" and "the check passed" were indistinguishable from outside: no
+> exception, no log, a served read. When a condition guards whether a security decision is made,
+> it must name the thing the decision needs (here: a principal to evaluate), never a field the
+> decision does not read.
+>
+> Pinned by `RoutedApiTokenClampTest`, whose control arm is the same person, same node, same routed
+> message *without* the Bearer flag — so the pin measures a capability decision rather than a
+> blanket deny.
+
 ### Phase 5 — Handler runs under user identity
 
 The handler body executes synchronously (or as a single observable chain — no `await`; see [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls)). Every read of `AccessService.Context` returns the originating user. Every check (`securityService.HasPermission(...)`, `RlsNodeValidator.Validate(...)`) is evaluated under the right principal.
