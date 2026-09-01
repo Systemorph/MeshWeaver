@@ -64,9 +64,15 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      # No `if:` on any of the three steps below. They assert and fail; they do not decide whether
-      # to run. The ONE exemption is on the job, and it is a property of the EVENT (draft, fork),
-      # never a question about whether a credential happens to be set — invariant #3.
+      # No `if:` on any step that DECIDES anything below. The assert, the mint and the arm run
+      # unconditionally: they assert and fail, they do not choose whether to run. The ONE exemption
+      # is on the job, and it is a property of the EVENT (draft, fork), never a question about
+      # whether a credential happens to be set — invariant #3.
+      #
+      # The single `if:` further down is on a step that only PRINTS, and it is conditioned on a
+      # failure having already happened. A diagnostic that can turn nothing green is not a
+      # trapdoor — the distinction that matters is whether an `if:` can make a gate not run, and
+      # that one cannot.
       - name: The App credential, or a red run naming what to provision
         env:
           MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
@@ -103,8 +109,13 @@ jobs:
       # installed but lacks one of the two permissions, and that message names neither the App nor
       # the grant — so say it here, where a reader lands. Diagnostics on a failed step, not a gate:
       # this cannot make a red run green.
+      # 🚨 Scoped to the MINT's own outcome, not to `failure()` alone. A bare `if: failure()` also
+      # fires when the secret-presence assert above failed — the mint never ran — and would then
+      # print "could not mint an installation token" over a run whose actual problem was a missing
+      # secret it had just named correctly. Diagnostics that describe a step that did not execute
+      # are worse than none: they send the reader to the wrong half of the lane.
       - name: Name the grant, if the mint could not get it
-        if: failure()
+        if: failure() && steps.arm-token.outcome == 'failure'
         run: |
           echo "::error::could not mint an installation token with Contents:write + PullRequests:write."
           echo "The meshweaver-cloud App must carry BOTH. Check:"
