@@ -46,6 +46,13 @@ boolean:
 > `NodeTypeExecutionGateTest.AdoptedUnverified_IsPermitted_TheAntiOutageProperty` plus the
 > `AnUnverifiedAdoption_StillArms_TheAntiOutageProperty` rows of `ExecuteTimeInterlockTest`.
 
+> **Where the predicate lives.** `NodeTypeExecutionGate` is in **`MeshWeaver.Compiler.Pipeline`**,
+> not `MeshWeaver.Graph.Contract` — even though the latter is where `NodeTypeDefinition` now lives
+> and would be the tidier home. `Graph.Contract` is inside `MeshWeaver.Compiler`'s reference closure,
+> which is a full-MVID toolchain root, so a body-only change there re-bakes every NodeType on every
+> mesh. The pipeline is surface-hashed and is referenced by both enforcement sites, so it carries the
+> predicate at no rebake cost. See [Graph / Compiler Layering](/Doc/Architecture/GraphCompilerLayering).
+
 `BuildExecutionVerdict.Inconclusive` is a separate member for the reason `ErrorType.Unavailable` is:
 a probe must not answer its scariest branch — or its friendliest one — on its own inability to run.
 A boolean gate would force the caller to pick, and both picks are wrong.
