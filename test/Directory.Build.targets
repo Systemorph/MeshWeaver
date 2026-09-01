@@ -1,37 +1,29 @@
 <Project>
 
-  <!-- Guard the two-branch test-config plumbing in Directory.Build.props.
-       Named for xunit.runner.json, which it was written for; it now guards appsettings.json
-       too, since that file rides the identical shared-default-or-project-local selection.
+  <!-- 🚨 DELIBERATELY EMPTY — and it must stay that way.
 
-       That plumbing picks ONE of two Content includes (shared default vs project-local opt-in)
-       on an Exists() condition. If it ever picks neither — a renamed file, a reworked condition,
-       or the `None Update` trap documented in Directory.Build.props — the build still succeeds
-       and the tests still run. They just run under xUnit's OWN defaults, where
-       parallelizeTestCollections is TRUE and the thread count is the machine's core count.
+       `VerifyXunitRunnerConfigCopied` used to live here. It now lives in
+       test/Directory.Build.props, in the SAME file as the four Content includes it validates,
+       and moving it back would re-open the hole it was moved to close.
 
-       So the silent failure is not "we lost a setting", it is "every test project silently
-       switched to unbounded parallelism", on a suite that is single-threaded precisely because
-       parts of it are not parallel-safe. That would surface as unattributable flakes in CI, far
-       from the change that caused it.
+       MSBuild auto-imports Directory.Build.props and Directory.Build.targets independently, so a
+       consumer can take one and not the other — and every satellite that consumes the plumbing
+       does exactly that. MeshWeaver.Plugins (78 *.Test projects) and MeshWeaver.SocialMedia (1)
+       import `$(MeshWeaverRoot)/test/Directory.Build.props` explicitly from their own
+       src/Directory.Build.props, and NEITHER imports this file. Measured 2026-09-01: ZERO of the
+       five satellite checkouts (.Plugins, .Education, .Reinsurance, .SocialMedia, .Manufacturing)
+       reference `test/Directory.Build.targets` at all. They inherited the plumbing without the
+       assertion that it worked — 79 test projects, against core's ~15 that had the guard.
 
-       Fail the build instead. This target is why a future edit to the props cannot regress
-       quietly. -->
-  <Target Name="VerifyXunitRunnerConfigCopied"
-          AfterTargets="Build"
-          Condition="'$(TargetDir)' != '' AND '$(DesignTimeBuild)' != 'true'">
-    <Error Condition="!Exists('$(TargetDir)xunit.runner.json')"
-           Text="No xunit.runner.json reached $(TargetDir). The Content includes in test/Directory.Build.props selected neither the shared default nor a project-local override, so this assembly would run under xUnit's built-in defaults (parallelizeTestCollections=true, threads=core count) instead of the suite's configured settings. Fix the includes in test/Directory.Build.props — do not suppress this error." />
+       The rule AGENTS.md states, and the reason this file is now empty: a gate must never be
+       separable from the input it validates — a gate that never runs is indistinguishable from a
+       gate that passed. Anything guarding test/Directory.Build.props belongs IN
+       test/Directory.Build.props. See DirectoryBuildGuardTravelsWithItsSubjectTest, which fails if
+       the target reappears here.
 
-    <!-- appsettings.json rides the identical two-branch plumbing, so it needs the identical
-         guard. Its silent failure is quieter than the runner config's but cost more: the
-         project-local files are where a test project raises specific channels to Debug to
-         diagnose a CI-only flake, and a build that lands the shared Warning-only file instead
-         produces a green-looking run with no diagnostic output at all. That is exactly how the
-         #993 instrumentation in test/MeshWeaver.Query.Test/appsettings.json ran for over a week
-         emitting nothing on CI while working locally. -->
-    <Error Condition="!Exists('$(TargetDir)appsettings.json')"
-           Text="No appsettings.json reached $(TargetDir). The Content includes in test/Directory.Build.props selected neither the shared default nor the project-local file, so this assembly would run with no logging configuration — any per-project diagnostic channels would silently emit nothing. Fix the includes in test/Directory.Build.props — do not suppress this error." />
-  </Target>
+       The file itself is kept (rather than deleted) so the auto-import surface of the test tree is
+       unchanged: MSBuild stops its upward Directory.Build.targets search at the first file it
+       finds, and there is no root-level Directory.Build.targets in this repository, so keeping an
+       empty one preserves today's behaviour exactly. -->
 
 </Project>

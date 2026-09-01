@@ -173,4 +173,65 @@
     </Content>
   </ItemGroup>
 
+  <!-- ================= The guard for the four Content includes above =================
+
+       🚨 THIS TARGET LIVES HERE, IN THE SAME FILE AS THE PLUMBING IT VALIDATES, AND MUST STAY
+       HERE. It used to sit in test/Directory.Build.targets, and that separation is what made it
+       unreachable for every repository in the fleet.
+
+       MSBuild auto-imports Directory.Build.props and Directory.Build.targets independently, so a
+       consumer can take one without the other — and every satellite that consumes this plumbing
+       does exactly that. MeshWeaver.Plugins (78 *.Test projects) and MeshWeaver.SocialMedia (1)
+       each import THIS file explicitly from their own src/Directory.Build.props:
+
+           <Import Project="$(MeshWeaverRoot)/test/Directory.Build.props"
+                   Condition="$(MSBuildProjectName.EndsWith('.Test')) AND Exists(...)" />
+
+       and NEITHER imports test/Directory.Build.targets — nor do the other satellite checkouts
+       (.Education, .Reinsurance, .Manufacturing, which import neither file). Measured 2026-09-01:
+       ZERO of five checkouts reference `test/Directory.Build.targets`. So every repository that
+       took the two-branch Content selection took it WITHOUT the assertion that it selected
+       anything — 79 satellite test projects, against core's ~15 that had the guard.
+
+       What the guard is for: the four includes above pick ONE of two branches on an Exists()
+       condition. If a branch is renamed, a condition is reworked, or the `None Update` trap in the
+       comment above is re-introduced, the includes select NEITHER, the build still succeeds, and
+       the tests still run — under xUnit's OWN defaults. That is not "a lost setting":
+
+         * parallelizeTestCollections becomes TRUE and maxParallelThreads becomes the core count,
+           on suites that are single-threaded precisely because parts of them are not parallel-safe;
+         * methodTimeout (30 s) disappears entirely.
+
+       The second one is why this guard belongs to the hang investigation (#2865). With
+       methodTimeout in force a wedged test is killed at 30 s and its transcript is WRITTEN — the
+       "strictly better witness" #2865 identifies. Without it, nothing bounds the test, the shard
+       runs to its wall-clock cap, the host is killed (exit=124 / HOST_CRASHED) and the in-flight
+       test's transcript is DESTROYED — which is the structural obstacle that issue records as the
+       reason the family cannot be diagnosed from CI artifacts at all. Whether a hang is
+       investigable therefore depends on this file's includes having worked, and until now nothing
+       outside core checked that they had.
+
+       AGENTS.md states the rule this restores: a gate must never be separable from the input it
+       validates, because a gate that never runs is indistinguishable from a gate that passed.
+
+       Keeping the target in a .props is ordinary MSBuild: AfterTargets is resolved when targets
+       execute, long after this file is imported, and $(TargetDir) is fully evaluated by then.
+       DirectoryBuildGuardTravelsWithItsSubjectTest pins the co-location. -->
+  <Target Name="VerifyXunitRunnerConfigCopied"
+          AfterTargets="Build"
+          Condition="'$(TargetDir)' != '' AND '$(DesignTimeBuild)' != 'true'">
+    <Error Condition="!Exists('$(TargetDir)xunit.runner.json')"
+           Text="No xunit.runner.json reached $(TargetDir). The Content includes in test/Directory.Build.props selected neither the shared default nor a project-local override, so this assembly would run under xUnit's built-in defaults (parallelizeTestCollections=true, threads=core count, NO methodTimeout) instead of the suite's configured settings. A missing methodTimeout is why a wedged test kills the whole host at the wall-clock cap and destroys its own transcript (#2865). Fix the includes in test/Directory.Build.props — do not suppress this error." />
+
+    <!-- appsettings.json rides the identical two-branch plumbing, so it needs the identical
+         guard. Its silent failure is quieter than the runner config's but cost more: the
+         project-local files are where a test project raises specific channels to Debug to
+         diagnose a CI-only flake, and a build that lands the shared Warning-only file instead
+         produces a green-looking run with no diagnostic output at all. That is exactly how the
+         #993 instrumentation in test/MeshWeaver.Query.Test/appsettings.json ran for over a week
+         emitting nothing on CI while working locally. -->
+    <Error Condition="!Exists('$(TargetDir)appsettings.json')"
+           Text="No appsettings.json reached $(TargetDir). The Content includes in test/Directory.Build.props selected neither the shared default nor the project-local file, so this assembly would run with no logging configuration — any per-project diagnostic channels would silently emit nothing. Fix the includes in test/Directory.Build.props — do not suppress this error." />
+  </Target>
+
 </Project>
