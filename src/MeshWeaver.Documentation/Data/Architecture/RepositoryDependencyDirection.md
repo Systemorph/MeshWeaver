@@ -35,9 +35,15 @@ incidental coupling that can be tidied away.
 | `main-cd.yml:849` → `:974` | checks out Plugins @ `vars.MW_PLUGINS_REF \|\| main`, publishes `plugins-repo/src/Memex.Portal.Distributed` | a Plugins compile error turns core CD red; **no images publish for that core commit** |
 | `main-cd.yml:1020` → `:1080` | same, for `Memex.Database.Migration` | ditto — and a missing migration tag is the 6.5 h production outage of 2026-08-27 (#2555) |
 | `main-cd.yml:524` | `git ls-remote` the Plugins HEAD, to key the image set on the PAIR (#2622) | fails RED, deliberately: an unresolvable HEAD means the image identity cannot be established |
-| `main-cd.yml:2094` (`plugins-modules`), `:2166` (`plugins-bake`) | core's CD packs and bakes the Plugins module bundles the portals adopt for this identity | a red leg means the sealed publication is missing for an identity the images already carry |
+| `main-cd.yml:2094` (`plugins-modules`), `:2166` (`plugins-bake`) | core's CD packs and bakes the Plugins module bundles the portals adopt for this identity | a red leg means the sealed publication is missing for an identity the images already carry — **and it stops the whole fleet**: `notify-dependents` is gated on `needs.plugins-bake.result == 'success'` (`:1982`), so Education, Reinsurance, SocialMedia and Manufacturing are never told the platform released |
 | `release-images.yml:34` → `:101`, `:114`, `:126` | the `v*.*.*` tag lane, same two projects | a tag release publishes no portal image |
 | `edge-images.yml:39` → `:92`, `:105` | the manual edge channel, same two projects | edge builds fail |
+
+🚨 **The blast radius is the FLEET, not this repo.** A broken plugins tree does not merely red a
+core job: `notify-dependents` — the one fan-out that tells every satellite a platform release
+happened — sits behind `needs.plugins-bake.result == 'success'`. So one repository's compile error
+silences the release wave for four others, which then adopt nothing and report `FrameworkDeclined`
+at their next fetch. That is the cost of the edge, stated plainly.
 
 🚨 **`ref: main` is the dishonest part, not the checkout.** A live checkout of a sibling's moving
 default branch means "which plugins commit shipped with which core commit" is decided by whoever
