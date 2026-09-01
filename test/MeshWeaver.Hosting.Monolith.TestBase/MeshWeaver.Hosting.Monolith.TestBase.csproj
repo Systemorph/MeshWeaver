@@ -22,4 +22,8 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The collection-scoped fixture lifetime that ShareMeshAcrossTests hangs on. -->
+    <ProjectReference Include="..\MeshWeaver.Testing.Xunit\MeshWeaver.Testing.Xunit.csproj" />
+  </ItemGroup>
 </Project>

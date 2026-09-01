@@ -134,6 +134,8 @@ WEIGHTS=$(cat <<'EOF'
 2 MeshWeaver.Markdown.Collaboration.Test
 2 MeshWeaver.Portal.E2E.Test
 1 MeshWeaver.Data.TestDomain
+1 MeshWeaver.Testing.Xunit.Test
+1 MeshWeaver.Testing.Xunit
 EOF
 )
 
