@@ -4520,84 +4520,178 @@ public class MeshOperations
         // Defer so the post happens on Subscribe — MeshOperations' documented cold-observable
         // contract (hub.Observe posts eagerly when called).
         return Observable.Defer(() =>
-        {
-            var submissionId = Guid.NewGuid().ToString("N");
-            return hub
-                .Observe<ExecuteScriptResponse>(
-                    new ExecuteScriptRequest { SubmissionId = submissionId },
-                    o => o.WithTarget(new Address(resolvedPath)))
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds)))
-                .Select(delivery =>
+            // 🚨 PRE-FLIGHT (#2918). Whether this target can run a script at all is decidable HERE,
+            // from one bounded read — so it is decided here, instead of being asked of a hub that
+            // may never answer.
+            //
+            // What the dispatch depends on that this does not: a NACK travelling back. Both routers
+            // do emit one — an absent path gets ErrorType.NotFound (RoutingServiceBase.PostNotFound
+            // / RoutingGrain), and a hub with no ExecuteScriptRequest handler answers
+            // "No handler found for message type ExecuteScriptRequest" (MessageHub) — and in-process
+            // both arrive in milliseconds. Production 2026-08-31 (fingerprint 6094e6b21967f47b) shows
+            // what happens when one does NOT arrive: the caller sat on the hub's 60 s RequestTimeout
+            // and reported a TimeoutException whose own text could not say which of "undeliverable"
+            // and "delivered but unanswered" had happened. A reply that never comes back is a
+            // transport defect and is tracked as one; the fix HERE is to stop needing the reply for
+            // the two conditions the caller can establish itself.
+            //
+            // The read is the same one every other path-taking MeshOperations tool uses (Get / Patch
+            // / Update / Delete all go through FetchNode) and the verdicts are the same three
+            // CodeNodeType.HandleExecuteScript reaches on the owning hub — with the caller's own
+            // budget as the ceiling, so the pre-flight can never cost more than the dispatch it
+            // replaces.
+            FetchNode(resolvedPath, Math.Clamp(timeoutSeconds, 1, PreflightReadSeconds))
+                .SelectMany(outcome =>
+                    DescribeUnrunnableTarget(outcome, resolvedPath) is { } refusal
+                        ? Observable.Return(refusal)
+                        : DispatchScript(resolvedPath, timeoutSeconds)));
+    }
+
+    /// <summary>
+    /// Budget for the pre-flight read, capped by the caller's own <c>timeoutSeconds</c>. Ten
+    /// seconds is <see cref="FetchNode"/>'s standard budget across this tool surface — deliberately
+    /// NOT a second, independently-tuned number, because the read being bounded is what makes an
+    /// unavailable read cheap, and the read reaching that bound at all is the one case the
+    /// pre-flight refuses to act on (see <see cref="DescribeUnrunnableTarget"/>).
+    /// </summary>
+    private const int PreflightReadSeconds = 10;
+
+    /// <summary>
+    /// The pre-flight verdict for <paramref name="resolvedPath"/>: the structured error to return
+    /// INSTEAD of dispatching, or <c>null</c> when the dispatch must go ahead.
+    ///
+    /// <para>🚨 <b>UNAVAILABLE ≠ absent (#974).</b> A read that reached no verdict is not evidence
+    /// that the target is missing or unrunnable, so it NEVER refuses — the dispatch proceeds exactly
+    /// as it did before, and the owning hub gets the last word. That asymmetry is what makes this
+    /// pre-flight safe to add: it can only ever turn a guaranteed failure into a fast one, never a
+    /// would-be success into an error.</para>
+    ///
+    /// <para>The refusals mirror <c>CodeNodeType.HandleExecuteScript</c>'s own first three checks,
+    /// with one difference that matters: the content is read with
+    /// <see cref="MeshNodeContentExtensions.ContentAs{T}"/>, not a CLR cast. The owner casts
+    /// because the type IS registered on its own hub; here the node has crossed a hub boundary and
+    /// its <see cref="CodeConfiguration"/> can legitimately arrive as a raw
+    /// <see cref="JsonElement"/> — a cast would read that as "nothing to execute" and refuse a node
+    /// that runs perfectly well.</para>
+    /// </summary>
+    private string? DescribeUnrunnableTarget(NodeReadOutcome outcome, string resolvedPath)
+    {
+        if (outcome.IsUnavailable)
+            return null;
+
+        if (outcome.Node is null)
+            // DEFINITIVE absence — a routing NotFound or a read denial, classified at the read
+            // (NodeReadOutcome.FromReadFailure), never a silence that timed out.
+            return PreflightError(resolvedPath, "NodeNotFound",
+                $"No node found at '{resolvedPath}', or you may not read it — there is nothing to "
+                + "execute. Check the path; a `search` scoped to the parent lists what is there.");
+
+        var code = outcome.Node.ContentAs<CodeConfiguration>(hub.JsonSerializerOptions, logger);
+        if (code is null)
+            return PreflightError(resolvedPath, "NotExecutable",
+                $"Node '{resolvedPath}' carries "
+                + $"{outcome.Node.Content?.GetType().Name ?? "no content"}, not a CodeConfiguration "
+                + "— there is nothing to execute. Only a Code node runs scripts.");
+        if (!code.IsExecutable)
+            return PreflightError(resolvedPath, "NotExecutable",
+                $"Not executable: '{resolvedPath}' has CodeConfiguration.IsExecutable = false. "
+                + "Set it to true on the Code node to make it runnable.");
+        return null;
+    }
+
+    /// <summary>
+    /// The pre-flight refusal, in the SAME envelope the dispatch's own failure path emits
+    /// (<c>status</c> / <c>path</c> / <c>errorType</c> / <c>message</c>) so a caller has one shape
+    /// to read regardless of which side answered. <c>errorType</c> is a stable token here rather
+    /// than an exception type name — there is no exception, and inventing one would be a lie.
+    /// </summary>
+    private string PreflightError(string resolvedPath, string errorType, string message) =>
+        JsonSerializer.Serialize(
+            new { status = "Error", path = resolvedPath, errorType, message },
+            hub.JsonSerializerOptions);
+
+    /// <summary>
+    /// The dispatch itself — unchanged behaviour, lifted out of <see cref="ExecuteScript"/> so the
+    /// pre-flight can decide whether to reach it.
+    /// </summary>
+    private IObservable<string> DispatchScript(string resolvedPath, int timeoutSeconds)
+    {
+        var submissionId = Guid.NewGuid().ToString("N");
+        return hub
+            .Observe<ExecuteScriptResponse>(
+                new ExecuteScriptRequest { SubmissionId = submissionId },
+                o => o.WithTarget(new Address(resolvedPath)))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds)))
+            .Select(delivery =>
+            {
+                var response = delivery.Message;
+                if (!response.Success)
                 {
-                    var response = delivery.Message;
-                    if (!response.Success)
-                    {
-                        // The owning hub refused or faulted. It has already logged the WHY
-                        // (with exception type + stack where there was one); relay the
-                        // verdict verbatim so the caller is never told "Dispatched" for a
-                        // run that will never exist.
-                        logger.LogWarning(
-                            "ExecuteScript dispatch refused for {Path}: {Error}",
-                            resolvedPath, response.Error);
-                        return JsonSerializer.Serialize(
-                            new
-                            {
-                                status = "Error",
-                                path = resolvedPath,
-                                submissionId,
-                                message = response.Error
-                                    ?? "The Code node's hub refused the dispatch without a reason."
-                            },
-                            hub.JsonSerializerOptions);
-                    }
-
-                    // AUTHORITATIVE path — where the owning hub actually created the
-                    // Activity, never a locally reconstructed guess.
-                    var activityPath = response.ActivityLog;
-                    if (string.IsNullOrEmpty(activityPath))
-                        return JsonSerializer.Serialize(
-                            new
-                            {
-                                status = "Error",
-                                path = resolvedPath,
-                                submissionId,
-                                message = "The dispatch succeeded but the Code node's hub "
-                                    + "returned no activity path, so the run cannot be observed."
-                            },
-                            hub.JsonSerializerOptions);
-
+                    // The owning hub refused or faulted. It has already logged the WHY
+                    // (with exception type + stack where there was one); relay the
+                    // verdict verbatim so the caller is never told "Dispatched" for a
+                    // run that will never exist.
+                    logger.LogWarning(
+                        "ExecuteScript dispatch refused for {Path}: {Error}",
+                        resolvedPath, response.Error);
                     return JsonSerializer.Serialize(
-                        new
-                        {
-                            status = "Dispatched",
-                            path = resolvedPath,
-                            submissionId = response.SubmissionId ?? submissionId,
-                            activityPath,
-                            message = $"Script dispatched. Poll `get @{activityPath}` for live "
-                                + "messages and final status (Running → Succeeded/Failed)."
-                        },
-                        hub.JsonSerializerOptions);
-                })
-                .Catch<string, Exception>(ex =>
-                {
-                    // Undeliverable (no such node / the per-node hub never activated), the
-                    // budget elapsed, or the hub is shutting down. Exception TYPE + full
-                    // STACK to the logger, TYPE + message + detail to the caller — a caller
-                    // that cannot tell "pending" from "dropped" is the defect this fixes.
-                    logger.LogError(ex, "ExecuteScript dispatch failed for {Path}", resolvedPath);
-                    return Observable.Return(JsonSerializer.Serialize(
                         new
                         {
                             status = "Error",
                             path = resolvedPath,
-                            errorType = ex.GetType().FullName,
-                            message = ex.Message,
-                            detail = ex.ToString()
+                            submissionId,
+                            message = response.Error
+                                ?? "The Code node's hub refused the dispatch without a reason."
                         },
-                        hub.JsonSerializerOptions));
-                });
-        });
+                        hub.JsonSerializerOptions);
+                }
+
+                // AUTHORITATIVE path — where the owning hub actually created the
+                // Activity, never a locally reconstructed guess.
+                var activityPath = response.ActivityLog;
+                if (string.IsNullOrEmpty(activityPath))
+                    return JsonSerializer.Serialize(
+                        new
+                        {
+                            status = "Error",
+                            path = resolvedPath,
+                            submissionId,
+                            message = "The dispatch succeeded but the Code node's hub "
+                                + "returned no activity path, so the run cannot be observed."
+                        },
+                        hub.JsonSerializerOptions);
+
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Dispatched",
+                        path = resolvedPath,
+                        submissionId = response.SubmissionId ?? submissionId,
+                        activityPath,
+                        message = $"Script dispatched. Poll `get @{activityPath}` for live "
+                            + "messages and final status (Running → Succeeded/Failed)."
+                    },
+                    hub.JsonSerializerOptions);
+            })
+            .Catch<string, Exception>(ex =>
+            {
+                // Undeliverable (no such node / the per-node hub never activated), the
+                // budget elapsed, or the hub is shutting down. Exception TYPE + full
+                // STACK to the logger, TYPE + message + detail to the caller — a caller
+                // that cannot tell "pending" from "dropped" is the defect this fixes.
+                logger.LogError(ex, "ExecuteScript dispatch failed for {Path}", resolvedPath);
+                return Observable.Return(JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Error",
+                        path = resolvedPath,
+                        errorType = ex.GetType().FullName,
+                        message = ex.Message,
+                        detail = ex.ToString()
+                    },
+                    hub.JsonSerializerOptions));
+            });
     }
 }
 
