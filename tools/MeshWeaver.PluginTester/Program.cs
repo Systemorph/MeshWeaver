@@ -167,9 +167,9 @@ static async Task<int> RunBuild(string[] args)
 // the cascade live in ProjectFile / ContainerReferenceSet / ProjectBuild; this is only the argv.
 static async Task<int> RunBuildProject(string[] args)
 {
-    // build-project <csproj|dir> [--output <dir>] [--app <dir>] [--extra-refs <dir>]...
+    // build-project <csproj|dir>... [--output <dir>] [--app <dir>] [--extra-refs <dir>]...
     //               [--accept <construct>]... [--allow-warnings | --no-warn=false] [--max-parallel <n>]
-    string? entry = null;
+    var entries = new List<string>();
     string? outDir = null;
     var app = ContainerReferenceSet.DefaultAppDirectory;
     string? sharedFrameworks = null;
@@ -254,24 +254,18 @@ static async Task<int> RunBuildProject(string[] args)
                 Console.Error.WriteLine(BuildProjectUsage());
                 return 2;
             default:
-                if (entry is not null)
-                {
-                    Console.Error.WriteLine(
-                        $"mw-plugin-test build-project: one project at a time — got '{entry}' and '{args[i]}'.");
-                    return 2;
-                }
-                entry = args[i];
+                entries.Add(args[i]);
                 break;
         }
     }
-    if (entry is null)
+    if (entries.Count == 0)
     {
         Console.Error.WriteLine(BuildProjectUsage());
         return 2;
     }
     var projectReport = await ProjectBuild.Run(new ProjectBuild.Options
     {
-        EntryProject = entry,
+        EntryProjects = entries,
         OutputDirectory = outDir,
         AppDirectory = app,
         SharedFrameworksRoot = sharedFrameworks,
