@@ -304,6 +304,86 @@ artifacts. The gate log and the rendered pass/fail table are the record instead.
 test population — behaviour checks against a live mesh — that trade has already been paid 206
 times without a request for any of the four back.
 
+## TWO executors, and which one a case lands in
+
+The section above says "the gate is the executor". That is one of two, and the difference decides
+whether a suite can be migrated at all — so it is the first thing to establish about any test.
+
+| | **`StaticTestRunner`** (off-mesh) | **the gate** (on-mesh) |
+|---|---|---|
+| where | `tools/MeshWeaver.PluginTester/StaticTestRunner.cs` | plugin gate, probe instance |
+| what it runs | the emitted assembly, in a collectible ALC | the type's `Tests` layout area |
+| needs a mesh | **no** | yes |
+| a case it accepts | `public static void Foo()` — **parameterless** | anything the area can invoke |
+| a case it cannot run | one taking `LayoutAreaHost`, a hub, … | — |
+
+🚨 **A case the off-mesh runner cannot execute is reported `NeedsMesh` — COUNTED and NAMED, never
+silently dropped.** That is the whole reason the classification is trustworthy: the report says
+exactly how much of a type's suite the mesh lane still owns, so "it ran" and "it was skipped" can
+never read alike.
+
+This is the maintainer's split of 2026-08-30, quoted in the runner's own doc comment: **compile and
+pure tests off the mesh** (*"grains cannot handle compile workload"*, *"do not try to import mesh
+nodes"*), **the hosted cases through the gate** that seeds from the build's output.
+
+### What that means when migrating an xUnit suite
+
+Classify before converting, because only one of these is a translation job:
+
+- **PURE** — parsers, projections, identity/fingerprint functions, formatters, path conventions,
+  option binding. Becomes `Test/*.cs` static methods, 1:1. Migrate these first; they are the
+  fraction that gets real coverage onto the runner immediately.
+- **MESH** — anything standing up a mesh (`MonolithMeshTestBase`, `HubTestBase`, Orleans fixtures),
+  rendering a layout area, or awaiting a stream. These are **not** convertible to parameterless
+  static methods. They belong to the gate lane, and forcing them into the off-mesh shape means
+  deleting the thing they assert.
+
+🚨 **Never weaken a case to make it fit the shape.** If an xUnit assertion cannot be expressed
+in-mesh, KEEP the original and record why. A migration that quietly drops coverage is worse than the
+xUnit dependency it removed — the suite still appears in the count, and no longer asserts anything.
+
+## Authoring an in-mesh test — the checklist
+
+1. **Put it beside its subject**: `<NodeType>/Test/*.cs`, next to `<NodeType>/Source/*.cs`. Tests
+   live where the functionality lives; a suite in another repo from its subject is a defect, not a
+   layout choice.
+2. **Head the file** with the node block — `// <meshweaver>`, `// Id:`, `// DisplayName:`.
+3. **Static class, `public static void` cases, parameterless**, throwing on failure.
+4. **Own your assertion helper** — a local four-line `Expect`. No xUnit, no FluentAssertions, not
+   even `MeshWeaver.Reactive.Assertions`: a test compiles against the image's framework plus its own
+   type's `Source`, and nothing else.
+5. **Add the `Tests` area** in a sibling `*TestsArea.cs`, enumerating `(name, Action)` and rendering
+   pass/fail — registered with a **literal** `.WithView("Tests", …)`, because the gate reads that
+   field as text and an area registered only inside an extension method reports `tests=skipped`.
+6. **Assert the real surface.** Read the members; never invent an API. A case naming a method that
+   does not exist teaches a call that is wrong — worse than no case at all.
+7. **Pin the silent defaults.** A fallback that returns a plausible value on no-match is exactly what
+   rots unnoticed; a case that names it makes it deliberate.
+
+## Consistency across the fleet
+
+The shape above is the same in every repo — there is no per-repo dialect, and a repo that deviates
+is behind rather than different. Two things follow:
+
+- **`Test/` beside `Source/` is the only layout.** Not a `.Test` project, not another repo.
+- **The assertion idiom is the local `Expect`**, everywhere. A repo whose suites use
+  `MeshWeaver.Reactive.Assertions` or FluentAssertions has not converted yet — check before
+  copying an idiom from a neighbouring file, because the un-converted ones are still present.
+
+Fleet state, measured 2026-09-01 — compiled xUnit projects remaining:
+
+| repo | `.Test` projects | test files |
+|---|---|---|
+| MeshWeaver (platform) | 38 | 1 239 |
+| MeshWeaver.Plugins | 64 | 1 237 |
+| MeshWeaver.SocialMedia | 1 | 16 |
+| MeshWeaver.Crm | **0** | **0** |
+| MeshWeaver.Education / .Reinsurance / .Manufacturing | **0** | **0** |
+
+🚨 **Crm is the reference, not the laggard.** It has no compiled test project at all and 13 in-mesh
+test files — the target state, already reached. When in doubt about the shape, read `Crm/*/Test/`
+rather than inventing one.
+
 ## What retires: the compiled test scaffolding
 
 **Maintainer, 2026-08-30: *"we want to discontinue fixture project overall."***
