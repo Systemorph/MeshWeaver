@@ -74,6 +74,15 @@ Additional libraries resolve from the curated **module-libraries shelf**, and a
 exactly what the SDK hands a consumer (`PackageReference Microsoft.Graph` lets code
 `using Microsoft.Kiota…`; anything less re-creates that gap as a CS0234 wall).
 
+🚨 **What a module COMPILES against and what its bundle CARRIES are two questions with two
+answers.** For the compile the image is authoritative — a module binds the assemblies of the host
+it is loaded into. For the bundle it is not: the image is a PORTAL, and a portal with a module
+compiled into it also carries that module's private package dependencies, so "`/app` has the file"
+is a fact about one host, never a platform guarantee. A bundle carries its own package closure
+minus the SHARED FRAMEWORK, exactly as the SDK lane's `--deps-closure` does — see
+[ModuleClosureAccounting](../ModuleClosureAccounting) for the rule and the two outages that came
+from conflating the two questions.
+
 ## Gates compile against IMPLEMENTATION frameworks
 
 Every compile-check extracts the image's `/usr/share/dotnet/shared` beside `/app` and, seeing
@@ -125,6 +134,7 @@ No component ever publishes from the mesh router — the router names a spokesma
 * **Self-hosted runners with a mounted git mirror + warm image store** (MeshWeaver#2926): bare
   mirror volume, `git worktree add` per run at the release ref, worktree deleted at job end.
 
-See also: [ModuleVersioning](../ModuleVersioning) ·
+See also: [ModuleClosureAccounting](../ModuleClosureAccounting) ·
+[ModuleVersioning](../ModuleVersioning) ·
 [NodeTypeCompilation](../NodeTypeCompilation) · [PluginBuildContract](../PluginBuildContract) ·
 [BuildProcess](../BuildProcess) · [InMeshBuildAndTest](../InMeshBuildAndTest).

@@ -214,6 +214,21 @@ public static class ProjectBuild
         /// </summary>
         public int ResourceCount { get; init; }
 
+        /// <summary>
+        /// The non-framework assemblies this project's own <c>PackageReference</c>s pull in — what
+        /// must RIDE a bundle built from it (<see cref="PrivateClosure"/>).
+        ///
+        /// <para>Carried on the result rather than written during the compile because a bundle's
+        /// closure is the union over its whole IN-TREE graph: a module-owned sibling rides the
+        /// bundle, so the sibling's private dependencies have to ride with it. The union is taken
+        /// once, after the cascade, where the graph is at hand.</para>
+        ///
+        /// <para>🚨 An <c>init</c> PROPERTY, not a primary-constructor parameter — adding a
+        /// parameter REPLACES the record's signature
+        /// (<c>scripts/check-record-signatures.py</c>).</para>
+        /// </summary>
+        public ImmutableArray<PrivateClosure.Ride> Rides { get; init; } = [];
+
         /// <summary>Compiled, emitted, and within the warning policy.</summary>
         public bool IsGreen => Failure is null && AssemblyPath is not null;
     }
@@ -345,23 +360,34 @@ public static class ProjectBuild
                 // (closure pollution). Each entry's manifest names exactly the assemblies its own
                 // in-tree graph produced: the module itself first, its in-tree dependencies after.
                 if (results.All(r => r.IsGreen))
+                {
+                    var byProject = results
+                        .Where(r => r.Result is not null)
+                        .ToDictionary(r => r.Result!.ProjectPath, r => r.Result!, StringComparer.Ordinal);
                     foreach (var entryPath in entries)
                     {
-                        var reachable = new List<string>();
-                        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        var walkStack = new Stack<string>();
-                        walkStack.Push(entryPath);
-                        while (walkStack.Count > 0)
-                        {
-                            var current = walkStack.Pop();
-                            if (!seen.Add(current) || !graph.Models.TryGetValue(current, out var m)) continue;
-                            reachable.Add(m.AssemblyName);
-                            foreach (var dep in graph.DependenciesOf(current))
-                                walkStack.Push(dep);
-                        }
+                        var reachableProjects = InTreeClosure(graph, entryPath);
+                        var reachable = reachableProjects
+                            .Select(path => graph.Models[path].AssemblyName)
+                            .ToList();
                         File.WriteAllLines(
                             Path.Combine(workRoot, reachable[0] + ".closure.txt"), reachable);
+                        // 🚨 THE PRIVATE CLOSURE IS A UNION OVER THE IN-TREE GRAPH, not just the
+                        // entry's own packages. A module-owned sibling RIDES the bundle
+                        // (MeshWeaver.Markdown.Collaboration rides MeshWeaver.AI's), so its own
+                        // package dependencies have to ride with it or the bundle faults the first
+                        // time the sibling touches one — the same shape as the entry's own missing
+                        // closure, one hop further out. The SDK path got this for free: `dotnet
+                        // publish` materializes the WHOLE project graph's package assets.
+                        EmitPrivateClosure(
+                            Path.Combine(workRoot, reachable[0]),
+                            reachable[0],
+                            [.. reachableProjects
+                                .Where(byProject.ContainsKey)
+                                .SelectMany(path => byProject[path].Rides)],
+                            sink);
                     }
+                }
                 Print(options.Output, report);
                 return report;
             })
@@ -716,6 +742,24 @@ public static class ProjectBuild
                 model.CompileItems.Length, 0, 0, null, unresolved.ToImmutable(), message);
         }
 
+        // 🚨 WHAT RIDES IS NOT WHAT RESOLVED. The loop above answered "can this compile", and for
+        // that the container is authoritative. The bundle's closure is a different question with a
+        // different answer: /app is ONE PORTAL's composition, and a portal with a module compiled
+        // into it carries that module's private dependencies — so reading "/app has it" as "the
+        // platform supplies it" drops them from the bundle and the module faults everywhere else
+        // (MeshWeaver.Plugins#1043). The shared framework is the only sound omission.
+        var privateClosure = PrivateClosure.Derive(
+            model.PackageReferences.Select(p => p.Id), container, shelf);
+        foreach (var absent in privateClosure.Missing)
+            sink.Warn($"[{name}] private closure: no file for '{absent}' in the image or on the "
+                + "shelf — it cannot ride, and a bundle missing part of its closure faults at first use");
+        if (!privateClosure.Rides.IsEmpty)
+            sink.Info($"[{name}] private closure: {privateClosure.Rides.Length} assembl(y|ies) ride "
+                + $"the bundle, {privateClosure.FrameworkResolved.Length} left to the shared framework"
+                + (options.Verbose
+                    ? " — " + string.Join(", ", privateClosure.Rides.Select(r => $"{r.AssemblyName} ({r.Source})"))
+                    : " (names with --verbose)"));
+
         // The reference set: the whole container, MINUS every assembly this run builds from source
         // (its own included) — two definitions of one type is the CS0433 family, and the local build
         // is the one under test. Plus the dependency projects' fresh outputs and any additional
@@ -995,7 +1039,6 @@ public static class ProjectBuild
                     $"{warnings} warning(s) under the no-warn policy");
             }
             NameTheDocumentationFile(outputDirectory, model);
-            EmitShelfRides(outputDirectory, model, shelfResolutions, sink, name);
             var scopedCssCount = EmitStaticAssets(outputDirectory, model, sink, name);
             sink.Info(
                 $"[{name}] OK — {model.CompileItems.Length} source file(s)"
@@ -1009,6 +1052,7 @@ public static class ProjectBuild
             {
                 RazorCount = razorGenerated,
                 ResourceCount = model.EmbeddedResources.Length,
+                Rides = privateClosure.Rides,
             };
         }
         catch (CompilationException ex)
@@ -1092,38 +1136,64 @@ public static class ProjectBuild
     }
 
     /// <summary>
-    /// The file, beside the built module, that names every shelf-supplied assembly riding the
-    /// bundle. 🚨 It is the PROVENANCE the lane's inspection keys on: a container bundle may carry
+    /// The file, beside the built module, that names every non-framework assembly riding the
+    /// bundle — its PRIVATE CLOSURE, sourced from the image's <c>/app</c> and the module-libraries
+    /// shelf. 🚨 It is the PROVENANCE the lane's inspection keys on: a container bundle may carry
     /// a non-MeshWeaver assembly ONLY when this manifest names it — anything else still means the
-    /// closure cannot be accounted for and the pack must fail.
+    /// closure cannot be accounted for and the pack must fail. (The name predates the widening
+    /// from "shelf rides" to "the whole private closure", MeshWeaver.Plugins#1043; it is kept
+    /// because pinned caller workflows read it by name.)
     /// </summary>
     public const string ShelfManifestName = "module-libs.txt";
 
     /// <summary>
-    /// Copies every shelf ride beside the module and writes <see cref="ShelfManifestName"/>. The
-    /// rides were derived from the shelf's deps.json minus everything the landing image supplies
-    /// (<see cref="ModuleLibrariesShelf.Resolve"/>), so the bundle's closure stays complete BY
-    /// RECORD — the property the lane's no-extra-refs stance protects.
+    /// Copies a module's private closure beside it and writes <see cref="ShelfManifestName"/>. The
+    /// rides were derived from the image's and the shelf's own deps.json records
+    /// (<see cref="PrivateClosure.Derive"/>), so the bundle's closure stays complete BY RECORD —
+    /// the property the lane's no-extra-refs stance protects.
     /// </summary>
-    private static void EmitShelfRides(
-        string outputDirectory, ProjectFile.Model model,
-        List<ModuleLibrariesShelf.Resolution> shelfResolutions, Sink sink, string name)
+    private static void EmitPrivateClosure(
+        string outputDirectory, string moduleName,
+        ImmutableArray<PrivateClosure.Ride> rides, Sink sink)
     {
-        if (shelfResolutions.Count == 0)
+        if (rides.IsEmpty || !Directory.Exists(outputDirectory))
             return;
         var manifest = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var resolution in shelfResolutions)
-            foreach (var file in resolution.RideFiles)
-            {
-                var fileName = Path.GetFileName(file);
-                if (fileName.Equals(model.AssemblyName + ".dll", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                File.Copy(file, Path.Combine(outputDirectory, fileName), overwrite: true);
-                manifest.Add(fileName);
-            }
+        foreach (var ride in rides)
+        {
+            var fileName = Path.GetFileName(ride.SourcePath);
+            if (fileName.Equals(moduleName + ".dll", StringComparison.OrdinalIgnoreCase))
+                continue;
+            File.Copy(ride.SourcePath, Path.Combine(outputDirectory, fileName), overwrite: true);
+            manifest.Add(fileName);
+        }
+        if (manifest.Count == 0)
+            return;
         File.WriteAllLines(Path.Combine(outputDirectory, ShelfManifestName), manifest);
-        sink.Info($"[{name}] shelf rides: {manifest.Count} assembl(y|ies) beside the module "
+        sink.Info($"[{moduleName}] private closure: {manifest.Count} assembl(y|ies) beside the module "
             + $"({ShelfManifestName} is the provenance the pack inspection keys on)");
+    }
+
+    /// <summary>
+    /// The projects reachable from <paramref name="entryPath"/> over IN-TREE
+    /// <c>ProjectReference</c> edges, the entry first. One walk, used for both the entry's closure
+    /// manifest and the union its bundle's private closure is taken over.
+    /// </summary>
+    private static List<string> InTreeClosure(Graph graph, string entryPath)
+    {
+        var reachable = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var walkStack = new Stack<string>();
+        walkStack.Push(entryPath);
+        while (walkStack.Count > 0)
+        {
+            var current = walkStack.Pop();
+            if (!seen.Add(current) || !graph.Models.ContainsKey(current)) continue;
+            reachable.Add(current);
+            foreach (var dep in graph.DependenciesOf(current))
+                walkStack.Push(dep);
+        }
+        return reachable;
     }
 
     /// <summary>How many resource names a build lists before it counts the rest instead.</summary>

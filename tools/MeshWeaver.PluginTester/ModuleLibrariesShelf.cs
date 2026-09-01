@@ -12,10 +12,17 @@ namespace MeshWeaver.PluginTester;
 /// <c>deps.json</c>, never guessed (the 2026-08-19/20 outage was a guessed closure, and the lane's
 /// no-extra-refs stance exists so that cannot recur).
 ///
-/// <para>🚨 <b>The container still wins.</b> An assembly the platform image supplies (its
-/// <c>/app</c>, its shared frameworks) never rides from the shelf — a same-identity duplicate
-/// beside the platform's copy is the #143-family binding trap. The shelf contributes only what the
-/// landing image does not have, which is the definition of an additional library.</para>
+/// <para>🚨 <b>The container still wins — for the COMPILE.</b> An assembly the platform image
+/// supplies (its <c>/app</c>, its shared frameworks) is referenced from there, not from the shelf:
+/// two metadata references to one simple name is the CS0433 family.</para>
+///
+/// <para>🚨 <b>It does NOT decide what rides.</b> That is
+/// <see cref="PrivateClosure"/>'s job, and it deliberately does not ask whether <c>/app</c> has
+/// the file: the reference image is a PORTAL, so a module compiled into it puts its own private
+/// dependencies in <c>/app</c>, and treating that as a platform guarantee is what emptied the
+/// <c>MeshWeaver.AI</c> bundle's closure (MeshWeaver.Plugins#1043).
+/// <see cref="Resolution.RideFiles"/> answers the narrower question "what would ride from the
+/// shelf alone" and is no longer the bundle's ride set.</para>
 /// </summary>
 public sealed class ModuleLibrariesShelf
 {
@@ -124,6 +131,33 @@ public sealed class ModuleLibrariesShelf
             full, assemblies.ToImmutable(), dependencies.ToImmutable(),
             versions.ToImmutable(), files);
     }
+
+    /// <summary>Whether the shelf carries this package at all (its deps record names it).</summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>True when the shelf's deps.json has a node for it.</returns>
+    public bool Knows(string packageId) => _assembliesByPackage.ContainsKey(packageId);
+
+    /// <summary>The assembly simple names this package contributes, per the shelf's deps record.</summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>The simple names, empty when the shelf does not carry the package.</returns>
+    public ImmutableArray<string> AssembliesOf(string packageId) =>
+        _assembliesByPackage.TryGetValue(packageId, out var names) ? names : [];
+
+    /// <summary>The package ids this package depends on, per the shelf's deps record.</summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>The dependency ids, empty when the shelf does not carry the package.</returns>
+    public ImmutableArray<string> DependenciesOf(string packageId) =>
+        _dependenciesByPackage.TryGetValue(packageId, out var deps) ? deps : [];
+
+    /// <summary>The shelf's pinned version for a package, or null.</summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>The version string, or null.</returns>
+    public string? VersionOf(string packageId) => _versionsByPackage.GetValueOrDefault(packageId);
+
+    /// <summary>The file on the shelf backing an assembly simple name, or null.</summary>
+    /// <param name="assemblyName">The assembly's simple name.</param>
+    /// <returns>The path, or null.</returns>
+    public string? FileFor(string assemblyName) => _filesByName.GetValueOrDefault(assemblyName);
 
     /// <summary>One shelf resolution: the package's own assemblies plus its transitive ride set.</summary>
     /// <param name="PackageId">The package.</param>
