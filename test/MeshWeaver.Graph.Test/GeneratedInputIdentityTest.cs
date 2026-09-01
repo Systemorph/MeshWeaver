@@ -356,6 +356,16 @@ public class GeneratedInputIdentityTest
     /// REGENERATES the input on a toolchain change and compares. The toolchain MVID then stops
     /// being the invalidation unit and becomes the trigger for that comparison — which is the
     /// demotion #1976 actually wants, and which this key is the precondition for.</para>
+    ///
+    /// <para>🚨 <b>That lane now EXISTS</b> (#1976 —
+    /// <see cref="ContentKeyReevaluation"/>,
+    /// <c>NodeTypeCompilationHelpers.ReevaluateStaleBuild</c>), and the last two assertions below
+    /// exercise it: the same record a metadata-only caller validates forever is judged EXACTLY by
+    /// a caller that regenerated. What still blocks the DELETION of the rule is not the decision —
+    /// it is that a build's bytes are addressed under a store key carrying the framework tag, so
+    /// carrying one across a framework generation is a cross-generation assembly load (the
+    /// 2026-06-20 wedge) and a maintainer scope call. The lane therefore acts only where the bytes
+    /// are already addressable under the live tag. Until that call is made, this pin stays.</para>
     /// </summary>
     [Fact]
     public void DeletingTheFullMvidRule_WouldLeaveNothingWatchingTheToolchain()
@@ -392,6 +402,16 @@ public class GeneratedInputIdentityTest
         CompiledDependencies.FindMismatch(
                 record, ids, ToolchainAfterDeletion, afterAToolchainChangeThatDidAlterTheInput)
             .Should().Contain(CompiledDependencies.ContentKey);
+
+        // The lane's own verdicts over the same staged world: a regenerated input that MOVED is a
+        // rebuild, and one that did not is carried forward — the demotion, positively.
+        ContentKeyReevaluation.Reevaluate(
+                record, ids, ToolchainAfterDeletion,
+                Digest(GeneratedSource + "using System.Text;\n"))
+            .Verdict.Should().Be(ReevaluationVerdict.Rebuild);
+        ContentKeyReevaluation.Reevaluate(
+                record, ids, "mvid:a-DIFFERENT-toolchain", Digest(GeneratedSource))
+            .Verdict.Should().Be(ReevaluationVerdict.CarryForward);
     }
 
     /// <summary>

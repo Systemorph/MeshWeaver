@@ -439,6 +439,18 @@ activation (`TryGetAssemblyPath` misses → `TriggerRecompileAndRetry`); the bak
 probe's `NodeTypeBakeStatus.Classify` has the `BytesMissing` state for exactly
 that gap.
 
+🚨 **The `!toolchain` half of clause 4 is a PROXY, and it now demotes to a trigger
+(#1976).** It hashes the toolchain closure's implementation MVIDs — 16 assemblies,
+383 commits/30d — so it moves on changes that touch none of a given type's compile
+input. When a stale-build verdict has already been formed *and* the store already
+holds bytes under the live framework tag, the **re-evaluation lane** regenerates
+what a compile would be handed and compares it with the build's stamped `!input`
+content key: equal ⇒ the record is restamped and no compile is dispatched;
+different ⇒ compile (a NEW invalidation — that branch used to skip
+unconditionally); inconclusive ⇒ exactly the behaviour above, and never a
+restamp. Full reasoning, including the one half that is deliberately still gated:
+[The Toolchain Re-evaluation Lane](../ToolchainReevaluationLane).
+
 **Adopt-before-compile (#1707 slice 3).** "If a pre-built lib exists, take it; only if not,
 generate" holds at every entry point, not just at boot: a package INSTALL and a git-sync PUSH
 first run their affected types through the deployment's bundle sources
