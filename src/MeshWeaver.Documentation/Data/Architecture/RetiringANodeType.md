@@ -11,7 +11,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 content record and a definition class in `src/`. This page is about the other kind: an **in-mesh**
 NodeType, shipped by a package or a node repo as `{Type}.json` plus `{Type}/Source/*.cs`, compiled
 at runtime by [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation). Withdrawing one is not
-the mirror image of adding one, and the difference has cost production twice.
+the mirror image of adding one: the package can stop shipping the type, and the live mesh keeps it
+anyway — as a permanent `CompileError` nobody authored.
 
 ## The rule
 
