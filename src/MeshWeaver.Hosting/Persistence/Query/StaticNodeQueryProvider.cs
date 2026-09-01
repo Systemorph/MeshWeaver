@@ -229,15 +229,50 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 Every effective query, not just the first. A multi-query request
+    /// (<see cref="MeshQueryRequest.FromQueries"/>) is a UNION — "matches A OR B OR …" — and
+    /// <see cref="StorageAdapterMeshQueryProvider"/> has always iterated
+    /// <see cref="MeshQueryRequest.EffectiveQueries"/> to build it. This provider read
+    /// <c>request.Query</c>, which <c>FromQueries</c> fills with <c>list[0]</c>, so a static node
+    /// matched only by the SECOND or later query was silently absent from the union — no error, no
+    /// log, an answer that simply omits it. The asymmetry was invisible for as long as every union's
+    /// static half happened to sit in query #1: the skill query set
+    /// (<c>AgentPickerProjection.BuildSkillQueries</c>) puts the platform <c>Skill</c> catalog first
+    /// and a package's own <c>{partition}/Skill</c> subtree second, so built-in skills resolved and a
+    /// module-shipped one did not (MeshWeaver.Plugins — skills that ship with their module).
+    /// </remarks>
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
         // Static nodes are purely in-memory (no I/O) and never change.
         // Collect synchronously and return a completed Observable.Return — no async, no scheduler.
-        var parsedQuery = _parser.Parse(request.Query);
+        var effective = request.EffectiveQueries;
+        // The FIRST query owns sort / paging / scoring for the whole union — the documented
+        // contract on MeshQueryRequest.Queries ("the others contribute membership only"), and the
+        // one the storage provider already implements.
+        var parsedQuery = _parser.Parse(effective.FirstOrDefault() ?? string.Empty);
         var items = CollectStaticResults<T>(parsedQuery, request.Context);
+        // Union the remaining queries by PATH, which is the identity the request's own Items list
+        // de-dupes on. A node matched by two queries must appear once.
+        if (effective.Count > 1)
+        {
+            var seen = new HashSet<string>(
+                items.OfType<MeshNode>().Select(n => n.Path), StringComparer.OrdinalIgnoreCase);
+            for (var q = 1; q < effective.Count; q++)
+            {
+                foreach (var item in CollectStaticResults<T>(_parser.Parse(effective[q]), request.Context))
+                {
+                    // A non-MeshNode projection has no path to key on; keep it (the single-query
+                    // path never de-duped those either) rather than silently dropping it.
+                    if (item is MeshNode node && !seen.Add(node.Path))
+                        continue;
+                    items.Add(item);
+                }
+            }
+        }
         _logger?.LogDebug(
             "[StaticNodeQueryProvider] Query query='{Query}' parsedPath='{Path}' parsedNodeType='{NodeType}' -> {Count} item(s)",
-            request.Query, parsedQuery.Path ?? "(null)",
+            string.Join(" | ", effective), parsedQuery.Path ?? "(null)",
             (parsedQuery.Filter as MeshWeaver.Mesh.QueryComparison)?.Condition.Values is { } vs
                 ? string.Join("|", vs) : "(complex)",
             items.Count);
