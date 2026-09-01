@@ -127,10 +127,10 @@ different axis and does not help.
 
 ## See also
 
-- [Durable But Unreadable](DurableButUnreadable) — the *other* way an acknowledged write goes
+- [Durable But Unreadable](/Doc/Architecture/DurableButUnreadable) — the *other* way an acknowledged write goes
   missing, and the three-seam test that tells them apart. A transport refusal is loud and terminal;
   that one is silent and leaves a version row behind. Do not diagnose one as the other.
-- [Error Propagation and Wedges](ErrorPropagationAndWedges) — surfacing rather than swallowing.
-- [Debugging Message Flow](DebuggingMessageFlow) — finding the exact broken edge.
-- [Orleans Stream Pub-Sub Durability](OrleansStreamPubSubDurability) — the neighbouring case where a
+- [Error Propagation and Wedges](/Doc/Architecture/ErrorPropagationAndWedges) — surfacing rather than swallowing.
+- [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow) — finding the exact broken edge.
+- [Orleans Stream Pub-Sub Durability](/Doc/Architecture/OrleansStreamPubSubDurability) — the neighbouring case where a
   publish with no subscriber succeeds.
