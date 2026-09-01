@@ -537,19 +537,47 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         /// </summary>
         private void ArmLateRetype(MeshNode raw, MeshNode typed)
         {
-            if (contentTypeRegistry is null || typed.Content is not JsonElement)
+            if (contentTypeRegistry is null || typed.Content is not JsonElement degraded)
+            {
+                _lateRetype.Disposable = Disposable.Empty;
+                return;
+            }
+
+            // Read the stored discriminator ONCE, here, so the per-registration filter below is a
+            // string compare and never touches the document again.
+            var discriminator = degraded.ValueKind == JsonValueKind.Object
+                && degraded.TryGetProperty("$type", out var typeProp)
+                && typeProp.ValueKind == JsonValueKind.String
+                    ? typeProp.GetString()
+                    : null;
+
+            // 🚨 Neither route has an INPUT: no stored discriminator and no NodeType means
+            // TryRecoverForNodeType has nothing to key on, now or ever. Arming here would leave a
+            // wait per degraded subscriber that no registration can ever complete — dead weight for
+            // the life of the subscription. Content this shape is free-form JSON by design (see
+            // ContentDiscriminatorValidator: "content WITHOUT a $type stays legal"), so this is a
+            // real state, not a corner case.
+            if (discriminator is null && string.IsNullOrEmpty(raw.NodeType))
             {
                 _lateRetype.Disposable = Disposable.Empty;
                 return;
             }
 
             _lateRetype.Disposable = contentTypeRegistry.Registrations
+                // 🚨 String compares only, BEFORE any deserialization. A boot registers every
+                // content type in the mesh, and without this each one would re-deserialize this
+                // node's whole JsonElement in every degraded subscription — N×M for nothing. The
+                // predicate mirrors exactly the two routes TryRecoverForNodeType can take, so a
+                // registration it drops is one that provably could not have resolved this node.
+                .Where(r => CouldResolve(r, raw, discriminator))
                 .Select(_ => System.Reactive.Unit.Default)
                 // 🚨 StartWith closes the gap between the conversion above and this Subscribe: a
                 // registration landing in that window would otherwise be missed, and the wait
                 // would hold out for a LATER one that may never come. It runs on the immediate
                 // scheduler, so the re-check is synchronous and — on the ordinary path, where
-                // nothing registered in the window — costs one failed lookup.
+                // nothing registered in the window — costs one failed lookup. It is placed AFTER
+                // the filter deliberately: the filter answers "could THIS registration matter",
+                // and the gap re-check has no registration to judge.
                 .StartWith(System.Reactive.Unit.Default)
                 .Select(_ => Retype(raw))
                 .Where(n => n is not null)
@@ -563,6 +591,35 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     // the defect this wait exists to end, so it must not be reintroduced here.
                     ex => _out.OnError(ex));
         }
+
+        /// <summary>
+        /// Could <paramref name="registration"/> possibly make this node resolvable? It mirrors the
+        /// TWO routes <c>TryRecoverForNodeType</c> takes, and nothing else:
+        /// <list type="number">
+        /// <item>the EXACT route — the registration was keyed on this node's own
+        /// <see cref="MeshNode.NodeType"/> (matched case-insensitively, as the registry's NodeType
+        /// map is keyed);</item>
+        /// <item>the NAME route — the registered type's short or full name IS the stored
+        /// <c>$type</c> (matched ordinally, as <c>ClaimDiscriminator</c> keys it).</item>
+        /// </list>
+        ///
+        /// <para>🚨 It must stay a superset of what could resolve, never a guess at what will: a
+        /// registration wrongly dropped here re-creates the exact defect this wait exists to end.
+        /// A node with neither a NodeType nor a <c>$type</c> matches nothing — correctly, because
+        /// neither route could ever have answered for it. The conversion still runs afterwards and
+        /// the answer is still kept only when it is genuinely typed; this only decides whether it
+        /// is worth ASKING.</para>
+        /// </summary>
+        private static bool CouldResolve(
+            MeshWeaver.Mesh.Services.MeshContentTypeRegistration registration,
+            MeshNode raw,
+            string? discriminator)
+            => (registration.NodeTypePath is { Length: > 0 } path
+                    && raw.NodeType is { Length: > 0 } nodeType
+                    && string.Equals(path, nodeType, StringComparison.OrdinalIgnoreCase))
+               || (discriminator is not null
+                    && (string.Equals(registration.ContentType.Name, discriminator, StringComparison.Ordinal)
+                        || string.Equals(registration.ContentType.FullName, discriminator, StringComparison.Ordinal)));
 
         /// <summary>Re-runs the conversion; null when it still degrades. Throws exactly what the
         /// primary path throws — the Subscribe above routes it to the subscriber.</summary>
