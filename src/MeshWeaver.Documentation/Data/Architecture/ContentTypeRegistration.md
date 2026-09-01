@@ -73,10 +73,12 @@ repaired**. Two independent reasons, either sufficient:
 - **It destroys the content bake.** Resolving a compiled type's configurations loads its assembly,
   and `NodeAssemblyLoadContext.LoadNodeAssembly` **deletes the file** when the load throws
   `BadImageFormatException` ("deleting for regeneration",
-  `src/MeshWeaver.Graph/Configuration/CompilationCacheService.cs`). Probing an adopted-but-not-yet-loadable
+  `src/MeshWeaver.Compiler.Pipeline/CompilationCacheService.cs`). Probing an adopted-but-not-yet-loadable
   bake therefore removes the store's bytes and forces a re-adoption on the next boot.
-  `ShippedPrebuiltBundlesTest` caught this to the tick — an unchanged bundle was restamped where
-  the boot contract requires it to be skipped.
+  `ShippedPrebuiltBundlesTest` (in `MeshWeaver.PluginCatalog.Test`, which lives in
+  `MeshWeaver.Plugins`) caught this to the tick — an unchanged bundle was restamped where the boot
+  contract requires it to be skipped. Note that it is NOT in this repo's solution: a core change
+  can break it without any local build saying so.
 - **It reintroduces per-NodeType boot cost.** Opening every compiled type's bytes at start is
   exactly what the CI content bake removed: 43 re-adopted assemblies cost 13.5 s of a 101 s boot
   before that work. See [NodeType Compilation](../NodeTypeCompilation).
