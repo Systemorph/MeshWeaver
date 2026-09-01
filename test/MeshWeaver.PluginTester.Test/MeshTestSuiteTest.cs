@@ -214,8 +214,10 @@ public class MeshTestSuiteTest(ITestOutputHelper output)
     /// so the declaration is last and therefore wins; seeding after would silently override the
     /// substitution the facility exists to deliver, with no error and no failing assertion.
     ///
-    /// <para><c>IConfiguration</c> is not an arbitrary choice: at 46 sites across both repos it is
-    /// the single most substituted registration in the whole blocked population.</para>
+    /// <para><c>IConfiguration</c> is not an arbitrary choice: at 49 sites across both repos
+    /// (28 in core's <c>test/</c>, 21 in <c>MeshWeaver.Plugins/src</c>) it is the most substituted
+    /// registration in the whole blocked population bar one — <c>IChatClientFactory</c>, which is 65
+    /// sites but all in the AI suites.</para>
     /// </summary>
     [Fact(Timeout = 300000)]
     public void ADeclaredSubstitution_IsWhatTheMeshResolves_EvenOverTheLanesOwn()

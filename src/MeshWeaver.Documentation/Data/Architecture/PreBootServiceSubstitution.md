@@ -46,6 +46,16 @@ The second correction is smaller: the blocked-case figure carried into this work
 Plugins. Re-measured here it is **507**, close enough to confirm the premise and worth stating
 exactly rather than repeating.
 
+**And a number that is LARGER than any of them.** The table above counts a class only when its OWN
+body registers. Following the base-class chain — a suite whose base substitutes is just as blocked —
+the population is **2,644 cases** (572 Plugins + 2,072 core); `MeshWeaver.GitSync.Test`'s
+`GitHubSyncTestBase`, which registers `FakeGitHubRepoClient` and `StubPullRequestDraftService` for
+its 29 subclasses, is the archetype. The seam handles that shape the same way — the shared
+declaration becomes a shared static helper the per-class `ConfigureMesh` calls, exactly what the base
+class is doing today — but the per-class facility needs of the inherited population were NOT
+individually assessed, so **the coverage figure in §6 is computed on the 1,236 direct cases only**
+and must not be scaled up to 2,644.
+
 ---
 
 ## 2. The seam: a DECLARATION and an APPLICATOR, deliberately far apart
