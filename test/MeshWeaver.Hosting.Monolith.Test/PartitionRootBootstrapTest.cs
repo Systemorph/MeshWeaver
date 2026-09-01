@@ -289,6 +289,106 @@ public class PartitionRootBootstrapTest(ITestOutputHelper output) : MonolithMesh
             "the bare short id must never become a partition root");
     }
 
+    /// <summary>
+    /// 🚨 #2939 — the SAME defect one segment deeper, and the shape the original 1b′ trigger
+    /// (<c>MainNode == Id</c>) could not see. A parser that mints a node in the platform
+    /// <c>Skill</c> partition and rebases it afterwards with <c>with { Namespace = … }</c> leaves
+    /// <c>MainNode = "Skill/{id}"</c> on a node whose Path is <c>{partition}/Skill/{id}</c>.
+    /// Two segments, so the bare-Id test misses it — and because <c>MainNode</c> is non-nullable,
+    /// the stale value reads as a DELIBERATE satellite pointer and is persisted. The node is then
+    /// <c>Active</c>, readable by <c>get</c>, and invisible to every search, because the catalog's
+    /// <c>is:main</c> projection is SQL <c>n.main_node = n.path</c>. Six live nodes on
+    /// memex.meshweaver.cloud were in exactly this state, and it cost a full investigation on a
+    /// downstream repo before anyone looked at <c>mainNode</c>.
+    /// </summary>
+    [Fact]
+    public async Task MainNode_StaleNamespacedSelfDefaultFromAnotherPartition_IsRepairedOnCreate()
+    {
+        const string partition = "BootstrapMainNodeNs";
+
+        // Exactly how SkillFileParser produced it: minted in "Skill", rebased into the plugin's own
+        // partition. Path follows the rebase; the STORED MainNode does not.
+        var buggy = new MeshNode("deployment", "Skill") with
+        {
+            Namespace = $"{partition}/Skill",
+            Name = "/deployment",
+            NodeType = "Markdown",   // a MAIN (non-satellite) type
+            State = MeshNodeState.Active
+        };
+        buggy.Path.Should().Be($"{partition}/Skill/deployment");
+        buggy.MainNode.Should().Be("Skill/deployment",
+            "pre-condition: the stored MainNode kept the namespace the node was BORN in");
+        buggy.HasExplicitMainNode.Should().BeTrue(
+            "pre-condition: and it is indistinguishable from a deliberate satellite pointer — "
+            + "which is why every upsert faithfully persisted it");
+
+        await MeshService.CreateNode(buggy).Should().Within(30.Seconds()).Emit();
+
+        var read = await ReadStorage(buggy.Path);
+        read.Should().NotBeNull();
+        read!.MainNode.Should().Be(read.Path,
+            "a MAIN node whose MainNode is a self-default frozen in ANOTHER partition is stale, "
+            + "not deliberate — stored as-is it drops out of `is:main` with nothing to grep for");
+    }
+
+    /// <summary>
+    /// The NEGATIVE control the broadened 1b′ rule needs, and the reason it is not a blanket
+    /// <c>MainNode != Path</c>. A non-satellite node may legitimately point <c>MainNode</c> at
+    /// another node — <c>GitHubSyncConfig</c>'s <c>MainNode = spacePath</c>, an app tile's
+    /// navigation target. Those are distinguished by their LAST SEGMENT: a self-default ends with
+    /// the node's OWN id, a pointer at some other node does not.
+    /// </summary>
+    [Fact]
+    public async Task MainNode_PointerAtAnotherNode_IsLeftAlone_EvenAcrossPartitions()
+    {
+        const string partition = "BootstrapMainNodeKeep";
+        const string foreignTarget = "SomeOtherPartition/Apps/store-front";
+
+        var node = new MeshNode("tile", $"{partition}/Tiles")
+        {
+            Name = "Tile",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+            MainNode = foreignTarget,
+        };
+
+        await MeshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
+
+        var read = await ReadStorage(node.Path);
+        read.Should().NotBeNull();
+        read!.MainNode.Should().Be(foreignTarget,
+            "the last segment is not this node's id, so it is a deliberate pointer, not a frozen "
+            + "self-default — re-stamping it would be #2383 in reverse");
+    }
+
+    /// <summary>
+    /// The second negative control: a self-default-SHAPED MainNode that stays inside the node's own
+    /// partition is a legitimate parent pointer (a <c>~/Threads</c> app tile targets
+    /// <c>{owner}/Threads</c>, whose last segment IS the tile's id). Both halves of the trigger are
+    /// load-bearing — either one alone over-reaches.
+    /// </summary>
+    [Fact]
+    public async Task MainNode_SelfDefaultShapedButInsideItsOwnPartition_IsLeftAlone()
+    {
+        const string partition = "BootstrapMainNodeSamePart";
+        var sameParty = $"{partition}/Threads";
+
+        var node = new MeshNode("Threads", $"{partition}/App")
+        {
+            Name = "Threads",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+            MainNode = sameParty,
+        };
+
+        await MeshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
+
+        var read = await ReadStorage(node.Path);
+        read.Should().NotBeNull();
+        read!.MainNode.Should().Be(sameParty,
+            "same partition — the node it names is real and routable, so nothing is stale here");
+    }
+
     // ── #638: the residue of a NON-ATOMIC create is what the bootstrap must repair ──────────
 
     /// <summary>
