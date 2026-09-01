@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 // DocumentPaths moved to MeshWeaver.Mesh.Contract, keeping its
 // MeshWeaver.ContentCollections.Indexing namespace, and this assembly forwards the name so nothing
 // that binds it has to change — not source in this repo, not a module already published against
@@ -13,5 +15,4 @@
 // Landing the relocation PLUS this forwarder on its own breaks the cycle. Afterwards both trees
 // compile at every point: this assembly still answers for the name, and Mesh.Contract carries the
 // definition the plugins copy binds.
-[assembly: System.Runtime.CompilerServices.TypeForwardedTo(
-    typeof(MeshWeaver.ContentCollections.Indexing.DocumentPaths))]
+[assembly: TypeForwardedTo(typeof(MeshWeaver.ContentCollections.Indexing.DocumentPaths))]
