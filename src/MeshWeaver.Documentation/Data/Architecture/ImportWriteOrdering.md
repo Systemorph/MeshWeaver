@@ -104,6 +104,18 @@ The same classification covers a cycle member, for the identical reason: its typ
 
 **This is not a bounded-retry or a deferral timer.** There is one attempt per import pass, it is named, and it costs no write.
 
+## One boundary this deliberately does not cross — the partition root
+
+The partition **root** is written by `EnsureRoot`, one step *before* the node loop, and is not part
+of the plan. That is on purpose: root-first is what makes the partition routable, listable and
+landable, and every static-repo source's root is a `Space` — a statically-registered type — so the
+ordering has nothing to decide. A root whose own type is a dynamic type defined by one of its
+children (the Store shape: root `nodeType: Store/Catalog`, defined by `Store/Catalog`) would still
+be refused here. [`PackageInstaller.InstallNodeRepo`](../Plugins) solves that with a `Space`
+**placeholder** root that is retyped once the types land; the static-repo importer has never needed
+it, and adding it speculatively would disturb the root-first ordering for no measured case. If a
+source ever ships such a root, that placeholder — not a wider plan — is the fix.
+
 ## What did NOT change (and why that mattered)
 
 `StaticRepoImporter.Run`'s ordering encodes four production incidents. The staging is inserted **inside the per-node upsert phase only**; every one of these is upstream or downstream of it and is untouched:
