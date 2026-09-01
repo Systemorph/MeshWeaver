@@ -63,7 +63,7 @@ public class EmbeddedResourceTest : IDisposable
     private ProjectBuild.Options OptionsFor(string entry, params string[] accept) =>
         new()
         {
-            EntryProject = entry,
+            EntryProjects = [entry],
             AppDirectory = AppDirectory(),
             OutputDirectory = Path.Combine(_root, "out"),
             Output = TextWriter.Null,

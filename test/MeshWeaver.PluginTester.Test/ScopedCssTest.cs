@@ -301,7 +301,7 @@ public class ScopedCssTest : IDisposable
 
         var report = await ProjectBuild.Run(new()
         {
-            EntryProject = entry,
+            EntryProjects = [entry],
             AppDirectory = AppDirectory(),
             OutputDirectory = Path.Combine(_root, "out"),
             Output = TextWriter.Null,

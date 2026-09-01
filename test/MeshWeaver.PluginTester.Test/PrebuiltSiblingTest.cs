@@ -78,7 +78,7 @@ public class PrebuiltSiblingTest : IDisposable
 
         var first = await ProjectBuild.Run(new()
         {
-            EntryProject = sibling,
+            EntryProjects = [sibling],
             AppDirectory = AppDirectory(),
             OutputDirectory = Path.Combine(_root, "out1"),
             Output = TextWriter.Null,
@@ -88,7 +88,7 @@ public class PrebuiltSiblingTest : IDisposable
 
         var second = await ProjectBuild.Run(new()
         {
-            EntryProject = consumer,
+            EntryProjects = [consumer],
             AppDirectory = AppDirectory(),
             OutputDirectory = Path.Combine(_root, "out2"),
             Output = TextWriter.Null,
@@ -112,7 +112,7 @@ public class PrebuiltSiblingTest : IDisposable
 
         var report = await ProjectBuild.Run(new()
         {
-            EntryProject = entry,
+            EntryProjects = [entry],
             AppDirectory = AppDirectory(),
             OutputDirectory = Path.Combine(_root, "out"),
             Output = TextWriter.Null,
