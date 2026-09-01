@@ -33,8 +33,8 @@ namespace MeshWeaver.Documentation.Test;
 /// is a hard parse failure at the worst moment; in an allow-file it corrupts a ratchet's baseline.</para>
 ///
 /// <para>This is a cheap, total check of the kind AGENTS.md asks for: it asserts an OUTCOME over the
-/// real tree rather than a convention, and it cannot pass by not running — an empty file list fails
-/// the guard rather than reporting success over nothing.</para>
+/// real tree rather than a convention, and it cannot pass by not running — it asserts a sentinel
+/// path was actually enumerated rather than trusting that the scan found something.</para>
 /// </summary>
 public class NoConflictMarkersGuard
 {
@@ -50,14 +50,28 @@ public class NoConflictMarkersGuard
     private static readonly string[] Markers = ["<<<<<<<", ">>>>>>>"];
 
     /// <summary>
-    /// Extensions worth reading. Binary files cannot carry a marker that matters, and scanning the
-    /// whole tree would make this slow enough to be skipped.
+    /// Extensions that cannot meaningfully carry a marker. Everything else is read.
+    ///
+    /// <para>🚨 A BLOCKLIST, not an allow-list, and the distinction is the point. An allow-list of
+    /// "text" extensions silently skips whatever nobody thought of — <c>.csx</c> scripts, and every
+    /// extensionless tracked file: <c>.gitignore</c>, <c>.editorconfig</c>, <c>.gitattributes</c>,
+    /// <c>CODEOWNERS</c>, <c>LICENSE</c>, <c>Dockerfile</c>. Those are ordinary conflict targets,
+    /// and a guard reporting green over them is the same "checked nothing" failure it exists to
+    /// prevent, one level in.</para>
     /// </summary>
-    private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> BinaryExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".md", ".cs", ".csproj", ".slnx", ".json", ".yml", ".yaml", ".sh", ".ps1",
-        ".props", ".targets", ".razor", ".ts", ".tsx", ".js", ".py", ".allow", ".txt",
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp", ".pdf", ".zip", ".gz", ".tgz",
+        ".dll", ".exe", ".pdb", ".so", ".dylib", ".nupkg", ".snk", ".woff", ".woff2", ".ttf",
+        ".otf", ".eot", ".mp4", ".mov", ".webm", ".mp3", ".wav", ".bin", ".dat",
     };
+
+    /// <summary>
+    /// A path every checkout of this repository has. Asserting it was enumerated proves the scan
+    /// ran against the real tree — deterministically, where a "more than N files" floor only
+    /// guesses at it and drifts as the repository grows.
+    /// </summary>
+    private const string SentinelPath = "AGENTS.md";
 
     [Fact]
     public void NoTrackedFileCarriesAnUnresolvedConflictMarker()
@@ -65,23 +79,29 @@ public class NoConflictMarkersGuard
         var root = FindRepoRoot();
         var tracked = TrackedFiles(root);
 
-        // The guard's own input, asserted. A `git ls-files` that returns nothing (not a checkout,
-        // git missing from PATH) would otherwise report a clean tree having read zero files —
-        // the "green on no evidence" shape this repository keeps re-learning.
+        // The guard's own input, asserted against a path that MUST exist rather than a count that
+        // merely looks plausible. A `git ls-files` returning nothing (not a checkout, git missing
+        // from PATH, wrong working directory) would otherwise report a clean tree having read zero
+        // files — the "green on no evidence" shape this repository keeps re-learning.
         Assert.True(
-            tracked.Count > 500,
-            $"only {tracked.Count} tracked file(s) enumerated under {root} — this guard cannot have "
-            + "checked anything meaningful. Refusing to report a clean tree over an empty read.");
+            tracked.Contains(SentinelPath),
+            $"`git ls-files` under {root} did not enumerate {SentinelPath}, so this guard did not "
+            + "scan the repository. Refusing to report a clean tree over a read that found nothing.");
 
         var offenders = new List<string>();
         foreach (var relative in tracked)
         {
-            if (!TextExtensions.Contains(Path.GetExtension(relative)))
+            if (BinaryExtensions.Contains(Path.GetExtension(relative)))
                 continue;
 
             var full = Path.Combine(root, relative);
             if (!File.Exists(full))
                 continue;   // a delete staged but not yet written to disk
+
+            // Extension lists are guesses; a NUL byte is evidence. Catches an unlisted binary
+            // without the blocklist having to know its name.
+            if (LooksBinary(full))
+                continue;
 
             var lines = File.ReadAllLines(full);
             for (var i = 0; i < lines.Length; i++)
@@ -101,6 +121,15 @@ public class NoConflictMarkersGuard
             + "conflict properly: for the Architecture topic map that means UNIONING both sides' "
             + "entries, because each side is usually adding a different page and taking either "
             + "wholesale silently orphans the other one.");
+    }
+
+    /// <summary>A NUL byte in the first 8 KB — the standard, name-independent binary test.</summary>
+    private static bool LooksBinary(string path)
+    {
+        using var s = File.OpenRead(path);
+        Span<byte> head = stackalloc byte[8192];
+        var read = s.Read(head);
+        return head[..read].IndexOf((byte)0) >= 0;
     }
 
     /// <summary>
