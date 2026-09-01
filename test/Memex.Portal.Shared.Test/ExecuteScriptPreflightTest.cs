@@ -199,9 +199,14 @@ public class ExecuteScriptPreflightTest(ITestOutputHelper output) : MonolithMesh
         LogLevel Level, string Category, string Message, Exception? Exception);
 
     /// <summary>
-    /// An <see cref="ILoggerProvider"/> that keeps every record the mesh emits. The backing queue
-    /// is an INSTANCE field on an instance the test's mesh owns — the no-static-state rule applies
-    /// to test infrastructure exactly as it does to <c>src/</c>.
+    /// An <see cref="ILoggerProvider"/> that keeps every record the mesh's <c>ILoggerFactory</c>
+    /// routes to it at <see cref="LogLevel.Debug"/> or above — the factory's own filter rules apply
+    /// first, so what lands here is what a deployment's sink would receive, minus <c>Trace</c>.
+    /// That is deliberate: the assertion is about Warning+, and the failure dump is more useful
+    /// without per-message trace chatter buried in it.
+    ///
+    /// <para>The backing queue is an INSTANCE field on an instance the test's mesh owns — the
+    /// no-static-state rule applies to test infrastructure exactly as it does to <c>src/</c>.</para>
     /// </summary>
     private sealed class CapturingLoggerProvider : ILoggerProvider
     {
