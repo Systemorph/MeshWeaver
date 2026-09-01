@@ -18,6 +18,10 @@
          MeshWeaver.AI.Test travels to MeshWeaver.Plugins. -->
     <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Auth.Test" />
+    <!-- The build-principal suite (#2483) drives GitHubOidcKeyService's FETCH leaf directly, so the
+         cache / refresh-floor / fail-closed rules are exercised without reaching GitHub over the
+         network. Same white-box grant, same reason, as the three above. -->
+    <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
   </ItemGroup>
 
   <ItemGroup>

@@ -74,6 +74,10 @@ public static class PluginBundleEndpoints
     /// <summary><see cref="HttpContext.Items"/> key holding the authenticated caller.</summary>
     private const string CallerItemKey = "PluginBundle.Caller";
 
+    /// <summary><see cref="HttpContext.Items"/> key holding the authenticated BUILD principal — a
+    /// different caller class from an installation, so a different slot (#2483).</summary>
+    private const string BuildCallerItemKey = "PluginBundle.BuildCaller";
+
     /// <summary>Maps the instance-key-gated bundle routes. Call alongside <c>MapPluginRegistry</c>.</summary>
     public static IEndpointRouteBuilder MapPluginBundles(this IEndpointRouteBuilder endpoints)
     {
@@ -101,7 +105,13 @@ public static class PluginBundleEndpoints
                 return InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger);
 
             var caller = outcome.Instance;
-            if (caller is null)
+            var build = outcome.Build;
+            // 🚨 A BUILD principal (#2483) is admitted on the PREBUILT routes ONLY. It is a CI run,
+            // not an installation: it has no instance record, no plan and no PluginGrant, so every
+            // other bundle route — which decides per package against exactly those — keeps refusing
+            // it with the same 401 as before. Narrowing here rather than inside each handler means
+            // a route added later is refused by default rather than by remembering to.
+            if (caller is null && (build is null || !IsPrebuiltRoute(http.Request.Path)))
             {
                 // 🚨 Fails CLOSED, with no anonymous escape hatch — unlike /api/plugins, which
                 // keeps one for local dev. These are compiled assemblies for PAID modules; "open
@@ -114,7 +124,10 @@ public static class PluginBundleEndpoints
                     statusCode: StatusCodes.Status401Unauthorized);
             }
 
-            http.Items[CallerItemKey] = caller;
+            if (caller is not null)
+                http.Items[CallerItemKey] = caller;
+            if (build is not null)
+                http.Items[BuildCallerItemKey] = build;
             return await next(ctx);
         });
 
@@ -190,27 +203,28 @@ public static class PluginBundleEndpoints
     {
         group.MapGet($"/{PrebuiltSegment}/{{identity}}/{{source}}",
             (HttpContext http, string identity, string source) =>
-                PrebuiltIndex(http, identity, source, Caller(http)));
+                PrebuiltIndex(http, identity, source, Caller(http), BuildCaller(http)));
         group.MapGet($"/{PrebuiltSegment}/{{identity}}/{{source}}/{{bundle}}",
             (HttpContext http, string identity, string source, string bundle) =>
-                PrebuiltBundle(http, identity, source, bundle, Caller(http)));
+                PrebuiltBundle(http, identity, source, bundle, Caller(http), BuildCaller(http)));
         // The module set a publication was sealed against (MeshWeaver#2698) — a consumer pinned to
         // this identity composes THESE bytes, never the package endpoint's. The literal segment wins
         // over {bundle} above, so a NodeType bundle named "modules" is not served here.
         group.MapGet($"/{PrebuiltSegment}/{{identity}}/{{source}}/{PublishedBundleCatalogue.ModulesDirectoryName}",
             (HttpContext http, string identity, string source) =>
-                PrebuiltModuleSet(http, identity, source, Caller(http)));
+                PrebuiltModuleSet(http, identity, source, Caller(http), BuildCaller(http)));
         group.MapGet($"/{PrebuiltSegment}/{{identity}}/{{source}}/{PublishedBundleCatalogue.ModulesDirectoryName}/{{bundle}}",
             (HttpContext http, string identity, string source, string bundle) =>
-                PrebuiltModule(http, identity, source, bundle, Caller(http)));
+                PrebuiltModule(http, identity, source, bundle, Caller(http), BuildCaller(http)));
     }
 
     /// <summary>The sealed publication's bundle names, or 404 when none is sealed for that
     /// identity/source, or 403 when the caller holds no whole-source grant on it.</summary>
     private static IResult PrebuiltIndex(
-        HttpContext http, string identity, string source, AuthenticatedInstance? caller)
+        HttpContext http, string identity, string source,
+        AuthenticatedInstance? caller, AuthenticatedBuild? build)
     {
-        if (PrebuiltDecision(http, identity, source, caller) is { } refused)
+        if (PrebuiltDecision(http, identity, source, caller, build) is { } refused)
             return refused;
         var directory = PrebuiltDirectory(http, identity, source);
         var sealed_ = directory is null ? null : PublishedBundleCatalogue.SealedBundlesOf(directory, Log(http));
@@ -224,9 +238,10 @@ public static class PluginBundleEndpoints
     /// <summary>One sealed bundle's bytes. A name the seal does not list is 404 even if the file
     /// exists — an unsealed file is not part of the publication.</summary>
     private static IResult PrebuiltBundle(
-        HttpContext http, string identity, string source, string bundle, AuthenticatedInstance? caller)
+        HttpContext http, string identity, string source, string bundle,
+        AuthenticatedInstance? caller, AuthenticatedBuild? build)
     {
-        if (PrebuiltDecision(http, identity, source, caller) is { } refused)
+        if (PrebuiltDecision(http, identity, source, caller, build) is { } refused)
             return refused;
         var directory = PrebuiltDirectory(http, identity, source);
         var sealed_ = directory is null ? null : PublishedBundleCatalogue.SealedBundlesOf(directory, Log(http));
@@ -241,9 +256,10 @@ public static class PluginBundleEndpoints
     /// is torn, or predates module sealing (republish it); an EMPTY list when the bake composed
     /// nothing. Same grant as the bundle index: a whole-source grant on the source.</summary>
     private static IResult PrebuiltModuleSet(
-        HttpContext http, string identity, string source, AuthenticatedInstance? caller)
+        HttpContext http, string identity, string source,
+        AuthenticatedInstance? caller, AuthenticatedBuild? build)
     {
-        if (PrebuiltDecision(http, identity, source, caller) is { } refused)
+        if (PrebuiltDecision(http, identity, source, caller, build) is { } refused)
             return refused;
         var directory = PrebuiltDirectory(http, identity, source);
         var reading = directory is null
@@ -259,9 +275,10 @@ public static class PluginBundleEndpoints
     /// <summary>One sealed module bundle's bytes. A name the module index does not list is 404
     /// even if the file exists — an unlisted file is not part of the sealed set.</summary>
     private static IResult PrebuiltModule(
-        HttpContext http, string identity, string source, string bundle, AuthenticatedInstance? caller)
+        HttpContext http, string identity, string source, string bundle,
+        AuthenticatedInstance? caller, AuthenticatedBuild? build)
     {
-        if (PrebuiltDecision(http, identity, source, caller) is { } refused)
+        if (PrebuiltDecision(http, identity, source, caller, build) is { } refused)
             return refused;
         if (!IsBareName(bundle))
             return Results.Json(new { error = "bundle must be a bare name" },
@@ -283,14 +300,23 @@ public static class PluginBundleEndpoints
     /// ledger like every other bundle route, so a refused fetch is as visible as a refused serve.
     /// </summary>
     private static IResult? PrebuiltDecision(
-        HttpContext http, string identity, string source, AuthenticatedInstance? caller)
+        HttpContext http, string identity, string source,
+        AuthenticatedInstance? caller, AuthenticatedBuild? build)
     {
-        if (caller is null)
+        if (caller is null && build is null)
             return Results.Json(new { error = "a registered instance key is required" },
                 statusCode: StatusCodes.Status401Unauthorized);
         if (!IsBareName(identity) || !IsBareName(source))
             return Results.Json(new { error = "identity and source must be bare names" },
                 statusCode: StatusCodes.Status400BadRequest);
+
+        // 🚨 The BUILD leg (#2483). A verified GitHub Actions token establishes WHICH repository
+        // asked; the admin-owned BuildPrincipal node decides whether it may fetch THIS source, on
+        // THIS event. It is the same shape as the instance leg one line below — credential resolves
+        // to identity, admin-owned node decides — so there is one thing to keep honest, not two.
+        if (caller is null)
+            return BuildDecision(http, source, build!);
+
         // A PLAN-LESS whole-source entry, specifically: a sealed publication carries every plan's
         // bundles, so a plan-scoped `<source>/*@pro` — which licenses that source's packages one by
         // one, by tier — must never fetch the publication whole.
@@ -309,6 +335,42 @@ public static class PluginBundleEndpoints
             : Results.Json(
                 new { error = $"instance '{caller.Instance.InstanceId}' is not granted source '{source}'" },
                 statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    /// <summary>
+    /// The build principal's half of <see cref="PrebuiltDecision"/>: <c>fetch:&lt;source&gt;</c> on
+    /// the repository's own <see cref="BuildPrincipal"/>, decided against the run's <c>event_name</c>
+    /// and <c>ref</c> (#2483).
+    ///
+    /// <para>🚨 The refusal BODY names the repository and the source and nothing else. The reason —
+    /// which check failed — goes to the log and the entitlement ledger, because the URL space here
+    /// is fully predictable and a reason that distinguishes "wrong event" from "no scope" from "no
+    /// such publication" is an inventory oracle over every source this registry holds.</para>
+    /// </summary>
+    private static IResult? BuildDecision(HttpContext http, string source, AuthenticatedBuild build)
+    {
+        var refusal = build.Refuse(BuildVerbs.Fetch, source, DateTimeOffset.UtcNow);
+        var allowed = refusal is null;
+        Ledger(http)?.Record(new EntitlementDecision(
+            $"{PrebuiltSegment}/{source}",
+            allowed ? EntitlementOutcome.Granted : EntitlementOutcome.Denied,
+            EntitlementAnchorKind.Registry,
+            source,
+            true,
+            allowed
+                ? $"build principal {build.PrincipalPath} holds '{BuildPrincipal.Scope(BuildVerbs.Fetch, source)}' "
+                  + $"for {build.Repository} on event '{build.Claims.EventName}'"
+                : $"build principal {build.PrincipalPath} ({build.Repository}, event "
+                  + $"'{build.Claims.EventName}'): {refusal}"));
+        if (allowed)
+            return null;
+
+        Log(http)?.LogWarning(
+            "Plugin bundles: build principal {Path} refused for source {Source} — {Reason}",
+            build.PrincipalPath, source, refusal);
+        return Results.Json(
+            new { error = $"repository '{build.Repository}' may not fetch source '{source}'" },
+            statusCode: StatusCodes.Status403Forbidden);
     }
 
     private static string? PrebuiltDirectory(HttpContext http, string identity, string source)
@@ -477,6 +539,16 @@ public static class PluginBundleEndpoints
     /// </summary>
     private static AuthenticatedInstance? Caller(HttpContext http) =>
         http.Items.TryGetValue(CallerItemKey, out var value) ? value as AuthenticatedInstance : null;
+
+    /// <summary>The authenticated BUILD principal the filter stamped, or <c>null</c> (#2483). Same
+    /// contract as <see cref="Caller"/>: null is "granted nothing", never "unscoped".</summary>
+    private static AuthenticatedBuild? BuildCaller(HttpContext http) =>
+        http.Items.TryGetValue(BuildCallerItemKey, out var value) ? value as AuthenticatedBuild : null;
+
+    /// <summary>Whether <paramref name="path"/> is one of the prebuilt-publication routes — the only
+    /// ones a build principal may reach.</summary>
+    private static bool IsPrebuiltRoute(PathString path) =>
+        path.StartsWithSegments($"{RoutePrefix}/{PrebuiltSegment}");
 
     /// <summary>
     /// 🚨 <b>THE PER-PACKAGE AUTHORIZATION</b> (#1772), now anchored on the REGISTRY (#1782 gap 2) —
