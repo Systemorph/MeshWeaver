@@ -196,9 +196,10 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
         var updater = new RecordingUpdater();
         var options = new SelfUpdateOptions
         {
-            // The poll interval doubles as the fault-resubscribe delay — short so the test observes
-            // the recovery promptly.
-            RetryInterval = TimeSpan.FromMilliseconds(500),
+            // A first-read fault is the ESTABLISHING case, so this is the interval that paces the
+            // recovery — short here so the test observes it promptly. RetryInterval is deliberately
+            // left at its production default: it must not be what gets this install moving again.
+            PolicyEstablishRetryInterval = TimeSpan.FromMilliseconds(500),
             DefaultPolicy = UpdatePolicyKind.Continuous,
         };
         var service = new FaultingFirstReadService(
@@ -209,9 +210,11 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
         try
         {
             // 1. The first live read FAULTS (TimeoutException — the prod shape) right after the seed.
-            //    The startup default (Continuous) still drives the first poll, and the faulted read
-            //    must retry silently in the background. Pre-fix the fault terminated the whole
-            //    subscription permanently.
+            //    Nothing can proceed on a guessed policy (#2731/#2797 removed the synthetic default
+            //    emission), so EVERY trigger waits on the re-read: the roll below is proof the
+            //    faulted read came back on its own. Pre-fix the fault terminated the whole
+            //    subscription permanently; pre-#PolicyEstablishRetryInterval it came back only after
+            //    the 6 h RetryInterval, which is the same outage with a longer name.
             var firstTag = await updater.Patched
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
@@ -343,5 +346,77 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
         {
             await service.StopAsync(CancellationToken.None);
         }
+    }
+
+    /// <summary>
+    /// 🚨 The memex-cloud defect, at production cadence (2026-09-01). A first policy read that
+    /// faults must NOT park this install on <see cref="SelfUpdateOptions.RetryInterval"/>: every
+    /// trigger — startup, build completion, policy change and the safety net — is gated on that
+    /// first emission, so until it lands the install performs no checks AT ALL and the safety net
+    /// cannot bound it, because the safety net is behind the same gate.
+    ///
+    /// <para>What it cost: memex.meshweaver.cloud served <c>rc8.ci.6829</c> while ACR had reached
+    /// <c>rc9.ci.7231</c> — about 400 builds — with its pinned module set advanced past the image
+    /// (modules "contributing nothing"), memory at 89% and satellite CI gates failing on its bundle
+    /// endpoints. Two pods of the same build proved the mechanism: the one that logged <c>policy
+    /// stream faulted; re-establishing in 06:00:00</c> had run ZERO checks, its sibling two.</para>
+    ///
+    /// <para>🚨 The pre-existing first-read test cannot see this, and that is the point of adding a
+    /// second one: it sets <c>RetryInterval</c> itself to 500 ms, so it proves recovery HAPPENS
+    /// while saying nothing about recovery happening usefully. Here RetryInterval keeps its
+    /// production default, so the only thing that can make this test pass is the establishing
+    /// cadence.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task A_faulted_FIRST_policy_read_recovers_at_the_establish_cadence_not_the_six_hour_one()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var acr = new FakeAcrTagLister();
+        var updater = new RecordingUpdater();
+        var options = new SelfUpdateOptions
+        {
+            // PRODUCTION value, deliberately: if the fix regresses, this is the wait, and the test
+            // fails by timeout rather than by passing for the wrong reason.
+            RetryInterval = TimeSpan.FromHours(6),
+            PolicyEstablishRetryInterval = TimeSpan.FromMilliseconds(200),
+            DefaultPolicy = UpdatePolicyKind.Continuous,
+        };
+        var service = new FaultingFirstReadService(
+            Mesh, acr, updater, options,
+            Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>());
+
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            // The positive signal is a ROLL: it can only happen after a policy has actually been
+            // read, which can only happen after the faulted first read was re-established.
+            var applied = await updater.Patched
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Await(ct);
+            applied.Should().Be(FakeAcrTagLister.CiTag);
+            service.ReadSubscriptions.Should().BeGreaterThanOrEqualTo(2,
+                "the recovery must have gone through the injected fault and a re-subscription");
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// The decision itself, both directions and in the right order: fast while no policy has been
+    /// read (the install is inert), paced once one has (the value is retained and checks continue).
+    /// Pure, so it pins the intent without waiting on a mesh.
+    /// </summary>
+    [Fact]
+    public void PolicyRetryDelay_is_fast_while_establishing_and_paced_once_established()
+    {
+        var options = new SelfUpdateOptions();
+
+        options.PolicyRetryDelay(policyEstablished: false).Should().Be(options.PolicyEstablishRetryInterval);
+        options.PolicyRetryDelay(policyEstablished: true).Should().Be(options.RetryInterval);
+        options.PolicyEstablishRetryInterval.Should().BeLessThan(options.RetryInterval,
+            "an install with no policy yet is INERT — it must not wait a re-establishment interval");
     }
 }

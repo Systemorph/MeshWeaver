@@ -45,6 +45,43 @@ public record SelfUpdateOptions
     public TimeSpan RetryInterval { get; init; } = TimeSpan.FromHours(6);
 
     /// <summary>
+    /// 🚨 The retry cadence while the update policy has NEVER been read — the ESTABLISHING case,
+    /// which <see cref="RetryInterval"/> is the wrong value for.
+    ///
+    /// <para>Every trigger — startup, build completion, policy change, AND the
+    /// <see cref="SafetyNetCheckInterval"/> safety net — is gated on the first policy emission,
+    /// deliberately: the poller must never decide under a policy it has not read (#2731/#2797).
+    /// So until that first read succeeds self-update is not slow, it is entirely INERT, and the
+    /// safety net that exists to bound a dead channel sits BEHIND that same gate and cannot bound
+    /// this one. Pacing the first attempt at the 6 h <see cref="RetryInterval"/> therefore turns a
+    /// single slow boot-time <c>SubscribeRequest</c> into six hours with no checks at all.</para>
+    ///
+    /// <para>Measured, not hypothetical: on 2026-09-01 memex-cloud served
+    /// <c>memex.meshweaver.cloud</c> from <c>rc8.ci.6829</c> while ACR had reached
+    /// <c>rc9.ci.7231</c> — roughly 400 builds behind, its pinned module set advanced past the
+    /// image, modules "contributing nothing", and satellite CI gates failing on the bundle
+    /// endpoints. Two pods of the SAME build told the whole story: the one whose policy read
+    /// faulted (<c>policy stream faulted; re-establishing in 06:00:00</c>) had run ZERO checks,
+    /// while its sibling, which read the policy cleanly, had run two.</para>
+    ///
+    /// <para>Once the policy HAS been read a later fault keeps the long
+    /// <see cref="RetryInterval"/>: the last value is retained, checks keep running, and the
+    /// pacing intent is untouched. <see cref="PolicyRetryDelay"/> is that decision, and it is the
+    /// only place the two cadences are chosen between.</para>
+    /// </summary>
+    public TimeSpan PolicyEstablishRetryInterval { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long a faulted watch waits before re-establishing: <see cref="PolicyEstablishRetryInterval"/>
+    /// while the poller has never read a policy (it is inert until it has, so a fault in that state
+    /// costs the whole feature), <see cref="RetryInterval"/> once it has (the value is retained and
+    /// checks continue, so the fault costs only freshness). Pure — pinned by
+    /// <c>SelfUpdatePollerResilienceTest</c> in both directions.
+    /// </summary>
+    public TimeSpan PolicyRetryDelay(bool policyEstablished) =>
+        policyEstablished ? RetryInterval : PolicyEstablishRetryInterval;
+
+    /// <summary>
     /// The minimum time between two automatic rolls of this install.
     ///
     /// <para>Since the check became event-driven, a publication is a roll and a roll is a pod
