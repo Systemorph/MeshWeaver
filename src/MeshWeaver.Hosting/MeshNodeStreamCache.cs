@@ -1478,9 +1478,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // wedged-thread / never-dispatching-watcher bug class.
     private IObservable<MeshNode> GetStreamRaw(string path)
     {
-        // ♻️ A TRANSIENT NODE PROBE HAS NO MESH NODE — and this is the SECOND seam a probe's
-        // own-address read arrives on. The first, MeshNodeStreamExtensions.GetMeshNodeOutcome,
-        // has answered such a read `Absent` since #2468; this one had no guard at all, and it is
+        // ♻️ A TRANSIENT NODE PROBE HAS NO MESH NODE — and this is the SECOND of the THREE seams a
+        // probe's own-address read arrives on. The first, MeshNodeStreamExtensions.GetMeshNodeOutcome,
+        // has answered such a read `Absent` since #2468; the third is the own-node reduce behind
+        // `workspace.GetMeshNodeStream()` (MeshNodeStreamHandle.Subscribe), which threw a causeless
+        // "Failed to create stream" until #2990 and now also completes empty. This one had no guard
+        // at all, and it is
         // the seam that in-mesh NodeType content actually reaches for, because reading the OWN
         // node through the process-wide cache is what the framework tells content to do (it is
         // also the only own-node read that works during initialization — the hub's own-node
