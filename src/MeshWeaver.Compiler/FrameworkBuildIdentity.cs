@@ -121,8 +121,13 @@ public static class FrameworkBuildIdentity
         // it too), and an image shipping AI.dll in its app closure would 409 the registry module.
         "MeshWeaver.Compiler",
         "MeshWeaver.ContentCollections",
-        "MeshWeaver.ContentCollections.Indexing",
-        "MeshWeaver.ContentCollections.Indexing.Graph",
+        // MeshWeaver.ContentCollections.Indexing and .Indexing.Graph left the content surface
+        // with the indexing carve-out, for the same reason MeshWeaver.Markdown.Collaboration did
+        // below: the chunking/embedding pipeline is the Indexing MODULE now, composed into
+        // content compiles per-mesh via CompileReferences.ComposeWithModules — never part of the
+        // framework identity. No in-mesh content binds it (verified across every gated sample
+        // tree); DocumentPaths, the one type the platform still needs, kept its namespace and
+        // moved to MeshWeaver.Mesh.Contract, which both remaining consumers already reference.
         "MeshWeaver.Data",
         "MeshWeaver.Data.Contract",
         "MeshWeaver.Domain",

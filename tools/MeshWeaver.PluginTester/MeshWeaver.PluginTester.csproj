@@ -253,7 +253,6 @@
          content surface (in-mesh source compiles against them), so the closure keeps them
          directly now that the engine is gone. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Operations\MeshWeaver.Mesh.Operations.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing.Graph\MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
