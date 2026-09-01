@@ -136,57 +136,65 @@ fault cannot red a suite that passed.
 
 ## Measured
 
-`MeshWeaver.Autocomplete.Test`, on 2026-09-01, local (Debug, in-process runner):
+**In core, now — `MeshWeaver.Graph.Test`** (2026-09-01, local, `-c Release`, in-process runner):
+
+| | cases | baseline | on the host | |
+|---|---|---|---|---|
+| `AppIconAdoptionTest` (6 `[InlineData]`) | 14 | **2.879 s** | **1.330 s** | **2.2×** |
+
+The shape is the amortisation: the first case pays **0.387 s** (the boot), every later one
+**0.047–0.062 s**. Validated **20/20 green** on the class, and the whole assembly — **1063 cases,
+every one routed through `MeshTestAssemblyRunner`** — is **3/3 green** at 64–72 s.
+
+Per-row verdicts, with the row arguments xunit prints:
+
+```
+A_target_with_no_better_icon_changes_nothing(targetIcon: null)          [FINISHED] 0.050s
+A_target_with_no_better_icon_changes_nothing(targetIcon: "")            [FINISHED] 0.047s
+A_target_with_no_better_icon_changes_nothing(targetIcon: "…puzzle.svg") [FINISHED] 0.050s
+A_record_without_a_real_icon_adopts_the_apps_own(current: null)         [FINISHED] 0.048s
+A_record_without_a_real_icon_adopts_the_apps_own(current: "")           [FINISHED] 0.052s
+A_record_without_a_real_icon_adopts_the_apps_own(current: "…puzzle.svg")[FINISHED] 0.049s
+```
+
+**The original measurement, on a suite that has since left this repo.** The facility was built and
+proved against `MeshWeaver.Autocomplete.Test`, which moved to MeshWeaver.Plugins on 2026-09-01 with
+16 other mesh suites (`b253cec0a`, "core stops building them"). Recorded because it is the larger
+number and the honest provenance of the design:
 
 | | cases | baseline | on the host | |
 |---|---|---|---|---|
 | `AutocompleteMultiSourceTest` (25 `[InlineData]`) | 48 | **26.9 s** | **4.0 s** | **6.7×** |
-| whole assembly (5 of 6 classes share) | 146 | **33.5 s** | **12.2 s** | **2.7×** |
+| whole assembly (5 of 6 classes shared) | 146 | **33.5 s** | **12.2 s** | **2.7×** |
 
-After declining the one class that does not tolerate sharing (below), the converted assembly ran
-**18/18 green at 11.7–14.3 s**, against a baseline of 33.5–36.9 s over 21 runs.
-
-Within the converted class the shape is exactly the amortisation: the first case pays **2.62 s**
-(the boot), every later one **0.04–0.11 s**.
-
-Per-row verdicts, with a failure injected into one row to prove isolation:
-
-```
-FuzzyScorer_AnyWordInFilename_RanksDocumentFirst(query: "one")   [FINISHED] 0.284s
-FuzzyScorer_AnyWordInFilename_RanksDocumentFirst(query: "two")   [FINISHED] 0.043s
-FuzzyScorer_AnyWordInFilename_RanksDocumentFirst(query: "thr")   [FINISHED] 0.044s
-FuzzyScorer_AnyWordInFilename_RanksDocumentFirst(query: "ONE")   [FINISHED] 0.045s
-FuzzyScorer_AnyWordInFilename_RanksDocumentFirst(query: "Two")   [FINISHED] 0.043s
-FuzzyScorer_AnyWordInFilename_RanksDocumentFirst(query: "THR")   [FAIL] injected
-FuzzyScorer_AnyWordInFilename_RanksDocumentFirst(query: "three") [FINISHED] 0.041s
-Total: 7, Failed: 1
-```
-
-Seven rows, one verdict each, one failure — the run continues past it. That is the non-negotiable
-the whole facility exists for, and it is xunit's, not ours.
+18/18 green against a 33.5–36.9 s baseline over 21 runs; the first case paid the 2.62 s boot and
+every later one 0.04–0.11 s. With a failure injected into one row, seven rows produced seven
+verdicts and one failure and the run continued past it — per-row isolation, which is xunit's and
+not ours, and the non-negotiable the whole facility exists for.
 
 ## 🚨 Every opt-in is an untested assumption — re-validate one class at a time
 
 The flag was **inert for its whole life**. All 72 `ShareMeshAcrossTests => true` overrides were
-written against a kill-switch that was hard-coded `false`, so **not one of them was ever executed
-shared**. Turning the lifetime on does not "restore an optimisation" — it runs 72 classes in a mode
-none of them has been observed in.
+written against a kill-switch hard-coded `false`, so **not one was ever executed shared**. Turning
+the lifetime on does not "restore an optimisation" — it runs classes in a mode none of them has been
+observed in. That is why adoption is per assembly, then measured per class.
 
-`MeshWeaver.Autocomplete.Test` has six such classes. Five survive sharing. One does not:
+It is not a theoretical risk. `MeshWeaver.Autocomplete.Test` had six such classes; five survived
+sharing and one did not:
 
 | | sharing ON | sharing OFF |
 |---|---|---|
 | `AutocompleteIntegrationTest.ChatAutocomplete_GlobalFanOut_ReachesOtherPartitions`, full assembly | **2 failures / 22 runs** | **0 / 21** |
 | the same class run **alone**, sharing ON | **0 / 20** | — |
 
-Run alone it is perfectly green, so the fixture is not simply broken: what it does not tolerate is a
-mesh that has already served the class's other 22 cases, in a process where the rest of the assembly
-ran first. Its opt-in is therefore declined **in the class**, with the measurement recorded next to
-it, and the test itself is untouched and still runs.
+Run alone it was perfectly green, so the fixture was not simply broken: what it did not tolerate was
+a mesh that had already served the class's other 22 cases, in a process where the rest of the
+assembly ran first. Its opt-in was declined in the class with the measurement recorded beside it,
+and the test itself was never touched. (That suite now lives in MeshWeaver.Plugins; the lesson is
+why `AppIconAdoptionTest`'s opt-in above was measured 20/20 before it was turned on, not after.)
 
-**The rule this sets: adopt per assembly, then measure per class.** A class that flakes under
-sharing has its own opt-in turned off with the numbers written down — never by relaxing the test,
-and never by widening a timeout to hide it.
+**A class that flakes under sharing has its own opt-in turned off with the numbers written down** —
+never by relaxing the test, and never by widening a timeout to hide it.
 
 ## 🚨 Adding a test project: two places, or the suite runs nowhere
 
@@ -233,10 +241,14 @@ project gets parallel collections.
   parameterless statics.
 - **`MonolithMeshTestBase` is not retired.** This removes the reason it could not be — a shared mesh
   now has an end — but the migration is its own work.
-- **One assembly is converted.** `MeshWeaver.Autocomplete.Test` — five of its six opted-in classes
-  now share, the sixth is declined with evidence. The remaining 66 classes carrying
-  `ShareMeshAcrossTests => true` elsewhere in the estate light up as their assemblies opt in, one at
-  a time, each re-measured the same way.
+- **One core assembly is converted, and one class in it shares.** `MeshWeaver.Graph.Test` runs on
+  the host (1063 cases); `AppIconAdoptionTest` is the class that shares a mesh. Every other class in
+  it is unaffected, because a class that does not declare `ShareMeshAcrossTests` never takes the
+  shared path.
+- 🚨 **Core has no other opt-ins left.** All 72 `ShareMeshAcrossTests => true` classes moved to
+  MeshWeaver.Plugins with the 17 mesh suites (`b253cec0a`), so the population this facility was
+  built for now lives THERE. `MonolithMeshTestBase` stays here with 64 consumer files, and the host
+  is a core assembly, so Plugins adopts it the same way: one assembly at a time, measured per class.
 
 ## See also
 
