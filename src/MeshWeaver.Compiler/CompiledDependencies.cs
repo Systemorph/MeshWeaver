@@ -156,7 +156,62 @@ public static class CompiledDependencies
         Func<string, string?> liveIdOf,
         string liveToolchainId,
         string? liveContentKey = null)
+        => Compare(record, liveIdOf, liveToolchainId, liveContentKey, demoteToolchain: false);
+
+    /// <summary>
+    /// 🚨 <see cref="FindMismatch"/> with the toolchain entry DEMOTED from an invalidation unit to
+    /// a trigger (#1976) — the read half of the content key, and the only place the demotion is
+    /// expressed.
+    ///
+    /// <para><b>The rule.</b> When <paramref name="liveContentKey"/> is supplied AND equals the
+    /// record's stamped <see cref="ContentKey"/>, the reserved <see cref="ToolchainKey"/> entry
+    /// stops deciding: the proxy it stands in for ("the toolchain moved, so the generated input
+    /// MIGHT have moved") has been answered directly, and the answer is no. Every other entry
+    /// still decides — the assembly <c>ref:</c>/<c>mvid:</c> pairs are compared exactly as before,
+    /// so a real surface or module drift is still a mismatch.</para>
+    ///
+    /// <para><b>Why the demotion cannot silently widen.</b> The live key a caller may pass is
+    /// formed by <see cref="LiveContentKeyOf"/>, which folds the LIVE resolution of the record's
+    /// OWN assembly entries into the hash. So "the content key matched" already implies "every
+    /// stamped assembly entry still resolves identically" — the loop below re-checks them anyway,
+    /// deliberately, so the demotion stays confined to one entry even if the key's shape ever
+    /// changes.</para>
+    ///
+    /// <para>🚨 <b>Absence is never equality.</b> A null/empty live key, or a record carrying no
+    /// <see cref="ContentKey"/>, falls through to EXACTLY <see cref="FindMismatch"/>'s behaviour:
+    /// the toolchain entry stays decisive and the type rebuilds. A false MISMATCH costs one
+    /// rebuild; a false MATCH serves stale bytes (#2813), so every inconclusive case takes the
+    /// rebuild side.</para>
+    /// </summary>
+    /// <param name="record">The stamped record.</param>
+    /// <param name="liveIdOf">The live surface-id resolver (<see cref="CreateIdResolver"/>).</param>
+    /// <param name="liveToolchainId">The live toolchain id (<see cref="ComputeToolchainId"/>).</param>
+    /// <param name="liveContentKey">The content key the caller computed by REGENERATING this
+    /// type's compile input — <see cref="LiveContentKeyOf"/>. Null when it did not.</param>
+    public static string? FindMismatchAfterReevaluation(
+        IReadOnlyDictionary<string, string> record,
+        Func<string, string?> liveIdOf,
+        string liveToolchainId,
+        string? liveContentKey)
     {
+        ArgumentNullException.ThrowIfNull(record);
+        var proven =
+            !string.IsNullOrEmpty(liveContentKey)
+            && record.TryGetValue(ContentKey, out var stamped)
+            && string.Equals(stamped, liveContentKey, StringComparison.Ordinal);
+        return Compare(record, liveIdOf, liveToolchainId, liveContentKey, demoteToolchain: proven);
+    }
+
+    private static string? Compare(
+        IReadOnlyDictionary<string, string> record,
+        Func<string, string?> liveIdOf,
+        string liveToolchainId,
+        string? liveContentKey,
+        bool demoteToolchain)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(liveIdOf);
+
         // 🚨 A record WITHOUT the reserved toolchain entry is never trusted: FindMismatch only
         // compares entries that are PRESENT, so such a record would validate forever across
         // toolchain changes — fail-open. Compute always writes the key, so a legitimate record
@@ -170,7 +225,15 @@ public static class CompiledDependencies
         {
             string live;
             if (string.Equals(name, ToolchainKey, StringComparison.Ordinal))
+            {
+                // 🚨 THE DEMOTION (#1976). Reached only from
+                // FindMismatchAfterReevaluation, and only when the regenerated content key
+                // PROVED the generated input unchanged. Everywhere else the toolchain entry is
+                // decisive, exactly as it has always been.
+                if (demoteToolchain)
+                    continue;
                 live = liveToolchainId;
+            }
             else if (string.Equals(name, ContentKey, StringComparison.Ordinal))
             {
                 // The content key has NO cheap live counterpart — evaluating it means regenerating
@@ -188,6 +251,69 @@ public static class CompiledDependencies
                 return $"'{name}' built against {stamped}, live is {live}";
         }
         return null;
+    }
+
+    /// <summary>
+    /// 🚨 THE ONE WAY a non-compiling consumer forms the live content key for a stamped record
+    /// (#1976) — <see cref="GeneratedInputIdentity.Combine"/> of the caller's freshly REGENERATED
+    /// stage-1 digest with the LIVE resolution of the record's own assembly entries.
+    ///
+    /// <para><b>Why the record's own entry set.</b> Stage 2 folds the PRUNED reference surfaces
+    /// read off the emitted assembly, and a caller that has not compiled cannot know that set. The
+    /// record's assembly entries ARE that set, as recorded by the producer, so resolving exactly
+    /// those names against this environment reproduces the stamped key when — and only when —
+    /// both halves are unchanged. Equality therefore proves two things at once: the generated
+    /// input is byte-identical, and every assembly the build binds still presents the same
+    /// surface here.</para>
+    ///
+    /// <para>Returns <c>null</c> — never a value — when the record carries no
+    /// <see cref="ContentKey"/> (there is nothing to compare against) or when the caller supplied
+    /// no digest (nothing was regenerated). A null result is INCONCLUSIVE, and every consumer must
+    /// treat it as "rebuild", never as "match".</para>
+    /// </summary>
+    /// <param name="record">The stamped record.</param>
+    /// <param name="liveIdOf">The live surface-id resolver (<see cref="CreateIdResolver"/>).</param>
+    /// <param name="liveGeneratedInputDigest">The stage-1 digest
+    /// (<see cref="GeneratedInputIdentity.OfGeneratedInput"/>) of the compile input as REGENERATED
+    /// now, or null when the caller did not regenerate.</param>
+    public static string? LiveContentKeyOf(
+        IReadOnlyDictionary<string, string> record,
+        Func<string, string?> liveIdOf,
+        string? liveGeneratedInputDigest)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(liveIdOf);
+        if (string.IsNullOrEmpty(liveGeneratedInputDigest) || !record.ContainsKey(ContentKey))
+            return null;
+        return GeneratedInputIdentity.Combine(
+            liveGeneratedInputDigest,
+            record.Where(pair => !IsReservedKey(pair.Key))
+                .Select(pair => new KeyValuePair<string, string>(
+                    pair.Key, liveIdOf(pair.Key) ?? AbsentId)));
+    }
+
+    /// <summary>
+    /// 🚨 THE RESTAMP (#1976): the record with its reserved <see cref="ToolchainKey"/> entry moved
+    /// to the live value, and NOTHING else touched.
+    ///
+    /// <para><b>Legitimate only after a <c>CarryForward</c> verdict</b>
+    /// (<see cref="ContentKeyReevaluation.Reevaluate"/>). The toolchain entry is a PROXY for "the
+    /// generated input might have moved"; a carry-forward is the direct observation that it did
+    /// not. Restamping is what makes that observation DURABLE — every metadata-only reader
+    /// (<c>HasUsableBuild</c>, the bake probe, the prebuilt seeder) then answers correctly without
+    /// regenerating anything, and the next toolchain move re-arms the trigger exactly as before.
+    /// </para>
+    ///
+    /// <para>The <see cref="ContentKey"/> and every assembly entry are carried through untouched:
+    /// they are the evidence, and a restamp that rewrote them would be asserting something nobody
+    /// measured.</para>
+    /// </summary>
+    public static ImmutableSortedDictionary<string, string> RestampToolchain(
+        ImmutableSortedDictionary<string, string> record, string liveToolchainId)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentException.ThrowIfNullOrEmpty(liveToolchainId);
+        return record.SetItem(ToolchainKey, liveToolchainId);
     }
 
     /// <summary>True for the reserved '!'-prefixed record keys, which name compile FACTS rather
