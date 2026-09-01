@@ -73,6 +73,14 @@ jobs:
           # Read it back. An exit code of 0 is the command's opinion; this is the evidence.
           if gh pr view "$PR" --repo "$REPO" --json autoMergeRequest --jq '.autoMergeRequest != null' | grep -qx true; then
             echo "armed: #$PR will merge when the required contexts pass"
+          elif [ "$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)" != "OPEN" ]; then
+            # 🚨 Arming a PR with nothing left to wait for MERGES IT ON THE SPOT, so there is no
+            # auto-merge request to read back. That is the lane working, not failing. Measured
+            # on MeshWeaver.Crm#43: "arm requested (--merge): ok" followed by an immediate merge,
+            # which the first draft of this read-back reported as 'is Allow auto-merge enabled?'
+            # — a warning blaming a setting that was never off. The whole design leans on this
+            # warning meaning something, so it must never cry wolf.
+            echo "landed: #$PR had nothing left to wait for and merged immediately"
           else
             echo "::warning::auto-merge still not set on #$PR after a clean arm — is 'Allow auto-merge' enabled on $REPO?"
           fi
