@@ -1,12 +1,12 @@
 ---
-Name: An API token no longer remembers what you used to be allowed
+Name: An API token no longer works from a copy of your old permissions
 Category: Fix
 Description: API tokens carried a copy of your roles from the moment they were created. That copy could not see access granted later — and, worse, could not lose access taken away later. Tokens now read your access live, so a new grant works immediately and a withdrawal takes effect immediately.
 Icon: ShieldKeyhole
 Order: -20260901
 ---
 
-# An API token no longer remembers what you used to be allowed
+# An API token no longer works from a copy of your old permissions
 
 An API token — the `mw_…` key that connects Claude, an MCP client or any script to your mesh — signs
 in as you. It should see what you see.
