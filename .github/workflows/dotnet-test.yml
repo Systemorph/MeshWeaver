@@ -1780,6 +1780,15 @@ jobs:
     - name: "Prove the gate is non-vacuous (self-test)"
       run: python3 .github/scripts/check-workflow-shell.py --self-test
 
+    # 🚨 This repo's .github/scripts/compile-check.py is the CANONICAL NodeType gate: every node
+    # repo's lane fetches it from here at the pinned platform ref and runs it instead of its own
+    # copy (node-repo-compile-check.yml). So a defect in its import-scope parser reds satellites
+    # that never changed a line — as one did: it matched `using static X.Y.Type;` but captured
+    # only `X.Y.Type`, re-emitting `global using X.Y.Type;` and failing CS0138 on source the mesh
+    # compiles. It ran here unproven because nothing invoked it. It is proven now.
+    - name: "NodeType import-scope parser can fail (self-test)"
+      run: python3 .github/scripts/compile-check.py --self-test
+
     - name: "Gate the shell CI itself runs"
       run: python3 .github/scripts/check-workflow-shell.py
 
