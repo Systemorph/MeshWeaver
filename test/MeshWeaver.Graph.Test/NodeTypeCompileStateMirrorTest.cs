@@ -60,15 +60,19 @@ public class NodeTypeCompileStateMirrorTest(ITestOutputHelper output) : Monolith
         // bare create in this fixture does not spin the hub up. In production type hubs
         // activate constantly (compiles, instance resolution, the PreWarm sweep); the
         // authoritative owner round-trip is the same touch.
-        await ReadNode(TypePath).FirstAsync().Timeout(30.Seconds());
+        await ReadNode(TypePath).FirstAsync().Timeout(30.Seconds()).Await();
         await WaitForState(statePath, s =>
             s.LastCompiledVersion == 1082 && s.LatestAssemblyPath == "Widget/v1082.dll");
 
         // A state CHANGE on the node follows onto the satellite.
         using (accessService.ImpersonateAsSystem())
         {
-            var current = await ReadNode(TypePath).FirstAsync().Timeout(30.Seconds());
-            var content = current!.ContentAs<NodeTypeDefinition>(options)!;
+            var current = await ReadNode(TypePath).FirstAsync().Timeout(30.Seconds()).Await();
+            // Assert rather than `!`: the node was created above, so a null here is a real failure
+            // (the read gave up, or the create did not land) and must say so instead of NREing on
+            // the `with` below. `.Await()` surfaces the nullability the Rx awaiter inferred away.
+            Assert.NotNull(current);
+            var content = current.ContentAs<NodeTypeDefinition>(options)!;
             await meshService.UpdateNode(current with
             {
                 Content = content with
@@ -93,5 +97,6 @@ public class NodeTypeCompileStateMirrorTest(ITestOutputHelper output) : Monolith
             .Select(n => NodeTypeCompileStateMirror.Parse(n, Mesh.JsonSerializerOptions))
             .Where(s => s is not null && predicate(s))
             .FirstAsync()
-            .Timeout(60.Seconds());
+            .Timeout(60.Seconds())
+            .Await();
 }
