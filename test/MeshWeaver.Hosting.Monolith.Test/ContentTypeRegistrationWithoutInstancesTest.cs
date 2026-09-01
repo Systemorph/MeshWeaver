@@ -26,12 +26,12 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// unrefreshable — one missing registration disabling the whole commerce surface. The cloud
 /// escapes only by the accident of having live <c>Store/Plugin</c> instances.</para>
 ///
-/// <para>The cure this test pins: a definition being KNOWN is enough — the platform sweeps
-/// defined NodeTypes and registers their content types through the same transient-probe build the
-/// schema probes use (configuration build only, nothing started). A static NodeType is used
-/// deliberately, like <see cref="NodeTypePathRegistrationTest"/>: it exercises the same
-/// HubConfiguration route a runtime-compiled type does, without dragging Roslyn into the
-/// test.</para>
+/// <para>The cure this test pins: a STATIC definition being KNOWN is enough — at start the
+/// platform sweeps every <c>AddMeshNodes</c> definition carrying a HubConfiguration and registers
+/// its content types through the same transient-probe build the schema probes use (configuration
+/// build only, nothing started). Compiled (dynamic) types are deliberately out of the sweep's
+/// scope — they register at instance activation, and probing their bytes eagerly is the boot cost
+/// (and the store-corrupting self-heal trigger) <c>ShippedPrebuiltBundlesTest</c> forbids.</para>
 /// </summary>
 public class ContentTypeRegistrationWithoutInstancesTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)

@@ -20,6 +20,6 @@ needed the package's price, tier or install actions then received data it could 
 and quietly rendered nothing. Deployments with such nodes escaped by luck, which is what let the
 gap hide for so long.
 
-Defined types now register at startup, and recompiled types re-register on the spot — whether or
-not a single node of theirs exists. On an affected portal, one restart after this update brings
-the Store's buttons back, and with them the normal way of updating installed content.
+Built-in types now register at startup, whether or not a single node of theirs exists. On an
+affected portal, one restart after this update brings the Store's buttons back, and with them the
+normal way of updating installed content.

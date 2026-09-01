@@ -1,6 +1,4 @@
 using System;
-using System.Linq;
-using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
@@ -38,11 +36,16 @@ namespace MeshWeaver.Graph;
 /// control plane; see <c>MeshOperations.ReadFromContentType</c>, whose probe this mirrors). Cost
 /// is a config build per type, once per process.</para>
 ///
-/// <para>Two lanes feed it: the <see cref="ContentTypeRegistrationSweep"/> hosted service walks
-/// the STATIC definitions (<c>AddMeshNodes</c>) at start, and
-/// <see cref="EnsureRegisteredForCompiledDefinition"/> is invoked wherever a COMPILED definition
-/// flows through <c>MeshNodeTypeSource</c> — which covers boot hydration and every later
-/// recompile without a timer or a second enumeration.</para>
+/// <para>Scope: the <see cref="ContentTypeRegistrationSweep"/> hosted service walks the STATIC
+/// definitions (<c>AddMeshNodes</c>) at start — which is where the measured defect lived: every
+/// commerce content type is a static definition. COMPILED (dynamic) types are deliberately NOT
+/// swept: their configuration lives inside an assembly, and eagerly opening every compiled
+/// type's bytes at boot is exactly the per-NodeType cost the CI content bake removed (#1660 —
+/// 13.5 s of a 101 s boot); worse, a probe of an adopted-but-not-yet-loadable bake trips the
+/// loader's corrupt-file self-heal, which DELETES the store's bytes and forces a re-adoption
+/// (ShippedPrebuiltBundlesTest pins that boot contract). A dynamic type registers the moment an
+/// instance hub activates — and a dynamic type with zero instances has no payload carrying its
+/// discriminator, so there is nothing to degrade.</para>
 /// </summary>
 public static class ContentTypeRegistration
 {
@@ -80,57 +83,6 @@ public static class ContentTypeRegistration
         }
     }
 
-    /// <summary>
-    /// The DYNAMIC lane: a compiled NodeType definition flowed through the workspace — register
-    /// its content types if the registry does not know its path yet. Resolves the compiled
-    /// HubConfiguration from the already-cached assembly (no compile is triggered), then runs the
-    /// same probe the static lane uses. Fire-safe: subscribed with an error arm, once per
-    /// definition emission; the registry pre-check bounds it to one probe per type per process.
-    /// </summary>
-    /// <param name="hub">The hub the definition flowed through (its services resolve the
-    /// compilation service and assembly store).</param>
-    /// <param name="definition">The NodeType definition node.</param>
-    public static void EnsureRegisteredForCompiledDefinition(IMessageHub hub, MeshNode definition)
-    {
-        // 🚨 ContentAs, never `Content is T` — the CLR check is the documented trap-door: content
-        // can sit as an unmaterialized JsonElement (or a same-named type from another collectible
-        // assembly) and the pattern silently skips registration for exactly the nodes this exists
-        // for. Callers filter by node.NodeType == "NodeType" FIRST, so this deserializes only
-        // definition nodes (a static platform type), never arbitrary collectible content — the
-        // reflection-free constraint of the UpdateImpl pipeline stays intact.
-        var def = definition.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
-        if (def is null
-            || def.CompilationStatus != CompilationStatus.Ok
-            || string.IsNullOrEmpty(def.LatestAssemblyPath))
-            return;
-        var registry = hub.ServiceProvider.GetService<IMeshContentTypeRegistry>();
-        if (registry is null || registry.TryResolveByNodeType(definition.Path, out _))
-            return;
-        var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
-        var store = hub.ServiceProvider.GetService<IAssemblyStore>();
-        if (compilationService is null || store is null)
-            return;
-        var logger = hub.ServiceProvider.GetService<ILogger<MeshNodeTypeSource>>();
-        var version = def.LastCompiledVersion ?? definition.Version;
-        store.TryGetAssemblyPath(definition.Path, version)
-            .Take(1)
-            .SelectMany(localPath => string.IsNullOrEmpty(localPath)
-                ? Observable.Empty<NodeCompilationResult?>()
-                : compilationService.GetConfigurationsFromExistingAssembly(localPath!, definition.Path).Take(1))
-            .Subscribe(
-                result =>
-                {
-                    var cfg = result?.NodeTypeConfigurations
-                        .FirstOrDefault(c =>
-                            string.Equals(c.NodeType, definition.Path, StringComparison.OrdinalIgnoreCase))
-                        ?.HubConfiguration;
-                    if (cfg is not null)
-                        ProbeRegister(hub, definition.Path, cfg, logger);
-                },
-                ex => logger?.LogDebug(ex,
-                    "Content-type registration skipped for compiled NodeType {NodeType}",
-                    definition.Path));
-    }
 }
 
 /// <summary>
