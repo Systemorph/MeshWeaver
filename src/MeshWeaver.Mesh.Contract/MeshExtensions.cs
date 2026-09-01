@@ -3438,9 +3438,15 @@ public static class MeshExtensions
                     "[DeleteNode] the {NodeType} access rule for {Path} could not reach a verdict for "
                     + "{User} — refusing the delete and reporting an availability failure, not a denial",
                     node.NodeType, node.Path, userId);
+                // 🚨 The TYPE, never the exception's MESSAGE. This detail is echoed to the CALLER
+                // in the DeleteNodeResponse, and an arbitrary rule's exception text can carry
+                // internal paths, connection strings or another tenant's identifiers. The type
+                // names the condition, which is all a caller can act on ("retry, or ask an
+                // operator"); the full exception — message and stack — is on the LogWarning above,
+                // where only an operator sees it. (Copilot review, #2945.)
                 return Observable.Return<(DeletePreflight Verdict, string? Detail)?>(
                     (DeletePreflight.Unestablished,
-                        $"the '{node.NodeType}' access rule failed ({ex.GetType().Name}: {ex.Message})"));
+                        $"the '{node.NodeType}' access rule failed ({ex.GetType().Name})"));
             })
             // 🚨 THE THIRD TERMINAL — a chain can also COMPLETE WITHOUT EMITTING (the shape that
             // made RlsNodeValidator's own fold read as "nothing objected", #2742). Built LAZILY via

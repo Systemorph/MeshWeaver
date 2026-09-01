@@ -69,6 +69,13 @@ public class DeleteHonoursNodeTypeAccessRuleTest(ITestOutputHelper output) : Mon
     /// </summary>
     private const int FactTimeoutMs = 240_000;
 
+    /// <summary>
+    /// Stand-in for whatever a real rule's exception might carry — an internal path, a connection
+    /// string, another tenant's identifier. The caller-visible refusal must name the exception TYPE
+    /// and NOT this text; the full exception belongs in the operator's log only.
+    /// </summary>
+    private const string SecretInFaultMessage = "internal-detail-that-must-not-reach-the-caller";
+
     private IStorageAdapter Storage => Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
 
     /// <summary>
@@ -90,7 +97,7 @@ public class DeleteHonoursNodeTypeAccessRuleTest(ITestOutputHelper output) : Mon
                     new SatelliteAccessRule(SatelliteType, sp.GetRequiredService<IMessageHub>()));
                 services.AddSingleton<INodeTypeAccessRule>(new ScriptedAccessRule(
                     FaultingType,
-                    () => Observable.Throw<bool>(new InvalidOperationException("the rule could not answer"))));
+                    () => Observable.Throw<bool>(new InvalidOperationException(SecretInFaultMessage))));
                 services.AddSingleton<INodeTypeAccessRule>(new ScriptedAccessRule(
                     DenyingType, () => Observable.Return(false)));
                 return services;
@@ -222,6 +229,12 @@ public class DeleteHonoursNodeTypeAccessRuleTest(ITestOutputHelper output) : Mon
             + "into Unauthorized would send a correctly-entitled caller to request rights they hold");
         response.Error.Should().Contain("could not be established",
             $"the refusal must say WHICH failure it was: {response.Error}");
+        response.Error.Should().Contain(nameof(InvalidOperationException),
+            "the exception TYPE names the condition and is what a caller can act on");
+        response.Error.Should().NotContain(SecretInFaultMessage,
+            "a rule's raw exception MESSAGE must never be echoed to the caller — it can carry "
+            + "internal paths or another tenant's identifiers; it belongs in the operator's log "
+            + "only (Copilot review, #2945)");
 
         (await Storage.Read(faulty, Mesh.JsonSerializerOptions).Should().Within(TestTimeouts.Convergence).Emit())
             .Should().NotBeNull("a delete that could not be authorised must remove nothing");

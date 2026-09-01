@@ -1215,6 +1215,11 @@ statement about the caller's rights (`Unavailable`, above). There is deliberatel
 `.Catch(_ => true)` on this path: the identical instinct on the security-fold twin is what made a
 group deny fail OPEN.
 
+The caller-visible detail names the exception **type** and never its **message**. A rule is arbitrary
+code, and its exception text can carry an internal path, a connection string or another tenant's
+identifier — while the type is all a caller can act on ("retry, or ask an operator"). The full
+exception, message and stack, goes to the log where only an operator sees it.
+
 **What is still NOT routed through the rule, on purpose.** `DeleteNodeRequest` and
 `ValidateDeleteRequest` carry `[RequiresPermission(Permission.Delete)]`, so on a route that passes
 through a hub with the `AccessControlPipeline` (a per-node hub) the delivery gate still demands
