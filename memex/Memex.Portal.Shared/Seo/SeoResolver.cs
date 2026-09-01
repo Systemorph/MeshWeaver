@@ -77,6 +77,11 @@ public static class SeoResolver
             .Take(1)
             .SelectMany(resolution => resolution?.Node is not { } node
                 ? Observable.Return<SeoPageData?>(null)
+                // The BOOLEAN projection is correct here and stays (#2901): "not public" and "the
+                // gate could not find out" both mean WITHHOLD the rich metadata, and neither is
+                // asserted to a human — an omitted og: block is not a claim about the visitor. A
+                // caller whose answer becomes a redirect, a status code or a message must use
+                // AnonymousGate.Evaluate and branch on IsUndetermined first.
                 : AnonymousGate.AllowAnonymous(hub, resolution.Prefix)
                     .Take(1)
                     .Select(allowed => allowed

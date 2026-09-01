@@ -3143,7 +3143,7 @@ public class MeshOperations
                 //    NO access → empty. Bounded parallel; fail-closed on error (never leak a node).
                 allNodes
                     .Select(n => permissionHub
-                        .CheckPermission(n.Path, callerUserId, Permission.Export)
+                        .CheckPermissionOutcome(n.Path, callerUserId, Permission.Export)
                         // 🚨 TakeDecisionOutsideGate, NOT a bare Take(1) — issue #899/#978. Everything
                         //    downstream of this decision is REAL WORK: stage 3 posts GetDataRequest to
                         //    each permitted node's address (ACTIVATING those hubs), mutates the shared
@@ -3160,12 +3160,28 @@ public class MeshOperations
                         //    pool.InvokeBlocking and hops off the gate before doing any work.
                         .TakeDecisionOutsideGate()
                         .Timeout(TimeSpan.FromSeconds(30))
-                        .Catch((Exception ex) =>
+                        // 🚨 The tri-state, not a swallow (#2901). The verdict path is unchanged —
+                        // a node is exported only on a positive Export grant — but "we could not
+                        // find out" no longer looks like "you may not": it is logged as the
+                        // degraded dependency it is, and `.Timeout` alone could never have caught
+                        // the fold that COMPLETES without emitting (#2742), which
+                        // CheckPermissionOutcome materialises. A silently dropped node in an
+                        // export the user believes is complete is a data-completeness lie, so the
+                        // omission has to be attributable.
+                        .Catch((Exception ex) => Observable.Return(
+                            PermissionCheckOutcome.Undetermined(
+                                $"the Export permission check for '{n.Path}' did not complete: "
+                                + $"{ex.GetType().Name}")))
+                        .Select(outcome =>
                         {
-                            logger.LogDebug(ex, "Export: permission check failed for {Path} — skipping", n.Path);
-                            return Observable.Return(false);
-                        })
-                        .Select(allowed => (Node: n, Allowed: allowed)))
+                            if (outcome.IsUndetermined)
+                                logger.LogWarning(
+                                    "Export: the permission fold for {Path} reached NO verdict — the "
+                                    + "node is omitted (fail closed), but this is a degraded "
+                                    + "dependency, not a refusal: {Reason}",
+                                    n.Path, outcome.UndeterminedReason);
+                            return (Node: n, Allowed: outcome.IsGranted);
+                        }))
                     .ToObservable()
                     .Merge(NodeCopyHelper.DefaultBatchSize)
                     .Where(x => x.Allowed)
@@ -3580,24 +3596,50 @@ public class MeshOperations
         //    follows re-runs its source query against a half-invalidated state and matches zero
         //    Code nodes. Export above is the opposite case: its continuation is genuinely
         //    detached work that must leave the gate.
-        return hub.CheckPermission(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
+        // 🚨 The tri-state, not a swallow (#2901). The refusal message below is ACTIONABLE — "ask
+        // someone with write access" — and a swallow made the tool say it whenever the permission
+        // fold merely hiccuped or timed out, sending a caller who already holds Update to go and
+        // request it. `.Timeout` cannot help either: it faults on SILENCE, and a fold that
+        // COMPLETES without emitting (#2742) sails past it. CheckPermissionOutcome classifies both
+        // terminals, so "we could not find out" gets its own answer instead of borrowing the
+        // denial's. Still fail-closed: nothing is recycled without a positive verdict.
+        return hub.CheckPermissionOutcome(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
-            .Catch((Exception ex) =>
+            .Catch((Exception ex) => Observable.Return(
+                MeshWeaver.Mesh.Security.PermissionCheckOutcome.Undetermined(
+                    $"the permission check for Recycle on '{resolvedPath}' did not complete: "
+                    + $"{ex.GetType().Name}")))
+            .SelectMany(outcome =>
             {
-                logger.LogWarning(ex, "Recycle: permission check failed for {Path}", resolvedPath);
-                return Observable.Return(false);
-            })
-            .SelectMany(allowed => allowed
-                ? RecycleCore(resolvedPath)
-                : Observable.Return(JsonSerializer.Serialize(
+                if (outcome.IsGranted)
+                    return RecycleCore(resolvedPath);
+
+                if (outcome.IsUndetermined)
+                {
+                    logger.LogWarning(
+                        "Recycle: the permission fold for {Path} reached NO verdict — reporting it "
+                        + "as retryable, not as a denial: {Reason}",
+                        resolvedPath, outcome.UndeterminedReason);
+                    return Observable.Return(JsonSerializer.Serialize(
+                        new
+                        {
+                            status = "Error",
+                            path = resolvedPath,
+                            message = "Could not determine whether you may recycle this node — the permission check did not complete. This is a temporary condition, not a refusal: try again in a moment."
+                        },
+                        hub.JsonSerializerOptions));
+                }
+
+                return Observable.Return(JsonSerializer.Serialize(
                     new
                     {
                         status = "Error",
                         path = resolvedPath,
                         message = "Recycle requires Update permission on the target node — it disposes the node's hub and forces re-initialization. Ask someone with write access to the node (or a platform admin) to do it."
                     },
-                    hub.JsonSerializerOptions)));
+                    hub.JsonSerializerOptions));
+            });
     }
 
     private IObservable<string> RecycleCore(string resolvedPath)
