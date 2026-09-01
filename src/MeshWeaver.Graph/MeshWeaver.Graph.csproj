@@ -8,6 +8,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+    <!-- OverlaySelfHealWatcherTest moved to the pipeline suite with its subject
+         (OverlayHealBudget), but the self-heal it exercises is ARMED by
+         NodeTypeEnrichmentHelpers, which stays here with the hub enrichment. -->
+    <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
     <!-- The build/bake pipeline drives NodeType compilation (MeshNodeCompilationService,
          NodeTypeCompilationHelpers, TryCreateReleaseNode) — a live internal coupling,

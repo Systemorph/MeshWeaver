@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Autofac" />
+    <PackageReference Include="Microsoft.Reactive.Testing" />
+    <PackageReference Include="Namotion.Reflection" />
+    <PackageReference Include="NSubstitute" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The subject: the mesh-actor half of NodeType compilation, and the toolchain it drives.
+         These tests used to live in MeshWeaver.Graph.Test because the pipeline lived in
+         MeshWeaver.Graph; they moved with it, so each suite now sits beside what it tests. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Compiler.Pipeline\MeshWeaver.Compiler.Pipeline.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Compiler\MeshWeaver.Compiler.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Graph.Contract\MeshWeaver.Graph.Contract.csproj" />
+    <!-- The pipeline is exercised against a real mesh, so the suite still composes a host
+         (AddGraph) exactly as it did inside MeshWeaver.Graph.Test. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Build\MeshWeaver.Plugin.Build.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Packaging\MeshWeaver.Plugin.Packaging.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+  </ItemGroup>
+
+</Project>

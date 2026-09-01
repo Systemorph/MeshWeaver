@@ -116,7 +116,7 @@ WEIGHTS=$(cat <<'EOF'
 91 MeshWeaver.Data.Test
 76 MeshWeaver.Messaging.Hub.Test
 74 MeshWeaver.PluginTester.Test
-69 MeshWeaver.Graph.Test
+64 MeshWeaver.Graph.Test
 65 MeshWeaver.Persistence.Test
 65 MeshWeaver.Content.Test
 54 MeshWeaver.GitSync.Test
@@ -137,6 +137,7 @@ WEIGHTS=$(cat <<'EOF'
 7 MeshWeaver.ContentCollections.Test
 6 MeshWeaver.Documentation.Test
 6 MeshWeaver.AccessControl.Test
+5 MeshWeaver.Compiler.Pipeline.Test
 5 MeshWeaver.Todo.Test
 5 MeshWeaver.MathDemo.Test
 4 MeshWeaver.Serialization.Test
