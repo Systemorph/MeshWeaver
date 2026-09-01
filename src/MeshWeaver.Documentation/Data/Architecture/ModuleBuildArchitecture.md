@@ -125,6 +125,6 @@ No component ever publishes from the mesh router — the router names a spokesma
 * **Self-hosted runners with a mounted git mirror + warm image store** (MeshWeaver#2926): bare
   mirror volume, `git worktree add` per run at the release ref, worktree deleted at job end.
 
-See also: [ModuleVersioning](ModuleVersioning) · [NodeTypeCompilation](NodeTypeCompilation) ·
-[PluginBuildContract](PluginBuildContract) · [BuildProcess](BuildProcess) ·
-[InMeshBuildAndTest](InMeshBuildAndTest).
+See also: [ModuleVersioning](../ModuleVersioning) ·
+[NodeTypeCompilation](../NodeTypeCompilation) · [PluginBuildContract](../PluginBuildContract) ·
+[BuildProcess](../BuildProcess) · [InMeshBuildAndTest](../InMeshBuildAndTest).
