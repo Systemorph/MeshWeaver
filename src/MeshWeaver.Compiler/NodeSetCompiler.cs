@@ -65,7 +65,28 @@ public static class NodeSetCompiler
         ImmutableArray<string> MatchedSourcePaths,
         ImmutableArray<string> ExpandedQueries,
         string GeneratedSource,
-        ImmutableArray<NuGetPackageReference> NuGetReferences);
+        ImmutableArray<NuGetPackageReference> NuGetReferences)
+    {
+        /// <summary>
+        /// The <c>@@</c>-include CLOSURE this resolution consumed — resolved node path → code text,
+        /// transitively, collected BY the substitution in <see cref="ResolveInputs"/> rather than by
+        /// a second walk (#2948). These are the Code nodes no source query matched, so they are in
+        /// <see cref="GeneratedSource"/> and deliberately NOT in
+        /// <see cref="MatchedSourcePaths"/>; the bake folds them into
+        /// <see cref="NodeTypeSourceFingerprint"/> so a consumer can tell that an included-only
+        /// snippet has changed under a prebuilt assembly.
+        ///
+        /// <para><c>required</c>, and an <c>init</c> member rather than a positional parameter, for
+        /// two different reasons. Positional would have changed the primary constructor's ARITY,
+        /// which is a binary break between a module and the platform it loads into — there is no
+        /// image that can serve a mixed set, so the host aborts at boot in both directions
+        /// (<c>scripts/check-record-signatures.py</c>). And <c>required</c> because the failure mode
+        /// of forgetting it is SILENT: an empty closure for a type that has includes is not "the
+        /// fingerprint minus the includes", it is a value that disagrees with every honest consumer,
+        /// i.e. a refused adoption.</para>
+        /// </summary>
+        public required ImmutableSortedDictionary<string, string> ResolvedIncludes { get; init; }
+    }
 
     /// <summary>One compiled NodeType's artifacts.</summary>
     /// <param name="NodePath">The NodeType's mesh path — the bundle's key.</param>
@@ -130,6 +151,13 @@ public static class NodeSetCompiler
         // @@ includes, resolved against the SAME node set. The runtime reads them through the mesh
         // under System impersonation with a bounded timeout; here the read is a dictionary lookup,
         // so the reactive chain completes on subscribe.
+        //
+        // 🚨 #2948 — the walk also RECORDS what it pulled in. An include target is a Code node no
+        // source query matched, so it is in the bytes and absent from `matchedPaths`; without this
+        // record the bake's source fingerprint could not cover it, and a consumer holding an edited
+        // snippet would adopt these bytes as VERIFIED. Collected here, inside the substitution
+        // itself, so there is no second traversal to disagree with the first.
+        var closure = new Dictionary<string, string>(StringComparer.Ordinal);
         var resolvedFiles = new List<CodeConfiguration>(codeFiles.Count);
         foreach (var codeFile in codeFiles)
         {
@@ -137,7 +165,7 @@ public static class NodeSetCompiler
                 .ResolveCodeIncludes(
                     codeFile.Code!, new HashSet<string>(StringComparer.Ordinal), nodePath,
                     (anchored, authored) => Observable.Return(ReadInclude(nodes, anchored, authored)),
-                    logger)
+                    logger, closure)
                 .Wait();
             resolvedFiles.Add(
                 ReferenceEquals(resolvedCode, codeFile.Code)
@@ -159,7 +187,10 @@ public static class NodeSetCompiler
             [.. matchedPaths],
             resolution.ExpandedQueries,
             source,
-            [.. nugetRefs]);
+            [.. nugetRefs])
+        {
+            ResolvedIncludes = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal, closure),
+        };
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
 using MeshWeaver.Mesh;
@@ -77,14 +78,34 @@ public static class NodeCompileShaping
     /// The mesh read is the caller's business: <paramref name="readInclude"/> receives the
     /// ANCHORED path plus the authored path as fallback (null when identical) and reports the
     /// node together with the path that actually produced it, so nested includes anchor there —
-    /// MeshWeaver.Graph supplies the System-impersonated, bounded read.
+    /// MeshWeaver.Compiler.Pipeline supplies the System-impersonated, bounded read.
+    ///
+    /// <para>🚨 <paramref name="closure"/> is how the STALENESS half of the mechanism sees what the
+    /// bytes see (#2948). An <c>@@</c> target is a Code node that no source query matches, so it
+    /// reaches the emitted assembly but is absent from <c>CollectCompileSources</c> — and therefore
+    /// from <see cref="NodeTypeSourceFingerprint"/> and <c>NodeTypeDefinition.CompiledSources</c>.
+    /// Passing a dictionary here records <c>resolved path → code text</c> for every include this
+    /// walk actually consumed, so the fingerprint can cover exactly the set the substitution used.
+    /// It is recorded HERE, inside the one walk, rather than by a second traversal, because a
+    /// second traversal is a second set of rules — and the whole point of the fingerprint is that
+    /// producer and consumer cannot fork on which files count.</para>
     /// </summary>
+    /// <param name="code">The source text to resolve includes in.</param>
+    /// <param name="resolved">Visited set for THIS root file — the cycle brake. A path already in
+    /// it is substituted with the empty string and neither read nor walked again.</param>
+    /// <param name="anchorPath">The path mount-relative includes rebase onto.</param>
+    /// <param name="readInclude">The caller's include read.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="closure">Optional accumulator: resolved include path → its code text. May be
+    /// shared across several root files (the entries are keyed by path, so a snippet included by
+    /// two files contributes once).</param>
     internal static IObservable<string> ResolveCodeIncludes(
         string code,
         HashSet<string> resolved,
         string? anchorPath,
         Func<string, string?, IObservable<(MeshNode? Node, string Path)>> readInclude,
-        ILogger logger)
+        ILogger logger,
+        IDictionary<string, string>? closure = null)
     {
         if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
             return Observable.Return(code);
@@ -118,10 +139,16 @@ public static class NodeCompileShaping
                             && !string.IsNullOrWhiteSpace(cf.Code))
                         {
                             logger.LogDebug("Resolved code include @@{Path}", hit.Path);
+                            // #2948 — record the RAW code, keyed by the path that actually produced
+                            // the node, BEFORE recursing: the fingerprint hashes each included
+                            // node's own text, not the substituted result, so a nested include
+                            // contributes exactly once no matter how many parents pull it in.
+                            if (closure is not null)
+                                closure[hit.Path] = cf.Code;
                             // Nested includes anchor from where THIS one was found, so a chain of
                             // mount-relative includes stays inside the same mount.
                             return ResolveCodeIncludes(
-                                    cf.Code, resolved, hit.Path, readInclude, logger)
+                                    cf.Code, resolved, hit.Path, readInclude, logger, closure)
                                 .Select(resolvedInner => current.Replace(matchValue, resolvedInner));
                         }
                         logger.LogWarning(
@@ -135,6 +162,89 @@ public static class NodeCompileShaping
         }
 
         return chain;
+    }
+
+    /// <summary>
+    /// The <c>@@</c>-include CLOSURE of a compile's source set — <c>resolved path → code text</c>
+    /// for every Code node the substitution would pull in, transitively (#2948).
+    ///
+    /// <para><b>Why it exists.</b> An include target is by definition a node NO source query
+    /// matches, so it is invisible to <see cref="CollectCompileSources"/> — yet it is inside the
+    /// emitted bytes. Without this, editing an included-only snippet moved neither
+    /// <c>NodeTypeDefinition.CurrentSourceFingerprint</c> nor <c>AdoptedSourceFingerprint</c>, so a
+    /// prebuilt assembly baked BEFORE that edit still adopted as
+    /// <c>BuildProvenance.AdoptedVerified</c> — a verified claim over source that was never
+    /// hashed, which is worse than no claim at all.</para>
+    ///
+    /// <para><b>It is the SAME walk.</b> This runs <see cref="ResolveCodeIncludes"/> — the exact
+    /// call the emit path makes — with a collector, and throws the substituted text away. There is
+    /// no second implementation of the include rules to drift: the anchoring, the
+    /// anchored-then-authored fallback order, the executable/blank filters upstream and the cycle
+    /// brake are all the compile's own.</para>
+    ///
+    /// <para>🚨 <b>Deterministic, and cycle-safe.</b> Three properties, because a fingerprint that
+    /// moves when nothing changed is phantom staleness — endless recompiles, or a false refusal:
+    /// <list type="number">
+    ///   <item><b>Order cannot reach the result.</b> The output is keyed by resolved path and
+    ///     handed back SORTED (ordinal), and <c>PartitionSourceFingerprint.Compute</c> sorts
+    ///     again before hashing. The roots are walked in the order
+    ///     <see cref="CollectCompileSources"/> produced them — itself ordinal by node path — and
+    ///     SERIALLY (one <c>SelectMany</c> chain, never a <c>Merge</c>), so there is no read
+    ///     interleaving to observe either.</item>
+    ///   <item><b>Suppression is result-preserving.</b> The per-root <c>resolved</c> set skips a
+    ///     path this root already walked; skipping a re-read of the SAME anchored path can only
+    ///     re-derive the entry that is already present, so which parent reached it first cannot
+    ///     change the closure.</item>
+    ///   <item><b>A cycle terminates.</b> <c>A → B → A</c> adds each path to <c>resolved</c> once;
+    ///     the second visit takes the already-added branch, reads nothing and recurses no further.
+    ///     A self-include is the same case with one hop.</item>
+    /// </list></para>
+    ///
+    /// <para>An include that does NOT resolve contributes nothing — exactly as it contributes
+    /// nothing to the bytes (it stays VERBATIM). A read that could not be COMPLETED is a different
+    /// thing entirely and must not be confused with it: the caller's <paramref name="readInclude"/>
+    /// is expected to fault, and this chain propagates that fault rather than silently returning a
+    /// short closure, because a short closure is a fingerprint mismatch and therefore a FALSE
+    /// REFUSAL — an outage strictly worse than the staleness it is guarding against.</para>
+    /// </summary>
+    /// <param name="sources">The compile's shaped source set (<see cref="CollectCompileSources"/>
+    /// output, in its order).</param>
+    /// <param name="anchorPath">The anchor the emit path uses for root files — the NodeType's own
+    /// path, matching <c>MeshNodeCompilationService.ResolveIncludesForCodeFiles</c> and
+    /// <see cref="NodeSetCompiler.ResolveInputs"/>.</param>
+    /// <param name="readInclude">The caller's include read.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static IObservable<ImmutableSortedDictionary<string, string>> CollectIncludeClosure(
+        IReadOnlyList<CodeConfiguration> sources,
+        string? anchorPath,
+        Func<string, string?, IObservable<(MeshNode? Node, string Path)>> readInclude,
+        ILogger logger)
+    {
+        // The overwhelmingly common case: no `@@` anywhere in the set. Costs one substring scan
+        // per file and NOT ONE mesh read — which is what keeps this affordable on a path that runs
+        // at every hub activation and every source edit.
+        var roots = sources
+            .Where(s => !string.IsNullOrWhiteSpace(s.Code) && s.Code!.Contains("@@"))
+            .ToList();
+        if (roots.Count == 0)
+            return Observable.Return(ImmutableSortedDictionary<string, string>.Empty);
+
+        var closure = new Dictionary<string, string>(StringComparer.Ordinal);
+        var chain = Observable.Return(Unit.Default);
+        foreach (var root in roots)
+        {
+            var code = root.Code!;
+            chain = chain.SelectMany(_ => ResolveCodeIncludes(
+                    code,
+                    // A visited set PER ROOT FILE — the emit path's own semantics, because that is
+                    // what decides the substituted text. Sharing one across files would make the
+                    // second file's `@@S` expand to nothing.
+                    new HashSet<string>(StringComparer.Ordinal),
+                    anchorPath, readInclude, logger, closure)
+                .Select(_ => Unit.Default));
+        }
+        return chain.Select(_ =>
+            ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal, closure));
     }
 
     /// <summary>

@@ -88,6 +88,16 @@ public static class TreeBake
         string? Error,
         ImmutableArray<string> MatchedSourcePaths)
     {
+        /// <summary>
+        /// The <c>@@</c>-include targets the compile pulled in — Code nodes NO source query
+        /// matched, so they are deliberately absent from <see cref="MatchedSourcePaths"/> and from
+        /// the bundle's <c>sourceVersions</c>, while being inside both the emitted bytes and the
+        /// source fingerprint (#2948). Reported so a reader (and
+        /// <c>BakeEquivalenceTest</c>) can see that the include actually resolved rather than
+        /// assuming it from an equal hash.
+        /// </summary>
+        public ImmutableArray<string> ResolvedIncludePaths { get; init; } = [];
+
         /// <summary>True when the type produced bytes.</summary>
         public bool Success => Error is null;
     }
@@ -386,12 +396,20 @@ public static class TreeBake
                     // the same RAW resolved set for the same reason: NodeTypeSourceFingerprint
                     // applies the shaping fold, so the bake and the runtime cannot fork on which
                     // files count.
+                    //
+                    // 🚨 #2948 — plus the `@@`-include closure, handed straight back by the compile
+                    // that just substituted it (CompileInputs.ResolvedIncludes). No second walk, no
+                    // second read, and no `.Wait()` at this synchronous build-step boundary.
                     SourceFingerprint = NodeTypeSourceFingerprint.Compute(
-                        resolution.Sources, candidate.Node.Path, options.Logger),
+                        resolution.Sources, candidate.Node.Path,
+                        compiled.Inputs.ResolvedIncludes, options.Logger),
                 });
 
                 results.Add(new TypeResult(
-                    compiled.NodePath, candidate.Package, null, compiled.Inputs.MatchedSourcePaths));
+                    compiled.NodePath, candidate.Package, null, compiled.Inputs.MatchedSourcePaths)
+                {
+                    ResolvedIncludePaths = [.. compiled.Inputs.ResolvedIncludes.Keys],
+                });
                 options.Output.WriteLine(
                     $"   ok  {compiled.NodePath} "
                     + $"[{compiled.Inputs.MatchedSourcePaths.Length} source(s), "
