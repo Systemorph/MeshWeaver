@@ -77,12 +77,16 @@ public class NodeTypePathRegistrationTest(ITestOutputHelper output) : MonolithMe
     {
         var registry = Mesh.ServiceProvider.GetRequiredService<IMeshContentTypeRegistry>();
 
-        // CAUSALITY: nothing has activated this NodeType yet, so the key must be absent. Without
-        // this the test could not distinguish "the stamp wrote the key" from "the key was already
-        // there".
-        registry.TryResolveByNodeType(StampedNodeType, out _).Should().BeFalse(
-            "no instance of the NodeType has activated yet — nothing should have registered its "
-            + "content type under that path");
+        // The key is present BEFORE any activation now, by design: ContentTypeRegistrationSweep
+        // registers every static definition's content type at mesh start, so a defined type is
+        // readable with zero instances (the dead-Store defect, 2026-09-01). The original causality
+        // pre-check ("must be absent before activation") pinned the pre-sweep world and its job —
+        // "does the stamp reach WithContentType at all" — is now carried by the sweep's own test
+        // (ContentTypeRegistrationWithoutInstancesTest, verified red against the unswept build).
+        registry.TryResolveByNodeType(StampedNodeType, out var sweptType).Should().BeTrue(
+            "the start-time sweep must have registered the static definition's content type "
+            + "before any instance exists");
+        sweptType.Should().Be(typeof(StampedProduct));
 
         var id = $"stamped-{Guid.NewGuid():N}";
         var path = $"{TestPartition}/{id}";

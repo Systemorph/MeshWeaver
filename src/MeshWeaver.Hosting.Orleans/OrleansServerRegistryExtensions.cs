@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using MeshWeaver.Graph;
 
 namespace MeshWeaver.Hosting.Orleans;
 
@@ -187,6 +188,9 @@ public static class OrleansServerRegistryExtensions
         // The root mesh hub's cross-silo REPLY stream (core#694 layer 2) — see
         // RootMeshHubReplyStreamService for the full story.
         services.AddRootMeshHubReplyStream();
+        // Same wiring as the monolith: defined NodeTypes register their content types at start,
+        // instance or no instance (see ContentTypeRegistrationSweep).
+        services.AddContentTypeRegistrationSweep();
 
         // Mesh-scoped registry of the last per-grain activation failure. MessageHubGrain
         // records the real activation error here (the same one it feeds to _hubReadyRaw.OnError);
