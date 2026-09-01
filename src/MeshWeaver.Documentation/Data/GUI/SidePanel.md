@@ -123,6 +123,57 @@ Click **&#x2197;** to move the current thread from the side panel into the full 
 
 ---
 
+# Opening the Side Panel From a Layout Area
+
+Everything above is what the *viewer* does. An area can also open the side panel itself — and for
+an embedded chat that is almost always the right choice.
+
+A layout area has two ways to send a viewer somewhere:
+
+| Call | Effect |
+|---|---|
+| `Host.NavigateTo(uri)` | Replaces the page — the viewer leaves where they are |
+| `Host.NavigateToSidePanel(uri)` | Opens `uri` beside the page — the viewer stays put |
+
+Both are available on `LayoutAreaHost` and, as extension methods, on the `UiActionContext` a click
+handler receives:
+
+```csharp
+Controls.Button("Try it")
+    .WithClickAction(click =>
+    {
+        var threadPath = StartTheExerciseThread(click);
+        click.NavigateToSidePanel(threadPath);   // not NavigateTo — the lesson stays on screen
+        return Task.CompletedTask;
+    })
+```
+
+> **Use `NavigateToSidePanel` wherever a click creates or references a thread the viewer should see
+> *beside* their work.** An embedded exercise composer that navigates the whole page to the thread
+> it just opened destroys the very page the exercise told the viewer to come back to. This was a
+> real defect in a course's try-it exercise: sending a prompt replaced the lesson with the thread.
+
+## How it reaches the browser
+
+`NavigateToSidePanel` posts a `NavigationRequest` carrying `Target = "SidePanel"` to the area's
+subscriber. From there the chain is the one the portal already had end to end — the portal
+application's handler, the navigation service, its side-panel event, and the portal layout opening
+the panel on that path. The API is the first link; nothing downstream was added for it.
+
+## Two design notes worth knowing
+
+- **It is a separate method, not a parameter on `NavigateTo`.** Adding a parameter changes that
+  method's signature, and module DLLs compiled against `NavigateTo(string, bool, bool)` would throw
+  `MissingMethodException` at runtime. Framework surfaces that modules bind to are extended by
+  addition, never by amendment.
+- **The panel must be free to show it.** In presentation mode the panel is suppressed, and a
+  side-panel navigation arriving while it is suppressed used to be accepted and then silently
+  dropped (fixed in `MeshWeaver.Plugins`). On the `/next` React shell, server-driven
+  `NavigationRequest` is not handled at all yet, so this call — like every other server-driven
+  navigation — currently does nothing there.
+
+---
+
 # Main Panel
 
 The main panel occupies the full width when the side panel is closed, and shares space via the resizable splitter when it is open. Its content always reflects the current URL.
