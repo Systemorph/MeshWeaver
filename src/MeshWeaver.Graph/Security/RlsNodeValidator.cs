@@ -16,7 +16,7 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
 {
     private readonly IMessageHub _hub;
     private readonly ILogger<RlsNodeValidator> _logger;
-    private readonly IReadOnlyDictionary<string, INodeTypeAccessRule> _accessRules;
+    private readonly NodeTypeAccessRuleSet _accessRules;
     private readonly TimeSpan _establishmentBudget;
 
     /// <summary>
@@ -24,17 +24,20 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
     /// </summary>
     /// <param name="hub">The message hub used for permission checks.</param>
     /// <param name="logger">The logger used to record access grants and denials.</param>
-    /// <param name="accessRules">The per-node-type access rules, indexed by node type (last registration wins per type).</param>
+    /// <param name="accessRules">
+    /// The mesh's per-node-type access rules. 🚨 The INDEX, not the raw enumerable — this validator
+    /// used to build its own dictionary while the delete handler's pre-flight consulted NO rule at
+    /// all, which is how a satellite's Delete came to be governed by two disagreeing answers
+    /// (#2913). Sharing the index is what makes them one.
+    /// </param>
     public RlsNodeValidator(
         IMessageHub hub,
         ILogger<RlsNodeValidator> logger,
-        IEnumerable<INodeTypeAccessRule> accessRules)
+        NodeTypeAccessRuleSet accessRules)
     {
         _hub = hub;
         _logger = logger;
-        _accessRules = accessRules
-            .GroupBy(r => r.NodeType, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
+        _accessRules = accessRules;
         // 🚨 DERIVED from the enclosing mesh-operation budget, never configured on its own — issue
         // #1198. This bound only earns its keep by firing BEFORE the operation that encloses it,
         // and the previous shape (its own options class, its own 30 s default) made that ordering
@@ -251,10 +254,7 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
 
     private IObservable<NodeValidationResult?> CheckCustomRule(NodeValidationContext context, string? userId)
     {
-        if (string.IsNullOrEmpty(context.Node.NodeType)
-            || !_accessRules.TryGetValue(context.Node.NodeType, out var accessRule)
-            || (accessRule.SupportedOperations.Count != 0
-                && !accessRule.SupportedOperations.Contains(context.Operation)))
+        if (_accessRules.Find(context.Node.NodeType, context.Operation) is not { } accessRule)
             return Observable.Return<NodeValidationResult?>(null);
 
         return accessRule.HasAccess(context, userId).Select<bool, NodeValidationResult?>(hasAccess =>
