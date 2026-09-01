@@ -77,13 +77,9 @@ public static class NodeTypeBuildState
             // the process-local AssemblyLocation when the producer hasn't
             // populated the store fields yet (Null store path), and finally
             // to a fresh GUID so the version is never null.
-            var hashSrc = (!string.IsNullOrEmpty(result.Collection) && !string.IsNullOrEmpty(result.ContentPath))
-                ? $"{result.Collection}/{result.ContentPath}"
-                : result.AssemblyLocation ?? Guid.NewGuid().ToString();
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = Convert.ToBase64String(
-                sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(hashSrc)))
-                .Replace('+', '-').Replace('/', '_').TrimEnd('=')[..8];
+            var hashSrc = ReleaseHashSource(result.Collection, result.ContentPath)
+                ?? result.AssemblyLocation ?? Guid.NewGuid().ToString();
+            var hash = ReleaseVersionHash(hashSrc);
             var version = $"{DateTime.UtcNow:yyyyMMddHHmmss}-{hash}";
 
             var releaseNamespace = $"{nodeTypePath}/{GraphNodeTypeNames.ReleaseSegment}";
@@ -193,21 +189,174 @@ public static class NodeTypeBuildState
                         : System.Reactive.Disposables.Disposable.Empty,
                     _ => meshService.CreateNode(node).Take(1))
                 .Select(_ => (string?)releasePath)
-                .Timeout(TimeSpan.FromSeconds(10), Observable.Return<string?>(null))
+                // 🚨 The bound must DELIVER its diagnostic (#781). A bare
+                // `Timeout(_, Observable.Return(null))` made "the create starved" indistinguishable
+                // from "no release was asked for": the caller stamps the PREVIOUS release path and
+                // the node settles Ok, current sources, current assembly — and a release naming
+                // yesterday's bytes. That state is stable and looks healthy from every angle, which
+                // is why it took comparing two timestamps in a node dump to find.
+                .Timeout(ReleaseCreateBound, Observable.Defer(() =>
+                {
+                    logger?.LogError(
+                        "CompileWatcher: the Release node create for {ReleasePath} did not land "
+                        + "within {Bound}s — the compile SUCCEEDED but no release was cut, so "
+                        + "LatestReleasePath still names the PREVIOUS build",
+                        releasePath, ReleaseCreateBound.TotalSeconds);
+                    return Observable.Return<string?>(null);
+                }))
                 .Catch<string?, Exception>(ex =>
                 {
-                    logger?.LogWarning(ex,
-                        "CompileWatcher: failed to create Release node at {ReleasePath}",
-                        releasePath);
+                    logger?.LogError(ex,
+                        "CompileWatcher: failed to create Release node at {ReleasePath} — the "
+                        + "compile SUCCEEDED but no release was cut, so LatestReleasePath still "
+                        + "names the PREVIOUS build", releasePath);
                     return Observable.Return<string?>(null);
                 });
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex,
-                "CompileWatcher: TryCreateReleaseNode threw for {NodeTypePath}", nodeTypePath);
+            logger?.LogError(ex,
+                "CompileWatcher: TryCreateReleaseNode threw for {NodeTypePath} — no release was "
+                + "cut, so LatestReleasePath still names the PREVIOUS build", nodeTypePath);
             return Observable.Return<string?>(null);
         }
+    }
+
+    /// <summary>How long the release-node create may take before the caller gives up on it. The
+    /// create is one owner round-trip; a bound nested inside the hub's own request timeout so it
+    /// can fire FIRST and say WHICH write starved.</summary>
+    internal static readonly TimeSpan ReleaseCreateBound = TimeSpan.FromSeconds(10);
+
+    /// <summary>The number of hash characters a minted release version carries.</summary>
+    private const int ReleaseHashLength = 8;
+
+    /// <summary>The <c>{yyyyMMddHHmmss}-{hash}</c> length of a minted release version.</summary>
+    private const int ReleaseVersionLength = 14 + 1 + ReleaseHashLength;
+
+    /// <summary>
+    /// The DURABLE identity a release version is minted from — the cross-silo assembly-store
+    /// coordinates, or <c>null</c> when the producer has not populated them (the Null-store path,
+    /// where the mint falls back to a process-local location and the identity is not derivable
+    /// from the node at all). Pure.
+    /// </summary>
+    internal static string? ReleaseHashSource(string? collection, string? contentPath) =>
+        !string.IsNullOrEmpty(collection) && !string.IsNullOrEmpty(contentPath)
+            ? $"{collection}/{contentPath}"
+            : null;
+
+    /// <summary>
+    /// The release-version hash for a build identity — the ONE function
+    /// <see cref="TryCreateReleaseNode"/> mints with and
+    /// <see cref="ReleaseNamesBuild(string?, string?, string?)"/> checks
+    /// against, so the mint and the check cannot drift into disagreeing about what a release
+    /// version means. Pure.
+    /// </summary>
+    internal static string ReleaseVersionHash(string hashSource) =>
+        Convert.ToBase64String(
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(hashSource)))
+            .Replace('+', '-').Replace('/', '_').TrimEnd('=')[..ReleaseHashLength];
+
+    /// <summary>
+    /// 🚨 The cheap comparison issue #781 asked for: does <paramref name="latestReleasePath"/> name
+    /// THESE bytes? A release version is <c>{yyyyMMddHHmmss}-{hash}</c> where the hash is minted
+    /// from the build's durable store coordinates, so the question is answerable from the node
+    /// alone — no store probe, no I/O.
+    ///
+    /// <para><b>Inconclusive answers TRUE, always.</b> Three of them, each deliberate:
+    /// <list type="bullet">
+    ///   <item><b>No release at all.</b> Absence is not staleness — a build ADOPTED from a prebuilt
+    ///     bundle has never had a release, and #1707 slice 3 decided that such a request is
+    ///     satisfied by the build in hand. Answering FALSE here would put a compile back on every
+    ///     install, which is the cost that slice removed.</item>
+    ///   <item><b>No durable coordinates.</b> The Null-store path mints from a process-local
+    ///     assembly location, which no other process can reproduce.</item>
+    ///   <item><b>A version this mint did not produce.</b> A different (older, or hand-written)
+    ///     shape is not evidence of anything.</item>
+    /// </list>
+    /// FALSE is returned only where the check can actually TELL, and it disagrees — which is
+    /// exactly the #781 state: a current build, and a release naming the previous one.</para>
+    /// </summary>
+    internal static bool ReleaseNamesBuild(
+        string? latestReleasePath, string? collection, string? contentPath)
+    {
+        if (string.IsNullOrEmpty(latestReleasePath))
+            return true;
+        if (ReleaseHashSource(collection, contentPath) is not { } hashSource)
+            return true;
+        var version = latestReleasePath[(latestReleasePath.LastIndexOf('/') + 1)..];
+        if (version.Length != ReleaseVersionLength || version[14] != '-')
+            return true;
+        for (var i = 0; i < 14; i++)
+            if (!char.IsAsciiDigit(version[i]))
+                return true;
+        return string.Equals(
+            version[15..], ReleaseVersionHash(hashSource), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <see cref="ReleaseNamesBuild(string?,string?,string?)"/> read off a NodeType's own record:
+    /// does <see cref="NodeTypeDefinition.LatestReleasePath"/> name the build that
+    /// <see cref="NodeTypeDefinition.LatestAssemblyCollection"/> /
+    /// <see cref="NodeTypeDefinition.LatestAssemblyPath"/> describe? Pure.
+    /// </summary>
+    internal static bool ReleaseNamesBuild(NodeTypeDefinition def) =>
+        ReleaseNamesBuild(
+            def.LatestReleasePath, def.LatestAssemblyCollection, def.LatestAssemblyPath);
+
+    /// <summary>
+    /// Cut a Release for the build the node ALREADY holds — no compile (#781).
+    ///
+    /// <para>A release request answered by the build in hand
+    /// (<c>NodeTypeCompilationHelpers.IsSatisfiedByCurrentBuild</c>) still has to LEAVE A RELEASE
+    /// for that build: consuming it against a <see cref="NodeTypeDefinition.LatestReleasePath"/>
+    /// minted for different bytes is how a consumer following that field adopts the PREVIOUS
+    /// build while the node reports Ok on the current one. The bytes exist and are addressed by
+    /// the node's own durable coordinates, so the honest answer is to mint the release from them
+    /// rather than to recompile bytes that are already correct.</para>
+    ///
+    /// <para>Emits the created path, or <c>null</c> when nothing was needed OR the create did not
+    /// land. A null is never consumed as success: the caller's satisfied branch requires a release
+    /// that names the build, so a failed cut falls through to the compile path, which cuts one of
+    /// its own.</para>
+    /// </summary>
+    internal static IObservable<string?> TryCutReleaseForBuildInHand(
+        IMessageHub hub,
+        string nodeTypePath,
+        MeshNode node,
+        NodeTypeDefinition def,
+        ILogger? logger)
+    {
+        if (ReleaseNamesBuild(def))
+            return Observable.Return<string?>(null);
+        logger?.LogInformation(
+            "[ReleaseRequestWatcher] {NodeTypePath}: the build in hand has no release of its own "
+            + "(LatestReleasePath '{Stale}' was minted for other bytes) — cutting one from the "
+            + "build itself, no compile", nodeTypePath, def.LatestReleasePath);
+        // Same credential split as the compile that would otherwise have produced this release:
+        // EXECUTION is the System's (the compile watcher's terminal writes run under
+        // ImpersonateAsSystem for exactly this reason — a read-only partition must still get its
+        // release), while ATTRIBUTION stays the requester's, which TryCreateReleaseNode applies on
+        // top of this scope. Acquired at SUBSCRIBE, never at compose time: this watcher callback is
+        // a deferred Rx continuation and the ambient context does not flow into it.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Using(
+            () => accessService?.ImpersonateAsSystem()
+                ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
+            _ => TryCreateReleaseNode(
+            hub,
+            nodeTypePath,
+            new NodeCompilationResult(
+                AssemblyLocation: null,
+                NodeTypeConfigurations: [],
+                CompiledSources: def.CompiledSources as ImmutableDictionary<string, long>
+                    ?? def.CompiledSources?.ToImmutableDictionary(),
+                Collection: def.LatestAssemblyCollection,
+                ContentPath: def.LatestAssemblyPath,
+                Version: def.LastCompiledVersion),
+            node,
+            activityPath: def.LastCompilationActivityPath,
+            logger));
     }
 
     /// <summary>

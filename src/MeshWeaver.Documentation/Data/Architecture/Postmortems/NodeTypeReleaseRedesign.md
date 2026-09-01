@@ -346,3 +346,83 @@ un-skipped and running today.
    NodeType simultaneously will get different auto-stamped versions (timestamp
    differs). Both compile independently; the latest Succeeded wins active
    status. This is probably fine.
+
+---
+
+## 2026-09-01 — "handled" was never the same fact as "released" (MeshWeaver.Plugins#781)
+
+**Measured state, `Publish/Deck` on memex-cloud, 2026-08-27:**
+
+| field | value |
+|---|---|
+| `lastCompileSucceededAt` | `21:53:01.850Z` |
+| `lastCompiledVersion` | `575` |
+| `latestAssemblyPath` | `Publish_Deck/v575-…dll` |
+| `requestedReleaseAt` | `21:52:59.898Z` |
+| `lastReleaseRequestHandledAt` | `21:52:59.898Z` — consumed |
+| `latestReleasePath` | `…/Release/20260826065548-neI3XM25` — **the previous morning** |
+
+`compilationStatus: Ok`, `compiledSources` identical to `currentSourceVersions`, diagnostics clean.
+Every single-field read is healthy. Only holding the RELEASE up against the BUILD shows it, and the
+consequence is that every consumer following `LatestReleasePath` — the build protocol, a
+release-pinned activation, the Configuration pane's "→ release" link — serves the PREVIOUS assembly
+while the type reports Ok on the current one.
+
+### The two facts the design conflated
+
+`LastReleaseRequestHandledAt` is stamped **at dispatch**, on the same commit that flips to `Pending`.
+That is correct as a re-fire guard and wrong as a delivery receipt, and the field was doing both
+jobs. Between dispatch and a Release node existing there are three ways to end up with nothing, and
+all three were **silent and indistinguishable from "no release was asked for"**:
+
+1. `TryCreateReleaseNode`'s bound expired — it returned `null` through a bare
+   `Timeout(_, Observable.Return(null))` with no log line at all.
+2. The create faulted or was refused (it runs under the REQUESTER's identity for attribution, so a
+   partition the requester cannot write refuses it) — logged at Warning, swallowed.
+3. The request was answered by the build already in hand (#1707 slice 3) — which dispatches nothing,
+   and therefore creates nothing.
+
+In every case `ApplyCompileSuccess` stamps `LatestReleasePath = releasePath ?? def.LatestReleasePath`
+— the previous build's release — and the trigger is spent.
+
+**The state was also unrepairable from the outside.** A second, ordinary release request hit case 3:
+the bytes ARE current, so the request was consumed again without producing anything. Only
+`RequestedReleaseForce` escaped, and only if someone knew to look.
+
+### The invariant
+
+> **`LatestReleasePath` must never name a build older than `LastCompiledVersion` once
+> `RequestedReleaseAt` has been consumed.**
+
+It is answerable from the node alone, with no store probe: a release version is
+`{yyyyMMddHHmmss}-{hash}` where the hash is minted from the build's DURABLE store coordinates
+(`{Collection}/{ContentPath}`), which are exactly what `LatestAssemblyCollection` /
+`LatestAssemblyPath` carry. Mint and check are now the same function applied twice
+(`NodeTypeBuildState.ReleaseVersionHash`), so they cannot drift into disagreeing about what a
+release version means.
+
+### What was done
+
+- `NodeTypeBuildState.ReleaseNamesBuild` — the cheap comparison, pure. **Inconclusive answers TRUE**
+  in three cases, each deliberate: no release at all (absence is not staleness — an ADOPTED build has
+  never had one, and calling that stale would put a compile back on every install), no durable
+  coordinates (the Null-store path mints from a process-local location), and a version shape this
+  mint did not produce.
+- `IsSatisfiedByCurrentBuild` = `BuildInHandAnswersRequest` **and** `ReleaseNamesBuild`. The branch
+  consumes the trigger on the same commit path a dispatch would use, so it can never re-fire —
+  consuming it beside a release minted for other bytes is what made #781 permanent.
+- `TryCutReleaseForBuildInHand` — when the bytes are right but the release is not, the release is cut
+  **from those bytes**, no compile, under the same System execution scope the compile's own release
+  create uses. A cut that does not land leaves the clause false, so the request falls through to the
+  compile path and gets its release from the compile's terminal create; it is never consumed for
+  nothing.
+- The bound now **delivers its diagnostic** (an ERROR naming the type and the attempted release),
+  which is the same rule `ReadBudget` states for nested read bounds: the inner bound is the only one
+  that knows WHICH write starved, so it must say so rather than degrade to a null.
+
+### The rule this leaves behind
+
+A one-shot trigger must be consumed by the thing it asked for, not by the attempt. Where the two
+cannot be made the same write, the gap needs a cheap end-state comparison that some later pass can
+run — otherwise the failure is stable, self-consistent and invisible, and it is found by a human
+noticing that a merged fix is not live.

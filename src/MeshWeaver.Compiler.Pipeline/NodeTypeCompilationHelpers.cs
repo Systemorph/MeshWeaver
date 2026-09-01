@@ -1717,8 +1717,8 @@ internal static class NodeTypeCompilationHelpers
                     // def.RequestedReleaseAt re-read, which can have flapped back to
                     // an older value by the time the Update lambda runs on the
                     // action block (see the high-water comment above).
-                    if (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseAt
-                        is not { } triggerAt) return;
+                    if (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)
+                        is not { RequestedReleaseAt: { } triggerAt } observed) return;
                     // 🚨 NO high-water advance here. The mark advances ONLY on the
                     // Update's COMMIT path below — where LastReleaseRequestHandledAt
                     // is actually stamped. Advancing eagerly at dispatch time lost
@@ -1734,9 +1734,32 @@ internal static class NodeTypeCompilationHelpers
                     logger?.LogInformation(
                         "[ReleaseRequestWatcher] {HubPath}: handling RequestedReleaseAt={Req} (force={Force}, lastHandled={Handled})",
                         hubPath, triggerAt,
-                        node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseForce,
-                        node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.LastReleaseRequestHandledAt);
-                    workspace.GetMeshNodeStream().Update(curr =>
+                        observed.RequestedReleaseForce,
+                        observed.LastReleaseRequestHandledAt);
+                    // 🚨 MeshWeaver.Plugins#781 — a request answered by the build in hand must
+                    // still LEAVE A RELEASE for that build. When the bytes are already correct but
+                    // LatestReleasePath was minted for other bytes, the honest answer is to cut the
+                    // missing release FROM THOSE BYTES — not to recompile them (which would put the
+                    // compile #1707 slice 3 removed back on the install path), and not to consume
+                    // the trigger against a release that names the previous build (which is the
+                    // defect: spent request, stale release, and no way to ask again because the
+                    // next plain request is absorbed by the same branch).
+                    //
+                    // The decision below is re-taken authoritatively inside the Update lambda
+                    // against `curr`; this pre-cut is a best-effort on the OBSERVED emission. If the
+                    // state moves in between so the lambda takes another branch, the cut Release
+                    // node is simply history for a build that really was compiled — never a phantom
+                    // path, because TryCreateReleaseNode emits only after the create LANDED.
+                    var precut = BuildInHandAnswersRequest(node, observed, GuardsOf(hub))
+                        ? NodeTypeBuildState.TryCutReleaseForBuildInHand(
+                            hub, hubPath, node, observed, logger)
+                        : Observable.Return<string?>(null);
+                    precut
+                        .Take(1)
+                        // Totality guard, as everywhere else in this file: a cut that completed
+                        // empty must not swallow the dispatch below.
+                        .DefaultIfEmpty()
+                        .SelectMany(cutPath => workspace.GetMeshNodeStream().Update(curr =>
                     {
                         if (curr.Content is not NodeTypeDefinition def) return curr;
                         // 🚨 #1834 — fulfil a pending adoption stamp BEFORE the satisfied-branch
@@ -1825,19 +1848,28 @@ internal static class NodeTypeCompilationHelpers
                         // request's outcome is byte-for-byte what a recompile would have produced.
                         // RequestedReleaseForce stays the user's escape hatch: an explicit force
                         // always compiles.
-                        if (!def.RequestedReleaseForce
-                            && def.CompilationStatus is CompilationStatus.Ok
-                            && !def.IsDirty
-                            && HasUsableBuild(curr, def, GuardsOf(hub)))
+                        //
+                        // 🚨 …and the release the request ASKS FOR has to exist for THESE bytes
+                        // (MeshWeaver.Plugins#781). `cutPath` is the one the pre-cut above just
+                        // minted from the build in hand, if it was needed and landed; folding it in
+                        // HERE is what lets the branch stay a no-compile answer while still leaving
+                        // a release that names the build. A cut that did NOT land leaves the clause
+                        // false, so the request falls through to the compile path below and gets
+                        // its release from the compile's own terminal create.
+                        var satisfiedDef = cutPath is null
+                            ? def
+                            : def with { LatestReleasePath = cutPath };
+                        if (IsSatisfiedByCurrentBuild(curr, satisfiedDef, GuardsOf(hub)))
                         {
                             logger?.LogInformation(
                                 "[ReleaseRequestWatcher] {HubPath}: release request satisfied by the "
                                 + "existing current build (adopted or already compiled) — no compile "
-                                + "dispatched", hubPath);
+                                + "dispatched (release {Release})",
+                                hubPath, satisfiedDef.LatestReleasePath ?? "(none)");
                             dispatchHighWater.Advance(triggerAt);
                             return curr with
                             {
-                                Content = def with
+                                Content = satisfiedDef with
                                 {
                                     LastReleaseRequestHandledAt =
                                         def.LastReleaseRequestHandledAt is { } sat && sat > triggerAt
@@ -1871,7 +1903,7 @@ internal static class NodeTypeCompilationHelpers
                                         : triggerAt
                             }
                         };
-                    }).Subscribe(
+                    })).Subscribe(
                         _ => { },
                         ex => logger?.LogWarning(ex,
                             "[ReleaseRequestWatcher] {HubPath}: failed to dispatch release", hubPath));
@@ -2413,6 +2445,49 @@ internal static class NodeTypeCompilationHelpers
         => !def.RequestedReleaseForce
            && def.DispatchedBuildInputs is { } dispatched
            && string.Equals(dispatched, requestedToken, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The BUILD half of #1707 slice 3's branch rule, pure: are the BYTES this request asks for
+    /// already in hand — settled <see cref="CompilationStatus.Ok"/> over sources that are not
+    /// dirty, a build still usable in THIS environment
+    /// (<see cref="HasUsableBuild(MeshNode, NodeTypeDefinition, BuildGuards?)"/>), and no explicit
+    /// <see cref="NodeTypeDefinition.RequestedReleaseForce"/> demanding a fresh compile anyway?
+    ///
+    /// <para>Deliberately says nothing about the RELEASE — this is the predicate that decides
+    /// whether a COMPILE is needed, and the watcher uses it to know that it may cut the missing
+    /// release from the build in hand instead of rebuilding bytes that are already correct.</para>
+    /// </summary>
+    internal static bool BuildInHandAnswersRequest(
+        MeshNode node, NodeTypeDefinition def, BuildGuards? guards)
+        => !def.RequestedReleaseForce
+           && def.CompilationStatus is CompilationStatus.Ok
+           && !def.IsDirty
+           && HasUsableBuild(node, def, guards);
+
+    /// <summary>
+    /// 🚨 THE BRANCH RULE for #1707 slice 3, pure: is a release request already answered by the
+    /// state the node is SITTING ON — so that the trigger may be CONSUMED without dispatching
+    /// anything at all?
+    ///
+    /// <para>Two halves, and the second one is MeshWeaver.Plugins#781. The bytes must be in hand
+    /// (<see cref="BuildInHandAnswersRequest"/>) — <b>and the node's
+    /// <see cref="NodeTypeDefinition.LatestReleasePath"/> must not name a DIFFERENT build</b>. The
+    /// branch consumes the trigger on the same commit path a dispatch would use, so it can never
+    /// re-fire; consuming it beside a release minted for other bytes is what leaves
+    /// <c>latestReleasePath</c> permanently older than <c>lastCompiledVersion</c> with the request
+    /// spent — measured on <c>Publish/Deck</c>, where instances went on binding the previous day's
+    /// assembly under a green <c>Ok</c>. Worse, the state was then UNREPAIRABLE from the outside:
+    /// a plain re-request was absorbed by this very branch, so asking again could not fix it.</para>
+    ///
+    /// <para>Absence is not staleness — see
+    /// <see cref="NodeTypeBuildState.ReleaseNamesBuild(NodeTypeDefinition)"/> for the three
+    /// inconclusive cases that all answer TRUE, of which "adopted build, no release yet" is the one
+    /// slice 3 exists for.</para>
+    /// </summary>
+    internal static bool IsSatisfiedByCurrentBuild(
+        MeshNode node, NodeTypeDefinition def, BuildGuards? guards)
+        => BuildInHandAnswersRequest(node, def, guards)
+           && NodeTypeBuildState.ReleaseNamesBuild(def);
 
     internal static string BuildInputsToken(
         string? modulesHash, IReadOnlyDictionary<string, long>? sources) =>
