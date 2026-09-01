@@ -1,0 +1,60 @@
+# Arm auto-merge on every non-draft PR, so a PR that goes green LANDS.
+#
+# 🚨 This does not weaken a single gate. Auto-merge waits for exactly the required contexts
+# branch protection already demands; it removes only the human round-trip between "green" and
+# "merged". The failure it fixes is the one measured on 2026-09-01: core had SIX PRs sitting
+# CLEAN and unarmed with an empty merge queue — nothing was failing, nothing was blocked, and
+# nothing was landing either. A green PR nobody arms is indistinguishable from a red one.
+#
+# Deliberately NOT here:
+#   * no `if: ${{ vars.X != '' }}` — invariant #3; a skipped job renders like a passed one.
+#   * drafts are skipped, which is the ONE opt-out. Mark a PR draft and it will not be armed;
+#     that is the intended way to say "not ready", rather than withholding the arm.
+#   * forks are skipped: arming a PR from a fork would let an outside branch merge itself the
+#     moment the required set passes.
+name: Arm auto-merge
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-arm-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  arm:
+    name: Arm auto-merge on this PR
+    runs-on: ubuntu-latest
+    # A draft is the opt-out, and a fork must never arm itself. Both are properties of the
+    # event, not configuration — there is no variable here to forget to set.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Arm it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Already armed is the common case on `synchronize` and is NOT a failure.
+          if gh pr view "$PR" --repo "$REPO" --json autoMergeRequest --jq '.autoMergeRequest != null' | grep -qx true; then
+            echo "already armed — nothing to do"; exit 0
+          fi
+          # A merged/closed PR races us on `synchronize`; treat it as done, not as an error.
+          state=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)
+          if [ "$state" != "OPEN" ]; then echo "PR is $state — nothing to arm"; exit 0; fi
+          # 🚨 Failing to arm must be VISIBLE. It is not fatal to the PR — a human can still
+          # merge it — but a silent failure here recreates exactly the state this exists to
+          # fix: a green PR that never lands, with nothing saying why.
+          if ! out=$(gh pr merge "$PR" --repo "$REPO" --merge --auto 2>&1); then
+            echo "::warning::could not arm auto-merge on #$PR — $out"
+            exit 0
+          fi
+          echo "armed: #$PR will merge when the required contexts pass"
