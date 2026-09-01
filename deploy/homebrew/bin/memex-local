@@ -1146,6 +1146,13 @@ plugin_repo_paths() {
   for d in "$parent"/*/; do
     d="${d%/}"
     [ -d "$d" ] || continue
+    # 🚨 Never a LINKED WORKTREE. A worktree of a node repo is a node repo by content and derives
+    # the SAME source name from its origin, so discovering it beside its primary mounts the same
+    # /plugin-repos/<name> twice and the helm upgrade dies on the duplicate ("duplicate entries
+    # for key [mountPath=/plugin-repos/Education]", 2026-09-01). A linked worktree is the
+    # directory whose `.git` is a FILE (a gitdir pointer); auto-discovery serves primaries only,
+    # and serving a worktree deliberately stays one MEMEX_PLUGIN_REPOS away.
+    [ -f "$d/.git" ] && continue
     is_node_repo "$d" && printf '%s\n' "$d"
   done
   return 0
