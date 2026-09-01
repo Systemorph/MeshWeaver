@@ -284,9 +284,27 @@ jobs:
           # state this input exists to leave.
           [ "$added" -gt 0 ] || { echo "::error::external modules were requested but none were added — the artifact pattern matched nothing and no registry bundle was fetched."; exit 1; }
           echo "reference set topped up from $added module bundle(s): $(find refs -name 'MeshWeaver.*.dll' | wc -l) assemblies"
+      # 🚨 ONE implementation, every repo ("centralize scripts as best as possible"): the check
+      # runs the PLATFORM's compile-check.py at the pinned ref — the caller keeps only its
+      # allow-file (policy). Fetched exactly like compose-sealed-modules.sh above: asserted RED
+      # when unavailable, never fallen back to a drifted per-repo copy (three satellite copies
+      # had already drifted apart when this centralization landed).
+      - name: Fetch the platform's compile-check at the pinned ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM_REF: ${{ inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the canonical compile-check.py has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compile-check.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/compile-check.py" \
+            || { echo "::error::could not fetch .github/scripts/compile-check.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/compile-check.py" | grep -q "compile-check" || { echo "::error::the fetched compile-check.py at ${PLATFORM_REF} does not look like the checker"; exit 1; }
       - name: Compile-check every NodeType
         working-directory: repo
+        env:
+          MW_REPO_ROOT: ${{ github.workspace }}/repo
+          MW_ALLOW_FILE: ${{ github.workspace }}/repo/scripts/compile-check.allow
         # --refs points at the assemblies unpacked from the platform image — a FLAT directory;
         # compile-check.py globs it recursively, dedupes by filename, and compiles each
-        # NodeType's resolved source-set.
-        run: python3 scripts/compile-check.py --refs ../refs
+        # NodeType's resolved source-set. The script is the PLATFORM's, fetched above.
+        run: python3 "$RUNNER_TEMP/compile-check.py" --refs ../refs

@@ -142,6 +142,34 @@ public class Workspace : IWorkspace
             return;
         }
 
+        // 🚨 "No one must ever publish from main hub" (maintainer, 2026-09-01). For a per-node or
+        // activity hub the resolved parent IS the mesh ROUTER, and a router-stamped announcement
+        // is exactly what ROUTER_TRAFFIC reports as a violation — the compile+render gate logged
+        // "StreamEndedEvent has the mesh hub as sender (sender: mesh/…)" once per recycled
+        // activity. Climb to the router's own parent — a real application hub that outlives
+        // per-node hubs — and announce only from a NON-router carrier; when none exists the
+        // change-feed-latch fallback below already covers every subscriber.
+        if (carrier is not null
+            && string.Equals(carrier.Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal))
+        {
+            // The router's designated spokesman (RouterCarrier — on a mesh, the nodeops execution
+            // hub); with none registered, climb to the router's own parent. Either way the
+            // announcement never carries the router's identity.
+            IMessageHub? spokesman = null;
+            try { spokesman = carrier.Configuration.Get<RouterCarrier>()?.Resolve(carrier); }
+            catch { /* teardown probing must never throw */ }
+            if (spokesman is null)
+            {
+                IMessageHub? up;
+                try { up = carrier.Configuration.ParentHub; }
+                catch { up = null; }
+                spokesman = up is null || ReferenceEquals(up, carrier)
+                            || string.Equals(up.Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal)
+                    ? null : up;
+            }
+            carrier = spokesman;
+        }
+
         // 🚨 A SELF-PARENT IS NOT A CARRIER. `Configuration.ParentHub` resolves `IMessageHub` from
         // the parent DI scope, and for a root hub that is the hub ITSELF (the same self-parent
         // DataExtensions.RouteStreamMessage terminates its walk on). Posting through it would be
