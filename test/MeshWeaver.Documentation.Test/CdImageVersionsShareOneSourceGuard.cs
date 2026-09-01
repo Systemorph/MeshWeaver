@@ -102,6 +102,95 @@ public class CdImageVersionsShareOneSourceGuard
         return [.. matches.Select(m => m.Groups["project"].Value.Replace('\\', '/'))];
     }
 
+    /// <summary>
+    /// 🚨 <b>Every leg of a published set must be BUILT from the same plugin COMMIT</b> — the same
+    /// rule as the version above, one level down: not "tagged from one source of truth" but
+    /// "compiled from one tree".
+    ///
+    /// <para><b>What went wrong.</b> Each consumer resolved the plugins ref for itself.
+    /// <c>gate</c> resolved the HEAD of <c>MW_PLUGINS_REF</c> (default <c>main</c>) ONCE, minted the
+    /// image-set identity from it, and <c>promote</c> tagged the portal
+    /// <c>&lt;core-sha&gt;-p&lt;plugins-sha&gt;</c> with that value — while <c>portal-image</c>,
+    /// <c>migration-image</c> and the two reusable calls each checked out the BRANCH, seconds to
+    /// minutes later. <c>node-repo-module-pack</c> alone checks the content repo out three times.
+    /// A plugins merge landing mid-run therefore produced an image built from a commit the pair tag
+    /// does not name, and — the part that matters — a portal image and the module bundles sealed
+    /// beside it from DIFFERENT trees. There is no image that can serve a mixed set of module
+    /// builds; that is the whole reason the pair key (#2622) exists.</para>
+    ///
+    /// <para><b>Why it is silent.</b> Every leg succeeds. Every image pushes. The tags are
+    /// well-formed. Only the provenance they assert is false, and nothing compares a built tree to
+    /// the sha that named it — exactly the shape of #2555 one layer up.</para>
+    ///
+    /// <para>Asserted structurally: every checkout or reusable call in CD that names a plugin
+    /// repository must take its ref from <c>needs.gate.outputs.plugins_sha</c>, the value
+    /// <c>gate</c> resolved once. A branch name there — <c>main</c>, or the steering variable
+    /// unresolved — is the regression.</para>
+    /// </summary>
+    [Fact]
+    public void EveryPluginCheckoutUsesTheCommitTheGateResolved()
+    {
+        var pins = PluginRefs();
+
+        Assert.True(pins.Count >= 4,
+            $"Expected at least the two image legs and the two reusable calls to name a plugin "
+            + $"repository in {Workflow}; found {pins.Count}. Either they were renamed or the "
+            + "matcher no longer recognises them — in both cases this guard checks nothing.");
+
+        // 🚨 EQUALITY, not Contains (Copilot, #2967). `Contains` would accept
+        // `${{ needs.gate.outputs.plugins_sha || 'main' }}` — the pinned sha with the branch
+        // restored as a fallback, which is the regression itself wearing the fix's name. A
+        // fallback is not a safety net here: `gate` already fails RED on an unresolvable ref, so
+        // the only way the sha is empty is a gate that did not run, and then the job must not run
+        // either. Quoting and inner whitespace are tolerated; a second expression is not.
+        var offenders = pins.Where(x => !PinnedExactly.IsMatch(x.Ref)).ToList();
+
+        Assert.True(offenders.Count == 0,
+            "main-cd.yml reaches into a plugin repository at a ref it resolved for itself:\n  "
+            + string.Join("\n  ", offenders.Select(x => $"line {x.Line}: {x.Repo} @ {x.Ref}"))
+            + "\nEvery leg of one run must build from ONE plugin commit — the sha `gate` already "
+            + "resolved and `promote` tags the image set with. Re-resolving a branch here lets a "
+            + "mid-run merge ship an image whose pair tag names a different tree, and lets the "
+            + "module bundles be sealed from a third. Use ${{ needs.gate.outputs.plugins_sha }}; "
+            + "MW_PLUGINS_REF keeps steering the run through `gate`, which resolves it ONCE.");
+    }
+
+    /// <summary>The one accepted ref: the sha <c>gate</c> resolved, and nothing else beside it.</summary>
+    private static readonly Regex PinnedExactly =
+        new(@"^[""']?\$\{\{\s*needs\.gate\.outputs\.plugins_sha\s*\}\}[""']?$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Every place CD names a plugin repository, paired with the ref that checkout or reusable call
+    /// will use — the next <c>ref:</c>/<c>content-ref:</c> within the same <c>with:</c> block.
+    /// Comment lines are skipped: this workflow explains its own history in prose, and a matcher
+    /// that read a comment would report an edge that does not exist.
+    /// </summary>
+    private static IReadOnlyList<(int Line, string Repo, string Ref)> PluginRefs()
+    {
+        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
+        var found = new List<(int, string, string)>();
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (Regex.IsMatch(lines[i], @"^\s*#")) continue;
+            var repo = Regex.Match(lines[i], @"^\s*(?:content-)?repository:\s*(?<repo>Systemorph/MeshWeaver\.[A-Za-z.]+)\s*$");
+            if (!repo.Success) continue;
+
+            // The ref sits within the same `with:` block — a handful of lines, never a whole job.
+            var refValue = "<none>";
+            for (var j = i + 1; j < Math.Min(i + 8, lines.Length); j++)
+            {
+                if (Regex.IsMatch(lines[j], @"^\s*#")) continue;
+                var m = Regex.Match(lines[j], @"^\s*(?:content-)?ref:\s*(?<ref>.+?)\s*$");
+                if (m.Success) { refValue = m.Groups["ref"].Value; break; }
+            }
+
+            found.Add((i + 1, repo.Groups["repo"].Value, refValue));
+        }
+
+        return found;
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
