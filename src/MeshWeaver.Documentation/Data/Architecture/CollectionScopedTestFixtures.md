@@ -240,5 +240,5 @@ project gets parallel collections.
 
 ## See also
 
-- [Asynchronous Calls](AsynchronousCalls) — why the synchronous `GetOrCreate` overload exists.
-- [AsyncLocal Across Hops](AsyncLocalAcrossHops) — the flow rule the ambient scope relies on.
+- [Asynchronous Calls](../AsynchronousCalls) — why the synchronous `GetOrCreate` overload exists.
+- [AsyncLocal Across Hops](../AsyncLocalAcrossHops) — the flow rule the ambient scope relies on.
