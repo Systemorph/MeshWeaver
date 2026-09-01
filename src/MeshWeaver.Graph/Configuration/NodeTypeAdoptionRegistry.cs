@@ -12,7 +12,7 @@ namespace MeshWeaver.Graph.Configuration;
 ///
 /// <para><b>The race this closes, measured 2026-08-22.</b> Adopting a prebuilt assembly requires
 /// writing the NodeType's node, and that write goes through the type's OWN hub — so
-/// <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string})"/> ACTIVATES the hub it is about to stamp. Activation is
+/// <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string}, string)"/> ACTIVATES the hub it is about to stamp. Activation is
 /// exactly what arms the first-build kickoff (<c>CompilationStatus is null</c> + no usable build ⇒
 /// flip Pending), so the seeder's own probe started the very Roslyn compile the adoption exists to
 /// avoid:</para>

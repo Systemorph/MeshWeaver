@@ -496,7 +496,7 @@ public record NodeTypeDefinition
     /// <summary>
     /// A REQUEST to the owning per-NodeType hub: "stamp <see cref="CompiledSources"/> from your own
     /// <see cref="CurrentSourceVersions"/>". Written by
-    /// <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string})"/> when it adopts a prebuilt assembly; consumed —
+    /// <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string}, string)"/> when it adopts a prebuilt assembly; consumed —
     /// exactly once — on the owner, which clears it in the same write that applies the stamp.
     ///
     /// <para>🚨 <b>Why the value cannot be written by the adopter</b> (#1834). A bundle's own
@@ -530,7 +530,7 @@ public record NodeTypeDefinition
     /// The source fingerprint the PRODUCER recorded for the adopted bytes — a content hash over
     /// the Code/Test nodes the bundle was compiled from
     /// (<see cref="Mesh.PartitionSourceFingerprint"/>). Written by
-    /// <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string})"/> beside <see cref="RequestedSourceStampAt"/>;
+    /// <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string}, string)"/> beside <see cref="RequestedSourceStampAt"/>;
     /// <c>null</c> for a locally-compiled build and for a LEGACY bundle published before producers
     /// recorded one.
     ///
