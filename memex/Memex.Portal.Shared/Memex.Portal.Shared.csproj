@@ -44,7 +44,6 @@
          recurred here the moment the map packs left, and
          FrameworkBuildIdentityTest.CanonicalContentSurface_IsRecordedByEverySurfaceManifestHost
          is what caught it. No portal code uses these types — the reference IS the point. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Maps\MeshWeaver.Maps.csproj" />
     <!-- MeshWeaver.Blazor.EntityViews is deliberately NOT referenced (the Analysis/#1974 shape):
          it ships via the registry as a module, its EntityViewsViewPackModuleAttribute registers
          the views when the DLL is listed under Modules:Assemblies, and Modules:Required declares
