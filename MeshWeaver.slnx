@@ -34,8 +34,6 @@
     <Project Path="src/MeshWeaver.Compiler/MeshWeaver.Compiler.csproj" />
     <Project Path="src/MeshWeaver.Connection.Orleans/MeshWeaver.Connection.Orleans.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
-    <Project Path="src/MeshWeaver.ContentCollections.Indexing/MeshWeaver.ContentCollections.Indexing.csproj" />
-    <Project Path="src/MeshWeaver.ContentCollections.Indexing.Graph/MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
     <Project Path="src/MeshWeaver.Data.Contract/MeshWeaver.Data.Contract.csproj" />
     <Project Path="src/MeshWeaver.Data/MeshWeaver.Data.csproj" />
     <Project Path="src/MeshWeaver.Documentation/MeshWeaver.Documentation.csproj" />
@@ -76,8 +74,6 @@
     <Project Path="test/MeshWeaver.Hosting.Monolith.TestBase/MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <Project Path="test/MeshWeaver.Content.Test/MeshWeaver.Content.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Test/MeshWeaver.ContentCollections.Test.csproj" />
-    <Project Path="test/MeshWeaver.ContentCollections.Indexing.Test/MeshWeaver.ContentCollections.Indexing.Test.csproj" />
-    <Project Path="test/MeshWeaver.ContentCollections.Indexing.Graph.Test/MeshWeaver.ContentCollections.Indexing.Graph.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj" />
     <Project Path="test/MeshWeaver.Documentation.Test/MeshWeaver.Documentation.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />
