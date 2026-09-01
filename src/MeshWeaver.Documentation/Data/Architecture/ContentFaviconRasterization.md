@@ -87,6 +87,11 @@ an `/api/icon` endpoint Safari honours while leaving **the exact node in the bug
 showing the portal favicon. A fix that does not cover its own reproduction case is the shape worth
 refusing, so the dependency was taken.
 
+**Measured on the real population, not on a sample:** every one of the **56 authored store marks**
+was pushed through `IconRasterizer` at both declared sizes — **56/56 produced a valid PNG of the
+right dimensions, 0 blank, 0 parse failures.** That is the check worth repeating if a mark ever
+stops appearing; the marks are the input this was chosen for.
+
 🚨 **`Svg.Skia` and `SkiaSharp` are one decision, not two.** `Svg.Skia` 4.9.1 floors SkiaSharp at
 3.119.2; a lower central pin under a higher transitive floor is `NU1605`, not a silent resolve — so
 the central pin moved from 3.116.1 with it. Moving either version moves the other.

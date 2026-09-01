@@ -51,12 +51,19 @@ public static class SeoEndpoints
     /// Sink for an AUTHORED icon whose markup will not parse. The route answers 404 either way, so
     /// without this line a broken mark and a node with no mark are indistinguishable from outside —
     /// and the broken one is the only one anybody can fix.
+    ///
+    /// <para>🚨 <c>GetRequiredService</c>, unlike <see cref="LateFault"/> above, and the difference
+    /// is the point: this sink IS the diagnostic. A null-conditional logger would make the one
+    /// signal that a mark is broken silently optional — the exact failure the method exists to
+    /// prevent — so a host with no logger factory must say so loudly rather than serve 404s that
+    /// mean nothing. Resolved ONCE per request, before the reactive chain, so the cost is not paid
+    /// per emission and a missing registration cannot surface as a swallowed 404.</para>
     /// </summary>
     private static Action<Exception> UnrenderableIcon(IMessageHub hub, string nodePath)
     {
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger(typeof(SeoEndpoints));
-        return ex => logger?.LogWarning(
+        var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(SeoEndpoints));
+        return ex => logger.LogWarning(
             ex, "The icon of '{Path}' is inline svg that will not render; serving no raster icon "
                 + "for it", nodePath);
     }
@@ -180,10 +187,11 @@ public static class SeoEndpoints
                     $"size must be one of {string.Join(", ", IconRasterizer.SupportedSizes)}"));
 
             var pixels = size;
+            var unrenderable = UnrenderableIcon(hub, nodePath);
             return SeoResolver.Resolve(hub, nodePath)
                 .Select(data => data is null
                     ? Results.NotFound()
-                    : IconResult(http, data.Node, pixels, UnrenderableIcon(hub, nodePath)))
+                    : IconResult(http, data.Node, pixels, unrenderable))
                 .Catch<IResult, Exception>(_ => Observable.Return(Results.NotFound()))
                 .FirstAsync()
                 .ObserveCompletion(LateFault(hub, $"/api/icon/{nodePath}"), ct)!;
