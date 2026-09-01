@@ -355,7 +355,7 @@ public static class DataExtensions
         // register, so drop straight away.
         if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
         {
-            LogStreamMessageDrop(hub, request, streamMessage, message);
+            LogStreamMessageDrop(hub, request, streamMessage, message, heldFor: TimeSpan.Zero);
             return Observable.Return(request.Ignored());
         }
 
@@ -387,7 +387,7 @@ public static class DataExtensions
             .ToArray();
         if (hubAddedSignals.Length == 0)
         {
-            LogStreamMessageDrop(hub, request, streamMessage, message);
+            LogStreamMessageDrop(hub, request, streamMessage, message, heldFor: TimeSpan.Zero);
             return;
         }
 
@@ -430,8 +430,13 @@ public static class DataExtensions
                 {
                     // Grace elapsed (Timeout) — the stream is genuinely gone; drop with the
                     // diagnostic, exactly as before (just this window later).
+                    // 🚨 The hold is REPORTED (#2776). This line is written `grace` after the
+                    // message arrived, so its timestamp is NOT the time the stream ended — and it
+                    // was read as one twice, producing "the owner tore its streams down ~5 s into
+                    // the run" for two unrelated suites when both had ended theirs at ~0.1 s. A
+                    // diagnostic that misdates its own subject is worse than none.
                     if (System.Threading.Interlocked.Exchange(ref delivered, 1) == 0)
-                        LogStreamMessageDrop(hub, request, streamMessage, message);
+                        LogStreamMessageDrop(hub, request, streamMessage, message, grace);
                     sub.Dispose();
                 });
 
@@ -449,10 +454,22 @@ public static class DataExtensions
     /// intentional but never silent.
     /// </summary>
     private static void LogStreamMessageDrop(
-        IMessageHub hub, IMessageDelivery request, StreamMessage streamMessage, object message)
+        IMessageHub hub, IMessageDelivery request, StreamMessage streamMessage, object message,
+        TimeSpan heldFor)
     {
         try
         {
+            // 🚨 The AGE of what is being reported, always stated — see the Timeout arm's note.
+            // Zero means "dropped on arrival"; anything else is how long this line lagged the
+            // event it describes.
+            // Invariant, never the ambient culture: a decimal comma in a machine-read log line is
+            // a needless divergence between hosts (and CurrentCulture formatting is banned outright).
+            var age = heldFor > TimeSpan.Zero
+                ? " This line is written "
+                  + heldFor.TotalSeconds.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)
+                  + "s AFTER the message arrived (the sync-hub registration grace) — the stream "
+                  + "ended then, not now."
+                : string.Empty;
             var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
                 ?.CreateLogger(typeof(DataExtensions).FullName!);
             // 🚨 Level is TYPED, deliberately. A StreamEndedEvent to a subscriber whose stream is
@@ -465,14 +482,14 @@ public static class DataExtensions
                 logger?.LogDebug(
                     "Dropping StreamEndedEvent for stream {StreamId} on hub {Address}: the target "
                     + "stream is already gone, and a terminal notice to a departed subscriber is a "
-                    + "no-op. Sender: {Sender}.",
-                    streamMessage.StreamId, hub.Address, request.Sender);
+                    + "no-op. Sender: {Sender}.{Age}",
+                    streamMessage.StreamId, hub.Address, request.Sender, age);
             else
                 logger?.LogWarning(
                     "Dropping {MessageType} for stream {StreamId} on hub {Address}: no synchronization "
                     + "hub found on this hub or any parent — the target stream is gone (disposed circuit, "
-                    + "released read stream, or never-created sync hub). Sender: {Sender}.",
-                    message.GetType().Name, streamMessage.StreamId, hub.Address, request.Sender);
+                    + "released read stream, or never-created sync hub). Sender: {Sender}.{Age}",
+                    message.GetType().Name, streamMessage.StreamId, hub.Address, request.Sender, age);
         }
         catch (ObjectDisposedException)
         {
