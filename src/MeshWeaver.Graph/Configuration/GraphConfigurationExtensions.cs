@@ -285,6 +285,12 @@ public static class GraphConfigurationExtensions
                 // set and a false CS0103. Stateless integrity rule, no hub dependency.
                 services.AddScoped<INodeValidator, CodeNodeSegmentNameValidator>();
 
+                // Delivery for the compile pipeline's parked-failure bell. The pipeline lives in
+                // MeshWeaver.Compiler and cannot reference NotificationService (it reads the
+                // Notification* node types), so it resolves this seam optionally — registered
+                // HERE, with AddGraph, because the notification model is what AddGraph brings.
+                services.AddSingleton<ICompileFailureNotifier, CompileFailureNotifier>();
+
                 // Register compilation cache options
                 services.AddOptions<CompilationCacheOptions>();
 

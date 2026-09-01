@@ -255,7 +255,7 @@ internal sealed class CompletionMemoryStore : IDisposable
         var node = MeshNode.FromPath(path) with
         {
             Name = "Completion memory",
-            NodeType = CompletionMemoryNodeType.NodeType,
+            NodeType = GraphNodeTypeNames.CompletionMemory,
             MainNode = viewer,
             State = MeshNodeState.Active,
             Content = entry.Memory,

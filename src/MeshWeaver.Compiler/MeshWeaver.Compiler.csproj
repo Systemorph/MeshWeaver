@@ -9,7 +9,13 @@
     <!-- The mesh actor half of the compile pipeline (MeshNodeCompilationService,
          NodeTypeCompilationHelpers) stays in MeshWeaver.Graph and orchestrates the
          internal toolchain members here. -->
+    <!-- The mesh-actor half of the pipeline moved OUT of MeshWeaver.Graph into
+         MeshWeaver.Compiler.Pipeline; it is the caller that orchestrates this toolchain, so
+         the grant follows it. Kept for MeshWeaver.Graph as well: the graph half still
+         composes the toolchain in AddGraph. -->
     <InternalsVisibleTo Include="MeshWeaver.Graph" />
+    <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline" />
+    <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline.Test" />
     <!-- NodeTypeBatchBake / the pre-warmer drive the same toolchain (ApplyQueryChange,
          EmitCanaryDataKey). -->
     <InternalsVisibleTo Include="MeshWeaver.Hosting" />

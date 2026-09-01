@@ -2999,7 +2999,7 @@ internal static class NodeTypeCompilationHelpers
                 .SelectMany(_ => meshService.CreateNode(new MeshNode(activityId, activityNamespace)
                 {
                     Name = $"Compile {hubPath}",
-                    NodeType = ActivityNodeType.NodeType,
+                    NodeType = GraphNodeTypeNames.Activity,
                     MainNode = hubPath,
                     State = MeshNodeState.Active,
                     Content = new ActivityLog(ActivityCategory.Compilation)
@@ -3206,7 +3206,7 @@ internal static class NodeTypeCompilationHelpers
                     // Ok write used to hit a hard path-resolution NotFound (the
                     // NodeTypeReleaseGateTest 2-core flake).
                     var releasePathObservable = ok
-                        ? MeshDataSourceExtensions.TryCreateReleaseNode(
+                        ? NodeTypeBuildState.TryCreateReleaseNode(
                             hub, hubPath, outcome.Result!, outcome.PendingNode, resolvedActivityPath, logger)
                         : Observable.Return<string?>(null);
 

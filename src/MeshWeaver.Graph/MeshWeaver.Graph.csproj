@@ -8,6 +8,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+    <!-- OverlaySelfHealWatcherTest moved to the pipeline suite with its subject
+         (OverlayHealBudget), but the self-heal it exercises is ARMED by
+         NodeTypeEnrichmentHelpers, which stays here with the hub enrichment. -->
+    <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
     <!-- The build/bake pipeline drives NodeType compilation (MeshNodeCompilationService,
          NodeTypeCompilationHelpers, TryCreateReleaseNode) — a live internal coupling,
@@ -71,6 +75,8 @@
          framework identity) lives in MeshWeaver.Compiler (#1707), namespace MeshWeaver.Compiler;
          this project keeps the mesh-actor half (discovery, impersonation, status write-backs). -->
     <ProjectReference Include="..\MeshWeaver.Compiler\MeshWeaver.Compiler.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Compiler.Pipeline\MeshWeaver.Compiler.Pipeline.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Graph.Contract\MeshWeaver.Graph.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
     <ProjectReference Include="..\MeshWeaver.Kernel\MeshWeaver.Kernel.csproj" />

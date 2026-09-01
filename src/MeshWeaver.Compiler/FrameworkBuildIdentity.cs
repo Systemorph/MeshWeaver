@@ -120,6 +120,12 @@ public static class FrameworkBuildIdentity
         // referencing AI types compiles wherever the AI module is installed (the bake host lands
         // it too), and an image shipping AI.dll in its app closure would 409 the registry module.
         "MeshWeaver.Compiler",
+        // The mesh-actor half of the compile pipeline, factored out of MeshWeaver.Graph. It is
+        // surface-hashed here rather than being part of MeshWeaver.Compiler, because MeshWeaver.
+        // Compiler is a full-MVID toolchain ROOT: folding the platform's highest-churn code into
+        // it would re-bake every NodeType on every mesh on every pipeline commit — exactly the
+        // property #1707 created the small toolchain assembly to get.
+        "MeshWeaver.Compiler.Pipeline",
         "MeshWeaver.ContentCollections",
         // MeshWeaver.Maps left the content surface with them: MapControl is the Maps MODULE now,
         // pre-installed so every portal still lands it, and the one gated tree that binds it
@@ -137,6 +143,10 @@ public static class FrameworkBuildIdentity
         "MeshWeaver.Domain",
         "MeshWeaver.GitSync",
         "MeshWeaver.Graph",
+        // The vocabulary the graph model and the compile pipeline share (NodeTypeDefinition,
+        // NodeSources' inputs, BuildState, NodeTypeRelease, ServedBuildIdentity, the synced-query
+        // helpers). Owned by neither half, so neither can close a cycle through the other.
+        "MeshWeaver.Graph.Contract",
         "MeshWeaver.Hosting",
         "MeshWeaver.Kernel",
         "MeshWeaver.Kernel.Hub",

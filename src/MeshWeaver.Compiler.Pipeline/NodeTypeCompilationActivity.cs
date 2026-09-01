@@ -63,7 +63,7 @@ internal static class NodeTypeCompilationActivity
             var node = new MeshNode(activityId, activityNamespace)
             {
                 Name = $"Compile {nodeTypePath}",
-                NodeType = ActivityNodeType.NodeType,
+                NodeType = GraphNodeTypeNames.Activity,
                 MainNode = nodeTypePath,
                 State = MeshNodeState.Active,
                 Content = new ActivityLog(ActivityCategory.Compilation)
