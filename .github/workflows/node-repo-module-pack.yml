@@ -581,7 +581,7 @@ jobs:
   # there, never rebuilt locally.
   build-workspace:
     name: Build the workspace (one global build)
-    needs: [select, prepare, build-workspace]
+    needs: [select, prepare]
     if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -715,7 +715,7 @@ jobs:
 
   pack:
     name: Module bundle (${{ matrix.entry.module }})
-    needs: [select, prepare]
+    needs: [select, prepare, build-workspace]
     runs-on: ubuntu-latest
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
     # a matrix with no vectors, so an empty selection has to express itself as "this job does not
