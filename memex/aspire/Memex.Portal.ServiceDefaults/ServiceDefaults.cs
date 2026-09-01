@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using MeshWeaver.Hosting;
+using MeshWeaver.Mesh;
 using Microsoft.Extensions.Logging;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -385,37 +386,23 @@ public static class ServiceDefaults
     /// constants baked into the assembly, so re-reading them per request would buy nothing.
     /// Immutable and never written after initialization (a constant, not a cache).
     /// </summary>
-    public static BuildIdentity Build { get; } = ReadBuildIdentity(SelectBuildAssembly());
+    public static BuildIdentity Build { get; } = ReadBuildIdentity(PlatformBuildInfo.BuildAssembly);
 
     /// <summary>Web defaults ⇒ camelCase, so the contract is <c>{"version":…,"commit":…}</c>.</summary>
     private static readonly JsonSerializerOptions VersionJsonOptions = new(JsonSerializerDefaults.Web);
 
     /// <summary>
-    /// The assembly that represents this build. In the portal this is the entry assembly — the
-    /// executable — which the root <c>Directory.Build.props</c> stamps with both the platform
-    /// version and the commit (<c>memex/Directory.Build.props</c> imports the root, so every
-    /// portal project inherits the stamps). Reading the entry assembly is what keeps this endpoint
-    /// and the About tab reporting the same build.
+    /// Projects an assembly's build stamps to the wire record. The About tab
+    /// (<c>ShippedReleaseSeed.InstalledPlatformVersion</c> / <c>.CommitHash</c>) reads the same two
+    /// attributes off the same assembly — the two readers are separate only because
+    /// <c>Memex.Portal.Shared</c> sits far above this infrastructure project and must not be pulled
+    /// into it, so the SELECTION of that assembly lives below both, in
+    /// <see cref="PlatformBuildInfo.SelectBuildAssembly"/>.
     ///
-    /// <para>When the process was launched by a host that is NOT part of this build, the entry
-    /// assembly carries no <c>CommitHash</c> and reading it would report the HOST's version — a
-    /// test runner's <c>1.0.0</c> with no commit. (<c>test/Directory.Build.props</c> deliberately
-    /// does not import the root props, so this is exactly the shape under test.) The fallback is
-    /// this assembly: the same build stamps every one of its assemblies with the same commit, so
-    /// the answer is the real one rather than a foreign host's.</para>
-    /// </summary>
-    internal static Assembly SelectBuildAssembly()
-    {
-        var entry = Assembly.GetEntryAssembly();
-        return entry is not null && CommitOf(entry) is not null ? entry : typeof(ServiceDefaults).Assembly;
-    }
-
-    /// <summary>
-    /// Projects an assembly's build stamps to the wire record. Mirrors the reflection behind the
-    /// About tab (<c>ShippedReleaseSeed.InstalledPlatformVersion</c> / <c>.CommitHash</c>) — the two
-    /// readers are separate only because <c>Memex.Portal.Shared</c> sits far above this
-    /// infrastructure project and must not be pulled into it; both read the SAME two attributes, so
-    /// the page and the endpoint report the same build.
+    /// <para>🚨 It used to be duplicated here instead, and only here — the About tab read
+    /// <c>GetEntryAssembly()</c> raw. When the portal executable moved to a repo that stamps no
+    /// version (2026-08-25) the copies diverged in production: this endpoint answered
+    /// <c>3.0.0-rc9+0a1eabdc…</c> and the page said <c>1.0.0</c>. One selection, one answer.</para>
     /// </summary>
     public static BuildIdentity ReadBuildIdentity(Assembly assembly) => new(
         assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion

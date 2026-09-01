@@ -81,22 +81,20 @@ public static class ShippedReleaseSeed
     /// holds across CI jobs (#1660 WS3) — so this reads the
     /// <see cref="MeshWeaver.Mesh.PlatformBuildInfo.PlatformVersionEnvironmentVariable"/> the
     /// container publish injects FIRST (the self-updater's version comparison against registry
-    /// tags depends on the run number), then falls back to the entry assembly's
+    /// tags depends on the run number), then falls back to the build assembly's
     /// <see cref="AssemblyInformationalVersionAttribute"/> (<c>PlatformVersion+&lt;sha&gt;</c> on a
     /// CI build), the numeric assembly version, then <c>"unknown"</c>.
+    ///
+    /// <para>🚨 <b>Build assembly, not entry assembly.</b> Reading
+    /// <see cref="Assembly.GetEntryAssembly"/> here reported <c>1.0.0</c> on the deployed portal for
+    /// a week: the portal executable moved to MeshWeaver.Plugins (2026-08-25), which defines no
+    /// <c>Version</c>, so the host stopped being part of this build. Because
+    /// <c>VersionSelect.IsNewer</c> compares registry tags against THIS value, every tag then looked
+    /// newer forever — the install could never reach "up to date" and re-rolled on every check
+    /// floor. <see cref="MeshWeaver.Mesh.PlatformBuildInfo"/> owns the selection so this page and
+    /// <c>/api/version</c> cannot answer differently.</para>
     /// </summary>
-    public static string InstalledPlatformVersion
-    {
-        get
-        {
-            if (MeshWeaver.Mesh.PlatformBuildInfo.RuntimePlatformVersion is { } injected)
-                return injected;
-            var asm = Assembly.GetEntryAssembly() ?? typeof(ShippedReleaseSeed).Assembly;
-            return asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-                ?? asm.GetName().Version?.ToString()
-                ?? "unknown";
-        }
-    }
+    public static string InstalledPlatformVersion => MeshWeaver.Mesh.PlatformBuildInfo.PlatformVersion;
 
     /// <summary>The GitHub repository the platform is built from.</summary>
     public const string RepositoryUrl = "https://github.com/Systemorph/MeshWeaver";
@@ -106,17 +104,10 @@ public static class ShippedReleaseSeed
     /// by the <c>AddCommitHashMetadata</c> target in <c>Directory.Build.props</c> (from the SDK's
     /// <c>SourceRevisionId</c> or the CI <c>GITHUB_SHA</c>). Null when the build carried no source-control
     /// info (a git-less source drop) — the About page then falls back to the version string alone.
+    /// Read off the same build assembly the version comes from, so "which build" and "which commit"
+    /// can never name two different builds.
     /// </summary>
-    public static string? CommitHash
-    {
-        get
-        {
-            var asm = Assembly.GetEntryAssembly() ?? typeof(ShippedReleaseSeed).Assembly;
-            var sha = asm.GetCustomAttributes<AssemblyMetadataAttribute>()
-                .FirstOrDefault(a => string.Equals(a.Key, "CommitHash", StringComparison.OrdinalIgnoreCase))?.Value;
-            return string.IsNullOrWhiteSpace(sha) ? null : sha;
-        }
-    }
+    public static string? CommitHash => MeshWeaver.Mesh.PlatformBuildInfo.CommitHash;
 
     /// <summary>Link to the GitHub commit this build was produced from, or null when the SHA is unknown.</summary>
     public static string? CommitUrl => CommitHash is { } sha ? $"{RepositoryUrl}/commit/{sha}" : null;
