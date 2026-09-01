@@ -169,6 +169,8 @@ hub.WithTypes(typeof(Story), typeof(Task), typeof(Comment))
 
 A missing registration does not throw on write — the discriminator is simply absent, and the object deserializes as `JsonElement` or `object` instead of the expected CLR type. Register early; diagnose by inspecting stored JSON for a missing `$type`.
 
+For a NodeType, `WithContentType` lives in the type's own hub configuration, and **the registration must not depend on an instance of that type existing** — see [Content-Type Registration](../ContentTypeRegistration) for how the platform sweeps definitions at startup, and for the whole commerce surface that went dead when it did not.
+
 ### The `$type` discriminator is the SHORT name — register the type on BOTH ends
 
 The `$type` discriminator defaults to the **short** type name (`StackControl`, `LayoutStackSkin`), **not** the namespace-qualified full name (`MeshWeaver.Layout.StackControl`). A short name is **only** resolvable through the type registry — there is no `Type.GetType("StackControl")` reflection fallback the way there is for a full name. Two consequences, both non-negotiable:
