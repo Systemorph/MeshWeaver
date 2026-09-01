@@ -118,8 +118,36 @@ inspected on the portal in question. Both instances above are still live and rep
 the evidence has not decayed. Do not repair either by restoring versions until the write lane is
 fixed; a restore would take the same path and can land the same way.
 
+### Candidates from the code (not yet confirmed against a live schema)
+
+The durable write and the mesh-wide **announcement** are two separate steps: the row goes to
+storage, and `IMeshChangeFeed` separately tells the running mesh the path exists. Everything that
+decides *reachability* keys off the announcement, not the row — `PathResolutionService` caches path
+resolution, and a path cached as a miss stays a miss for the life of the process, while a live
+children listing runs its SQL once at `Initial` and re-queries only on a change notification.
+That shape produces exactly the three-seam signature above, and it is size-independent. Places the
+announcement can be lost while the row (and its history row) commits:
+
+- `MeshNodeTypeSource` announces via `WriteAndPublishCreated` **only** when the incoming node's
+  `Version` is 0; a re-add of already-durable content is a bare `Write`. The class documentation
+  calls this the #817/#824 announce-loss class and states the consequence outright.
+- The `pg_notify` trigger's dedup suppresses NOTIFY entirely for updates touching only
+  `description`/`category`/`icon`/`display_order`/… while the history trigger still writes a row.
+- The Orleans cross-silo change-feed broadcast logs-and-skips a failed broadcast; the cross-process
+  route silently counts a discard.
+
+Two adjacent defects found while looking, worth their own issues: `public.top_level_index` is a
+**materialized view that is never rebuilt on partition CREATE** (only by the migration Job and by
+`DeletePartition`), which is why partitions created since the last migration are absent from `@/`
+autocomplete while their content is searchable; and the runtime and migration `ExcludedSchemas`
+lists are **inverted on `agent` and `auth`**.
+
 ## Related
 
+- [Oversized Delivery Refusal](/Doc/Architecture/OversizedDeliveryRefusal) — the *other* way an
+  acknowledged write goes missing, and explicitly NOT this one: a transport refusal is loud and
+  terminal and leaves no version row behind. Rule it in or out by date and by whether anything was
+  logged, before attributing an invisible write to message size.
 - [CQRS and Content Access](/Doc/Architecture/CqrsAndContentAccess) — why a stale negative from the
   index is not evidence of absence, and why the point read is the authoritative seam.
 - [Postgres Schema Architecture](/Doc/Architecture/PostgresSchemaArchitecture) — where a partition's
