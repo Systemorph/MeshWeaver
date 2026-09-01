@@ -57,7 +57,12 @@ public class ShardWeightHeadroomGuard
 
         var units = ReadWeights(File.ReadAllText(Path.Combine(root, WeightsPath))).ToArray();
 
-        units.Length.Should().BeGreaterThanOrEqualTo(20,
+        // 🚨 A NON-VACUITY floor, not a policy one: it catches a parse that returned nothing, and
+        // must therefore track the table's real size. 41 entries -> 24 when 17 mesh suites moved to
+        // MeshWeaver.Plugins (#2847), -> 14 when tranche 2 took nine more plus two dead support
+        // libraries. Lower it as the table shrinks; a floor left above the real count fails every
+        // run and says "the parse broke" about a parse that worked.
+        units.Length.Should().BeGreaterThanOrEqualTo(10,
             "the weight table must actually have been parsed — a short list means the parse broke, "
             + "not that the table is healthy, and a guard that measures nothing must fail loudly");
 
