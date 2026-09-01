@@ -283,6 +283,45 @@ public class Workspace : IWorkspace
     /// The currently-attached subscribers stay live (they continue to receive
     /// DataChanged events from the source hub for the moment); the eviction only
     /// affects the NEXT GetRemoteStream caller, which will spin up a fresh stream.
+    ///
+    /// <para>🚨🚨 <b>DO NOT make this conditional on the stream still being LIVE.</b> It is the
+    /// obvious change to make — the mirror looks healthy, the owner's own fan-out delivers routine
+    /// updates, and the two other consumers of this same <c>IMeshChangeFeed</c> broadcast already
+    /// say so in as many words (<c>MeshNodeStreamCache.ResetFailureState</c>: <i>"A healthy live
+    /// entry is left untouched"</i>; <c>JsonSynchronizationStream</c>'s version-gated
+    /// <c>Resubscribe</c>: <i>"a HEALTHY subscriber receives that same write through its own
+    /// subscription, so resubscribing on it is pure churn"</i>). It was tried, measured, and
+    /// REVERTED — see <c>Doc/Architecture/LiveMirrorsAndTheChangeFeed</c> for the numbers.</para>
+    ///
+    /// <para><b>Why it cannot simply go.</b> This eviction is, incidentally, what keeps a
+    /// cross-hub writer's BASE current with respect to writes the OWNER makes for itself. The
+    /// per-path update queue hands a predecessor's locally-computed node to its successor
+    /// (<c>_pendingSelfWrites</c>), but that only carries THIS cache's writes forward; an
+    /// owner-side write (an activity's <c>messageCount</c>, a sealed log segment) reaches the
+    /// mirror only through the asynchronous fan-out. Evicting on the change event forces the next
+    /// write to resolve a fresh stream and therefore to diff against a freshly-fetched
+    /// authoritative snapshot. Skip it and the base goes stale: measured with
+    /// <c>DOTNET_PROCESSOR_COUNT=4</c> on
+    /// <c>StaticRepoImportActivityWriteCountTest.AppendCost_DoesNotGrowWithTheLengthOfTheActivity</c>,
+    /// the gated version LOST a whole 25-message append batch (2000 appended, 1975 recorded) while
+    /// the ungated one passed, and on CI it turned 80 appends into 99 writes with 44
+    /// <c>OWNER_NACK_REENQUEUE</c> / <c>MergeGuard</c> refusals of <c>messageCount</c>.</para>
+    ///
+    /// <para><b>What it costs, and what that cost looks like in a log.</b> The feed fires after
+    /// EVERY create/update/delete, so every cross-hub write evicts its own mirror; a write holds a
+    /// lease only for its <c>Observable.Create</c> subscription, so moments later
+    /// <see cref="ReclaimIfUnheld"/> DISPOSES the evicted stream — <c>UnsubscribeRequest</c> to the
+    /// owner, both <c>sync/{id}</c> hubs gone — and the owner then announces
+    /// <c>StreamEndedEvent</c> to a subscriber that no longer exists. Measured: six progress writes
+    /// to one activity node with one live reader mint 7 client-side and 11 owner-side <c>sync/</c>
+    /// hubs. Those announcements are the <c>"Dropping StreamEndedEvent … the target stream is
+    /// gone"</c> lines of #2776 — and they are logged
+    /// <c>SyncStreamOptions.SyncHubRegistrationGrace</c> (5 s) AFTER the stream actually ended,
+    /// which is what made that issue read as a mid-run hub teardown.</para>
+    ///
+    /// <para><b>The real fix</b> is to make the writer's base version-aware rather than to buy its
+    /// freshness with a full re-subscribe — i.e. wait for the mirror to reach the version the
+    /// change feed announced. That is a change to the write path, not to this method.</para>
     /// </summary>
     private void EvictForPath(string path)
     {
@@ -299,6 +338,7 @@ public class Workspace : IWorkspace
         foreach (var key in _remoteStreamCache.Keys)
         {
             // Owner-address match only — every identity's stream for that owner is evicted.
+            // 🚨 Unconditional ON PURPOSE — see the remarks above before adding a liveness gate.
             if (string.Equals(key.Owner.ToString(), path, StringComparison.OrdinalIgnoreCase)
                 && _remoteStreamCache.TryRemove(key, out var removed))
             {
