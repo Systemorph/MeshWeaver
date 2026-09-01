@@ -277,8 +277,10 @@ public class DataContextFaultedInitBeforeStreamHubBoundTest(ITestOutputHelper ou
         => configuration.WithTypes(typeof(ProbeRequest), typeof(ProbeResponse));
 
     /// <summary>What the park actually observed — written to test output so a future red says
-    /// whether the window was staged at all, not merely that the probe was slow.</summary>
-    private string parkDiagnostics = "(never parked)";
+    /// whether the window was staged at all, not merely that the probe was slow. Volatile: it is
+    /// written on the hosted-hub CONSTRUCTION thread and read on the test thread, and a stale read
+    /// would make the one diagnostic that explains a future red untrustworthy.</summary>
+    private volatile string parkDiagnostics = "(never parked)";
 
     /// <summary>
     /// The address of the first <c>sync/…</c> sub-hub seen — the data source's own stream hub.
