@@ -15,6 +15,12 @@ work — **which of the two different moves you are making.**
 Measured against `Systemorph/MeshWeaver@98195f9b2` and `Systemorph/MeshWeaver.Plugins@79271b94`.
 Re-measure before acting on it; the numbers move weekly.
 
+🚨 **Every move leaves an edge behind, and the edge points the WRONG way.** What core still reaches
+back INTO the plugin repo for — the image lanes that publish the departed portal host, the gate
+whose subject stayed here while the test left — is inventoried in
+[Repository Dependency Direction](../RepositoryDependencyDirection). Read it before making the next
+move; a move that adds an unpinned core→plugins edge has not finished.
+
 ## The two moves are not the same move
 
 Almost every argument about "can this leave core" is really two questions wearing one name.
