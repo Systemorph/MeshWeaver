@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Hosting;
+﻿using MeshWeaver.Graph;
+using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -29,6 +30,9 @@ public static class MonolithRegistryExtensions
             // Root-hub reply stream — a no-op for in-process routing but keeps both
             // transports symmetric (core#694 layer 2; see RootMeshHubReplyStreamService).
             services.AddRootMeshHubReplyStream();
+            // Content types of DEFINED NodeTypes register at start, instance or no instance —
+            // see ContentTypeRegistrationSweep for the dead-Store defect this closes.
+            services.AddContentTypeRegistrationSweep();
             return services;
         });
         builder.ConfigureHub(conf =>
