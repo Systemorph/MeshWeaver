@@ -343,8 +343,9 @@ public static class SpaceNodeType
 
     /// <summary>
     /// DI-registered access rule for Space nodes.
-    /// Read: requires partition Read permission. Create/Update/Delete: requires
-    /// appropriate permission (via <c>SecurityService</c>).
+    /// Read: requires partition Read permission. Create: any authenticated identity for a
+    /// top-level Space (the creator becomes its Admin), parent Create otherwise. Update: requires
+    /// <see cref="Permission.Update"/>; Delete: requires <see cref="Permission.Delete"/>.
     /// </summary>
     private class SpaceAccessRule(IMessageHub hub) : INodeTypeAccessRule
     {
@@ -378,8 +379,20 @@ public static class SpaceNodeType
                 return hub.CheckPermission(parentPath, userId, Permission.Create);
             }
 
-            if (context.Operation is NodeOperation.Update or NodeOperation.Delete)
+            if (context.Operation == NodeOperation.Update)
                 return hub.CheckPermission(context.Node.Path, userId, Permission.Update);
+
+            // 🚨 DELETE IS NOT UPDATE, and this rule is now the ONLY thing that says so.
+            // Deleting a Space tears down a partition and drops its backing store
+            // (SpacePostDeletionHandler), so it has always required Permission.Delete in practice —
+            // but that demand lived in the delete handler's pre-flight, NOT here, and this rule said
+            // Update. Nothing could reach the gap while the pre-flight ran its own
+            // Permission.Delete check on every node; routing that pre-flight through this rule
+            // (#2913) makes the rule authoritative, so the demand has to be written down where the
+            // decision is taken. Same permission, same outcome for every caller — the second
+            // opinion is simply gone.
+            if (context.Operation == NodeOperation.Delete)
+                return hub.CheckPermission(context.Node.Path, userId, Permission.Delete);
 
             return Observable.Return(false);
         }
