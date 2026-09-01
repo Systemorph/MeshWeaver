@@ -29,11 +29,18 @@ namespace MeshWeaver.Data.Test;
 /// failure's message if the shutdown reject was ridden out, the shutdown reject's message if it
 /// was (wrongly) treated as terminal. No sleep, no "wait and see nothing happened".</para>
 ///
-/// <para>The producing side of the same contract is pinned by
-/// <c>MeshWeaver.Hosting.Monolith.Test.ShutdownRoutingRejectClassificationTest</c> (the router must
-/// EMIT <see cref="ErrorType.ShuttingDown"/>) and <c>MeshWeaver.Layout.Test.SubscribeDuringRecycleTest</c>.
-/// Neither is worth anything without this one: a correctly-labelled reject that the consumer still
-/// treats as terminal reproduces the wedge exactly.</para>
+/// <para>The consuming side has a SECOND half this test does not reach: not tearing down is
+/// necessary but not sufficient — the stream also has to converge once the address reactivates.
+/// That is <c>RecycleReAskRidesOutTheDyingActivationTest</c>, which drives a real corpse at
+/// <c>RunLevel=Dead</c> and fails when the re-arm latch spends its budget on re-asks the SAME dying
+/// activation refuses (#2986). Both are needed: a stream kept alive by a latch that has stopped
+/// trying is indistinguishable, from the reader, from one that was torn down.</para>
+///
+/// <para>🚨 This paragraph previously also named
+/// <c>MeshWeaver.Hosting.Monolith.Test.ShutdownRoutingRejectClassificationTest</c> as the producing
+/// side's pin. NO SUCH TEST EXISTS in this repo — prose asserting a guard that is not there is worse
+/// than no prose, because it reads as coverage. What DOES pin a consumer of the classification is
+/// <c>MeshWeaver.Layout.Test.SubscribeDuringRecycleTest</c>.</para>
 /// </summary>
 public class ShutdownFailureRideOutTest(ITestOutputHelper output) : HubTestBase(output)
 {
