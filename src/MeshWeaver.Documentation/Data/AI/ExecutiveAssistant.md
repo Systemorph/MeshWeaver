@@ -45,7 +45,7 @@ The EA agent declares the `Mesh` + `ExecutiveAssistant` plugins. The `ExecutiveA
 
 | Area | Tools |
 |---|---|
-| Mail | `ListInbox`, `SearchMail`, `ReadMail`, `DraftMail`, `DraftReply` — and `SendMail`, `ReplyToMail` **only where the deployment opted in**, see below |
+| Mail | `ListInbox`, `SearchMail`, `ReadMail`, `DraftMail`, `DraftReply`, `GetDraft`, `UpdateDraft`, `DiscardDraft` — and `SendMail`, `ReplyToMail` **only where the deployment opted in**, see below |
 | Calendar | `ListEvents`, `GetEvent`, `CreateEvent` (book + invite attendees), `UpdateEvent`, `CancelEvent` |
 
 Example asks: *"Book 30 min with Alice next Tuesday afternoon and invite her"*, *"reply to the vendor that
@@ -68,22 +68,65 @@ in `DraftOnly` they refuse by name and tell the caller to use the draft tool ins
 saying you will is wrong. Prepare the draft, then tell the person it is in their Drafts and what it
 says. The human-in-the-loop step is real and needs no extra UI.
 
-### No mail tool attaches a file — and none amends a draft
+### No mail tool attaches a file
 
-Two limits of the mail surface, both worth knowing before you promise an outcome:
+One limit of the mail surface, worth knowing before you promise an outcome: no `ExecutiveAssistant`
+mail tool attaches anything; the tools carry a text body only. A message that must carry a file goes
+through the document path instead — **Share ⇒ as email** in the node menu, i.e.
+`SendDocumentDispatch.ExportAndSend` with `DocumentDelivery.Attachment` — see
+[Sending Email](/Doc/Architecture/SendingEmail) and the `/share-email` skill (`get
+Skill/share-email`, served from MeshWeaver.Plugins). It sends **as the user**, off the same
+`EaCredential`, so it needs no second consent.
 
-- **Attachments.** No `ExecutiveAssistant` mail tool attaches anything; the tools carry a text body
-  only. A message that must carry a file goes through the document path instead — **Share ⇒ as
-  email** in the node menu, i.e. `SendDocumentDispatch.ExportAndSend` with
-  `DocumentDelivery.Attachment` — see [Sending Email](/Doc/Architecture/SendingEmail) and the
-  `/share-email` skill (`get Skill/share-email`, served from MeshWeaver.Plugins). It sends **as the
-  user**, off the same
-  `EaCredential`, so it needs no second consent.
-- **Amending.** There is no `GetDraft`/`UpdateDraft` and no delete. Correcting a saved draft is
-  therefore not possible — writing a second draft beside the first is the only move, and it leaves
-  the person choosing between two near-identical messages. Get the wording right the first time, or
-  hand the correction to the person along with the draft. (The calendar surface fixed the same
-  asymmetry after the 2026-08-16 data loss; see the next section.)
+### Correcting a draft is an AMENDMENT, never a second draft
+
+A draft has a whole life on this surface: `DraftMail` / `DraftReply` write one, **`GetDraft`** reads
+it back in full, **`UpdateDraft`** amends it in place (a Graph `PATCH` carrying only the fields you
+pass), **`DiscardDraft`** removes one that has been abandoned or replaced.
+
+They exist for the reason `GetEvent`/`UpdateEvent` exist on the calendar half. Without them, the
+only correction available to an agent was to write a **second draft beside the wrong one** — and the
+reviewer then has to open Drafts and choose between two messages with the same recipient, the same
+subject, and one differing sentence. That is exactly the confusion the `DraftOnly` review step
+exists to remove, so the missing amend did not merely inconvenience the agent: it defeated the
+control. It surfaced on a real deadline submission (2026-08-31), where a German reply needed one
+question turned into a statement and the only options were to leave the wrong wording or to hand the
+person two drafts and instructions.
+
+`UpdateDraft` **REPLACES the whole body**, exactly as `UpdateEvent` does — so read the draft with
+`GetDraft` first and send back everything you mean to keep.
+
+All three are safe under `DraftOnly` and are offered there, which is the point: that is the mode
+whose correction path was broken. None of them sends. `isDraft` is not a writable property, the
+delivery routes (`/sendMail`, `/messages/{id}/send`, `/reply`) are never touched, and the human
+still presses Send.
+
+### 🚨 The `isDraft` guard is re-read INSIDE the write
+
+**`UpdateDraft` and `DiscardDraft` must not decide "this is a draft" from the argument they were
+passed, nor from an `isDraft` the agent observed earlier.** Each re-reads the message's current
+`isDraft` from Graph immediately before writing, and refuses when it is no longer one.
+
+The reason is the design itself, not an exotic edge case. Under `DraftOnly` **the human holds the
+other half of this workflow** — the whole arrangement is that they press Send in their own mail
+client whenever they like. So an id that was an unsent draft when the agent read it can perfectly
+well have been **sent by the person in that window**. A guard evaluated from that earlier read would
+silently turn *amend the draft* into *edit a message the recipient is already holding*, and *discard
+the draft* into *destroy sent mail* — the stored record then disagreeing with what was delivered,
+with no trace of the difference. That is precisely the failure the `/email` skill's *a sent message
+is READ-ONLY* rule exists to prevent, reintroduced through the back door.
+
+A refusal in that window is the **correct** outcome, and it says so plainly ("that message is no
+longer a draft … nothing was changed") so the agent reports it to the person rather than retrying.
+
+A read and a write are still two round trips, so the re-read narrows the window rather than
+abolishing it. What closes the remainder differs between the two tools, and the difference is worth
+knowing before anyone edits them:
+
+| | what stops a lost race |
+|---|---|
+| `UpdateDraft` | the patch carries **only** `subject`, `body`, `toRecipients`, `ccRecipients` — the four fields Graph documents as *"Updatable only if **isDraft** = true"*. A patch that arrives after the send is rejected by the **server**, atomically. `importance`, `categories`, `flag` and `isRead` *are* updatable on a sent message; adding one would remove that backstop silently, so the field set is pinned by a test. |
+| `DiscardDraft` | nothing beyond the re-read. `DELETE /me/messages/{id}` deletes whatever it is given, draft or sent — which is why this tool's guard is the only thing between "discard that draft" and destroying a delivered message. |
 
 ### Editing an event is READ then PATCH, never cancel-and-recreate
 
