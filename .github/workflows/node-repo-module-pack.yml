@@ -258,11 +258,19 @@ on:
         default: ''
       lane-id:
         description: >
-          Distinguishes this CALL's global-build artifact when one workflow invokes the lane
-          more than once in the same run (floor + rest): both calls uploading 'workspace-build'
-          collide, and half the packs then download the OTHER call's workspace — measured on
-          Plugins#1044 (run 33475…, 'produced no MeshWeaver.Teams.dll' while the build had 35/35
-          ok). Callers with multiple invocations MUST set distinct values.
+          A HUMAN LABEL for this call, nothing more — it is a readability prefix on the lane key,
+          not the thing that makes the key unique. It exists because one workflow may invoke this
+          lane more than once in the same run (floor + rest) and artifacts are RUN-WIDE, so two
+          calls uploading 'workspace-build' collide and half the packs then download the OTHER
+          call's workspace — measured on Plugins#1044 (run 33475…, 'produced no
+          MeshWeaver.Teams.dll' while the build had 35/35 ok) and again on Plugins#1077 (run
+          33487032213 carried TWO artifacts named 'workspace-build', 25.8 MB and 950 kB, and the
+          floor's pack downloaded the other call's).
+          🚨 A DISCRIMINATOR WITH A SHARED DEFAULT IS NOT A DISCRIMINATOR: every caller that
+          forgot to set this got 'main' on both calls and collided exactly as before, silently.
+          So the lane KEY is now derived in `select` and always carries a fingerprint of this
+          call's own `modules:` matrix (`select.outputs.lane`), which is unique per call by
+          construction. Setting this input only makes the artifact names readable.
         type: string
         required: false
         default: 'main'
@@ -347,13 +355,18 @@ on:
     outputs:
       bundles-built:
         description: >
-          "true" when EVERY selected module bundle exists as an artifact — the module-built-<module>
-          markers, dropped right after the bundle upload and BEFORE the tests. This is the claim a
-          caller's gate should depend on when it only COMPOSES the bundles: a red suite in this call
-          must not read as "bundle missing" there (Plugins #937 — one AI flake turned both required
-          gates red). The lane's own stable context (`All selected bundles built`) still asserts the
-          receipts AND the pack job's result, so a failed suite keeps the lane red wherever the lane
-          itself is required.
+          "true" when EVERY selected module bundle of THIS CALL exists as a COMPOSABLE artifact —
+          a `module-built-<lane>-<module>` marker, dropped right after the bundle upload and BEFORE
+          the tests, recording the bundle it attests and the closure evidence the build resolved.
+          This is the claim a caller's gate should depend on when it only COMPOSES the bundles: a
+          red suite in this call must not read as "bundle missing" there (Plugins #937 — one AI
+          flake turned both required gates red). Nothing about the test run reaches it.
+          🚨 It FAILS CLOSED. Zero markers, a marker stamped with another call's lane, an unstamped
+          one, and one that does not record what it attests are all "not built" for the module in
+          question — a truthy answer derived from absent or foreign evidence is the defect this
+          output exists to not have (Plugins#1077). The lane's own stable context (`All selected
+          bundles built`) still asserts the receipts AND the pack job's result, so a failed suite
+          keeps the lane red wherever the lane itself is required.
         value: ${{ jobs.verify.outputs.bundles-built }}
 
 jobs:
@@ -368,7 +381,38 @@ jobs:
       count: ${{ steps.scope.outputs.count }}
       selected: ${{ steps.scope.outputs.selected }}
       scope: ${{ steps.scope.outputs.scope }}
+      lane: ${{ steps.lane.outputs.id }}
     steps:
+      # ───────────── THIS CALL'S ARTIFACT NAMESPACE — derived, never assumed ─────────────
+      # 🚨 ARTIFACTS ARE RUN-WIDE. A repo may invoke this reusable workflow more than once in one
+      # run (MeshWeaver.Plugins does, on every run: `modules-floor` and `modules-rest`), and every
+      # artifact either call uploads lands in ONE run-scoped namespace. `lane-id` was added for
+      # exactly this (#2934) — and did not close it, because its DEFAULT is the same literal for
+      # both calls and neither caller set it. Two artifacts named `workspace-build` therefore
+      # coexisted in Plugins run 33487032213 (25.8 MB and 950 kB), `download-artifact` resolved
+      # the name to ONE of them, and the floor's pack read the other call's workspace: "the global
+      # build wrote no closure manifest for MeshWeaver.Markdown.Collaboration" — a REQUIRED gate
+      # flipping green/red on main with no source change (Plugins#1077).
+      #
+      # So the key is DERIVED here rather than trusted from the caller: `lane-id` is only a
+      # readable prefix, and the part that discriminates is a fingerprint of this call's own
+      # `modules:` matrix. Two calls that build different sets fingerprint differently by
+      # construction — there is no input a caller can forget. It is also stamped INTO every
+      # marker and receipt this call drops, so the verifier can refuse a foreign lane's evidence
+      # even if the names ever collide again.
+      - name: This call's lane key
+        id: lane
+        env:
+          LANE: ${{ inputs.lane-id }}
+          DECLARED: ${{ inputs.modules }}
+        run: |
+          set -euo pipefail
+          # Artifact names may not carry " : < > | * ? \ / — keep the label to a safe alphabet.
+          slug="$(printf '%s' "$LANE" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-24)"
+          fingerprint="$(printf '%s' "$DECLARED" | sha256sum | cut -c1-12)"
+          id="${slug:-lane}-$fingerprint"
+          echo "lane key: $id (label '${LANE:-<unset>}' + a fingerprint of this call's own modules: matrix)"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
       # 🚨 The caller goes in its OWN directory, not the workspace root. Node packages are
       # discovered as "top-level dirs carrying an index.json", and the platform checkout below
       # lands INSIDE the workspace — clone core to the root beside the caller's content and the
@@ -501,10 +545,13 @@ jobs:
       - name: Publish the module-pack tool (once for every pack job)
         if: steps.tool-cache.outputs.cache-hit != 'true'
         run: dotnet publish meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o "$RUNNER_TEMP/pack-tool"
+      # Lane-scoped like every other artifact this workflow drops: two calls in one run publish
+      # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
+      # with the other call's builder.
       - name: Hand the tool to the matrix
         uses: actions/upload-artifact@v7
         with:
-          name: module-pack-tool
+          name: module-pack-tool-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/pack-tool
           retention-days: 1
       - name: Restore the platform image tarball (per-digest cache)
@@ -718,7 +765,7 @@ jobs:
         if: steps.build.outputs.built == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: workspace-build-${{ inputs.lane-id }}
+          name: workspace-build-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/module-build
           retention-days: 1
           if-no-files-found: error
@@ -972,7 +1019,7 @@ jobs:
         if: ${{ (matrix.entry.build || 'sdk') == 'container' }}
         uses: actions/download-artifact@v8
         with:
-          name: workspace-build-${{ inputs.lane-id }}
+          name: workspace-build-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/workspace-build
       - name: Build the module — and say which compiler produced it
         id: build
@@ -1026,6 +1073,11 @@ jobs:
                 ${REFS:+-p:MeshWeaverRefs=$REFS}
               packdir="$GITHUB_WORKSPACE/$(dirname "$PROJECT")/bin/Release/net10.0/publish"
               printf '%s\n' --deps-closure >> "$packargs"
+              # What resolved this bundle's private closure — recorded, not merely implied. It is
+              # stamped into the built marker below and the verifier REFUSES a marker without it:
+              # "the bundle exists" and "the bundle is composable" must be one claim, not two
+              # facts that happen to be produced by adjacent steps (Plugins#1077).
+              closure_evidence="deps-closure (from the publish deps.json)"
               ;;
             container)
               compiler="memex build project (ONE global workspace build)"
@@ -1047,6 +1099,7 @@ jobs:
                 echo "::error::the global build wrote no closure manifest for $MODULE — without it this job cannot know which in-tree siblings ride THIS bundle (a shared workspace output holds every entry's assemblies side by side, and globbing it would ride every other module)."
                 exit 1
               fi
+              closure_evidence="$MODULE.closure.txt ($(wc -l < "$closure_file" | tr -d ' ') entr(y|ies)) from the global workspace build"
               echo "compiler: CONTAINER — consumed from the ONE global workspace build (no docker, no registry, no compile in this job)"
               # MODULE-OWNED in-tree siblings (from THIS module's closure manifest, never a glob of
               # the shared output) MUST ride; image-shipped ones must NOT (same-identity duplicate
@@ -1103,8 +1156,15 @@ jobs:
               exit 1
               ;;
           esac
-          echo "compiler=$MODE" >> "$GITHUB_OUTPUT"
-          echo "packdir=$packdir" >> "$GITHUB_OUTPUT"
+          # `closure` is never empty by the time we get here: both branches set it, and the only
+          # paths that leave it unset already exited 1 above. The built marker carries it so that
+          # the VERIFIER — not the order the steps happen to sit in — is what asserts this bundle
+          # was composable (Plugins#1077).
+          {
+            echo "compiler=$MODE"
+            echo "packdir=$packdir"
+            echo "closure=$closure_evidence"
+          } >> "$GITHUB_OUTPUT"
           {
             echo "### \`$MODULE\` — compiled by **$compiler**"
             echo
@@ -1119,7 +1179,7 @@ jobs:
       - name: Fetch the module-pack tool (built once by prepare)
         uses: actions/download-artifact@v8
         with:
-          name: module-pack-tool
+          name: module-pack-tool-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/pack-tool
 
       - name: Pack the module bundle
@@ -1251,25 +1311,52 @@ jobs:
           retention-days: 3
           if-no-files-found: error
 
-      # ───────────── THE BUILT MARKER — "the bundle exists", and nothing more ─────────────
+      # ───────── THE BUILT MARKER — "this bundle exists AND is composable", from THIS lane ─────────
       # Dropped the moment the bundle artifact is up, BEFORE the tests and the hand-over, so a
       # caller whose gates only COMPOSE this bundle can depend on the workflow's `bundles-built`
       # output instead of this job's result: a red suite here must not read as "bundle missing"
-      # there. The receipt further down stays LAST — it still means the whole leg, tests and
+      # there (#2710, Plugins#937). That intent is unchanged — NOTHING about the test run reaches
+      # this marker. The receipt further down stays LAST — it still means the whole leg, tests and
       # publish included, got here.
+      #
+      # 🚨 WHAT THE MARKER ASSERTS IS NOW WRITTEN DOWN, not inferred from where the step sits.
+      # `bundles-built` is the claim a REQUIRED gate composes bundles on, so it must mean "the set
+      # is complete and usable", and a marker that says only "an artifact was uploaded" leaves
+      # "present but uncomposable" reading as true. So the marker carries the two things the
+      # composing caller actually needs — the bundle file the upload above just took, and the
+      # closure evidence the build resolved (the closure manifest on the container path) — and the
+      # verifier REFUSES a marker missing either. An ordering guarantee that only a comment
+      # records is one refactor away from being gone; this one fails closed instead.
+      #
+      # 🚨 And it carries its LANE. Artifacts are run-wide, so a repo calling this workflow twice
+      # (Plugins: floor + rest) puts both calls' evidence in one namespace. The names below are
+      # lane-scoped AND the stamp inside is checked, so even a name collision cannot donate one
+      # call's marker to the other's answer (Plugins#1077).
       - name: Drop the built marker
+        env:
+          LANE: ${{ needs.select.outputs.lane }}
+          PACKAGE: ${{ matrix.entry.package }}
+          MODULE: ${{ matrix.entry.module }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          COMPILER: ${{ steps.build.outputs.compiler }}
+          CLOSURE: ${{ steps.build.outputs.closure }}
+          BUNDLE: ${{ steps.bundle.outputs.path }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/built"
-          jq -n --arg p "${{ matrix.entry.package }}" --arg m "${{ matrix.entry.module }}" \
-                --arg v "${{ steps.identity.outputs.version }}" \
-                --arg c "${{ steps.build.outputs.compiler }}" \
-             '{package:$p, module:$m, version:$v, compiler:$c}' \
-             > "$RUNNER_TEMP/built/${{ matrix.entry.module }}.json"
+          [ -n "$LANE" ]    || { echo "::error::the lane key is empty — the select job did not produce one, so this marker could not be attributed to this call and the verifier would refuse it anyway. Failing here, where it is readable."; exit 1; }
+          [ -n "$CLOSURE" ] || { echo "::error::the build step recorded no closure evidence for $MODULE — the bundle may exist but nothing says it is composable, which is exactly the claim \`bundles-built\` makes. Failing rather than dropping a marker that overstates."; exit 1; }
+          [ -n "$BUNDLE" ]  || { echo "::error::no bundle path from the pack step for $MODULE — there is nothing for this marker to attest."; exit 1; }
+          jq -n --arg l "$LANE" --arg p "$PACKAGE" --arg m "$MODULE" \
+                --arg v "$VERSION" --arg c "$COMPILER" \
+                --arg cl "$CLOSURE" --arg b "$(basename "$BUNDLE")" \
+             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, closure:$cl, bundle:$b}' \
+             > "$RUNNER_TEMP/built/$MODULE.json"
+          cat "$RUNNER_TEMP/built/$MODULE.json"
       - name: Upload the built marker
         uses: actions/upload-artifact@v7
         with:
-          name: module-built-${{ matrix.entry.module }}
+          name: module-built-${{ needs.select.outputs.lane }}-${{ matrix.entry.module }}
           path: ${{ runner.temp }}/built/*.json
           retention-days: 1
           if-no-files-found: error
@@ -1384,21 +1471,33 @@ jobs:
       # that failure mode reachable rather than theoretical. `verify` counts these against the
       # selection and names whatever is missing. It is the LAST step on purpose: a receipt means
       # the whole leg, publish included, got here.
+      # 🚨 Lane-stamped and lane-named, for the same reason as the marker: artifacts are run-wide,
+      # and `--declared` alone separates two calls only while their matrices are DISJOINT. The
+      # moment two calls in one run declare the same module — an `always-modules` floor entry that
+      # is also in the other call's list is all it takes — a name-only filter hands one call's
+      # receipt to the other's accounting. The stamp is what makes attribution structural.
       - name: Drop the receipt
+        env:
+          LANE: ${{ needs.select.outputs.lane }}
+          PACKAGE: ${{ matrix.entry.package }}
+          MODULE: ${{ matrix.entry.module }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          COMPILER: ${{ steps.build.outputs.compiler }}
+          PUBLISHED: ${{ inputs.publish }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/receipts"
-          jq -n --arg p "${{ matrix.entry.package }}" --arg m "${{ matrix.entry.module }}" \
-                --arg v "${{ steps.identity.outputs.version }}" \
-                --arg c "${{ steps.build.outputs.compiler }}" \
-                --argjson pub '${{ inputs.publish }}' \
-             '{package:$p, module:$m, version:$v, compiler:$c, published:$pub}' \
-             > "$RUNNER_TEMP/receipts/${{ matrix.entry.module }}.json"
-          cat "$RUNNER_TEMP/receipts/${{ matrix.entry.module }}.json"
+          [ -n "$LANE" ] || { echo "::error::the lane key is empty — the select job did not produce one, so this receipt could not be attributed to this call."; exit 1; }
+          jq -n --arg l "$LANE" --arg p "$PACKAGE" --arg m "$MODULE" \
+                --arg v "$VERSION" --arg c "$COMPILER" \
+                --argjson pub "$PUBLISHED" \
+             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, published:$pub}' \
+             > "$RUNNER_TEMP/receipts/$MODULE.json"
+          cat "$RUNNER_TEMP/receipts/$MODULE.json"
       - name: Upload the receipt
         uses: actions/upload-artifact@v7
         with:
-          name: module-pack-receipt-${{ matrix.entry.module }}
+          name: module-pack-receipt-${{ needs.select.outputs.lane }}-${{ matrix.entry.module }}
           path: ${{ runner.temp }}/receipts/*.json
           retention-days: 1
           if-no-files-found: error
@@ -1432,18 +1531,31 @@ jobs:
           python-version: "3.12"
       # Absent receipts are the finding, so a download that matches nothing must NOT fail here —
       # it must reach the verifier, which says which module is missing. That is the whole point.
+      #
+      # 🚨 SCOPED TO THIS CALL'S LANE. These patterns used to be `module-pack-receipt-*` and
+      # `module-built-*`, and artifacts are RUN-WIDE: a repo calling this workflow twice in one
+      # run (Plugins: `modules-floor` + `modules-rest`) had each verifier download BOTH calls'
+      # evidence and then separate them by module NAME alone (`--declared`). That works only while
+      # the two matrices are disjoint, and `bundles-built` is what a REQUIRED gate composes on —
+      # so the failure mode was a truthy answer derived from a sibling's evidence (Plugins#1077).
+      # The lane key is unique per call by construction, so the glob no longer reaches a sibling;
+      # the lane stamp INSIDE each file is checked as well, because a pattern is one edit away
+      # from being widened again and this one must fail closed when it is.
+      #
+      # A pattern that matches nothing still reaches the verifier as ZERO evidence, which is
+      # `bundles-built=false` for any non-empty selection — never a silent true.
       - name: Collect the receipts
         uses: actions/download-artifact@v8
         continue-on-error: true
         with:
-          pattern: module-pack-receipt-*
+          pattern: module-pack-receipt-${{ needs.select.outputs.lane }}-*
           merge-multiple: true
           path: ${{ runner.temp }}/receipts
       - name: Collect the built markers
         uses: actions/download-artifact@v8
         continue-on-error: true
         with:
-          pattern: module-built-*
+          pattern: module-built-${{ needs.select.outputs.lane }}-*
           merge-multiple: true
           path: ${{ runner.temp }}/built
       - name: Exactly the selected bundles were built
@@ -1454,6 +1566,7 @@ jobs:
           SCOPE: ${{ needs.select.outputs.scope }}
           COUNT: ${{ needs.select.outputs.count }}
           DECLARED: ${{ inputs.modules }}
+          LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
           echo "scope=$SCOPE, selection named $COUNT module bundle(s); pack job: $PACK_RESULT"
@@ -1479,15 +1592,31 @@ jobs:
             echo "bundles_built=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          # 🚨 The lane key is what makes every download above THIS call's. Without it the two
+          # collectors fall back to name-only separation, which is exactly the state that let a
+          # sibling call's evidence answer this one (Plugins#1077) — so an empty key is refused
+          # here rather than silently degraded into the behaviour being fixed.
+          if [ -z "$LANE" ]; then
+            echo "::error title=Module bundles incomplete::the selection produced no lane key, so \
+          nothing downloaded above can be attributed to THIS call and bundles-built would be \
+          answerable from a sibling call's artifacts. Refusing to answer."
+            echo "bundles_built=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           # 🚨 `--declared`: artifacts are RUN-wide, so when a repo calls this workflow twice in
           # one run (Plugins #932: a floor call the gates compose, and the rest) each verifier
           # downloads the OTHER call's receipts too. Only modules in THIS call's matrix count.
+          # 🚨 `--lane`: the structural half of the same answer. `--declared` separates two calls
+          # by module name; `--lane` separates them by the stamp the producer wrote, so a marker
+          # or receipt this call cannot attribute to itself is set aside and NAMED, and a
+          # SELECTED module left without one reads as not built.
           python3 meshweaver/.github/scripts/node-repo-pack-verify.py \
             --expected "$EXPECTED" \
             --receipts "$RUNNER_TEMP/receipts" \
             --pack-result "$PACK_RESULT" \
             --scope "$SCOPE" \
             --declared "$DECLARED" \
+            --lane "$LANE" \
             --built "$RUNNER_TEMP/built" \
             --github-output "$GITHUB_OUTPUT"
 
