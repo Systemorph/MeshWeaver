@@ -1125,16 +1125,24 @@ jobs:
                   echo "closure: $name.dll does NOT ride — the image ships it (src/platform-shipped.txt); bundling it would land a same-identity duplicate beside /app's copy"
                 fi
               done < "$closure_file"
-              # The SHELF rides: module-libs.txt is the builder-written provenance.
+              # The PRIVATE CLOSURE rides: module-libs.txt is the builder-written provenance —
+              # every non-framework assembly this module's own PackageReferences pull in, sourced
+              # from the image's /app and the module-libraries shelf.
+              # 🚨 "The image has it" is NOT a reason to leave one out. The reference image is a
+              # PORTAL, and a portal with a module compiled into it carries that module's private
+              # dependencies too: reading /app as a platform guarantee dropped Microsoft.Agents.AI
+              # out of the AI bundle and threw ReflectionTypeLoadException in every host that was
+              # not that exact image — this repo's bake gate and MeshWeaver.Reinsurance's trunk
+              # (MeshWeaver.Plugins#1043). The SHARED FRAMEWORK is the only sound omission.
               if [ -f "$packdir/module-libs.txt" ]; then
                 while IFS= read -r ride; do
                   [ -n "$ride" ] || continue
                   printf '%s\n%s\n' --with "$ride" >> "$packargs"
-                  echo "closure: $ride RIDES — module-libraries shelf (deps.json-derived; the image does not carry it)"
+                  echo "closure: $ride RIDES — the module's private closure (deps.json-derived, from the image or the shelf)"
                 done < "$packdir/module-libs.txt"
               fi
               echo "closure: NO --deps-closure on the container path — there is no SDK deps.json to derive one from."
-              echo "closure: complete BY RECORD instead — every reference resolved from the image, its shared frameworks, or the module-libraries shelf; the builder refuses BY NAME anything none of them supplies, and this lane passes no --extra-refs."
+              echo "closure: complete BY RECORD instead — the builder walked the module's own package references over the image's and the shelf's deps.json and copied everything the shared framework does not supply; it refuses BY NAME anything neither supplies, and this lane passes no --extra-refs."
               # 🚨 THE BINDING IDENTITY, CHECKED (MeshWeaver#143): the expected value is the one
               # the global builder read out of the image, so it cannot drift from what the portals
               # run. The global build log carries it once for the whole workspace.
@@ -1267,9 +1275,10 @@ jobs:
           # refusal, not a curiosity. The SDK path is untouched: its private closure legitimately
           # carries package assemblies.
           if [ "$COMPILER" = "container" ]; then
-            # A non-MeshWeaver assembly is allowed ONLY with shelf provenance: the builder's
-            # module-libs.txt names every ride it derived from the shelf's deps.json. Anything
-            # else has no accountable closure and must fail — the 2026-08-19/20 outage shape.
+            # A non-MeshWeaver assembly is allowed ONLY with builder provenance: the builder's
+            # module-libs.txt names every ride it derived from the image's and the shelf's
+            # deps.json. Anything else has no accountable closure and must fail — the
+            # 2026-08-19/20 outage shape.
             # 🚨 FROM THE BUILD STEP'S OWN packdir output — never a hard-coded layout. The global
             # workspace moved the pack input to workspace-build/<Module>; this path still reading
             # module-build/ made the allow-list EMPTY and failed all 8 shelf-consuming modules on
@@ -1283,8 +1292,8 @@ jobs:
                   | select(. as $a | $shelf | index($a) | not)]
                | length == 0' \
               "$manifest" > /dev/null \
-              || { echo "::error::the container-built bundle carries a non-MeshWeaver assembly with NO shelf provenance (not in the builder's module-libs.txt) — its closure cannot be accounted for, so the pack fails rather than landing a module that faults at first use"; exit 1; }
-            echo "container path: closure is entry + module-owned MeshWeaver siblings + shelf-manifested rides, as recorded"
+              || { echo "::error::the container-built bundle carries a non-MeshWeaver assembly with NO builder provenance (not in the builder's module-libs.txt) — its closure cannot be accounted for, so the pack fails rather than landing a module that faults at first use"; exit 1; }
+            echo "container path: closure is entry + module-owned MeshWeaver siblings + the manifested private closure, as recorded"
             # 🚨 The STATIC-ASSET half, asserted — because its absence is the one failure with no
             # symptom at any later gate: the publish 200s, the module lands and loads, every page
             # renders, only UNSTYLED (#2221's exact signature; PluginBundlePublishAssetsTest names
