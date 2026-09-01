@@ -77,10 +77,13 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Packaging\MeshWeaver.Plugin.Packaging.csproj" />
     <!-- MeshWeaver.Observability is deliberately NOT referenced (#1644 step 2): the engine ships
          via the modules/<Name>/ closure layout in MeshModulesPublish.targets and activates via
-         Modules:Assemblies -> ObservabilityProviderAttribute. Only the wire contract stays in the
-         app closure (LogIncidentEndpoints resolves ILogIncidentIngest optionally and answers an
-         actionable 503 when the module is not listed). -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Observability.Contract\MeshWeaver.Observability.Contract.csproj" />
+         Modules:Assemblies -> ObservabilityProviderAttribute.
+         The wire contract is NOT referenced here either, and that is the fix rather than an
+         omission: MeshWeaver.Observability.Contract lives in MeshWeaver.Plugins, where the endpoint
+         that names it (LogIncidentEndpoints, in Memex.Portal.Gui) already references it directly.
+         This project used to carry a SECOND, byte-identical copy from the platform src/, so both
+         fed the same publish under one assembly name — a same-identity duplicate whose winner was
+         decided by the copy-local step. -->
     <!-- MeshWeaver.Notifications.Channels is deliberately NOT referenced (#1644 step 2): it
          ships via the modules/<Name>/ closure layout in MeshModulesPublish.targets and activates
          via Modules:Assemblies -> NotificationChannelsModuleAttribute (the triage watcher
