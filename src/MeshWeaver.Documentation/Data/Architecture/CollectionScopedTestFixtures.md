@@ -105,6 +105,14 @@ substitutes *where a case's fixture comes from*, nothing else. That is why zero 
 It exists so a synchronous caller never blocks on a `ValueTask` — the deadlock this codebase
 forbids outright, and "just this once, in a fixture" is how it gets in.
 
+That overload therefore keeps the value in a second map and reads it from THERE, never off the
+`Task`. The first cut wrote `task.GetAwaiter().GetResult()` guarded by `task.IsCompleted`, and
+`BlockingBridgeInTestRatchetGuard` failed the build for it — correctly. "The task is already
+completed" is not a licence to write a blocking bridge: the shape is what the ratchet keeps out,
+because the next edit is what makes it not-completed. Forcing a `Lazy` runs its factory inline and
+is not a wait; a key created by the async overload has no sync value and is refused by name rather
+than waited on.
+
 ## What changed in `MonolithMeshTestBase`
 
 The kill-switch is gone. Sharing is now enabled precisely when there is a lifetime to hang it on:

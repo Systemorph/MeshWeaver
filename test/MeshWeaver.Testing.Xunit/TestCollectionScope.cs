@@ -31,6 +31,10 @@ public sealed class TestCollectionScope : IAsyncDisposable
     private static readonly AsyncLocal<TestCollectionScope?> CurrentScope = new();
 
     private readonly ConcurrentDictionary<object, Lazy<Task<object>>> entries = new();
+
+    // Resources created by the SYNCHRONOUS overload, by key. It exists so the sync path can hand
+    // back the value it just built WITHOUT going through the Task — see GetOrCreate.
+    private readonly ConcurrentDictionary<object, object> syncValues = new();
     private readonly List<object> creationOrder = [];
     private readonly Lock creationOrderGate = new();
     private int disposed;
@@ -123,19 +127,25 @@ public sealed class TestCollectionScope : IAsyncDisposable
         var lazy = entries.GetOrAdd(key, k => new Lazy<Task<object>>(() =>
         {
             var value = factory();
+            syncValues[k] = value;
             lock (creationOrderGate)
                 creationOrder.Add(k);
             return Task.FromResult<object>(value);
         }));
 
-        // Never blocks: a Lazy created by this overload completes inside Lazy.Value. A key first
-        // created by the ASYNC overload would, so that is refused rather than silently blocking.
-        var task = lazy.Value;
-        if (!task.IsCompleted)
+        // 🚨 Forcing the Lazy runs the factory INLINE and is not a wait — and the value is then read
+        // from `syncValues`, never off the Task. There is deliberately no `.GetAwaiter().GetResult()`
+        // here: a blocking bridge in a fixture is exactly the shape BlockingBridgeInTestRatchetGuard
+        // exists to keep out, and "the task is already completed" is not a licence to write one.
+        _ = lazy.Value;
+
+        // A key first created by the ASYNC overload has no sync value, and this path must not wait
+        // for one. Refuse, naming the fix, rather than block.
+        if (!syncValues.TryGetValue(key, out var created))
             throw new InvalidOperationException(
-                $"resource '{key}' of collection '{CollectionDisplayName}' is being created "
-                + "asynchronously; use GetOrCreateAsync for it rather than blocking here");
-        return (T)task.GetAwaiter().GetResult();
+                $"resource '{key}' of collection '{CollectionDisplayName}' was created "
+                + "asynchronously; use GetOrCreateAsync for it rather than waiting here");
+        return (T)created;
     }
 
     /// <summary>Whether a resource is already registered under <paramref name="key"/>.</summary>
@@ -187,6 +197,7 @@ public sealed class TestCollectionScope : IAsyncDisposable
         }
 
         entries.Clear();
+        syncValues.Clear();
         CurrentScope.Value = null;
 
         if (failures is not null)
