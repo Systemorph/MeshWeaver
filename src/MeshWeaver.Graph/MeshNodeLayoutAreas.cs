@@ -232,15 +232,19 @@ public static class MeshNodeLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        // CombineLatest with permission stream — pure observable composition, no await.
+        // CombineLatest with permission stream — pure observable composition, no await. The third
+        // input is the node's PARTITION ROOT, which the header's icon inherits its package mark from
+        // (#2075 item 2); it starts null, so it can never delay the page.
         return host.Workspace.GetMeshNodeStream().CombineLatest(
                 host.Hub.GetEffectivePermissions(hubPath),
-                (node, permissions) => (Node: node, Permissions: permissions))
+                host.Workspace.ObservePartitionRoot(host.Hub.Address.Path),
+                (node, permissions, partitionRoot) =>
+                    (Node: node, Permissions: permissions, PartitionRoot: partitionRoot))
             .SelectMany(t =>
             {
                 if (t.Permissions.HasFlag(Permission.Read))
                     return Observable.Return((UiControl?)host.BuildDetailsContent(
-                        t.Node, null, t.Permissions.HasFlag(Permission.Update)));
+                        t.Node, null, t.Permissions.HasFlag(Permission.Update), t.PartitionRoot));
                 // Read denied: the partition's declared funnel page (RedirectOnDenied — e.g.
                 // a product's glossy marketing brochure) takes the viewer there instead of a
                 // dead-end Request-Access wall. Rendering the denial INSIDE the area used to
@@ -272,9 +276,12 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         return host.Workspace.GetMeshNodeStream().CombineLatest(
                 host.Hub.GetEffectivePermissions(hubPath),
-                (node, permissions) => (Node: node, Permissions: permissions))
+                host.Workspace.ObservePartitionRoot(host.Hub.Address.Path),
+                (node, permissions, partitionRoot) =>
+                    (Node: node, Permissions: permissions, PartitionRoot: partitionRoot))
             .Select(t => t.Permissions.HasFlag(Permission.Read)
-                ? (UiControl?)host.BuildDetailsContent(t.Node, null, t.Permissions.HasFlag(Permission.Update))
+                ? (UiControl?)host.BuildDetailsContent(
+                    t.Node, null, t.Permissions.HasFlag(Permission.Update), t.PartitionRoot)
                 : BuildAccessDenied(hubPath, locale: host.ViewerLocale()));
     }
 
@@ -334,7 +341,9 @@ public static class MeshNodeLayoutAreas
         return $"position: relative; max-width: {pageMaxWidth}; margin: 0 auto; padding: 0 24px;";
     }
 
-    internal static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef, bool canEdit = true)
+    // partitionRoot: the node's partition root, when the caller holds it — the header icon inherits
+    // its package mark from there (#2075 item 2). Null simply keeps the NodeType glyph.
+    internal static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef, bool canEdit = true, MeshNode? partitionRoot = null)
     {
         // Outer wrapper at full page width
         var outer = Controls.Stack.WithWidth("100%");
@@ -343,7 +352,7 @@ public static class MeshNodeLayoutAreas
         var content = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host, typeDef));
 
         // Header with title/icon
-        content = content.WithView(BuildHeader(host, node, canEdit));
+        content = content.WithView(BuildHeader(host, node, canEdit, partitionRoot));
 
         // For built-in type nodes (Content is NodeTypeDefinition), show type info
         // instead of property editor which would expose internal NodeTypeDefinition fields.
@@ -412,6 +421,31 @@ public static class MeshNodeLayoutAreas
     /// as built-in node pages — the alternative is a hand-built copy that drifts.
     /// </summary>
     public static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node, bool canEdit = true)
+        => BuildHeader(host, node, canEdit, null);
+
+    /// <summary>
+    /// <see cref="BuildHeader(LayoutAreaHost, MeshNode?, bool)"/> with the node's PARTITION ROOT in
+    /// hand, so a page under a marked package wears that package's mark instead of a generic type
+    /// glyph (#2075 item 2).
+    ///
+    /// <para>🚨 A separate overload rather than a fourth optional parameter, for the reason
+    /// <c>PageIcon.Rel</c> spells out: this method is a module-facing contract, and adding a
+    /// parameter — default or not — REPLACES the signature every already-compiled module was built
+    /// against. An overload is additive, so a module compiled against the three-argument form keeps
+    /// binding to it.</para>
+    ///
+    /// <para>Inheritance is opt-in per surface, deliberately. A page identifies ONE node, so the
+    /// package mark is pure gain there; a LIST of siblings is not — the NodeType glyph is what tells
+    /// a doc from a code node from a thread in a mixed child listing, and flattening a rail to one
+    /// repeated package mark would take that away. So the page header opts in and the nav rail's
+    /// child links do not.</para>
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="node">The node whose header is being built.</param>
+    /// <param name="canEdit">Whether the viewer may edit (icon picker, inline title).</param>
+    /// <param name="partitionRoot">The node's partition root, or null to skip inheritance.</param>
+    public static UiControl BuildHeader(
+        LayoutAreaHost host, MeshNode? node, bool canEdit, MeshNode? partitionRoot)
     {
         // Chrome-less pages: a node excluded from the "header" context ships without the
         // icon/title/meta block — the content (a marketing hero, a landing page) starts
@@ -421,7 +455,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         var nodePath = node?.Path ?? hubPath;
         var title = node?.Name ?? node?.Id ?? hubPath;
-        var iconValue = MeshNodeImageHelper.ResolveNodeIcon(node);
+        var iconValue = MeshNodeImageHelper.ResolveNodeIcon(node, partitionRoot);
         var rawIcon = node?.Icon;
 
         // Row 1 — icon + title (+ action buttons on the right)
