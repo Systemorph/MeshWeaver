@@ -59,7 +59,17 @@ public static class BundleReader
     /// <param name="Dependencies">The producer's per-type dependency record (#1707 slice 2), or
     /// null for a legacy bundle.</param>
     public sealed record AssemblyRef(
-        string NodePath, string Assembly, IReadOnlyDictionary<string, string>? Dependencies = null);
+        string NodePath, string Assembly, IReadOnlyDictionary<string, string>? Dependencies = null)
+    {
+        /// <summary>
+        /// The producer's CONTENT fingerprint of the sources these bytes were compiled from
+        /// (#2813) — see <see cref="Payload.SourceFingerprint"/>. Null for a legacy bundle.
+        ///
+        /// <para>An INIT property, not a fourth primary-constructor parameter: adding one replaces
+        /// a public record's constructor signature and is a binary break across the fleet.</para>
+        /// </summary>
+        public string? SourceFingerprint { get; init; }
+    }
 
     /// <summary>The bundle's compiled-module declaration.</summary>
     /// <param name="AssemblyName">The module's entry-assembly name WITHOUT extension
@@ -105,7 +115,23 @@ public static class BundleReader
     /// (#1707 slice 2), joined from the manifest, or null for a legacy bundle.</param>
     public sealed record Payload(
         string NodePath, byte[] Assembly, byte[]? Pdb,
-        IReadOnlyDictionary<string, string>? Dependencies = null);
+        IReadOnlyDictionary<string, string>? Dependencies = null)
+    {
+        /// <summary>
+        /// 🚨 <b>The producer's CONTENT fingerprint of the sources these bytes were compiled
+        /// from</b> (#2813), joined from the manifest. A consumer MUST pass it to
+        /// <c>PrebuiltAssemblySeeder.Seed</c>: it is what lets the owning hub compare the bundle's
+        /// source against the source THIS mesh holds and refuse an adoption that would run last
+        /// week's code over today's data.
+        ///
+        /// <para>Null for a legacy bundle whose producer recorded none — that adoption still
+        /// lands, as <c>BuildProvenance.AdoptedUnverified</c>.</para>
+        ///
+        /// <para>An INIT property, not a fifth primary-constructor parameter — see
+        /// <see cref="AssemblyRef.SourceFingerprint"/>.</para>
+        /// </summary>
+        public string? SourceFingerprint { get; init; }
+    }
 
     /// <summary>
     /// Extracts the manifest and every assembly it names.
@@ -174,7 +200,14 @@ public static class BundleReader
 
             payloads.Add(new Payload(
                 reference.NodePath, ReadAll(dll), pdb is null ? null : ReadAll(pdb),
-                reference.Dependencies));
+                reference.Dependencies)
+            {
+                // #2813 — carried, not derived. The manifest is the producer's statement about
+                // which sources these bytes came from; a reader that dropped it would leave every
+                // consumer unable to tell a current adoption from a stale one, which is exactly
+                // the state this mechanism sat in while it looked implemented.
+                SourceFingerprint = reference.SourceFingerprint,
+            });
         }
 
         return (manifest, payloads);

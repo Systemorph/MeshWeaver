@@ -556,11 +556,38 @@ unrecoverable. Only forcing a compile moved the MVID.
 
 #### The check, and where it can be made
 
-The producer records a **content** fingerprint of the sources the bytes were built from
-(`PartitionSourceFingerprint`). It has to be content, not versions: `CurrentSourceVersions` is
-`{path → LastModified.UtcTicks}`, mesh-LOCAL modification times the producer cannot know and does not
-have (the bake writes zeros), so a fingerprint over ticks would never match and every adoption would
-be refused.
+The producer records a **content** fingerprint of the sources the bytes were built from. It has to
+be content, not versions: `CurrentSourceVersions` is `{path → LastModified.UtcTicks}`, mesh-LOCAL
+modification times the producer cannot know and does not have (the bake writes zeros), so a
+fingerprint over ticks would never match and every adoption would be refused.
+
+**What exactly is hashed — `NodeTypeSourceFingerprint` (in `MeshWeaver.Compiler`).** The fingerprint
+is taken over the *compile input*: the `NodeCompileShaping.CollectCompileSources` fold — deduplicated
+ordinal-ignore-case, executable cells and blank files dropped — reduced to
+`(node path, SHA-256 of the code text)`, folded with `PartitionSourceFingerprint`, which sorts by
+path so enumeration order cannot reach the result. Both the runtime and the bake call *that* fold
+already, so they cannot fork on which files count.
+
+The obvious alternative — hashing the source MeshNodes' serialised content — is unusable across
+processes, and each of its three failure modes produces a **false refusal**, which is an outage
+strictly worse than the staleness bug:
+
+- **Run bookkeeping churns it.** `CodeConfiguration` carries `LastExecutedAt` / `LastExecutedBy` /
+  `LastExecutedCodeHash` / `LastActivityPath`, written when a reader presses **Run** on a code cell.
+  The live hash would move with no source change at all, and no producer can know those values.
+- **The two sides serialise differently by design.** The consumer has a hub and therefore a
+  TypeRegistry (polymorphic `$type` discriminators); the compiler-driven bake deliberately has
+  neither — `TreeNodeLoader` materialises exactly the two content types a compile reads and leaves
+  everything else null, precisely so a half-populated registry cannot degrade content to
+  `JsonElement`. Two honest readers, two different JSON strings.
+- **Node metadata is not compile input.** A description, an icon, an order: none of them change a
+  byte of the emitted assembly.
+
+It lives in `MeshWeaver.Compiler` because `FrameworkBuildIdentity.FullMvidAssemblies` is that
+assembly's transitive closure, and adoption is *already* gated on the framework identity matching —
+so a producer and a consumer that can adopt across each other necessarily run the same
+implementation of this hash. Anywhere else, two meshes could disagree about the shape while agreeing
+about the gate.
 
 The comparison happens on the **owner**, in `ApplyAdoptedSourceStamp` — one pure function shared by
 all three writers that can fulfil the request, so turning assert into check fixes all three at once:
@@ -602,15 +629,80 @@ set on a mesh nobody can see:
 > **memex** and **memex-cloud** (#2194 item 3 records the same) — two instances, saying nothing about
 > `pearl`, `atioz`, local installs, or any external instance the registry serves.
 
+#### 🚨 The path the fingerprint actually travels — and why it was INERT for months
+
+The comparison above shipped complete, and for months it could not fire. Nothing was broken in it;
+the value it compares simply never arrived, and every part of the system reported success:
+
+1. `PrebuiltAssemblySeeder.Seed` had a **seven-parameter convenience overload** that hard-coded
+   `sourceFingerprint: null`. Both production callers — `PluginBundleClient` and
+   `ShippedPrebuiltBundles` — bound to it, so `AdoptedSourceFingerprint` was never written, the
+   first guard in `ApplyAdoptedSourceStamp` short-circuited, and **every adoption on every mesh
+   returned `AdoptedUnverified`**. That overload is now `[Obsolete(error: true)]`: passing null is
+   still allowed (a legacy bundle genuinely records none) but must be *written at the call site*,
+   where a reviewer sees the claim being waived. It is obsoleted rather than **deleted** because
+   deleting public framework surface is a breaking change to in-mesh code no compiler can see, and
+   the live-mesh sweep AGENTS.md requires could not be completed — `search_chunks` answers
+   `"searched": false` on both reachable deployments, which is a FAILED sweep, not a clean one. Both
+   repos' node trees were swept by hand and hold no caller, so the symbol stays (nothing already
+   compiled breaks) while every source call site now fails loudly, at the call, with the reason.
+2. **No producer wrote one.** `BundleWriter.AssemblyEntry.SourceFingerprint` /
+   `BundleReader.AssemblyRef` / `BundleReader.Payload` now carry it end to end, and all three bake
+   producers record it — the compiler-driven `TreeBake` and `CascadeBuild` from the tree, the
+   mesh-driven `BakeOutput` through the same `NodeSources.GetSources` query the owning hub reads.
+3. **The live half was computed only when it was already too late to matter.** The owner computed
+   `CurrentSourceFingerprint` only "when there is something to compare it against" — a condition
+   unsatisfiable in the ordering the incident took. The owner publishes its snapshot first; the
+   adoption's patch then lands carrying both the adopted fingerprint and the stamp request, and the
+   sources watcher does **not** re-run, because its `DistinctUntilChanged` keys on the source
+   *queries*, which did not change. The judgement then read an absent live value and took the
+   "inconclusive" branch. It is now computed on **every** publication (a SHA over text already in
+   hand, on a path where a Roslyn compile is about to cost four orders of magnitude more), the
+   idempotency check includes it so a node persisted before the field existed self-heals on its next
+   activation, and the two writers that cannot compute it — the standalone stamp watcher and the
+   release-request watcher — now **wait** rather than consume the one-shot request on an absence.
+
+> 🚨 **The lesson is the general one:** *"the fix merged" is not "the fix runs."* A guard whose
+> input is never supplied is indistinguishable from a guard that passes. The regression that pins
+> this one is `AdoptedBuildSourceStampTest`, which drives a real bundle through
+> `BundleWriter → BundleReader → ShippedPrebuiltBundles → Seed → the owner's stamp` on a real mesh and
+> asserts all three rows of the table; a unit test over the pure function cannot see any of the four
+> links above.
+
+**Producer and consumer must hash identically, or every good bundle is refused.** That equality is
+pinned twice. `BakeEquivalenceTest` bakes one content set both ways — through a real mesh (whose
+value *is* the consumer-side value) and through the mesh-free tree bake — and asserts the
+fingerprints are equal, non-empty, and different for different types. And the PR lane asserts it on
+the REAL trees: `bake-then-gate.sh` stages the bake and the gate from the same tree, so an
+`ADOPTION REFUSED` line in that run can only mean the two producers hash the same content
+differently, and `assert-bake-consumption.sh` fails on it by name.
+
+> 🚨 That second check exists because a false refusal is otherwise INVISIBLE in CI, in the same way
+> the original defect was. `Seed` returns `true`, the adopted/declared counts balance (the owner
+> refuses *afterwards*, when it stamps), the type flips to `Pending`, recompiles locally, and every
+> per-type verdict is green. Only the log says anything — and only because the refusal logs at
+> `Error`, above the gate's default level.
+
 #### Two things this deliberately does NOT do
 
-- **Nothing writes a fingerprint into a bundle yet**, so today every adoption reads
-  `AdoptedUnverified`. That is the honest state and the whole visibility win; the refusal row is armed
-  and starts discriminating the day the bake records one, with no further change here.
+- **`@@` includes are outside the fingerprint.** An `@@` include pulls a Code node that no source
+  query matches, so a change to an included-only snippet does not move the hash. That is not a new
+  hole: it is the same set `CompiledSources` records, so `IsDirty` has always missed it too. Closing
+  it means resolving includes on the live side (a mesh read per include) and is tracked separately —
+  but it is stated, because a guard whose coverage is assumed rather than named is exactly how this
+  mechanism went inert the first time.
 - **Refusing to LOAD is the second line of defence.** The damage needs two ingredients — stale bytes
   *and something armed to run them*. A type that renders read-only pages from unverified bytes is a
   degraded system; a type that WRITES from them is the incident. The execute-time interlock is
-  tracked separately, and `BuildProvenance` is what makes it stateable.
+  tracked separately (#2820), and `BuildProvenance` is what makes it stateable.
+
+> `BuildProvenance` is reset to `Compiled` by `ApplyCompileSuccess`: Roslyn built those bytes here,
+> from the source this mesh holds, so nothing about an earlier adoption survives a successful local
+> compile. Without that reset the field was write-once-per-adoption — a type refused as stale and
+> then recompiled kept reading `AdoptionRefused` forever, which turns the operator signal into noise
+> and would make the execute-time interlock refuse a type whose source it had just compiled itself.
+> `ApplyCompileFailure` deliberately does *not* reset it: after a failed compile the bytes in place
+> are still whatever the refusal left, so the refusal is still the true story.
 
 > 🚨 **Do not use `LatestReleasePath` vs the NodeType as a staleness signal.** It lags routinely —
 > a healthy type can serve perfectly with its release pointer several versions behind, and a check of

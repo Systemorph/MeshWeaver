@@ -258,6 +258,26 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
                         meshEntry.SourceVersions.Keys.OrderBy(k => k, StringComparer.Ordinal),
                         treeEntry.SourceVersions.Keys.OrderBy(k => k, StringComparer.Ordinal));
 
+                    // 3b. 🚨 THE SOURCE FINGERPRINT (#2813) — THE equality this whole mechanism
+                    //     rests on. The consumer refuses an adoption whose recorded fingerprint
+                    //     differs from the one ITS OWN hub computes over ITS live sources, so a
+                    //     producer that hashes even slightly differently turns every good bundle
+                    //     into a refusal: a self-inflicted outage strictly worse than the staleness
+                    //     bug. The mesh bake computes it through NodeSources.GetSources on a real
+                    //     workspace — i.e. it IS the consumer-side value — and the tree bake
+                    //     computes it from files with no mesh anywhere. Equal here means a bundle
+                    //     baked by the compiler-driven producer is adoptable as VERIFIED by a mesh
+                    //     holding the same content, which is the claim the fix makes.
+                    Assert.False(
+                        string.IsNullOrEmpty(meshEntry.SourceFingerprint),
+                        $"the mesh bake recorded no source fingerprint for {nodePath} — a bundle "
+                        + "without one adopts as AdoptedUnverified and the staleness refusal can "
+                        + "never fire, which is the exact state #2813 sat in");
+                    Assert.False(
+                        string.IsNullOrEmpty(treeEntry.SourceFingerprint),
+                        $"the compiler-driven bake recorded no source fingerprint for {nodePath}");
+                    Assert.Equal(meshEntry.SourceFingerprint, treeEntry.SourceFingerprint);
+
                     // 4. The per-type DEPENDENCY RECORD — what PrebuiltAssemblySeeder validates
                     //    before adopting. A record that differs is a bundle that declines (or,
                     //    worse, one that adopts against a surface it was not built for).
@@ -290,6 +310,13 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
             Assert.Contains("Helper", thingSurface);
             Assert.Contains("Deep", thingSurface);
             Assert.Contains("ThingTests", thingSurface);
+            // 7a'. …and the fingerprint DISCRIMINATES. Two types with different sources must not
+            //      hash the same, or assertion 3b above is satisfiable by a constant — which is
+            //      exactly the shape of guard #2813 is about (one that cannot fail).
+            Assert.NotEqual(
+                tree.Bundles["Widget"]["Widget/Thing"].SourceFingerprint,
+                tree.Bundles["Lib"]["Lib/Shared"].SourceFingerprint);
+
             // 7b. The @@ include pulled in a Code node NO source query matches — so it is absent
             //     from the resolved set but present in the bytes.
             Assert.DoesNotContain("Widget/Snippets/Greeting", thing.SourceVersions.Keys);
@@ -380,7 +407,8 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
         byte[] Assembly,
         bool HasPdb,
         IReadOnlyDictionary<string, string> Dependencies,
-        IReadOnlyDictionary<string, long> SourceVersions);
+        IReadOnlyDictionary<string, long> SourceVersions,
+        string? SourceFingerprint);
 
     private sealed record BakeDirectory(
         string FrameworkIdentity,
@@ -405,7 +433,11 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
                     p.Pdb is { Length: > 0 },
                     p.Dependencies ?? new Dictionary<string, string>(StringComparer.Ordinal),
                     sourceVersions.GetValueOrDefault(p.NodePath)
-                        ?? new Dictionary<string, long>(StringComparer.Ordinal)),
+                        ?? new Dictionary<string, long>(StringComparer.Ordinal),
+                    // #2813 — read through BundleReader, not off the raw manifest: this is the
+                    // value a real consumer receives, so a reader that dropped it would show up
+                    // here as two nulls comparing equal rather than as a passing test.
+                    p.SourceFingerprint),
                 StringComparer.Ordinal);
         }
         return new BakeDirectory(identity, bundles);
