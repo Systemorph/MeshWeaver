@@ -351,9 +351,37 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
 
 
     /// <summary>
-    /// The actual synchronization hub
+    /// The actual synchronization hub.
+    ///
+    /// <para>🚨 <b>Bound BEFORE the hub can process its own initialization, not after
+    /// <c>GetHostedHub</c> returns</b> (#2625). <c>MessageHubConfiguration.Build</c> ends with
+    /// <c>StartMessageProcessing()</c>, which POSTS <c>InitializeHubRequest</c> — so the sub-hub's
+    /// BuildupActions run on its turn scheduler while this constructor is still inside
+    /// <c>GetHostedHub</c>. A data source whose initial load faults synchronously
+    /// (<c>Observable.Throw</c>) reaches <see cref="OnError"/> in that window, and with the
+    /// assignment done only on the constructor's return path that call found <c>Hub</c> null and
+    /// SILENTLY skipped <c>FailStartup</c> + <c>OpenGate(SynchronizationGate)</c>: the sub-hub
+    /// stayed <c>Starting</c> forever, its <c>Started</c> task never settled, so
+    /// <c>IDataSource.Initialized</c> hung and the owning <c>DataContext</c>'s gate was never
+    /// given its answer — every request to that hub deferred until an unrelated deadline
+    /// expired.</para>
+    ///
+    /// <para>So the binding is a SYNCHRONOUS buildup action (<see cref="BindHub"/>), which
+    /// <c>Build</c> runs BEFORE <c>StartMessageProcessing</c>. There is then no window at all:
+    /// every message handler and every BuildupAction on the sub-hub sees a bound
+    /// <c>Hub</c>, on the same thread that is still running this constructor. The constructor's
+    /// own assignment below remains for the path where <c>GetHostedHub</c> hands back a
+    /// PRE-EXISTING sub-hub, in which case the configuration lambda — and therefore
+    /// <see cref="BindHub"/> — never runs (and no BuildupAction runs either, so nothing can
+    /// observe the gap).</para>
     /// </summary>
-    public IMessageHub Hub { get; }
+    public IMessageHub Hub { get; private set; } = null!;
+
+    /// <summary>
+    /// Binds <see cref="Hub"/> from the sub-hub's synchronous buildup action — see the remarks
+    /// on <see cref="Hub"/> for why this cannot wait for the constructor's return path.
+    /// </summary>
+    private void BindHub(IMessageHub syncHub) => Hub = syncHub;
 
     /// <summary>
     /// The host of the synchronization stream.
@@ -911,13 +939,31 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             {
                 logger.LogDebug(ex, "[SYNC_STREAM] Exception from Store.OnError propagation for {StreamId}", StreamId);
             }
-            // Always fault startup and open gate, even if Store.OnError throws.
-            // (Hub is non-null on every constructed stream — the ctor refuses rather
-            // than fabricating a hub-less one; the guard is belt-and-braces.)
+            // Always fault startup and open gate, even if Store.OnError throws. These two calls
+            // are the ONLY thing that lets a faulted initial load settle
+            // IDataSource.Initialized — FailStartup faults the sub-hub's Started task, which
+            // DataContext's gate is a WhenAll over.
+            //
+            // 🚨 SKIPPING THEM IS A WEDGE, NEVER A NO-OP (#2625). Hub is bound by a SYNCHRONOUS
+            // buildup action now (see the remarks on Hub), so it is non-null for every
+            // BuildupAction and every handler and this branch cannot be taken from the init
+            // path. It stays as a guard because the constructor's refusal path leaves a
+            // stream whose Hub was never bound — but it must be LOUD: the silent version cost
+            // #2625 two months of an unreproducible CI flake, because everything downstream
+            // simply waited forever with nothing logged.
             if (Hub is not null)
             {
                 Hub.FailStartup(error);
                 Hub.OpenGate(SynchronizationGate);
+            }
+            else
+            {
+                logger.LogError(error,
+                    "[SYNC_STREAM] OnError for {StreamId} (Reference={Reference}, Owner={Owner}) "
+                    + "could not fault its sub-hub's startup: the stream has no Hub bound. Anything "
+                    + "waiting on that hub's Started task — IDataSource.Initialized, and therefore "
+                    + "the owning DataContext's initialization gate — will never be settled by this "
+                    + "fault.", StreamId, Reference, Owner);
             }
         }
         else
@@ -1208,6 +1254,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
     {
         config = config
+            // 🚨 FIRST, and the SYNCHRONOUS overload on purpose (#2625): SyncBuildupActions run
+            // inside Build() BEFORE StartMessageProcessing posts InitializeHubRequest, so this
+            // binds the stream's Hub before ANY message — including this hub's own init, whose
+            // fault path calls OnError → Hub.FailStartup — can reach code that reads it. See the
+            // remarks on Hub.
+            .WithInitialization(BindHub)
             // Inherit the owning Host's posting identity (feedback_access_context_always_set). In
             // prod the Host is a User hub (= the default) so this is a no-op; in plumbing tests the
             // Host is a System hub and the sync hub must be System too, else its own

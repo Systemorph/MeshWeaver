@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Data.Test;
@@ -194,5 +196,182 @@ public class DataContextInitFaultedTest(ITestOutputHelper output) : HubTestBase(
             "the hub must expose the FAILED status marker after a faulted init");
         initError!.ToString().Should().Contain(InitFaultMarker,
             "the recorded failure must carry the SPECIFIC init fault for diagnosis");
+    }
+}
+
+/// <summary>
+/// The DETERMINISTIC repro of the #2625 flake, and the regression guard for its fix.
+///
+/// <para><b>The race.</b> <c>SynchronizationStream</c>'s constructor asks
+/// <c>Host.GetHostedHub(sync/…, HostedHubCreation.Always)</c> for its sub-hub, and
+/// <c>MessageHubConfiguration.Build</c> STARTS that hub — it posts <c>InitializeHubRequest</c> —
+/// before <c>GetHostedHub</c> returns. So the sub-hub's BuildupActions can run on the action
+/// block WHILE the constructor is still executing, i.e. before the constructor has assigned the
+/// stream's <c>Hub</c> field. A data source whose initial load faults SYNCHRONOUSLY
+/// (<c>Observable.Throw</c>) does exactly that in ~zero time.</para>
+///
+/// <para><b>What that used to cost.</b> The fault reached
+/// <c>SynchronizationStream.OnError</c>, whose <c>if (Hub is not null)</c> guard then SKIPPED
+/// both <c>Hub.FailStartup(error)</c> and <c>Hub.OpenGate(SynchronizationGate)</c> — silently.
+/// The sync hub therefore never reached <c>Started</c> and its <c>Started</c> task never
+/// settled, so <c>IDataSource.Initialized</c> (a <c>WhenAll</c> over those tasks) hung, so
+/// <see cref="DataContext"/>'s gate was never settled and every request to the owning hub sat
+/// behind <c>DataContextInit</c> until an unrelated deadline expired. The hub logged
+/// "initialization failed … FAILED state" in 4 ms and answered nothing for the rest of the
+/// test's budget — the exact signature in the issue.</para>
+///
+/// <para><b>Why this test is deterministic where a 25-run loop was not.</b>
+/// <c>HostedHubsCollection</c> publishes <c>HubAdded</c> on the CONSTRUCTING thread, inside the
+/// creation <c>Lazy</c> — after <c>Build</c> has posted the init request and before
+/// <c>GetHostedHub</c> returns to the stream's constructor. Parking that thread there until the
+/// sub-hub has recorded its init failure pins the CI interleaving with no timing luck at all.
+/// The park is the SUBJECT of the test, so it is a bounded <c>SpinWait.SpinUntil</c> over a
+/// value another worker writes (AGENTS.md's sanctioned shape) — not a gate.</para>
+/// </summary>
+public class DataContextFaultedInitBeforeStreamHubBoundTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    private const string InitFaultMarker = "boom before the stream bound its hub";
+
+    private record FaultyItem(string Id);
+
+    // NOT PingRequest — the gate exempts liveness pings; see DataContextInitTimeoutTest.
+    private record ProbeRequest : IRequest<ProbeResponse>;
+
+    private record ProbeResponse;
+
+    /// <summary>
+    /// Set once, so only the FIRST hosted sub-hub — the data source's own
+    /// <c>sync/…</c> stream hub — is parked; later ones (reduced streams) run free.
+    /// </summary>
+    private int parkClaimed;
+
+    /// <summary>True once the park has actually been taken, so the test can assert it staged.</summary>
+    private volatile bool parkStaged;
+
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+        => configuration
+            .WithTypes(typeof(ProbeRequest), typeof(ProbeResponse))
+            // The handler WOULD answer, so a pass can only come from the FAILED-state
+            // rejection — never from the request quietly being served after all.
+            .WithHandler<ProbeRequest>((hub, request) =>
+            {
+                hub.Post(new ProbeResponse(), o => o.ResponseFor(request));
+                return request.Processed();
+            })
+            // 🚨 The SYNCHRONOUS WithInitialization overload on purpose: SyncBuildupActions run
+            // inside Build(), BEFORE the host starts message processing — so this subscription is
+            // guaranteed to be in place before the init turn creates any data-source stream. The
+            // observable overload would run on the init turn itself and could miss the emission.
+            .WithInitialization(hub => hub.RegisterForDisposal(
+                hub.ServiceProvider.GetRequiredService<HostedHubsCollection>()
+                    .HubAdded
+                    .Subscribe(ParkConstructionUntilChildInitFailed)))
+            .AddData(data => data
+                .AddSource(src => src.WithType<FaultyItem>(t => t
+                    .WithKey(i => i.Id)
+                    .WithInitialData(() =>
+                        Observable.Throw<IEnumerable<FaultyItem>>(
+                            new InvalidOperationException(InitFaultMarker))))));
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => configuration.WithTypes(typeof(ProbeRequest), typeof(ProbeResponse));
+
+    /// <summary>What the park actually observed — written to test output so a future red says
+    /// whether the window was staged at all, not merely that the probe was slow. Volatile: it is
+    /// written on the hosted-hub CONSTRUCTION thread and read on the test thread, and a stale read
+    /// would make the one diagnostic that explains a future red untrustworthy.</summary>
+    private volatile string parkDiagnostics = "(never parked)";
+
+    /// <summary>
+    /// The address of the first <c>sync/…</c> sub-hub seen — the data source's own stream hub.
+    /// Written and read only on the constructing thread.
+    /// </summary>
+    private Address? firstSyncAddress;
+
+    private void ParkConstructionUntilChildInitFailed(IMessageHub child)
+    {
+        if (child is not MessageHub concrete
+            || concrete.Address.Type != MeshWeaver.Data.SynchronizationAddress.AddressType)
+            return;
+
+        // 🚨 HubAdded fires TWICE per hosted hub, and only the SECOND one is the window.
+        //   1. HostedHubsCollection.Add — called from MessageHubConfiguration.Build BEFORE
+        //      SyncBuildupActions and BEFORE StartMessageProcessing, so the hub has not yet
+        //      been handed its InitializeHubRequest and nothing can fault.
+        //   2. HostedHubsCollection.GetHub's creation Lazy — called AFTER Build returned, i.e.
+        //      after StartMessageProcessing posted InitializeHubRequest, and BEFORE
+        //      GetHostedHub returns to SynchronizationStream's constructor. That is exactly
+        //      the interval in which the constructor has NOT yet assigned its Hub field.
+        if (firstSyncAddress is null)
+        {
+            firstSyncAddress = concrete.Address;
+            return;
+        }
+        if (!firstSyncAddress.Equals(concrete.Address))
+            return;
+        if (Interlocked.Exchange(ref parkClaimed, 1) != 0)
+            return;
+
+        parkStaged = true;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            // Bounded, and the bound is a DIAGNOSTIC rather than a budget: the sub-hub's init
+            // faults synchronously on its own turn scheduler, so this releases in milliseconds.
+            // Written in the shape AGENTS.md sanctions for a park that IS the subject of the
+            // test — a bounded SpinUntil over a value another worker writes, never a gate.
+            SpinWait.SpinUntil(() => concrete.InitializationError is not null, TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            parkDiagnostics =
+                $"parked on {concrete.Address} for {sw.ElapsedMilliseconds}ms, "
+                + $"RunLevel={concrete.RunLevel}, InitializationError={concrete.InitializationError?.Message ?? "(null)"}";
+        }
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task StreamFaultingBeforeItsHubIsBound_StillFailsTheDataContextGateFast()
+    {
+        var host = GetHost();
+        var client = GetClient();
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        // Generous WAIT / asserted ELAPSED, exactly as DataContextInitFaultedTest separates them
+        // (#2700): the wait must be long enough that a timeout means NEVER, the elapsed assertion
+        // is what carries "…Fast".
+        var act = () => client
+            .Observe(new ProbeRequest(), o => o.WithTarget(host.Address))
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(45)).Await();
+
+        var ex = (await act.Should().ThrowAsync<Exception>(
+            "a hub whose data-source init threw must answer requests with an error")).Which;
+        stopwatch.Stop();
+
+        Output.WriteLine($"PARK: {parkDiagnostics}");
+        parkStaged.Should().BeTrue(
+            "the repro only means anything if the stream's construction was actually parked at "
+            + "HubAdded — a HubAdded that never fired would make this test a tautology");
+
+        ex.Should().NotBeOfType<TimeoutException>(
+            "a faulted init must be ANSWERED by the rejection handler even when the sub-hub's init "
+            + "turn beat the stream's constructor to the Hub assignment — a timeout here is the "
+            + "#2625 wedge: OnError skipped FailStartup, so Started never settled and the "
+            + "DataContextInit gate was never given its answer");
+
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(25),
+            $"the rejection handler answers in milliseconds; this took {stopwatch.Elapsed.TotalSeconds:F1}s, "
+            + "which is a request that fell through to a deferral/time-box deadline rather than one "
+            + "the faulted arm rejected");
+
+        ex.ToString().Should().Contain("initialization failed",
+            "the rejection must be reported as an initialization failure");
+
+        var initError = host.GetWorkspace().DataContext.InitializationError;
+        initError.Should().NotBeNull(
+            "the DataContext must reach its terminal FAILED state, not sit un-settled");
+        initError!.ToString().Should().Contain(InitFaultMarker,
+            "the recorded failure must carry the SPECIFIC init fault — a TimeoutException here "
+            + "would mean the time-box settled the gate instead of the fault");
     }
 }
