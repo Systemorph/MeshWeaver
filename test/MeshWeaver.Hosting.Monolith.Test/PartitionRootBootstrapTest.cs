@@ -296,10 +296,11 @@ public class PartitionRootBootstrapTest(ITestOutputHelper output) : MonolithMesh
     /// <c>MainNode = "Skill/{id}"</c> on a node whose Path is <c>{partition}/Skill/{id}</c>.
     /// Two segments, so the bare-Id test misses it — and because <c>MainNode</c> is non-nullable,
     /// the stale value reads as a DELIBERATE satellite pointer and is persisted. The node is then
-    /// <c>Active</c>, readable by <c>get</c>, and invisible to every search, because the catalog's
-    /// <c>is:main</c> projection is SQL <c>n.main_node = n.path</c>. Six live nodes on
-    /// memex.meshweaver.cloud were in exactly this state, and it cost a full investigation on a
-    /// downstream repo before anyone looked at <c>mainNode</c>.
+    /// <c>Active</c>, readable by <c>get</c>, and dropped from the catalog's <c>is:main</c>
+    /// projection — SQL <c>n.main_node = n.path</c>. Seven live nodes on memex.meshweaver.cloud were
+    /// in exactly this state, and it cost a full investigation on a downstream repo before anyone
+    /// looked at <c>mainNode</c>. (Restoring the pointer is one of TWO required halves; the other is
+    /// #2942, an independent query-union defect with the same symptom.)
     /// </summary>
     [Fact]
     public async Task MainNode_StaleNamespacedSelfDefaultFromAnotherPartition_IsRepairedOnCreate()

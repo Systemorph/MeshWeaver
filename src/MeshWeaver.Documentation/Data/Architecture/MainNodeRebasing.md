@@ -116,14 +116,37 @@ owner's listings and re-scopes its grants (they project at `COALESCE(main_node, 
 - **#2383** — `_Policy` satellites minted with the plain constructor pointed `MainNode` at
   themselves, so *Access Policy* was listed as content on every package cover.
 - **#2939 / MeshWeaver.Plugins#1053** — every `Skill` authored as `.md` inside a plugin partition
-  imported with `MainNode = "Skill/{id}"`. Six live nodes on `memex.meshweaver.cloud`
+  imported with `MainNode = "Skill/{id}"`. **Seven** live nodes on `memex.meshweaver.cloud`
   (`Hosting/Skill/{deployment,deployment-activity,instance,platform-update}`, `Essentials/Skill/email`,
-  `Store/Skill/ci-policy`) were `Active` and invisible to `search nodeType:Skill scope:subtree` — the
-  documented way to find skills. It cost a full investigation on a downstream repo, from the
-  confident and wrong premise that a GitSync reporting success had failed to import four nodes.
+  `RemoteControl/Skill/remote`, `Store/Skill/ci-policy`) were `Active` and absent from
+  `search nodeType:Skill scope:subtree` — the documented way to find skills. A reachability sweep
+  across all 53 packages, reading the mesh by two independent paths (`get` vs `search`) and reporting
+  the disagreement, found the unreachable set to be **exactly** the set where `main_node != path`,
+  with no false positives.
+
+  It cost a full investigation on a downstream repo, from the confident and wrong premise that an
+  import reporting success had failed to write four nodes. The nodes were there the whole time,
+  `Active` at version 7 — the "absence" was reported by this very defect. (`lastSyncCommitSha` is not
+  per-partition import evidence either: 33 of 34 partitions record the identical sha while
+  `lastSyncedAt` spans 25 days.)
 
 Both were latent for days behind a green wall. **A field that cannot be observed to be wrong needs a
 guard, not care** — which is why the rebase now lives in one method and the repair in one helper.
+
+## 🚨 One symptom, two independent defects
+
+**Restoring `MainNode == Path` does not by itself make a decentral node searchable.** A second and
+unrelated defect produces the same symptom, and fixing either alone leaves the skills broken:
+
+> `MeshQueryRequest.FromQueries` builds a union but fills the legacy single `Query` field with
+> `list[0]`. `StaticNodeQueryProvider` reads `Query`; `StorageAdapterMeshQueryProvider` iterates
+> `EffectiveQueries`. A static node matched only by query **#2** is therefore silently absent — and
+> the skill query set leads with the platform catalog and follows with the package partition, i.e.
+> exactly query #2.
+
+That is **#2942**, tracked separately. Both halves are required. This is worth stating plainly
+because the failure mode is shared: two different causes, one indistinguishable symptom (`get`
+returns it, `search` does not), and a fix for either that *looks* complete on its own.
 
 ## Related
 

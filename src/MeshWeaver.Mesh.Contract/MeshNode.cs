@@ -161,8 +161,10 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// on the wire from a deliberate satellite pointer: <see cref="HasExplicitMainNode"/> reads
     /// <c>true</c>, every upsert faithfully persists it, and the node drops out of <c>is:main</c>
     /// (SQL <c>n.main_node = n.path</c>) — <c>get</c> returns it, <c>search</c> cannot see it, and
-    /// nothing errors or logs. That is Systemorph/MeshWeaver#2939 (six live Skill nodes) and #2383
-    /// before it, and it has been written the wrong way at four independent sites.</para>
+    /// nothing errors or logs. That is Systemorph/MeshWeaver#2939 (seven live Skill nodes) and #2383
+    /// before it, and it has been written the wrong way at four independent sites. (Restoring the
+    /// pointer is NECESSARY BUT NOT SUFFICIENT for such a node to be searchable again — #2942 is an
+    /// independent defect with the identical symptom.)</para>
     ///
     /// <para>A MainNode the caller set DELIBERATELY (<see cref="HasExplicitMainNode"/>) is carried
     /// across untouched — an <c>_Access</c> grant's MainNode IS its scope, and an install that

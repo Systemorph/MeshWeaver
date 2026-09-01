@@ -578,9 +578,14 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
     /// that re-imports it: a full-instance upsert can move a MainNode anywhere EXCEPT back onto the
     /// node's own path, because <c>MainNode == Path</c> is exactly what
     /// <see cref="MeshNode.HasExplicitMainNode"/> reads as "unset" (see its remarks). So the
-    /// re-import compared equal, skipped as a no-op, and the row stayed invisible to <c>is:main</c>
-    /// — SQL <c>n.main_node = n.path</c> — forever. Six live nodes on memex.meshweaver.cloud were
-    /// in this state for three days with <c>get</c> returning each of them perfectly.
+    /// re-import compared equal, skipped as a no-op, and the row stayed outside <c>is:main</c>
+    /// — SQL <c>n.main_node = n.path</c> — forever. SEVEN live nodes on memex.meshweaver.cloud were
+    /// in this state, with <c>get</c> returning each of them perfectly.
+    ///
+    /// <para>🚨 Restoring the pointer is one of TWO required halves for those nodes to be findable
+    /// again; the other is #2942 (a query union whose legacy single-<c>Query</c> field carries only
+    /// <c>list[0]</c>). This test pins the half that lives here — the stored value — and claims
+    /// nothing about search.</para>
     ///
     /// <para>The upsert now runs the same 1b′ repair on the MERGED node, so a re-import heals it.
     /// The no-op skip has to know that too, or the write it needs never happens.</para>

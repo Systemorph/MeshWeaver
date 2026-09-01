@@ -24,9 +24,16 @@ namespace MeshWeaver.PluginCatalog.Test;
 /// the installer rebase it therefore hands over a node whose computed <see cref="MeshNode.Path"/>
 /// has moved and whose <c>MainNode</c> has NOT. <c>ParseCanonical</c> used to keep that value
 /// verbatim — its <c>parsed.MainNode ?? (…)</c> was dead code, because the field can never be
-/// null — so the node installed <c>Active</c>, fully formed, and INVISIBLE to every search: the
-/// catalog's <c>is:main</c> projection is SQL <c>n.main_node = n.path</c>. Nothing errors, nothing
-/// logs, no status flips. Six live Skill nodes on memex.meshweaver.cloud were in this state.</para>
+/// null — so the node installed <c>Active</c>, fully formed, and OUTSIDE <c>is:main</c>: the
+/// catalog's projection is SQL <c>n.main_node = n.path</c>. Nothing errors, nothing logs, no status
+/// flips. Seven live Skill nodes on memex.meshweaver.cloud were in this state — a reachability sweep
+/// of all 53 packages found the unreachable set to be EXACTLY the set where
+/// <c>main_node != path</c>, with no false positives.</para>
+///
+/// <para>🚨 This pins the STORED value only. Making a decentral skill searchable again needs a
+/// second, independent fix as well — #2942, where a query union fills the legacy single
+/// <c>Query</c> field with <c>list[0]</c> and one of the two providers reads that instead of the
+/// union, so a node matched only by query #2 is silently absent.</para>
 ///
 /// <para>The file below reproduces it with the only lever a core test has: a node file that
 /// DECLARES a namespace other than the one its path implies — which is exactly what
@@ -79,7 +86,7 @@ public class NodeRepoMainNodeRebaseTest(ITestOutputHelper output) : MonolithMesh
         var skill = await Read("Gadget/Skill/deployment");
         skill.MainNode.Should().Be("Gadget/Skill/deployment",
             "a node whose MainNode was never authored is a MAIN node — keeping the namespace the "
-            + "parser minted it in makes it invisible to `is:main` (SQL n.main_node = n.path) "
+            + "parser minted it in drops it out of `is:main` (SQL n.main_node = n.path) "
             + "while `get` still returns it, Active and fully formed");
         skill.MainNode.Should().Be(skill.Path);
 

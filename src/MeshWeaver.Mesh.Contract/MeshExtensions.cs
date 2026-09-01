@@ -4427,6 +4427,15 @@ public static class MeshExtensions
     /// <c>n.main_node = n.path</c> — while <c>get</c> still returns it, <c>Active</c> and fully
     /// formed. Nothing errors, nothing logs, no status flips (#2939).</para>
     ///
+    /// <para>🚨 <b>Restoring <c>MainNode == Path</c> is NECESSARY BUT NOT SUFFICIENT for a decentral
+    /// node to become searchable.</b> A second, independent defect produces the same symptom —
+    /// <c>MeshQueryRequest.FromQueries</c> builds a union but fills the legacy single <c>Query</c>
+    /// field with <c>list[0]</c>, and <c>StaticNodeQueryProvider</c> reads <c>Query</c> while
+    /// <c>StorageAdapterMeshQueryProvider</c> iterates <c>EffectiveQueries</c>, so a static node
+    /// matched only by query #2 is silently absent (#2942). The skill query set leads with the
+    /// platform catalog and follows with the package partition, i.e. exactly query #2. Both halves
+    /// are required; neither alone restores visibility.</para>
+    ///
     /// <para><b>Two shapes, and the second needs BOTH of its halves.</b></para>
     /// <list type="number">
     /// <item><description><b>The bare-Id default.</b> A node first built BARE
@@ -4436,8 +4445,9 @@ public static class MeshExtensions
     /// created under the NON-EXISTENT "Datenextraktion" partition → Postgres 42P01
     /// (<c>relation "datenextraktion.mesh_nodes" does not exist</c>).</description></item>
     /// <item><description><b>The namespaced default frozen in ANOTHER PARTITION</b> —
-    /// <c>Skill/deployment</c> on <c>Hosting/Skill/deployment</c>, six live nodes on
-    /// memex.meshweaver.cloud. Matching requires that MainNode's LAST SEGMENT is this node's own Id
+    /// <c>Skill/deployment</c> on <c>Hosting/Skill/deployment</c>, seven live nodes on
+    /// memex.meshweaver.cloud (a reachability sweep of all 53 packages found the unreachable set to
+    /// be EXACTLY the set where <c>main_node != path</c>, with no false positives). Matching requires that MainNode's LAST SEGMENT is this node's own Id
     /// (which is what makes it a self-default rather than a pointer at some other node) AND that it
     /// names a different PARTITION (first segment). Either half alone over-reaches: a non-satellite
     /// node may legitimately point MainNode at a parent inside its own partition

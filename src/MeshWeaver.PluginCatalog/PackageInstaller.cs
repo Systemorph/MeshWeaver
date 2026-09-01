@@ -3211,9 +3211,12 @@ public static class PackageInstaller
         // 🚨 WithPath, not `with { Id/Namespace }`. MeshNode.MainNode is a STORED, non-nullable init
         // property whose default is evaluated once at construction, so a plain record copy moves the
         // computed Path and leaves MainNode naming the namespace the parser minted the node in — and
-        // the install then persists that as if it were deliberate (#2939: six live Skill nodes at
-        // `Hosting/Skill/x` carrying `MainNode = "Skill/x"`, Active, and invisible to every search
-        // because `is:main` is SQL `n.main_node = n.path`).
+        // the install then persists that as if it were deliberate (#2939: seven live Skill nodes at
+        // `Hosting/Skill/x` and friends carrying `MainNode = "Skill/x"`, Active, and dropped from
+        // `is:main` — SQL `n.main_node = n.path`). Restoring the pointer is one of TWO required
+        // halves for a decentral node to be searchable again; the other is #2942 (a query union
+        // whose legacy single-Query field carries only list[0], so a static node matched by the
+        // SECOND query is silently absent).
         //
         // This line used to read `MainNode = parsed.MainNode ?? (…)`, which is DEAD CODE: MainNode is
         // non-nullable, so the right-hand side never ran and the parser's value was always kept. The
