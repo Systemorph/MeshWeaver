@@ -320,6 +320,17 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             }
         }
 
+        // 🚨 The DYNAMIC lane of ContentTypeRegistration: every compiled NodeType DEFINITION that
+        // flows through here (boot hydration and every later recompile alike) registers its
+        // content types in the mesh-wide registry — instance or no instance. Without this, a
+        // defined-and-compiled type with zero live instances never ran WithContentType, and its
+        // content stayed an untyped JsonElement on every read seam (the dead-Store defect,
+        // measured 2026-09-01). Bounded by the registry pre-check inside: one probe per type per
+        // process, nothing on the hot path afterwards.
+        foreach (var definition in System.Linq.Enumerable.OfType<MeshNode>(instances.Instances.Values)
+                     .Where(n => n.Content is Configuration.NodeTypeDefinition))
+            ContentTypeRegistration.EnsureRegisteredForCompiledDefinition(_workspace.Hub, definition);
+
         var adds = instances.Instances
             .Where(x => !_lastSaved.Instances.ContainsKey(x.Key))
             .Select(x => (MeshNode)x.Value)
