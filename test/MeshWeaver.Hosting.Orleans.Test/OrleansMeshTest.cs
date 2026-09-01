@@ -11,7 +11,7 @@ using Orleans;
 
 using System.Reactive.Linq;
 namespace MeshWeaver.Hosting.Orleans.Test;
-public class OrleansMeshTests(ITestOutputHelper output) : OrleansSharedTestBase(output)
+public class OrleansMeshTests(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
     private IMessageHub GetClient([CallerMemberName] string? name = null)
         => base.GetClient($"mesh-{name}-{Guid.NewGuid():N}", "TestUser");

@@ -43,8 +43,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// is blocked — and the probe times out. Post-fix it answers in milliseconds.</para>
 /// </summary>
 public class RoutingGrainTurnIsolationTest(ITestOutputHelper output)
-    : OrleansTestBase<StallingResolverSiloConfigurator>(output)
+    : OrleansMeshTestBase(output)
 {
+    /// <inheritdoc />
+    protected override Type SiloConfiguratorType => typeof(StallingResolverSiloConfigurator);
+
     /// <summary>
     /// Budget for the probe ping — comfortably above a healthy grain activation (&lt; 1 s). The stall
     /// only ends when the test calls <see cref="StallingPathResolver.Release"/> in its finally, so
