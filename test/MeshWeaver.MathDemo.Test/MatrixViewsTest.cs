@@ -75,7 +75,13 @@ public class MatrixViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact(Timeout = 120_000)]
     public async Task Inverse_ShouldRenderForMatrixExample()
     {
-        if (ShouldSkip) return;
+        // 🚨 Assert.SkipWhen, never `if (…) return;`. A bare return reports the case as
+        // PASSED — the run then claims a NuGet-restoring render was proven on a machine where it
+        // never executed, which is the absence-of-evidence-reads-as-green failure the estate keeps
+        // paying for. xUnit v3 has the primitive; this repo already uses it everywhere else.
+        Assert.SkipWhen(ShouldSkip,
+            "MESHWEAVER_SKIP_NUGET=1 — this case restores MathNet.Numerics from api.nuget.org "
+            + "on first run and cannot be executed offline");
 
         var client = GetClient();
         var address = new Address("MathDemo/Matrix/Example");

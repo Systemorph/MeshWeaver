@@ -18,7 +18,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// DISTRIBUTED (Orleans) repro for the prod "/Doc shows no content" bug, on the STANDARD
-/// in-memory Orleans fixture (<see cref="TestSiloConfigurator"/> via <see cref="OrleansTestBase{T}"/>)
+/// in-memory Orleans fixture (<see cref="TestSiloConfigurator"/> via <see cref="OrleansMeshTestBase"/>)
 /// — the same wiring as the distributed portal (<c>ConfigurePortalMesh</c> + <c>AddDocumentation</c>
 /// + <c>AddRowLevelSecurity</c>), plus <c>AddSpaceType</c> and the fake static-repo source.
 ///
@@ -29,8 +29,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// shadow that left prod's pages blank).</para>
 /// </summary>
 public class OrleansStaticRepoImportTest(ITestOutputHelper output)
-    : OrleansTestBase<OrleansStaticRepoImportTest.ImportConfigurator>(output)
+    : OrleansMeshTestBase(output)
 {
+    /// <inheritdoc />
+    protected override Type SiloConfiguratorType => typeof(OrleansStaticRepoImportTest.ImportConfigurator);
+
     // Fresh per test-run partition so reruns don't collide on the shared in-memory store.
     internal static readonly string Partition = "TestRepo" + Guid.NewGuid().ToString("N")[..8];
     internal static readonly FakeRepoSource Source = new(Partition);
@@ -38,8 +41,7 @@ public class OrleansStaticRepoImportTest(ITestOutputHelper output)
     // The importer + persistence + IStaticRepoSource (registered via ConfigureMesh) all live on the
     // SILO's mesh hub — that's where prod runs AddStaticRepoSync. The client SP is a separate
     // container, so resolve the source/import/reads from the silo.
-    private IServiceProvider SiloServices => ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services;
-    private IMessageHub Mesh => SiloServices.GetRequiredService<IMessageHub>();
+    private IMessageHub Mesh => SiloServices().GetRequiredService<IMessageHub>();
 
     private CancellationToken Ct => new CancellationTokenSource(55.Seconds()).Token;
 

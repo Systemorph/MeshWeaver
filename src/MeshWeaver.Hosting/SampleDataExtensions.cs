@@ -28,10 +28,6 @@ public static class SampleDataExtensions
     public static TBuilder AddPensionFund<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder.IncludePartition("PensionFund");
 
-    /// <summary>Includes the Cornerstone insurance sample data.</summary>
-    public static TBuilder AddCornerstone<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-        => builder.IncludePartition("Cornerstone");
-
     /// <summary>Includes the Systemorph sample data.</summary>
     public static TBuilder AddSystemorph<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder.IncludePartition("Systemorph");
@@ -99,7 +95,6 @@ public static class SampleDataExtensions
             .AddFutuRe()
             .AddAcme()
             .AddPensionFund()
-            .AddCornerstone()
             .AddSystemorph()
             .AddTestSpace()
             .AddMeshWeaverDocs()

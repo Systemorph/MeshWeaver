@@ -58,8 +58,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// driving Pending on its own.</para>
 /// </summary>
 public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
-    : OrleansTestBase<RestrictedAccessSiloConfigurator>(output)
+    : OrleansMeshTestBase(output)
 {
+    /// <inheritdoc />
+    protected override Type SiloConfiguratorType => typeof(RestrictedAccessSiloConfigurator);
+
     private IMeshService SiloMeshService =>
         ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
             .GetRequiredService<IMessageHub>()

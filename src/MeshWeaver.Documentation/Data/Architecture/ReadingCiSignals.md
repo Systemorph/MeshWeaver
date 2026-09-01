@@ -82,6 +82,50 @@ Two bugs that make a monitor lie, both hit in one session:
   of a PR with zero checks. Decide readiness by asserting the **required set is present and
   SUCCESS**, never by the absence of failures.
 
+## A green gate can be answering with evidence it did not produce
+
+The traps above are about a check that never *ran*. This one is worse: the check runs, does its
+accounting, and reports SUCCESS **from another job's evidence**.
+
+**Artifacts are RUN-wide, not call-wide.** A reusable workflow that a repo invokes twice in one run
+— `MeshWeaver.Plugins` calls `node-repo-module-pack.yml` as both `modules-floor` and `modules-rest`,
+on every run — puts both calls' artifacts in ONE namespace. Two uploads of the same name are
+*accepted*: Plugins run `33487032213` carried two artifacts literally named `workspace-build`
+(25.8 MB and 950 kB), and `download-artifact` resolved the name to one of them. The floor's pack job
+read the other call's workspace and died on *"the global build wrote no closure manifest for
+MeshWeaver.Markdown.Collaboration"* — a REQUIRED gate flipping green/red on `main` with **no source
+change**, alternating by which call won the name (Plugins#1077).
+
+**A discriminator with a shared default is not a discriminator.** The `lane-id` input existed for
+exactly this and did not close it, because its default was the same literal for both calls and
+neither caller set it. The fix is to *derive* the key rather than trust the caller: `select` now
+computes a lane key from the call's own `modules:` matrix — unique per call by construction, with no
+input a caller can forget — and every artifact the call drops is named and stamped with it.
+
+**Three rules generalise out of it:**
+
+1. **Name every artifact for the CALL, not the workflow.** If two invocations can coexist in one
+   run, the name must carry something that differs between them, derived — not an input someone
+   remembers to pass.
+2. **Scope the download to match, and check the stamp anyway.** A `pattern: foo-*` glob is one edit
+   from being widened back; the producer stamping its lane INTO the file means the consumer can
+   still refuse foreign evidence when it is.
+3. **An answer a gate composes must fail closed.** `bundles-built` is what a required gate depends
+   on, so zero evidence, foreign evidence and evidence that does not record what it attests are all
+   *false* — never a silent true. A marker saying "an artifact was uploaded" leaves
+   present-but-uncomposable reading as green, so the marker records the bundle it attests **and**
+   the closure the build resolved, and the verifier requires both.
+
+🚨 **Preserve the reason the evidence is dropped EARLY.** The built marker lands before the module's
+tests deliberately, so a red suite cannot read as "bundle missing" to a gate that only *composes*
+bundles (#2710, Plugins#937). Strengthening what the marker claims must not drag test results into
+it — "the bundle is complete and usable" and "the module's tests passed" are different questions,
+answered by different contexts.
+
+**And the acceptance criterion for a fix in this class is REPEATED green.** A defect that alternates
+run to run produces single greens by itself; one green run is what it looks like, not evidence it is
+gone.
+
 ## Reading a RED shard: the exit marker classifies it, the log text does not
 
 A red shard says *why* in exactly one place — the **exit marker** printed by "Fail on non-zero

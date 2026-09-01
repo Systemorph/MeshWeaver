@@ -43,8 +43,11 @@ public record OrleansBrokenTypeProbeResponse;
 /// through the Orleans stream to the client's <c>Observe</c> callback.</para>
 /// </summary>
 public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
-    : OrleansTestBase<DynamicCompilationSiloConfigurator>(output)
+    : OrleansMeshTestBase(output)
 {
+    /// <inheritdoc />
+    protected override Type SiloConfiguratorType => typeof(DynamicCompilationSiloConfigurator);
+
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration)
             .WithType(typeof(OrleansBrokenTypeProbeRequest), nameof(OrleansBrokenTypeProbeRequest))

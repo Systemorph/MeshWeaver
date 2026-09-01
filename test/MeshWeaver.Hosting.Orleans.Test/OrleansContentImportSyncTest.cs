@@ -30,8 +30,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// request/response + per-node-grain handler that the monolith can't.</para>
 /// </summary>
 public class OrleansContentImportSyncTest(ITestOutputHelper output)
-    : OrleansTestBase<OrleansContentImportSyncTest.ContentImportConfigurator>(output)
+    : OrleansMeshTestBase(output)
 {
+    /// <inheritdoc />
+    protected override Type SiloConfiguratorType => typeof(OrleansContentImportSyncTest.ContentImportConfigurator);
+
     internal static readonly string Partition = "TestContent" + Guid.NewGuid().ToString("N")[..8];
     internal static readonly FakeContentSource Source = new(Partition);
 

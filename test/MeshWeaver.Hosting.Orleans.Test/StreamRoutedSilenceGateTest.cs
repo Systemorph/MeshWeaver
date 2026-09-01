@@ -41,7 +41,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <see cref="TimeoutException"/>. Every wait here is bounded — an unbounded one would hang exactly
 /// the way the bug does and prove nothing.</para>
 /// </summary>
-public class StreamRoutedSilenceGateTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
+public class StreamRoutedSilenceGateTest(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
     /// <summary>
     /// The gate. A request addressed at a stream-routed hub that no silo serves must come back as a

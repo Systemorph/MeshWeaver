@@ -56,7 +56,6 @@
         <!-- Direct on purpose (#1644 step 2): the export engine left Memex.Portal.Shared's
              closure (it ships via modules/), so the export tests reference it themselves. -->
         <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
-        <ProjectReference Include="..\..\src\MeshWeaver.Maps\MeshWeaver.Maps.csproj" />
         <!-- Direct on purpose (#1644 step 2): the provider pack left Memex.Portal.Shared's
              closure (it ships via modules/), so AgentPickerProjectionTest references it itself. -->
         <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />

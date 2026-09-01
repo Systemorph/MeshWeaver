@@ -27,7 +27,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// an ActivityLog MeshNode at script dispatch and thread its id/logger through
 /// to the script's <c>Log</c> global).
 /// </summary>
-public class OrleansKernelProgressTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
+public class OrleansKernelProgressTest(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
     private const int DefaultTimeoutMs = 30_000;
 

@@ -50,7 +50,7 @@ Registered once, `silo.AddMemoryStreams(StreamProviders.Memory)` in
 Two facts that change the shape of the design, both verified from source:
 
 1. **No production process hosts hubs as an Orleans client.** `UseOrleansMeshClient` has exactly
-   two callers, both test fixtures (`OrleansTestBase`, `OrleansDocumentationTest`). `Memex.Portal.Distributed`
+   two callers, both test fixtures (`OrleansMeshTestBase`, `OrleansDocumentationTest`). `Memex.Portal.Distributed`
    is a co-hosted silo; the monolith, `LocalMesh` and the bake host run no Orleans at all. So *"a
    client cannot host a grain, therefore it keeps the stream permanently"* — the standing
    justification for the fallback — describes the **test rig**, not the fleet.

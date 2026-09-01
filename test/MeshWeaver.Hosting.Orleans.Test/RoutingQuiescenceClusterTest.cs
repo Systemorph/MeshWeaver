@@ -24,8 +24,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// wait is on the gauge's own emissions or on the decorator's counters.</para>
 /// </summary>
 public class RoutingQuiescenceClusterTest(ITestOutputHelper output)
-    : OrleansTestBase<StallingResolverSiloConfigurator>(output)
+    : OrleansMeshTestBase(output)
 {
+    /// <inheritdoc />
+    protected override Type SiloConfiguratorType => typeof(StallingResolverSiloConfigurator);
+
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     [Fact]

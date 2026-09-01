@@ -43,7 +43,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// signal — the owner's eviction counter — stays at zero and the bounded wait times out. Every wait
 /// here is bounded; an unbounded one would hang exactly the way the storm does and prove nothing.</para>
 /// </summary>
-public class DeadSubscriberEvictionTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
+public class DeadSubscriberEvictionTest(ITestOutputHelper output) : OrleansMeshTestBase(output)
 {
     // 🚨 This class asserts the OWNER-GLOBAL eviction counter — the documented opt-out category
     // for the mesh pool (WritingTests.md § The Mesh Pool). On a pooled cluster the counter moves

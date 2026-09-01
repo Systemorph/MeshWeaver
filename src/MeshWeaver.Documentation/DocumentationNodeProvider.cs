@@ -164,10 +164,13 @@ public class DocumentationNodeProvider : IStaticNodeProvider
 
             // Align Namespace/Id with the served path (mirrors EmbeddedResourceStorageAdapter's
             // path normalization, including the partition prefix and NO index→parent collapse).
+            // WithPath carries MainNode along — a bare `with { Namespace = … }` leaves it frozen at
+            // the namespace the parser minted, which is what makes a node invisible to `is:main`
+            // while `get` still returns it (#2939).
             var lastSlash = fullPath.LastIndexOf('/');
             node = lastSlash > 0
-                ? node with { Namespace = fullPath[..lastSlash], Id = fullPath[(lastSlash + 1)..] }
-                : node with { Namespace = "", Id = fullPath };
+                ? node.WithPath(fullPath[(lastSlash + 1)..], fullPath[..lastSlash])
+                : node.WithPath(fullPath, "");
             nodes.Add(node);
         }
         return nodes;
