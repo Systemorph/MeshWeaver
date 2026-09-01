@@ -909,6 +909,17 @@ Bearer context, for two non-authority reasons: it is a useful diagnostic, and `A
 uses a non-empty `Roles` list as its cue to restore the sender's `AccessContext` on a receiving hub.
 Neither is a permission decision — a future "just check the claims" is a regression, not a shortcut.
 
+> ⚠️ **Known gap, named rather than papered over — that second use is itself a defect.**
+> `AccessControlPipeline` restores the sender's context only when `delivery.AccessContext` carries a
+> **non-empty** `Roles` list. A token minted with no claims (the ordinary case) therefore reaches a
+> per-node hub with no restored context at all, so `capturedContext` is null, `IsApiToken` is
+> unknown, and the clamp **does not run** on that path. It is not a hole in the read path — the
+> exact-read gate (`MeshNodeStreamCache.GetStreamRaw` → `ProbeEffectivePermissions`) captures the
+> caller's context directly and clamps correctly — but a message-routed check on a per-node hub can
+> miss it. The cure is to make the restore unconditional rather than role-shaped; it is a
+> context-propagation defect, not a staleness one, and it is tracked separately (issue #2976) so it
+> gets its own measurement on a hot path rather than riding along here.
+
 > 🚨 **The general rule this is an instance of.** A credential must not carry a *copy* of an
 > authorization fact. Copies go stale silently and in both directions, and the permissive direction
 > has no expiry: the moment authority is snapshotted onto a token, revoking it stops working for
