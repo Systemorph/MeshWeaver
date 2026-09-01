@@ -27,15 +27,15 @@ namespace MeshWeaver.Graph.Configuration;
 ///
 /// <para>🚨 <b>The architecture NEVER relaxes the identity gate.</b> It narrows, never widens: an
 /// artifact is a candidate only when its identity matches EXACTLY
-/// (<see cref="PrebuiltAssemblySeeder.DeclineReason(string?, string)"/>) and its architecture matches
+/// (<c>DeclineReason</c>) and its architecture matches
 /// too. Recording several artifacts on one release is how a lane that genuinely bakes twice publishes
 /// both honestly — it is NOT a licence to re-publish one bake's bytes under a second identity, which
 /// the CD lane forbids and which would defeat the whole proof.</para>
 /// </summary>
 /// <param name="FrameworkIdentity">The resolved framework build identity
 /// (<c>s&lt;hash&gt;</c>/<c>g&lt;sha&gt;</c>) the producing process recorded beside these exact bytes —
-/// the same value <see cref="PrebuiltAssemblySeeder.LiveFrameworkMvid"/> reads and
-/// <see cref="PrebuiltAssemblySeeder.DeclineReason(string?)"/> compares. 🚨 NOT
+/// the same value <c>LiveFrameworkMvid</c> reads and
+/// <c>DeclineReason</c> compares. 🚨 NOT
 /// <see cref="NodeTypeRelease.FrameworkVersion"/>, which is an assembly version string
 /// (<c>3.0.0.0</c>) and has never had anything to do with adoption.</param>
 /// <param name="Architecture">The portable RID of the producing process

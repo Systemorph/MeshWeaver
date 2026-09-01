@@ -7,7 +7,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// <para>Raised by the enrichment wait INSTEAD of sitting out a no-progress budget that cannot
 /// possibly be beaten — parking is exactly the guarantee that no further compile will be
 /// dispatched. Carrying its own type matters for the operator-facing copy: a parked type is a
-/// <see cref="NodeTypeEnrichmentHelpers.OverlayCause.CompileFailed"/>, where a code fix IS the
+/// <c>CompileFailed</c>, where a code fix IS the
 /// remedy, whereas a budget expiry maps to "no code change needed, it will self-heal". Those two
 /// messages send an operator in opposite directions, and before this existed the parked case
 /// rendered the wrong one.</para>

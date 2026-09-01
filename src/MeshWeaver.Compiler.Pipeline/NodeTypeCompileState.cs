@@ -238,7 +238,7 @@ public static class NodeTypeCompileStateMirror
         new(StateId, $"{nodeTypePath}/_Activity")
         {
             Name = $"Compile state ({nodeTypePath})",
-            NodeType = ActivityNodeType.NodeType,
+            NodeType = GraphNodeTypeNames.Activity,
             MainNode = nodeTypePath,
             State = MeshNodeState.Active,
             Content = new ActivityLog(ActivityCategory.Compilation)

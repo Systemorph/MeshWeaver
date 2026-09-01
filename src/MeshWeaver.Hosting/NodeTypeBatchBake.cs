@@ -447,7 +447,7 @@ internal static class NodeTypeBatchBake
     /// <summary>
     /// Compile ONE pending type directly — no hub activation, no compile-watcher settle — then
     /// write the same artifacts the activation path writes: the release record
-    /// (<see cref="MeshDataSourceExtensions.TryCreateReleaseNode"/> — bounded, best-effort, same
+    /// (<see cref="NodeTypeBuildState.TryCreateReleaseNode"/> — bounded, best-effort, same
     /// helper) and the compile-state stamps
     /// (<see cref="NodeTypeCompilationHelpers.ApplyCompileSuccess"/> /
     /// <see cref="NodeTypeCompilationHelpers.ApplyCompileFailure"/> — the shared field-set),
@@ -579,7 +579,7 @@ internal static class NodeTypeBatchBake
         // gated pod nobody is watching, and a null activity path is exactly what the shared stamp
         // writes when the activation path's activity create doesn't land.
         var releaseObservable = ok
-            ? MeshDataSourceExtensions.TryCreateReleaseNode(
+            ? NodeTypeBuildState.TryCreateReleaseNode(
                 mesh, typePath, result!, typeNode, activityPath: null, logger)
             : Observable.Return<string?>(null);
 

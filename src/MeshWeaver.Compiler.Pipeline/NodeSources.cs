@@ -1,8 +1,8 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Compiler;
 using MeshWeaver.Mesh;
 
-using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>

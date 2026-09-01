@@ -12,7 +12,7 @@ namespace MeshWeaver.Graph.Configuration;
 public static class CompletionMemoryNodeType
 {
     /// <summary>The NodeType value used to identify completion-memory nodes.</summary>
-    public const string NodeType = "CompletionMemory";
+    public const string NodeType = GraphNodeTypeNames.CompletionMemory;
 
     /// <summary>Registers the built-in "CompletionMemory" MeshNode on the mesh builder.</summary>
     public static TBuilder AddCompletionMemoryType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder

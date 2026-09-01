@@ -17,6 +17,11 @@ using Microsoft.Extensions.Logging;
 // else without spamming it on the sanctioned hot paths.
 [assembly: InternalsVisibleTo("MeshWeaver.Mesh.Contract")]
 [assembly: InternalsVisibleTo("MeshWeaver.Graph")]
+// The graph/compiler split (#2967): the shared contract carries the synced-query helpers that
+// used to live in MeshWeaver.Graph, and the compile pipeline moved to MeshWeaver.Compiler.
+[assembly: InternalsVisibleTo("MeshWeaver.Graph.Contract")]
+[assembly: InternalsVisibleTo("MeshWeaver.Compiler")]
+[assembly: InternalsVisibleTo("MeshWeaver.Compiler.Pipeline")]
 // Framework-internal tests of the raw remote-stream cache identity
 // (ReferenceEquals on Workspace._remoteStreamCache) legitimately open the raw
 // single-node reduce — they test the mechanism itself, not mesh-node access.
