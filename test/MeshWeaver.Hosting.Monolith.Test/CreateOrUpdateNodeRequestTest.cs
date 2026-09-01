@@ -571,6 +571,76 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
         after.MainNode.Should().Be(after.Path);
     }
 
+    /// <summary>
+    /// 🚨 #2939 — the UPDATE half, and the reason the create-path guard alone was not enough.
+    /// A durable row carrying a stale self-default <c>MainNode</c> (a node minted in one partition
+    /// and rebased into another with <c>with { Namespace = … }</c>) cannot be healed by the writer
+    /// that re-imports it: a full-instance upsert can move a MainNode anywhere EXCEPT back onto the
+    /// node's own path, because <c>MainNode == Path</c> is exactly what
+    /// <see cref="MeshNode.HasExplicitMainNode"/> reads as "unset" (see its remarks). So the
+    /// re-import compared equal, skipped as a no-op, and the row stayed outside <c>is:main</c>
+    /// — SQL <c>n.main_node = n.path</c> — forever. SEVEN live nodes on memex.meshweaver.cloud were
+    /// in this state, with <c>get</c> returning each of them perfectly.
+    ///
+    /// <para>🚨 Restoring the pointer is one of TWO required halves for those nodes to be findable
+    /// again; the other is #2942 (a query union whose legacy single-<c>Query</c> field carries only
+    /// <c>list[0]</c>). This test pins the half that lives here — the stored value — and claims
+    /// nothing about search.</para>
+    ///
+    /// <para>The upsert now runs the same 1b′ repair on the MERGED node, so a re-import heals it.
+    /// The no-op skip has to know that too, or the write it needs never happens.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Upsert_HealsAStoredStaleSelfDefaultMainNode_TheSourceCannotExpress()
+    {
+        var id = $"upsert-stale-mainnode-{Guid.NewGuid():N}";
+        var ns = $"{TestPartition}/Skill";
+        var path = $"{ns}/{id}";
+        var stale = $"Skill/{id}";
+
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+
+        // Planted straight into storage: the CREATE path repairs this shape now, so a durable row in
+        // this state can only be a row written before the repair existed — which is exactly what the
+        // measured nodes are.
+        await storage.Write(
+                new MeshNode(id, ns)
+                {
+                    Name = "Deployment",
+                    NodeType = "Markdown",
+                    Content = new MarkdownContent { Content = "# skill" },
+                    State = MeshNodeState.Active,
+                    MainNode = stale,
+                    Version = 3,
+                },
+                Mesh.JsonSerializerOptions)
+            .Should().Within(15.Seconds()).Emit();
+
+        (await ReadStable(storage, path)).MainNode.Should().Be(stale, "seed precondition");
+
+        // The re-import: byte-identical to the file it came from, and — crucially — its MainNode is
+        // the node's own path, i.e. NOT explicit. Every field compares equal to the stored row.
+        var source = new MeshNode(id, ns)
+        {
+            Name = "Deployment",
+            NodeType = "Markdown",
+            Content = new MarkdownContent { Content = "# skill" },
+            State = MeshNodeState.Active,
+        };
+        source.HasExplicitMainNode.Should().BeFalse(
+            "precondition: the source cannot even SAY 'point back at yourself'");
+
+        var resp = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(source))
+            .Select(d => d.Message)
+            .Should().Emit();
+        resp.Success.Should().BeTrue(resp.Error ?? "");
+
+        var after = await ReadStable(storage, path, n => n.MainNode == path);
+        after.MainNode.Should().Be(path,
+            "a re-import must heal a stale self-default MainNode — otherwise the only route back "
+            + "is a hand-run GetMeshNodeStream(path).Update on a live portal");
+    }
+
     // Reads until the persisted node satisfies the predicate AND its Version is unchanged across
     // 4 consecutive samples (~1.2s quiet — past the 200ms persist debounce), so enrichment/debounce
     // trails can't masquerade as churn.
