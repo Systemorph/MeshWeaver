@@ -1352,6 +1352,25 @@ jobs:
           collected-logs/
         compression-level: 9
         retention-days: 15
+    # 🚨 AFTER the upload on purpose: this step can RED the shard, and the logs it reds on are the
+    #    evidence. Uploading first means the artifact exists whichever way the gate goes.
+    #
+    #    What it catches is silent by construction. A content type not registered on the hub that
+    #    READS it does not throw — the `$type` will not resolve, the value degrades to a raw
+    #    JsonElement, and everything downstream reads it as absent: an `is MyType` check misses, a
+    #    view renders empty, a reactive wait never completes. The message-payload equivalent is
+    #    loud ("type 'X' is not registered in this hub's TypeRegistry", with a NACK); the content
+    #    equivalent is a warning nothing was reading.
+    #
+    #    🚨 The warning became load-bearing on 2026-09-02. `MessageService.Post` used to log via
+    #    `JsonSerializer.Serialize(ret, …)`, and that serialize registered every posted payload
+    #    type as a side effect (ObjectPolymorphicConverter.Write → GetOrAddType). #3056 removed it
+    #    — correctly; logging must not register types — and with the net gone, everything that had
+    #    relied on "registered because it was once posted" surfaces here. It surfaced the same day
+    #    as a validator that silently stopped validating.
+    - name: "Gate: no content degraded to an untyped JsonElement"
+      if: always()
+      run: bash .github/scripts/check-untyped-content.sh collected-logs
     # ── Per-shard surfacing: publish THIS shard's results as soon as it
     #    finishes, so you don't wait for the slowest sibling + the collector to
     #    see shard 0's outcome. The collect-results job re-consolidates all
