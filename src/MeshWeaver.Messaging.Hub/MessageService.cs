@@ -1505,8 +1505,31 @@ public class MessageService : IMessageService
         }
         else
         {
-            var jsonMessage = JsonSerializer.Serialize(delivery, hub.JsonSerializerOptions);
-            logger.LogWarning("Hub {Address} is disposing. Not processing message {Message}", hub.Address, jsonMessage);
+            // 🚨 NAME the message; never SERIALISE it. This line read
+            // `JsonSerializer.Serialize(delivery, hub.JsonSerializerOptions)` passed as a log
+            // argument — the #3044 shape that #3056 removed from `Post`, but at WARNING rather than
+            // Debug, which makes it strictly worse in two ways.
+            //
+            // A method argument is evaluated BEFORE the call, so the whole delivery was serialised
+            // on EVERY message that arrived at a disposing hub, whatever the log level. And because
+            // Warning ships, the rendered payload actually LEFT the process for Loki — a message
+            // body of arbitrary size, including whatever a caller happened to be writing.
+            //
+            // It is on the disposal path, which is exactly where this is least affordable: a hub
+            // tearing down under load can take a whole queue of these, each one an eager transcode
+            // (~5x the payload to render, per #2885's measurement) at the moment the process is
+            // trying to release memory rather than allocate it.
+            //
+            // The type name, the delivery id and the sender are what a reader actually needs here —
+            // "which message was dropped, from whom" — and they identify it without carrying it.
+            // The full body was never the useful part of this line: it is a DROP notice, and the
+            // fate trail below already records the routing story.
+            logger.LogWarning(
+                "Hub {Address} is disposing. Not processing {MessageType} (id={DeliveryId}, sender {Sender})",
+                hub.Address,
+                delivery.Message?.GetType().Name ?? "<null>",
+                delivery.Id,
+                delivery.Sender);
             fate?.Add($"NOT_PROCESSED_DISPOSING runLevel={hub.RunLevel}", Address);
             // 🚨 ANSWER it — never just drop it. This is the FOURTH door into the silent-
             // abandonment park, and the one neither #672 fix covers: the delivery was ACCEPTED
@@ -1533,7 +1556,7 @@ public class MessageService : IMessageService
             // distinct owners must key off the activation tag, never the whole message text.
             NackThroughParent(delivery,
                 $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}, {ActivationTag()}) — "
-                + $"{delivery.Message.GetType().Name} (id={delivery.Id}) was accepted before "
+                + $"{delivery.Message?.GetType().Name ?? "<null>"} (id={delivery.Id}) was accepted before "
                 + "disposal began and its turn came too late to process. The address may "
                 + "reactivate (recycle / restart); retry to get the authoritative answer.");
             exec = Observable.Return(delivery);
