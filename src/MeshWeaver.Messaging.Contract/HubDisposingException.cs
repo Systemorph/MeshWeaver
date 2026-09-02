@@ -44,8 +44,8 @@ public sealed class HubDisposingException : ObjectDisposedException
             // WorkspaceReference renders as its own POINTER, which already carries single quotes
             // around its segments — EntityReference's is `/{collection}/'{id}'` — so single-quoting
             // it produced the unreadable `cannot create '/data/'postAdvanceStatus''` (#2255).
-            $"Hub {hubAddress} is shutting down — cannot create {Describe(what)}. "
-            + "The address may reactivate (recycle / restart); retry to get the authoritative answer.")
+            ShutdownNack.RetryForTheAuthoritativeAnswer(
+                hubAddress, null, $"cannot create {Describe(what)}"))
     {
         HubAddress = hubAddress;
     }
@@ -65,8 +65,8 @@ public sealed class HubDisposingException : ObjectDisposedException
     /// <param name="innerException">The fault that revealed the teardown.</param>
     public HubDisposingException(Address hubAddress, object what, Exception innerException)
         : base(
-            $"Hub {hubAddress} is shutting down — cannot create {Describe(what)}. "
-            + "The address may reactivate (recycle / restart); retry to get the authoritative answer.",
+            ShutdownNack.RetryForTheAuthoritativeAnswer(
+                hubAddress, null, $"cannot create {Describe(what)}"),
             innerException)
     {
         HubAddress = hubAddress;
