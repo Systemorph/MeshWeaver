@@ -170,7 +170,7 @@ public static class SecurityQueries
         GatedNodes("Store/Plugin"),
         Scoped("namespace:_Access nodeType:AccessAssignment " + ContentProjection),
         Scoped("namespace: id:_Policy nodeType:PartitionAccessPolicy " + ContentProjection),
-        PartitionAssignments("rbuergi"),
-        PartitionPolicies("rbuergi"),
+        PartitionAssignments("acme"),
+        PartitionPolicies("acme"),
     ];
 }
