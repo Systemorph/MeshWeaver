@@ -220,6 +220,17 @@ long-lived chain — the #1962 defect, where an early `Permission.None` seed sta
 later re-renders the menu with every entitled tab silently missing. The Read floor is what still
 makes an anonymous viewer see nothing.
 
+🚨 **One compiled tab shape does not survive migration unchanged: `RequiredPermission =
+Permission.None`.** `FilterByPermission` treats a `None` tab as chrome *every* viewer sees, but a
+contribution can never demand less than `Read` (that floor is what makes the lane fail closed), so
+a `None` tab becomes `Read`-gated the moment it moves onto the lane. In practice that is the same
+set of viewers — you cannot open a node's settings page without reading the node — with one real
+difference: a viewer holding `Permission.None` on the node loses the tab. Per-node tabs registered
+as `None` today (Notifications is one) are therefore a deliberate decision at migration time, not a
+copy-paste: either accept the narrowing, or leave that tab compiled. This is the closed vocabulary
+working as designed — a contribution narrows, never widens — but it is a behaviour change, so it
+belongs in the migration PR's description rather than being discovered afterwards.
+
 **Whole top-bar menus** (`Context: TopBar`): the contribution declares a NEW dropdown — its `Area`
 names the menu's own context key, `Label`/`Icon`/`Order`/`Tooltip` style the button, and its
 entries are ordinary contributions targeting that key. The gates apply to the declaration itself

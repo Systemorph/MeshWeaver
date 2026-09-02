@@ -180,6 +180,13 @@ internal static class UiContributionProjection
     /// A contribution can never demand LESS than <see cref="Permission.Read"/> — an entry that
     /// declares nothing still requires Read, which is what makes an anonymous viewer (who arrives
     /// as <see cref="Permission.None"/>) see nothing at all.
+    ///
+    /// <para>🚨 Consequence for the per-node settings migration: a COMPILED tab registered with
+    /// <see cref="Permission.None"/> is chrome every viewer sees
+    /// (<c>SettingsMenuItemsExtensions.FilterByPermission</c> passes those unconditionally), and it
+    /// cannot be reproduced on this lane — it becomes Read-gated. Same viewers in practice, except
+    /// one holding <see cref="Permission.None"/> on the node; a decision to make when migrating
+    /// such a tab, not a detail to discover afterwards.</para>
     /// </summary>
     private static Permission RequiredPermissionFloor(UiContribution contribution)
         => contribution.RequiredPermission == Permission.None
