@@ -260,6 +260,9 @@ public class StreamResyncAnswerInFlightTest(ITestOutputHelper output) : HubTestB
             + "at all: it asked once, the owner is answering, and every frame since has merely "
             + "re-stated that the answer has not arrived yet");
 
+        // Snapshot BEFORE the release re-opens the pipeline: from here on, acks travel normally.
+        var acksThatOvertookTheirAnswer = Volatile.Read(ref acksLetThrough);
+
         // ── RELEASE, IN THE ORDER THE OWNER POSTED IT ──────────────────────────────────────────
         holdAnswers = false;
         var released = 0;
@@ -296,6 +299,17 @@ public class StreamResyncAnswerInFlightTest(ITestOutputHelper output) : HubTestB
             "the owner must acknowledge a re-subscribe only AFTER posting the snapshot that answers "
             + "it — an ack that overtakes its own answer makes 'acknowledged and unanswered' true of "
             + "every ask the moment it is made, which is exactly what the give-up then counts");
+
+        // The same invariant stated as an ABSENCE, which is the half that keeps it honest: it is not
+        // enough that SOME ack rode behind its answer, no ack may have gone out ahead of one. An ack
+        // with no snapshot behind it is exactly the evidence the give-up consumes, so a single
+        // escapee is a re-ask miscounted as a failure — which is why the owner's failure arms
+        // REFUSE with a DeliveryFailure rather than ack (ResyncRefused classifies that verdict and
+        // never counts it) instead of acknowledging a snapshot they did not send.
+        acksThatOvertookTheirAnswer.Should().Be(0,
+            "an ack means 'your snapshot is on the wire' — so no path may post one without having "
+            + "posted the snapshot first, and no path may leave the subscriber unanswered either: "
+            + "the two obligations are met by one answer per subscribe, an ack or a refusal");
 
         Volatile.Read(ref patchesLetThroughAfterTheLoss).Should().BeGreaterThanOrEqualTo(
             MaxUnansweredResyncs + 1,
