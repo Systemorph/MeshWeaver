@@ -414,10 +414,80 @@ public static class BuildNodeType
                 // ObserveBuildClaim emits — the field set only, never a wholesale replace: a
                 // registration written milliseconds ago may not have reached storage, and replacing
                 // the mirror would drop it and strand its candidate.
+                //
+                // 🚨 …and the publish may REFUSE (#1193). `pending` was read off this mirror two
+                // storage round-trips ago, and a candidate is free to stand down inside that
+                // window. ApplyGrant is the serialised point that can still see it did, so the
+                // refusal is authoritative — and it is the arbiter's job, not the candidate's, to
+                // put the lock back where it found it.
                 return workspace.GetMeshNodeStream()
                     .Update(current => ApplyGrant(current, granted, options))
-                    .Select(_ => Unit.Default);
+                    .Take(1)
+                    .SelectMany(published => HandBackAStoodDownGrant(
+                        storage, options, logger, granted, claimPath, published));
             });
+    }
+
+    /// <summary>
+    /// Undoes a grant the mirror REFUSED to publish, by releasing the lock this pass just took
+    /// (#1193).
+    ///
+    /// <para><b>Why a grant can need undoing.</b> The candidate set is read off the mirror at the
+    /// START of an arbitration pass and the grant is committed two storage round-trips later. A
+    /// follower that reaches its answer some other way stands down inside that window
+    /// (<c>WithdrawBuildClaim</c>), and BOTH of its halves are conditional on state this pass is
+    /// about to change: it removes its registration, then finds no lock of its own to release. The
+    /// pass then commits a grant to a process that has already finished with the build and is no
+    /// longer listening.</para>
+    ///
+    /// <para>Where the debris lands depends on how the two writers interleave, and neither
+    /// half converges on its own:</para>
+    /// <list type="bullet">
+    /// <item>the mirror's claim PROJECTION keeps naming the withdrawn candidate at
+    /// <see cref="BuildStatus.Planning"/> — measured, and on a host whose arbiter decides on the
+    /// mirror (<c>GrantOnMirror</c>: no durable store, or the fail-open path) that projection IS
+    /// the claim;</item>
+    /// <item>or the claim LOCK does — the one witness every cluster's arbiter decides on — when the
+    /// stand-down read it a moment before this pass wrote it.</item>
+    /// </list>
+    ///
+    /// <para>Either way <see cref="HolderStillHoldsIt"/> then defends it BY DESIGN, because the
+    /// process really is alive (#1355: a stopped heartbeat on a running process means busy, not
+    /// dead). With cluster membership the claim is never taken over at all; without it every later
+    /// candidate waits out <see cref="ClaimStaleAfter"/> and is handed the same dead claim again.
+    /// No builder, no bake, no ready pod — the readiness stall #1440 fixed from the candidate's
+    /// side, arriving instead through the arbiter's own commit.</para>
+    ///
+    /// <para>Level-triggered on real state, with no timing anywhere: the mirror either names our
+    /// winner as holder (published — nothing to do) or it does not (refused), and the lock is
+    /// dropped only while it still names that winner, so a pass that lost a later race removes
+    /// nothing. The delete publishes on the store's change feed, which is the arbiter's own
+    /// trigger, so a queued candidate is elected immediately rather than at the slow tick.</para>
+    /// </summary>
+    internal static IObservable<Unit> HandBackAStoodDownGrant(
+        IStorageAdapter storage,
+        System.Text.Json.JsonSerializerOptions options,
+        ILogger? logger,
+        BuildState granted,
+        string claimPath,
+        MeshNode? published)
+    {
+        if (published?.ContentAs<BuildState>(options)?.ClaimedBy == granted.ClaimedBy)
+            return Observable.Return(Unit.Default);
+
+        logger?.LogInformation(
+            "Build claim {ClaimPath}: {Holder} won the lock but had already STOOD DOWN before the "
+            + "grant could be published, so the build would have stayed locked to a live process "
+            + "that is no longer listening. Releasing the lock — the next candidate elects freely.",
+            claimPath, granted.ClaimedBy);
+
+        return storage.Read(claimPath, options)
+            .Take(1)
+            .SelectMany(held =>
+                held is not null
+                && held.ContentAs<BuildState>(options)?.ClaimedBy == granted.ClaimedBy
+                    ? storage.DeleteIfExists(claimPath).Take(1).Select(_ => Unit.Default)
+                    : Observable.Return(Unit.Default));
     }
 
     /// <summary>
@@ -439,13 +509,30 @@ public static class BuildNodeType
     /// Applies a grant this cluster WON durably onto its own mirror — the claim field set only, so
     /// nothing the mirror holds and storage has not seen yet is lost.
     /// </summary>
-    private static MeshNode ApplyGrant(
+    internal static MeshNode ApplyGrant(
         MeshNode node, BuildState granted, System.Text.Json.JsonSerializerOptions options)
     {
         if (node is null) return node!;
         var state = node.ContentAs<BuildState>(options) ?? new BuildState();
         if (state.ClaimedBy == granted.ClaimedBy && state.Status == granted.Status)
             return node;   // already reflects this grant — a redundant pass writes nothing
+
+        // 🚨 THE WINNER MUST STILL BE A CANDIDATE AT PUBLISH TIME (#1193). The election ran on a
+        // candidate set read before two storage round-trips, and a follower that reached its answer
+        // some other way stands down inside that window (WithdrawBuildClaim). This lambda runs on
+        // the node's own serialised write path, so it is the last — and only — point that can still
+        // see that it did. Publishing anyway leaves the projection naming a live process that will
+        // never act on the build and never release it, and the takeover rule then defends that
+        // holder BY DESIGN; see HandBackAStoodDownGrant for the whole failure and its measurement.
+        //
+        // The guard is "neither holder nor candidate", and the first clause is load-bearing: a
+        // holder MID-BAKE has no registration left either — its own grant consumed it — so a bare
+        // "is it still queued?" test would read a running bake as a candidate that stood down.
+        if (state.ClaimedBy != granted.ClaimedBy
+            && granted.ClaimedBy is { } winner
+            && state.RequestedClaims?.ContainsKey(winner) != true)
+            return node;
+
         return node with
         {
             Content = state with
