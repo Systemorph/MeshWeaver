@@ -33,7 +33,7 @@ it, not before.
 
 ### 🚨 Before you push: make CI green LOCALLY first
 
-CI builds **Release with warnings-as-errors**; a plain local Debug build passes while CI fails. **Build every touched project and its dependents with `dotnet build -c Release -warnaserror`, one project per invocation, and only push when that is clean.** The bar is MERGEABLE, not merged: a branch merely *behind* main merges fine here (`strict: false`, one required check — `Consolidate test results`), so do NOT re-sync just to catch up; merge main only when the PR is `DIRTY` or CI fails on something your diff cannot reach. 🚨 `strict` is **PER-REPO** — `MeshWeaver.Plugins` is `strict: true`.
+CI builds **Release with warnings-as-errors**; a plain local Debug build passes while CI fails. **Build every touched project and its dependents with `dotnet build -c Release -warnaserror`, one project per invocation, and only push when that is clean.** The bar is MERGEABLE, not merged: a branch merely *behind* main merges fine here (`strict: false`, one required check — `Consolidate test results`), so do NOT re-sync just to catch up; merge main only when the PR is `DIRTY` or CI fails on something your diff cannot reach. 🚨 `strict` is **PER-REPO** and it FLIPS — `MeshWeaver.Plugins` was `strict: true` until 2026-08-29 and measured `false` on 2026-09-02; never trust a written value, run `gh api repos/Systemorph/<repo>/branches/main/protection --jq '.required_status_checks.strict'`.
 
 ### 🚨 A verification step that cannot fail is not a verification step
 
