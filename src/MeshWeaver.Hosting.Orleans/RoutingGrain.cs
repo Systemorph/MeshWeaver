@@ -279,7 +279,18 @@ internal class RoutingGrain(
             Dispatch(BuildGrainRoute(delivery, address, addressPath, streamProvider, grainFactory),
                 addressPath, delivery.Id);
 
-        return Task.FromResult(delivery.Forwarded(address));
+        // 🚨 THE ACKNOWLEDGEMENT CARRIES THE VERDICT, NOT THE BODY — issue #3045.
+        //
+        // Orleans copies a grain call's RESULT with the same JsonCodec it copies the arguments with,
+        // so echoing the delivery back made an n-byte payload cost n bytes outbound AND n bytes
+        // inbound on every hop, to deliver a state word. The one caller,
+        // OrleansRoutingService.DispatchObservable, reads State, SenderWasNacked and
+        // GetFailureMessage() — never Message. On 2026-09-02 the return half is the half that failed
+        // (PooledResponseCopier → JsonCodec.DeepCopy → OutOfMemoryException inside
+        // InsideRuntimeClient.SafeSendResponse): the callee could not send its own answer. See
+        // DeliveryPayloadBounds.WithoutEchoedPayload for why this is unconditional.
+        return Task.FromResult(
+            DeliveryPayloadBounds.WithoutEchoedPayload(delivery).Forwarded(address));
     }
 
     /// <summary>
