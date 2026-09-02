@@ -430,11 +430,14 @@ internal class UnifiedReferenceAutocompleteProvider(
                     .ToList());
     }
 
-    /// <summary>2-second cap on a delegated per-node round-trip. Without this we
-    /// inherit the framework's 30 s <c>RequestTimeout</c>, which means a hung /
-    /// non-responding remote node hub stalls the entire autocomplete result for
-    /// the whole 30 s.</summary>
-    private static readonly TimeSpan NodeDelegationTimeout = TimeSpan.FromSeconds(2);
+    /// <summary>Cap on a delegated per-node round-trip. Without it we inherit the framework's 30 s
+    /// <c>RequestTimeout</c>, which means a hung / non-responding remote node hub stalls the entire
+    /// autocomplete result for the whole 30 s.
+    /// <para>🚨 DERIVED from the producer's own answer deadline
+    /// (<see cref="AutocompleteBounds.CallerBound"/>), never written here. It was a literal 2 s —
+    /// the same value the delegate answers at — so a delegated answer that took the full deadline
+    /// raced this cap. A caller's bound must strictly dominate the producer's (#3094).</para></summary>
+    private static readonly TimeSpan NodeDelegationTimeout = AutocompleteBounds.CallerBound;
 
     private IObservable<AutocompleteResponse?> GetCompletionsViaHub(string nodePath, string currentSegment)
     {
