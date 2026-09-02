@@ -529,6 +529,27 @@ that does not exist is what stops the next reader from looking at the one that d
 `ReleaseDeliveryChainGuard` (`test/MeshWeaver.Documentation.Test`) now fails RED for any joint of
 this chain whose configuration key no chart renders.
 
+**Rendered is not provisioned** (Memex#140, measured 2026-09-01 and again 2026-09-02): after the
+chart rendered the four slots, memex-cloud's ConfigMap carried `FrameworkBroadcast__Subscribers__0..3`
+**all blank** — the environment overlay never named a subscriber, so the wave still dispatched to
+nobody. Two controls now tell that state from a legitimately inert mesh, and neither is inferred
+from the ConfigMap:
+
+- **At runtime, on the control instance only.** `FrameworkReleaseBroadcaster` reads its own
+  `WebhookInbox:Targets`; a mesh whose allowlist carries `Hosting/PlatformBuilds` IS the control
+  instance (it receives the release events), and there an empty subscriber set logs a **Warning**
+  naming `FrameworkBroadcast__Subscribers__0..N` — everywhere else the same state is Information.
+  `FrameworkBroadcastEmptySubscribersGuard` pins both levels and the target normalisation.
+- **At deploy time, in the deployment repo.** The subscriber set is a field on the
+  `Hosting/Deployment` record (`extraPortalConfig`), rendered into the committed overlay, and
+  `helm-release.yml` reads `helm get values --all` back after every upgrade and fails RED naming any
+  overlay leaf the release does not carry — the same assertion that caught `values.gate.yaml`
+  never having rendered (Memex#137).
+
+The subscriber set for the Systemorph fleet is the four repos that call `node-repo-publish-bake`
+and listen for `meshweaver-framework-released`: MeshWeaver.Plugins, .Education, .Reinsurance,
+.SocialMedia. Crm and Manufacturing do not bake and are not subscribed.
+
 🚨 **The notify job is a GATE, not a reporter (#2235).** It was written reporter-class — "losing one
 notification costs one delayed rebake wave" — with an input-shaped `if [ -z "$SECRET" ] … exit 0`
 and a `::warning::` on every non-2xx. Result: **zero releases broadcast between 2026-08-22 and
