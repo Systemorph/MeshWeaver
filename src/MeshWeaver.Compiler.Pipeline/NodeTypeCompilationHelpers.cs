@@ -2640,6 +2640,28 @@ internal static class NodeTypeCompilationHelpers
         };
 
     /// <summary>
+    /// 🚨 The start timestamp of the compile claim ALREADY STANDING on
+    /// <paramref name="def"/> — the pure rule behind <see cref="RunCompile"/>'s Compiling flip
+    /// (#2895), so "which run does this stamp describe" is a checkable function rather than a
+    /// shape you have to read the pipeline to see.
+    ///
+    /// <para><see cref="NodeTypeDefinition.LastCompileStartedAt"/> means "when the Pending →
+    /// Compiling transition happened" — that is the contract
+    /// <c>DynamicTypePreWarmer.SourcesMovedDuringCompile</c> compares source ticks against, and the
+    /// one <c>IsLiveCompileClaim</c> ages a stranded claim by. <c>HandleDispatchCompile</c>'s
+    /// compare-and-swap is where that transition occurs and where the stamp is minted, so a node
+    /// already reading <see cref="CompilationStatus.Compiling"/> with a start time is carrying THIS
+    /// run's own value and it is returned unchanged. Only a caller that reached the flip without
+    /// that transition (there is none today — <see cref="RunCompile"/> has one caller — but the
+    /// method is public) mints a fresh one, so a Compiling status can never be left without the
+    /// timestamp its liveness is judged by.</para>
+    /// </summary>
+    internal static DateTimeOffset StartOfThisCompileClaim(NodeTypeDefinition def) =>
+        def is { CompilationStatus: CompilationStatus.Compiling, LastCompileStartedAt: { } started }
+            ? started
+            : DateTimeOffset.UtcNow;
+
+    /// <summary>
     /// THE terminal stamp of a SUCCESSFUL compile — the exact field set
     /// <see cref="RunCompile"/>'s write-back has always applied, extracted as a pure function so
     /// the initial-bake batch driver (issue #1207, <c>NodeTypeBatchBake</c> in
@@ -3074,6 +3096,21 @@ internal static class NodeTypeCompilationHelpers
         // Flip the parent NodeType to Compiling, stamping the ACTUAL activity path (or
         // null when the create didn't land). The stamp follows the create — it is never
         // a path that does not exist.
+        //
+        // 🚨 It does NOT re-mint LastCompileStartedAt (#2895). HandleDispatchCompile's
+        // Pending → Compiling compare-and-swap — the ONLY caller of RunCompile, and the
+        // transition this field's contract names ("stamped on the Pending → Compiling
+        // transition", DynamicTypePreWarmer.SourcesMovedDuringCompile) — stamped it moments
+        // ago. Re-stamping here moved the recorded start forward past the activity-node
+        // create, a step bounded at TEN SECONDS below: every source written inside that
+        // window then read as older than the compile, which is exactly the torn-snapshot
+        // evidence SourcesMovedDuringCompile exists to surface, silently discarded. And
+        // because a fresh timestamp can never equal the persisted one, it also denied this
+        // write UpdateOwn's no-op gate on the runs where the activity path did not change,
+        // minting a node version — and a fan-out to every reader — for no observable fact.
+        // A caller that reaches RunCompile without that CAS (none today; the method is
+        // public) still gets a start stamp: the fallback below mints one whenever the node
+        // is not already carrying a Compiling claim's own.
         Observable.Using(
                 () => accessService?.ImpersonateAsSystem() ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
                 _ => activityPathObservable
@@ -3085,7 +3122,7 @@ internal static class NodeTypeCompilationHelpers
                                 Content = def with
                                 {
                                     CompilationStatus = CompilationStatus.Compiling,
-                                    LastCompileStartedAt = DateTimeOffset.UtcNow,
+                                    LastCompileStartedAt = StartOfThisCompileClaim(def),
                                     LastCompilationActivityPath = resolvedActivityPath
                                 }
                             }

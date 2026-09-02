@@ -231,63 +231,7 @@ internal static class NodeTypeContractHandler
                         if (response!.Success && !string.IsNullOrEmpty(response.AssemblyLocation))
                             return curr with
                             {
-                                Content = def with
-                                {
-                                    CompilationStatus = CompilationStatus.Ok,
-                                    CompilationError = null,
-                                    LastCompileSucceededAt = DateTimeOffset.UtcNow,
-                                    // Cross-silo durable assembly reference from the
-                                    // response (set by CompileAndGetConfigurations'
-                                    // IAssemblyStore upload, or by the
-                                    // BuildResponseFromLocal short-circuit). Falls back
-                                    // to the previous values when the producer did not
-                                    // populate them (Null store).
-                                    LatestAssemblyCollection = response.Collection ?? def.LatestAssemblyCollection,
-                                    LatestAssemblyPath = response.ContentPath ?? def.LatestAssemblyPath,
-                                    // The bytes' identity beside their address (#2471). This
-                                    // handler RACES ApplyCompileSuccess (see the LastCompiledVersion
-                                    // note below), so it has to stamp the same shape — a success
-                                    // write that omitted the MVID would leave whichever writer won
-                                    // deciding whether the served build is checkable at all.
-                                    LatestAssemblyMvid =
-                                        ServedBuildIdentity.OfFile(response.AssemblyLocation)
-                                        ?? def.LatestAssemblyMvid,
-                                    // 🚨 The version the BYTES are stored under — never curr.Version.
-                                    // LastCompiledVersion is one half of the IAssemblyStore key
-                                    // (nodeTypePath, version); the response echoes that key's version
-                                    // precisely "so the consumer's cache key matches what was actually
-                                    // compiled". curr.Version is the node's version at WRITE-BACK time,
-                                    // which has advanced past the upload (every compile-status write
-                                    // bumps it) and, on a hydrate, was never the upload version at all.
-                                    //
-                                    // Stamping it re-pointed the record at a store key holding no bytes,
-                                    // and this handler races the activity write-back (ApplyCompileSuccess,
-                                    // which stamps correctly) — so whether the record ended up valid was
-                                    // decided by scheduling. Whoever lost, the readers all use this field
-                                    // as the store key: activation (MeshDataSource / EnrichWithNodeType)
-                                    // then misses and falls back to the DEFAULT config — no
-                                    // MeshNodeReference reducer, the instance page renders nothing — and
-                                    // NodeTypeBakeStatus reports a baked type as having no bytes.
-                                    // Issue #1368.
-                                    LastCompiledVersion = ResolvedStoreVersion(response, def, curr),
-                                    // 🚨 A FRESH compile's success write must be COMPLETE —
-                                    // stamp the framework version the build ran against,
-                                    // exactly like the activity write-back (RunCompile).
-                                    // Leaving it unstamped produced the wedge state
-                                    // Ok + assembly-set + CompiledFrameworkVersion='' ⇒
-                                    // HasUsableBuild=false forever (nothing re-triggers:
-                                    // kickoff needs status null) — the 2-core CI flake's
-                                    // terminal signature. Safe: a fresh success is either a
-                                    // real Roslyn run against the live framework or a
-                                    // cache-hit DLL the loader already verified is NEWER
-                                    // than the framework build (LoadNodeAssembly deletes
-                                    // older-than-framework DLLs). Hydrate paths
-                                    // (freshCompile=false) keep the persisted value — they
-                                    // must never erase an ABI-staleness marker.
-                                    CompiledFrameworkVersion = freshCompile
-                                        ? NodeTypeCompilationHelpers.FrameworkVersion
-                                        : def.CompiledFrameworkVersion
-                                }
+                                Content = ApplyResolvedSuccess(def, response, freshCompile, curr)
                             };
                         // 🚨 "Could not determine" is not "failed". Unavailable is a
                         // MARKER, so it may never overwrite a state another driver owns
@@ -580,6 +524,118 @@ internal static class NodeTypeContractHandler
             ContentPath = contentPath
         };
     }
+
+    /// <summary>
+    /// THE success stamp of a RESOLVED compilation path — the field set this handler writes back
+    /// when <see cref="GetCompilationPathRequest"/> ends with a usable assembly, extracted as a
+    /// pure function (like <c>NodeTypeCompilationHelpers.ApplyCompileSuccess</c>, which it races)
+    /// so the one property that matters can be asserted without a mesh: on the HYDRATE path it
+    /// must return a definition EQUAL to the one it was given.
+    ///
+    /// <para>🚨 That equality is load-bearing (#2895). A hydrate resolves the bytes the record
+    /// already names, so every field below resolves to what is already persisted and
+    /// <c>MeshNodeStreamExtensions.UpdateOwn</c>'s no-op gate (<c>MeshNode.SerializedEquals</c>)
+    /// absorbs the write: no version, no change-feed fan-out, no Postgres row. A single field
+    /// re-stamped with <c>UtcNow</c> defeats that gate for the whole write — which is what
+    /// <c>LastCompileSucceededAt</c> did, on a path that had compiled nothing.
+    /// <c>ResolvedSuccessIsANoOpOnHydrate</c> pins it.</para>
+    /// </summary>
+    /// <param name="def">The NodeType definition as currently persisted.</param>
+    /// <param name="response">The resolved response carrying the assembly coordinates.</param>
+    /// <param name="freshCompile">Whether a real Roslyn run produced this answer, as opposed to a
+    /// hydrate of bytes that already existed. Only a fresh compile may stamp what a compile
+    /// means.</param>
+    /// <param name="curr">The node the stamp lands on — the store-version fallback reads it.</param>
+    internal static NodeTypeDefinition ApplyResolvedSuccess(
+        NodeTypeDefinition def,
+        GetCompilationPathResponse response,
+        bool freshCompile,
+        MeshNode curr)
+        => def with
+        {
+            CompilationStatus = CompilationStatus.Ok,
+            CompilationError = null,
+            // 🚨 A HYDRATE IS NOT A COMPILE (#2895). Handle's published-release
+            // short-circuit resolves bytes the record ALREADY names, out of the
+            // assembly store, under the key it already carries — nothing is built.
+            // Stamping UtcNow there recorded a compile that never happened.
+            //
+            // 🚨 And it was a FALSE PASS in two bake gates, which is the sharper
+            // reason. DynamicTypePreWarmer.RebuildMissingBytes and WatchForRecovery
+            // both prove "a compile is demonstrably FRESH" with
+            // IsFreshSuccess(LastCompileSucceededAt, baseline) — precisely so a
+            // replayed pre-existing Ok cannot green-light a share that never got its
+            // bytes back. A hydrate satisfied that proof having compiled nothing.
+            //
+            // Every other field on this branch already resolves to what is persisted,
+            // so with the timestamp gated the whole write reproduces the stored
+            // definition and UpdateOwn's no-op gate (MeshNode.SerializedEquals)
+            // absorbs it — no version, no change-feed fan-out, no Postgres row. That
+            // matters wherever this contract is still driven: it is the per-NodeType
+            // hub's FALLBACK resolve (see its registration in MeshDataSource — the
+            // common activation path is NodeTypeService.ResolveViaStream), reached by
+            // cross-process / participating-client probes.
+            //
+            // Gated on `freshCompile`, the same predicate — and for the same reason —
+            // that already gates CompiledFrameworkVersion at the bottom of this
+            // initializer: only a real Roslyn run may stamp what a real Roslyn run
+            // means.
+            LastCompileSucceededAt = freshCompile
+                ? DateTimeOffset.UtcNow
+                : def.LastCompileSucceededAt,
+            // Cross-silo durable assembly reference from the
+            // response (set by CompileAndGetConfigurations'
+            // IAssemblyStore upload, or by the
+            // BuildResponseFromLocal short-circuit). Falls back
+            // to the previous values when the producer did not
+            // populate them (Null store).
+            LatestAssemblyCollection = response.Collection ?? def.LatestAssemblyCollection,
+            LatestAssemblyPath = response.ContentPath ?? def.LatestAssemblyPath,
+            // The bytes' identity beside their address (#2471). This
+            // handler RACES ApplyCompileSuccess (see the LastCompiledVersion
+            // note below), so it has to stamp the same shape — a success
+            // write that omitted the MVID would leave whichever writer won
+            // deciding whether the served build is checkable at all.
+            LatestAssemblyMvid =
+                ServedBuildIdentity.OfFile(response.AssemblyLocation)
+                ?? def.LatestAssemblyMvid,
+            // 🚨 The version the BYTES are stored under — never curr.Version.
+            // LastCompiledVersion is one half of the IAssemblyStore key
+            // (nodeTypePath, version); the response echoes that key's version
+            // precisely "so the consumer's cache key matches what was actually
+            // compiled". curr.Version is the node's version at WRITE-BACK time,
+            // which has advanced past the upload (every compile-status write
+            // bumps it) and, on a hydrate, was never the upload version at all.
+            //
+            // Stamping it re-pointed the record at a store key holding no bytes,
+            // and this handler races the activity write-back (ApplyCompileSuccess,
+            // which stamps correctly) — so whether the record ended up valid was
+            // decided by scheduling. Whoever lost, the readers all use this field
+            // as the store key: activation (MeshDataSource / EnrichWithNodeType)
+            // then misses and falls back to the DEFAULT config — no
+            // MeshNodeReference reducer, the instance page renders nothing — and
+            // NodeTypeBakeStatus reports a baked type as having no bytes.
+            // Issue #1368.
+            LastCompiledVersion = ResolvedStoreVersion(response, def, curr),
+            // 🚨 A FRESH compile's success write must be COMPLETE —
+            // stamp the framework version the build ran against,
+            // exactly like the activity write-back (RunCompile).
+            // Leaving it unstamped produced the wedge state
+            // Ok + assembly-set + CompiledFrameworkVersion='' ⇒
+            // HasUsableBuild=false forever (nothing re-triggers:
+            // kickoff needs status null) — the 2-core CI flake's
+            // terminal signature. Safe: a fresh success is either a
+            // real Roslyn run against the live framework or a
+            // cache-hit DLL the loader already verified is NEWER
+            // than the framework build (LoadNodeAssembly deletes
+            // older-than-framework DLLs). Hydrate paths
+            // (freshCompile=false) keep the persisted value — they
+            // must never erase an ABI-staleness marker.
+            CompiledFrameworkVersion = freshCompile
+                ? NodeTypeCompilationHelpers.FrameworkVersion
+                : def.CompiledFrameworkVersion
+        };
+
 
     /// <summary>
     /// The <see cref="IAssemblyStore"/> key version that <see cref="NodeTypeDefinition.LastCompiledVersion"/>
