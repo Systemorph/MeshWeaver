@@ -355,6 +355,98 @@ on a rebased clock, the re-ask refused **terminally** (must fault), and the re-a
 **transiently** with the identical `TargetUnserved` stamp (must be ridden out and still
 converge). Each fails on the pre-#2654 tree.
 
+### The termination contract — when the mirror stops asking and faults (#1384)
+
+The contract above recovers a mirror when the leg loses **one** thing. It does not
+terminate when the leg keeps losing **this stream's** snapshots, and that residual is a
+silent forever-wedge: every re-ask is acknowledged, every acknowledgement re-opens the
+gate, every answering Full dies on the way back, and the mirror asks again for the rest of
+the process's life. The `Resync has not converged` Warning above is the only trace, and a
+**log line is not an API** — nothing downstream of the stream is told anything, so nothing
+can re-establish.
+
+Measured on memex-cloud, 2026-09-01, on `Event/SavGeneralversammlung2026/Talk`:
+
+```
+[SYNC_STREAM] Frame loss detected for G4LJWZjBXkWdULLsT-5N5g: incoming Patch v13 chains onto v12
+  but the last applied frame is v11 — a frame was lost in transport; requesting fresh snapshot
+Layout area 'Present' on Event/SavGeneralversammlung2026/Talk was torn down having never rendered
+  — the subscriber only ever saw the "awaiting first data" placeholder.
+```
+
+Plain node reads on that path answered instantly, so the owner was healthy; **recycling the
+pod that held the activation did not clear it**, because the wedge lived entirely in a
+subscriber that had not been told anything was wrong.
+
+So the count of consecutive **acknowledged-and-unanswered** re-asks is bounded, and at
+`SynchronizationStream.MaxUnansweredResyncs` (3) the mirror stops asking and calls
+`OnError` with a `StreamNotConvergingException`.
+
+🚨 **The count is of ACKS, not of asks, and that is the #2745 policy in one line.** The
+increment lives in the ack arm of `RequestFreshSnapshot` and nowhere else. An
+acknowledgement means the owner *processed* the re-subscribe, so a base snapshot that never
+follows died on the leg — evidence. A re-ask **refused transiently** (`ShuttingDown`, the
+rolling-deploy overlap window) is deliberately ridden out by the table above, and counting
+it would fault every mirror in that window, which is worse than the bug this fixes. An
+increment that races an answering Full is undone by that Full's own reset a moment later.
+A re-ask that gets **no verdict at all** (undeliverable, so the hub's own request/response
+terminal fires) is likewise not counted — "we could not find out" is not an answer about
+the owner, and the table above already keeps that case recoverable and loud, one Warning
+carrying the exception per attempt. Widening the count to cover it would be a separate
+decision with a separate justification, not a free extension of this one.
+
+🚨 **Mirrors only.** The give-up applies where `StreamIdentity.Owner` is another hub — the
+same predicate `OwnerVersion()` uses. `PatchDataChangeRequest` reaches `UpdateStream` on the
+*owner's* server-side stream as well, where a subscriber write that races that stream's
+first outbound frame takes the same "Patch before base Full" branch; there the counter never
+resets (the Full that would reset it is one that stream **sends**), so it measures nothing
+and faulting on it would kill an owner's stream for a subscriber-side race.
+
+🚨 **This is a bound on EVIDENCE, not a retry budget.** Nothing here retries and nothing
+polls. An increment costs a full round trip to the owner — the gate suppresses every re-ask
+while one is outstanding, and only the answer releases it — **plus** a subsequent owner
+frame that proves the mirror still has no base. Raising the bound buys a longer silence, not
+a better chance; that is the opposite of a widened timeout, and it is why the number is
+small.
+
+**Why 3.** The one healthy way to spend an attempt without converging is a Patch overtaking
+the answering Full. The owner queues its re-assert on the **same** stream hub that produces
+the patches, so a patch can only overtake a re-assert that was already in flight when the
+re-ask landed — one redundant round trip, twice over at the very worst. The two failure
+directions are also not symmetric:
+
+| bound too low | bound too high |
+|---|---|
+| a stream that would have converged is faulted ⇒ **one re-establish**: `StreamLiveness.IsUsable` refuses to serve a faulted stream (#2387), the cache evicts it, and the next natural caller opens a fresh one that subscribes from scratch | a view that never loads and never says so ⇒ the incident above |
+
+**The fault is the recovery signal**, not the end of the road. A faulted stream is the one
+state every consumer already knows how to act on: the store's terminal error reaches every
+reader, `Workspace` drops it from `_remoteStreamCache` and closes it, and `OnError` also
+calls `Hub.FailStartup` + `Hub.OpenGate(SynchronizationGate)` — which releases whatever was
+deferred behind that gate. Re-establishing stays the *subscriber's* decision, taken because
+it was finally told.
+
+**The operator signal** is `[SYNC_STREAM] Resync gave up for {StreamId}: N consecutive
+fresh-snapshot requests to {Owner} were acknowledged and none produced a base snapshot` at
+**Warning**, followed by the stream's own `OnError` line. Seeing it means the
+owner→subscriber leg is losing frames systematically — read it together with the query
+pressure work in
+[Cross-Schema Fan-Out Elimination](/Doc/Architecture/CrossSchemaFanOutElimination): a leg
+drops frames when the process behind it is saturated, and that saturation is the thing to
+fix. This bound exists so the saturation cannot cash out as a view that is blank forever.
+
+**A note on the ordering inside `RequestFreshSnapshot`.** The method establishes that it
+*can* ask — `Reference is WorkspaceReference` — **before** it nulls the cached JSON or takes
+the gate. That order matters (the reverse closes the gate on a re-ask that was never made,
+permanently by construction) and it is already how the code reads since #2654. It is **not**
+what produced the incident above: `LayoutAreaReference` *is* a `WorkspaceReference`, so the
+Present-area stream took the ordinary path, asked, was acknowledged, and was never answered.
+
+Pinned by `StreamResyncGivesUpTest`: one mid-burst Patch eaten to start the resync, then
+**every** fresh snapshot eaten, one write per proven gap — the mirror must fault with a
+`StreamNotConvergingException`, and a fresh subscriber must then get a new stream that
+converges on the owner's complete state. It hangs on the pre-#1384 tree.
+
 ---
 
 ## 7. Minimal bytes on the wire
