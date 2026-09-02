@@ -148,12 +148,37 @@ public class SecurityQueryShapesTest
     /// overwhelming majority at runtime — and they must come back PINNED.
     /// </summary>
     [Theory]
-    [InlineData("namespace:rbuergi/_Access nodeType:AccessAssignment select:path,id limit:all", "rbuergi")]
-    [InlineData("namespace:acme/Renewals/_Access nodeType:AccessAssignment limit:all", "acme")]
-    [InlineData("path:Admin/_Access scope:children nodeType:AccessAssignment limit:all", "Admin")]
-    [InlineData("namespace:Doc id:_Policy nodeType:PartitionAccessPolicy limit:all", "Doc")]
+    [InlineData("path:rbuergi scope:descendants nodeType:AccessAssignment select:path,id limit:all", "rbuergi")]
+    [InlineData("path:acme scope:descendants nodeType:AccessAssignment limit:all", "acme")]
+    [InlineData("path:Admin scope:descendants nodeType:AccessAssignment limit:all", "Admin")]
+    [InlineData("path:Doc scope:descendants id:_Policy nodeType:PartitionAccessPolicy limit:all", "Doc")]
     public void AnAnchoredScopeLegPinsItsPartition(string query, string expected)
         => PinnedPartition(query).Should().Be(expected);
+
+    /// <summary>
+    /// The two shapes the fold actually issues per partition (#3093) come back PINNED — the same
+    /// positive control as above, but taken from the BUILDERS rather than from strings written
+    /// here, so a change to <see cref="SecurityQueries.PartitionAssignments"/> that quietly stopped
+    /// anchoring cannot pass while a hand-copied literal keeps saying it does.
+    ///
+    /// <para>🚨 Anchoring THESE is not the truncation the census forbids. The forbidden move is
+    /// pinning a GLOBAL read (memberships, roles, gated types) to the viewer's partition, which
+    /// drops records that live elsewhere. A grant on any scope of a path lives at
+    /// <c>{scope}/_Access</c> where the scope is a PREFIX of that path — so it is in that path's
+    /// own partition by construction, and the partition read is a superset of the per-scope walk it
+    /// replaced.</para>
+    /// </summary>
+    [Fact]
+    public void ThePerPartitionLegsPinTheirPartition()
+    {
+        PinnedPartition(SecurityQueries.PartitionAssignments("acme")).Should().Be("acme");
+        PinnedPartition(SecurityQueries.PartitionPolicies("acme")).Should().Be("acme");
+        // "Admin" is PermissionEvaluator.AdminScope, which is internal to Mesh.Contract.
+        PinnedPartition(SecurityQueries.PartitionAssignments("Admin")).Should().Be("Admin",
+                "the Admin partition is excluded from searchable_schemas, so its grants are only "
+                + "reachable through a path-anchored read — that is why the fold used to carry an "
+                + "Admin special case, and why every partition now takes that route");
+    }
 
     [Theory]
     [InlineData("nodeType:Role scope:subtree limit:all")]

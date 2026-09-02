@@ -852,83 +852,102 @@ internal static class PermissionEvaluator
 
     #endregion
 
-    #region Per-scope observable chains (AccessAssignment + Policy)
+    #region Per-partition observable chains (AccessAssignment + Policy)
 
-    private static IObservable<IEnumerable<MeshNode>> ObserveScopeAssignments(
-        IMessageHub hub, IMeshNodeStreamCache cache, string scope, IReadOnlyList<MeshNode> staticNodes)
-    {
-        var key = scope ?? string.Empty;
-        var nsQuery = string.IsNullOrEmpty(key) ? "_Access" : $"{key}/_Access";
-
-        // The Admin partition is EXCLUDED from cross-schema global search
-        // (PostgreSqlSchemaInitializer.searchable_schemas), so a namespace-only access query
-        // never reaches admin.access — platform-admin grants would silently never load and a
-        // platform admin is unrecognized on Postgres. For Admin-rooted scopes, route by PATH:
-        // `path:{scope}/_Access` resolves to the admin schema via its first segment
-        // (PostgreSqlPartitionedMeshQuery.FirstSegment) and to the access table via nodeType.
-        // Every other scope keeps the namespace query — those schemas ARE in the cross-schema
-        // search, and path/namespace select the same flat grant set under {scope}/_Access.
-        var isAdminScope = key == AdminScope
-            || key.StartsWith(AdminScope + "/", StringComparison.Ordinal);
-        var selfFilter = SecurityQueries.Scoped(isAdminScope
-            ? $"path:{nsQuery} scope:children nodeType:{SecurityCollections.AccessAssignmentNodeType} {SecurityQueries.ContentProjection}"
-            : $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType} {SecurityQueries.ContentProjection}");
-
-        // Self: narrow per-scope query against the singleton cache. Each
-        // scope's stream is cached PROCESS-WIDE under the key
-        // "$security-access:{scope}" — every hub in the process shares one
-        // upstream subscription per scope.
-        var self = SecurityQuery(cache, $"$security-access:{key}", hub.JsonSerializerOptions, selfFilter);
-
-        // Parent: recursive reference to parent-scope cached observable.
-        // Root scope folds in statics instead.
-        IObservable<IEnumerable<MeshNode>> parentOrBase = string.IsNullOrEmpty(key)
-            ? Observable.Return<IEnumerable<MeshNode>>(staticNodes.ToArray())
-            : ObserveScopeAssignments(hub, cache, GetParentScope(key), staticNodes);
-
-        return Observable.CombineLatest(self, parentOrBase, UnionByPath)
-            .DistinctUntilChanged(MeshNodeListPathEquality.Instance);
-    }
-
+    /// <summary>
+    /// 🚨 <b>THE FOLD READS PER PARTITION, NEVER PER SCOPE</b> (issue #3093). The partition of
+    /// <paramref name="nodePath"/> — its first segment — is the ONLY place a grant on any scope of
+    /// that path can live: a grant sits at <c>{scope}/_Access/{id}</c>, and every scope on the
+    /// chain except the root is a prefix of the path. Two anchored reads therefore answer the whole
+    /// chain: this partition's grants, plus the ROOT scope's (which belongs to no partition).
+    ///
+    /// <para><b>What it replaced, and why that was O(nodes).</b> The previous shape recursed the
+    /// chain, opening a process-wide cached query per SCOPE. A node's own path is always the LEAF
+    /// of its own chain, so every node ever permission-checked minted its own live
+    /// <c>$security-access:{path}</c> + <c>$security-policy:{path}</c> pair — and the per-user RLS
+    /// filter on a shared synced query checks EVERY node in the snapshot before its first emission.
+    /// Measured on this tree (SecurityQueryScaleTest): RLS-filtering a 4-node listing opened 13
+    /// security queries, a 32-node listing 69; both are 5 now.
+    /// The count now depends on how many PARTITIONS a listing spans, not on how many nodes it
+    /// shows, and it no longer depends on path depth at all.</para>
+    ///
+    /// <para><b>Why the verdict cannot change.</b> The fold never depended on which scopes were
+    /// READ, only on which are CONSULTED: <see cref="ComputeScopeRoles"/> buckets whatever nodes it
+    /// is handed by each node's OWN namespace, and <see cref="ComputeRoleState"/> then walks
+    /// <see cref="GetScopeHierarchy"/> and reads only the buckets on the target path's chain. A
+    /// partition-wide read is a strict superset of the per-scope walk, so nothing a grant or a DENY
+    /// depends on can go missing — the direction that matters, because a short read here reads as
+    /// "denied" and a missing group DENY fails OPEN (#2011, Doc/Architecture/UnanchoredSecurityReads).</para>
+    ///
+    /// <para>The Admin special case is GONE because <c>path:</c> anchoring is exactly what it
+    /// needed: <c>Admin</c> is excluded from <c>searchable_schemas</c>, so the old namespace-only
+    /// query never reached <c>admin.access</c> and platform-admin grants silently never loaded.
+    /// Every partition now takes the route Admin had to be special-cased into.</para>
+    /// </summary>
     private static IObservable<IEnumerable<MeshNode>> ObserveEffectiveAssignments(
         IMessageHub hub, IMeshNodeStreamCache cache, string nodePath, IReadOnlyList<MeshNode> staticNodes)
-        => ObserveScopeAssignments(hub, cache, nodePath ?? string.Empty, staticNodes);
+    {
+        // The ROOT scope's grants live under the `_Access` namespace of no partition, so this leg
+        // stays global (declared in SecurityQueryShapesTest.DeliberatelyGlobal) and stays ONE
+        // process-wide cached subscription for the whole mesh.
+        var root = SecurityQuery(cache, "$security-access:", hub.JsonSerializerOptions,
+            SecurityQueries.Scoped(
+                $"namespace:_Access nodeType:{SecurityCollections.AccessAssignmentNodeType} "
+                + SecurityQueries.ContentProjection));
 
+        var statics = Observable.Return<IEnumerable<MeshNode>>(staticNodes.ToArray());
+        var partition = GetPartition(nodePath);
+
+        var withStatics = string.IsNullOrEmpty(partition)
+            ? Observable.CombineLatest(root, statics, UnionByPath)
+            : Observable.CombineLatest(
+                SecurityQuery(cache, $"$security-access:{partition}", hub.JsonSerializerOptions,
+                    SecurityQueries.PartitionAssignments(partition)),
+                root,
+                statics,
+                (own, rootNodes, staticList) => UnionByPath(UnionByPath(own, rootNodes), staticList));
+
+        return withStatics.DistinctUntilChanged(MeshNodeListPathEquality.Instance);
+    }
+
+    /// <summary>
+    /// The policy twin of <see cref="ObserveEffectiveAssignments"/>: the <c>_Policy</c> nodes of
+    /// <paramref name="scope"/>'s partition plus the root one, as a <c>namespace → policy</c> map.
+    /// <see cref="ComputeRoleState"/> reads only the scopes on the target path's chain, so a
+    /// partition-wide map is a superset that changes no verdict. See #3093 for the measurement.
+    /// </summary>
     private static IObservable<ImmutableDictionary<string, PartitionAccessPolicy>> ObserveScopePolicies(
         IMessageHub hub, IMeshNodeStreamCache cache, string scope,
         IReadOnlyDictionary<string, PartitionAccessPolicy> staticPolicies)
     {
-        var key = scope ?? string.Empty;
-        var nsFilter = string.IsNullOrEmpty(key)
-            ? "namespace: id:_Policy"
-            : $"namespace:{key} id:_Policy";
-
-        var self = SecurityQuery(
-            cache,
-            $"$security-policy:{key}",
-            hub.JsonSerializerOptions,
+        // Root: the empty namespace belongs to no partition — global, one subscription, declared.
+        var root = SecurityQuery(cache, "$security-policy:", hub.JsonSerializerOptions,
             SecurityQueries.Scoped(
-                $"{nsFilter} nodeType:{SecurityCollections.PartitionAccessPolicyNodeType} {SecurityQueries.ContentProjection}"));
+                $"namespace: id:_Policy nodeType:{SecurityCollections.PartitionAccessPolicyNodeType} "
+                + SecurityQueries.ContentProjection));
 
-        IObservable<ImmutableDictionary<string, PartitionAccessPolicy>> parentOrBase;
-        if (string.IsNullOrEmpty(key))
-        {
-            var staticMap = staticPolicies.Aggregate(
-                ImmutableDictionary<string, PartitionAccessPolicy>.Empty,
-                (acc, kvp) => acc.SetItem(kvp.Key, kvp.Value));
-            parentOrBase = Observable.Return(staticMap);
-        }
-        else
-        {
-            parentOrBase = ObserveScopePolicies(hub, cache, GetParentScope(key), staticPolicies);
-        }
+        var partition = GetPartition(scope);
+        var nodes = string.IsNullOrEmpty(partition)
+            ? root
+            : Observable.CombineLatest(
+                SecurityQuery(cache, $"$security-policy:{partition}", hub.JsonSerializerOptions,
+                    SecurityQueries.PartitionPolicies(partition)),
+                root,
+                UnionByPath);
+
+        var staticMap = staticPolicies.Aggregate(
+            ImmutableDictionary<string, PartitionAccessPolicy>.Empty,
+            (acc, kvp) => acc.SetItem(kvp.Key, kvp.Value));
 
         var options = hub.JsonSerializerOptions;
-        return Observable.CombineLatest(self, parentOrBase,
-            (selfNodes, parentMap) =>
+        return nodes
+            .Select(policyNodes =>
             {
-                var dict = parentMap;
-                foreach (var node in selfNodes)
+                // Runtime policies layer OVER the static map, exactly as the per-scope recursion's
+                // parent→child fold did (the root leg started from statics and each child scope
+                // SetItem'd its own namespace on top).
+                var dict = staticMap;
+                foreach (var node in policyNodes)
                 {
                     if (node.Id != "_Policy") continue;
                     var policy = node.Content as PartitionAccessPolicy
@@ -939,6 +958,22 @@ internal static class PermissionEvaluator
                 return dict;
             })
             .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// The partition a path or scope belongs to — its first non-empty segment, which is the schema
+    /// its <c>_Access</c> / <c>_Policy</c> nodes live in (one schema per partition). Empty for the
+    /// root scope, which belongs to no partition.
+    /// </summary>
+    private static string GetPartition(string? pathOrScope)
+    {
+        if (string.IsNullOrEmpty(pathOrScope))
+            return string.Empty;
+        // 🚨 The FIRST NON-EMPTY segment, exactly as GetScopeHierarchy splits — a leading or
+        // doubled '/' must not resolve the partition to the empty string, which would silently
+        // drop this partition's grants and fail the whole path CLOSED.
+        var segments = pathOrScope.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length == 0 ? string.Empty : segments[0];
     }
 
     /// <summary>
@@ -1105,7 +1140,7 @@ internal static class PermissionEvaluator
     /// each node's CONTENT (<c>roles</c>, <c>denied</c>, <c>accessObject</c>). Comparing only the set
     /// of paths meant any emission that CORRECTED an assignment's content while the path set stayed
     /// the same was suppressed by the <c>DistinctUntilChanged</c> in
-    /// <see cref="ObserveScopeAssignments"/> — permanently, not merely late. The subscriber kept the
+    /// <see cref="ObserveEffectiveAssignments"/> — permanently, not merely late. The subscriber kept the
     /// first snapshot forever, so a grant that arrived content-empty and was filled in a beat later
     /// never reached the evaluator. That is the <c>PaywallRealGateShapeTests</c> buyer-wait hang
     /// (reproduced 1-in-7 locally): the timeout could be raised to any value and it would still hang,

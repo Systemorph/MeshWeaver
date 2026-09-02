@@ -67,6 +67,17 @@ Each of these small sets is **tiny and rarely changing** — the fold's global r
 ~50 rows; the bell's thousands of rows are its own defect — fetched the most expensive way the
 storage layer has, per render.
 
+### What #3093 changed underneath this census
+
+The fold's ANCHORED legs were per-SCOPE, and that made their *count* — not their fan-out — grow with
+the mesh's read volume: a node's own path is the leaf of its own scope chain, so every node ever
+permission-checked minted its own live `$security-access:{path}` + `$security-policy:{path}` query.
+They are now per-PARTITION (`path:{partition} scope:descendants …`), which is where `_Access` and
+`_Policy` actually live. Measured: RLS-filtering a 4-node listing opened 13 security queries and a
+32-node listing 69; both are 5 now. Rows 2 and 3 of the census are unchanged — the *global* legs
+still fan out, and [Unanchored Security Reads](/Doc/Architecture/UnanchoredSecurityReads) says why
+they must.
+
 ## The elimination plan
 
 ### 1. The bell: deliver notifications to the RECIPIENT's partition

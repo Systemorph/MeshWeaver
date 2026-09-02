@@ -65,10 +65,32 @@ the overwhelming majority at runtime — so "everything is unanchored" cannot pa
 | root `namespace:_Access` | the ROOT scope's anchor is the satellite segment `_Access`, which resolves to **no partition** — there is no partition name to write |
 | root `namespace:` + `id:_Policy` | the root scope's policy leg carries the EMPTY namespace by construction, for the same reason |
 
-Note what is NOT on the list: every *scoped* leg (`namespace:{scope}/_Access`,
-`namespace:{scope} id:_Policy`) already pins its partition through its first path segment, and the
-fold's scope recursion means those are the queries it issues most often. The global legs are five
-process-wide cached subscriptions, not a per-render storm — which is why the ordering below matters.
+Note what is NOT on the list: the **per-partition** legs (`path:{partition} scope:descendants
+nodeType:AccessAssignment`, and its `_Policy` twin) pin their partition through the first path
+segment. The global legs are five process-wide cached subscriptions, not a per-render storm — which
+is why the ordering below matters.
+
+## The distinction that makes one anchoring sound and the other a regression (#3093)
+
+Those per-partition legs used to be **per-scope** legs — one cached query per scope on the target
+path's chain — and that shape was O(nodes), not O(partitions): a node's own path is always the LEAF
+of its own scope chain, so every node ever permission-checked minted its own live
+`$security-access:{path}` + `$security-policy:{path}` pair. The per-user RLS filter on a shared
+synced query checks EVERY node in a snapshot before its first emission, so a listing paid that twice
+per row. Measured (`SecurityQueryScaleTest`): **13** security queries for a 4-node listing, **69**
+for a 32-node one; **5 either way** after the fold started reading per partition.
+
+Anchoring those legs is **not** the truncation this page forbids, and the difference is worth
+stating precisely, because "anchor it to a partition" is the sentence that means both things:
+
+| | Subject | Anchoring to a partition is… |
+|---|---|---|
+| `Memberships`, `Roles`, `GatedNodes` | a record that may live in **any** partition — a `GroupMembership` under the GROUP node, a `Role` wherever it was authored | **truncation.** The record is elsewhere, so it is not returned: the grant vanishes and the group DENY fails open |
+| the per-partition grant/policy legs | `{scope}/_Access` where the scope is a **prefix of the target path** | **exact.** The subject is in that path's own partition by construction, so a partition-wide read is a strict SUPERSET of the per-scope walk |
+
+The test to apply is not "is it anchored" but **"can the subject live outside the anchor"**. Where it
+can, anchoring loses a permission. Where it provably cannot, per-scope reads were only ever paying
+for the same rows N times.
 
 ## What IS tractable, and what needs a decision
 

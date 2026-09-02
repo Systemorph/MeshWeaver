@@ -57,7 +57,7 @@ The two symptoms this produced, on the two backends where it was found:
 
 | Backend | What the surviving subscribers lost | How it looked |
 |---|---|---|
-| Postgres (#889) | the `$security-access:{scope}` query the permission fold reads; its `Replay(1)` cache stayed frozen at the pre-write snapshot | reads evaluated against **stale permissions** until something re-triggered the query; in tests, `PaywallRealGateShapeTests` timing out on its fold barrier |
+| Postgres (#889) | the `$security-access:{partition}` query the permission fold reads; its `Replay(1)` cache stayed frozen at the pre-write snapshot | reads evaluated against **stale permissions** until something re-triggered the query; in tests, `PaywallRealGateShapeTests` timing out on its fold barrier |
 | In-memory (#1053) | a live `scope:children` listing | a children query that **silently stopped re-emitting** after a create that completed successfully — 30 s timeout, write present in storage, nothing wrong anywhere |
 
 Note what both have in common: the *write* succeeded, the *notification* was published, and the
