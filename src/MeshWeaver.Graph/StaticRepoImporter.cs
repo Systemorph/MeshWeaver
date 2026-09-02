@@ -75,6 +75,20 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     /// none" on its root), where declining everything IS the instruction.
     /// </summary>
     public ImmutableList<string> BlockedCreatePaths { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// How many WRITE REQUESTS this import posted to the mesh hub — the round-trip count, not the node
+    /// count.
+    ///
+    /// <para>Plain creates travel in bulk (one <c>CreateNodesRequest</c> per chunk, which reaches
+    /// storage as ONE <c>WriteMany</c> — on Postgres one batch per (schema, table) window), while
+    /// updates, satellites and grants keep the per-node verb because their write has to route through
+    /// the owning per-node hub. So this is <c>⌈bulk creates ÷ chunk⌉ + one per node written
+    /// individually</c>, and on a first import of a whole partition it is a small fraction of
+    /// <see cref="StaticRepoImportResult.Count"/>. It used to equal it exactly
+    /// (Systemorph/MeshWeaver.Plugins#1013).</para>
+    /// </summary>
+    public int WriteRequests { get; init; }
 }
 
 /// <summary>
@@ -144,6 +158,22 @@ public static class StaticRepoImporter
     /// than floods; sources still run sequentially (<c>.Concat()</c>), so this is the only concurrency.
     /// </summary>
     private const int BatchSize = 5;
+
+    /// <summary>
+    /// How many plain CREATES travel in ONE <see cref="CreateNodesRequest"/>
+    /// (Systemorph/MeshWeaver.Plugins#1013). A stage's creates are chunked at this size, so the
+    /// import costs ⌈creates/25⌉ cross-hub round-trips instead of one per node, and each request
+    /// reaches storage as ONE <c>IStorageAdapter.WriteMany</c> — on Postgres one <c>NpgsqlBatch</c>
+    /// per (schema, table) window rather than N separate statements.
+    ///
+    /// <para>Deliberately a few dozen rather than "the whole stage". The bulk handler validates,
+    /// type-probes and runs post-creation handlers SEQUENTIALLY over its batch, so the request's
+    /// duration grows with the chunk and has to stay well inside the hub's request timeout; and a
+    /// refused batch is re-run one node at a time to attribute the failure, so the chunk also bounds
+    /// what a single bad node costs. 25 removes 96% of the round-trips; 200 would remove 99.5% and
+    /// buy that with an eight-times longer request and an eight-times more expensive fallback.</para>
+    /// </summary>
+    private const int BulkCreateBatchSize = 25;
 
     /// <summary>
     /// How many blocked-create paths the import NAMES in its summary + log line before summarising the
@@ -1031,192 +1061,238 @@ public static class StaticRepoImporter
                     && unsatisfiableTypes.Contains(sourceNode.NodeType!)
                     && !ImportWriteOrder.TypeIsOrderedAhead(plan, sourceNode);
 
+                // 🚨 ONE WRITE PER STAGE, NOT ONE PER NODE (Systemorph/MeshWeaver.Plugins#1013).
+                // The decision for a source node is PURE — claimed? blocked? outside the git diff?
+                // unchanged? server-newer? — so it is taken here, in memory, for the whole stage
+                // before anything is posted. Only the nodes that actually have to be written reach
+                // a hub, and the ones that are plain CREATES (this pass read no node at that path)
+                // travel together in ONE CreateNodesRequest per chunk: one cross-hub round-trip
+                // instead of N, and ONE IStorageAdapter.WriteMany instead of N single Writes —
+                // which on Postgres is one NpgsqlBatch per (schema, table) window rather than N
+                // statements. The bulk verb is the SAME pipeline the singular create runs (partition
+                // bootstrap, every validator including RLS, the type-existence probe, the
+                // post-creation handlers), so nothing is bypassed: this is the canonical mesh verb,
+                // just addressed to a list. Writes that are NOT plain creates keep the per-node
+                // canonical upsert, because that is where the write has to route through the OWNING
+                // per-node hub's stream — an update is applied by the node's own hub, never by the
+                // mesh hub, and satellites and grants carry per-node lifecycle guards.
+                bool IsBulkCreate(MeshNode node, MeshNode? target) =>
+                    // Absent as far as this pass could tell. The snapshot is eventually consistent,
+                    // so this can be stale — the bulk verb re-reads authoritatively and reports any
+                    // path that turned out to exist in CreateNodesResponse.Existing, which falls
+                    // back to the per-node upsert below rather than being dropped.
+                    target is null
+                    // The refusal rules of CreateNodesRequest itself, asked of the contract rather
+                    // than re-derived here — one implementation, so the two cannot drift.
+                    && CreateNodesRequest.BulkRefusal(node) is null;
+
+                // The round-trip count this import reports back (StaticRepoImportResult.WriteRequests)
+                // — the evidence that the writes really are batched, in the operator's own log line.
+                var tally = new WriteTally();
+
                 var upserted = Observable.Concat(plan.Stages
-                    .Select(stage => stage
-                    .Select(sourceNode =>
+                    .Select(stage =>
                     {
-                        var path = sourceNode.Path;
-                        existing.TryGetValue(path, out var target);
-                        if (IsClaimed(path, target))
-                        {
-                            // 🚨 A CLAIMED SKIP OF A NODE THAT DOES NOT EXIST IS NOT A SKIP — it is a
-                            // node the source declares that can NEVER appear, and it is counted and
-                            // NAMED (see the terminal-status decision below). A claim means "this is
-                            // the admin's now, don't overwrite it"; there is nothing to protect on a
-                            // path the mesh has no node at, so a claim that blocks its CREATION is a
-                            // claim that is wider than the thing it protects. That is issue #2211:
-                            // Provider/{name} was claimed ExcludeThisAndChildren, so the 12 configured
-                            // LanguageModel children were declined on every boot, the import wrote
-                            // "Imported: 0 node(s)" and stamped the marker Succeeded — and Succeeded at
-                            // that fingerprint is the durable short-circuit, so every later boot
-                            // skipped before it could look at anything. Permanent AND invisible.
-                            logger?.LogDebug(
-                                "[StaticRepoImport] {Partition}: skip claimed {Path}", source.Partition, path);
-                            return Observable.Return((
-                                Imported: 0, Failed: 0, Preserved: 0, Claimed: 1,
-                                Written: (string?)null,
-                                Blocked: target is null ? (string?)path : null,
-                                Log: (LogMessage?)null));
-                        }
+                        // ——— Decide, in stage order, without touching the mesh. ———
+                        var settled = new List<ImportItem>();
+                        var bulk = new List<MeshNode>();
+                        var singles = new List<MeshNode>();
+                        // A stage may carry the SAME path twice (ImportWritePlan keeps duplicates
+                        // together in input order). The bulk verb refuses a batch with a duplicate
+                        // path, and last-writer-wins is the semantics a duplicate has always had —
+                        // so only the first copy is bulk-creatable and every later one takes the
+                        // per-node upsert, which runs AFTER the batch (Concat below).
+                        var seenInStage = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-                        // 🚨 A TYPE THIS PASS CANNOT PUT IN PLACE IS DRIFT, NOT A FAILURE TO RETRY
-                        // (#2556). Ordering fixes the case where the type is carried by this very
-                        // import; it cannot fix a type that arrives from ANOTHER partition/repo, nor a
-                        // cycle where two nodes type each other. Attempting the write anyway is what
-                        // produced the 6,902 refusals: the create is refused, the ⚠ counts as a per-file
-                        // FAILURE, and Failed>0 holds the git baseline — so one node whose type lives
-                        // elsewhere froze every LATER commit of the same repo as well, while the same
-                        // refusal was re-logged on every pass. Named as a BLOCKED CREATE instead: the
-                        // marker is stamped Warning (so the next boot re-attempts and it self-heals the
-                        // moment the defining source is installed), the path and the missing type are
-                        // reported, and the baseline is free to move on. No write is attempted, so the
-                        // refusal — and its log line — is not produced at all.
-                        if (TypeCannotLand(sourceNode, target))
+                        foreach (var sourceNode in stage)
                         {
-                            logger?.LogWarning(
-                                "[StaticRepoImport] {Partition}: {Path} declares NodeType '{NodeType}', which "
-                                + "this source does not carry ahead of it and the mesh does not have — the "
-                                + "create would be refused. Recorded as a blocked create; import the source "
-                                + "that defines '{NodeType}', or drop the node.",
-                                source.Partition, path, sourceNode.NodeType, sourceNode.NodeType);
-                            return Observable.Return((
-                                Imported: 0, Failed: 0, Preserved: 0, Claimed: 0,
-                                Written: (string?)null,
-                                Blocked: (string?)path,
-                                Log: (LogMessage?)new LogMessage(
-                                    $"🚫 {path}: NodeType '{sourceNode.NodeType}' is not carried by this "
-                                    + "source and is absent from the mesh — no write order can create it.",
-                                    Microsoft.Extensions.Logging.LogLevel.Warning)));
-                        }
-
-                        // 🅶 Git-diff scope: when the caller supplied the changed-path set (a webhook /
-                        // reimport that diffed the last-synced commit against the new head), an EXISTING
-                        // node NOT in that set was not touched by any commit since the last sync — skip it
-                        // WITHOUT computing its token or re-upserting. This survives a missing/stale
-                        // manifest (the failure that made every webhook re-materialise the whole partition
-                        // → mass recompile storm, memex-cloud 2026-07-23): git, not a mesh write that can
-                        // fail under load, is the authority on "what changed". A node ABSENT from the DB is
-                        // NOT skipped even if outside the diff (first materialisation / self-heal safety),
-                        // and prune still runs over the full source set, so deletes are unaffected.
-                        if (changedNodePaths is not null && target is not null
-                            && !changedNodePaths.Contains(path))
-                        {
-                            // 🚨 A server-newer node OUTSIDE the diff scope is still a pending LOCAL
-                            // change: the repo copy didn't change, so there is nothing to apply — but
-                            // the mesh is AHEAD of the repo for this node (the edit isn't committed
-                            // back yet). Count it PRESERVED so the caller does not advance the
-                            // conflict horizon (LastSyncedAt) past it — otherwise a LATER repo edit
-                            // to this file would no longer see it as "newer on the server" and
-                            // silently overwrite the edit (the diff-scope shape of issue #677).
-                            if (policy?.PreservesServerCopyOf(target) == true)
+                            var path = sourceNode.Path;
+                            existing.TryGetValue(path, out var target);
+                            if (IsClaimed(path, target))
                             {
+                                // 🚨 A CLAIMED SKIP OF A NODE THAT DOES NOT EXIST IS NOT A SKIP — it is a
+                                // node the source declares that can NEVER appear, and it is counted and
+                                // NAMED (see the terminal-status decision below). A claim means "this is
+                                // the admin's now, don't overwrite it"; there is nothing to protect on a
+                                // path the mesh has no node at, so a claim that blocks its CREATION is a
+                                // claim that is wider than the thing it protects. That is issue #2211:
+                                // Provider/{name} was claimed ExcludeThisAndChildren, so the 12 configured
+                                // LanguageModel children were declined on every boot, the import wrote
+                                // "Imported: 0 node(s)" and stamped the marker Succeeded — and Succeeded at
+                                // that fingerprint is the durable short-circuit, so every later boot
+                                // skipped before it could look at anything. Permanent AND invisible.
                                 logger?.LogDebug(
-                                    "[StaticRepoImport] {Partition}: outside git-diff scope, {Path} is server-newer — counted preserved.",
-                                    source.Partition, path);
-                                return Observable.Return(
-                                    (Imported: 0, Failed: 0, Preserved: 1, Claimed: 0, Written: (string?)null, Blocked: (string?)null, Log: (LogMessage?)null));
+                                    "[StaticRepoImport] {Partition}: skip claimed {Path}", source.Partition, path);
+                                settled.Add(new ImportItem(
+                                    Claimed: 1, Blocked: target is null ? path : null));
+                                continue;
                             }
-                            logger?.LogDebug(
-                                "[StaticRepoImport] {Partition}: outside git-diff scope, skipping {Path}",
-                                source.Partition, path);
-                            return Observable.Return(
-                                (Imported: 0, Failed: 0, Preserved: 0, Claimed: 0, Written: (string?)null, Blocked: (string?)null, Log: (LogMessage?)null));
-                        }
 
-                        // Incremental skip: unchanged since the last import (same source token) AND the
-                        // node is actually present (so a drifted/deleted node still re-imports). Skips the
-                        // expensive cross-hub upsert + owner re-render. Token is over the RAW source node,
-                        // matching what the manifest stored.
-                        var token = PartitionSourceFingerprint.ComputeNodeToken(sourceNode, hub.JsonSerializerOptions);
-                        if (target is not null
-                            && manifest.TryGetValue(path, out var prevToken)
-                            && string.Equals(prevToken, token, StringComparison.Ordinal))
-                        {
-                            // 🚨 Same shape as the diff-scope skip above: an unchanged repo copy of a
-                            // SERVER-NEWER node means the mesh is ahead (a pending local edit, not
-                            // yet committed back). Count it preserved so the conflict horizon stays
-                            // put; skipping with 0 let the horizon advance past the edit and disarm
-                            // the two-way protection for the next repo push (issue #677).
-                            if (policy?.PreservesServerCopyOf(target) == true)
+                            // 🚨 A TYPE THIS PASS CANNOT PUT IN PLACE IS DRIFT, NOT A FAILURE TO RETRY
+                            // (#2556). Ordering fixes the case where the type is carried by this very
+                            // import; it cannot fix a type that arrives from ANOTHER partition/repo, nor a
+                            // cycle where two nodes type each other. Attempting the write anyway is what
+                            // produced the 6,902 refusals: the create is refused, the ⚠ counts as a per-file
+                            // FAILURE, and Failed>0 holds the git baseline — so one node whose type lives
+                            // elsewhere froze every LATER commit of the same repo as well, while the same
+                            // refusal was re-logged on every pass. Named as a BLOCKED CREATE instead: the
+                            // marker is stamped Warning (so the next boot re-attempts and it self-heals the
+                            // moment the defining source is installed), the path and the missing type are
+                            // reported, and the baseline is free to move on. No write is attempted, so the
+                            // refusal — and its log line — is not produced at all.
+                            if (TypeCannotLand(sourceNode, target))
                             {
-                                logger?.LogDebug(
-                                    "[StaticRepoImport] {Partition}: unchanged in repo, {Path} is server-newer — counted preserved.",
-                                    source.Partition, path);
-                                return Observable.Return(
-                                    (Imported: 0, Failed: 0, Preserved: 1, Claimed: 0, Written: (string?)null, Blocked: (string?)null, Log: (LogMessage?)null));
-                            }
-                            logger?.LogDebug(
-                                "[StaticRepoImport] {Partition}: unchanged, skipping {Path}", source.Partition, path);
-                            return Observable.Return(
-                                (Imported: 0, Failed: 0, Preserved: 0, Claimed: 0, Written: (string?)null, Blocked: (string?)null, Log: (LogMessage?)null));
-                        }
-
-                        // Two-way conflict resolution: a node changed on the SERVER since the last sync
-                        // is NOT overwritten by the repo — it is preserved here and carried back to
-                        // GitHub on the next commit ("newer on the server wins → GitHub"). Only reached
-                        // once the repo's copy actually differs (past the incremental-skip above), i.e. a
-                        // real conflict. A forced import ignores this and overwrites (deliberate discard).
-                        if (policy?.PreservesServerCopyOf(target) == true)
-                        {
-                            logger?.LogInformation(
-                                "[StaticRepoImport] {Partition}: two-way — preserving server-newer {Path} (not overwritten).",
-                                source.Partition, path);
-                            // 🚨 The activity line RIDES ALONG with the result instead of being written
-                            // here. A per-item stream.Update re-serialises the whole activity node, so
-                            // one write per kept/failed file is O(n²) — see the phase-level AppendLogs
-                            // below and NodeTypeCompilationActivity.AppendLogs.
-                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 1, Claimed: 0, Written: (string?)null, Blocked: (string?)null,
-                                Log: (LogMessage?)new LogMessage(
-                                    $"↩ Kept local change to {path} (newer on the server — commit to sync it back).",
-                                    Microsoft.Extensions.Logging.LogLevel.Information)));
-                        }
-
-                        var materialized = Materialize(sourceNode);
-                        if (target is not null)
-                            materialized = materialized with
-                            {
-                                CreatedDate = target.CreatedDate,
-                                CreatedBy = target.CreatedBy
-                            };
-                        // 🚨 Mesh-owned compile state is NOT carried over here any more (#748). It
-                        // used to be — against `target`, which comes from the eventually-consistent
-                        // `path:{p} scope:descendants` snapshot above. That snapshot is fine for the
-                        // decisions it was read for (SyncBehavior, identity, prune candidates: all
-                        // authored, all under the import's own lock) but NOT for the operational
-                        // members, which the compile pipeline writes OUTSIDE that lock. Preserving
-                        // from a lagged index is the CQRS rule's forbidden shape ("never read a
-                        // single node's content from the query"), and it actively regressed live
-                        // state: after a framework roll, an import would stamp the pre-roll verdict
-                        // back and a healthy type reverted to `Pending` with a dangling
-                        // `latestReleasePath` (memex 2026-08-02). The rule now lives at the OWNER —
-                        // MeshExtensions.PreserveMeshOwnedOperational, inside the upsert's merge —
-                        // where the answer is authoritative and every upsert writer gets it.
-                        // 🚨 Per-FILE isolation. A single node's upsert faulting (bad content, a
-                        // validator reject, a transient owner timeout) must NOT abort the whole
-                        // partition import — the first failure used to propagate through Merge and
-                        // kill every remaining node. Guard each create: log the exact path to the
-                        // logger AND append a per-file ⚠ line to the import activity (so the failure
-                        // is diagnosable from the activity log after the fact), then count it as a
-                        // Failed and continue. The Failed tally drives the terminal Warning status
-                        // below — the activity never reports a green Succeeded while hiding failures.
-                        return Upsert(hub, materialized)
-                            .Select(_ => (Imported: 1, Failed: 0, Preserved: 0, Claimed: 0, Written: (string?)path, Blocked: (string?)null,
-                                Log: (LogMessage?)null))
-                            .Catch<(int Imported, int Failed, int Preserved, int Claimed, string? Written, string? Blocked, LogMessage? Log), Exception>(ex =>
-                            {
-                                logger?.LogWarning(ex,
-                                    "[StaticRepoImport] {Partition}: upsert of {Path} failed (continuing).",
-                                    source.Partition, path);
-                                return Observable.Return((Imported: 0, Failed: 1, Preserved: 0, Claimed: 0, Written: (string?)null, Blocked: (string?)null,
-                                    Log: (LogMessage?)new LogMessage(
-                                        $"⚠ Failed to import {path}: {ex.Message}",
+                                logger?.LogWarning(
+                                    "[StaticRepoImport] {Partition}: {Path} declares NodeType '{NodeType}', which "
+                                    + "this source does not carry ahead of it and the mesh does not have — the "
+                                    + "create would be refused. Recorded as a blocked create; import the source "
+                                    + "that defines '{NodeType}', or drop the node.",
+                                    source.Partition, path, sourceNode.NodeType, sourceNode.NodeType);
+                                settled.Add(new ImportItem(
+                                    Blocked: path,
+                                    Log: new LogMessage(
+                                        $"🚫 {path}: NodeType '{sourceNode.NodeType}' is not carried by this "
+                                        + "source and is absent from the mesh — no write order can create it.",
                                         Microsoft.Extensions.Logging.LogLevel.Warning)));
-                            });
-                    })
-                    .ToObservable()
-                    // The barrier is BETWEEN stages (Observable.Concat above); inside one it is the
-                    // same BatchSize fan-out the import always used.
-                    .Merge(BatchSize)))
+                                continue;
+                            }
+
+                            // 🅶 Git-diff scope: when the caller supplied the changed-path set (a webhook /
+                            // reimport that diffed the last-synced commit against the new head), an EXISTING
+                            // node NOT in that set was not touched by any commit since the last sync — skip it
+                            // WITHOUT computing its token or re-upserting. This survives a missing/stale
+                            // manifest (the failure that made every webhook re-materialise the whole partition
+                            // → mass recompile storm, memex-cloud 2026-07-23): git, not a mesh write that can
+                            // fail under load, is the authority on "what changed". A node ABSENT from the DB is
+                            // NOT skipped even if outside the diff (first materialisation / self-heal safety),
+                            // and prune still runs over the full source set, so deletes are unaffected.
+                            if (changedNodePaths is not null && target is not null
+                                && !changedNodePaths.Contains(path))
+                            {
+                                // 🚨 A server-newer node OUTSIDE the diff scope is still a pending LOCAL
+                                // change: the repo copy didn't change, so there is nothing to apply — but
+                                // the mesh is AHEAD of the repo for this node (the edit isn't committed
+                                // back yet). Count it PRESERVED so the caller does not advance the
+                                // conflict horizon (LastSyncedAt) past it — otherwise a LATER repo edit
+                                // to this file would no longer see it as "newer on the server" and
+                                // silently overwrite the edit (the diff-scope shape of issue #677).
+                                if (policy?.PreservesServerCopyOf(target) == true)
+                                {
+                                    logger?.LogDebug(
+                                        "[StaticRepoImport] {Partition}: outside git-diff scope, {Path} is server-newer — counted preserved.",
+                                        source.Partition, path);
+                                    settled.Add(new ImportItem(Preserved: 1));
+                                    continue;
+                                }
+                                logger?.LogDebug(
+                                    "[StaticRepoImport] {Partition}: outside git-diff scope, skipping {Path}",
+                                    source.Partition, path);
+                                settled.Add(new ImportItem());
+                                continue;
+                            }
+
+                            // Incremental skip: unchanged since the last import (same source token) AND the
+                            // node is actually present (so a drifted/deleted node still re-imports). Skips the
+                            // expensive cross-hub upsert + owner re-render. Token is over the RAW source node,
+                            // matching what the manifest stored.
+                            var token = PartitionSourceFingerprint.ComputeNodeToken(sourceNode, hub.JsonSerializerOptions);
+                            if (target is not null
+                                && manifest.TryGetValue(path, out var prevToken)
+                                && string.Equals(prevToken, token, StringComparison.Ordinal))
+                            {
+                                // 🚨 Same shape as the diff-scope skip above: an unchanged repo copy of a
+                                // SERVER-NEWER node means the mesh is ahead (a pending local edit, not
+                                // yet committed back). Count it preserved so the conflict horizon stays
+                                // put; skipping with 0 let the horizon advance past the edit and disarm
+                                // the two-way protection for the next repo push (issue #677).
+                                if (policy?.PreservesServerCopyOf(target) == true)
+                                {
+                                    logger?.LogDebug(
+                                        "[StaticRepoImport] {Partition}: unchanged in repo, {Path} is server-newer — counted preserved.",
+                                        source.Partition, path);
+                                    settled.Add(new ImportItem(Preserved: 1));
+                                    continue;
+                                }
+                                logger?.LogDebug(
+                                    "[StaticRepoImport] {Partition}: unchanged, skipping {Path}", source.Partition, path);
+                                settled.Add(new ImportItem());
+                                continue;
+                            }
+
+                            // Two-way conflict resolution: a node changed on the SERVER since the last sync
+                            // is NOT overwritten by the repo — it is preserved here and carried back to
+                            // GitHub on the next commit ("newer on the server wins → GitHub"). Only reached
+                            // once the repo's copy actually differs (past the incremental-skip above), i.e. a
+                            // real conflict. A forced import ignores this and overwrites (deliberate discard).
+                            if (policy?.PreservesServerCopyOf(target) == true)
+                            {
+                                logger?.LogInformation(
+                                    "[StaticRepoImport] {Partition}: two-way — preserving server-newer {Path} (not overwritten).",
+                                    source.Partition, path);
+                                // 🚨 The activity line RIDES ALONG with the result instead of being written
+                                // here. A per-item stream.Update re-serialises the whole activity node, so
+                                // one write per kept/failed file is O(n²) — see the phase-level AppendLogs
+                                // below and NodeTypeCompilationActivity.AppendLogs.
+                                settled.Add(new ImportItem(
+                                    Preserved: 1,
+                                    Log: new LogMessage(
+                                        $"↩ Kept local change to {path} (newer on the server — commit to sync it back).",
+                                        Microsoft.Extensions.Logging.LogLevel.Information)));
+                                continue;
+                            }
+
+                            var materialized = Materialize(sourceNode);
+                            if (target is not null)
+                                materialized = materialized with
+                                {
+                                    CreatedDate = target.CreatedDate,
+                                    CreatedBy = target.CreatedBy
+                                };
+                            // 🚨 Mesh-owned compile state is NOT carried over here any more (#748). It
+                            // used to be — against `target`, which comes from the eventually-consistent
+                            // `path:{p} scope:descendants` snapshot above. That snapshot is fine for the
+                            // decisions it was read for (SyncBehavior, identity, prune candidates: all
+                            // authored, all under the import's own lock) but NOT for the operational
+                            // members, which the compile pipeline writes OUTSIDE that lock. Preserving
+                            // from a lagged index is the CQRS rule's forbidden shape ("never read a
+                            // single node's content from the query") and it actively regressed live
+                            // state: after a framework roll, an import would stamp the pre-roll verdict
+                            // back and a healthy type reverted to `Pending` with a dangling
+                            // `latestReleasePath` (memex 2026-08-02). The rule now lives at the OWNER —
+                            // MeshExtensions.PreserveMeshOwnedOperational, inside the upsert's merge —
+                            // where the answer is authoritative and every upsert writer gets it.
+                            if (seenInStage.Add(path) && IsBulkCreate(materialized, target))
+                                bulk.Add(materialized);
+                            else
+                                singles.Add(materialized);
+                        }
+
+                        // ——— Write. Settled outcomes first (they cost nothing), then the bulk
+                        // creates, then the per-node writes — an update of a path this stage also
+                        // creates therefore runs after that create, which is the last-writer-wins
+                        // order a duplicate has always had.
+                        //
+                        // 🚨 The chunks are MERGED at BatchSize, not concatenated, and that is what
+                        // keeps this a pure win. BatchSize bounds CONCURRENT HEAVY OPERATIONS, and one
+                        // bulk request is internally sequential (validators .Concat(), then one
+                        // WriteMany that builds each row — prerender, embedding — in order). Running
+                        // the chunks one after another would therefore cut the import's concurrency
+                        // from 5 to 1 and could make a large first import SLOWER than the per-node
+                        // path it replaces, batching or not. Merged, the bound is unchanged — ~5 heavy
+                        // operations in flight, the boot import still trickling rather than flooding —
+                        // and each of those now carries 25 nodes instead of one. ———
+                        return Observable.Concat(
+                            settled.ToObservable(),
+                            bulk.Chunk(BulkCreateBatchSize)
+                                .Select(chunk => WriteBulk(hub, source.Partition, chunk, logger, tally))
+                                .ToObservable()
+                                .Merge(BatchSize),
+                            singles.Select(node => WriteOne(hub, source.Partition, node, logger, tally))
+                                .ToObservable()
+                                // The barrier is BETWEEN stages (Observable.Concat above); inside one it is
+                                // the same BatchSize fan-out the import always used.
+                                .Merge(BatchSize));
+                    }))
                     // WrittenPaths ride along with the counts: only a node that really landed can
                     // leave a NodeType's assembly stale, so the recompile derivation downstream
                     // (GitHubSyncService → ReleaseAffectedNodeTypes) keys off exactly this list.
@@ -1437,8 +1513,10 @@ public static class StaticRepoImporter
                                     "[StaticRepoImport] {Partition}: {Claimed} node(s) skipped as claimed (all present).",
                                     source.Partition, count.Claimed);
                             logger?.LogInformation(
-                                "[StaticRepoImport] {Partition}: imported {Count}, failed {Failed}, claimed {Claimed}, pruned {Pruned}, content {Content} at {Fingerprint}.",
-                                source.Partition, count.Imported, failed, count.Claimed, prunedPaths.Count, contentCount, fingerprint);
+                                "[StaticRepoImport] {Partition}: imported {Count} in {WriteRequests} write request(s), "
+                                + "failed {Failed}, claimed {Claimed}, pruned {Pruned}, content {Content} at {Fingerprint}.",
+                                source.Partition, count.Imported, tally.Requests, failed, count.Claimed,
+                                prunedPaths.Count, contentCount, fingerprint);
                             return new StaticRepoImportResult(source.Partition, fingerprint,
                                 failed > 0 ? "ImportedWithErrors"
                                     : blockedCreates.Count > 0 ? "ImportedWithBlockedCreates" : "Imported",
@@ -1451,6 +1529,7 @@ public static class StaticRepoImporter
                                 // the baseline past it and the miss is permanent (#2229 item C).
                                 Failed = failed,
                                 BlockedCreatePaths = blockedCreates,
+                                WriteRequests = tally.Requests,
                             };
                         });
                         }));
@@ -2094,6 +2173,155 @@ public static class StaticRepoImporter
                 logger?.LogWarning(ex,
                     "[StaticRepoImport] {Partition}: manifest write failed (next import non-incremental).", partition);
                 return Observable.Return(0);
+            });
+    }
+
+    /// <summary>
+    /// Counts the WRITE REQUESTS one import posts — the round-trip count reported as
+    /// <see cref="StaticRepoImportResult.WriteRequests"/>. A mutable box rather than a returned value
+    /// because the writes fan out across stages, chunks and the per-node fallbacks, and the number has
+    /// to survive every one of those paths (including a batch that was refused and re-run node by
+    /// node). Incremented at SUBSCRIBE, so it counts requests actually issued, never merely planned.
+    /// </summary>
+    private sealed class WriteTally
+    {
+        /// <summary>Write requests issued so far. Written via <see cref="Interlocked"/>.</summary>
+        public int Requests;
+    }
+
+    /// <summary>
+    /// ONE source node's contribution to the upsert phase's tally: the counters, the path it wrote or
+    /// could not create, and the per-file activity line that rides along to the phase's single
+    /// <c>AppendLogs</c> (written per item it is O(n²) — see the phase-log note at the call site).
+    /// </summary>
+    /// <param name="Imported">1 when the node was written, else 0.</param>
+    /// <param name="Failed">1 when the write was attempted and faulted, else 0.</param>
+    /// <param name="Preserved">1 when a server-newer copy was kept, else 0.</param>
+    /// <param name="Claimed">1 when a claim declined the node, else 0.</param>
+    /// <param name="Written">The path that landed, or <c>null</c>.</param>
+    /// <param name="Blocked">The path that can never be created, or <c>null</c>.</param>
+    /// <param name="Log">The activity line this item contributes, or <c>null</c>.</param>
+    private readonly record struct ImportItem(
+        int Imported = 0,
+        int Failed = 0,
+        int Preserved = 0,
+        int Claimed = 0,
+        string? Written = null,
+        string? Blocked = null,
+        LogMessage? Log = null);
+
+    /// <summary>
+    /// Writes ONE node through the canonical per-node upsert verb, isolated.
+    ///
+    /// <para>🚨 Per-FILE isolation. A single node's upsert faulting (bad content, a validator reject, a
+    /// transient owner timeout) must NOT abort the whole partition import — the first failure used to
+    /// propagate through <c>Merge</c> and kill every remaining node. So the fault is caught here: the
+    /// exact path is logged AND a per-file ⚠ line is appended to the import activity (so the failure is
+    /// diagnosable from the activity log after the fact), and it counts as a <c>Failed</c>. The Failed
+    /// tally drives the terminal Warning status — the activity never reports a green Succeeded while
+    /// hiding failures.</para>
+    /// </summary>
+    private static IObservable<ImportItem> WriteOne(
+        IMessageHub hub, string partition, MeshNode node, ILogger? logger, WriteTally tally) =>
+        Observable.Defer(() =>
+        {
+            Interlocked.Increment(ref tally.Requests);
+            return Upsert(hub, node);
+        })
+            .Select(_ => new ImportItem(Imported: 1, Written: node.Path))
+            .Catch<ImportItem, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[StaticRepoImport] {Partition}: upsert of {Path} failed (continuing).",
+                    partition, node.Path);
+                return Observable.Return(new ImportItem(
+                    Failed: 1,
+                    Log: new LogMessage(
+                        $"⚠ Failed to import {node.Path}: {ex.Message}",
+                        Microsoft.Extensions.Logging.LogLevel.Warning)));
+            });
+
+    /// <summary>
+    /// Writes a chunk of plain CREATES as ONE <see cref="CreateNodesRequest"/> — the bulk sibling of the
+    /// singular create, running the identical pipeline (partition bootstrap once per partition, every
+    /// validator including RLS for every node, the type-existence probe, then ONE
+    /// <c>IStorageAdapter.WriteMany</c> and the post-creation handlers). This is the canonical mesh verb
+    /// addressed to a list, NOT a direct storage write: the importer never reaches past the hub.
+    ///
+    /// <para>🚨 Two fallbacks, and both exist so that BATCHING CANNOT COST THE IMPORT ITS PER-FILE
+    /// REPORTING:</para>
+    /// <list type="number">
+    ///   <item><b>A refused (or faulted) batch is re-run one node at a time.</b> The bulk verb is
+    ///     validate-all-then-write — one offender refuses the whole request and can name at most one
+    ///     path — while the import's contract is the opposite: every other node still has to land, and
+    ///     the one that did not has to be NAMED in the activity log. Re-running attributes the failure
+    ///     to the file that caused it and lands everything else, exactly as before batching. The cost is
+    ///     paid only on the failing path.</item>
+    ///   <item><b>A path the batch did NOT create falls through to the per-node upsert.</b> The importer
+    ///     chose this chunk from an eventually-consistent snapshot, so "absent" can be stale; the bulk
+    ///     verb re-reads authoritatively and reports such paths in <see cref="CreateNodesResponse.Existing"/>
+    ///     rather than overwriting them. Those are UPDATES, and an update routes through the owning
+    ///     per-node hub's stream — which is precisely what <see cref="Upsert"/> does. Dropping them here
+    ///     would silently fail to apply a changed node.</item>
+    /// </list>
+    /// </summary>
+    private static IObservable<ImportItem> WriteBulk(
+        IMessageHub hub, string partition, IReadOnlyList<MeshNode> chunk, ILogger? logger, WriteTally tally)
+    {
+        if (chunk.Count == 0)
+            return Observable.Empty<ImportItem>();
+        // One node is not a batch: the singular verb reports its own failure without a second pass.
+        if (chunk.Count == 1)
+            return WriteOne(hub, partition, chunk[0], logger, tally);
+
+        IObservable<ImportItem> PerNode(IEnumerable<MeshNode> nodes) =>
+            nodes.Select(n => WriteOne(hub, partition, n, logger, tally)).ToObservable().Merge(BatchSize);
+
+        return Observable.Defer(() =>
+            {
+                Interlocked.Increment(ref tally.Requests);
+                return AsSystem(hub, () => hub.Observe<CreateNodesResponse>(
+                    new CreateNodesRequest(chunk.ToImmutableList())));
+            })
+            .FirstAsync()
+            .Select(d => d.Message)
+            // A transport fault says nothing about WHICH node is at fault, so it takes the same
+            // per-node re-run a refusal does rather than failing the whole chunk unattributed.
+            .Catch<CreateNodesResponse, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[StaticRepoImport] {Partition}: bulk create of {Count} node(s) FAULTED.",
+                    partition, chunk.Count);
+                return Observable.Return(CreateNodesResponse.Fail(ex.Message));
+            })
+            .SelectMany(response =>
+            {
+                if (!response.Success)
+                {
+                    logger?.LogInformation(
+                        "[StaticRepoImport] {Partition}: bulk create of {Count} node(s) was refused "
+                        + "({Error}{FailedPath}) — re-running the batch one node at a time so the "
+                        + "failure is attributed to the node that caused it.",
+                        partition, chunk.Count, response.Error,
+                        response.FailedPath is null ? "" : $" at {response.FailedPath}");
+                    return PerNode(chunk);
+                }
+
+                var created = response.Created
+                    .Select(n => n.Path)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var landed = chunk
+                    .Where(n => created.Contains(n.Path))
+                    .Select(n => new ImportItem(Imported: 1, Written: n.Path))
+                    .ToObservable();
+                var leftOver = chunk.Where(n => !created.Contains(n.Path)).ToList();
+                if (leftOver.Count == 0)
+                    return landed;
+                logger?.LogDebug(
+                    "[StaticRepoImport] {Partition}: {Count} of {Total} node(s) in a bulk create already "
+                    + "existed — applying them as updates through the per-node verb.",
+                    partition, leftOver.Count, chunk.Count);
+                return landed.Concat(PerNode(leftOver));
             });
     }
 
