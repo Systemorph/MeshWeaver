@@ -424,22 +424,35 @@ jobs:
           echo "> window starts at the last main run that ACTUALLY ran the tests — not at this commit."
         } >> "$GITHUB_STEP_SUMMARY"
 
-  # ── No preflight job right now, and that is deliberate ────────────────────────────────
+  # ── No preflight JOB — the assertion lives in the two gates that have an input ─────────
   #
-  # AGENTS.md requires ONE preflight job that asserts every CI input coming from OUTSIDE the
-  # tree (secrets, repo variables) and fails RED naming what to provision — so that a gate can
-  # never skip on a missing input and look identical to one that passed.
+  # AGENTS.md requires that every CI input coming from OUTSIDE the tree (secrets, repo variables)
+  # is ASSERTED and fails RED naming what to provision — so that a gate can never skip on a
+  # missing input and look identical to one that passed.
   #
-  # This workflow currently has no such input. Its only assertion was PLUGINS_REPO_SSH_KEY, the
-  # deploy key the plugin gates used to check out MeshWeaver.Plugins, and those gates are gone:
-  # core builds the image and runs its OWN tests, plugins are built by the plugin repo. Keeping
-  # the job with an empty `missing` array would be strictly worse than deleting it — a job that
-  # asserts nothing and always passes IS the green-on-zero-evidence shape the rule exists to
-  # prevent.
+  # This workflow had NO such input for a while: its only assertion was PLUGINS_REPO_SSH_KEY, the
+  # deploy key the plugin gates used to check out MeshWeaver.Plugins, and those gates are gone
+  # (core builds the image and runs its OWN tests; plugins are built by the plugin repo). Keeping
+  # a preflight job with an empty `missing` array would have been strictly worse than deleting it
+  # — a job that asserts nothing and always passes IS the green-on-zero-evidence shape the rule
+  # exists to prevent.
   #
-  # 🚨 Reinstate it the moment this workflow needs its first external input again: one job, its
-  # `missing` array, a RED failure naming exactly what to provision, and `needs: [preflight]`
-  # on every gate plus the required check.
+  # 🚨 TWO gates have an external input again — `shared-rules` and `cross-repo-pair`, both of
+  # which read the FLEET through a GitHub App installation token — and each carries the assertion
+  # ITSELF, as its first step, rather than through a shared preflight job:
+  #
+  #   * each fails RED naming exactly which secret to provision, so a missing credential can
+  #     never render a tick;
+  #   * each then PROVES the token can perform the read it needs (present is not valid), so a
+  #     provisioned-but-dead credential cannot pass either;
+  #   * each runs unconditionally, with the exemption written on the EVENT and nowhere else;
+  #   * each is a `needs:` of `collect-results` WITH an explicit fail step, so a skipped or
+  #     cancelled verdict fails the required check rather than reading as passed.
+  #
+  # That is the rule's substance held in two places instead of one. A shared `preflight` job would
+  # centralise the `missing` array — worth doing if a THIRD credentialed gate appears here — but
+  # it would not add a single assertion that is not already made, and moving the credential proof
+  # away from the gate that needs it is how a proof and its subject drift apart.
 
   build:
     name: "Build solution (once)"
@@ -1977,6 +1990,163 @@ jobs:
         python3 .github/scripts/check-shared-rules.py \
           --local Systemorph/MeshWeaver=AGENTS.md
 
+  cross-repo-pair:
+    name: "Cross-repo pair (public surface)"
+    # 🚨 THE GAP THIS CLOSES (#2689): when a change spans this repo and a plugin repo, nothing made
+    # the two halves land together — and the half that lands FIRST decides whether somebody else's
+    # trunk goes red. #2678 ("the node-surface views leave the platform for a module") merged HERE,
+    # deleting nine public view classes from MeshWeaver.Graph, while its plugin half
+    # (MeshWeaver.Plugins#904) was still open. Eight MeshWeaver.AI.Test cases failed with
+    # "No renderer is registered for area `Content`", which failed the MeshWeaver.AI bundle, which
+    # failed BOTH of that repo's required compile gates: every open pull request there went red,
+    # and its main was red from 17:20 to the fix, on a change none of them made. Four more shapes
+    # are recorded on #2689. The expensive part is always the same — the people who see the red are
+    # never the people who caused it.
+    #
+    # ORDERING IS THE WHOLE INVARIANT: the deleting half must land LAST.
+    #
+    # 🚨 NO SKIP-TRAPDOOR, and the trigger is what keeps it honest:
+    #   * the DETECTOR is check-type-forwards.py, reused rather than reimplemented — its own
+    #     self-tests run first and fail this job, and its report carries `publicTypesAtBase` so
+    #     "this diff removed nothing" cannot be confused with "the scan read nothing" (the pair
+    #     script refuses a base tree below 500 public types; src/ declares 1832 today);
+    #   * no path filter — an unrelated pull request would otherwise "pass" by not running;
+    #   * no `continue-on-error:` anywhere, and no `if:` that asks whether a secret is set;
+    #   * the credential is ASSERTED and PROVEN to read the fleet's pull requests before any
+    #     verdict is trusted (present is not valid — chart-drift learned that on 2026-08-17);
+    #   * the exemption is on the EVENT and nowhere else, in the two cases where GitHub withholds
+    #     the credential by design (a fork pull request, and dependabot's separate secret scope),
+    #     plus `pull_request` itself, because this gate's second input is the pull-request BODY and
+    #     a merge_group event does not carry one. A pull request cannot reach the queue without
+    #     this job having been green, since it is a `needs:` of the required check.
+    #
+    # 🛡️ THIS IS NOT A CHECKOUT. It resolves a pull-request NUMBER the author declared, through the
+    # API, under a GitHub App installation token: no plugin source enters core's build and
+    # `dotnet build` here still needs no sibling on disk. That is exactly the line
+    # PlatformNeverDependsOnPluginsGuard draws, and the line `shared-rules` below already sits on
+    # the permitted side of. Both are inventoried in Doc/Architecture/RepositoryDependencyDirection
+    # § C and asserted by that guard's API-read ledger.
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        # The detector compares HEAD against the merge base, so the base commit must be present.
+        fetch-depth: 0
+
+    - name: Assert the cross-repo read credential, or fail naming what to provision
+      env:
+        MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+        MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+      run: |
+        missing=()
+        [ -n "$MESHWEAVER_APP_ID" ] || missing+=("secrets.MESHWEAVER_APP_ID            app id of the org's meshweaver-cloud GitHub App, which is installed on every repo in the fleet")
+        [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY   that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+        if [ ${#missing[@]} -gt 0 ]; then
+          echo "::error::The cross-repo pair gate cannot resolve a declared counterpart — provision the following, then re-run:"
+          for m in "${missing[@]}"; do echo "  • $m"; done
+          exit 1
+        fi
+        echo "Credential inputs are present (validity is proven below, not assumed)."
+
+    # Same posture as `shared-rules`: an App installation token minted per run, never a stored PAT.
+    # `pull-requests: read` is the ONE extra capability this gate needs over that one, and it is
+    # read-only on the sibling repos in the register — it cannot write anything anywhere.
+    - name: Mint an installation token for the fleet
+      id: fleet-token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+        private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        owner: Systemorph
+        repositories: >-
+          MeshWeaver,MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,Memex
+        permission-contents: read
+        permission-pull-requests: read
+
+    # PRESENT is not VALID. Prove the capability this gate actually needs — LISTING PULL REQUESTS
+    # on each sibling — against the real API before any verdict is trusted, and name what each
+    # rejection means, because 401/403/404 take very different fixes and a private repo the token
+    # cannot see reports 404, not 403.
+    - name: The token can actually read PULL REQUESTS on every sibling
+      env:
+        FLEET_TOKEN: ${{ steps.fleet-token.outputs.token }}
+      run: |
+        set -uo pipefail
+        # 🚨 Read the register into a variable FIRST and assert it. `for repo in $(...)` would
+        # iterate ZERO times if that command failed — the loop would simply end and the step would
+        # report every repo readable having contacted none of them.
+        repos=$(python3 -c "import json;print(' '.join(r for r in json.load(open('.github/shared-rules.json'))['repos'] if r != 'Systemorph/MeshWeaver'))") \
+          || { echo "::error::Could not read the repo register from .github/shared-rules.json."; exit 1; }
+        [ -n "$repos" ] || { echo "::error::.github/shared-rules.json lists no sibling repos — no declaration could be validated against it."; exit 1; }
+        bad=0
+        seen=0
+        for repo in $repos; do
+          seen=$((seen+1))
+          # `|| code=000` is not noise: `run:` is bash -e, so a TRANSPORT failure would kill the
+          # step before the case block — i.e. before the one sentence this probe exists to print.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $FLEET_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$repo/pulls?per_page=1") || code=000
+          case "$code" in
+            200) echo "  ok   $repo" ;;
+            401) echo "::error::$repo -> 401: the App token is invalid or expired."; bad=1 ;;
+            403) echo "::error::$repo -> 403: the token is valid but lacks pull-requests:read here, or is rate-limited."; bad=1 ;;
+            404) echo "::error::$repo -> 404: the App is not installed on this repo (GitHub reports an invisible private repo as 404, not 403)."; bad=1 ;;
+            000) echo "::error::$repo -> could not reach api.github.com."; bad=1 ;;
+            *)   echo "::error::$repo -> HTTP $code."; bad=1 ;;
+          esac
+        done
+        [ "$bad" = "0" ] || { echo "::error::The gate cannot read the fleet's pull requests, so it cannot report on a declared counterpart. Refusing to pass on partial evidence."; exit 1; }
+        [ "$seen" -ge 2 ] || { echo "::error::The probe examined only $seen repo(s) — the register did not expand. Refusing to report success."; exit 1; }
+
+    # 🚨 Both self-tests run FIRST and fail the job. The detector's cases prove it still reports a
+    # departure, a forwarded move and a whole assembly leaving; the gate's cases prove it fires on
+    # an undeclared removal, an open counterpart, a counterpart merged into a FEATURE branch, an
+    # unparseable declaration and a starved surface report — and stays silent on an ordinary diff
+    # and on a landed pair. An unproven gate is no gate.
+    - name: "Prove the surface detector is not vacuous (self-test)"
+      run: python3 scripts/check-type-forwards.py --self-test
+    - name: "Prove the pair gate is not vacuous (self-test)"
+      run: python3 scripts/check-cross-repo-pair.py --self-test
+
+    # A pull-request body is attacker-controlled text: it goes to a FILE through the environment,
+    # never interpolated into a shell command.
+    - name: Capture the pull-request body
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: |
+        set -euo pipefail
+        printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
+        echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
+
+    - name: "Report the public surface this diff removes"
+      run: |
+        set -euo pipefail
+        git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
+        # 🚨 The MERGE BASE, not the base branch tip — the same reasoning as the two gates in
+        # "Public surface (binary compatibility)". Against the tip, a public type somebody else
+        # removed on main while this pull request is open reads as THIS pull request removing it,
+        # and the gate would demand a counterpart for a change it did not make.
+        base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+        echo "Comparing against merge base $base"
+        python3 scripts/check-type-forwards.py --base "$base" --surface-json "$RUNNER_TEMP/surface.json"
+
+    - name: "Every declared cross-repo counterpart has already landed"
+      env:
+        GITHUB_TOKEN: ${{ steps.fleet-token.outputs.token }}
+      run: |
+        set -euo pipefail
+        python3 scripts/check-cross-repo-pair.py \
+          --surface-json "$RUNNER_TEMP/surface.json" \
+          --pr-body-file "$RUNNER_TEMP/pr-body.md"
+
   collect-results:
     name: "Consolidate test results"
     # plugin-gate is a NEEDS so this required check cannot go green while the plugins are
@@ -2005,7 +2175,12 @@ jobs:
     # in a file no build or test reads. MeshWeaver.Plugins#705 measured the divergence; nothing
     # could see it. A gate whose verdict nothing reads is decorative, so it hangs off the repo's
     # one required check like every other gate here.
-    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules]
+    # cross-repo-pair is a NEEDS on the same principle, applied ACROSS the repository boundary:
+    # the failure it gates lands in a DIFFERENT repository, on unrelated pull requests, minutes to
+    # hours after the merge that causes it (#2689 records five incidents). Nothing on the causing
+    # pull request goes red, so if this gate could not fail the required check it would be a
+    # notification rather than a gate — and a notification is what the fleet already had.
+    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -2341,6 +2516,20 @@ jobs:
       if: github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.shared-rules.result != 'success'
       run: |
         echo "::error::The 'AGENTS.md shared rule blocks' gate concluded '${{ needs.shared-rules.result }}' — see that job, which names the repo and the exact drift. Every repo's CLAUDE.md is a one-line @AGENTS.md include, so a block that differs between repos means agents follow different instructions in each of them. The register is .github/shared-rules.json; the rationale is Doc/Architecture/SharedRuleBlocks. The fix is always a pull request in the repo the error names — never a bypass here."
+        exit 1
+
+    # ── …and an UNLANDED CROSS-REPO COUNTERPART decides it too ──────────────────────────────
+    # `!= 'success'` rather than `== 'failure'`, for the same reason as the gates above: a job
+    # that was skipped or cancelled produced no verdict, and no verdict must never read as passed.
+    # The event predicate is kept IDENTICAL to the gate's own `if:` so the two can never disagree
+    # about who is exempt — `pull_request` because the gate's second input is the pull-request
+    # BODY, and fork/dependabot because GitHub withholds the credential by design in both.
+    - name: Fail if a cross-repo counterpart has not landed
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.cross-repo-pair.result != 'success'
+      run: |
+        echo "::error::The 'Cross-repo pair (public surface)' gate concluded '${{ needs.cross-repo-pair.result }}' — see that job, which names the public types this diff removes from src/ and the state of every declared counterpart."
+        echo "::error::This pull request removes public surface, which can red a plugin repo's trunk hours later on pull requests that did not make the change (#2689). Declare the counterpart in the PR BODY as 'Pairs-with: Systemorph/MeshWeaver.Plugins#904', or 'Pairs-with: none — <reason>' when no other repository is affected."
+        echo "::error::ORDERING IS THE INVARIANT: the deleting half lands LAST. Merge the counterpart into its repo's default branch first, then re-run. Rationale: Doc/Architecture/CrossRepoPairGate."
         exit 1
 
     - name: Fail if the clients gate failed

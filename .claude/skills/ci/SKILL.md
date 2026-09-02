@@ -170,8 +170,44 @@ Full contract:
 [ContinuousDeliveryContract.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ContinuousDeliveryContract.md)
 (which also carries the GitHub OIDC subject-format rule: register BOTH subject formats per repo).
 
+## 🚨 A change that spans two repos lands DELETING-HALF-LAST — declare the pair
+
+**Core's CI does not build the plugin repos, so a cross-repo break can surface nowhere except CD,
+after the fact.** #2678 deleted nine public view classes here while its module half was still open:
+eight `MeshWeaver.AI.Test` cases failed, which failed the `MeshWeaver.AI` bundle, which failed BOTH
+of MeshWeaver.Plugins' required compile gates — every open PR there went red and its `main` was red
+for two hours, on a change none of them made. Four more shapes are on #2689.
+
+A PR whose diff **removes a `public` top-level type from `src/`** — a departure, a move (a forwarder
+keeps the type IDENTITY, not the consumer's `.csproj` references), or a whole assembly leaving —
+must declare its counterpart in the **PR body**:
+
+```text
+Pairs-with: Systemorph/MeshWeaver.Plugins#904
+Pairs-with: none — <reason, ≥12 chars, when nothing outside core referenced it>
+```
+
+`Cross-repo pair (public surface)` resolves it through the API and stays red while the counterpart
+is open, draft, closed-unmerged, or **merged into anything but its repo's default branch**
+(Plugins#904 merged into `feat/collaboration-module` — "merged" alone is not landed). It is a
+`needs:` of `Consolidate test results`, so it can actually block.
+
+- **Ordinary PRs never meet it.** Measured 2026-09-02: `main~25 → main` removes ZERO public types;
+  `main~100 → main` removes 116, all of them the Maps/Indexing carve-out.
+- **It reads, it never checks out.** A checkout puts plugin SOURCE into core's build; an API read
+  puts only a FACT into a verdict. That is the line `PlatformNeverDependsOnPluginsGuard` draws, and
+  its `ApiReadLedger` now enumerates both workflows on that side of it.
+- **The `none` escape is a declaration, not a skip** — printed into the log, and refused without a
+  reason. Core cannot see a private repo's callers; what the gate removes is nobody being asked.
+
+Full reference:
+[CrossRepoPairGate.md](../../../src/MeshWeaver.Documentation/Data/Architecture/CrossRepoPairGate.md)
+· [RepositoryDependencyDirection.md](../../../src/MeshWeaver.Documentation/Data/Architecture/RepositoryDependencyDirection.md) § C.
+
 ## Checklist
 
+- [ ] Removing public surface? `Pairs-with:` is in the PR body and the counterpart is MERGED into
+      its repo's default branch.
 - [ ] Every job I added or touched carries a literal `timeout-minutes` ≤ 45 (`python3 .github/scripts/check-workflow-timeouts.py --root .` is green).
 - [ ] No `continue-on-error` on a gate's input step; no `if:` asking whether a secret/variable is
       set. Fork-PR exemption expressed once, on the event.
