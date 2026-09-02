@@ -186,7 +186,37 @@ public abstract record MessageDelivery : IMessageDelivery
             var message = GetMessage();
             if (message is RawJson)
                 return this;
-            var serialized = JsonSerializer.Serialize(message, options ?? fallbackOptions);
+            var effectiveOptions = options ?? fallbackOptions;
+            // 🚨 A NACK ABOUT AN OVERSIZED MESSAGE MUST NOT BE ONE — issue #3104, and this is the
+            // seam where that stops being a statement about RawJson only.
+            //
+            // DeliveryFailure has applied the strip in its own constructor since #3056, which
+            // covers every one of the ~25 construction sites — but only for a payload that was
+            // ALREADY packaged, because DeliveryPayloadBounds could not measure a CLR object
+            // without serializer options and the record has none. Every NACK raised before
+            // packaging therefore slipped through, AccessControlPipeline's permission denials
+            // above all: [RequiresPermission] is an attribute on the message TYPE, so the gate
+            // cannot run against RawJson and its deliveries are typed by construction. Such a
+            // report kept the whole body and reached the line below, where serializing it is the
+            // Utf8JsonWriter.TranscodeAndWriteRawValue → SharedArrayPool.Rent → GC.AllocateNewArray
+            // allocation that threw OutOfMemoryException on a production pod (#3049) — losing the
+            // notification at exactly the wall it was describing.
+            //
+            // Here, and not at the call sites, for the reason #3056 established: "remember to
+            // strip" was never a control. This is the ONE place a delivery becomes its wire form
+            // and the one place a hub's options are in hand, so it also covers the sites nobody has
+            // enumerated yet. And it is bound to PACKAGING rather than to construction on purpose —
+            // an in-process report never meets a transport, so it keeps its full echo, which is the
+            // better diagnostic and costs nothing.
+            if (message is DeliveryFailure failure && failure.Delivery is not null)
+            {
+                var echoed = DeliveryPayloadBounds.WithoutOversizedPayload(
+                    failure.Delivery, effectiveOptions);
+                if (!ReferenceEquals(echoed, failure.Delivery))
+                    message = failure with { Delivery = echoed };
+            }
+
+            var serialized = JsonSerializer.Serialize(message, effectiveOptions);
             var rawJson = new RawJson(serialized);
             var packaged = WithMessage(rawJson);
             // 🚨 Carry the payload's ANSWERABILITY across the type erasure — issue #1485, and the
