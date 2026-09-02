@@ -1024,15 +1024,31 @@ public static class DataExtensions
     ///   <item><b>Echo arrives</b> → flush durably → ack <c>true</c> on the flush's emission. Nothing is
     ///     posted between the echo and the flush landing: the echo's own <c>Take(1)</c> completion is NOT
     ///     a verdict (see <see cref="WhenCompletesEmpty{T}"/>).</item>
-    ///   <item><b>Echo stream ENDS without the echo</b> — a <c>SynchronizationStream</c> disposed by mirror
-    ///     eviction while the hub lives completes its store — → NACK
-    ///     <see cref="MeshNodeErrorCode.OwnerDisposing"/>, naming the condition. That code, not
+    ///   <item><b>Echo stream ENDS without the echo while the owner LIVES</b> — a
+    ///     <c>SynchronizationStream</c> disposed by mirror eviction while the hub lives completes its store
+    ///     — → NACK <see cref="MeshNodeErrorCode.OwnerDisposing"/>, naming the condition. That code, not
     ///     <see cref="MeshNodeErrorCode.OwnerUnreachable"/> and not a new one: a stream ending under a live
     ///     patch IS the owner's stream going away, which is what the code means, and it is the writer's
     ///     auto-retried code — a re-enqueue re-runs the update lambda against the FRESH state and re-diffs,
     ///     so a merge that DID commit before the stream ended becomes a no-op. "Fate unknown, safe to retry"
     ///     is the honest verdict; the timeout verdict stays <c>Unknown</c> + <c>TimeoutException</c>, so the
     ///     two are separable by <c>Code</c> (Doc/Architecture/ReadingAWriteVerdict).</item>
+    ///   <item>🚨 <b>Echo stream ENDS without the echo while the owner is SHUTTING DOWN</b>
+    ///     (<paramref name="ownerIsShuttingDown"/>) → post NOTHING here. The stream completes in the owner's
+    ///     <c>DisposeHostedHubs</c> phase (its sync hub disposes and <c>Store.OnCompleted()</c>s), and the
+    ///     verdict for a patch in flight at owner teardown belongs to the ShutDown-phase disposal NACK
+    ///     (<c>RegisterOwnerDisposingNack</c>, on the same once-only gate). Claiming the gate here was the
+    ///     regression that turned <c>LateNackReenqueueTest</c> and <c>NackReachesTheWaiterDuringTeardownTest</c>
+    ///     red on 2026-09-02, for two reasons: (1) <b>one phase too early</b> — the dying activation still holds
+    ///     the address until its ShutDown phase removes it from the parent's registry, so an
+    ///     <c>OwnerDisposing</c> ("safe to retry against the fresh activation") minted at DisposeHostedHubs sends
+    ///     the writer's immediate re-enqueue into the SAME activation, which rejects it <c>ShuttingDown</c>, and
+    ///     the write fails <c>Unknown</c>; (2) <b>the wrong transport</b> — <c>hub.Post</c> from a hub past
+    ///     Quiescing is dropped under a whole-mesh teardown, and with the gate already claimed the registrant's
+    ///     direct <c>ILatePatchVerdictSink.Dispatch</c> — the one route that still reaches the armed waiter —
+    ///     is skipped, so the caller burns its whole verdict budget in silence (#2778 again). The registrant
+    ///     is total for a disposing hub (a registration racing disposal is disposed at once), so deferring
+    ///     to it loses no verdict.</item>
     ///   <item><b>Flush ENDS without emitting</b> → ack <c>true</c>. <see cref="IPostCommitFlush.Flush"/> is
     ///     contracted to "complete immediately for entity types this hook does not persist": nothing to
     ///     make durable means the in-memory commit IS the durable state — the same verdict as when no hook
@@ -1048,13 +1064,22 @@ public static class DataExtensions
         TimeSpan flushTimeout,
         Action<bool, MeshNodeError?> ackOnce,
         Action<IDisposable> registerForDisposal,
-        string hubPath)
+        string hubPath,
+        Func<bool> ownerIsShuttingDown)
         => commitEcho
-            .WhenCompletesEmpty(() => ackOnce(false, new MeshNodeError(
-                MeshNodeErrorCode.OwnerDisposing, hubPath,
-                "the owner's stream ended before this patch's commit echo arrived — the owner reported no "
-                + "verdict, so the write's fate is UNKNOWN; safe to retry: a re-enqueue re-diffs against the "
-                + "fresh state, so a merge that did commit is a no-op")))
+            .WhenCompletesEmpty(() =>
+            {
+                // The stream ended because the OWNER is going down: the ShutDown-phase disposal NACK
+                // owns this verdict (see remarks) — claiming the gate here mints it one phase too early
+                // and on a transport that does not reach the waiter under a whole-mesh teardown.
+                if (ownerIsShuttingDown())
+                    return;
+                ackOnce(false, new MeshNodeError(
+                    MeshNodeErrorCode.OwnerDisposing, hubPath,
+                    "the owner's stream ended before this patch's commit echo arrived — the owner reported no "
+                    + "verdict, so the write's fate is UNKNOWN; safe to retry: a re-enqueue re-diffs against the "
+                    + "fresh state, so a merge that did commit is a no-op"));
+            })
             .Subscribe(
                 committed =>
                 {
@@ -1480,11 +1505,19 @@ public static class DataExtensions
             // stream that faults or ENDS before delivering the state to merge against left the
             // request accepted and silently unanswered — the writer then burned its full
             // confirmation window and reported OwnerUnreachable. Here the merge provably never
-            // ran, so OwnerDisposing ("the patch was NOT applied; safe to retry") is exact.
-            .WhenCompletesEmpty(() => AckOnce(false, new MeshNodeError(
-                MeshNodeErrorCode.OwnerDisposing, hubPath,
-                "the owner's stream ended before it delivered the current state to merge against — "
-                + "the patch was NOT applied; safe to retry against the fresh activation")))
+            // ran, so OwnerDisposing ("the patch was NOT applied; safe to retry") is exact — unless
+            // the stream ended because the OWNER is shutting down, in which case the ShutDown-phase
+            // disposal NACK (RegisterOwnerDisposingNack, above) owns the verdict: minted here it
+            // would be one phase too early and on the wrong transport (see ArmPatchAckWatcher).
+            .WhenCompletesEmpty(() =>
+            {
+                if (hub.IsShuttingDown)
+                    return;
+                AckOnce(false, new MeshNodeError(
+                    MeshNodeErrorCode.OwnerDisposing, hubPath,
+                    "the owner's stream ended before it delivered the current state to merge against — "
+                    + "the patch was NOT applied; safe to retry against the fresh activation"));
+            })
             .Subscribe(change =>
             {
                 try
@@ -1632,7 +1665,8 @@ public static class DataExtensions
                         TimeSpan.FromSeconds(10),
                         AckOnce,
                         d => hub.RegisterForDisposal(d),
-                        hubPath);
+                        hubPath,
+                        () => hub.IsShuttingDown);
                     hub.RegisterForDisposal(postSub);
 
                     // Route via the hub's DataChangeRequest pipeline — the workspace
@@ -1737,10 +1771,14 @@ public static class DataExtensions
             TimeSpan.FromSeconds(10),
             AckOnce,
             d => hub.RegisterForDisposal(d),
-            hubPath);
+            hubPath,
+            () => hub.IsShuttingDown);
         hub.RegisterForDisposal(postSub);
         // Registered AFTER postSub so the composite disposes the watcher FIRST, then this NACK
         // claims the gate — an unacked in-flight patch always gets a terminal, never silence.
+        // The watcher's own completion arm stands aside for a shutting-down owner precisely so
+        // that this registrant — the ShutDown-phase seam, whose Dispatch reaches the waiter and
+        // whose timing lets the re-enqueue land on a FRESH activation — is the one that claims it.
         RegisterOwnerDisposingNack(hub, request, hubPath,
             () => System.Threading.Interlocked.Exchange(ref ackPosted, 1) == 0);
 
