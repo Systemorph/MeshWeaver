@@ -70,6 +70,8 @@
   "error.areaFailed": "This area failed to render.",
   "error.areaReconnecting": "This view is reconnecting…",
   "error.areaReconnectingHint": "The service behind it is restarting. It will come back on its own in a moment — nothing is lost and there is nothing to fix.",
+  "error.storageUnavailable": "This view is temporarily unavailable.",
+  "error.storageUnavailableHint": "The service that stores this content did not answer in time. Nothing is lost and nothing is broken — please wait a moment and reload the page.",
   "error.dialogFailed": "This dialog failed to render.",
   "error.notFound": "Not found",
   "error.validationFailed": "Validation failed",

@@ -85,6 +85,45 @@ public class MeshQueryTransientRetryTest
         TransientStorageFaults.IsTransientConnectFault(null).Should().BeFalse();
     }
 
+    /// <summary>
+    /// 🚨 ONE rule, TWO consumers (#2876). This layer decides whether a fault is worth a bounded
+    /// RETRY; <c>MeshWeaver.Layout.AreaErrorClassifier.IsStorageUnavailable</c> decides what an area
+    /// SHOWS once that retry is spent. They sit on opposite sides of the assembly graph and both
+    /// forward to <see cref="MeshWeaver.Data.StorageFaults.IsTransientConnectFault"/>.
+    ///
+    /// <para>The drift this pins is silent in both directions: a fault the fan-in retries but the
+    /// renderer reports as a defect sends an operator hunting for a bug in a view, and an outage
+    /// the renderer excuses ("temporarily unavailable, come back later") that this layer never
+    /// retried is a real error dressed up as weather. The corpus below is the incident shape and
+    /// its boundaries, asserted through BOTH surfaces.</para>
+    /// </summary>
+    [Fact]
+    public void TheRetryAndTheRenderFrame_ClassifyTheSameFaults()
+    {
+        (Exception? Fault, bool Transient)[] corpus =
+        [
+            (ConnectTimeout(), true),
+            (new FakeDbException("connect", new SocketException()), true),
+            (new FakeDbException("connect", new System.IO.IOException("broken pipe")), true),
+            (new InvalidOperationException("query failed", ConnectTimeout()), true),
+            (new FakeDbException("server refusing", sqlState: "57P03"), true),
+            (new FakeDbException("undefined_table", sqlState: "42P01"), false),
+            (new FakeDbException("deadlock_detected", sqlState: "40P01"), false),
+            (new TimeoutException(), false),
+            (new OperationCanceledException(), false),
+            (null, false),
+        ];
+
+        foreach (var (fault, transient) in corpus)
+        {
+            TransientStorageFaults.IsTransientConnectFault(fault).Should().Be(transient,
+                $"the query fan-in's verdict on {fault?.GetType().Name ?? "null"}");
+            MeshWeaver.Layout.AreaErrorClassifier.IsStorageUnavailable(fault).Should().Be(transient,
+                "the render frame must reach the SAME verdict — two copies of this rule drift, and "
+                + "the drift is invisible from either side");
+        }
+    }
+
     // ————————————————————————— retry chain (virtual time)
 
     [Fact]

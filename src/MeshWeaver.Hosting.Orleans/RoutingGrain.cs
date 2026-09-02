@@ -488,7 +488,8 @@ internal class RoutingGrain(
             .Catch<Unit, Exception>(ex => IsPodHubNotHere(ex)
                 ? AnswerPodHubNotHere(
                     delivery, addressPath, address.Type, meshConfig,
-                    FallBackToStream, PostVerdictToSender, logger, podHubRefusalLog)
+                    FallBackToStream, PostVerdictToSender, logger, podHubRefusalLog,
+                    RespondingSilo(ex))
                 // A REAL failure of the call, transient retries exhausted (or a non-transient
                 // fault) — the owning silo threw, went away mid-call, or the placement could not
                 // be made. This is the whole gain over a publish: it is OBSERVABLE, so it becomes
@@ -591,6 +592,10 @@ internal class RoutingGrain(
     /// <param name="postFailureToSender">Message, error type, and the <c>TargetUnserved</c> stamp.</param>
     /// <param name="logger">Logger for the refusal line.</param>
     /// <param name="refusalLog">Window for the full line; null logs every refusal in full.</param>
+    /// <param name="respondingSilo">
+    /// The silo whose activation answered — see <see cref="RespondingSilo"/> for why this is on the
+    /// line at all. Null on a peer that predates the field.
+    /// </param>
     internal static IObservable<Unit> AnswerPodHubNotHere(
         IMessageDelivery delivery,
         string addressPath,
@@ -599,7 +604,8 @@ internal class RoutingGrain(
         Func<IObservable<Unit>> fallBackToStream,
         Action<string, ErrorType, bool> postFailureToSender,
         ILogger logger,
-        DeadTargetRefusalLog? refusalLog = null)
+        DeadTargetRefusalLog? refusalLog = null,
+        string? respondingSilo = null)
     {
         if (meshConfig.ClientHostedAddressTypes.Contains(addressType))
             return fallBackToStream();
@@ -607,7 +613,11 @@ internal class RoutingGrain(
         var reason =
             $"Directed delivery to pod hub '{addressPath}' was refused: no silo in this cluster is "
             + "currently serving that hub. Transient — the owner claims its address for as long as it "
-            + "is registered, so a retry is the correct response.";
+            + "is registered, and re-asserts that claim on every cluster membership change, so a retry "
+            + "is the correct response. The activation that answered is on silo "
+            + $"'{respondingSilo ?? "(not reported — a peer predating the field)"}'; when that is THIS "
+            + "router's own silo, the grain directory holds no entry for the address at all and "
+            + "prefer-local placed a throw-away activation here (#2938).";
         var suppressedSincePriorReport = 0;
         if (refusalLog is null || refusalLog.ShouldReport(addressPath, out suppressedSincePriorReport))
             logger.LogWarning(
@@ -638,6 +648,26 @@ internal class RoutingGrain(
     internal static bool IsPodHubNotHere(Exception ex) =>
         ex is PodHubNotHereException
         || (ex.InnerException is not null && IsPodHubNotHere(ex.InnerException));
+
+    /// <summary>
+    /// The silo whose activation answered the refusal, dug out of the same wrapped chain
+    /// <see cref="IsPodHubNotHere"/> walks — or null on a peer that predates the field.
+    ///
+    /// <para>🚨 This is the fact that makes a refusal DIAGNOSABLE rather than merely reported. The
+    /// warning below says "no silo in this cluster is currently serving that hub", and for twelve
+    /// hours of memex-cloud that sentence covered two different faults with different fixes
+    /// (#2938): the owner's claim genuinely not being held, and <c>[PreferLocalPlacement]</c>
+    /// putting a throw-away activation on the ROUTER's own silo because the grain directory has no
+    /// entry at all. When the responding silo is the one printing the line, it is the second.</para>
+    /// </summary>
+    /// <param name="ex">The exception the pod-hub call failed with.</param>
+    /// <returns>The responding silo's identity, or null.</returns>
+    internal static string? RespondingSilo(Exception? ex) => ex switch
+    {
+        null => null,
+        PodHubNotHereException notHere => notHere.RespondingSilo,
+        _ => RespondingSilo(ex.InnerException),
+    };
 
     /// <summary>
     /// Composes (does NOT run) the MEMORY-STREAM leg of a route: the "I'm a registered hosted hub,

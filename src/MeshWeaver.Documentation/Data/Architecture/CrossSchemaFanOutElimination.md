@@ -118,6 +118,14 @@ not optional hygiene.
    `notifications` fan-out and its thousands-of-rows reads.
 4. The ratchet (plan 3).
 
-Related: issue #2640 (the per-page floor this eliminates), #2895 (the rebake write storm whose
-mutual blocking with the fan-outs produced the 08-31 outages), #2011/#2048 (why the fold must
+🚨 **Read [Unanchored Security Reads](../UnanchoredSecurityReads) before touching plan 2.** It is
+the companion to this page and it says which of these fan-outs must NOT be eliminated the obvious
+way: anchoring the fold's global reads to the viewer's partition is truncation, which makes a
+group-derived permission vanish AND a group-scoped deny fail open, with nothing logged and nothing
+failing. It also carries the per-lever verdicts (what is tractable, what needs a decision) and the
+executable census `SecurityQueryShapesTest` pins.
+
+Related: issue #2640 (the per-page floor this eliminates), #2876 (a transient connect timeout took
+a whole area render down — the same fan-out, from the render side), #2895 (the rebake write storm
+whose mutual blocking with the fan-outs produced the 08-31 outages), #2011/#2048 (why the fold must
 never be paged), Plugins #1035 (the shape log).

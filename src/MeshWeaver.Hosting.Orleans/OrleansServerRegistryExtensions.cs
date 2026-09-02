@@ -115,7 +115,15 @@ public static class OrleansServerRegistryExtensions
         // resolution. Consumers treat "not registered" as "no cluster" (ClusterMemberState.Unknown),
         // which is exactly right for a client, a monolith, or a test.
         silo.ConfigureServices(services =>
-            services.TryAddSingleton<IClusterMembership, OrleansClusterMembership>());
+        {
+            services.TryAddSingleton<IClusterMembership, OrleansClusterMembership>();
+            // 🚨 The EDGE sibling, registered under the SAME silo-only rule and for the same reason
+            // ISiloStatusOracle exists nowhere else. It is what lets the pod-hub claim re-assert
+            // itself when the grain directory it publishes into is re-partitioned — see
+            // IClusterMembershipFeed and OrleansRoutingService.AttachPodHub. Absent on a client or
+            // a monolith, where membership cannot change under this process at all.
+            services.TryAddSingleton<IClusterMembershipFeed, OrleansClusterMembershipFeed>();
+        });
 
         silo.AddMemoryStreams(StreamProviders.Memory);
 

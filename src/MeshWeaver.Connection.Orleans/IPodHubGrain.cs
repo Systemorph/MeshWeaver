@@ -76,10 +76,68 @@ public sealed class PodHubNotHereException : Exception
         : base($"No silo in this cluster serves '{address}' through the pod-hub transport.")
         => Address = address;
 
+    /// <summary>
+    /// Creates the exception for <paramref name="address"/>, naming the silo whose activation
+    /// answered — the fact a production log could not previously carry.
+    /// </summary>
+    /// <param name="address">The address whose local route the responding silo does not have.</param>
+    /// <param name="respondingSilo">The silo the activation was on, or null when unknown.</param>
+    public PodHubNotHereException(string address, string? respondingSilo)
+        : base(respondingSilo is null
+            ? $"No silo in this cluster serves '{address}' through the pod-hub transport."
+            : $"No silo in this cluster serves '{address}' through the pod-hub transport — the "
+              + $"activation the call reached is on silo '{respondingSilo}', which has no local "
+              + "route for that address.")
+    {
+        Address = address;
+        RespondingSilo = respondingSilo;
+    }
+
     /// <summary>Parameterless ctor for the serializer.</summary>
     public PodHubNotHereException() { }
+
+    /// <summary>
+    /// The claim's OWN refusal — <c>Attach</c> answered <c>false</c>, so nothing was ever thrown
+    /// across the wire.
+    ///
+    /// <para>🚨 It reads differently on purpose. This exception is what
+    /// <c>OrleansRoutingService.AttachPodHub</c>'s budget-exhausted <c>Warning</c> logs, and in
+    /// production that line carried the wire-level text above — which reads as though the cluster
+    /// had been asked and had answered, when in fact the OWNER's own claim landed on a silo that is
+    /// not it. Those are different faults with different fixes, and eight days of memex-cloud logs
+    /// could not tell them apart (#2938).</para>
+    /// </summary>
+    /// <param name="address">The address whose claim was refused.</param>
+    /// <returns>The exception the claim's retry policy treats as "bounce and try again".</returns>
+    public static PodHubNotHereException ClaimRefused(string address) =>
+        new()
+        {
+            Address = address,
+            ClaimRefusal = true,
+        };
 
     /// <summary>The address that could not be served.</summary>
     [global::Orleans.Id(0)]
     public string? Address { get; set; }
+
+    /// <summary>
+    /// The silo whose activation answered, when known. Null on an older peer, and on the
+    /// <see cref="ClaimRefused"/> shape (nothing crossed the wire there).
+    /// </summary>
+    [global::Orleans.Id(1)]
+    public string? RespondingSilo { get; set; }
+
+    /// <summary>
+    /// True when this is the CLAIM's own refusal (<c>Attach</c> answered <c>false</c>) rather than
+    /// a refusal thrown by a remote <c>Deliver</c>. See <see cref="ClaimRefused"/>.
+    /// </summary>
+    [global::Orleans.Id(2)]
+    public bool ClaimRefusal { get; set; }
+
+    /// <inheritdoc />
+    public override string Message => ClaimRefusal
+        ? $"The pod-hub claim for '{Address}' was refused: Attach answered false, so the activation "
+          + "this process reached is on a silo that has no local route for the address. The owner's "
+          + "claim has NOT landed and the cluster cannot reach this hub by directed grain call."
+        : base.Message;
 }
