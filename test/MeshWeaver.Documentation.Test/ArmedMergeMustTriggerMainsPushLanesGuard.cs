@@ -126,6 +126,67 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
         }
     }
 
+    /// <summary>
+    /// 🚨 <c>auto-arm.yml</c> tolerates a failed mint, and that tolerance is only defensible
+    /// because the assertion it drops was MOVED rather than deleted.
+    ///
+    /// <para>The move was made because a missing grant is a property of the org installation, not
+    /// of any pull request: asserting it per-PR produced an identical red on every open PR at
+    /// once, told a reader nothing about the branch they were looking at, and could not be acted
+    /// on from there. A check whose value never varies carries no information, and a permanent
+    /// wall of red is how a real red stops being read. So the arm lane now degrades to a warning
+    /// — the honest per-PR statement is "this PR was not armed", which costs a convenience and no
+    /// check — while <c>arm-credential.yml</c> keeps failing red, once, against the repository.</para>
+    ///
+    /// <para><b>Delete that lane and the tolerance becomes exactly the trapdoor AGENTS.md
+    /// forbids:</b> a credential that silently stopped working, an arm that silently stops
+    /// happening, and green everywhere. This test is the coupling — the two files may not drift
+    /// apart, and the day someone removes the preflight, the build says why it mattered.</para>
+    /// </summary>
+    [Fact]
+    public void ToleratingAFailedMintRequiresARepoScopedAssertion()
+    {
+        var armLines = ExecutableLines(File.ReadAllText(Path.Combine(WorkflowsDir(), "auto-arm.yml")));
+        if (!armLines.Any(l => l.Contains("continue-on-error", StringComparison.Ordinal)))
+            return; // The arm lane asserts for itself; no companion lane is owed.
+
+        var preflight = Path.Combine(WorkflowsDir(), "arm-credential.yml");
+        Assert.True(
+            File.Exists(preflight),
+            "auto-arm.yml tolerates a failed token mint, but arm-credential.yml — the lane that "
+            + "carries the assertion it dropped — is gone. Nothing now fails when the App loses "
+            + "Pull requests: write: the mint fails, the arm is skipped, the job is green, and PRs "
+            + "quietly stop landing with no red anywhere. Restore the lane, or delete the "
+            + "continue-on-error and let auto-arm assert for itself again.");
+
+        var lines = ExecutableLines(File.ReadAllText(preflight));
+
+        Assert.True(
+            lines.All(l => !l.Contains("continue-on-error", StringComparison.Ordinal)),
+            "arm-credential.yml carries continue-on-error. It is the ONLY thing left that fails "
+            + "when the arm credential is unusable; a tolerated failure there means no lane in the "
+            + "repository asserts the credential at all.");
+
+        // The whole point is that it runs without a pull request. A dispatch-only lane asserts
+        // only when a human already suspects the answer.
+        Assert.True(
+            lines.Any(l => l.StartsWith("schedule:", StringComparison.Ordinal))
+            || lines.Any(l => l.StartsWith("- cron:", StringComparison.Ordinal)),
+            "arm-credential.yml has no schedule. Manual dispatch only asserts the credential when "
+            + "someone already suspects it is broken, which is precisely when the assertion is no "
+            + "longer needed.");
+
+        foreach (var permission in new[] { "permission-contents: write", "permission-pull-requests: write" })
+        {
+            Assert.True(
+                lines.Any(l => l.Contains(permission, StringComparison.Ordinal)),
+                $"arm-credential.yml does not request '{permission}'. A token minted without naming "
+                + "both permissions inherits whatever the installation happens to hold — and "
+                + "'whatever it happens to hold' is the state that produced #2916. Requesting them "
+                + "explicitly is the entire mechanism by which a missing grant fails here.");
+        }
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
