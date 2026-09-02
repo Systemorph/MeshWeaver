@@ -107,6 +107,20 @@ treatment.
 Nothing is widened by this: the owner already refused everything the pre-flight now refuses. A mesh
 deliberately built **without** RLS stays ungated, because there is then no delegate to copy.
 
+🚨 **Waking a gate means matching what the owner asks, not just asking something.** The owner's
+delivery gate stopped being a raw `(path, permission)` fold in
+[#3061/#3100](https://github.com/Systemorph/MeshWeaver/issues/3061): on a definitive denial it
+re-decides through the node's registered `INodeTypeAccessRule`, which for every satellite type says
+*a satellite's write is `Update` on its MainNode*. `Recycle`'s pre-flight was a raw check, and
+switching it on without that second opinion would have **created** a false refusal — an editor
+entitled through a satellite's MainNode, whom the owner grants, refused by a pre-flight that only
+knows the path. It now takes the same second opinion, from the same `NodeTypeAccessRuleGate`
+helpers, on the same condition (a definitive denial only — never an undetermined fold, which must
+stay "we could not check"). Pinned by `RecyclingASatelliteFollowsItsNodeTypesRule_NotTheRawPath`,
+whose fixture points a satellite's `MainNode` into another partition: a satellite living *under* its
+main node inherits that node's grants by path, so raw and rule agree by construction and the case
+would prove nothing.
+
 **Half two — the owner's verdict is rendered, not raised.** A pre-flight is check-then-act. It runs
 on a different hub, at an earlier moment, against a permission fold that can have moved on: an
 assignment revoked in between, a cross-silo fold, an identity lost across a scheduler hop. The owner
@@ -143,6 +157,9 @@ That the tri-state survives the hop *as a type distinction* is not an accident:
 - **Ask the permission question on a hub that can answer it.** If you are writing a
   `CheckPermission` / `CheckPermissionOutcome` call, know which hub it lands on. A session hub now
   answers correctly; a hub you build yourself does not, unless you copy the evaluator.
+- **A pre-flight asks what the OWNER asks, or it is a new bug.** A raw `(path, permission)` fold is
+  not what the delivery gate does any more. Take the same `INodeTypeAccessRule` second opinion, on
+  the same condition — a definitive denial only.
 - **Never let authorization be a side effect of a write.** Decide, then act. A stamp that happens to
   be gated is not a gate — it stops being one the day the stamp becomes a no-op.
 - **A refusal is a return value.** Render it in the operation's envelope. The tool transport's

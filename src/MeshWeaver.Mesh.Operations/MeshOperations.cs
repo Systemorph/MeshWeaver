@@ -3627,6 +3627,22 @@ public class MeshOperations
                 MeshWeaver.Mesh.Security.PermissionCheckOutcome.Undetermined(
                     $"the permission check for Recycle on '{resolvedPath}' did not complete: "
                     + $"{ex.GetType().Name}")))
+            // 🚨 THE PRE-FLIGHT MUST ASK THE QUESTION THE OWNER WILL ASK — issue #3121. The check
+            // above is a RAW (path, Update) fold, and the owner's delivery gate stopped being that
+            // in #3061/#3100: on a definitive denial it re-decides through the node's registered
+            // INodeTypeAccessRule, which for every satellite type says "a satellite's write is
+            // Update on its MainNode". Until #3121 the disagreement was invisible here, because
+            // this whole check was inert on a session hub. Making it live without this line would
+            // have introduced a NEW false refusal — an editor entitled via a satellite's MainNode,
+            // whom the owner grants, refused by a pre-flight that only knows the raw path.
+            //
+            // Reached ONLY on a definitive denial, exactly as in AccessControlPipeline, and for the
+            // same two reasons: it costs nothing on the granted path (which never reads a node), and
+            // it never turns an UNDETERMINED fold into a rule question — "we could not check" must
+            // stay "we could not check".
+            .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
+                ? Observable.Return(outcome)
+                : ReconsiderRecycleThroughNodeTypeRule(resolvedPath))
             .SelectMany(outcome =>
             {
                 if (outcome.IsGranted)
@@ -3646,6 +3662,61 @@ public class MeshOperations
                 return Observable.Return(JsonSerializer.Serialize(
                     new { status = "Error", path = resolvedPath, message = RecycleDeniedMessage },
                     hub.JsonSerializerOptions));
+            });
+    }
+
+    /// <summary>
+    /// Re-decides a DENIED <see cref="Recycle"/> pre-flight through the target node's own
+    /// <c>INodeTypeAccessRule</c> — the same second opinion <c>AccessControlPipeline</c> takes since
+    /// #3061, built from the same <c>NodeTypeAccessRuleGate</c> helpers so the two seams cannot
+    /// drift into asking different questions.
+    ///
+    /// <para>Every terminal is the honest one: no rule governs the type (or nothing is served at the
+    /// path) leaves the standard check's <see cref="PermissionCheckOutcome.Denied"/> standing, and a
+    /// read that FAULTS is <see cref="PermissionCheckOutcome.Undetermined(string)"/> — a storage
+    /// blip must not be reported as a refusal nobody established. Undetermined carries
+    /// <c>IsGranted = false</c>, so the caller fails closed on every leg.</para>
+    /// </summary>
+    /// <param name="resolvedPath">The recycle target, already resolved.</param>
+    private IObservable<MeshWeaver.Mesh.Security.PermissionCheckOutcome> ReconsiderRecycleThroughNodeTypeRule(
+        string resolvedPath)
+    {
+        // Update is in the CRUD set SubjectOperationFor maps, so this is never null in practice —
+        // it is asked rather than assumed so that a change to that mapping cannot silently make
+        // this seam decide an operation no rule can speak for.
+        if (NodeTypeAccessRuleGate.SubjectOperationFor(MeshWeaver.Mesh.Security.Permission.Update)
+            is not { } operation)
+            return Observable.Return(MeshWeaver.Mesh.Security.PermissionCheckOutcome.Denied);
+
+        return NodeTypeAccessRuleGate.ReadSubjectNode(hub, resolvedPath)
+            .SelectMany(node =>
+            {
+                if (node is null
+                    || NodeTypeAccessRuleGate.Find(hub, node.NodeType, operation) is not { } rule)
+                    return Observable.Return(MeshWeaver.Mesh.Security.PermissionCheckOutcome.Denied);
+
+                var accessService = hub.ServiceProvider.GetService<AccessService>();
+                var context = new NodeValidationContext
+                {
+                    Operation = operation,
+                    Node = node,
+                    AccessContext = accessService?.Context ?? accessService?.CircuitContext,
+                };
+                logger.LogDebug(
+                    "Recycle: Update on {Path} was denied by the standard check — re-deciding "
+                    + "through the {NodeType} access rule, which governs this node type",
+                    resolvedPath, node.NodeType);
+                return NodeTypeAccessRuleGate.Evaluate(rule, context, ResolveCallerUserId(), logger);
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "Recycle: could not read the node at {Path} to apply its node-type access rule "
+                    + "— reporting UNAVAILABLE rather than a denial nobody established",
+                    resolvedPath);
+                return Observable.Return(MeshWeaver.Mesh.Security.PermissionCheckOutcome.Undetermined(
+                    $"the node at '{resolvedPath}' could not be read to apply its node-type access "
+                    + $"rule ({ex.GetType().Name})"));
             });
     }
 

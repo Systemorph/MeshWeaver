@@ -79,8 +79,30 @@ public class SessionDenialIsAnAnswerTest(ITestOutputHelper output) : MonolithMes
     /// <summary>A NodeType: its recycle stamp is a real write, and the owner refuses it.</summary>
     private const string NodeTypePath = Partition + "/Ty";
 
+    /// <summary>
+    /// A second partition, holding an <c>Activity</c> satellite whose <c>MainNode</c> points back
+    /// into <see cref="Partition"/>. The split is what makes the case sharp: a satellite under its
+    /// own main node inherits that node's grants by path, so the raw check and the rule agree by
+    /// construction and nothing is being tested. <c>MainNode</c> is a POINTER, not a parent — the
+    /// hazard <c>MainNodeRebasing</c> documents — and <c>SatelliteAccessRule</c> delegates to
+    /// wherever it points.
+    /// </summary>
+    private const string Elsewhere = "SessionDenialElsewhere";
+
+    /// <summary>
+    /// The satellite: <c>Update</c> on its own path is DENIED for the Editor, and its registered
+    /// <c>SatelliteAccessRule</c> ("a satellite's write is Update on its MainNode") GRANTS.
+    /// </summary>
+    private const string SatellitePath = Elsewhere + "/_Activity/run1";
+
     /// <summary>Read|Execute|Api — no Update anywhere in this partition.</summary>
     private const string ViewerUser = "session-viewer";
+
+    /// <summary>
+    /// Update but no Delete — the entitlement that makes the satellite case sharp: the raw check on
+    /// the satellite's OWN path denies, and the node type's rule grants via the MainNode.
+    /// </summary>
+    private const string EditorUser = "session-editor";
 
     /// <summary>🚨 <see cref="TestTimeouts"/>, never a literal — CI-scaled, and it reports what it
     /// was waiting for instead of dying anonymously.</summary>
@@ -95,7 +117,21 @@ public class SessionDenialIsAnAnswerTest(ITestOutputHelper output) : MonolithMes
                 new MeshNode(Partition) { Name = "Session Denial", NodeType = "Markdown" },
                 new MeshNode("Doc", Partition) { Name = "Doc", NodeType = "Markdown" },
                 new MeshNode("Ty", Partition) { Name = "Ty", NodeType = MeshNode.NodeTypePath },
-                AssignmentNodeFactory.UserRole(ViewerUser, "Viewer", Partition));
+                new MeshNode(Elsewhere) { Name = "Elsewhere", NodeType = "Markdown" },
+                new MeshNode("run1", Elsewhere + "/_Activity")
+                {
+                    Name = "Compile run",
+                    NodeType = "Activity",
+                    // The satellite pointer, into the OTHER partition. Without it
+                    // SatelliteAccessRule takes its degenerate branch and falls back to the plain
+                    // path check — i.e. the answer with no rule at all — so this line is what makes
+                    // the case a satellite whose rule DISAGREES with the raw path.
+                    MainNode = PlainPath,
+                },
+                AssignmentNodeFactory.UserRole(ViewerUser, "Viewer", Partition),
+                // Scoped to `Partition` ONLY: Update on `SessionDenial/Doc`, nothing at all in
+                // `SessionDenialElsewhere`.
+                AssignmentNodeFactory.UserRole(EditorUser, "Editor", Partition));
 
     /// <summary>
     /// The session hub every API surface issues on, materialised exactly as MCP materialises it —
@@ -107,8 +143,10 @@ public class SessionDenialIsAnAnswerTest(ITestOutputHelper output) : MonolithMes
         "denial",
         Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(SessionDenialIsAnAnswerTest)));
 
-    private void ActAsViewer() => Mesh.ServiceProvider.GetRequiredService<AccessService>()
-        .SetContext(new AccessContext { ObjectId = ViewerUser, Name = ViewerUser });
+    private void ActAs(string userId) => Mesh.ServiceProvider.GetRequiredService<AccessService>()
+        .SetContext(new AccessContext { ObjectId = userId, Name = userId });
+
+    private void ActAsViewer() => ActAs(ViewerUser);
 
     /// <summary>
     /// 🚨 THE ROOT CAUSE, pinned as one comparison: the SAME question, asked on the session hub and
@@ -165,6 +203,44 @@ public class SessionDenialIsAnAnswerTest(ITestOutputHelper output) : MonolithMes
         => (await RecycleAsViewer(PlainPath)).Should().Be(MeshOperations.RecycleDeniedMessage,
             "recycling disposes the node's hub — a caller who may not write the node may not tear "
             + "it down either, and that must not depend on whether the stamp happens to be a write");
+
+    /// <summary>
+    /// 🚨 THE OTHER DIRECTION, and the regression this change had to avoid CREATING. Making the
+    /// pre-flight live is only safe if it asks the question the OWNER asks — and since #3061/#3100
+    /// the owner's delivery gate re-decides a denied raw check through the node's registered
+    /// <c>INodeTypeAccessRule</c>. A pre-flight that stopped at the raw path would refuse an editor
+    /// the owner grants: a NEW false refusal, introduced by a fix for a legibility bug.
+    ///
+    /// <para>The fixture is a satellite whose <c>MainNode</c> points into ANOTHER partition, which
+    /// is the only shape where the two answers can differ: a satellite living UNDER its main node
+    /// inherits that node's grants by path, so raw and rule agree by construction and the case
+    /// would be vacuous. <c>MainNode</c> is a pointer, not a parent.</para>
+    ///
+    /// <para>So: the Editor holds Update in <see cref="Partition"/> and nothing in
+    /// <see cref="Elsewhere"/>. Raw <c>Update</c> on the satellite's own path — DENIED.
+    /// <c>SatelliteAccessRule</c> — "a satellite's write is Update on its MainNode" — GRANTED.
+    /// The recycle must go through.</para>
+    /// </summary>
+    [Fact]
+    public async Task RecyclingASatelliteFollowsItsNodeTypesRule_NotTheRawPath()
+    {
+        ActAs(EditorUser);
+
+        var rawCheck = await Mesh.CheckPermissionOutcome(SatellitePath, EditorUser, Permission.Update)
+            .Take(1).Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        rawCheck.IsGranted.Should().BeFalse(
+            "the Editor's grant is scoped to the other partition — if the raw path check GRANTS, "
+            + "the rule is never consulted and this test proves nothing");
+
+        var answer = await new MeshOperations(SessionHub()).Recycle(SatellitePath)
+            .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        Output.WriteLine($"Recycle({SatellitePath}) → {answer}");
+
+        using var envelope = JsonDocument.Parse(answer);
+        envelope.RootElement.GetProperty("status").GetString().Should().Be("Recycled",
+            "the satellite's own access rule grants what the raw path check denies, and the "
+            + "pre-flight must reach the same verdict the owner's delivery gate would");
+    }
 
     /// <summary>
     /// 🚨 ONLY A VERDICT READS AS A DENIAL. <see cref="MeshOperations.IsWriteDenial"/> is the seam
