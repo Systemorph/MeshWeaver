@@ -1245,33 +1245,14 @@ public static class MeshExtensions
                     NodeCreationRejectionReason.ValidationFailed);
                 return request.Processed();
             }
-            if (string.IsNullOrWhiteSpace(candidate.Id) || string.IsNullOrWhiteSpace(candidate.Path))
+            // The per-NODE structural rules live on the request itself (CreateNodesRequest.BulkRefusal)
+            // — ONE statement of what may travel in a bulk create, so a caller that has to split a set
+            // into "batchable" and "not" (StaticRepoImporter, per write stage) asks the same function
+            // instead of re-deriving it. Only the BATCH-level rules stay here: a null entry and a
+            // duplicate path are properties of the list, not of any node in it.
+            if (CreateNodesRequest.BulkRefusal(candidate) is { } refusal)
             {
-                PostFail("Node path and Id must not be empty",
-                    NodeCreationRejectionReason.ValidationFailed, candidate.Path);
-                return request.Processed();
-            }
-            if (string.IsNullOrWhiteSpace(candidate.NodeType) && candidate.Content == null)
-            {
-                PostFail($"Node '{candidate.Path}' must have a NodeType or Content set; bare nodes are not allowed.",
-                    NodeCreationRejectionReason.ValidationFailed, candidate.Path);
-                return request.Processed();
-            }
-            // Satellites (_Access, _Activity, _Thread, …) carry per-node guards (ownerless-activity,
-            // assignment scope/system-owned) and satellite-MainNode normalization that are
-            // deliberately per-node lifecycle — refuse them here rather than half-support them.
-            if (candidate.Segments.Any(segment => segment.StartsWith('_')))
-            {
-                PostFail(
-                    $"'{candidate.Path}' is a satellite path — satellites are per-node lifecycle; use CreateNodeRequest/CreateOrUpdateNodeRequest.",
-                    NodeCreationRejectionReason.InvalidPath, candidate.Path);
-                return request.Processed();
-            }
-            if (string.Equals(candidate.NodeType, AccessAssignmentNodeTypeName, StringComparison.OrdinalIgnoreCase))
-            {
-                PostFail(
-                    $"'{candidate.Path}' is an AccessAssignment — grants are per-node lifecycle; use CreateNodeRequest.",
-                    NodeCreationRejectionReason.ValidationFailed, candidate.Path);
+                PostFail(refusal.Error, refusal.Reason, candidate.Path);
                 return request.Processed();
             }
             if (!seenPaths.Add(candidate.Path))
@@ -1509,7 +1490,7 @@ public static class MeshExtensions
     private const string PartitionRootNodeTypeName = "Space";
 
     /// <summary>The <c>AccessAssignment</c> node type name — same rationale as <see cref="PartitionRootNodeTypeName"/>.</summary>
-    private const string AccessAssignmentNodeTypeName = "AccessAssignment";
+    private const string AccessAssignmentNodeTypeName = CreateNodesRequest.AccessAssignmentNodeType;
 
     /// <summary>
     /// SELF-HEALING PARTITION BOOTSTRAP — the centralized invariant that every mesh partition
