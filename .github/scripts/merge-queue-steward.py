@@ -461,23 +461,32 @@ class Gh:
         return True
 
     def group_pull_requests(self, run: dict, own: int) -> tuple[int, ...]:
-        """Every PR in the group this run built. The queue branch is `gh-readonly-queue/main/pr-<N>-<base>`
-        — <base> is main's tip the group was built from — and each hop of the first-parent chain
-        from the run's head back to <base> is one entry's merge commit, whose message names its PR.
-        Bounded: a chain that does not reach <base> in ten hops yields what it found, never a loop."""
-        m = re.match(rf"gh-readonly-queue/{QUEUE_BRANCH}/pr-\d+-([0-9a-f]{{7,40}})$", run.get("head_branch") or "")
-        base = m.group(1) if m else None
+        """Every PR in the group this run built — i.e. this entry plus every entry that was AHEAD of
+        it in the queue, since an entry's temporary branch is main + all entries ahead + itself.
+
+        Each hop of the first-parent chain from the run's head is one entry's merge commit, whose
+        message names its PR. The chain ends at main's tip AS OF THE RUN, and that is decided by
+        evidence rather than by shape: a PR whose `merged_at` precedes the run's creation was already
+        on main when the group was built, so its commit is base, not group. (Comparing against main
+        NOW would undercount — the entries ahead were green and have usually landed by the time the
+        steward reads the failure — and the sha in the branch name is the previous entry's head, not
+        main's tip.) Bounded to ten hops so a surprise never loops."""
+        created = run.get("created_at") or ""
         found: list[int] = []
         sha = run["head_sha"]
         for _ in range(10):
-            if base and sha.startswith(base):
-                break   # reached main's tip: the chain is complete
             commit = self.api(f"commits/{sha}")
             msg = ((commit or {}).get("commit") or {}).get("message", "")
             first = msg.splitlines()[0] if msg else ""
-            pr = re.search(r"Merge pull request #(\d+)", msg) or re.search(r"\(#(\d+)\)\s*$", first)
-            if pr:
-                found.append(int(pr.group(1)))
+            m = re.search(r"Merge pull request #(\d+)", msg) or re.search(r"\(#(\d+)\)\s*$", first)
+            if not m:
+                break   # not a pull-request merge: we are on main's history
+            number = int(m.group(1))
+            if number != own:
+                merged_at = (self.api(f"pulls/{number}") or {}).get("merged_at") or ""
+                if merged_at and merged_at < created:
+                    break   # landed before this group was built: base, not group
+            found.append(number)
             parents = (commit or {}).get("parents", [])
             if not parents:
                 break

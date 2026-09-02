@@ -67,22 +67,36 @@ public class MergeQueueStewardGuard
     public void TheValidator_RefusesEachDefectItClaimsToCatch()
     {
         var today = new DateOnly(2026, 9, 2);
-        string Entry(string overrides) => """{"entries":[{"id":"x","assertionPattern":"timed out after","testName":"T",""" +
-            """"issue":"https://github.com/Systemorph/MeshWeaver/issues/9","expires":"2026-09-30","addedOn":"2026-09-02",""" +
-            """"addedBy":"me","evidence":["https://github.com/Systemorph/MeshWeaver/actions/runs/1"]""" + overrides + "}]}";
+        static string Catalogue(params (string Key, object? Value)[] overrides)
+        {
+            var entry = new Dictionary<string, object?>
+            {
+                ["id"] = "x",
+                ["assertionPattern"] = "timed out after",
+                ["testName"] = "T",
+                ["issue"] = "https://github.com/Systemorph/MeshWeaver/issues/9",
+                ["expires"] = "2026-09-30",
+                ["addedOn"] = "2026-09-02",
+                ["addedBy"] = "me",
+                ["evidence"] = new[] { "https://github.com/Systemorph/MeshWeaver/actions/runs/1" },
+            };
+            foreach (var (key, value) in overrides)
+                entry[key] = value;
+            return JsonSerializer.Serialize(new { entries = new[] { entry } });
+        }
 
-        Assert.Empty(Validate(Entry(""), today));
-        Assert.Empty(Validate("""{"entries":[]}""", today));
+        Assert.Empty(Validate(Catalogue(), today));
+        Assert.Empty(Validate(JsonSerializer.Serialize(new { entries = Array.Empty<object>() }), today));
 
-        Assert.NotEmpty(Validate(Entry(""","issue":""""), today));
-        Assert.NotEmpty(Validate(Entry(""","issue":"https://example.com/1""""), today));
-        Assert.NotEmpty(Validate(Entry(""","expires":"2026-11-30""""), today));      // > 30 days out
-        Assert.NotEmpty(Validate(Entry(""","expires":"2026-09-01""""), today));      // already expired
-        Assert.NotEmpty(Validate(Entry(""","assertionPattern":"(""""), today));      // invalid regex
-        Assert.NotEmpty(Validate(Entry(""","assertionPattern":".*""""), today));     // matches everything
-        Assert.NotEmpty(Validate(Entry(""","evidence":[]"""), today));
-        Assert.NotEmpty(Validate(Entry(""","evidence":["https://github.com/Systemorph/MeshWeaver/pull/1"]"""), today));
-        Assert.NotEmpty(Validate("""{"entries":[{"id":"x"}]}""", today));
+        Assert.NotEmpty(Validate(Catalogue(("issue", "")), today));
+        Assert.NotEmpty(Validate(Catalogue(("issue", "https://example.com/1")), today));
+        Assert.NotEmpty(Validate(Catalogue(("expires", "2026-11-30")), today));          // > 30 days out
+        Assert.NotEmpty(Validate(Catalogue(("expires", "2026-09-01")), today));          // already expired
+        Assert.NotEmpty(Validate(Catalogue(("assertionPattern", "(")), today));          // invalid regex
+        Assert.NotEmpty(Validate(Catalogue(("assertionPattern", ".*")), today));         // matches everything
+        Assert.NotEmpty(Validate(Catalogue(("evidence", Array.Empty<string>())), today));
+        Assert.NotEmpty(Validate(Catalogue(("evidence", new[] { "https://github.com/Systemorph/MeshWeaver/pull/1" })), today));
+        Assert.NotEmpty(Validate(JsonSerializer.Serialize(new { entries = new[] { new { id = "x" } } }), today));
         Assert.NotEmpty(Validate("not json", today));
     }
 
