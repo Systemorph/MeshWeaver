@@ -157,6 +157,45 @@ public record CreateNodesRequest(ImmutableList<MeshNode> Nodes) : IRequest<Creat
     /// <see cref="CreateNodeRequest.CreatedBy"/>.
     /// </summary>
     public string? CreatedBy { get; init; }
+
+    /// <summary>
+    /// The <c>AccessAssignment</c> node type name. Named by literal here rather than by type so
+    /// Mesh.Contract needs no dependency on the assembly that defines the type.
+    /// </summary>
+    public const string AccessAssignmentNodeType = "AccessAssignment";
+
+    /// <summary>
+    /// Why this node may NOT travel in a bulk create — or <c>null</c> when it may.
+    ///
+    /// <para>These ARE the handler's structural (phase 0) guards: it calls this, so there is exactly
+    /// one statement of the rule. A caller that has to SPLIT a set into "what can go in one request"
+    /// and "what must keep the per-node verb" — the static-repo importer does exactly that per write
+    /// stage — asks this instead of re-deriving the rule, because a second copy drifts and the
+    /// symptom would be a whole batch refused for a reason the caller thought it had excluded.</para>
+    ///
+    /// <para>Not covered here, because they are properties of a BATCH rather than of a node: a null
+    /// entry and a duplicate path. The handler checks both itself.</para>
+    /// </summary>
+    /// <param name="node">The candidate node.</param>
+    /// <returns>The refusal message and its reason, or <c>null</c> when the node is bulk-creatable.</returns>
+    public static (string Error, NodeCreationRejectionReason Reason)? BulkRefusal(MeshNode node)
+    {
+        if (string.IsNullOrWhiteSpace(node.Id) || string.IsNullOrWhiteSpace(node.Path))
+            return ("Node path and Id must not be empty", NodeCreationRejectionReason.ValidationFailed);
+        if (string.IsNullOrWhiteSpace(node.NodeType) && node.Content == null)
+            return ($"Node '{node.Path}' must have a NodeType or Content set; bare nodes are not allowed.",
+                NodeCreationRejectionReason.ValidationFailed);
+        // Satellites (_Access, _Activity, _Thread, …) carry per-node guards (ownerless-activity,
+        // assignment scope/system-owned) and satellite-MainNode normalization that are deliberately
+        // per-node lifecycle — refused here rather than half-supported.
+        if (node.Segments.Any(segment => segment.StartsWith('_')))
+            return ($"'{node.Path}' is a satellite path — satellites are per-node lifecycle; use CreateNodeRequest/CreateOrUpdateNodeRequest.",
+                NodeCreationRejectionReason.InvalidPath);
+        if (string.Equals(node.NodeType, AccessAssignmentNodeType, StringComparison.OrdinalIgnoreCase))
+            return ($"'{node.Path}' is an AccessAssignment — grants are per-node lifecycle; use CreateNodeRequest.",
+                NodeCreationRejectionReason.ValidationFailed);
+        return null;
+    }
 }
 
 /// <summary>
