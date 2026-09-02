@@ -363,6 +363,15 @@ Reading per SCOPE instead multiplied that one read by the depth of the path **an
 
 **Why the verdict cannot change.** The fold never depended on which scopes were READ, only on which are CONSULTED. `ComputeScopeRoles` buckets whatever nodes it is handed by each node's OWN namespace, and `ComputeRoleState` then walks `GetScopeHierarchy(nodePath)` and reads only the buckets on the target path's chain. A partition-wide read is a strict **superset** of the per-scope walk, so no grant — and, more importantly, no group-scoped DENY — can go missing. That direction is the one that matters: a short read in this fold is indistinguishable from "denied", and a missing deny fails OPEN (see [Unanchored Security Reads](/Doc/Architecture/UnanchoredSecurityReads)).
 
+**Which provider serves which leg** — worth knowing before changing either shape again, because the two legs are served by different code and only one of them is exercisable without Postgres:
+
+| Leg | Query | Classified | Served by |
+|---|---|---|---|
+| grants | `path:{partition} scope:descendants nodeType:AccessAssignment` | **satellite-targeted** — `PartitionDefinition.IsSatelliteNodeType("AccessAssignment")` is true (`_Access`→`access`) | the in-repo `StorageAdapterMeshQueryProvider` on every backend (`DefersToNativeProvider` returns **false** for a scoped satellite read) |
+| policies | `path:{partition} scope:descendants id:_Policy nodeType:PartitionAccessPolicy` | **content** — `_Policy` is not a configured satellite segment, so these live in `mesh_nodes` | deferred to the native per-schema delegate on Postgres |
+
+That classification is what makes the grant read correct rather than lucky: a query that did NOT target satellites has satellite-path rows filtered out of its result (`RunQueryNodes`, mirroring PG's separate-table routing), so an anchored `scope:descendants` read of `{partition}` would silently return no `_Access` rows at all. It is the `nodeType:` filter — configuration, not the `_` character — that keeps them in.
+
 **The Admin exception is gone**, absorbed rather than deleted. `Admin` is excluded from cross-schema global search (`searchable_schemas`), so a namespace-only query never reached `admin.access` and platform-admin grants silently never loaded; the fold used to special-case Admin-rooted scopes onto a `path:` query for exactly that reason. Every partition now takes that route, so there is no branch left to get wrong.
 
 The other shared query keys, all on the same cache, are still global by necessity: `$security-roles` (the custom `Role` catalogue), `$security-memberships` (**every** `GroupMembership` node — group access is resolved globally, because a group defined in one partition can be granted in another), and `$security-gated:{type}` (one per `NodeTypeGate`). Anchoring **those** to a partition is the truncation [Unanchored Security Reads](/Doc/Architecture/UnanchoredSecurityReads) forbids; anchoring the per-partition legs above is not, because their subject is in that partition by construction.
