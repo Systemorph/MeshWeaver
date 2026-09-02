@@ -1629,6 +1629,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 // did-not-converge counter: THIS is the event that says the resync worked.
                 ReleaseResyncGate();
                 resyncAttempts = 0;
+                // …and the evidence of non-convergence with it: a base snapshot ARRIVED, so every
+                // ack that preceded it turned out to be answered after all (#1384). Interlocked
+                // because the counter's other writer is the ack arm, on the response thread.
+                Interlocked.Exchange(ref unansweredResyncs, 0);
             }
             catch (Exception ex)
             {
@@ -1817,6 +1821,67 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     private int resyncAttempts;
 
     /// <summary>
+    /// Re-asks the owner ACKNOWLEDGED and then never followed with a base snapshot, reset by the
+    /// <see cref="ChangeType.Full"/> that finally arrives. This — not <see cref="resyncAttempts"/> —
+    /// is the evidence <see cref="MaxUnansweredResyncs"/> bounds, and the difference is the whole
+    /// of the #2745 policy: a re-ask REFUSED transiently (a silo whose pod-hub claim has not landed
+    /// during a rolling deploy answers <see cref="ErrorType.ShuttingDown"/>) is deliberately ridden
+    /// out, so it must not accumulate towards a fault. Only an owner that said "I have processed
+    /// your re-subscribe" and then produced nothing is evidence that the leg is eating this
+    /// stream's snapshots.
+    ///
+    /// <para>Written from the response thread (the ack arm) and from the hub turn (the reset), so
+    /// every access is interlocked.</para>
+    /// </summary>
+    private int unansweredResyncs;
+
+    /// <summary>
+    /// How many acknowledged-but-unanswered fresh-snapshot requests this mirror accumulates before
+    /// it stops asking and FAULTS itself instead — the bound that turns #2654's residual silent
+    /// forever-wedge into a surfaced error (Systemorph/MeshWeaver#1384).
+    ///
+    /// <para><b>What #2654 left behind.</b> The resync gate is released by the re-ask's ROUND TRIP
+    /// (the Full, the owner's ack, or a verdict), so a lost fresh snapshot no longer latches the
+    /// mirror shut: the next frame that proves the gap earns one new re-ask. That converges when
+    /// the leg loses ONE frame. It does not terminate when the leg keeps losing this stream's
+    /// Fulls — every re-ask is acked, every acked re-ask releases the gate, every answering Full
+    /// dies on the same leg, and the mirror re-asks forever at Warning while its subscriber sits on
+    /// "awaiting first data" with no error, no completion and nothing to re-establish from. That is
+    /// the state measured on memex-cloud 2026-09-01 on <c>Event/SavGeneralversammlung2026/Talk</c>:
+    /// <c>Frame loss detected … incoming Patch v13 chains onto v12 but the last applied frame is
+    /// v11</c>, then a layout area <c>torn down having never rendered</c>. Recycling the pod holding
+    /// the activation did not clear it, because nothing on the subscriber side had learned that
+    /// anything had gone wrong.</para>
+    ///
+    /// <para><b>Why a COUNT is not a retry budget.</b> Nothing here retries and nothing polls: this
+    /// counts EVIDENCE, not attempts at success. An increment costs a full round trip to the owner
+    /// (the gate suppresses every re-ask while one is outstanding, and only the ANSWER releases it)
+    /// PLUS a subsequent owner frame that proves the mirror still has no base. So
+    /// <c>unansweredResyncs == n</c> means n separate authoritative snapshots were asked for,
+    /// acknowledged, and never arrived. Raising this bound buys a longer silence, not a better
+    /// chance — which is the opposite of a widened timeout, and why the number is small.</para>
+    ///
+    /// <para><b>Why 3.</b> The one healthy way to spend an attempt without converging is a Patch
+    /// overtaking the answering Full — and the owner queues its re-assert on the SAME stream hub
+    /// that produces the patches, so a patch can only overtake a re-assert that was already in
+    /// flight when the re-ask landed. That is one redundant round trip, twice over at the very
+    /// worst. Three consecutive acknowledged, unanswered asks is not that shape. The two failure
+    /// directions are also not symmetric: faulting a stream that would eventually have converged
+    /// costs one re-establish (<c>StreamLiveness.IsUsable</c> refuses to serve a faulted stream, so
+    /// the workspace cache evicts it and the next natural caller opens a fresh one that subscribes
+    /// from scratch), while NOT faulting costs a view that never loads and never says so.</para>
+    /// </summary>
+    private const int MaxUnansweredResyncs = 3;
+
+    /// <summary>
+    /// Set once this mirror has given up (see <see cref="MaxUnansweredResyncs"/>) so a later frame
+    /// arriving on the already-faulted stream re-reports nothing. The store is terminal by then and
+    /// would swallow a second <see cref="OnError"/> per the Rx grammar, but the Warning beside it
+    /// would repeat per frame — log volume that says nothing new.
+    /// </summary>
+    private int resyncGaveUp;
+
+    /// <summary>
     /// The re-ask currently outstanding. At most ONE at a time (<see cref="resyncInFlight"/>), so a
     /// <see cref="SerialDisposable"/> both bounds the registration — a CompositeDisposable entry per
     /// resync would grow for the life of the stream — and cancels a superseded pending callback,
@@ -1857,8 +1922,55 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 StreamId, Reference);
             return;
         }
+        // Terminal already declared below — this mirror has stopped asking for good. A later frame
+        // must not re-enter: the stream is faulted, and re-reporting it every frame is log volume
+        // that says nothing new.
+        if (Volatile.Read(ref resyncGaveUp) == 1)
+            return;
         if (Interlocked.Exchange(ref resyncInFlight, 1) == 1)
             return;
+
+        // 🚨 …AND THE ONE THAT ENDS IT (#1384). VISIBLE is not the same as OVER: #2654 made the
+        // non-convergence audible in a portal log and left the SUBSCRIBER exactly where it was —
+        // holding a placeholder for a snapshot that is not coming, with no error and no completion,
+        // so nothing downstream could re-establish. A log line is not an API. Past
+        // MaxUnansweredResyncs acknowledged-and-unanswered asks this mirror stops asking and FAULTS
+        // instead, which is the one signal a subscriber can act on: the store's terminal error
+        // reaches every reader, StreamLiveness.IsUsable stops serving this stream from the
+        // workspace caches, and the next natural caller opens a fresh one.
+        //
+        // Read AFTER the gate is taken, so "no ask is outstanding" is part of the verdict — an
+        // answer still in flight is not evidence of anything. The gate is then released BEFORE the
+        // fault, in the order this method's opening comment teaches: never leave a latch behind a
+        // decision that posted no request. Releasing it asks for nothing by itself, and resyncGaveUp
+        // keeps a later frame from re-reporting a stream that is already terminal.
+        //
+        // 🚨 A MIRROR ONLY, and the qualifier is load-bearing. PatchDataChangeRequest reaches
+        // UpdateStream on the OWNER's server-side stream too, where a subscriber's write arriving
+        // before that stream has emitted its first frame (its outbound JSON cursor still null)
+        // takes the same "Patch before base Full" branch. On such a stream the count measures
+        // nothing: the re-ask is addressed to this very hub, and the Full that would reset it is
+        // one this stream SENDS rather than receives — so it could only ever climb, and faulting on
+        // it would kill an owner's stream for a subscriber-side race. Convergence is a claim about
+        // a REMOTE owner; only a stream that has one can fail to converge. Same predicate as
+        // OwnerVersion() uses to tell the two apart.
+        if (Volatile.Read(ref unansweredResyncs) >= MaxUnansweredResyncs
+            && !Owner.Equals(Host.Address))
+        {
+            Volatile.Write(ref resyncGaveUp, 1);
+            ReleaseResyncGate();
+            logger.LogWarning(
+                "[SYNC_STREAM] Resync gave up for {StreamId}: {Attempts} consecutive fresh-snapshot requests to {Owner} were acknowledged and none produced a base snapshot — faulting the mirror so its subscribers can re-establish",
+                StreamId, Volatile.Read(ref unansweredResyncs), StreamIdentity.Owner);
+            OnError(new StreamNotConvergingException(
+                $"Synchronization stream '{StreamId}' could not recover from a lost frame: "
+                + $"{Volatile.Read(ref unansweredResyncs)} consecutive fresh-snapshot requests to owner "
+                + $"'{StreamIdentity.Owner}' were acknowledged and none produced a base snapshot. The "
+                + "mirror holds no state it can patch onto, so it is faulted rather than left waiting "
+                + "for a snapshot that is not arriving."));
+            return;
+        }
+
         // 🚨 THE ONE LINE THAT MAKES NON-CONVERGENCE VISIBLE. A second consecutive ask means the
         // first one produced no base snapshot — the answer was lost, refused or thrown away — which
         // is exactly the state #2654 spent its whole life in at Debug level, with a stuck layout
@@ -1920,9 +2032,18 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                         // the mirror still has no base, so the worst case is one redundant round
                         // trip when a Patch overtakes the answering Full — and that redundant
                         // re-ask is itself answered with a Full, which ends the cycle.
+                        //
+                        // 🚨 …AND THE ACK IS ALSO THE EVIDENCE (#1384). An acknowledgement says the
+                        // owner processed this re-subscribe; if a base snapshot never follows, the
+                        // answer died on the leg rather than never being sent, which is exactly the
+                        // non-convergence MaxUnansweredResyncs bounds. Counted HERE and nowhere
+                        // else, deliberately: a re-ask REFUSED transiently is ridden out (#2745)
+                        // and must not accumulate towards a fault, and an increment that races an
+                        // answering Full is undone by that Full's reset a moment later.
                         logger.LogDebug(
                             "[SYNC_STREAM] Fresh-snapshot request for {StreamId} acknowledged by owner {Owner}",
                             StreamId, StreamIdentity.Owner);
+                        Interlocked.Increment(ref unansweredResyncs);
                         ReleaseResyncGate();
                     },
                     ResyncRefused);
