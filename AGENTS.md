@@ -105,6 +105,8 @@ Full reference: [/gui](.claude/skills/gui/SKILL.md) · [GUI/DataBinding.md](src/
 
 🚨 **Merging is a shared action.** A merge supersedes the run QUEUED behind the one in flight, including one another session is waiting on. Before merging, check whether main has a run someone is gating a deploy on; if so, **hold and say so** — and push that hold to your subagents explicitly, because their default is merge-on-green.
 
+🚦 **Core `main` merges through the MERGE QUEUE, and the queue has a steward.** `gh pr merge --auto` means *enqueue when this PR's own checks are green* (`auto-arm.yml` does it for every non-draft PR; draft is the opt-out). A push to a queued branch ejects it; dequeue via GraphQL `dequeuePullRequest`, never by re-ordering or `jump`. **Never re-queue an ejected PR by hand and never re-run its failed queue build** — `merge-queue-steward.yml` acts on every `dequeued` event: it re-queues on evidence (a catalogued flake in `.github/known-flakes.json`, an infrastructure death, a `CI_TIMEOUT`, or a multi-PR group whose own run was green — each capped per head sha and recorded in a marker comment) and otherwise leaves the PR out with the failing assertion, the run URL and the `queue-rejected` label. A queue red lives on the `gh-readonly-queue/main/pr-<N>-…` run, not on the PR's commit. Full reference: [MergeQueue.md](src/MeshWeaver.Documentation/Data/Architecture/MergeQueue.md).
+
 Full reference: [/pullrequest](.claude/skills/pullrequest/SKILL.md) · delivery, batching and image verification: [/release](.claude/skills/release/SKILL.md) · workflow/gate authoring: [/ci](.claude/skills/ci/SKILL.md).
 
 ## 🚨 Postgres: One Schema Per Partition

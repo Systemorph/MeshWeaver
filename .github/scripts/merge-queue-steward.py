@@ -418,14 +418,18 @@ class Gh:
     def pull_request(self, number: int) -> dict:
         return self.api(f"pulls/{number}")
 
-    def latest_merge_group_run(self, number: int) -> dict | None:
+    def latest_failed_merge_group_run(self, number: int) -> dict | None:
+        """The newest FAILED queue build of this PR. Not merely the newest: after an ejection the
+        queue may already be rebuilding the entry (a run in progress), and a PR that landed earlier
+        through the queue has a green run under the same prefix — neither is the failure to read."""
         prefix = f"gh-readonly-queue/{QUEUE_BRANCH}/pr-{number}-"
         runs = []
         for page in (1, 2):
             data = self.api(f"actions/runs?event=merge_group&per_page=100&page={page}")
             runs += (data or {}).get("workflow_runs", [])
         mine = [r for r in runs if (r.get("head_branch") or "").startswith(prefix)
-                and r.get("name") == "MeshWeaver Build and Test"]
+                and r.get("name") == "MeshWeaver Build and Test"
+                and r.get("status") == "completed" and r.get("conclusion") == "failure"]
         return max(mine, key=lambda r: r["created_at"]) if mine else None
 
     def run_evidence(self, run: dict, workdir: Path) -> RunEvidence:
@@ -456,25 +460,28 @@ class Gh:
             return False
         return True
 
-    def group_pull_requests(self, head_sha: str, own: int) -> tuple[int, ...]:
-        """Walk the queue branch's first-parent chain until a commit that is on main. Every hop is
-        one entry's merge commit and names its PR; the walk is bounded so a surprise never loops."""
+    def group_pull_requests(self, run: dict, own: int) -> tuple[int, ...]:
+        """Every PR in the group this run built. The queue branch is `gh-readonly-queue/main/pr-<N>-<base>`
+        — <base> is main's tip the group was built from — and each hop of the first-parent chain
+        from the run's head back to <base> is one entry's merge commit, whose message names its PR.
+        Bounded: a chain that does not reach <base> in ten hops yields what it found, never a loop."""
+        m = re.match(rf"gh-readonly-queue/{QUEUE_BRANCH}/pr-\d+-([0-9a-f]{{7,40}})$", run.get("head_branch") or "")
+        base = m.group(1) if m else None
         found: list[int] = []
-        sha = head_sha
+        sha = run["head_sha"]
         for _ in range(10):
+            if base and sha.startswith(base):
+                break   # reached main's tip: the chain is complete
             commit = self.api(f"commits/{sha}")
-            msg = (commit or {}).get("commit", {}).get("message", "")
-            m = re.search(r"Merge pull request #(\d+)", msg) or re.search(r"\(#(\d+)\)\s*$", msg.splitlines()[0] if msg else "")
-            if not m:
-                break
-            found.append(int(m.group(1)))
+            msg = ((commit or {}).get("commit") or {}).get("message", "")
+            first = msg.splitlines()[0] if msg else ""
+            pr = re.search(r"Merge pull request #(\d+)", msg) or re.search(r"\(#(\d+)\)\s*$", first)
+            if pr:
+                found.append(int(pr.group(1)))
             parents = (commit or {}).get("parents", [])
             if not parents:
                 break
             sha = parents[0]["sha"]
-            cmp = self.api(f"compare/{sha}...{QUEUE_BRANCH}")
-            if (cmp or {}).get("status") in ("identical", "ahead"):
-                break   # the parent is on main: the chain is complete
         if own not in found:
             found.append(own)
         return tuple(dict.fromkeys(found))
@@ -571,11 +578,11 @@ def act(args) -> int:
     group: tuple[int, ...] = (args.pr,)
     own_green: bool | None = None
     if reason == "CI_FAILURE":
-        run = gh.latest_merge_group_run(args.pr)
+        run = gh.latest_failed_merge_group_run(args.pr)
         if run:
             with tempfile.TemporaryDirectory(prefix="steward-") as tmp:
                 evidence = gh.run_evidence(run, Path(tmp))
-            group = gh.group_pull_requests(run["head_sha"], args.pr)
+            group = gh.group_pull_requests(run, args.pr)
             own_green = gh.own_run_green(head_sha)
 
     ctx = Context(reason, args.pr, head_sha, group, own_green, attempts, today)
@@ -786,8 +793,12 @@ def main(argv=None) -> int:
     a.add_argument("--pr", type=int, required=True)
     a.add_argument("--reason", required=True)
     a.add_argument("--dry-run", action="store_true")
-    sub.add_parser("status")
+    a.add_argument("--repo", help="owner/name (default: GH_REPO or GITHUB_REPOSITORY)")
+    s = sub.add_parser("status")
+    s.add_argument("--repo", help="owner/name (default: GH_REPO or GITHUB_REPOSITORY)")
     args = ap.parse_args(argv)
+    if getattr(args, "repo", None):
+        os.environ["GH_REPO"] = args.repo
     if args.self_test:
         return self_test()
     if args.cmd == "act":
