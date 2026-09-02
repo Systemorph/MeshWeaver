@@ -773,7 +773,8 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     internal static bool IsDirectoryUnstable(Exception ex) =>
         (ex is global::Orleans.Runtime.OrleansException
          && (ex.Message.Contains(DirectoryRetryLaterMarker, StringComparison.OrdinalIgnoreCase)
-             || ex.Message.Contains(DirectoryHopLimitMarker, StringComparison.OrdinalIgnoreCase)))
+             || ex.Message.Contains(DirectoryHopLimitMarker, StringComparison.OrdinalIgnoreCase)
+             || ex.Message.Contains(DirectoryInvalidSiloMarker, StringComparison.OrdinalIgnoreCase)))
         // Walks its own inner chain rather than relying on a caller's: this is consulted BOTH from
         // IsTransientFailure (which walks) and from RoutingGrain.ClassifyDeliveryException (which
         // does not, and which is handed an AggregateException by PostFailure's two-transport arm).
@@ -793,6 +794,31 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// two rolling deploys (issue #2357).
     /// </summary>
     internal const string DirectoryHopLimitMarker = "hop limit is reached";
+
+    /// <summary>
+    /// The REGISTRATION-side variant, from <c>"Trying to register {grainId} on invalid silo:
+    /// {siloAddress}. Known status: Dead"</c> — thrown by
+    /// <c>LocalGrainDirectoryPartition.AddSingleActivation</c> when the directory resolves an owner
+    /// that membership has already buried (issue #3139).
+    ///
+    /// <para>🚨 <b>The other two markers are LOOKUP-side, and that is why this one was needed.</b>
+    /// Both existing phrases come from <c>LocalGrainDirectory.LookupAsync</c> — reading an entry.
+    /// Attaching a stream subscription <i>writes</i> one: <c>SubscribeAsync</c> registers the
+    /// stream's <c>PubSubRendezvousGrain</c>, and when the directory hands that registration to a
+    /// silo the membership oracle has since marked <c>Dead</c>, Orleans throws a bare
+    /// <see cref="global::Orleans.Runtime.OrleansException"/> carrying THIS text and neither of the
+    /// other two. So <see cref="IsTransientFailure"/> returned false on attempt 0, the bounded
+    /// attach retry added by #2633 was never entered, and the hub latched into "cross-process
+    /// routing DISABLED" for the rest of its life — 13 occurrences on memex-cloud across three
+    /// ReplicaSet generations, 2026-08-23 → 2026-09-02, every one of them a membership-churn window
+    /// that was over in seconds.</para>
+    ///
+    /// <para>It is the same inert-classifier shape as #1742/#2357/#2451 and needs no new machinery:
+    /// the attach retry already re-invokes <c>AttachSubscriptionAsync</c> from scratch, so Orleans
+    /// re-resolves the rendezvous grain against settled membership. Recognising the condition is
+    /// what makes the existing cure reachable.</para>
+    /// </summary>
+    internal const string DirectoryInvalidSiloMarker = "on invalid silo";
 
     /// <summary>
     /// How the SENDER should read a delivery the grain returned <see cref="MessageDeliveryState.Failed"/>:
