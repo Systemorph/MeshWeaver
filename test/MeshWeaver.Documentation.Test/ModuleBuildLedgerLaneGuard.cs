@@ -17,8 +17,9 @@ namespace MeshWeaver.Documentation.Test;
 /// the one-workspace build; that the build compiles the ledger's <c>build-modules</c> subset and feeds
 /// the SAME list to its postcondition; that the pack job records the three transitions (Built after the
 /// artifact upload, Tested after the suite, Published after the hand-over) plus the Failed and cancelled
-/// verdicts; and that every ledger write is best-effort while the two scripts' self-tests run on every
-/// run. A lane that quietly dropped one of those would still be green — a duplicate build costs money
+/// verdicts — and, since the suite moved to a lane of its own on non-publishing runs, that the
+/// <c>tests</c> job records the same Tested / test-phase-Failed verdicts there; and that every ledger
+/// write is best-effort while the two scripts' self-tests run on every run. A lane that quietly dropped one of those would still be green — a duplicate build costs money
 /// silently, a missing <c>Built</c> record makes every later run rebuild, and a <c>Tested</c> recorded
 /// before the suite ran would hand followers a verdict nobody reached. Nothing in a green run
 /// distinguishes those shapes; this does.</para>
@@ -110,6 +111,33 @@ public class ModuleBuildLedgerLaneGuard
         Assert.Contains("--logger \"trx;LogFileName=ledger.trx\"", pack, StringComparison.Ordinal);
         // The reuse window is the artifact's retention.
         Assert.Contains("retention-days: 7", pack, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 The suite does not always run in the pack job any more: on a call with
+    /// <c>publish: false</c> it runs in the <c>tests</c> lane beside the pack matrix, so the
+    /// verdict a follower reads must be recorded THERE with the same rules — <c>Tested</c> only
+    /// after the suite it attests, the <c>test</c>-phase <c>Failed</c> verdict on the way out, and
+    /// both best-effort. A lane that moved the suite and left its bookkeeping behind would make
+    /// every later run of the same key re-run a suite that had already passed, silently.
+    /// </summary>
+    [Fact]
+    public void TestsLane_RecordsTestedAfterItsSuite_AndTheTestPhaseVerdict()
+    {
+        var tests = JobBody("tests");
+        var suite = tests.IndexOf("dotnet test \"$tests\"", StringComparison.Ordinal);
+        var tested = tests.IndexOf("--status Tested --trx", StringComparison.Ordinal);
+        Assert.True(suite >= 0, "the tests lane must run the module's suite");
+        Assert.True(tested > suite, "`Tested` must be recorded AFTER the suite it attests");
+        // Gated on the OUTCOME of the step it attests — never on the job's mood.
+        Assert.Contains("if: inputs.ledger == 'required' && steps.tests.outcome == 'success' && matrix.entry.ledger.key != ''",
+            tests, StringComparison.Ordinal);
+        // The suite writes the evidence the ledger records, exactly as the inline one does.
+        Assert.Contains("--logger \"trx;LogFileName=ledger.trx\"", tests, StringComparison.Ordinal);
+        // The way out: this lane can only fail in one phase, so it names it rather than deriving it.
+        Assert.Contains("--status Failed --phase test", tests, StringComparison.Ordinal);
+        Assert.Contains("if: failure() && inputs.ledger == 'required' && matrix.entry.ledger.key != ''",
+            tests, StringComparison.Ordinal);
     }
 
     [Fact]

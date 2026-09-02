@@ -72,6 +72,43 @@ name: node-repo module pack
 # A caller that ships neither scripts/affected-modules.py nor scripts/project-closure.py is simply
 # not narrowable: the scope script says FULL and says why. Nothing to opt into, nothing to skip.
 #
+# ──────────── Where the module's own suite runs (`pack` inline vs the `tests` lane) ────────────
+# 🚨 A CONSUMER THAT ONLY WANTS THE BUNDLE MUST NOT WAIT FOR THE SUITE. A `needs:` on a `uses:`
+# job waits for the WHOLE called workflow, so anything inside the last job of this lane is on the
+# critical path of every gate the caller hangs off it. Measured on MeshWeaver.Plugins run
+# 33656010754 (a 39-minute PR): `Module bundle (MeshWeaver.AI)` ran 13.4 minutes, of which 12.7
+# were `Run the module's tests` and 0.2 were the build — so the bundle ARTIFACT the two required
+# gates compose was ready 0.2 minutes in, and they started at 32.8. It also blocks the RETRY loop:
+# a run cannot be re-run until it completes, so a flaked portal-host shard waits out a suite whose
+# verdict nobody is reading.
+#
+# So the suite's position is decided by `publish`, the input that already means "trunk" here:
+#
+#   * `publish: true`  — the suite runs INLINE in `pack`, after the bundle upload and BEFORE the
+#     hand-over. That ordering buys exactly one property, and it is worth its cost here: a failing
+#     suite never publishes, and every installation reads what the registry serves.
+#   * `publish: false` — the hand-over step cannot fire at all (its own `if:` is `inputs.publish
+#     && …`), so the ordering protects nothing. The suite runs in the `tests` job, in PARALLEL
+#     with select → prepare → build-workspace → pack, and the lane finishes when the slower of the
+#     two ends instead of when their sum does.
+#
+# It is a switch on the INPUT, not on `github.event_name`: this repo's own main-cd calls the lane
+# with `publish: false` for the bake's compose set, and that call is not a pull request — it wants
+# the fast path for the same reason, because it publishes nothing either.
+#
+# 🚨 THE SUITE STILL GATES, and not because a comment says so:
+#   * the `tests` job is part of this called workflow, so a red suite fails the caller's `uses:`
+#     job exactly as a red inline suite did;
+#   * `verify` — `All selected bundles built`, this lane's one stable context and the one a repo's
+#     protection requires — `needs:` the tests lane and is RED when it did not succeed. No context
+#     is renamed and no protection changes;
+#   * and a suite that ran in NEITHER lane is caught by receipts rather than by re-reading the two
+#     conditions: every pack receipt records which lane owns its suite, the tests lane drops a
+#     receipt of its own, and `node-repo-pack-verify.py` fails when the two disagree.
+#
+# `bundles-built` is untouched: it still answers from the built markers dropped before any suite,
+# so a red suite still does not read as "bundle missing" to a gate that only COMPOSES the bundle.
+#
 # ─────────────────── Which compiler builds a module (`build`) ───────────────────
 # 🚨 "we want to use memex build plugin and not dotnet build" (maintainer, 2026-08-31).
 #
@@ -389,7 +426,8 @@ on:
           the tests, recording the bundle it attests and the closure evidence the build resolved.
           This is the claim a caller's gate should depend on when it only COMPOSES the bundles: a
           red suite in this call must not read as "bundle missing" there (Plugins #937 — one AI
-          flake turned both required gates red). Nothing about the test run reaches it.
+          flake turned both required gates red). Nothing about the test run reaches it — whether
+          the suite ran inline in `pack` (a publishing run) or in the `tests` lane beside it.
           🚨 It FAILS CLOSED. Zero markers, a marker stamped with another call's lane, an unstamped
           one, and one that does not record what it attests are all "not built" for the module in
           question — a truthy answer derived from absent or foreign evidence is the defect this
@@ -413,6 +451,11 @@ jobs:
       # The SUBSET the one-workspace build compiles — every entry the ledger did not hand a reusable
       # bundle for. The postcondition in build-workspace is fed the SAME list.
       build-modules: ${{ steps.ledger.outputs.build }}
+      # The SUBSET whose own test suite must RUN in this call — the entries the pack job's plan
+      # would answer `need_test=true` for. It is the `tests` job's matrix; see that job for why
+      # the suites are a lane of their own on a non-publishing run.
+      test-modules: ${{ steps.suites.outputs.modules }}
+      test-count: ${{ steps.suites.outputs.count }}
       count: ${{ steps.scope.outputs.count }}
       selected: ${{ steps.scope.outputs.selected }}
       scope: ${{ steps.scope.outputs.scope }}
@@ -609,6 +652,36 @@ jobs:
               exit 1
               ;;
           esac
+
+      # ───────────── WHICH OF THE SELECTION STILL OWES A TEST RUN ─────────────
+      # The `tests` job's matrix. The predicate is EXACTLY the one the pack job's `Ledger — this
+      # entry's plan` step answers as `need_test`, restated here because a matrix has to be known
+      # before the job it drives exists:
+      #
+      #     need_test = (ledger says REUSE) ? ledger.needTest : (entry.test != false)
+      #
+      # 🚨 TWO PLACES COMPUTING ONE PREDICATE IS A DRIFT RISK, SO THE VERIFIER CROSS-CHECKS THEM
+      # rather than trusting them to agree: the pack leg records in its receipt which lane owns its
+      # suite (`tests: none|inline|lane`), the tests lane drops a receipt of its own, and
+      # `node-repo-pack-verify.py` fails the run when a module the pack leg DELEGATED has no test
+      # receipt, or a test receipt arrives for a module that delegated nothing. A drift between
+      # these two expressions therefore surfaces as a RED count gate naming the module, never as a
+      # suite that quietly did not run.
+      - name: Which selected modules still owe a test run
+        id: suites
+        env:
+          SELECTION: ${{ steps.ledger.outputs.modules }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${SELECTION:-[]}" > "$RUNNER_TEMP/final.json"
+          jq -c '[ .[] | select(
+                    if (.ledger.decision // "build") == "reuse"
+                    then (.ledger.needTest == true)
+                    else (.test != false) end) ]' "$RUNNER_TEMP/final.json" > "$RUNNER_TEMP/suites.json"
+          count=$(jq 'length' "$RUNNER_TEMP/suites.json")
+          echo "modules=$(cat "$RUNNER_TEMP/suites.json")" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "$count of $(jq 'length' "$RUNNER_TEMP/final.json") selected module(s) still owe a test run: $(jq -r 'if length == 0 then "<none>" else [.[].module] | join(", ") end' "$RUNNER_TEMP/suites.json")"
 
   # ─────────────────── THE SHARED BUILD ENVIRONMENT, WARMED ONCE ───────────────────
   # "see we update *once at beginning for everyone* and not by module" (maintainer, 2026-08-31).
@@ -1734,18 +1807,33 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      # ═══════ THE SUITE, INLINE — ON A PUBLISHING RUN ONLY (see the `tests` job below) ═══════
       # 🚨 Only when THIS diff reaches the module (or on a full run): a floor-only entry — built
       # because the caller's gates compose it — carries test=false from the selection, and its
       # suite is skipped rather than answering a question nobody asked. The AI engine's suite
       # (~13 min, 1,600 tests) ran on every PR that never touched AI until 2026-08-29.
-      # Runs AFTER the bundle artifact and its built marker exist and BEFORE the hand-over: a
-      # failing suite never publishes — and never un-builds.
-      # The built module DLL as a run-scoped artifact, IMMEDIATELY — this is what lets a
       # `need_test`: the entry's own `test` flag AND, with the ledger on, "no earlier run recorded a
       # verdict for this key" — a reused Tested/Published bundle is not re-tested.
+      #
+      # 🚨 AND ONLY WHEN THIS CALL PUBLISHES. Inline, the suite sits AFTER the bundle upload and
+      # BEFORE the hand-over, and the property that buys is exactly one: *a failing suite never
+      # publishes*. That property is worth its cost on a trunk/release-follow run, where the step
+      # below POSTs these bytes to the registry and every installation then reads them. It buys
+      # NOTHING on a run with `publish: false` — the hand-over step's own `if:` cannot fire there,
+      # so there is nothing for the ordering to protect, and the ordering instead costs every
+      # consumer of this call the whole suite: a `needs:` on a `uses:` job waits for the WHOLE
+      # called workflow, so MeshWeaver.Plugins' two required gates, which consume only the bundle
+      # ARTIFACT, waited 12.7 minutes for a MeshWeaver.AI suite they never read (run 33656010754:
+      # the bundle was ready 0.2 min into a 13.4-minute job; the gates started at 32.8 min).
+      #
+      # So on a non-publishing run the suite moves to the `tests` job below and runs in PARALLEL
+      # with prepare → build-workspace → pack instead of after them. The two are mutually
+      # exclusive by construction (`inputs.publish` here, `!inputs.publish` there), the leg
+      # RECORDS which of them owned its suite in the receipt, and `verify` refuses a run where
+      # the two disagree — a suite may not silently belong to neither.
       - name: Run the module's tests, when it ships any
         id: tests
-        if: ${{ matrix.entry.test != false && steps.plan.outputs.need_test == 'true' }}
+        if: ${{ inputs.publish && matrix.entry.test != false && steps.plan.outputs.need_test == 'true' }}
         env:
           PROJECT: ${{ matrix.entry.project }}
           # 🚨 THE TRAIL A FLAKE LEAVES. A red here on a diff that cannot reach the module is a
@@ -1792,7 +1880,7 @@ jobs:
       # phase trace, the straggler captures and any dump. A green run uploads nothing — the point
       # is that the ONE red run in five leaves something to read instead of a re-run button.
       - name: Keep the failing suite's evidence
-        if: ${{ failure() && matrix.entry.test != false }}
+        if: ${{ failure() && inputs.publish && matrix.entry.test != false }}
         env:
           PROJECT: ${{ matrix.entry.project }}
         run: |
@@ -1812,7 +1900,7 @@ jobs:
           fi
           echo "kept $(ls "$out" | wc -l | tr -d ' ') file(s):"; ls -la "$out" | head -40
       - name: Upload the failing suite's evidence
-        if: ${{ failure() && matrix.entry.test != false }}
+        if: ${{ failure() && inputs.publish && matrix.entry.test != false }}
         uses: actions/upload-artifact@v7
         with:
           name: test-evidence-${{ matrix.entry.module }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1930,17 +2018,27 @@ jobs:
           VERSION: ${{ steps.identity.outputs.version }}
           COMPILER: ${{ steps.plan.outputs.decision == 'reuse' && 'reused' || steps.build.outputs.compiler }}
           PUBLISHED: ${{ inputs.publish }}
+          # 🚨 WHICH LANE OWNS THIS MODULE'S SUITE, written down rather than inferred from an `if:`
+          # nobody can read after the fact. `none` — the selection says this entry owes no test run
+          # (a floor-only entry, or a ledger record that already carries a verdict); `inline` — the
+          # step above ran it in this job, which is what a PUBLISHING run does so a red suite can
+          # never publish; `lane` — this call does not publish, so the `tests` job ran it beside
+          # this one. `verify` pairs every `lane` against a test receipt and fails when one is
+          # missing: two mutually exclusive conditions can BOTH be false, and this is what makes
+          # that impossible to do quietly.
+          TESTS: ${{ steps.plan.outputs.need_test != 'true' && 'none' || (inputs.publish && 'inline' || 'lane') }}
           LEDGER_KEY: ${{ steps.plan.outputs.key }}
           LEDGER_DECISION: ${{ steps.plan.outputs.decision }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/receipts"
-          [ -n "$LANE" ] || { echo "::error::the lane key is empty — the select job did not produce one, so this receipt could not be attributed to this call."; exit 1; }
+          [ -n "$LANE" ]  || { echo "::error::the lane key is empty — the select job did not produce one, so this receipt could not be attributed to this call."; exit 1; }
+          [ -n "$TESTS" ] || { echo "::error::this leg recorded no owner for $MODULE's suite — a receipt that cannot say whether the suite ran here, ran in the tests lane, or was not owed leaves 'it ran nowhere' reading as green."; exit 1; }
           jq -n --arg l "$LANE" --arg p "$PACKAGE" --arg m "$MODULE" \
-                --arg v "$VERSION" --arg c "$COMPILER" \
+                --arg v "$VERSION" --arg c "$COMPILER" --arg t "$TESTS" \
                 --argjson pub "$PUBLISHED" \
                 --arg lk "$LEDGER_KEY" --arg ld "$LEDGER_DECISION" \
-             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, published:$pub, ledger:{key:$lk, decision:$ld}}' \
+             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, tests:$t, published:$pub, ledger:{key:$lk, decision:$ld}}' \
              > "$RUNNER_TEMP/receipts/$MODULE.json"
           cat "$RUNNER_TEMP/receipts/$MODULE.json"
       - name: Upload the receipt
@@ -1961,6 +2059,238 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: python3 meshweaver/.github/scripts/module-build-ledger.py finish --key "$KEY"
 
+  # ════════ THE MODULE SUITES — A LANE OF THEIR OWN ON A NON-PUBLISHING RUN ════════
+  # 🚨 THE MEASUREMENT THIS JOB EXISTS FOR (MeshWeaver.Plugins run 33656010754, a 39-minute PR):
+  #
+  #    19.1 -> 32.5  Module bundles (floor) / Module bundle (MeshWeaver.AI)   <-- 13.4 min
+  #                    12.7 min  Run the module's tests, when it ships any
+  #                     0.2 min  Build the module — and say which compiler produced it
+  #    32.5 -> 32.7  Module bundles (floor) / All selected bundles built
+  #    32.8 -> 37.0  Compile every NodeType (vs core)          (a REQUIRED context)
+  #    32.9 -> 38.6  test-repos / Compile + render node repos  (the Tests-area gate)
+  #
+  # The bundle ARTIFACT — the only thing those two gates consume — was ready 0.2 minutes in. The
+  # gates waited another 12.7 for a suite they never read, because a `needs:` on a `uses:` job
+  # waits for the WHOLE called workflow, and the suite sat inside the last job of it. The floor
+  # call exists precisely so the gates do not wait for the other 30 bundles (Plugins#892); the
+  # suite put the wait straight back.
+  #
+  # It costs a SECOND thing, measured 2026-09-02: a run cannot be re-run until it fully completes
+  # (`gh run rerun --failed` answers "This workflow is already running"). So when a portal-host
+  # shard flakes, the retry is blocked by a suite whose verdict nobody is waiting on — every flake
+  # pays it, which makes the recovery loop the compounding half of the cost.
+  #
+  # 🚨 WHY IT IS SAFE TO RELAX HERE AND NOT ON TRUNK. Inline, the suite's position buys exactly one
+  # property: a failing suite never publishes. On a run with `publish: false` the hand-over step
+  # cannot fire at all — its own `if:` is `inputs.publish && …` — so the ordering protects nothing
+  # and delays everything. On a publishing run it protects the registry, and every installation
+  # reads what the registry serves, so there the suite stays INLINE and this job does not run. The
+  # switch is `inputs.publish`, not the event name: `publish` is the input that already means
+  # "trunk" by this file's caller contract, and core's own main-cd calls this lane with
+  # `publish: false` for the bake's compose set — that call gets the fast path and is not a PR.
+  #
+  # 🚨 IT IS NOT A WAY TO STOP TESTING, AND THREE THINGS MAKE THAT STRUCTURAL:
+  #   1. This job is part of THIS called workflow, so a red suite fails the CALLER's `uses:` job
+  #      exactly as a red inline suite did.
+  #   2. `verify` — the lane's one stable context, `All selected bundles built`, the context a
+  #      repo's protection requires — `needs:` this job and goes RED when it did not succeed. The
+  #      name is unchanged and so is what a red suite does to it.
+  #   3. A suite that silently ran NOWHERE is caught by receipts, not by reading a condition: the
+  #      pack leg records which lane owns its suite, this job drops a receipt of its own, and
+  #      node-repo-pack-verify.py fails when a delegated module has no test receipt (or a test
+  #      receipt arrives for a module that delegated nothing). Two mutually exclusive `if:`s can
+  #      BOTH be false; the receipts are what make that impossible to do quietly.
+  #
+  # `bundles-built` is deliberately untouched: it still answers from the built markers dropped
+  # before any suite, so a red suite still does not read as "bundle missing" to a gate that only
+  # COMPOSES the bundle (#2710, Plugins#937).
+  tests:
+    name: Module tests (${{ matrix.entry.module }})
+    # 🚨 `select` ONLY — not prepare, not build-workspace, not pack. The suite is a `dotnet test`
+    # against the content checkout with `-p:MeshWeaverRoot=<the platform checkout>`; it consumes
+    # no platform image, no workspace build and no bundle. Depending on any of them would put it
+    # back on the very chain this job exists to run beside.
+    needs: select
+    # 🚨 The exact COMPLEMENT of the inline step's `inputs.publish &&`, on the same input. A
+    # matrix with zero vectors does not evaluate, so `test-count` is asserted the way `pack`
+    # asserts `count` — and `verify` runs unconditionally and refuses the pairing when a
+    # delegated suite produced no receipt, which is what keeps this from being a skip-trapdoor.
+    if: >-
+      !inputs.publish
+      && needs.select.result == 'success'
+      && needs.select.outputs.test-count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      # One module's red suite must not hide the rest — a sweep wants every verdict in one run.
+      fail-fast: false
+      matrix:
+        entry: ${{ fromJson(needs.select.outputs.test-modules) }}
+    steps:
+      - name: Resolve the content repository's credential
+        id: content-repo
+        if: inputs.content-repository != ''
+        env:
+          REPO: ${{ inputs.content-repository }}
+          APP_ID: ${{ secrets.content-app-id }}
+          APP_KEY: ${{ secrets.content-app-private-key }}
+        run: |
+          set -euo pipefail
+          [ -n "$APP_ID" ]  || { echo "::error::content-repository is '$REPO' but secrets.content-app-id is empty — the caller's GITHUB_TOKEN cannot read another repository, so the checkout would 404. Pass a GitHub App installed on '$REPO' with Contents: Read."; exit 1; }
+          [ -n "$APP_KEY" ] || { echo "::error::content-repository is '$REPO' but secrets.content-app-private-key is empty — see content-app-id."; exit 1; }
+          echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${REPO#*/}"   >> "$GITHUB_OUTPUT"
+      - name: Mint a read token for the content repository
+        id: content-token
+        if: inputs.content-repository != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.content-app-id }}
+          private-key: ${{ secrets.content-app-private-key }}
+          owner: ${{ steps.content-repo.outputs.owner }}
+          repositories: ${{ steps.content-repo.outputs.name }}
+          permission-contents: read
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.content-repository || github.repository }}
+          ref: ${{ inputs.content-ref || github.sha }}
+          token: ${{ steps.content-token.outputs.token || github.token }}
+      - name: Check out Systemorph/MeshWeaver at the pinned ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: meshweaver
+      # 🚨 UNCONDITIONAL, and the log says why. `dotnet-sdk: by-declaration` exists so a job that
+      # compiles nothing on the runner stops installing an SDK by reflex — but this job's ONLY
+      # work is `dotnet test`, a verb the platform image's build-project does not have at all. So
+      # the SDK is a declared consumer here whichever way the caller's flag reads, and saying so
+      # out loud is the point: the flag chooses a COMPILER, it never chooses whether to verify.
+      - name: The .NET SDK is this job's one declared need
+        env:
+          POLICY: ${{ inputs.dotnet-sdk }}
+          MODULE: ${{ matrix.entry.module }}
+        run: |
+          set -euo pipefail
+          case "$POLICY" in
+            install|by-declaration) ;;
+            *) echo "::error::inputs.dotnet-sdk is '$POLICY'. The only values are 'install' (the default) and 'by-declaration'. An unreadable flag must NEVER resolve to 'do not install' — that is a skipped check wearing a green tick."; exit 1 ;;
+          esac
+          echo ".NET SDK on the runner: INSTALLED — policy '$POLICY'; this job's one declared consumer is the module's own suite ('dotnet test' for $MODULE), which the pinned platform image cannot run."
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      # The same command, the same evidence trail and the same tolerance for a module that ships
+      # no suite as the inline step in `pack` — this is a MOVE, not a rewrite. See that step for
+      # what each environment variable buys when a flake has to be diagnosed from the artifacts.
+      - name: Run the module's tests, when it ships any
+        id: tests
+        env:
+          PROJECT: ${{ matrix.entry.project }}
+          MESHWEAVER_TEST_FILE_LOGS: "1"
+          DOTNET_DbgEnableMiniDump: "1"
+          DOTNET_DbgMiniDumpType: "2"
+          DOTNET_DbgMiniDumpName: /tmp/coredumps/%e-%p.dmp
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/coredumps
+          tests="$(dirname "$PROJECT").Test"
+          if [ -d "$tests" ]; then
+            echo "suite=present" >> "$GITHUB_OUTPUT"
+            dotnet test "$tests" -c Release -warnaserror \
+              -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver \
+              --logger "trx;LogFileName=ledger.trx" --results-directory "$RUNNER_TEMP/trx"
+          else
+            echo "suite=absent" >> "$GITHUB_OUTPUT"
+            echo "no test project at $tests — nothing to run"
+          fi
+      - name: Ledger — Tested
+        if: inputs.ledger == 'required' && steps.tests.outcome == 'success' && matrix.entry.ledger.key != ''
+        env:
+          KEY: ${{ matrix.entry.ledger.key }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+        run: |
+          set -euo pipefail
+          python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$KEY" --status Tested --trx "$RUNNER_TEMP/trx/ledger.trx"
+      - name: Keep the failing suite's evidence
+        if: ${{ failure() }}
+        env:
+          PROJECT: ${{ matrix.entry.project }}
+        run: |
+          set -uo pipefail
+          tests="$(dirname "$PROJECT").Test"
+          out="$RUNNER_TEMP/test-evidence"; mkdir -p "$out"
+          find "$tests" -path '*/test-logs/*.log' -print0 2>/dev/null | while IFS= read -r -d '' f; do
+            cp "$f" "$out/" || true
+          done
+          [ -f /tmp/meshweaver-test-trace.log ] && cp /tmp/meshweaver-test-trace.log "$out/_meshweaver-test-trace.log" || true
+          [ -f /tmp/meshweaver-msg-trace.log ] && cp /tmp/meshweaver-msg-trace.log "$out/_meshweaver-msg-trace.log" || true
+          if compgen -G '/tmp/coredumps/*.dmp' > /dev/null; then
+            sudo chmod a+r /tmp/coredumps/*.dmp || true
+            cp /tmp/coredumps/*.dmp "$out/" || true
+            dotnet --list-runtimes > "$out/_runtimes.txt" 2>/dev/null || true
+          fi
+          echo "kept $(ls "$out" | wc -l | tr -d ' ') file(s):"; ls -la "$out" | head -40
+      - name: Upload the failing suite's evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-evidence-${{ needs.select.outputs.lane }}-${{ matrix.entry.module }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/test-evidence
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 9
+      # ─────────── THE TEST RECEIPT — positive evidence that this suite RAN ───────────
+      # 🚨 The whole reason the split is allowed to exist. Two mutually exclusive `if:`s can BOTH
+      # evaluate false, and a suite that ran in neither lane renders exactly like one that passed.
+      # So the pack leg records which lane OWNS its suite (`tests: none|inline|lane` in its
+      # receipt), this job records that the lane actually ran it, and `verify` refuses a run where
+      # the two do not line up — naming the module. Lane-stamped for the same reason as every
+      # other artifact here: artifacts are RUN-WIDE and a repo may call this lane twice.
+      # LAST step on purpose: a receipt means the suite got here green.
+      - name: Drop the test receipt
+        env:
+          LANE: ${{ needs.select.outputs.lane }}
+          PACKAGE: ${{ matrix.entry.package }}
+          MODULE: ${{ matrix.entry.module }}
+          SUITE: ${{ steps.tests.outputs.suite }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/test-receipts"
+          [ -n "$LANE" ]  || { echo "::error::the lane key is empty — the select job did not produce one, so this receipt could not be attributed to this call and the verifier would refuse it anyway."; exit 1; }
+          [ -n "$SUITE" ] || { echo "::error::the suite step recorded neither 'present' nor 'absent' for $MODULE — a receipt that cannot say whether a suite existed attests nothing."; exit 1; }
+          jq -n --arg l "$LANE" --arg p "$PACKAGE" --arg m "$MODULE" --arg s "$SUITE" \
+             '{lane:$l, package:$p, module:$m, tests:"lane", suite:$s, result:"passed"}' \
+             > "$RUNNER_TEMP/test-receipts/$MODULE.json"
+          cat "$RUNNER_TEMP/test-receipts/$MODULE.json"
+      - name: Upload the test receipt
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-tests-receipt-${{ needs.select.outputs.lane }}-${{ matrix.entry.module }}
+          path: ${{ runner.temp }}/test-receipts/*.json
+          retention-days: 1
+          if-no-files-found: error
+      # Best-effort, exactly as in `pack`: the script exits 0 with a ::warning when the registry is
+      # unavailable, and `|| true` keeps this leg's own failure as the job's verdict.
+      - name: Ledger — Failed
+        if: failure() && inputs.ledger == 'required' && matrix.entry.ledger.key != ''
+        env:
+          KEY: ${{ matrix.entry.ledger.key }}
+          MODULE: ${{ matrix.entry.module }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+        run: |
+          set -uo pipefail
+          printf 'the module suite failed in the tests lane — %s/%s/actions/runs/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > "$RUNNER_TEMP/failure.txt"
+          trx="$RUNNER_TEMP/trx/ledger.trx"
+          trxarg=()
+          if [ -f "$trx" ]; then trxarg=(--trx "$trx"); fi
+          python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$KEY" --status Failed --phase test \
+            --failure-file "$RUNNER_TEMP/failure.txt" ${trxarg[@]+"${trxarg[@]}"} || true
+
   # ═══════════════ THE COUNT GATE — one STABLE context, on every run ═══════════════
   # 🚨 A dynamic matrix cannot be a fixed list of required status checks: the per-module contexts
   # appear and disappear with the diff, so requiring one means requiring a context that will
@@ -1971,9 +2301,14 @@ jobs:
   #
   # `if: always()` because the failure it exists to catch is a SKIP, and a job that skips when the
   # thing it watches skipped watches nothing.
+  # 🚨 IT IS ALSO WHERE A RED SUITE LANDS. Since the suites may run beside `pack` rather than
+  # inside it (the `tests` job above), this job `needs:` BOTH and asserts both: a failed or
+  # cancelled tests lane is RED here, under the same context name a repo's protection already
+  # requires, and a module whose pack leg DELEGATED its suite but produced no test receipt is RED
+  # too. Moving the suite off the consumer's critical path may not move it out of the gate.
   verify:
     name: All selected bundles built
-    needs: [select, pack]
+    needs: [select, pack, tests]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -2018,18 +2353,29 @@ jobs:
           pattern: module-built-${{ needs.select.outputs.lane }}-*
           merge-multiple: true
           path: ${{ runner.temp }}/built
+      # The suites' own positive evidence, when they ran in the `tests` lane. Same rule as above:
+      # a pattern matching nothing must REACH the verifier as zero evidence, never fail here — a
+      # delegated suite with no receipt is precisely the finding.
+      - name: Collect the test receipts
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: module-tests-receipt-${{ needs.select.outputs.lane }}-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/test-receipts
       - name: Exactly the selected bundles were built
         id: verify
         env:
           EXPECTED: ${{ needs.select.outputs.selected }}
           PACK_RESULT: ${{ needs.pack.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
           SCOPE: ${{ needs.select.outputs.scope }}
           COUNT: ${{ needs.select.outputs.count }}
           DECLARED: ${{ inputs.modules }}
           LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          echo "scope=$SCOPE, selection named $COUNT module bundle(s); pack job: $PACK_RESULT"
+          echo "scope=$SCOPE, selection named $COUNT module bundle(s); pack job: $PACK_RESULT, tests lane: $TESTS_RESULT"
           # 🚨 An INDEPENDENT recount, because the count and the selection come from the same
           # call and therefore agree by construction — they cannot catch a selection that is
           # simply wrong. This one has a second source: on a FULL scope the answer must be every
@@ -2078,6 +2424,8 @@ jobs:
             --declared "$DECLARED" \
             --lane "$LANE" \
             --built "$RUNNER_TEMP/built" \
+            --test-receipts "$RUNNER_TEMP/test-receipts" \
+            --tests-result "$TESTS_RESULT" \
             --github-output "$GITHUB_OUTPUT"
 
       # ─────────── WHICH COMPILER BUILT WHAT — a NUMBER, on every run ───────────
