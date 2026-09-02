@@ -228,7 +228,7 @@ public static class MessageSizeGuard
     /// <c>MessageService.ReportFailure</c> (#3044/#3049). With ~20 <c>new DeliveryFailure(delivery)</c>
     /// sites in this repository, "remember to strip" was never a control. It is now
     /// <see cref="DeliveryFailure"/>'s own construction invariant — see
-    /// <see cref="DeliveryPayloadBounds.WithoutOversizedPayload"/>, which this delegates to — so the
+    /// <see cref="DeliveryPayloadBounds.WithoutOversizedPayload(IMessageDelivery, int)"/>, which this delegates to — so the
     /// two explicit calls are idempotent and kept only because their surrounding comments carry the
     /// incident history.</para>
     /// </summary>

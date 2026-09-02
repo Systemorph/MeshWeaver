@@ -135,6 +135,67 @@ their surrounding comments carry the incident history.
 > incident history and its public surface. This is the same move #2885 made one assembly earlier, for
 > the same reason, and the alternative is the same one it rejected: a copy-paste of the check.
 
+### The invariant was blind to half the traffic (#3104)
+
+Making the strip a construction invariant fixed *which sites* it reaches. It did not fix *which
+payloads* it can see, and the two are easy to conflate. `IsOversized` opens:
+
+```csharp
+if (delivery?.Message is not RawJson { Content: { } content })
+    return false;
+```
+
+A payload that is not `RawJson` is never measured and never stripped. That test is **right on the
+router hot path**, and its own doc says why: by the time a delivery reaches a transport `MeshBuilder`
+has packaged it, so `RawJson` is the routed shape, and guessing at anything else's size would mean
+serialising twice to answer a question that is almost always "no".
+
+🚨 **That reasoning does not transfer to the strip.** The strip runs only while a failure report is
+being made ready to travel — a rare path, where an exact measurement is the correct thing to pay for.
+Inheriting the hot path's excuse there left the entire **pre-packaging** half of the mesh unmeasured,
+and the construction invariant inherited the blind spot with it: it covers all ~25 sites, but only for
+a payload that is already `RawJson`.
+
+`AccessControlPipeline` is the case that bites, and it is not a corner. `[RequiresPermission]` is an
+attribute on the message **type**, so the gate cannot evaluate a `RawJson` at all — its deliveries are
+typed by construction. A permission denial therefore echoed a multi-megabyte body back verbatim, and
+serialising it at the packaging seam is the same
+`Utf8JsonWriter.TranscodeAndWriteRawValue` → `SharedArrayPool.Rent` → `GC.AllocateNewArray`
+allocation that threw in #3049. Every in-process NACK is in the same position:
+`MessageService.ReportFailure`, `MessageHub`'s unhandled and failed-state answers,
+`HierarchicalRouting`'s NotFound.
+
+**The measurement now takes options, and the strip is applied at the packaging seam.**
+`DeliveryPayloadBounds.IsOversized(delivery, options, limit, out bytes)` keeps the `RawJson` branch
+byte-for-byte as it was and serialises a typed payload only when options are supplied — into a
+counting `IBufferWriter` that keeps nothing, because rendering the document to read its `Length` is
+the very allocation this exists to prevent. A null `options` reproduces the old behaviour exactly, so
+no caller is worse off. `MessageDelivery.Package` applies it to a `DeliveryFailure`'s echo before it
+serialises.
+
+Three things about that placement are deliberate:
+
+- **The seam, not the call sites.** `Package` is the one place a delivery becomes its wire form and
+  the one place a hub's `JsonSerializerOptions` are in hand. Applying the rule there covers the sites
+  nobody has enumerated yet — which is the whole lesson of the section above, applied once more
+  rather than re-learned.
+- **Packaging, not construction.** A report that never crosses a boundary keeps its full echo. It
+  costs nothing to carry in-process and is the better diagnostic; the strip exists to keep a report
+  *deliverable*, never to redact it.
+- **Unmeasurable is not "too big".** A payload the serializer refuses has an *unknown* size, and the
+  honest answer to unknown is to echo it. Treating a failed measurement as oversized would be a
+  fail-closed default that silently destroys the content of every NACK whose payload happens to be
+  awkward to serialise — and it would buy nothing, since a payload that cannot be serialised cannot
+  be packaged either and so never reaches this bound's wall.
+
+Both seams are pinned by `DeliveryFailureEchoStripGuard`, which asserts the *seams* rather than the
+call sites — a per-site scan would enforce exactly the convention this page records the failure of,
+and could not see a site that reaches a report through a helper. It checks that the construction
+invariant still runs the strip, that `Package` strips **before** it serialises (the order is the
+assertion: stripping afterwards compiles, passes every functional test, and does nothing), that
+`MeshBuilder` still routes through `Package`, and that the seam has exactly one implementation. Each
+arm fails when its subject is missing rather than merely non-compliant.
+
 ## The fourth leg: the router's OWN grain call (#2885)
 
 The three sites above all live **inside** `RoutingGrain`. But a delivery has to *reach* that grain,
@@ -440,6 +501,14 @@ measured against its own `Files`.
 - **A rule enforced by remembering is not enforced.** If a payload rule can be violated by
   constructing a type, it belongs in that type's construction, not in the call sites. Two hand-applied
   call sites and a third that had never been told is how #1890 became #3044 two weeks later.
+- **Ask what a guard can SEE, not only where it runs.** Moving the strip to every site fixed *which
+  sites*; it said nothing about *which payloads*, and the `is not RawJson` test at the bottom of it
+  left every pre-packaging NACK unmeasured for as long again (#3104). A hot-path optimisation
+  inherited by a rare path is an optimisation nobody chose.
+- **A measurement on the error path must cost less than the thing it is deciding.** Count into a
+  discarding buffer; never render the document to read its `Length`. The error path is where the
+  process can least afford the allocation, which is precisely why the check was skipped there in the
+  first place.
 - **Never build a log argument eagerly.** `logger.LogDebug("…", Serialize(x), …)` renders `x`
   whether or not anyone is listening. Guard with `IsEnabled`, and on any per-message path render a
   summary rather than a payload.
