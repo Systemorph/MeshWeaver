@@ -1185,6 +1185,52 @@ jobs:
           echo "floor=$floor" >> "$GITHUB_OUTPUT"
           echo "packing $MODULE as $PACKAGE@$version, platform floor $floor"
 
+      # ───────────── THE LEDGER'S PLAN FOR THIS ENTRY — build it, or reuse another run's bundle ─────────────
+      # `select` annotated the entry (`ledger.decision`, `ledger.key`, what is still needed). ONE
+      # step reads it, prints it, and hands the rest of the job three booleans; with the ledger off
+      # the plan is "build, test if the entry says so, publish if the caller says so" — today's leg.
+      # A `reuse` leg downloads the recorded run's bundle artifact (sha256 verified against the
+      # record), runs only the phases the record lacks, and drops the same artifact, marker and
+      # receipt a built leg drops — a caller composing this bundle cannot tell the two apart, and
+      # must not need to. The heartbeat keeps the claim fresh across this job's queue time.
+      - name: Ledger — this entry's plan
+        id: plan
+        env:
+          LEDGER: ${{ inputs.ledger }}
+          ENTRY_LEDGER: ${{ toJSON(matrix.entry.ledger) }}
+          RUN_TESTS: ${{ matrix.entry.test != false }}
+          PUBLISH: ${{ inputs.publish }}
+          MODULE: ${{ matrix.entry.module }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+        run: |
+          set -euo pipefail
+          decision=build; key=""; need_test="$RUN_TESTS"; need_publish="$PUBLISH"; art_run=""; art_name=""; sha=""; holder=""
+          if [ "$LEDGER" = "required" ] && [ "$ENTRY_LEDGER" != "null" ] && [ -n "$ENTRY_LEDGER" ]; then
+            decision=$(jq -r '.decision // "build"' <<< "$ENTRY_LEDGER")
+            key=$(jq -r '.key // ""' <<< "$ENTRY_LEDGER")
+            if [ "$decision" = "reuse" ]; then
+              need_test=$(jq -r 'if .needTest then "true" else "false" end' <<< "$ENTRY_LEDGER")
+              need_publish=$(jq -r 'if .needPublish then "true" else "false" end' <<< "$ENTRY_LEDGER")
+              art_run=$(jq -r '.artifact.runId // ""' <<< "$ENTRY_LEDGER")
+              art_name=$(jq -r '.artifact.name // ""' <<< "$ENTRY_LEDGER")
+              sha=$(jq -r '.bundleSha256 // ""' <<< "$ENTRY_LEDGER")
+              holder=$(jq -r '.holder // ""' <<< "$ENTRY_LEDGER")
+              [ -n "$art_run" ] && [ -n "$art_name" ] || { echo "::error::the ledger said REUSE for $MODULE but named no bundle artifact — nothing to reuse; this is a select-step defect, not a build failure"; exit 1; }
+              echo "plan: REUSE $MODULE from run $art_run ($art_name, sha256 ${sha:-unrecorded}; holder $holder) — tests: $need_test, publish: $need_publish"
+            else
+              echo "plan: BUILD $MODULE (ledger key ${key:-<none>}; $(jq -r 'if .unavailable then "WITHOUT coordination: " + .unavailable else "attempt " + (.attempts|tostring) end' <<< "$ENTRY_LEDGER")) — tests: $need_test, publish: $need_publish"
+              [ -z "$key" ] || python3 meshweaver/.github/scripts/module-build-ledger.py heartbeat --key "$key"
+            fi
+          else
+            echo "plan: BUILD $MODULE (ledger off) — tests: $need_test, publish: $need_publish"
+          fi
+          {
+            echo "decision=$decision"; echo "key=$key"; echo "need_test=$need_test"; echo "need_publish=$need_publish"
+            echo "art_run=$art_run"; echo "art_name=$art_name"; echo "sha=$sha"; echo "holder=$holder"
+          } >> "$GITHUB_OUTPUT"
+
       # 🚨 THE PLATFORM IS THE IMAGE. When the caller pins platform-image-digest, the module is
       # compiled against the assemblies the portal actually runs (docker cp of /app, cached per
       # digest so a run pulls it once), and the platform checkout above serves only restore
@@ -1255,13 +1301,18 @@ jobs:
       # The global workspace build's outputs — every container entry's assemblies, closure
       # manifests and the one build log. Container packs consume THIS; sdk entries ignore it.
       - name: Fetch the global workspace build
-        if: ${{ (matrix.entry.build || 'sdk') == 'container' }}
+        if: ${{ (matrix.entry.build || 'sdk') == 'container' && steps.plan.outputs.decision == 'build' }}
         uses: actions/download-artifact@v8
         with:
           name: workspace-build-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/workspace-build
+      # 🚨 `if: decision == 'build'` on the build/pack/inspect trio is a MODE SWITCH on the ledger's
+      # plan, not a skip-trapdoor: the reuse leg below runs in their place, is itself unconditional
+      # within its mode, verifies the bytes it fetched, and drops the same artifact/marker/receipt —
+      # so `verify` still counts this entry, and a leg that did neither is still RED there.
       - name: Build the module — and say which compiler produced it
         id: build
+        if: steps.plan.outputs.decision == 'build'
         env:
           MODE: ${{ matrix.entry.build || 'sdk' }}
           ACCEPT: ${{ matrix.entry.accept || '' }}
@@ -1426,16 +1477,61 @@ jobs:
             echo "- closure args: \`$( (tr '\n' ' ' < "$packargs") || true )\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # ───────────── THE REUSE LEG — another run already built these bytes ─────────────
+      # The ledger's record names the run and the artifact; `select` already asked the API that the
+      # artifact exists and is not expired. Download it with this run's token (the caller's job needs
+      # `permissions: actions: read` — without it `select` never says reuse), and verify the sha256
+      # against the record: bytes that do not match the ledger are a FAULT (a re-uploaded artifact,
+      # a torn download), never something to pack anyway.
+      - name: Reuse the bundle another run built (ledger)
+        id: reused
+        if: steps.plan.outputs.decision == 'reuse'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ART_RUN: ${{ steps.plan.outputs.art_run }}
+          ART_NAME: ${{ steps.plan.outputs.art_name }}
+          EXPECTED_SHA: ${{ steps.plan.outputs.sha }}
+          HOLDER: ${{ steps.plan.outputs.holder }}
+          PACKAGE: ${{ matrix.entry.package }}
+          MODULE: ${{ matrix.entry.module }}
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bundles"
+          gh run download "$ART_RUN" -R "$GITHUB_REPOSITORY" -n "$ART_NAME" -D "$RUNNER_TEMP/bundles"
+          bundle="$RUNNER_TEMP/bundles/MeshWeaver.Plugin.$PACKAGE.$VERSION.module.nupkg"
+          if [ ! -f "$bundle" ]; then
+            found=$(find "$RUNNER_TEMP/bundles" -name '*.module.nupkg' | head -1)
+            echo "::error::run $ART_RUN's artifact $ART_NAME carries no MeshWeaver.Plugin.$PACKAGE.$VERSION.module.nupkg (found: ${found:-nothing}) — the ledger record and this checkout's manifest.lock disagree about the version; the key should have differed. Not reusing."
+            exit 1
+          fi
+          actual=$(sha256sum "$bundle" | cut -d' ' -f1)
+          if [ -n "$EXPECTED_SHA" ] && [ "$actual" != "$EXPECTED_SHA" ]; then
+            echo "::error::the downloaded bundle's sha256 $actual is not the ledger's $EXPECTED_SHA (record by $HOLDER) — the bytes are not the ones the record attests. Not reusing."
+            exit 1
+          fi
+          echo "reused: $bundle (sha256 $actual) from run $ART_RUN — built and inspected there ($HOLDER); no compile, no pack, no inspection in this job"
+          echo "path=$bundle" >> "$GITHUB_OUTPUT"
+          {
+            echo "### \`$MODULE\` — **reused** from run $ART_RUN"
+            echo
+            echo "- record: $HOLDER"
+            echo "- sha256: \`$actual\` (verified against the ledger)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Published ONCE by the prepare job — `dotnet build` here cost 48–79s in EVERY job (measured
       # across Plugins#1032). A missing artifact fails this download RED rather than quietly
       # rebuilding a maybe-different tool.
       - name: Fetch the module-pack tool (built once by prepare)
+        if: steps.plan.outputs.decision == 'build'
         uses: actions/download-artifact@v8
         with:
           name: module-pack-tool-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/pack-tool
 
       - name: Pack the module bundle
+        id: pack
+        if: steps.plan.outputs.decision == 'build'
         env:
           PACKDIR: ${{ steps.build.outputs.packdir }}
           COMPILER: ${{ steps.build.outputs.compiler }}
@@ -1466,6 +1562,7 @@ jobs:
       # consumer's landing gate will read, loudly, instead of trusting the packer's exit code.
       - name: Inspect the bundle (manifest + assemblies)
         id: bundle
+        if: steps.plan.outputs.decision == 'build'
         env:
           PACKAGE: ${{ matrix.entry.package }}
           MODULE: ${{ matrix.entry.module }}
@@ -1557,13 +1654,34 @@ jobs:
           echo "path=$bundle" >> "$GITHUB_OUTPUT"
           echo "bundle OK:"; jq . "$manifest"
 
+      # 7 days, not 3: this artifact is what a LATER run downloads when the ledger says the key is
+      # already built — the reuse window is exactly its retention (the ledger records the expiry).
       - name: Upload the bundle artifact
         uses: actions/upload-artifact@v7
         with:
           name: module-bundle-${{ matrix.entry.module }}
           path: ${{ runner.temp }}/bundles/*.module.nupkg
-          retention-days: 3
+          retention-days: 7
           if-no-files-found: error
+      # AFTER the upload, never before: `Built` means "a later run can fetch this bundle", and the
+      # record names the artifact the upload above just created. Carries the PLATFORM's identity as
+      # `prepare` resolved it (#931's producer half: the record says which framework these bytes are for).
+      - name: Ledger — Built
+        if: inputs.ledger == 'required' && steps.plan.outputs.decision == 'build' && steps.plan.outputs.key != ''
+        env:
+          KEY: ${{ steps.plan.outputs.key }}
+          BUNDLE: ${{ steps.bundle.outputs.path }}
+          MODULE: ${{ matrix.entry.module }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          PLATFORM_IDENTITY: ${{ needs.prepare.outputs.platform-identity }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+        run: |
+          set -euo pipefail
+          python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$KEY" --status Built \
+            --bundle "$BUNDLE" --artifact-name "module-bundle-$MODULE" --retention-days 7 \
+            --version "$VERSION" ${PLATFORM_IDENTITY:+--platform-identity "$PLATFORM_IDENTITY"}
 
       # ───────── THE BUILT MARKER — "this bundle exists AND is composable", from THIS lane ─────────
       # Dropped the moment the bundle artifact is up, BEFORE the tests and the hand-over, so a
@@ -1592,9 +1710,10 @@ jobs:
           PACKAGE: ${{ matrix.entry.package }}
           MODULE: ${{ matrix.entry.module }}
           VERSION: ${{ steps.identity.outputs.version }}
-          COMPILER: ${{ steps.build.outputs.compiler }}
-          CLOSURE: ${{ steps.build.outputs.closure }}
-          BUNDLE: ${{ steps.bundle.outputs.path }}
+          # A reused leg has no compiler of its own: the marker says so, and names the run that did.
+          COMPILER: ${{ steps.plan.outputs.decision == 'reuse' && 'reused' || steps.build.outputs.compiler }}
+          CLOSURE: ${{ steps.plan.outputs.decision == 'reuse' && format('reused from run {0} ({1}, sha256 verified against the ledger)', steps.plan.outputs.art_run, steps.plan.outputs.art_name) || steps.build.outputs.closure }}
+          BUNDLE: ${{ steps.bundle.outputs.path || steps.reused.outputs.path }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/built"
@@ -1622,8 +1741,11 @@ jobs:
       # Runs AFTER the bundle artifact and its built marker exist and BEFORE the hand-over: a
       # failing suite never publishes — and never un-builds.
       # The built module DLL as a run-scoped artifact, IMMEDIATELY — this is what lets a
+      # `need_test`: the entry's own `test` flag AND, with the ledger on, "no earlier run recorded a
+      # verdict for this key" — a reused Tested/Published bundle is not re-tested.
       - name: Run the module's tests, when it ships any
-        if: ${{ matrix.entry.test != false }}
+        id: tests
+        if: ${{ matrix.entry.test != false && steps.plan.outputs.need_test == 'true' }}
         env:
           PROJECT: ${{ matrix.entry.project }}
           # 🚨 THE TRAIL A FLAKE LEAVES. A red here on a diff that cannot reach the module is a
@@ -1648,11 +1770,23 @@ jobs:
           # src/<Module>.Test. Absent is fine; present and red is not.
           tests="$(dirname "$PROJECT").Test"
           if [ -d "$tests" ]; then
+            # The trx is the ledger's evidence: counts, and the FAILED names a follower is handed.
             dotnet test "$tests" -c Release -warnaserror \
-              -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
+              -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver \
+              --logger "trx;LogFileName=ledger.trx" --results-directory "$RUNNER_TEMP/trx"
           else
             echo "no test project at $tests — nothing to run"
           fi
+      - name: Ledger — Tested
+        if: inputs.ledger == 'required' && steps.plan.outputs.key != '' && steps.tests.outcome == 'success'
+        env:
+          KEY: ${{ steps.plan.outputs.key }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+        run: |
+          set -euo pipefail
+          python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$KEY" --status Tested --trx "$RUNNER_TEMP/trx/ledger.trx"
 
       # 🚨 Only on FAILURE, and only what a diagnosis needs: the failing suite's per-test logs, the
       # phase trace, the straggler captures and any dump. A green run uploads nothing — the point
@@ -1691,8 +1825,12 @@ jobs:
       # inspected — and reaches nobody, because a registry serves only bytes it holds. A missing
       # token here FAILS the job rather than skipping quietly: "published nothing" and "published
       # fine" must never look the same (the same reason a gate may not skip green).
+      # `need_publish`: the caller's `publish` AND, with the ledger on, "no earlier run published this
+      # key" — a key the registry already serves at these bytes is not re-handed (Plugins#889: a push
+      # publishes every module whose key has no Published record, and only those).
       - name: Hand the bundle to the registry
-        if: ${{ inputs.publish }}
+        id: publish
+        if: ${{ inputs.publish && steps.plan.outputs.need_publish == 'true' }}
         env:
           TOKEN: ${{ secrets.publish-token }}
           REGISTRY: ${{ inputs.registry-url }}
@@ -1700,7 +1838,7 @@ jobs:
           PACKAGE: ${{ matrix.entry.package }}
           MODULE: ${{ matrix.entry.module }}
           VERSION: ${{ steps.identity.outputs.version }}
-          BUNDLE: ${{ steps.bundle.outputs.path }}
+          BUNDLE: ${{ steps.bundle.outputs.path || steps.reused.outputs.path }}
         run: |
           set -euo pipefail
           if [ -z "${TOKEN:-}" ]; then
@@ -1717,6 +1855,60 @@ jobs:
             2*) echo "$MODULE@$VERSION is now served by $REGISTRY" ;;
             *)  echo "::error::registry refused $MODULE@$VERSION (HTTP $code)"; exit 1 ;;
           esac
+      - name: Ledger — Published
+        if: inputs.ledger == 'required' && steps.plan.outputs.key != '' && steps.publish.outcome == 'success'
+        env:
+          KEY: ${{ steps.plan.outputs.key }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+        run: |
+          set -euo pipefail
+          python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$KEY" --status Published
+
+      # ───────── THE LEDGER'S VERDICT WHEN THIS LEG DID NOT GET HERE — never a reason for red ─────────
+      # `failure()`: the phase is read off the step outcomes, so the record says WHERE it failed and the
+      # tolerance rule (compile blocks; a test failure blocks from the 2nd attempt; pack/publish never)
+      # is applied by the script. `cancelled()`: the claim is released at once instead of expiring.
+      # Both steps are best-effort by construction — the script exits 0 with a ::warning when the
+      # registry is unavailable, and `|| true` keeps a failed leg's own failure as the job's verdict.
+      - name: Ledger — Failed
+        if: failure() && inputs.ledger == 'required' && steps.plan.outputs.key != ''
+        env:
+          KEY: ${{ steps.plan.outputs.key }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          REUSED_OUTCOME: ${{ steps.reused.outcome }}
+          PACK_OUTCOME: ${{ steps.pack.outcome }}
+          INSPECT_OUTCOME: ${{ steps.bundle.outcome }}
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          MODE: ${{ matrix.entry.build || 'sdk' }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+        run: |
+          set -uo pipefail
+          phase="pack"
+          if   [ "$TESTS_OUTCOME" = "failure" ]; then phase="test"
+          elif [ "$PUBLISH_OUTCOME" = "failure" ]; then phase="publish"
+          elif [ "$BUILD_OUTCOME" = "failure" ] && [ "$MODE" = "sdk" ]; then phase="compile"
+          elif [ "$BUILD_OUTCOME" = "failure" ] || [ "$PACK_OUTCOME" = "failure" ] || [ "$INSPECT_OUTCOME" = "failure" ] || [ "$REUSED_OUTCOME" = "failure" ]; then phase="pack"
+          fi
+          printf 'step outcomes — build:%s reused:%s pack:%s inspect:%s tests:%s publish:%s (%s)\n' \
+            "$BUILD_OUTCOME" "$REUSED_OUTCOME" "$PACK_OUTCOME" "$INSPECT_OUTCOME" "$TESTS_OUTCOME" "$PUBLISH_OUTCOME" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/failure.txt"
+          trx="$RUNNER_TEMP/trx/ledger.trx"
+          trxarg=()
+          if [ -f "$trx" ]; then trxarg=(--trx "$trx"); fi
+          python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$KEY" --status Failed --phase "$phase" \
+            --failure-file "$RUNNER_TEMP/failure.txt" ${trxarg[@]+"${trxarg[@]}"} || true
+      - name: Ledger — released (cancelled)
+        if: cancelled() && inputs.ledger == 'required' && steps.plan.outputs.key != ''
+        env:
+          KEY: ${{ steps.plan.outputs.key }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+        run: python3 meshweaver/.github/scripts/module-build-ledger.py release --key "$KEY" || true
 
       # ─────────────────────────── THE RECEIPT ───────────────────────────
       # 🚨 POSITIVE EVIDENCE THAT THIS LEG RAN. A skipped matrix leg renders with the same tick as
@@ -1736,8 +1928,10 @@ jobs:
           PACKAGE: ${{ matrix.entry.package }}
           MODULE: ${{ matrix.entry.module }}
           VERSION: ${{ steps.identity.outputs.version }}
-          COMPILER: ${{ steps.build.outputs.compiler }}
+          COMPILER: ${{ steps.plan.outputs.decision == 'reuse' && 'reused' || steps.build.outputs.compiler }}
           PUBLISHED: ${{ inputs.publish }}
+          LEDGER_KEY: ${{ steps.plan.outputs.key }}
+          LEDGER_DECISION: ${{ steps.plan.outputs.decision }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/receipts"
@@ -1745,7 +1939,8 @@ jobs:
           jq -n --arg l "$LANE" --arg p "$PACKAGE" --arg m "$MODULE" \
                 --arg v "$VERSION" --arg c "$COMPILER" \
                 --argjson pub "$PUBLISHED" \
-             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, published:$pub}' \
+                --arg lk "$LEDGER_KEY" --arg ld "$LEDGER_DECISION" \
+             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, published:$pub, ledger:{key:$lk, decision:$ld}}' \
              > "$RUNNER_TEMP/receipts/$MODULE.json"
           cat "$RUNNER_TEMP/receipts/$MODULE.json"
       - name: Upload the receipt
@@ -1755,6 +1950,16 @@ jobs:
           path: ${{ runner.temp }}/receipts/*.json
           retention-days: 1
           if-no-files-found: error
+      # The leg is over: a record left at Built/Tested (no publish on this event) is marked finished so
+      # a follower stops waiting for a publish that will never come. Idempotent on a Published record.
+      - name: Ledger — finished
+        if: inputs.ledger == 'required' && steps.plan.outputs.key != ''
+        env:
+          KEY: ${{ steps.plan.outputs.key }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+        run: python3 meshweaver/.github/scripts/module-build-ledger.py finish --key "$KEY"
 
   # ═══════════════ THE COUNT GATE — one STABLE context, on every run ═══════════════
   # 🚨 A dynamic matrix cannot be a fixed list of required status checks: the per-module contexts
@@ -1906,11 +2111,15 @@ jobs:
               [ .[] | select((.module as $m | $mine | index($m)) and .compiler == "container") | .module ]
               | sort | join(", ")' "${receipts[@]}")"
           legacy="$(jq -s --argjson mine "$mine" -r '
-              [ .[] | select((.module as $m | $mine | index($m)) and .compiler != "container") | .module ]
+              [ .[] | select((.module as $m | $mine | index($m)) and .compiler != "container" and .compiler != "reused") | .module ]
+              | sort | join(", ")' "${receipts[@]}")"
+          reused="$(jq -s --argjson mine "$mine" -r '
+              [ .[] | select((.module as $m | $mine | index($m)) and .compiler == "reused") | .module ]
               | sort | join(", ")' "${receipts[@]}")"
           echo "compiler split: $split module bundle(s) built by \`memex build project\` in the platform image"
           echo "  container: ${containers:-<none>}"
           echo "  dotnet SDK: ${legacy:-<none>}"
+          echo "  reused (ledger): ${reused:-<none>}"
           {
             echo "### Compiler split"
             echo
@@ -1918,4 +2127,5 @@ jobs:
             echo
             echo "- container: ${containers:-_none yet_}"
             echo "- dotnet SDK (legacy): ${legacy:-_none_}"
+            echo "- reused from an earlier run (module build ledger): ${reused:-_none_}"
           } >> "$GITHUB_STEP_SUMMARY"

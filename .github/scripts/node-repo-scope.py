@@ -116,7 +116,9 @@ FULL_REASONS = {
                 "container pack path copies every module-owned MeshWeaver.* sibling INTO the "
                 "bundle, so a sibling's change moves the bundle's bytes and not its version. "
                 "Diffing github.event.before instead would silently skip every module whose commit "
-                "belonged to a cancelled, superseded or red run. Packing every module.",
+                "belonged to a cancelled, superseded or red run. Packing every module — the module "
+                "build ledger (module-build-ledger.py, when the caller sets ledger: required) then "
+                "reuses every entry whose content key is already Published.",
         "repository_dispatch": "a framework-release dispatch moves the platform pin every module is "
                                "built against — every bundle must be rebuilt and republished or "
                                "every portal reads FrameworkDeclined and adopts nothing "
