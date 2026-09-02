@@ -3684,94 +3684,139 @@ public static class DataExtensions
     private const int AutocompleteAggregateTopN = 200;
 
     /// <summary>
-    /// How long the merged snapshot must stay unchanged before it counts as settled. Short enough
-    /// to feel instant in a composer, long enough for a second provider's first real snapshot to
-    /// land after the seeded empty one.
-    /// </summary>
-    private static readonly TimeSpan AutocompleteSettleWindow = TimeSpan.FromMilliseconds(150);
-
-    /// <summary>
-    /// The answer deadline. A provider that keeps emitting (a live catalog under load) never goes
-    /// quiet, so at this point the best snapshot so far is the answer.
-    /// </summary>
-    private static readonly TimeSpan AutocompleteAnswerDeadline = TimeSpan.FromSeconds(2);
-
-    /// <summary>
-    /// The floor: if the combined stream never produced ANYTHING — a provider that emits neither a
-    /// snapshot nor an error, against the contract in <see cref="AutocompleteSnapshots.Empty"/> —
-    /// an empty response still goes out. Deliberately later than
-    /// <see cref="AutocompleteAnswerDeadline"/> so a real snapshot always wins the race.
-    /// </summary>
-    private static readonly TimeSpan AutocompleteSilenceFloor = TimeSpan.FromMilliseconds(2500);
-
-    /// <summary>
     /// Handles the one-shot <see cref="AutocompleteRequest"/> by aggregating the SNAPSHOT streams of
     /// every registered <see cref="IAutocompleteProvider"/>. CombineLatest + merge (see
     /// <see cref="AutocompleteSnapshots.Combine"/>), then ONE <see cref="AutocompleteResponse"/> is
-    /// posted. Progressive consumers use the <see cref="AutocompleteReference"/> workspace stream
-    /// instead. Each provider's <c>OnError</c> is swallowed to an empty snapshot so one bad provider
+    /// posted. Each provider's <c>OnError</c> is swallowed to an empty snapshot so one bad provider
     /// doesn't stall the CombineLatest.
     ///
-    /// <para>🚨 <b>"Settled" is a QUIET PERIOD, never completion.</b> This used to take
-    /// <c>LastAsync()</c>, which emits only when the combined stream COMPLETES — and a provider
-    /// backed by mesh data never completes: it is a live subscription, which is the whole point of
-    /// the snapshot model (<c>SkillAutocompleteProvider</c> composes ObserveSkillQueries →
-    /// ObserveSnapshot → Switch; every one of those is endless by design). So on any hub with such a
-    /// provider registered the handler ran, returned <c>Processed</c> in ~27 ms, and posted NOTHING
-    /// — the caller waited out its timeout with no error anywhere. Verified from the message trace:
-    /// <c>HUB_HANDLE_END … Result: Processed</c> followed by silence, and no response post from that
-    /// hub (issue #2276).</para>
+    /// <para>🚨 <b>The answer settles on CONVERGENCE, never on silence (#3094).</b> This used to
+    /// answer when the merged snapshot had been quiet for 150 ms. A quiet period is not a settled
+    /// answer: <see cref="AutocompleteSnapshots.Combine"/> seeds every provider with an empty
+    /// snapshot so it can emit progressively, so the merge is ALWAYS emitting a partial first — and
+    /// whenever the fast in-memory providers landed and a cross-partition provider's rows arrived
+    /// more than a beat later, the timer fired and the response went out WITHOUT them, still
+    /// labelled <see cref="AutocompleteResponse.IsComplete"/> = <c>true</c>. Under load the caller
+    /// could not tell a settled snapshot from a truncated one, and
+    /// <c>ChatCompletionOrchestrator</c> treated the truncated batch as final.</para>
     ///
-    /// <para>The three ways this now always answers, first one wins: the snapshot goes quiet for
-    /// <see cref="AutocompleteSettleWindow"/>; the deadline arrives and we answer with the best
-    /// snapshot so far; or no provider ever produced anything, in which case an empty response goes
-    /// out rather than nothing at all. A one-shot request must produce exactly one answer — never
-    /// a hang, which is indistinguishable from "still thinking".</para>
+    /// <para>The authoritative signal is the providers' own lifecycle, and the
+    /// <see cref="IAutocompleteProvider.GetItems"/> contract already names it: <i>the stream
+    /// completes when the provider has settled</i>. CombineLatest completes when every source has,
+    /// so the LAST value of the merged stream is the fully-merged, every-provider-in answer. No
+    /// clock is involved and nothing is tuned: under load the answer simply arrives later, and it
+    /// arrives COMPLETE.</para>
+    ///
+    /// <para>What remains is a HANG bound, which a one-shot request genuinely needs:
+    /// <see cref="AutocompleteBounds.AnswerDeadline"/>. Reaching it means some provider violated
+    /// the completion contract, so the response is marked <c>IsComplete = false</c> AND a warning
+    /// names the offending provider — a truncated answer is never passed off as settled again.
+    /// (The previous <c>LastAsync()</c> shape hung forever on such a provider and posted NOTHING,
+    /// which is #2276; a deadline that always answers is what fixes that, not a settle window.)</para>
     /// </summary>
     private static IMessageDelivery HandleAutocompleteRequest(
         IMessageHub hub,
         IMessageDelivery<AutocompleteRequest> request)
     {
-        var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>();
+        var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>().ToArray();
         var query = request.Message.Query;
         var contextPath = request.Message.Context;
 
-        // ONE upstream subscription shared by the three racers below — RefCount, so the providers'
-        // queries are not issued twice.
-        var combined = AutocompleteSnapshots.Combine(
-                providers.Select(p => p.GetItems(query, contextPath)
-                    .Catch<IReadOnlyCollection<AutocompleteItem>, Exception>(
-                        _ => Observable.Return(AutocompleteSnapshots.Empty))),
-                AutocompleteAggregateTopN)
-            .Publish()
-            .RefCount();
+        // Which providers have not yet honoured the completion contract. Concurrent because the
+        // provider streams complete on whatever thread their I/O landed on; per-REQUEST and local,
+        // so there is no shared/static state — it exists only to NAME the offender if the deadline
+        // has to fire.
+        var pending = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>();
+        var sources = providers.Select(p =>
+        {
+            var providerName = p.GetType().FullName ?? p.GetType().Name;
+            pending.TryAdd(providerName, 0);
+            return p.GetItems(query, contextPath)
+                // A provider that FAILS has still said all it is going to say — Catch substitutes a
+                // completing empty snapshot, so it counts as settled (below) rather than holding
+                // the answer to the deadline.
+                .Catch<IReadOnlyCollection<AutocompleteItem>, Exception>(
+                    _ => Observable.Return(AutocompleteSnapshots.Empty))
+                .Do(_ => { }, () => pending.TryRemove(providerName, out _));
+        });
 
-        Observable.Amb(
-                combined.Throttle(AutocompleteSettleWindow).Take(1),
-                combined.Sample(AutocompleteAnswerDeadline).Take(1),
-                Observable.Timer(AutocompleteSilenceFloor).Select(_ => AutocompleteSnapshots.Empty))
-            .Subscribe(
-                snapshot =>
+        AutocompleteSnapshots.Combine(sources, AutocompleteAggregateTopN)
+            // Materialize so the terminal notification is data: the fold below can tell "every
+            // provider settled" (OnCompleted seen) from "the deadline cut us off" (TakeUntil), and
+            // the answer carries that distinction to the caller.
+            .Materialize()
+            .TakeUntil(Observable.Timer(AutocompleteBounds.AnswerDeadline))
+            .Aggregate(
+                (Snapshot: AutocompleteSnapshots.Empty, Settled: false, Fault: (Exception?)null),
+                (acc, notification) => notification.Kind switch
                 {
-                    // Apply relevance filtering: boost items that match the query text,
-                    // suppress zero-priority items that don't match.
-                    var searchText = ExtractAutocompleteSearchText(query);
-                    IEnumerable<AutocompleteItem> result = snapshot;
-                    if (!string.IsNullOrEmpty(searchText))
-                    {
-                        result = snapshot
-                            .Select(item => item.Priority > 0
-                                ? item // Provider already scored this item
-                                : item with { Priority = ScoreAutocompleteItem(item, searchText) })
-                            .Where(item => item.Priority > 0)
-                            .OrderByDescending(item => item.Priority);
-                    }
+                    NotificationKind.OnNext => (notification.Value, acc.Settled, acc.Fault),
+                    NotificationKind.OnCompleted => (acc.Snapshot, true, acc.Fault),
+                    _ => (acc.Snapshot, acc.Settled, notification.Exception),
+                })
+            .Subscribe(
+                answer =>
+                {
+                    var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Data.Autocomplete");
+                    if (answer.Fault is not null)
+                        logger?.LogWarning(answer.Fault,
+                            "Autocomplete aggregation faulted for query {Query} on {Address}",
+                            query, hub.Address);
+                    if (!answer.Settled)
+                        // 🚨 Not a tuning signal. IAutocompleteProvider.GetItems must COMPLETE when
+                        // the provider has settled; a provider that never does costs every caller
+                        // the full deadline and truncates the answer. Name it so the defect is
+                        // greppable instead of showing up as "autocomplete feels slow".
+                        logger?.LogWarning(
+                            "Autocomplete answered query {Query} on {Address} at the {Deadline} "
+                            + "deadline with an UNSETTLED snapshot — provider(s) {Providers} never "
+                            + "completed their snapshot stream, against the "
+                            + "IAutocompleteProvider.GetItems contract. The response is marked "
+                            + "IsComplete=false.",
+                            query, hub.Address, AutocompleteBounds.AnswerDeadline,
+                            string.Join(", ", pending.Keys));
 
-                    hub.Post(new AutocompleteResponse(result.ToList()), o => o.ResponseFor(request));
+                    PostAutocompleteResponse(hub, request, answer.Snapshot, answer.Settled);
                 },
-                _ => hub.Post(new AutocompleteResponse([]), o => o.ResponseFor(request)));
+                ex =>
+                {
+                    hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Data.Autocomplete")
+                        .LogWarning(ex, "Autocomplete failed for query {Query} on {Address}",
+                            query, hub.Address);
+                    PostAutocompleteResponse(
+                        hub, request, AutocompleteSnapshots.Empty, isComplete: false);
+                });
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Applies relevance filtering to the settled snapshot and posts the single
+    /// <see cref="AutocompleteResponse"/>. <paramref name="isComplete"/> is the honest answer to
+    /// "did every provider settle" — see <see cref="AutocompleteBounds"/>.
+    /// </summary>
+    private static void PostAutocompleteResponse(
+        IMessageHub hub,
+        IMessageDelivery<AutocompleteRequest> request,
+        IReadOnlyCollection<AutocompleteItem> snapshot,
+        bool isComplete)
+    {
+        // Boost items that match the query text, suppress zero-priority items that don't.
+        var searchText = ExtractAutocompleteSearchText(request.Message.Query);
+        IEnumerable<AutocompleteItem> result = snapshot;
+        if (!string.IsNullOrEmpty(searchText))
+        {
+            result = snapshot
+                .Select(item => item.Priority > 0
+                    ? item // Provider already scored this item
+                    : item with { Priority = ScoreAutocompleteItem(item, searchText) })
+                .Where(item => item.Priority > 0)
+                .OrderByDescending(item => item.Priority);
+        }
+
+        hub.Post(new AutocompleteResponse(result.ToList(), isComplete), o => o.ResponseFor(request));
     }
 
     /// <summary>
