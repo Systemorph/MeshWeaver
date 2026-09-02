@@ -490,8 +490,37 @@ public sealed class MessageHub : IMessageHub
         var actions = Configuration.BuildupActions;
         logger.LogDebug("Message hub {address} has {count} BuildupActions to run", Address, actions.Count);
 
+        // 🚨 A BuildupAction never STARTS after teardown has begun. The init turn is queued at Build and
+        // runs whenever the action block reaches it — which can be after this hub's own Dispose() (a
+        // transient probe is created and disposed in one breath: ContentTypeRegistration.ProbeRegister,
+        // the schema probes) or after an ancestor's cascade froze the subtree. Every action is a piece
+        // of the per-node control plane — a watcher over the own node, an eagerly created child hub, a
+        // ticker — and installed on a hub that is already leaving each one is born dead and faults on
+        // the way out: HostedHubsCollection refuses the child with a Warning ("Rejecting hosted hub
+        // creation … during disposal"), the teardown errors the watcher's stream. The .Catch below
+        // already classifies "teardown ENDED an action" as a recognised shutdown; this is the same
+        // policy one step earlier, at the action boundary: once IsShuttingDown, the remaining actions
+        // are skipped, the gate still opens (so the disposal state machine flows) and nothing is
+        // installed. Measured: the boot-time content-type registration probe of the Thread NodeType
+        // reached its _Exec child creation after its own Dispose() in 159 of 643 test logs of one CI
+        // run (MeshWeaver CD 33619142646) — a Warning each time, and the one test that asserts a
+        // fault-free probe teardown (ProbeHubCostTest) red whenever the late creation landed in its
+        // window. Pinned by InitializationStopsAtTeardownStartTest.
+        var skipLogged = false;
         return Observable
-            .Concat(actions.Select(a => a(this).DefaultIfEmpty(Unit.Default).Take(1)))
+            .Concat(actions.Select(a => Observable.Defer(() =>
+            {
+                if (!IsShuttingDown)
+                    return a(this).DefaultIfEmpty(Unit.Default).Take(1);
+                if (!skipLogged)
+                {
+                    skipLogged = true;
+                    logger.LogDebug(
+                        "Message hub {address} began shutting down before its BuildupActions completed — the remaining actions are skipped; nothing is installed on a hub that is leaving",
+                        Address);
+                }
+                return Observable.Empty<Unit>();
+            })))
             .ToList()
             // 🚫 Liveness bound. A BuildupAction that HANGS — never emits and never completes (a
             // dependency that never initialises, a stuck NodeType compile, a subscribe that never
