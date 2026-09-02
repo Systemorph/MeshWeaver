@@ -35,8 +35,16 @@ namespace MeshWeaver.Hosting.Orleans;
 /// </summary>
 /// <param name="logger">Logger for attach/detach/delivery diagnostics.</param>
 /// <param name="meshHub">Mesh hub, used only to resolve this silo's routing service.</param>
+/// <param name="localSilo">
+/// This silo's own identity, so a refusal can NAME the silo that answered. Optional — a container
+/// without Orleans silo services (never production, but several fixtures) resolves null and the
+/// refusal degrades to the un-named form.
+/// </param>
 [global::Orleans.Placement.PreferLocalPlacement]
-internal sealed class PodHubGrain(ILogger<PodHubGrain> logger, IMessageHub meshHub)
+internal sealed class PodHubGrain(
+    ILogger<PodHubGrain> logger,
+    IMessageHub meshHub,
+    ILocalSiloDetails? localSilo = null)
     : Grain, IPodHubGrain
 {
     /// <summary>
@@ -60,6 +68,12 @@ internal sealed class PodHubGrain(ILogger<PodHubGrain> logger, IMessageHub meshH
 
     private string AddressPath => this.GetPrimaryKeyString();
 
+    /// <summary>
+    /// This silo's identity, for the refusal lines. Null only where Orleans' silo services are not
+    /// in the container.
+    /// </summary>
+    private string? SiloIdentity => localSilo?.SiloAddress.ToParsableString();
+
     /// <inheritdoc />
     public Task<bool> Attach()
     {
@@ -69,9 +83,11 @@ internal sealed class PodHubGrain(ILogger<PodHubGrain> logger, IMessageHub meshH
             // The activation landed on a silo that does not own the address — the previous owner's
             // activation is still alive. Step aside so the caller's retry can be placed on itself.
             logger.LogInformation(
-                "[POD-HUB] Attach for {Address} landed on a silo that has no local route for it — "
-                + "stepping aside so the owner's retry can claim it. Expected while a hub MOVES between pods.",
-                AddressPath);
+                "[POD-HUB] Attach for {Address} landed on silo {Silo}, which has no local route for it "
+                + "({LocalRoutes} routing service resolved) — stepping aside so the owner's retry can "
+                + "claim it. Expected while a hub MOVES between pods.",
+                AddressPath, SiloIdentity ?? "(unknown)",
+                localRoutes is null ? "NO" : "a");
             TryDeactivateOnIdle();
             return Task.FromResult(false);
         }
@@ -105,11 +121,17 @@ internal sealed class PodHubGrain(ILogger<PodHubGrain> logger, IMessageHub meshH
             // converge. This is a definitive answer about a transport, and the router reads it as
             // "fall back" during the roll and as "NACK the sender" after it.
             logger.LogInformation(
-                "[POD-HUB] {Address} has no local route on this silo — the owner is gone, or still on "
-                + "the previous release. Answering PodHubNotHere; the router decides what to do with it.",
-                AddressPath);
+                "[POD-HUB] {Address} has no local route on silo {Silo} — the owner is gone, or its claim "
+                + "is not held there. Answering PodHubNotHere; the router decides what to do with it.",
+                AddressPath, SiloIdentity ?? "(unknown)");
             TryDeactivateOnIdle();
-            throw new PodHubNotHereException(AddressPath);
+            // 🚨 NAME THE SILO. This is the one fact the production refusal could not carry: a
+            // router that says "no silo in this cluster is currently serving that hub" cannot tell
+            // "the owner answered no" from "prefer-local placed a throw-away activation on ME,
+            // because the directory has no entry at all". Those are different faults (#2938), and
+            // the second is the one that repeats forever — every refusal re-creates the activation
+            // on the caller's own silo. With the silo named, one log line separates them.
+            throw new PodHubNotHereException(AddressPath, SiloIdentity);
         }
 
         // 🚨 HAND OFF, DO NOT AWAIT THE HUB. Subscribing invokes the local route, which posts the
