@@ -543,6 +543,60 @@ If the same check name appears in every PR's failure list, stop triaging PRs and
 repository. `UNSTABLE` means the required set passed and something non-required did not — it is
 mergeable, and it is the state a hoistable assertion leaves behind.
 
+## 🚨 A lane hand-copied into N repos is N lanes, and N−1 of them are stale
+
+The arm lane is a single file, `.github/workflows/auto-arm.yml` in this repository, and every
+satellite reaches it through `workflow_call`:
+
+```yaml
+# MeshWeaver.<Satellite>/.github/workflows/auto-arm.yml — the whole file
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  arm:
+    uses: Systemorph/MeshWeaver/.github/workflows/auto-arm.yml@<sha>
+    secrets:
+      MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+      MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+```
+
+It was not always. Until 2026-09-02 the file was hand-copied into every repo in the fleet with a
+comment at the top asserting the copies were identical, and **they were not** — a comment claiming
+"the single implementation, so they cannot drift" is a hypothesis, and this one was false in three
+separate ways at once. Core had been moved to a minted App installation token; every satellite copy
+was still arming with `secrets.GITHUB_TOKEN`. Only `.Crm` carried the `landed:` read-back branch.
+Some copies had no `timeout-minutes` at all. (Figures below are a record of that day's measurement,
+not a live inventory of the fleet — the roster is read with
+`gh search code --owner Systemorph "auto-arm.yml@"`, never from prose.)
+
+**The consequence is the #2916 outage, running unnoticed in every satellite.** An auto-merge is
+performed as the identity that armed it; a push created with `GITHUB_TOKEN` does not trigger
+workflow runs; so each satellite's `main` was accumulating merges that started nothing.
+MeshWeaver.Reinsurance's `main` had no `push`-event run after 09:11Z that day, while PRs merged all
+afternoon. Nothing was red anywhere, because the evidence that would have been red is precisely the
+run that never existed.
+
+**How to see it — ask main whether its last commits produced runs, not whether the runs passed:**
+
+```bash
+gh api repos/Systemorph/<repo>/actions/runs --jq \
+  '[.workflow_runs[] | select(.event=="push" and .head_branch=="main")][0]
+   | "\(.created_at)  \(.name)  \(.conclusion)"'
+gh api repos/Systemorph/<repo>/commits/main --jq '.commit.committer.date'
+```
+
+A last-push-run timestamp older than main's HEAD commit is the signature. `github-actions[bot]` as
+the merging identity on recent merges is the cause. Neither is visible from any pull request.
+
+**The rule this generalises to** is already in AGENTS.md and `/ci`: a satellite's CI *calls* this
+repository's reusable workflows, it does not copy them. A copied lane costs nothing on the day it
+is copied and diverges silently forever after — and the divergence is invisible from inside any one
+repo, because each copy is self-consistent. Only a fleet-wide read finds it.
+
 ## 🚨 Delivery can stop for hours with every dashboard green — look for CANCELLED, not failed
 
 A cancelled run is not a failed run, and nothing alerts on it. `alert-on-failure` keys on failure;

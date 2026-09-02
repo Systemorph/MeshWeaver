@@ -6,10 +6,30 @@
 # CLEAN and unarmed with an empty merge queue — nothing was failing, nothing was blocked, and
 # nothing was landing either. A green PR nobody arms is indistinguishable from a red one.
 #
-# 🚨 This file is IDENTICAL in every repo (MeshWeaver, MeshWeaver.Plugins, .SocialMedia,
-# .Reinsurance, .Manufacturing, .Education, .Crm). The repos are NOT identical — core runs a
-# merge queue and the others do not — so the arm step handles both shapes rather than the file
-# forking per repo. Divergent copies of a shared lane are a recorded failure mode here.
+# 🚨 THIS FILE IS THE FLEET'S ONLY COPY OF THE ARM LANE. It runs directly here on
+# `pull_request_target`, and every OTHER repo in the fleet reaches it through `workflow_call` with
+# a caller that forwards the App credential and nothing else. (Deliberately no list of repo names
+# here: an enumeration in a comment is a copy of the fleet roster and would drift exactly the way
+# the copies below did. `gh search code --owner Systemorph "auto-arm.yml@"` answers who calls it.)
+# The repos are NOT identical — core runs a merge queue and the others do not — so the arm step
+# handles both shapes rather than the file forking per repo.
+#
+# It used to be hand-copied into every one of them, and the copies DRIFTED exactly as AGENTS.md
+# warns a copy-pasted lane does. Measured 2026-09-02 — the numbers below are a record of that
+# measurement, not a live count: core had already been moved to a minted App token (below) while
+# every satellite copy was still arming with `secrets.GITHUB_TOKEN`, so every satellite was living
+# the #2916 outage this file's header documents, silently. MeshWeaver.Reinsurance's `main` had not
+# seen a `push`-event run since 09:11Z despite PRs merging all afternoon. On top of that, only
+# .Crm carried the "landed:" read-back fix below, and several copies had no `timeout-minutes` at
+# all — four distinct variants of a file whose header claimed all copies were identical. One lane,
+# called from everywhere, cannot drift.
+#
+# 🚨 The `workflow_call` secrets are named `MESHWEAVER_APP_ID` / `MESHWEAVER_APP_PRIVATE_KEY` — the
+# SAME names as the repository secrets the direct `pull_request_target` trigger reads. That is
+# deliberate: `secrets.MESHWEAVER_APP_ID` then resolves correctly in BOTH modes (the repo secret
+# when this workflow is triggered here, the forwarded value when it is called), so the body needs
+# no `||` fallback and there is no second name to get wrong. A caller passes them explicitly —
+# never `secrets: inherit`, which would hand this lane every secret the calling repo owns.
 #
 # Deliberately NOT here:
 #   * no `if: ${{ vars.X != '' }}` — invariant #3; a skipped job renders like a passed one.
@@ -45,20 +65,46 @@ name: Arm auto-merge
 on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize]
+  # The satellites' entry point. A caller keeps the SAME `pull_request_target` trigger and one job
+  # that `uses:` this file — so `github.event` inside is the caller's pull-request event, and
+  # `github.repository` / `github.event.repository.name` are the CALLING repository, which is what
+  # the mint scopes to and what `gh pr merge` is pointed at. Nothing below needs to know whether it
+  # is running here or there.
+  workflow_call:
+    secrets:
+      MESHWEAVER_APP_ID:
+        description: >-
+          App id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet.
+          Required: an arm performed with secrets.GITHUB_TOKEN merges as github-actions[bot], whose
+          push triggers no workflows at all (#2916).
+        required: true
+      MESHWEAVER_APP_PRIVATE_KEY:
+        description: >-
+          That App's private key (PEM). Source of truth is Key Vault Systemorph/github-app-privatekey.
+        required: true
 
 permissions:
   contents: write
   pull-requests: write
 
-concurrency:
-  group: auto-arm-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   arm:
     name: Arm auto-merge on this PR
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 🚨 Job-level, not workflow-level, and that is load-bearing now that this file is also called.
+    # A concurrency group is per-repository, and a CALLER run and the job it dispatches into this
+    # workflow are two separate holders of it: if both named `auto-arm-<n>` the inner job would
+    # queue behind the caller run that is waiting for it, and the lane would deadlock until the
+    # cap fired. Declared on the job, the group is held once per run in either mode. Callers must
+    # therefore NOT add a `concurrency:` block of their own — this one already covers them.
+    concurrency:
+      group: auto-arm-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    # Four API calls and a mint — the same shape as arm-credential.yml, capped the same way. The
+    # fleet ceiling is 45 (check-workflow-timeouts.py); a lane whose whole job is to call gh three
+    # times has no business sitting on a billed runner for three quarters of an hour because a
+    # socket hung. This cap now applies to every repo that calls this lane.
+    timeout-minutes: 10
     # A draft is the opt-out, and a fork must never arm itself. Both are properties of the
     # event, not configuration — there is no variable here to forget to set.
     if: >-
