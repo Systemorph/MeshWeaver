@@ -40,6 +40,7 @@ jobs:
   unlist:
     name: Report or unlist orphaned packages
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6

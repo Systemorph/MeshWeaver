@@ -55,6 +55,7 @@ jobs:
   preflight:
     name: Preflight
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       # Asserts every input that comes from outside the tree, RED, naming what to provision — never
       # an `if: inputs.x != ''` on a later step. At job level those two look identical and only one

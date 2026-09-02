@@ -54,7 +54,7 @@ jobs:
     name: "Loop native host under ALC-unload GC probe"
     # ubuntu-latest == the 2-vCPU hosted runner the crash reproduces on.
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 45
     env:
       PROBE_PROJECT: ${{ inputs.project || 'MeshWeaver.FutuRe.Test' }}
       PROBE_ITERS: ${{ inputs.iterations || '10' }}

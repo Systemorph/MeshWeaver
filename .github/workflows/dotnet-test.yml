@@ -1789,6 +1789,15 @@ jobs:
     - name: "NodeType import-scope parser can fail (self-test)"
       run: python3 .github/scripts/compile-check.py --self-test
 
+    # 🚨 Every job in every workflow carries a LITERAL `timeout-minutes` <= 45 (maintainer, 2026-09-02:
+    # "hard cut CI runs after 45min — we pay all this"). GitHub's default is 360; one uncapped job in
+    # the module-pack lane held a runner for six hours per run across 19 concurrent Plugins runs and
+    # blocked every required check behind it. Self-test first — an unproven gate is no gate.
+    - name: "Every job is capped at 45 minutes — the gate can fail (self-test)"
+      run: python3 .github/scripts/check-workflow-timeouts.py --self-test
+    - name: "Every job is capped at 45 minutes"
+      run: python3 .github/scripts/check-workflow-timeouts.py --root .
+
     - name: "Gate the shell CI itself runs"
       run: python3 .github/scripts/check-workflow-shell.py
 
@@ -1992,6 +2001,7 @@ jobs:
     needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
     # Needed for the marker push/prune steps below: gives us a git repo whose
     # `origin` carries the run's credentials, and puts github.sha's object in it.
