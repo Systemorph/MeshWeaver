@@ -19,8 +19,10 @@ Never hand-roll a repo's build.
 ## The pipeline, end to end
 
 ```
-select ──► prepare (ONCE) ──► build (ONE workspace) ──► pack ─┬─► verify
-                                                      tests ──┘
+select ─┬─► prepare (ONCE) ──► build (ONE workspace) ──► pack ─┬─► verify
+        │                                                      │
+        └─► tests  (a lane of its own — publish: false) ────────┘
+             …or INLINE inside pack, before the hand-over, when the call publishes
 ```
 
 1. **select** — which bundles this diff can reach. The selector can say "these" or
@@ -38,10 +40,63 @@ select ──► prepare (ONCE) ──► build (ONE workspace) ──► pack �
    body pass like csc (parse+declaration diagnostics up front, body diagnostics from the single
    `Emit`), **fail-fast** (the first red blocks every not-yet-started node by name — a sweep
    that must enumerate every verdict opts out of fail-fast instead).
-4. **pack and tests fan out from the build's outputs** — they consume, they never recompile.
-   Tests are the honest per-module cost and parallelize across jobs.
-5. **verify** — unconditionally pairs the selection against the receipts; a skipped pack with a
-   non-zero selection is RED.
+4. **pack fans out from the build's outputs** — it consumes, it never recompiles.
+5. **tests — beside the chain, or inline, and `publish` decides which.** See below.
+6. **verify** — unconditionally pairs the selection against the receipts; a skipped pack with a
+   non-zero selection is RED, and so is a delegated suite that produced no test receipt.
+
+### Where a module's own suite runs — and why `publish` decides
+
+A `needs:` on a `uses:` job waits for the **whole** called workflow, so anything inside the last
+job of this lane sits on the critical path of every gate the caller hangs off it. Measured on
+MeshWeaver.Plugins run 33656010754, a 39-minute pull request:
+
+```
+19.1 -> 32.5  Module bundles (floor) / Module bundle (MeshWeaver.AI)   <-- 13.4 min
+                12.7 min  Run the module's tests, when it ships any
+                 0.2 min  Build the module — and say which compiler produced it
+32.5 -> 32.7  Module bundles (floor) / All selected bundles built
+32.8 -> 37.0  Compile every NodeType (vs core)          (a REQUIRED context)
+32.9 -> 38.6  test-repos / Compile + render node repos  (the Tests-area gate)
+```
+
+The bundle **artifact** — the only thing those two gates consume — was ready 0.2 minutes in. They
+waited another 12.7 for a suite they never read. The floor call exists precisely so the gates do
+not wait for the other 30 bundles (Plugins#892); the suite put the wait straight back. It also
+lengthens the **recovery loop**: a run cannot be re-run until it completes, so a flaked shard's
+retry waits out a suite whose verdict nobody is reading — every flake pays that.
+
+So the suite's position is a function of `publish`, the input that already means *trunk* in this
+lane's caller contract:
+
+| `publish` | where the suite runs | what the position buys |
+|---|---|---|
+| `true` | **inline in `pack`**, after the bundle upload, before the hand-over | *a failing suite never publishes* — the registry serves what every installation reads |
+| `false` | the **`tests` job**, in parallel with select → prepare → build → pack | nothing is publishable on such a run (the hand-over step's own `if:` is `inputs.publish && …`), so the ordering protected nothing and delayed everything |
+
+It is a switch on the **input**, never on `github.event_name`: the platform's own `main-cd` calls
+this lane with `publish: false` for the bake's compose set, and that call is not a pull request —
+it wants the fast path for exactly the same reason.
+
+**Moving the suite off the critical path does not move it out of the gate**, and three structural
+things say so rather than a comment:
+
+* the `tests` job is part of the called workflow, so a red suite fails the caller's `uses:` job
+  exactly as a red inline suite did;
+* `verify` — `All selected bundles built`, this lane's one stable context and the one a repo's
+  branch protection requires — `needs:` the tests lane and goes RED when it did not succeed. **No
+  context is renamed**, so no repo's protection changes;
+* a suite that ran in **neither** lane is caught by receipts, not by re-reading two conditions.
+  Two mutually exclusive `if:`s can both be false, and a suite that ran nowhere renders exactly
+  like one that passed. So every pack receipt records which lane owns its suite
+  (`tests: none | inline | lane`), the tests lane drops a receipt of its own, and
+  `node-repo-pack-verify.py` fails when a delegated module has no test receipt, when a test
+  receipt arrives for a module that delegated nothing, or when the tests lane skipped while
+  modules delegated to it.
+
+`bundles-built` is deliberately untouched by all of this: it still answers from the built markers
+dropped *before* any suite, so a red suite still does not read as "bundle missing" to a gate that
+only COMPOSES the bundle (#2710, Plugins#937). Those are two different questions.
 
 ## Every stage asserts its OWN postcondition — never the next one's
 
