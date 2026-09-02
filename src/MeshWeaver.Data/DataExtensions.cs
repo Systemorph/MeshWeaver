@@ -1055,7 +1055,14 @@ public static class DataExtensions
     ///     is registered. (<c>StoragePostCommitFlush</c> itself ends in <c>DefaultIfEmpty(true)</c>, so this
     ///     arm is the contract made explicit, not a behaviour change for it.) A NACK here would fail every
     ///     successful write on a hook honouring the contract.</item>
-    ///   <item><b>Either stream faults</b> → NACK with the classified code.</item>
+    ///   <item>🚨 <b>Flush OUTLIVES <paramref name="flushTimeout"/></b> → ack <c>true</c> on the bound and
+    ///     let the flush run on (#3112). The echo already proved the merge COMMITTED; the bound is a wait
+    ///     bound on the ack, never a fate. Expiry used to NACK <c>Unknown</c> + <c>TimeoutException</c> —
+    ///     "the write did NOT apply" for a write that had — and dispose the flush, re-queueing the row
+    ///     through the sampler under the very congestion that made it slow. Logged as
+    ///     <c>FLUSH_OUTLIVED_BOUND</c>; a fault the flush raises after that ack is logged as
+    ///     <c>FLUSH_FAULTED_AFTER_ACK</c> (the sampler is then the writer of record).</item>
+    ///   <item><b>Either stream faults</b> (the flush inside its bound) → NACK with the classified code.</item>
     /// </list>
     /// </summary>
     internal static IDisposable ArmPatchAckWatcher<TEcho>(
@@ -1065,7 +1072,9 @@ public static class DataExtensions
         Action<bool, MeshNodeError?> ackOnce,
         Action<IDisposable> registerForDisposal,
         string hubPath,
-        Func<bool> ownerIsShuttingDown)
+        Func<bool> ownerIsShuttingDown,
+        ILogger? logger = null,
+        System.Reactive.Concurrency.IScheduler? flushBoundScheduler = null)
         => commitEcho
             .WhenCompletesEmpty(() =>
             {
@@ -1089,14 +1098,80 @@ public static class DataExtensions
                         ackOnce(true, null);
                         return;
                     }
+                    // 🚨 The COMMIT is the verdict; the flush is durability (#3112). Reaching this arm
+                    // means the owner's reduced stream emitted the echo that CONTAINS this write: the
+                    // merge landed, the Version advanced, every mirror is already receiving the new
+                    // state. What follows only decides WHEN the ack is posted, never WHETHER the write
+                    // applied — so the flush bound below is a wait bound on the ack, not a fate.
+                    //
+                    // This used to be `durable.Take(1).Timeout(flushTimeout)` feeding the fault arm,
+                    // which on expiry NACKed `Unknown` + "TimeoutException" — read by the writer as
+                    // "the write did NOT apply and is not auto-retryable" (LATE_NACK_TERMINAL) and
+                    // by its caller as a failed write. Measured on the node-repo gate (Manufacturing
+                    // run 33623113056): the bake seed's adoption stamp for Radzen/Gallery committed at
+                    // the owner (echo at +ε), the storage flush sat behind the mass install's queue
+                    // past 10 s, the owner answered NACK, the seed concluded "not adopted", the sweep
+                    // compiled the type OVER the adoption that had landed, and the gate DECLINED a
+                    // bundle a sibling repo adopted fine on the same seal. A slow flush was reported
+                    // as a lost write — a false verdict, the write-side twin of DurableButUnreadable.
+                    //
+                    // Now: the flush keeps running — `.Timeout` also DISPOSED it, cancelling a
+                    // storage write that had been queued for the whole bound and handing the row to
+                    // the persistence sampler, which re-queued it: under exactly the congestion that
+                    // made it slow, every slow flush became two writes. On the bound the owner acks
+                    // SUCCESS — truthful, the commit is what "saved" means (#2661) — and logs that
+                    // durability is still in flight. The flush's own terminal then finds the gate
+                    // latched: an emission is a no-op, a fault is logged (the sampler is the writer
+                    // of record — StoragePostCommitFlush releases its claim in Finally). A flush that
+                    // FAULTS inside the bound still NACKs with its classified code: a storage refusal
+                    // is a fact the caller should hear; slowness is not a verdict.
+                    //
+                    // The watcher itself posts at most ONE verdict for the flush leg — the bound and
+                    // the flush's terminal race only inside the millisecond the bound expires, and the
+                    // claim below decides it, so the caller's latch is never what keeps the count at one.
+                    var verdictClaimed = 0;
+                    bool ClaimVerdict() => System.Threading.Interlocked.Exchange(ref verdictClaimed, 1) == 0;
+                    var bound = new SingleAssignmentDisposable();
                     var flushSub = durable
                         .Take(1)
-                        .Timeout(flushTimeout)
-                        .WhenCompletesEmpty(() => ackOnce(true, null))
+                        .Finally(bound.Dispose)
+                        .WhenCompletesEmpty(() =>
+                        {
+                            if (ClaimVerdict()) ackOnce(true, null);
+                        })
                         .Subscribe(
-                            _ => ackOnce(true, null),
-                            ex => ackOnce(false, ClassifyPatchException(ex, hubPath)));
-                    registerForDisposal(flushSub);
+                            _ =>
+                            {
+                                if (ClaimVerdict()) ackOnce(true, null);
+                            },
+                            ex =>
+                            {
+                                if (!ClaimVerdict())
+                                {
+                                    logger?.LogWarning(ex,
+                                        "[PatchAck] FLUSH_FAULTED_AFTER_ACK path={Path} — the commit was "
+                                        + "acked on the flush bound and the durable flush has now faulted; "
+                                        + "the persistence sampler is the writer of record for this version",
+                                        hubPath);
+                                    return;
+                                }
+                                ackOnce(false, ClassifyPatchException(ex, hubPath));
+                            });
+                    bound.Disposable = Observable
+                        .Timer(flushTimeout, flushBoundScheduler ?? System.Reactive.Concurrency.Scheduler.Default)
+                        .Subscribe(_ =>
+                        {
+                            if (!ClaimVerdict()) return;
+                            logger?.LogWarning(
+                                "[PatchAck] FLUSH_OUTLIVED_BOUND path={Path} bound={BoundMs}ms — the merge "
+                                + "committed and is acked as such; the durable flush is still in flight "
+                                + "(storage behind), and keeps running",
+                                hubPath, flushTimeout.TotalMilliseconds);
+                            ackOnce(true, null);
+                        });
+                    // ONE registration for the leg, as before: the flush subscription and the bound
+                    // timer live and die together with the owner hub.
+                    registerForDisposal(new CompositeDisposable(flushSub, bound));
                 },
                 ex => ackOnce(false, ClassifyPatchException(ex, hubPath)));
 
@@ -1666,7 +1741,8 @@ public static class DataExtensions
                         AckOnce,
                         d => hub.RegisterForDisposal(d),
                         hubPath,
-                        () => hub.IsShuttingDown);
+                        () => hub.IsShuttingDown,
+                        hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"));
                     hub.RegisterForDisposal(postSub);
 
                     // Route via the hub's DataChangeRequest pipeline — the workspace
@@ -1772,7 +1848,8 @@ public static class DataExtensions
             AckOnce,
             d => hub.RegisterForDisposal(d),
             hubPath,
-            () => hub.IsShuttingDown);
+            () => hub.IsShuttingDown,
+            hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"));
         hub.RegisterForDisposal(postSub);
         // Registered AFTER postSub so the composite disposes the watcher FIRST, then this NACK
         // claims the gate — an unacked in-flight patch always gets a terminal, never silence.
