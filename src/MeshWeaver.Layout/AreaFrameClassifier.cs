@@ -65,6 +65,29 @@ public static class AreaFrameClassifier
     /// </summary>
     public const string HubRecyclingId = "hub-recycling";
 
+    /// <summary>
+    /// <see cref="UiControl.Id"/> of the frame an area serves when its render could not reach the
+    /// DATA STORE — a transient database connect/timeout that outlived the query fan-in's bounded
+    /// retry (<c>LayoutAreaHost.RenderRenderingError</c> on
+    /// <c>AreaErrorClassifier.IsStorageUnavailable</c>). TRANSIENT IN CAUSE, but NOT a
+    /// <see cref="IsTransientFrame"/>.
+    ///
+    /// <para>The FIFTH state (#2876). Against <see cref="AreaNotFoundId"/> and
+    /// <see cref="MissingReferenceId"/>: nothing is wrong with the area or with the content it
+    /// points at — the storage layer could not answer, and the same render will succeed once it
+    /// can. Against the generic error panel it replaces: that panel carried the driver's own text
+    /// (<c>"Npgsql.NpgsqlException (0x80004005): The operation has timed out"</c>) to an end user
+    /// and read as a defect in the view.</para>
+    ///
+    /// <para>🚨 <b>Deliberately excluded from <see cref="IsTransientFrame"/>.</b> That predicate
+    /// promises "this WILL be replaced without anyone acting" — the compile-progress page is
+    /// followed by a redirect, a recycling hub reactivates and the client's own resubscribe
+    /// re-renders. A connect timeout has no such push: no signal fires when the database comes
+    /// back, so a waiter that treated this as transient would wait forever. It is its own state
+    /// precisely because it is neither a verdict about the area nor a promise about the frame.</para>
+    /// </summary>
+    public const string StorageUnavailableId = "storage-unavailable";
+
     // The pre-id signal, kept as a fallback so a frame that lost its id on the way here (an
     // older peer, a control rebuilt from partial JSON) is still recognised. Never localize:
     // BuildNotFoundControl is deliberately English — it is a framework diagnostic, not UI copy.
@@ -107,6 +130,16 @@ public static class AreaFrameClassifier
     /// <param name="control">The rendered control, or <c>null</c>.</param>
     public static bool IsHubRecycling(UiControl? control)
         => HasFrameId(control, HubRecyclingId);
+
+    /// <summary>
+    /// True for the frame an area serves when the render could not reach the data store. Transient
+    /// in CAUSE — the same render succeeds once the database is reachable — but deliberately NOT
+    /// part of <see cref="IsTransientFrame"/>: nothing pushes a replacement, so a waiter must treat
+    /// this as an answer ("not available right now") rather than as "keep waiting".
+    /// </summary>
+    /// <param name="control">The rendered control, or <c>null</c>.</param>
+    public static bool IsStorageUnavailable(UiControl? control)
+        => HasFrameId(control, StorageUnavailableId);
 
     /// <summary>
     /// True for a frame that is not the area's content and will be REPLACED without anyone

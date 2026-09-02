@@ -74,6 +74,49 @@ public class AreaFrameClassifierTest
     }
 
     /// <summary>
+    /// The FIFTH state (#2876): the store could not be reached. Distinct from every other frame,
+    /// and — unlike the other two whose CAUSE is temporary — deliberately not
+    /// <see cref="AreaFrameClassifier.IsTransientFrame"/>.
+    ///
+    /// <para>That exclusion is the whole point of giving it an id of its own. "Transient" here
+    /// means "a replacement is coming without anyone acting": the compile-progress page is followed
+    /// by a redirect, a recycling hub reactivates and the client's own resubscribe re-renders.
+    /// Nothing fires when a database becomes reachable again, so a waiter told this frame was
+    /// transient would wait forever — while a waiter told it was a VERDICT (area-not-found) would
+    /// give up on an area that is perfectly fine.</para>
+    /// </summary>
+    [Fact]
+    public void StorageUnavailableFrame_IsItsOwnState_AndNotTransient()
+    {
+        var frame = new MarkdownControl("**This view is temporarily unavailable.**")
+        {
+            Id = AreaFrameClassifier.StorageUnavailableId
+        };
+
+        AreaFrameClassifier.IsStorageUnavailable(frame).Should().BeTrue();
+        AreaFrameClassifier.IsTransientFrame(frame).Should().BeFalse(
+            "nothing pushes a replacement when a connect times out — a waiter must not spin");
+        AreaFrameClassifier.IsAreaNotFound(frame).Should().BeFalse(
+            "the area is registered and rendering; the STORE did not answer");
+        AreaFrameClassifier.IsMissingReference(frame).Should().BeFalse(
+            "the content it points at is not the problem either");
+        AreaFrameClassifier.IsHubRecycling(frame).Should().BeFalse(
+            "a hub recycle announces its own return; a database outage does not");
+        AreaFrameClassifier.IsCompileProgress(frame).Should().BeFalse();
+
+        // …and the wire form, for the same reason the compile-progress id needs it.
+        var wireId = JsonSerializer.Deserialize<JsonElement>(
+            JsonSerializer.Serialize(AreaFrameClassifier.StorageUnavailableId));
+        AreaFrameClassifier.IsStorageUnavailable(Controls.Stack.WithId(wireId)).Should().BeTrue();
+
+        // The other frames must not answer to it.
+        AreaFrameClassifier.IsStorageUnavailable(NotFoundFrame()).Should().BeFalse();
+        AreaFrameClassifier.IsStorageUnavailable(CompileProgressFrame()).Should().BeFalse();
+        AreaFrameClassifier.IsStorageUnavailable(Controls.Markdown("### Total Premium")).Should().BeFalse();
+        AreaFrameClassifier.IsStorageUnavailable(null).Should().BeFalse();
+    }
+
+    /// <summary>
     /// The markdown fallback: a not-found frame whose id did not survive (an older peer, a control
     /// rebuilt from partial JSON) is still recognised, so the fix cannot regress a consumer that
     /// used to match the banner.

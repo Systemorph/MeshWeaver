@@ -70,6 +70,8 @@
   "error.areaFailed": "Dieser Bereich konnte nicht dargestellt werden.",
   "error.areaReconnecting": "Diese Ansicht wird neu verbunden …",
   "error.areaReconnectingHint": "Der zugehörige Dienst startet gerade neu. Die Ansicht kommt in einem Moment von selbst zurück — es geht nichts verloren und es ist nichts zu tun.",
+  "error.storageUnavailable": "Diese Ansicht ist vorübergehend nicht verfügbar.",
+  "error.storageUnavailableHint": "Der Dienst, der diesen Inhalt speichert, hat nicht rechtzeitig geantwortet. Es geht nichts verloren und es ist nichts defekt — bitte einen Moment warten und die Seite neu laden.",
   "error.dialogFailed": "Dieser Dialog konnte nicht dargestellt werden.",
   "error.notFound": "Nicht gefunden",
   "error.validationFailed": "Validierung fehlgeschlagen",
