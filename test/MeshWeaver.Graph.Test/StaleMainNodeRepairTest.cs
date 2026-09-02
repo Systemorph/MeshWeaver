@@ -239,6 +239,37 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     /// <summary>
+    /// The DEFAULT call shape — no roots, so the sweep starts from the storage adapter's own root
+    /// listing and walks the whole tree. Scoping every other test would leave
+    /// <c>ListChildPaths(null)</c> — the branch a real run against a portal takes — never executed.
+    ///
+    /// <para>The node is seeded in a partition the test never names to the repair, so finding it is
+    /// the enumeration's own work rather than something the caller pointed at. A second node is
+    /// seeded in a DIFFERENT top-level partition, and the path count must cover both: that is what
+    /// distinguishes a root listing that fans out across partitions from one that reached only the
+    /// first thing it found. (The count is exactly the durable rows this test wrote — the harness's
+    /// other nodes are statically seeded, not storage rows, so they are legitimately not walked.)
+    /// </para>
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task An_unscoped_sweep_walks_the_whole_tree_and_finds_it()
+    {
+        var node = await SeedCorruptAsync("platform-update", "Kappa/Skill", "OtherKappa/platform-update");
+        var elsewhere = await SeedRawAsync("bystander", "Lambda", "Lambda/bystander");
+
+        var report = await StaleMainNodeRepair.Repair(Mesh).Timeout(Budget).Await();
+
+        report.Findings.Select(f => f.Path).Should().Contain(node.Path,
+            "an unscoped sweep must reach a partition nobody named");
+        report.NodesRead.Should().BeGreaterThanOrEqualTo(2,
+            "the root listing must fan out across BOTH seeded partitions, not stop at the first");
+
+        (await ReadRawAsync(node.Path)).MainNode.Should().Be(node.Path);
+        (await ReadRawAsync(elsewhere.Path)).MainNode.Should().Be(elsewhere.Path,
+            "the healthy bystander in the other partition is read and left alone");
+    }
+
+    /// <summary>
     /// 🚨 <b>The one that matters.</b> The user-visible defect is not the field, it is that the node
     /// is missing from listings — so the repair is only proven by a query shape that could not see
     /// the node before and can see it after.
