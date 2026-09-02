@@ -344,32 +344,37 @@ Permissions are evaluated by **`PermissionEvaluator`** — an `internal static` 
 
 **No storage walk on the read path. No TTL cache to invalidate. Live updates ride the cached queries' own change feeds.**
 
-## Scope hierarchy as a recursive query fold
+## Two reads per path: the partition, and the root
 
-For a target path `ACME/Project/Task1`, `ObserveScopeAssignments` recurses **from the target path up to the root**, and each level `CombineLatest`-unions its own `_Access` grants with everything the parent scope resolved:
-
-```
-scope ""                → cache.GetQuery("$security-access:")            ∪ static baselines
-   ▲ parent fold
-scope "ACME"            → cache.GetQuery("$security-access:ACME")        ∪ (above)
-   ▲ parent fold
-scope "ACME/Project"    → cache.GetQuery("$security-access:ACME/Project")∪ (above)
-   ▲ parent fold
-scope "ACME/Project/Task1" → cache.GetQuery("$security-access:…/Task1")  ∪ (above)
-                              └─ UnionByPath + DistinctUntilChanged
-```
-
-Each level's query is cached **process-wide** under its key, so every hub in the process shares ONE upstream subscription per scope, and a scope that appears on many paths is subscribed once. `_Policy` nodes fold the same way under `$security-policy:{scope}`.
-
-The per-scope filter is normally namespace-shaped:
+For a target path `ACME/Project/Task1`, `ObserveEffectiveAssignments` issues exactly **two** anchored reads and unions them with the static baselines:
 
 ```
-namespace:{scope}/_Access nodeType:AccessAssignment select:path,id,namespace,name,nodeType,content
+partition "ACME"  → cache.GetQuery("$security-access:ACME")   path:ACME scope:descendants nodeType:AccessAssignment
+root scope ""     → cache.GetQuery("$security-access:")       namespace:_Access nodeType:AccessAssignment
+static baselines  → IStaticNodeProvider
+                     └─ UnionByPath + DistinctUntilChanged
 ```
 
-with **one deliberate exception**: scopes rooted at `Admin` use a **path** query (`path:{scope}/_Access scope:children …`). The `admin` schema is excluded from cross-schema global search (`searchable_schemas`), so a namespace-only query never reaches `admin.access` — platform-admin grants would silently never load and every platform admin would read as unrecognised on Postgres. Routing by path resolves the schema from the first segment instead.
+`_Policy` nodes fold the same way under `$security-policy:{partition}` / `$security-policy:`. Both keys are cached **process-wide**, so every hub in the process shares ONE upstream subscription per partition however many paths, hubs or viewers consult it.
 
-The other shared query keys, all on the same cache: `$security-roles` (the custom `Role` catalogue), `$security-memberships` (**every** `GroupMembership` node — group access is resolved globally, because a group defined in one partition can be granted in another), and `$security-gated:{type}` (one per `NodeTypeGate`).
+**Why the partition and not the scope.** A grant lives at `{scope}/_Access/{id}`, and every scope on a path's chain except the root is a **prefix** of that path — so all of them live in the path's own partition, which is exactly where `_Access` is stored (one schema per partition; the `_Access` segment routes to that schema's `access` table). One partition-wide read therefore answers the whole chain.
+
+Reading per SCOPE instead multiplied that one read by the depth of the path **and** by how many paths were checked, because a node's own path is always the LEAF of its own chain — so every node ever permission-checked minted its own live `$security-access:{path}` + `$security-policy:{path}` pair. Measured (issue #3093, `SecurityQueryScaleTest`): RLS-filtering a 4-node listing opened **13** security queries, a 32-node listing **69** — exactly +2 per node, and the population never fell below the stream cache's idle window. After: **5** either way.
+
+**Why the verdict cannot change.** The fold never depended on which scopes were READ, only on which are CONSULTED. `ComputeScopeRoles` buckets whatever nodes it is handed by each node's OWN namespace, and `ComputeRoleState` then walks `GetScopeHierarchy(nodePath)` and reads only the buckets on the target path's chain. A partition-wide read is a strict **superset** of the per-scope walk, so no grant — and, more importantly, no group-scoped DENY — can go missing. That direction is the one that matters: a short read in this fold is indistinguishable from "denied", and a missing deny fails OPEN (see [Unanchored Security Reads](/Doc/Architecture/UnanchoredSecurityReads)).
+
+**Which provider serves which leg** — worth knowing before changing either shape again, because the two legs are served by different code and only one of them is exercisable without Postgres:
+
+| Leg | Query | Classified | Served by |
+|---|---|---|---|
+| grants | `path:{partition} scope:descendants nodeType:AccessAssignment` | **satellite-targeted** — `PartitionDefinition.IsSatelliteNodeType("AccessAssignment")` is true (`_Access`→`access`) | the in-repo `StorageAdapterMeshQueryProvider` on every backend (`DefersToNativeProvider` returns **false** for a scoped satellite read) |
+| policies | `path:{partition} scope:descendants id:_Policy nodeType:PartitionAccessPolicy` | **content** — `_Policy` is not a configured satellite segment, so these live in `mesh_nodes` | deferred to the native per-schema delegate on Postgres |
+
+That classification is what makes the grant read correct rather than lucky: a query that did NOT target satellites has satellite-path rows filtered out of its result (`RunQueryNodes`, mirroring PG's separate-table routing), so an anchored `scope:descendants` read of `{partition}` would silently return no `_Access` rows at all. It is the `nodeType:` filter — configuration, not the `_` character — that keeps them in.
+
+**The Admin exception is gone**, absorbed rather than deleted. `Admin` is excluded from cross-schema global search (`searchable_schemas`), so a namespace-only query never reached `admin.access` and platform-admin grants silently never loaded; the fold used to special-case Admin-rooted scopes onto a `path:` query for exactly that reason. Every partition now takes that route, so there is no branch left to get wrong.
+
+The other shared query keys, all on the same cache, are still global by necessity: `$security-roles` (the custom `Role` catalogue), `$security-memberships` (**every** `GroupMembership` node — group access is resolved globally, because a group defined in one partition can be granted in another), and `$security-gated:{type}` (one per `NodeTypeGate`). Anchoring **those** to a partition is the truncation [Unanchored Security Reads](/Doc/Architecture/UnanchoredSecurityReads) forbids; anchoring the per-partition legs above is not, because their subject is in that partition by construction.
 
 ## Evaluation flow
 
@@ -644,7 +649,7 @@ Access control uses these shipped node types:
 
 > There is no `SecurityService` class any more, and **no write surface on the evaluator**. `AddUserRole`, `RemoveUserRole`, `SetPolicy`, `RemovePolicy`, `SaveRole` do not exist. Grants are ordinary MeshNodes: create/update them with `meshService.CreateNode(...)` / `workspace.GetMeshNodeStream(path).Update(...)` like any other node, and the shared `$security-*` queries pick the change up.
 
-Roles and baseline AccessAssignments follow the [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (including the read-only `_Policy` at the root namespace) and mesh-level extensions live as user-created MeshNodes. `CollectStaticAccessAssignments` / `CollectStaticPolicies` fold the static layer in **synchronously** at the root of the scope recursion, so a statically declared grant resolves on the first emission without waiting for storage.
+Roles and baseline AccessAssignments follow the [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (including the read-only `_Policy` at the root namespace) and mesh-level extensions live as user-created MeshNodes. `CollectStaticAccessAssignments` / `CollectStaticPolicies` fold the static layer in **synchronously**, unioned with the two anchored reads, so a statically declared grant resolves on the first emission without waiting for storage.
 
 ## The read surface
 
@@ -675,7 +680,7 @@ The evaluator holds **no per-process mutable state**: no `_permissionCache`, no 
 
 ## Writes are ordinary node writes
 
-Creating or editing a grant is `workspace.GetMeshNodeStream(path).Update(...)` (or `CreateNodeRequest` / `DeleteNodeRequest` for lifecycle) — exactly like every other MeshNode; see [`GetMeshNodeStream().Update()` is the only mutation API](/Doc/Architecture/RequestViaStreamUpdate). The write goes through the usual validator chain (`RlsNodeValidator`, `AccessAssignmentGuard`) and the usual persistence path; the shared `$security-access:{scope}` query then re-emits and subsequent checks reflect it.
+Creating or editing a grant is `workspace.GetMeshNodeStream(path).Update(...)` (or `CreateNodeRequest` / `DeleteNodeRequest` for lifecycle) — exactly like every other MeshNode; see [`GetMeshNodeStream().Update()` is the only mutation API](/Doc/Architecture/RequestViaStreamUpdate). The write goes through the usual validator chain (`RlsNodeValidator`, `AccessAssignmentGuard`) and the usual persistence path; the shared `$security-access:{partition}` query then re-emits and subsequent checks reflect it.
 
 ---
 
@@ -1714,7 +1719,7 @@ var builder = new MeshBuilder()
 2. **Use deny sparingly** — deny overrides only the specific role, not all permissions.
 3. **Anonymous for unauthenticated access** — configure the Anonymous user with Viewer role on namespaces that should be visible without login.
 4. **Public for authenticated baseline** — configure the Public user with Viewer role on namespaces that all logged-in users should access.
-5. **No manual caching** — `PermissionEvaluator` is a static algorithm whose per-scope state lives in the process-wide `IMeshNodeStreamCache` under `$security-access:{scope}` / `$security-policy:{scope}` / `$security-roles` / `$security-memberships`. Those queries are kept live by their own change feeds; there is no separate TTL cache to invalidate.
+5. **No manual caching** — `PermissionEvaluator` is a static algorithm whose state lives in the process-wide `IMeshNodeStreamCache` under `$security-access:{partition}` / `$security-policy:{partition}` (plus their root-scope twins) / `$security-roles` / `$security-memberships`. Those queries are kept live by their own change feeds; there is no separate TTL cache to invalidate.
 6. **Fail closed** — no roles assigned means no permissions (`Permission.None`).
 7. **Audit via MeshNodes** — AccessAssignment nodes provide a clear audit trail of who has access to what.
 8. **Use `ImpersonateAsHub()` for hub operations** — when a hub needs to perform operations as itself, use `PostOptions.ImpersonateAsHub()` instead of setting identity on `AccessService` directly.

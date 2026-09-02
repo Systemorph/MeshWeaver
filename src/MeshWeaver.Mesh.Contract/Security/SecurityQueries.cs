@@ -106,14 +106,57 @@ public static class SecurityQueries
     public static string GatedNodes(string nodeType) => Global(nodeType, IdentityProjection);
 
     /// <summary>
-    /// A security read anchored to one scope — the per-scope <c>AccessAssignment</c> and
-    /// <c>_Policy</c> walks. Anchored reads are normally served by a single partition's delegate, but
-    /// the ROOT scope's anchor (<c>_Access</c> / the empty namespace) resolves to no partition and
-    /// falls through to the same cross-schema fan-out, so these are stamped too.
+    /// A security read anchored to one scope — the root <c>AccessAssignment</c> and <c>_Policy</c>
+    /// legs. Anchored reads are normally served by a single partition's delegate, but the ROOT
+    /// scope's anchor (<c>_Access</c> / the empty namespace) resolves to no partition and falls
+    /// through to the same cross-schema fan-out, so these are stamped too.
     /// </summary>
     /// <param name="query">The anchored query string.</param>
     /// <returns>The query string, stamped as an enumeration.</returns>
     public static string Scoped(string query) => Enumeration(query);
+
+    /// <summary>
+    /// Every <c>AccessAssignment</c> in ONE partition — the grants for every scope on any path
+    /// rooted there, in one anchored read.
+    ///
+    /// <para>🚨 <b>Why the PARTITION and not the scope</b> (issue #3093). A grant lives at
+    /// <c>{scope}/_Access/{id}</c>, and every scope on a path's chain except the root is a PREFIX
+    /// of that path — so all of them live in the path's own partition, which is where
+    /// <c>_Access</c> is stored (one schema per partition; the <c>_Access</c> segment routes to
+    /// that schema's <c>access</c> table). Asking per SCOPE therefore multiplies one partition's
+    /// read by the depth of the path AND by how many paths are checked: a node's own path is
+    /// always the LEAF of its own chain, so every node ever permission-checked minted its own
+    /// live <c>$security-access:{path}</c> query. Measured on this tree: filtering a 4-node
+    /// listing opened 13 security queries, a 32-node listing 69 — exactly +2 per node, and the
+    /// population never falls below the stream cache's idle window.</para>
+    ///
+    /// <para>The verdict is unchanged because it was never a function of WHICH scopes were read:
+    /// <c>ComputeScopeRoles</c> buckets whatever it is given by each node's own namespace, and
+    /// <c>ComputeRoleState</c> then consults only the scopes on the target path's chain. A
+    /// partition-wide read is a strict SUPERSET of the per-scope walk, so no grant and no DENY
+    /// can be lost — the direction that matters, since a short read in this fold reads as
+    /// "denied" (see the class remarks and #2011).</para>
+    ///
+    /// <para>Anchored by <c>path:</c>, which pins the partition through its first segment. That is
+    /// also what makes the Admin partition work without a special case: <c>Admin</c> is excluded
+    /// from <c>searchable_schemas</c>, so a namespace-only read never reached <c>admin.access</c>
+    /// and platform-admin grants silently never loaded.</para>
+    /// </summary>
+    /// <param name="partition">The partition (first path segment) to read.</param>
+    /// <returns>The query string.</returns>
+    public static string PartitionAssignments(string partition)
+        => Enumeration($"path:{partition} scope:descendants "
+            + $"nodeType:{SecurityCollections.AccessAssignmentNodeType} {ContentProjection}");
+
+    /// <summary>
+    /// Every <c>_Policy</c> node in ONE partition — the <see cref="PartitionAssignments"/> twin for
+    /// <c>PartitionAccessPolicy</c>, anchored and read for the same reason.
+    /// </summary>
+    /// <param name="partition">The partition (first path segment) to read.</param>
+    /// <returns>The query string.</returns>
+    public static string PartitionPolicies(string partition)
+        => Enumeration($"path:{partition} scope:descendants id:_Policy "
+            + $"nodeType:{SecurityCollections.PartitionAccessPolicyNodeType} {ContentProjection}");
 
     /// <summary>
     /// Every query shape this class produces, for the completeness test that pins them. A member
@@ -127,5 +170,7 @@ public static class SecurityQueries
         GatedNodes("Store/Plugin"),
         Scoped("namespace:_Access nodeType:AccessAssignment " + ContentProjection),
         Scoped("namespace: id:_Policy nodeType:PartitionAccessPolicy " + ContentProjection),
+        PartitionAssignments("acme"),
+        PartitionPolicies("acme"),
     ];
 }

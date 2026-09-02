@@ -224,7 +224,7 @@ Using the same query id everywhere means a single shared upstream subscription v
 hand-rolls a per-user `MemoryCache` with a 2 s `Timeout()` fallback.** Its own summary now reads
 *"no per-hub service instance, no `IMemoryCache` layer"*: per-scope state lives entirely in the
 shared `IMeshNodeStreamCache` via narrow per-scope queries —
-`cache.GetQuery($"$security-access:{scope}", …)` and `cache.GetQuery($"$security-policy:{scope}", …)` —
+`cache.GetQuery($"$security-access:{partition}", …)` and `cache.GetQuery($"$security-policy:{partition}", …)` —
 which is this pattern applied. `RoleNodeType.BuiltInRolesProvider` ships the canonical roles plus the
 read-only `_Policy`.
 
