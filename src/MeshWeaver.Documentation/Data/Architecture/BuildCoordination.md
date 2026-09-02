@@ -306,7 +306,26 @@ never run — holding the claim at `Planning`, never heartbeating, and never tak
 process is alive and the takeover rule below defends a live holder by design (a stopped heartbeat on
 a live process means busy, not dead). The *next* image's fingerprint could then never be claimed and never get a GO, holding
 every silo's readiness down. `WithdrawBuildClaim` removes the registration and gives back a claim
-that raced it; both halves are conditional, so they are safe against a concurrent grant.
+that raced it.
+
+🚨 **Standing down cannot be made safe from the candidate's side alone (#1193).** Both halves of
+`WithdrawBuildClaim` are conditional on state the arbiter is about to change, and an arbitration
+pass spans two storage round-trips: it reads the candidate set off the mirror, reads the lock,
+commits the compare-and-set, and only then publishes the grant. A follower that stands down inside
+that window removes a registration the pass has already captured, and finds no lock of its own to
+release — so the pass commits a grant to a process that has finished with the build. **Conditional
+writes make each half safe on its own; they cannot order two writers.** Depending on the
+interleaving the debris is either the mirror's claim projection or the durable lock, and the
+takeover rule then defends it *because the process really is alive*. Measured on
+`BuildCoordinationTest.Follower_StandsDown_SoTheNextBuildCanStillBeClaimed`: 2 failures in 15 runs
+on an **idle** machine, the build node left at `ClaimedBy=<the follower>, Status=Planning`.
+
+So the arbiter re-checks at the point where it can: **`ApplyGrant` refuses to publish a grant whose
+winner is neither the holder the mirror already names nor still a candidate**, and a refused
+publication **hands the lock straight back** (`HandBackAStoodDownGrant`) — the arbiter is the lock's
+only writer, so undoing its own commit is the only place this can be closed. The guard's first
+clause is load-bearing: a holder *mid-bake* has no registration left either, its own grant having
+consumed it.
 
 There is deliberately **no timer and no bound bolted onto the wait**. A bound would end the wait by
 guessing, and a follower that guesses "the build finished" certifies a share it never probed — a
