@@ -388,17 +388,32 @@ def classify(ctx: Context, evidence: RunEvidence | None, catalogue: tuple[FlakeE
 # ─────────────────────────────── GitHub adapter ───────────────────────────────
 
 class Gh:
+    """Two tokens, by design. READS (runs, jobs, artifacts, check-runs, commits, comments) use
+    GH_READ_TOKEN — in the workflow that is the job's own GITHUB_TOKEN with `actions: read` and
+    `checks: read`. WRITES (comment, label, enqueue) use GH_TOKEN — the App installation token,
+    which the org grants exactly `contents: write` + `pull_requests: write` (measured 2026-09-02)
+    and nothing else, so it cannot read Actions at all. The split is also the safe direction: a
+    GITHUB_TOKEN read triggers nothing, while a GITHUB_TOKEN enqueue would merge as the bot and
+    start no run on main (#2916). Locally, with neither set, `gh` uses its own login."""
+
     def __init__(self, repo: str):
         self.repo = repo
+        self.write_token = os.environ.get("GH_TOKEN")
+        self.read_token = os.environ.get("GH_READ_TOKEN") or self.write_token
 
-    def api(self, path: str, *args: str, method: str | None = None, paginate: bool = False):
+    def _run(self, cmd: list[str], *, write: bool) -> subprocess.CompletedProcess:
+        token = self.write_token if write else self.read_token
+        env = {**os.environ, **({"GH_TOKEN": token} if token else {})}
+        return subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
+
+    def api(self, path: str, *args: str, method: str | None = None, paginate: bool = False, write: bool = False):
         cmd = ["gh", "api", path if path.startswith(("graphql", "/")) else f"repos/{self.repo}/{path}"]
         if method:
             cmd += ["-X", method]
         if paginate:
             cmd += ["--paginate", "--slurp"]
         cmd += list(args)
-        p = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        p = self._run(cmd, write=write)
         if p.returncode != 0:
             raise RuntimeError(f"gh api {path} failed ({p.returncode}): {p.stderr.strip()[:800]}")
         if not p.stdout.strip():
@@ -408,11 +423,11 @@ class Gh:
             data = [x for page in data for x in page]
         return data
 
-    def graphql(self, query: str, **variables):
+    def graphql(self, query: str, write: bool = False, **variables):
         args = ["-f", f"query={query}"]
         for k, v in variables.items():
             args += (["-F", f"{k}={v}"] if isinstance(v, int) else ["-f", f"{k}={v}"])
-        return self.api("graphql", *args)
+        return self.api("graphql", *args, write=write)
 
     # ── reads ──
     def pull_request(self, number: int) -> dict:
@@ -453,8 +468,7 @@ class Gh:
 
     def download_artifact(self, run_id: int, name: str, target: Path) -> bool:
         target.mkdir(parents=True, exist_ok=True)
-        p = subprocess.run(["gh", "run", "download", str(run_id), "--repo", self.repo, "-n", name, "-D", str(target)],
-                           capture_output=True, text=True, check=False)
+        p = self._run(["gh", "run", "download", str(run_id), "--repo", self.repo, "-n", name, "-D", str(target)], write=False)
         if p.returncode != 0:
             print(f"::notice::artifact {name} of run {run_id} is not available: {p.stderr.strip()[:300]}")
             return False
@@ -516,26 +530,29 @@ class Gh:
         data = self.graphql(q, o=owner, r=name, b=QUEUE_BRANCH)
         return ((data or {}).get("data") or {}).get("repository", {}).get("mergeQueue")
 
-    # ── writes ──
+    # ── writes (App token: pull_requests:write + contents:write, nothing more) ──
     def comment(self, number: int, body: str) -> None:
-        self.api(f"issues/{number}/comments", "-f", f"body={body}", method="POST")
+        self.api(f"issues/{number}/comments", "-f", f"body={body}", method="POST", write=True)
 
     def label(self, number: int) -> None:
-        subprocess.run(["gh", "label", "create", LABEL, "--repo", self.repo, "--force",
-                        "--color", "B60205", "--description",
-                        "The merge queue rejected this PR on an uncatalogued failure; a human owns it now"],
-                       capture_output=True, text=True, check=False)
-        self.api(f"issues/{number}/labels", "-f", f"labels[]={LABEL}", method="POST")
+        # `queue-rejected` is a REPOSITORY FIXTURE (created 2026-09-02): creating a label needs
+        # `issues: write`, which the App does not hold. Applying an existing one to a PR needs only
+        # `pull_requests: write`. Loud, not fatal — the comment above it is the verdict; the label
+        # is the filter.
+        try:
+            self.api(f"issues/{number}/labels", "-f", f"labels[]={LABEL}", method="POST", write=True)
+        except RuntimeError as e:
+            print(f"::warning::could not apply the '{LABEL}' label to #{number} — does it exist on the repo? {str(e)[:200]}")
 
     def enqueue(self, node_id: str, head_sha: str) -> str:
         try:
             self.graphql("mutation($id:ID!,$oid:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$oid}){mergeQueueEntry{position}}}",
-                         id=node_id, oid=head_sha)
+                         write=True, id=node_id, oid=head_sha)
             return "enqueued"
         except RuntimeError as e:
             # The queue only admits a PR whose own required checks are green. When they are not
             # yet (a fresh head), arm auto-merge instead: GitHub enqueues it the moment they are.
-            self.graphql("mutation($id:ID!){enablePullRequestAutoMerge(input:{pullRequestId:$id}){clientMutationId}}", id=node_id)
+            self.graphql("mutation($id:ID!){enablePullRequestAutoMerge(input:{pullRequestId:$id}){clientMutationId}}", write=True, id=node_id)
             return f"armed auto-merge (direct enqueue refused: {str(e)[:160]})"
 
 

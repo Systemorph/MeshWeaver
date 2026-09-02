@@ -63,8 +63,16 @@ on:
           - UNKNOWN_REMOVAL_REASON
         default: CI_FAILURE
 
-# The steward writes with the App token; the default token only needs to read the tree.
+# Two tokens, split by direction. The job's own GITHUB_TOKEN does every READ — the failed run's
+# jobs and artifacts (`actions: read`), the PR head's check-runs (`checks: read`), commits and
+# comments — because the meshweaver-cloud App is granted exactly `contents: write` +
+# `pull_requests: write` and nothing else (measured 2026-09-02: `gh api orgs/Systemorph/installations`),
+# so it cannot read Actions at all. The App token does every WRITE (comment, label, enqueue), for
+# the #2916 reason in the header. A GITHUB_TOKEN read triggers nothing, so the split is also the
+# safe direction.
 permissions:
+  actions: read
+  checks: read
   contents: read
   pull-requests: read
 
@@ -124,7 +132,10 @@ jobs:
 
       - name: Decide and act
         env:
+          # Writes: comment, label, enqueue — the App token (see the permissions note above).
           GH_TOKEN: ${{ steps.token.outputs.token }}
+          # Reads: runs, jobs, artifacts, check-runs, commits, comments — the job's own token.
+          GH_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number || inputs.pr }}
           REASON: ${{ github.event.reason || inputs.reason }}
