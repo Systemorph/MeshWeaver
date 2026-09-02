@@ -32,6 +32,16 @@ namespace MeshWeaver.Hosting.Persistence;
 /// <c>.Subscribe(_ => …, ex => log)</c> shape surfaces the refusal; a create request fails
 /// with a clear message instead of silently minting a doomed node.</para>
 ///
+/// <para><b>It is also the seam that SUPERSEDES a delete tombstone (#3008).</b> Every durable write
+/// crosses this decorator, so its post-commit emission is the one place that knows, synchronously,
+/// that the path exists again: <see cref="RecentlyDeletedRegistry.Supersede"/> runs in a <c>Do</c> on
+/// the write's emission — strictly BEFORE the caller's <c>IMeshChangeFeed</c> publish, which
+/// <c>StorageAdapterChangeFeedExtensions</c> composes downstream of it. That mirrors the delete, which
+/// marks the tombstone synchronously before its response returns. Before this, the only clear ran in
+/// a LIVE per-node hub's change handler — asynchronous, and absent when no hub was alive for the path
+/// — so a reader whose delivery reached the still-disposing old hub after <c>Created</c> had already
+/// been published was NACKed with the authoritative, non-retryable "will not reactivate".</para>
+///
 /// <para>Pass-through when no <see cref="RecentlyDeletedRegistry"/> is registered (meshes
 /// without Graph) and O(active deletions) — i.e. effectively free — on the write hot path.</para>
 /// </summary>
@@ -62,7 +72,14 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
                     return Observable.Throw<MeshNode?>(new InvalidOperationException(
                         $"Cannot write '{node.Path}': the subtree '{root}' is currently being deleted."));
                 }
-                return inner.Write(node, options);
+                // Post-commit, pre-publish: the null sentinel means "no adapter owns this path" —
+                // nothing was written, so nothing is superseded.
+                return inner.Write(node, options)
+                    .Do(saved =>
+                    {
+                        if (saved is not null)
+                            registry.Supersede(saved.Path, saved.Version);
+                    });
             });
 
     /// <inheritdoc />
@@ -84,7 +101,14 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
                             $"Cannot write '{node.Path}': the subtree '{root}' is currently being deleted."));
                     }
                 }
-                return inner.WriteMany(nodes, options);
+                // Only the nodes the adapter reports as written were claimed — same rule as the
+                // singular null sentinel.
+                return inner.WriteMany(nodes, options)
+                    .Do(written =>
+                    {
+                        foreach (var saved in written)
+                            registry.Supersede(saved.Path, saved.Version);
+                    });
             });
 
     /// <inheritdoc />
@@ -109,7 +133,14 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
                     return Observable.Throw<bool?>(new InvalidOperationException(
                         $"Cannot write '{node.Path}': the subtree '{root}' is currently being deleted."));
                 }
-                return inner.WriteIfVersion(node, expectedVersion, options);
+                // `true` is the one outcome that committed; a version mismatch (false) or an
+                // unowned path (null) wrote nothing.
+                return inner.WriteIfVersion(node, expectedVersion, options)
+                    .Do(written =>
+                    {
+                        if (written == true)
+                            registry.Supersede(node.Path, node.Version);
+                    });
             });
 
     /// <inheritdoc />
