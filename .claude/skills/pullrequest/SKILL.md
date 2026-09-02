@@ -330,9 +330,33 @@ only); adding a `workflow_run` branch + a raw-WS `/events/ci` endpoint would let
 with the harness `Monitor` `ws:` source for zero-poll delivery. Deferred — the background loop is
 enough today.
 
-> Do **not** rely on `gh pr merge --auto` either: GitHub auto-merge only waits for *required* status
-> checks. This repo currently merges with checks pending (no branch protection), so `--auto` merges
-> immediately — defeating the rule. Gate it yourself with the step-3 GraphQL check-suite poll.
+## 🚦 The merge queue — `--auto` enqueues, the steward re-queues, you never re-order
+
+Core `main` merges through GitHub's **merge queue** (ruleset `main pr protection`, rule
+`merge_queue`; the full manual is
+[MergeQueue.md](../../../src/MeshWeaver.Documentation/Data/Architecture/MergeQueue.md)). Each
+entry is built on top of the entries ahead of it, so the combination that lands is the combination
+that was tested — the fix for two independently-green PRs being red together (#2412). What that
+changes about this procedure:
+
+- **`gh pr merge <n> --auto` means "enqueue when this PR's own required checks are green".**
+  `auto-arm.yml` runs it on every non-draft PR, so a green PR lands without a hand on it. Convert to
+  **draft** to opt out. `gh pr merge <n> --merge` on a green PR is the same thing done by hand: it
+  enters the queue, it does not merge on the spot.
+- **A push to a queued branch ejects it.** The queue does not pick up the new commit in place; the
+  arm lane re-arms on `synchronize` and the new head re-enters once its own run is green.
+- **Dequeue via GraphQL** (`dequeuePullRequest(input:{id:<PR node id>})`), never by re-ordering or
+  by `jump`. The queue's order is its correctness argument.
+- **Never re-queue an ejected PR by hand, and never re-run the failed queue build.** The
+  `merge-queue-steward.yml` lane acts on every `dequeued` event: a catalogued flake, an
+  infrastructure death, a `CI_TIMEOUT`, or a multi-PR group whose own run was green is re-queued
+  (capped per head sha, recorded in a marker comment); anything else is left out with the failing
+  assertion, the run URL and the `queue-rejected` label. Read its comment. A red on a queue build
+  lives on the `gh-readonly-queue/main/pr-<N>-…` run, not on the PR's commit — `gh pr checks` shows
+  nothing. To make a flake re-queueable, add an evidence-bearing entry (assertion-MESSAGE regex,
+  issue, run URLs, ≤30-day expiry) to `.github/known-flakes.json`; never a test-name pattern.
+- **The step-3 poll still applies to the PR's own run**, and after the queue lands it, to `main`'s.
+  The queue is not a reason to stop watching; it is the reason the merge is no longer yours to press.
 
 ## What's New entry (step 0.5) — one doc node per user-facing PR
 
