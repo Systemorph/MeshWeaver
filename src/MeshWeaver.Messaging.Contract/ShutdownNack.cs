@@ -65,4 +65,97 @@ public static class ShutdownNack
             end++;
         return end > start ? message[start..end] : null;
     }
+
+    /// <summary>
+    /// The promise that makes an owner-side refusal RETRYABLE — "this address is coming back".
+    ///
+    /// <para>It is what separates a hub that is recycling from the routing layer reporting that
+    /// there is nowhere to go: <c>"No node found at 'x'"</c>, <c>"No route to 'x'"</c> and
+    /// <c>"Mesh/Host is shutting down, cannot route to x"</c> all promise nothing, because none of
+    /// them speaks for an address that reactivates.</para>
+    /// </summary>
+    public const string ReactivationPromise = "t" + ReactivationTail;
+
+    /// <summary>Both casings of <see cref="ReactivationPromise"/> off one string.</summary>
+    private const string ReactivationTail = "he address may reactivate (recycle / restart)";
+
+    /// <summary>
+    /// 🚨 The BANNER every owner-side shutdown refusal opens with — <c>"Hub {address} is shutting
+    /// down"</c> — and the reason it is a function rather than a literal at six call sites.
+    ///
+    /// <para>The banner is the only thing in a refusal that names WHO refused. Consumers use it to
+    /// tell an answer from the OWNER (its intake gate, its access gate, its handler, its
+    /// DataContext) from one manufactured by the ROUTING layer, which never makes this address the
+    /// subject of "is shutting down" — see <see cref="IsAnsweredByOwner"/>.</para>
+    /// </summary>
+    /// <param name="address">The owner — an <see cref="Address"/>, or its path.</param>
+    public static string Banner(object address) => $"Hub {address} is shutting down";
+
+    /// <summary>
+    /// The refusal for a delivery this hub declines HERE AND NOW — it arrived (or was evaluated)
+    /// after the hub left service, and was never accepted for processing.
+    ///
+    /// <para>🚨 THE WORDING IS CONTRACT, not prose. The mesh classifies delivery failures by their
+    /// MESSAGE TEXT as well as by <see cref="ErrorType"/>, and this sentence must be matched as
+    /// TRANSIENT by <c>MeshNodeStreamCache.IsTransientOwnerFailure</c>,
+    /// <c>OrleansRoutingService.ClassifyRoutedFailure</c> and
+    /// <c>AreaErrorClassifier.IsTransientHubFailure</c> — so the caller RE-PROBES and lands on the
+    /// fresh activation instead of taking a corpse's answer as final. It therefore carries their
+    /// markers ("is shutting down", "Rejecting now") by construction. Reword it casually at a call
+    /// site and #2727 comes back SILENTLY: nothing fails to compile, the delivery is still refused,
+    /// and the caller simply stops retrying.</para>
+    /// </summary>
+    /// <param name="address">The owner refusing the delivery.</param>
+    /// <param name="detail">Parenthesised evidence — run level, activation tag, what faulted. May be null.</param>
+    /// <param name="what">What could not be done, e.g. <c>"cannot process GetDataRequest"</c>.</param>
+    public static string RejectingNow(object address, string? detail, string what) =>
+        $"{Open(address, detail)} — {what}; {ReactivationPromise}. Rejecting now.";
+
+    /// <summary>
+    /// The refusal for work this hub ACCEPTED and can no longer finish — a queued turn that came
+    /// too late, machinery that can no longer be created, a gate that can never open. Same contract
+    /// as <see cref="RejectingNow"/>; the tail differs only because the caller is being told to ask
+    /// again rather than that its delivery was turned away at the door.
+    /// </summary>
+    /// <param name="address">The owner that cannot finish the work.</param>
+    /// <param name="detail">Parenthesised evidence. May be null.</param>
+    /// <param name="what">What could not be finished.</param>
+    public static string RetryForTheAuthoritativeAnswer(object address, string? detail, string what) =>
+        $"{Open(address, detail)} — {what}. T{ReactivationTail}; retry to get the authoritative answer.";
+
+    /// <summary>
+    /// 🚨 <b>Did the OWNER at <paramref name="ownerAddress"/> answer, or did the routing layer?</b>
+    /// The one predicate for that question — DERIVED from <see cref="Banner"/>, never a list of the
+    /// sentences somebody happened to think of.
+    ///
+    /// <para>Issue #3017. Enumerating owner terminals is what failed: a caller's four-shape list
+    /// rejected a FIFTH owner-side terminal (the access gate's refusal) as "not from the owner",
+    /// reddening a suite on a perfectly correct outcome — and its own guard passed, because a guard
+    /// over an enumeration can only assert the members somebody already wrote down. A sixth existed
+    /// at the time and had not been noticed either (the intake gate's <see cref="RejectingNow"/>).
+    /// Every owner-side refusal opens with <see cref="Banner"/> because every one is composed here,
+    /// so recognition follows the producers instead of trailing them.</para>
+    ///
+    /// <para>What it still REFUSES, which is what keeps it a real check: the routing layer's own
+    /// failures. <c>"No node found at 'x'"</c> and <c>"No route to 'x'"</c> carry no banner;
+    /// <c>"Mesh is shutting down, cannot route to x"</c> / <c>"Host is shutting down, cannot route
+    /// to x"</c> make the MESH or the HOST the subject, never this address; and a DIFFERENT hub's
+    /// refusal (<c>"Hub x/child is shutting down"</c>) names that hub, not this one.</para>
+    ///
+    /// <para>🚨 Deliberately NOT "the failure is classified <see cref="ErrorType.ShuttingDown"/>":
+    /// the routing layer mints that classification too, off the very same text
+    /// (<c>OrleansRoutingService.ClassifyRoutedFailure</c>), so an ErrorType test would answer this
+    /// question with the routing layer's echo of it. The banner is the only evidence that
+    /// identifies the speaker.</para>
+    /// </summary>
+    /// <param name="message">A NACK message, typically <c>DeliveryFailure.Message</c>.</param>
+    /// <param name="ownerAddress">The owner the caller addressed — an <see cref="Address"/>, or its path.</param>
+    /// <returns><c>true</c> when the refusal came from that owner.</returns>
+    public static bool IsAnsweredByOwner(string? message, object ownerAddress) =>
+        !string.IsNullOrEmpty(message)
+        && message.Contains(Banner(ownerAddress), System.StringComparison.Ordinal);
+
+    /// <summary>The banner plus its parenthesised evidence, when there is any.</summary>
+    private static string Open(object address, string? detail) =>
+        string.IsNullOrEmpty(detail) ? Banner(address) : $"{Banner(address)} ({detail})";
 }

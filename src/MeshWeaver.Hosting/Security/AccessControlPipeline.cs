@@ -65,14 +65,16 @@ public static class AccessControlPipeline
     /// </summary>
     /// <summary><see cref="RecyclingRefusal(Address, string, Exception)"/> for a reason string.</summary>
     internal static string RecyclingRefusal(Address address, string messageTypeName, string? reason) =>
-        $"Hub {address} is shutting down (its access gate could not reach a verdict: {reason}) "
-        + $"— cannot evaluate access for {messageTypeName}; the address may reactivate "
-        + "(recycle / restart). Rejecting now.";
+        ShutdownNack.RejectingNow(
+            address,
+            $"its access gate could not reach a verdict: {reason}",
+            $"cannot evaluate access for {messageTypeName}");
 
     internal static string RecyclingRefusal(Address address, string messageTypeName, Exception error) =>
-        $"Hub {address} is shutting down (its lifetime scope is gone, {error.GetType().Name}) "
-        + $"— cannot evaluate access for {messageTypeName}; the address may reactivate "
-        + "(recycle / restart). Rejecting now.";
+        ShutdownNack.RejectingNow(
+            address,
+            $"its lifetime scope is gone, {error.GetType().Name}",
+            $"cannot evaluate access for {messageTypeName}");
 
     /// <summary>
     /// <see cref="IsHubGone(IMessageHub, Exception)"/> for a path that has a REASON STRING rather

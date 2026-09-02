@@ -855,10 +855,10 @@ public class MessageService : IMessageService
             // about whether it was 110 probes at one corpse or at 110 of them. The object hash is
             // stable for an activation's lifetime and differs across activations, which is the
             // whole question.
-            var reason =
-                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}, {ActivationTag()}) "
-                + $"— cannot process {typeName}; the address may reactivate (recycle / restart). "
-                + "Rejecting now.";
+            var reason = ShutdownNack.RejectingNow(
+                Address,
+                $"RunLevel={hub.RunLevel}, {ActivationTag()}",
+                $"cannot process {typeName}");
 
             return NackThroughParent(delivery, reason)
                 ? delivery.FailedAndNacked("Hub is shutting down")
@@ -1554,11 +1554,11 @@ public class MessageService : IMessageService
             // per-DELIVERY `(id=...)` right after it: the delivery id is unique to THIS message and
             // varies on every retry even against the SAME activation, so a re-probe loop counting
             // distinct owners must key off the activation tag, never the whole message text.
-            NackThroughParent(delivery,
-                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}, {ActivationTag()}) — "
-                + $"{delivery.Message?.GetType().Name ?? "<null>"} (id={delivery.Id}) was accepted before "
-                + "disposal began and its turn came too late to process. The address may "
-                + "reactivate (recycle / restart); retry to get the authoritative answer.");
+            NackThroughParent(delivery, ShutdownNack.RetryForTheAuthoritativeAnswer(
+                Address,
+                $"RunLevel={hub.RunLevel}, {ActivationTag()}",
+                $"{delivery.Message?.GetType().Name ?? "<null>"} (id={delivery.Id}) was accepted "
+                + "before disposal began and its turn came too late to process"));
             exec = Observable.Return(delivery);
         }
 
