@@ -16,10 +16,9 @@ namespace MeshWeaver.PluginCatalog;
 ///
 /// <para>Registration writes the initial plan (the baseline, or the plan a registration key was
 /// minted for); nothing else on the instance's side can raise it. The write is one field on the
-/// <see cref="MeshWeaverInstance"/> record, and the process that made it forgets its cached
-/// authentication verdict for that instance at once, so the admin's next request already decides
-/// with the new plan; other replicas follow within
-/// <see cref="InstanceRegistryAuthenticator.CacheDuration"/>.</para>
+/// <see cref="MeshWeaverInstance"/> record, and because <see cref="InstanceRegistryAuthenticator"/>
+/// reads that record off its live mirror (#3119) the next request — on every replica — already
+/// decides with the new plan.</para>
 ///
 /// <para>In <c>MeshWeaver.PluginCatalog</c> rather than the portal's instance service so the
 /// admin tab (which lives here) can call it, and so the plan has ONE writer wherever the registry
@@ -86,9 +85,8 @@ public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanSer
                 var instance = node.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions);
                 if (instance is null)
                     return;
-                // The verdict cached on THIS process is now wrong; forget it so the next request
-                // here decides with the new plan instead of after the cache window.
-                hub.ServiceProvider.GetService<InstanceRegistryAuthenticator>()?.Invalidate(instance.KeyHash);
+                // No verdict to forget: the authenticator reads the instance off its live stream, so
+                // this write is what the next request — on every replica — decides with (#3119).
                 logger.LogInformation("Instance {InstanceId} set to plan {Plan}", instance.InstanceId, canonical);
             });
     }
