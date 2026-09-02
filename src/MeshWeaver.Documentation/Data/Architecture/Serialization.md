@@ -181,6 +181,42 @@ The `$type` discriminator defaults to the **short** type name (`StackControl`, `
 
 > Backward compatibility: the registry keeps an alias from each type's full name to its definition, so JSON persisted with a legacy `"$type":"MeshWeaver.Layout.StackControl"` still deserializes. New writes always emit the short name.
 
+### The resolver's diagnostics must never fail the serialization they run in
+
+`PolymorphicTypeInfoResolver` runs two kinds of work inside `GetTypeInfo`: the work the serializer
+needs (the `$type` discriminators for a base type's registered subtypes) and **diagnostics** — the
+"unregistered type serialised here" warning, and a scan of the base type's assembly for polymorphic
+subtypes nobody registered (which would drop to the nearest ancestor and render empty on the
+receiver). Because `GetTypeInfo` is on the path of *every* serialization on the hub, a diagnostic
+that throws does not merely lose its own warning: it fails whatever message was being written.
+
+That was measured on the one message that must never be lost. `MessageService.ReportFailure` posts
+a `DeliveryFailure` back to the sender of a request that could not be delivered; serializing that
+envelope resolved type info for a base type whose assembly came from a module with an incomplete
+dependency closure (a closure without `Microsoft.Agents.AI` — see
+[Module Closure Accounting](../ModuleClosureAccounting)). `Assembly.GetTypes()` on such an
+assembly throws `ReflectionTypeLoadException` for the *one* type it cannot load, the exception
+escaped the scan, and the hub logged
+`Failed to post DeliveryFailure message for CreateNodeRequest … - breaking error cascade` — the
+sender waited for a verdict that never came.
+
+The rule, and how the resolver now honours it:
+
+- **Enumerate types loader-safely.** `GetTypes()` is wrapped in the canonical
+  `catch (ReflectionTypeLoadException e) → e.Types.Where(t => t is not null)`: the loadable types
+  are scanned, the rest are skipped.
+- **Report the skipped remainder once per assembly, per hub.** The de-duplicated
+  `LoaderExceptions` messages name the missing dependency, so the warning is the actionable
+  diagnostic for the closure defect — one line, not one per serialized type.
+- **Compute the per-assembly type list once.** The loadable types are cached per assembly in an
+  instance `ConditionalWeakTable<Assembly, Type[]>` on the resolver (it dies with the hub's options
+  and, being weak-keyed, does not root a collectible module assembly), so a busy hub does not
+  re-enumerate — and, in the failing case, re-attempt the failed load — for every base type it
+  serializes.
+
+The closure defect itself stays a defect and is fixed where closures are built; the resolver's job
+is to make sure it can no longer silence the report of some *other* request's failure.
+
 ### Use typed query helpers
 
 `IMeshService.Query<T>` filters by `$type` and projects directly to `T`, avoiding manual
