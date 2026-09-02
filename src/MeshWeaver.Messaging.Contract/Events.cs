@@ -52,7 +52,7 @@ public record DeliveryFailure(IMessageDelivery Delivery, string? Message = null)
     /// about a 142 MB message is itself a 142 MB message and dies at exactly the wall it is
     /// describing — leaving the producer with neither the message nor the report. An undeliverable
     /// payload is therefore replaced, on construction, by a description of itself: see
-    /// <see cref="DeliveryPayloadBounds.WithoutOversizedPayload"/> for the full argument and for why
+    /// <see cref="DeliveryPayloadBounds.WithoutOversizedPayload(IMessageDelivery, int)"/> for the full argument and for why
     /// the strip belongs HERE rather than at the ~20 sites that build one. A payload that fits is
     /// echoed unchanged, so this is invisible to every ordinary failure; senders correlate a
     /// <see cref="DeliveryFailure"/> on <c>RequestId</c>, never on the echoed payload.</para>
