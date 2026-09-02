@@ -1,6 +1,5 @@
-using System.Collections.Concurrent;
 using System.Reactive.Linq;
-using System.Text.Json;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -22,53 +21,55 @@ namespace MeshWeaver.PluginCatalog;
 /// System — this IS the step that turns an anonymous caller into a known instance, so by definition
 /// there is no identity to read with yet. The hash comparison below is the authentication.</para>
 ///
-/// <para>Registered as a mesh-scoped singleton so its cache dies with the mesh (never a static
-/// collection). The cache is short-lived and keyed by hash: an instance disabled or re-granted takes
-/// effect within <see cref="CacheDuration"/> without a restart.</para>
+/// <para>🚨 <b>Every read is a LIVE stream, never a per-request round-trip (#3119).</b> The three
+/// legs used to be one-shot <c>GetDataRequest</c>s to the owning per-node hubs, ten seconds each,
+/// memoised for a minute per key. On a registry pod under cross-schema fan-out load the owner did
+/// not answer inside ten seconds, so once a minute EVERY consumer of that key — every satellite CI
+/// gate and every bake — was told <c>503 Instance-key resolution is temporarily unavailable</c>;
+/// the Reinsurance publish-bake failed three times in one day on it. Now each leg reads through the
+/// process-wide <c>IMeshNodeStreamCache</c>: a children LISTING of the parent namespace decides
+/// existence (empty-on-absent, so an unknown key never opens a point read on a path that does not
+/// exist) and the owner's mirror supplies the content. Both are hydrated once per process and kept
+/// current by the change feed, so only the FIRST request for an instance waits on an owner, every
+/// later one reads memory, and a disable or a plan change is seen by the very next request on every
+/// replica — no TTL, no verdict cache, nothing to invalidate. Design page:
+/// <c>Doc/Architecture/InstanceKeyResolution</c>.</para>
+///
+/// <para>Registered as a mesh-scoped singleton; it holds no state of its own.</para>
 /// </summary>
 public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<InstanceRegistryAuthenticator> logger)
 {
-    /// <summary>How long a resolved instance + grant is reused before re-reading the mesh.
-    /// Short on purpose: a revoked grant must stop working quickly, and the registry is not a
-    /// hot path (a consumer polls its catalog, it does not stream).</summary>
-    public static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(1);
-
-    /// <summary>
-    /// How long a DEFINITIVE "this key is unknown" is reused — far shorter than a positive.
-    ///
-    /// <para>The two are not symmetric. A positive answer costs a minute of staleness on a
-    /// revocation, which is the trade <see cref="CacheDuration"/> makes deliberately. A negative
-    /// costs a minute of lockout to an instance that has just been registered or re-keyed, for no
-    /// benefit at all: nobody polls a key that does not work. Five seconds still absorbs a burst of
-    /// unauthenticated requests without turning a registration into a coffee break.</para>
-    /// </summary>
-    public static readonly TimeSpan NegativeCacheDuration = TimeSpan.FromSeconds(5);
-
     /// <summary>Retry-After (seconds) an endpoint advertises when resolution was UNAVAILABLE.
     /// Matches the API-token leg's <c>ApiTokenAuthenticationHandler.RetryAfterSeconds</c>.</summary>
     public const int RetryAfterSeconds = 5;
 
-    private readonly ConcurrentDictionary<string, (DateTimeOffset At, AuthenticatedInstance? Result)> cache = new();
-
-    private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
+    /// <summary>
+    /// How long one leg may wait for the FIRST frame of its live listing or mirror before the request
+    /// is answered <see cref="InstanceAuthResult.Unavailable"/>. The SAME ten seconds the one-shot
+    /// read had — deliberately not widened, #3119 was never a budget problem — but it now bounds only
+    /// a cold hydration: the entry keeps hydrating after this subscriber gives up, so the retry the
+    /// 503 asks for finds the frame in memory. Init-only for tests that pin the classification
+    /// without waiting ten seconds.
+    /// </summary>
+    internal TimeSpan ReadBudget { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// Forgets the cached verdict for the instance whose key hashes to <paramref name="keyHash"/>.
-    /// Called by the writes that change what a verdict says — a plan promotion, a disable — so the
-    /// change is visible on the NEXT request served by this process rather than after
-    /// <see cref="CacheDuration"/>; other replicas see it within the window. Not a test hook: a
-    /// promotion an admin just made and a fetch that still refuses is the exact confusion #2804
-    /// exists to remove.
+    /// Retained for source compatibility with callers compiled outside this repository (in-mesh
+    /// control planes cannot be swept from here). Since #3119 there is NO verdict to forget: every
+    /// request reads the index, instance and grant nodes off their live mirrors, so a plan promotion
+    /// or a disable written through <c>GetMeshNodeStream(path).Update(...)</c> is visible to the next
+    /// request on EVERY replica the moment the change feed delivers it — the cross-replica lag #2804
+    /// worked around no longer exists. This method therefore does nothing.
     /// </summary>
+    /// <param name="keyHash">Ignored.</param>
     public void Invalidate(string keyHash)
     {
-        if (!string.IsNullOrWhiteSpace(keyHash))
-            cache.TryRemove(keyHash, out _);
+        // Intentionally empty — see the summary. There is no cache behind this class any more.
     }
 
     /// <summary>
-    /// The node read, injectable so the CACHE and CLASSIFICATION rules can be driven without a
-    /// mesh. Production is <see cref="IMessageHub"/>'s interrogable one-shot read; a test supplies
+    /// The node read, injectable so the CLASSIFICATION rules can be driven without a mesh.
+    /// Production is the live listing-then-mirror read in <see cref="ReadLive"/>; a test supplies
     /// an unavailable/absent/present sequence directly.
     /// </summary>
     internal Func<string, IObservable<NodeReadOutcome>>? ReadOverride { get; init; }
@@ -99,9 +100,11 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     /// anywhere).</para>
     ///
     /// <para>So: an <see cref="NodeReadStatus.Unavailable"/> on any leg yields
-    /// <see cref="InstanceAuthResult.Unavailable"/>, and <b>is never cached</b> — a fault must not
-    /// become a fact. Only a read that reached a verdict is remembered. This is the same two-shape
-    /// outcome the identity side adopted for #637; the instance-key leg simply never got it.</para>
+    /// <see cref="InstanceAuthResult.Unavailable"/> — a fault must not become a fact. Since #3119
+    /// nothing is remembered at all, verdicts included: every request re-derives its answer from the
+    /// live listings and mirrors, which costs a few in-memory lookups and means a revocation is seen
+    /// by the next request rather than after a cache window. This is the same two-shape outcome the
+    /// identity side adopted for #637; the instance-key leg simply never got it.</para>
     /// </summary>
     public IObservable<InstanceAuthResult> AuthenticateOutcome(string? authorizationHeader)
     {
@@ -110,22 +113,12 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
             return AuthenticateToken(authorizationHeader);
 
         var hash = InstanceKeys.Hash(rawKey);
-        if (cache.TryGetValue(hash, out var hit)
-            && DateTimeOffset.UtcNow - hit.At < (hit.Result is null ? NegativeCacheDuration : CacheDuration))
-            return Observable.Return(InstanceAuthResult.Resolved(hit.Result));
-
         return Resolve(hash)
-            .Do(result =>
-            {
-                // Only a VERDICT is cached. Caching the unavailable branch is the whole defect.
-                if (!result.IsUnavailable)
-                    cache[hash] = (DateTimeOffset.UtcNow, result.Instance);
-            })
             .Catch((Exception ex) =>
             {
                 // A read failure is NOT an authentication success — and it is not a denial either.
-                // It is unavailability: uncached, and surfaced as such so the caller retries instead
-                // of being told its key is unknown.
+                // It is unavailability, surfaced as such so the caller retries instead of being told
+                // its key is unknown.
                 logger.LogWarning(ex, "Instance key resolution UNAVAILABLE for hash prefix {Prefix} "
                     + "— reporting retryable, NOT 'unknown key'", InstanceKeys.HashPrefix(hash));
                 return Observable.Return(InstanceAuthResult.Unavailable(ex.Message));
@@ -427,8 +420,8 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                             })
                             // The plan ladder rides on the caller: a plan-scoped grant entry is
                             // decided against it at every surface, and reading it HERE — inside the
-                            // same System scope, cached with the same lifetime as the verdict — is
-                            // what keeps the endpoints from each resolving a ladder of their own.
+                            // same System scope — is what keeps the endpoints from each resolving a
+                            // ladder of their own.
                             // A ladder read that fails yields Empty: plan-scoped entries then license
                             // nothing (fail closed), plan-less entries are untouched, and the
                             // verdict itself stays a verdict.
@@ -462,33 +455,109 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     }
 
     /// <summary>
-    /// One-shot INTERROGABLE read by exact path. The System identity comes from the single
-    /// <see cref="ImpersonationScopeExtensions.RunAsSystem{T}"/> scope in <see cref="Resolve"/>, so
-    /// this composes inside it rather than opening a scope of its own.
-    ///
-    /// <para>🚨 <c>GetMeshNodeOutcome</c>, not <c>GetMeshNode</c>: the convenience read maps every
-    /// non-Present outcome to the same <c>null</c>, and "absent" versus "I could not read it" is the
-    /// entire question this authenticator has to answer. <see cref="ReadTimeoutBehavior.EmitNull"/>
-    /// keeps a budget overrun on the outcome channel as <see cref="NodeReadStatus.Unavailable"/>
-    /// rather than throwing it into the caller's catch-all.</para>
+    /// One INTERROGABLE read by exact path — <see cref="NodeReadStatus.Present"/>,
+    /// <see cref="NodeReadStatus.Absent"/> or <see cref="NodeReadStatus.Unavailable"/>, because
+    /// "absent" versus "I could not read it" is the entire question this authenticator answers.
     /// </summary>
     private IObservable<NodeReadOutcome> Read(string path) =>
-        ReadOverride is { } test
-            ? test(path)
-            : hub.GetMeshNodeOutcome(path, ReadTimeout, ReadTimeoutBehavior.EmitNull);
+        ReadOverride is { } test ? test(path) : ReadLive(path);
 
-    private T? Content<T>(MeshNode? node) where T : class
+    /// <summary>
+    /// The live read (#3119): listing for EXISTENCE, mirror for CONTENT — the canonical composition
+    /// for a node that may not be there (<c>Doc/Architecture/CqrsAndContentAccess</c>, "An OPTIONAL
+    /// node").
+    ///
+    /// <para>Two of the three legs are legitimately absent in normal operation: the index for an
+    /// unknown key, and the grant for a freshly registered instance. A point stream on an absent path
+    /// is a framework defect — the owner answers a routing NotFound that terminates the stream AND
+    /// opens the cache's storm-breaker on that path — so existence is decided by a children listing of
+    /// the parent namespace, which is empty-on-absent and live. Both the listing
+    /// (<c>Replay(1).AutoConnect(1)</c>, one per namespace) and the point mirror are process-wide
+    /// cache entries: hydrated once, kept current by the change feed, read from memory by every later
+    /// request.</para>
+    ///
+    /// <para>Sealed in its own subscribe-scoped System scope on top of the one around
+    /// <see cref="Resolve"/>: the second and third legs subscribe inside a continuation of the first,
+    /// where the AsyncLocal identity is whatever thread delivered that frame, and both the listing's
+    /// RLS wrap and the mirror's read gate capture identity at subscribe time. Idempotent under the
+    /// outer scope, and it leaves on the way out of the same Subscribe, so nothing downstream
+    /// inherits System.</para>
+    /// </summary>
+    private IObservable<NodeReadOutcome> ReadLive(string path)
     {
-        if (node?.Content is null) return null;
-        if (node.Content is T typed) return typed;
-        if (node.Content is not JsonElement json) return null;
-        try { return JsonSerializer.Deserialize<T>(json.GetRawText(), hub.JsonSerializerOptions); }
-        catch (JsonException ex)
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return accessService.RunAsSystem(() =>
         {
-            logger.LogWarning(ex, "Could not read {Type} from node {Path}", typeof(T).Name, node.Path);
-            return null;
-        }
+            var parent = ParentPath(path);
+            // A stable id per parent: the query set is a pure function of the parent, so the cache
+            // (keyed on id AND query set) hands back the one shared listing for that namespace.
+            var listing = parent is null
+                ? null
+                : hub.GetQuery($"instance-key-listing:{parent}", $"path:{parent} scope:children select:path");
+            return FirstFrame(listing, () => hub.GetMeshNodeStream(path), path, ReadBudget);
+        });
     }
+
+    /// <summary>
+    /// Folds a live listing and a live mirror into ONE <see cref="NodeReadOutcome"/> for
+    /// <paramref name="path"/>: the listing's current snapshot decides present-or-absent, the
+    /// mirror's first non-null frame is the content, a mirror that completes without a frame (a
+    /// tombstoned delete) is Absent, and no frame within <paramref name="budget"/> — or any fault on
+    /// the way — is <see cref="NodeReadStatus.Unavailable"/>, never Absent: a read that reached no
+    /// verdict establishes nothing about the key. Static and dependency-free so the classification
+    /// is pinned without a mesh.
+    /// </summary>
+    /// <param name="listing">The parent's live children listing, or null when the path has no parent
+    /// (a partition root), in which case the mirror is read directly.</param>
+    /// <param name="stream">Opens the owner's mirror for the path. Called only once the listing has
+    /// shown the node exists.</param>
+    /// <param name="path">The exact node path, for the outcome's diagnostics.</param>
+    /// <param name="budget">How long to wait for the first frame.</param>
+    internal static IObservable<NodeReadOutcome> FirstFrame(
+        IObservable<IEnumerable<MeshNode>>? listing,
+        Func<IObservable<MeshNode>> stream,
+        string path,
+        TimeSpan budget)
+    {
+        IObservable<NodeReadOutcome> Content() =>
+            stream()
+                .Where(node => node is not null)
+                .Take(1)
+                .Select(NodeReadOutcome.Present)
+                .DefaultIfEmpty(NodeReadOutcome.Absent);
+
+        var read = listing is null
+            ? Content()
+            : listing
+                .Take(1)
+                .SelectMany(nodes =>
+                    // Ordinal: mesh paths are case-sensitive, and a case-insensitive match would let a
+                    // DIFFERENT node open the point read on a path that does not exist.
+                    nodes.Any(node => string.Equals(node.Path, path, StringComparison.Ordinal))
+                        ? Content()
+                        : Observable.Return(NodeReadOutcome.Absent));
+
+        return read
+            .Timeout(budget)
+            .Catch((TimeoutException _) => Observable.Return(NodeReadOutcome.Unavailable(new TimeoutException(
+                $"The live read of '{path}' produced no frame within {budget.TotalSeconds:F0}s — its "
+                + "listing or the owner's mirror has not hydrated yet. This is NOT 'node not found': the "
+                + "hydration continues in the process-wide cache, and the retry the 503 asks for reads "
+                + "the frame from memory once it lands."))))
+            .Catch((Exception ex) => Observable.Return(NodeReadOutcome.Unavailable(ex)));
+    }
+
+    /// <summary>The path's parent, or null for a root-level path.</summary>
+    private static string? ParentPath(string path)
+    {
+        var slash = path.LastIndexOf('/');
+        return slash <= 0 ? null : path[..slash];
+    }
+
+    /// <summary>The node's content as <typeparamref name="T"/> through the framework accessor, which
+    /// recovers a payload the cache hub stored as JSON and says why when it cannot.</summary>
+    private T? Content<T>(MeshNode? node) where T : class =>
+        node.ContentAs<T>(hub.JsonSerializerOptions, logger);
 }
 
 /// <summary>
