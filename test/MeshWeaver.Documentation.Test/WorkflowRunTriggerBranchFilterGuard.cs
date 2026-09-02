@@ -45,35 +45,81 @@ public class WorkflowRunTriggerBranchFilterGuard
 {
     private static string WorkflowsDir() => Path.Combine(FindRepoRoot(), ".github", "workflows");
 
+    /// <summary>
+    /// 🚨 BOTH extensions. GitHub Actions accepts <c>.yml</c> and <c>.yaml</c> equally, so a guard
+    /// that scans one is evaded by choosing the other — not even deliberately; a contributor who
+    /// happens to type <c>.yaml</c> silently opts out. This is the second time this blind spot has
+    /// appeared in this repository's guards in one day (the first was an extension allow-list that
+    /// skipped files having no extension at all), which is why it is a named helper rather than a
+    /// literal repeated at each call site.
+    /// </summary>
+    private static IEnumerable<string> WorkflowFiles() =>
+        Directory.EnumerateFiles(WorkflowsDir(), "*.yml")
+            .Concat(Directory.EnumerateFiles(WorkflowsDir(), "*.yaml"))
+            .OrderBy(f => f, StringComparer.Ordinal);
+
     private static string[] ExecutableLines(string text) =>
         text.Split('\n')
             .Where(l => !l.TrimStart().StartsWith("#", StringComparison.Ordinal))
             .ToArray();
 
+    private static int IndentOf(string line) => line.Length - line.TrimStart().Length;
+
     /// <summary>
-    /// The <c>workflow_run:</c> block — from that key to the next key at the same indentation.
-    /// Returns null when the workflow has no such trigger.
+    /// Strips a trailing <c>#</c> comment so <c>workflow_run: # the platform wave</c> is still
+    /// recognised as the key. Deliberately naive about a <c>#</c> inside a quoted scalar: a trigger
+    /// KEY line has no value to quote, and over-trimming here can only help the matcher find the key
+    /// it is looking for — never invent one that is not there.
+    /// </summary>
+    private static string WithoutTrailingComment(string line)
+    {
+        var hash = line.IndexOf('#');
+        return (hash < 0 ? line : line[..hash]).TrimEnd();
+    }
+
+    /// <summary>
+    /// The <c>workflow_run:</c> block — from that key to the next key at the SAME OR SHALLOWER
+    /// indentation, whatever that indentation happens to be.
+    ///
+    /// <para>🚨 The first version hard-coded two spaces and terminated at <c>indent &lt;= 2</c>.
+    /// YAML indentation is a style choice, not a rule: a workflow indenting its triggers by four
+    /// would have had its <c>workflow_run</c> key missed altogether, and one indenting by one would
+    /// have had its block truncated at the first nested key. Both fail silently, in the direction
+    /// that reports green. The key's own indent is now measured and used as the terminator.</para>
     /// </summary>
     private static string[]? WorkflowRunBlock(string[] lines)
     {
-        var start = Array.FindIndex(lines, l => l.TrimEnd() == "  workflow_run:");
+        var start = Array.FindIndex(lines, l =>
+        {
+            var bare = WithoutTrailingComment(l);
+            return bare.TrimStart() == "workflow_run:" && IndentOf(bare) > 0;
+        });
         if (start < 0) return null;
 
+        var keyIndent = IndentOf(WithoutTrailingComment(lines[start]));
         var block = new List<string>();
         for (var i = start + 1; i < lines.Length; i++)
         {
             var line = lines[i];
             if (line.Trim().Length == 0) continue;
-            // A key at the same indent (two spaces, not more) ends the block.
-            var indent = line.Length - line.TrimStart().Length;
-            if (indent <= 2) break;
+            if (IndentOf(line) <= keyIndent) break;
             block.Add(line);
         }
         return block.ToArray();
     }
 
+    /// <summary>
+    /// 🚨 Matches BOTH concurrency forms. The mapping form (<c>concurrency:</c> alone, with
+    /// <c>group:</c> beneath) and the scalar shorthand (<c>concurrency: my-group</c>, or an
+    /// expression) produce the same one-pending-run behaviour, so recognising only the first lets
+    /// the shorthand bypass the guard entirely — while the guard reports that it checked.
+    /// </summary>
     private static bool DeclaresConcurrency(string[] lines) =>
-        lines.Any(l => l.TrimEnd() == "concurrency:");
+        lines.Any(l =>
+        {
+            var bare = WithoutTrailingComment(l);
+            return IndentOf(bare) == 0 && bare.StartsWith("concurrency:", StringComparison.Ordinal);
+        });
 
     [Fact]
     public void AWorkflowRunTriggerSharingAConcurrencyGroupFiltersItsBranches()
@@ -81,7 +127,7 @@ public class WorkflowRunTriggerBranchFilterGuard
         var offenders = new List<string>();
         var examined = 0;
 
-        foreach (var path in Directory.EnumerateFiles(WorkflowsDir(), "*.yml").OrderBy(p => p, StringComparer.Ordinal))
+        foreach (var path in WorkflowFiles())
         {
             var lines = ExecutableLines(File.ReadAllText(path));
             var block = WorkflowRunBlock(lines);
