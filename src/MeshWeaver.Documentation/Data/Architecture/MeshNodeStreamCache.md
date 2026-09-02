@@ -352,7 +352,7 @@ A failure that is *not* a genuine missing node — a transient reactivation miss
 
 Both breakers *suppress* while their window is open. When no window is open, the opposite must hold: the read has to actually re-probe. `GetStreamRaw`'s third guard enforces that — an entry whose hydration terminated with an error is evicted before the read resolves, so `SharedView` opens a fresh upstream.
 
-The eviction (`EvictFaultedEntry`) is the one teardown shared by all three re-probe triggers, and it must reach **two** layers:
+The eviction (`EvictFaultedEntry`) is the one teardown shared by all **four** triggers that can drop a faulted entry — the storm breaker's window expiry, the transient breaker's, `GetStreamRaw`'s faulted-entry guard, and the change-feed invalidation reset (`ResetFailureState`) — and it must reach **two** layers:
 
 1. the cache's own `Entry`, whose `Replay(1)` holds the terminal error, and
 2. the cacheHub **workspace's** remote-stream cache, keyed `(owner, reference, identity)`, which holds the errored `ISynchronizationStream`.
@@ -362,6 +362,14 @@ Dropping only (1) re-creates a fresh entry over the same dead stream: no `Subscr
 The protocol is the idle sweep's: **detach → claim pair-exact → tear down** (a loser re-parks what it detached). Detaching first is what makes disposal safe — a concurrent read builds a new stream with a new `StreamId`, so the `UnsubscribeRequest` for the old one cannot race it. Only a **faulted** entry qualifies; a healthy live entry is never torn down, because a breaker record can outlive the fault that wrote it and severing live subscribers over a stale counter would be a regression.
 
 🚨 The guard lives in `GetStreamRaw`, **never in `GetEntry`** — `GetEntry` is a pin-or-recreate loop, and evicting there spins forever on an entry that faults during creation. Running once per read *call* also bounds the re-probe: only a terminal entry qualifies, so an in-flight probe is shared, giving one new upstream per **fault**, not per read.
+
+### Dropping the entry without the upstream orphans a heartbeat nothing can reach (#3110)
+
+The fourth trigger — the change-feed reset — used to hand-roll its own teardown and dispose only layer (1). That is a second, worse failure than #1202's replay, because **both reclaimers of a warm mirror are keyed on the cache entry**: the idle sweep *iterates* `_streams`, and the event-driven `ReleaseIfUnwatched` (which a terminal activity write fires — see *A warm mirror is a KEEP-ALIVE, so "final" must be an event, not a wait*, above) *looks the path up* in it. Remove the entry and leave the stream attached, and neither can ever reach it again unless that exact path happens to be read once more.
+
+The fault class that matters here is the **transient** one. A `NotFound` disposes the stream's `keepAlive`, so its 45 s `HeartBeatEvent` is already dead — that is what made the old prose ("a terminally errored upstream has already torn down its own keep-alive") look true. An idle-collected grain or a 60 s request timeout is different: the node *exists*, the stream stays live, and the heartbeat keeps firing. Orphan one of those and it heartbeats its owner awake for the process lifetime.
+
+That is exactly what a finished compile activity showed in production: a `HeartBeatEvent` from `cache/…` still routing to `…/_Activity/compile-…` **49 minutes** after it succeeded in about a second — a path nothing reads again, so the accidental self-heal never came, and every compile storm multiplied the set of stale-but-routable activity hubs. The reset now calls `EvictFaultedEntry` like the other three, and `ChangeFeedResetReleasesUpstreamTest` pins it: a control arm releases the same faulted-with-live-upstream state through `ReleaseIfUnwatched` and asserts an upstream really was disposed, so the change-feed arm cannot pass vacuously.
 
 ## A delete tombstone is superseded at the recreate's commit — before `Created` is published
 
