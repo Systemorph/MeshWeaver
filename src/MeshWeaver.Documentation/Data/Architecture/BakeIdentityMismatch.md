@@ -176,6 +176,79 @@ and can no longer move an address. A caller who genuinely wants a different asse
 for it by name — `-p:AssemblyVersion=` / `-p:FileVersion=` / `-p:InformationalVersion=` still win —
 so the escape hatch survives, it just cannot be taken by accident.
 
+## Confirmed on the shipped images
+
+The fix landed on `main` as `71869075`. CD run
+[33587509969](https://github.com/Systemorph/MeshWeaver/actions/runs/33587509969) built both images
+from that commit, and the step that had been failing since 2026-09-01 passed:
+
+```text
+the bake published under: s8fe4902c0b2f5974f824be2867221dbd
+portal /app: 46 MeshWeaver assemblies, 46 manifest lines
+framework-identity: MATCH — '/portal' resolves s8fe4902c0b2f5974f824be2867221dbd,
+the identity the bake published under. Its bundles are addressed to this host.
+```
+
+Re-measured afterwards off the promoted `7186907` tags, by exactly the method that found the defect
+(`docker create` + `docker cp`, no execution) — so the confirmation is the same measurement, not a
+different one:
+
+| | before the fix | after the fix (`7186907`) |
+|---|---|---|
+| canonical names present in both manifests | 25 | 25 |
+| of those, hashes **equal** | **0** | **25** |
+
+```text
+memex-portal-ai   MeshWeaver.Utils.dll   3.0.0-rc9+71869075f5ace055629c7b1812b08d7334f871af
+mw-plugin-test    MeshWeaver.Utils.dll   3.0.0-rc9+71869075f5ace055629c7b1812b08d7334f871af
+```
+
+> **A green bake leg is not a sealed publication.** With the identity matching, `main-cd`'s platform
+> bake leg is green and the *next* leg — `Plugins: bake + seal the publication for this identity` —
+> reds on `CS0234: The type or namespace name 'Maps' does not exist in the namespace 'MeshWeaver'`
+> for `GoogleMaps/Gallery` and `OpenStreetMap/Gallery`. That is a different defect with a different
+> owner: `MeshWeaver.Maps` left the content surface in
+> [#2941](https://github.com/Systemorph/MeshWeaver/pull/2941) and its module has not started riding
+> yet, which is
+> [MeshWeaver.Plugins#1061](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1061) step 3 —
+> the cross-repo half of a carve-out, not an identity fork. Two red bake legs in one pipeline are not
+> one cause; read *which job* failed before attributing it.
+
+### The "second cause" that wasn't
+
+While the fix was in review, a second divergence was read off the same two images — the commit
+suffix apparently truncated to different lengths on the two legs:
+
+```text
+memex-portal-ai   3.0.0-rc9.ci.7471+30dda849febd
+mw-plugin-test    3.0.0-rc9+30dda849febd95c82d6f
+```
+
+Twelve hex characters against twenty. It is an artifact of the *reading*, not of the build: **both
+strings are exactly 30 characters long.** Whatever printed them truncated at 30, and `.ci.7471` —
+eight characters of prefix — is what pushed the suffix out of the window. `$(SourceRevisionId)` is
+the full 40-character SHA on both legs, as the post-fix dump above shows. One cause, not two.
+
+A version string is length-sensitive evidence. When two of them differ in a suffix *and* agree in
+total length, suspect the pipe before the compiler.
+
+### The run that looked like it still failed
+
+Run [33585729083](https://github.com/Systemorph/MeshWeaver/actions/runs/33585729083) started six
+minutes after the fix merged, carried `71869075` — the fix's merge commit — as its **head SHA**, and
+failed the identity check. It did not build that commit. `main-cd`'s `gate` job resolves its *own*
+target (the newest commit whose required check is green) and logs it:
+
+```text
+IMAGE: meshweaver.azurecr.io/mw-plugin-test:staging-3ac34af-33585729083
+SHA:   3ac34af522a933ac8a84a11825b593460a754a91      ← the fix's PARENT
+```
+
+The next run resolved `71869075` and passed. **A CD run's `headSha` is the ref the workflow was
+triggered on, never a claim about what it built.** Read `gate`'s own `SHA:` line — or the staging tag
+embedded in every image reference in the job — before attributing a red to a commit. That reading
+cost this issue a reopen.
+
 ## What was ruled out, and how
 
 A mismatch has three plausible causes and the error message names two of them. Both were falsified
@@ -210,12 +283,42 @@ Three details make it a guard rather than a green tick:
   guard is still measuring a real evaluation, but no longer one that can fork a bake address, so it
   fails and asks to be re-pointed.
 
+### And the general form of it
+
+`CdImageLegPropertiesDoNotForkTheIdentityGuard` (same project) guards the **class**, not the
+switch. The property that broke this was called `Version`, but nothing about the defect depends on
+that name: `main-cd.yml` publishes the two images from one commit with two *different sets* of
+global `-p:` properties, and a global property reaches every project in the graph. Any property one
+leg passes and the other does not — or passes with a different value — that reaches a compiled
+attribute forks the address.
+
+So it reads the two `dotnet publish` commands out of `main-cd.yml`, takes the union of every `-p:`
+name they carry, evaluates the probe project bare and with all of them applied at once, and requires
+the three compiled attributes to be identical. On a failure it re-probes one property at a time, so
+the message names the culprit rather than the set.
+
+- **`CIRun` is the one exclusion, and it is principled.** Both legs pass `-p:CIRun=true`, so it is
+  symmetric by construction and cannot fork them; and it is the one property that is *supposed* to
+  move `InformationalVersion` — it selects the commit-deterministic branch over the local-dev one.
+- **Reading the workflow is what keeps it from going stale.** A list of property names written in
+  the test would have been correct on the day it was written and wrong the day `-p:Version=` was
+  added to one leg — which is exactly how this defect got in. The next `-p:` added to either leg is
+  covered the moment it lands, with no second place to remember.
+- **The control arm asserts the parse found something.** Both publish commands must be located, each
+  must carry a plausible number of properties, both must carry `CIRun` (which is what proves these
+  are the platform's own publish commands and not two arbitrary lines), and the union must contain
+  `Version`. A parser that silently matched nothing would probe the empty set and pass having
+  measured nothing — a gate testing its own inputs.
+
 The CD step that caught this (`mw-plugin-test framework-identity /portal --expect <baked>`) stays
-exactly as it is. It is the artifact-level proof and it must remain able to fail; the guard just
-moves the *ordinary* case of this failure from minute 25 of a CD run to second 5 of a PR.
+exactly as it is. It is the artifact-level proof and it must remain able to fail; the guards just
+move the *ordinary* case of this failure from minute 25 of a CD run to second 5 of a PR.
 
 ## If you are staring at one of these right now
 
+0. **Confirm which job failed, and which commit it built.** `main-cd` has two bake legs — the
+   platform's own and `Plugins: bake + seal` — and they fail for unrelated reasons. Then read
+   `gate`'s `SHA:` line (or the staging tag): a run's head SHA is the trigger ref, not what it built.
 1. **Read both manifests, do not reason about them.** Pull the two images by their *staging* tags —
    immutable, unlike `main`/`latest` — and `docker cp` `/app/meshweaver-surface.manifest` out of
    each. Publish nothing; this is a read.

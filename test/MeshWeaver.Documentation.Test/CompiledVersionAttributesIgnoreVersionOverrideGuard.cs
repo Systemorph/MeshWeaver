@@ -1,10 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
 using System.Linq;
-using System.Text;
-using System.Text.Json;
 using MeshWeaver.Compiler;
 using Xunit;
 
@@ -154,90 +150,12 @@ public class CompiledVersionAttributesIgnoreVersionOverrideGuard
     public void ProbedAssemblyIsPartOfTheContentSurface()
         => Assert.Contains(ProbeAssembly, FrameworkBuildIdentity.ContentSurfaceAssemblies);
 
+
     /// <summary>
-    /// Evaluates <see cref="ProbeProject"/> and returns the requested properties. Fails RED —
-    /// never skips — when the project is missing, <c>dotnet</c> cannot be launched, MSBuild exits
-    /// non-zero, or the answer is not the JSON shape <c>-getProperty</c> promises: "could not
-    /// measure" must never be reported as "measured and fine".
+    /// Evaluates <see cref="ProbeProject"/> and returns the compiled attributes plus
+    /// <c>$(Version)</c>. The launcher itself lives in <see cref="MsBuildPropertyProbe"/>, shared
+    /// with <see cref="CdImageLegPropertiesDoNotForkTheIdentityGuard"/>.
     /// </summary>
     private static IReadOnlyDictionary<string, string> Evaluate(params string[] extraArguments)
-    {
-        var root = FindRepoRoot();
-        var project = Path.Combine(root, ProbeProject.Replace('/', Path.DirectorySeparatorChar));
-        Assert.True(File.Exists(project),
-            $"{ProbeProject} does not exist — this guard evaluates it to prove that -p:Version= "
-            + "cannot reach a compiled attribute. Re-point it at another project that inherits the "
-            + "root Directory.Build.props and is part of FrameworkBuildIdentity.ContentSurfaceAssemblies.");
-
-        var psi = new ProcessStartInfo("dotnet")
-        {
-            WorkingDirectory = root,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add("msbuild");
-        psi.ArgumentList.Add(project);
-        psi.ArgumentList.Add("-nologo");
-        // CIRun is how the platform is built everywhere the identity matters; evaluating without it
-        // would exercise the local-dev branch and prove nothing about CD.
-        psi.ArgumentList.Add("-p:CIRun=true");
-        foreach (var name in CompiledAttributes.Append("Version"))
-            psi.ArgumentList.Add($"-getProperty:{name}");
-        foreach (var argument in extraArguments)
-            psi.ArgumentList.Add(argument);
-
-        using var process = Process.Start(psi);
-        Assert.NotNull(process);
-
-        // 🚨 Drain BOTH pipes concurrently via the event-based reader, never
-        // `StandardOutput.ReadToEnd()` then `StandardError.ReadToEnd()`. Sequential draining
-        // deadlocks whenever the child writes enough to the *undrained* pipe to fill its buffer:
-        // MSBuild blocks writing stderr, the test blocks reading stdout, and neither moves. That
-        // this guard exists to catch a wedge makes hanging in the same way particularly poor.
-        // Event-based reading needs no TaskCompletionSource and no async bridge, so it stays
-        // inside the house rules for `test/`.
-        var outBuffer = new StringBuilder();
-        var errBuffer = new StringBuilder();
-        process!.OutputDataReceived += (_, e) => { if (e.Data is not null) outBuffer.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) errBuffer.AppendLine(e.Data); };
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-        // `-getProperty` only EVALUATES (no restore, no compile) — sub-second warm, a few seconds
-        // cold. A minute is far past any legitimate evaluation, so hitting it means MSBuild is
-        // wedged, and the guard says so instead of hanging out xUnit's method timeout.
-        if (!process.WaitForExit(60_000))
-        {
-            // Kill the TREE, not just `dotnet` — MSBuild spawns node processes that outlive the
-            // launcher, and a guard that leaks build nodes on every timeout degrades the machine
-            // it is measuring on.
-            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
-            Assert.Fail(
-                $"`dotnet msbuild {ProbeProject} -getProperty:…` did not finish within 60s. Evaluation "
-                + "does not restore or build, so this is a wedged MSBuild, not a slow one.");
-        }
-
-        // Only valid after WaitForExit() returned true: it is what flushes the final buffered lines.
-        var stdout = outBuffer.ToString();
-        var stderr = errBuffer.ToString();
-
-        Assert.True(process.ExitCode == 0,
-            $"`dotnet msbuild {ProbeProject} -getProperty:…` exited {process.ExitCode}.\n"
-            + $"stdout:\n{stdout}\nstderr:\n{stderr}");
-
-        using var document = JsonDocument.Parse(stdout);
-        var properties = document.RootElement.GetProperty("Properties");
-        return CompiledAttributes.Append("Version")
-            .ToDictionary(name => name, name => properties.GetProperty(name).GetString() ?? string.Empty,
-                StringComparer.Ordinal);
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException("Could not locate the repository root (no MeshWeaver.slnx above the test binary).");
-    }
+        => MsBuildPropertyProbe.Evaluate(ProbeProject, [.. CompiledAttributes, "Version"], extraArguments);
 }
