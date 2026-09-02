@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.Logging;
 using Orleans.Providers.Streams.Common;
 using Xunit;

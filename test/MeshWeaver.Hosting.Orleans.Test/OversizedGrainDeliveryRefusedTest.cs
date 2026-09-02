@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.Logging;
 using Orleans.Configuration;
 using Xunit;

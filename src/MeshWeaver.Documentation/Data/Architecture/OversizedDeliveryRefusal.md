@@ -51,18 +51,31 @@ symptom stop. The producer is what is wrong.
 
 ## The guard
 
-`MessageSizeGuard` (`src/MeshWeaver.Hosting.Orleans/MessageSizeGuard.cs`) measures a routed
-delivery's packaged `RawJson` payload against a transport's bound. It is cheap on the hot path — a
-UTF-16 char is at most 3 UTF-8 bytes, so `3 × Length < limit` is an O(1) proof that a payload fits
-and the common case never scans — and exact only for a delivery that might be over.
+`MessageSizeGuard` (`src/MeshWeaver.Messaging.Hub/Serialization/MessageSizeGuard.cs`) measures a
+routed delivery's packaged `RawJson` payload against a transport's bound. It is cheap on the hot
+path — a UTF-16 char is at most 3 UTF-8 bytes, so `3 × Length < limit` is an O(1) proof that a
+payload fits and the common case never scans — and exact only for a delivery that might be over.
 
-It is applied at three producer sites, all in `RoutingGrain`:
+It is applied at **four** producer sites:
 
-- `PostToStream` — the memory-stream leg, against the 1 MiB block.
-- `RefuseOversizedGrainDispatch`, on **both** forward grain legs: `BuildGrainRoute`'s
+- `RoutingGrain.PostToStream` — the memory-stream leg, against the 1 MiB block.
+- `RoutingGrain.RefuseOversizedGrainDispatch`, on **both** forward grain legs: `BuildGrainRoute`'s
   `IMessageHubGrain` call and `BuildPodHubRoute`'s `IPodHubGrain` call. Guarding only the first
   would leave the stream-routed half of forward traffic on the unguarded path — a control that
   covers one strand and misses the other.
+- `OrleansRoutingService.DeliverMessage` — the router's own `IRoutingGrain.RouteMessage` call, which
+  is strictly **upstream** of the other three (#2885, below).
+
+> **Why the guard lives in `MeshWeaver.Messaging.Hub` and is public.** It began beside the first
+> three sites in `MeshWeaver.Hosting.Orleans`, but the fourth site is in
+> `MeshWeaver.Connection.Orleans` — and `Hosting.Orleans` *references* that assembly, so the guard
+> could not stay there without being copy-pasted into the other. It moved down to the assembly both
+> routers already reference, beside the `RawJsonConverter` whose transcode is the allocation that
+> fails. It is **public** rather than `internal` + `InternalsVisibleTo` for the reason
+> `MessageStormBreaker` already documents: an assembly-wide `InternalsVisibleTo` on
+> `MeshWeaver.Messaging.Hub` exposes the internal `IMessageHub.Observe(object, …)` as an *instance*
+> method, which then outranks the public generic `Observe<TResponse>` extension in overload
+> resolution and silently turns every `response.Message` in the granted assembly into `object`.
 
 The grain bound is read from the **live** `IOptions<SiloMessagingOptions>`, not from a constant
 compiled in here, so a deployment that deliberately tuned its limit is measured against its own
@@ -96,25 +109,78 @@ whichever way it travels back.
 This is a second-order defect of the same shape, and it is why "just NACK it" is not a fix on its
 own.
 
-## Where the bound cannot reach
+## The fourth leg: the router's OWN grain call (#2885)
 
-The guard measures a delivery **after** `MeshBuilder` has packaged it (`delivery.Package(...)`),
-because `RawJson` is the routed shape. A payload so large that *packaging itself* exhausts memory
-never reaches a measurable form:
+The three sites above all live **inside** `RoutingGrain`. But a delivery has to *reach* that grain,
+and on a client or co-hosted portal it does so through one more grain call —
+`OrleansRoutingService.DispatchObservable` → `IRoutingGrain.RouteMessage(delivery)`. That leg was
+unguarded, and it is where production died:
 
 ```text
 System.OutOfMemoryException
+   at System.GC.AllocateNewArray(...)
    at System.Buffers.SharedArrayPool`1.Rent(Int32 minimumLength)
    at System.Text.Json.Utf8JsonWriter.TranscodeAndWriteRawValue(ReadOnlySpan`1 json, ...)
+   at System.Text.Json.Serialization.Metadata.JsonPropertyInfo`1.GetMemberAndWriteJson(...)
+   at System.Text.Json.Serialization.Converters.ObjectDefaultConverter`1.OnTryWrite(...)
+   at System.Text.Json.Serialization.Metadata.JsonTypeInfo`1.SerializeAsObject(...)
    at MeshWeaver.Messaging.Serialization.MessageDeliveryConverter.Write(...)
 ```
 
-`MessageDeliveryConverter` is the victim here, not the culprit — transcoding a raw value UTF-16 →
-UTF-8 rents a buffer of up to 3× the string length, so the peak is several times the payload. **No
-guard placed at the router can fix this.** The answer is at the producer: *do not build the payload
-whole.* Bulk producers — imports above all — must stream or batch rather than serialise a tree into
-one delivery. Note that bounding *concurrency* (as the static-repo importer already does) is a
-different axis and does not help.
+Orleans serialises a grain call's **arguments** with the mesh's own System.Text.Json options — the
+JSON codec is registered with `AddJsonSerializer(_ => true, _ => true, …)`, so it claims every type,
+including the `IMessageDelivery` envelope. `MessageDeliveryConverter.Write` therefore writes the
+whole envelope, one of whose properties is the packaged `RawJson`, and `RawJsonConverter` emits it
+with `writer.WriteRawValue(value.Content)` — a UTF-16 `string`, so `Utf8JsonWriter` rents up to
+**3 bytes per char** to transcode. That rent is the allocation that threw.
+
+### Read the frame order — it says which half failed
+
+This page previously concluded that *packaging itself* had exhausted memory, and therefore that "no
+guard placed at the router can fix this". **That was wrong, and the stack is what refutes it.**
+`MessageDelivery.Package(...)` serialises only the *payload* (`JsonSerializer.Serialize(message,
+…)` → `new RawJson(serialized)`); it never invokes `MessageDeliveryConverter`, which converts the
+`IMessageDelivery` **envelope**. So a stack that shows `MessageDeliveryConverter.Write` above
+`GetMemberAndWriteJson` above `TranscodeAndWriteRawValue` proves the payload was **already a
+materialised `RawJson` string in memory** when the failing allocation was attempted — packaging had
+finished, and what blew up was re-serialising the packaged envelope for transport.
+
+That distinction is the whole difference between "unreachable" and "one line away", because
+`MessageSizeGuard.IsOversized` needs nothing but `RawJson.Content.Length`: the fast path is
+`3 × Length < limit`, O(1) and **allocation-free**, so the guard can measure a payload that the very
+next statement cannot transcode. The bound was never the problem — its **placement** was.
+
+`OrleansRoutingService.DeliverMessage` now refuses at this leg before the dispatch, using the same
+`MessageSizeGuard` and the live `IOptions<ClientMessagingOptions>.MaxMessageBodySize` (this assembly
+is the client connection, and the client's own limit governs a client→silo call).
+
+### The same asymmetry, one site later
+
+`RoutingGrain.PostFailure` has stripped its NACK's echoed payload since #1890.
+`OrleansRoutingService.SendDeliveryFailure` did **not** — it posted `new DeliveryFailure(delivery)`
+with the payload attached. On this leg that is worse than a lost report: echoing the payload re-runs
+the identical 3×-payload transcode, so the refusal becomes a *second* allocation failure. Both sites
+now call `MessageSizeGuard.WithoutOversizedPayload`.
+
+## Where the bound still cannot reach
+
+Refusing at the frame limit is not the same as making the router allocation-safe, and the difference
+is a factor of three:
+
+- The **bound** is the transport's frame limit (100 MiB by default).
+- The **peak allocation** while transcoding is up to **3×** the payload.
+
+So a payload comfortably *under* `MaxMessageBodySize` can still fail to allocate on a
+memory-pressured pod, and no bound calibrated to the transport can prevent that. The #2885 incident
+carries **no payload size at all**, so it cannot be shown that the new refusal would have caught
+that particular delivery — only that the leg is now bounded and attributable, where before it was
+neither.
+
+The remaining work is at the producer, and it is a different axis from anything on this page: *do
+not build the payload whole.* Bulk producers — imports above all — must stream or batch rather than
+serialise a tree into one delivery. Note that bounding *concurrency* (as the static-repo importer
+already does, `BatchSize = 5`) is not that axis and does not help: it limits how many deliveries are
+in flight, never how big one of them is.
 
 ## Rules
 
@@ -122,8 +188,13 @@ different axis and does not help.
 - **Never retry a size failure.** It cannot converge; classify it terminal so recovery machinery
   stands down.
 - **A guard on one transport is not a guard on the system.** When a bound exists on one leg, ask
-  which other legs carry the same delivery.
+  which other legs carry the same delivery — *including the leg that reaches the guarded code*.
+  Three of these four sites sat downstream of the one that actually failed.
 - **Read the identical-size-on-a-new-port signature as one message, not many incidents.**
+- **Read the FRAME ORDER before concluding a guard cannot reach a failure.** `Package` serialises
+  the payload; `MessageDeliveryConverter` serialises the envelope. A stack showing the latter proves
+  the payload was already a measurable `RawJson` string, so "packaging itself ran out of memory" was
+  not what happened — and the difference decided whether #2885 was fixable at the router at all.
 
 ## See also
 
