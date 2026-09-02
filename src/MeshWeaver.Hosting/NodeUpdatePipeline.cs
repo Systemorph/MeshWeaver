@@ -2,11 +2,14 @@ using System;
 using System.Linq;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting;
 
@@ -119,6 +122,41 @@ internal static class NodeUpdatePipeline
                     return candidate with { LastModified = DateTimeOffset.UtcNow };
                 }));
 
+    // 🚨 A VALIDATOR COMPARES THE EXISTING NODE WITH THE PROPOSED ONE, SO BOTH MUST BE TYPED
+    // ALIKE — and the pipeline, not the validator, owes it that (#3056 fallout, found by the
+    // Plugins UpdateNode_VersionDowngrade_ShouldFail test on 2026-09-02).
+    //
+    // `existing` arrives through MeshNodeStreamCache.GetStream, which re-types the cache's raw
+    // JSON with THIS hub's registry — and a content type this hub never registered stays a
+    // JsonElement there. Until #3056, every hub registered every type it ever posted as a SIDE
+    // EFFECT: MessageService.Post rendered each delivery through the logging options eagerly
+    // (the argument was built before the LogDebug call), and ObjectPolymorphicConverter.Write
+    // calls typeRegistry.GetOrAddType for each value it meets. A hub that had merely handed a
+    // typed instance to CreateNode therefore "knew" the type when it read the node back. #3056
+    // removed that render (it was the OOM), and with it the accidental registration — so a
+    // validator written as `context.ExistingNode.Content is Versioned e && context.Node.Content
+    // is Versioned p && p.Version < e.Version` now sees a JsonElement on the left, skips its
+    // own `if`, and answers Valid. A refused write went through with nothing logged as an error.
+    //
+    // The proposed node carries a LIVE CLR instance of exactly the type the existing content
+    // must have (same node, same NodeType), and this hub demonstrably holds that type: it is
+    // the type authority for this update. Deserialise the degraded snapshot AS that type, here,
+    // on the hub that runs the validators — the same recovery ContentAs<T> performs at a
+    // consumer, done once for every validator instead of being each one's problem. A snapshot
+    // that will not deserialise as the proposal's type is left as it was (logged loud by As):
+    // hiding a shape mismatch from the validators would be a second silent pass.
+    private static MeshNode WithContentTypedLikeTheProposal(IMessageHub hub, MeshNode node, MeshNode existing)
+    {
+        var proposed = node.Content;
+        if (proposed is null or JsonElement or JsonNode || existing.Content is null)
+            return existing;
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeUpdatePipeline));
+        var typed = existing.Content.As(proposed.GetType(), hub.JsonSerializerOptions, logger, existing.Path);
+        return typed is null || ReferenceEquals(typed, existing.Content)
+            ? existing
+            : existing with { Content = typed };
+    }
+
     // 2. Run client-side Update validators sequentially (Concat preserves short-circuit:
     //    the chain stops at the first failure). Returns the mapped exception or null.
     private static IObservable<Exception?> RunUpdateValidators(
@@ -136,7 +174,7 @@ internal static class NodeUpdatePipeline
         {
             Operation = NodeOperation.Update,
             Node = node,
-            ExistingNode = existing,
+            ExistingNode = WithContentTypedLikeTheProposal(hub, node, existing),
             AccessContext = ctx,
         };
 
