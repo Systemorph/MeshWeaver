@@ -131,7 +131,21 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
     /// Used by executable code blocks where address is already known.
     /// </summary>
     internal static string GetLayoutAreaDiv(object address, string? area, object? id)
-        => $"<div class='{LayoutArea}' data-{Address}='{HttpUtility.HtmlAttributeEncode(address?.ToString() ?? string.Empty)}' data-{Area}='{HttpUtility.HtmlAttributeEncode(area ?? string.Empty)}' data-{AreaId}='{HttpUtility.HtmlAttributeEncode(id?.ToString() ?? string.Empty)}'></div>";
+        => GetLayoutAreaDivOpenTag(address, area, id) + "</div>";
+
+    /// <summary>
+    /// The OPENING tag of <see cref="GetLayoutAreaDiv(object,string?,object?)"/>, for a marker that
+    /// carries fallback content: a client that hydrates layout areas replaces the div and drops its
+    /// children, while one that does not renders them. The ```` ```prompt ```` fence uses this to
+    /// keep the authored prompt visible everywhere the composer cannot appear
+    /// (<c>ExecutableCodeBlockRenderer.WritePromptComposer</c>).
+    ///
+    /// <para>🚨 Shares ONE definition of the attribute set with the empty-marker overload — two call
+    /// sites spelling out <c>data-address</c>/<c>data-area</c>/<c>data-area-id</c> independently is
+    /// how one of them silently stops matching a client's parser.</para>
+    /// </summary>
+    internal static string GetLayoutAreaDivOpenTag(object address, string? area, object? id)
+        => $"<div class='{LayoutArea}' data-{Address}='{HttpUtility.HtmlAttributeEncode(address?.ToString() ?? string.Empty)}' data-{Area}='{HttpUtility.HtmlAttributeEncode(area ?? string.Empty)}' data-{AreaId}='{HttpUtility.HtmlAttributeEncode(id?.ToString() ?? string.Empty)}'>";
 
     /// <summary>
     /// Creates a layout area div with both raw path and pre-resolved address/area/id.

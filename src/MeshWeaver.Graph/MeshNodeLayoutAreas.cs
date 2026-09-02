@@ -95,6 +95,12 @@ public static class MeshNodeLayoutAreas
     public const string ThreadsArea = "Threads";
     /// <summary>Area name for the Chat layout area.</summary>
     public const string ChatArea = "Chat";
+    /// <summary>
+    /// Area name for the prompt composer a markdown ```` ```prompt ```` fence lowers to (#2511).
+    /// Takes the authored prompt as its reference ID; the constant is shared with the renderer that
+    /// emits the marker so the two cannot drift apart.
+    /// </summary>
+    public const string PromptArea = PromptFence.AreaName;
     /// <summary>Area name for the Import mesh nodes layout area.</summary>
     public const string ImportMeshNodesArea = "ImportMeshNodes";
     /// <summary>Area name for the Export layout area.</summary>
@@ -188,6 +194,7 @@ public static class MeshNodeLayoutAreas
             .WithView(FilesArea, Files)
             .WithView(ThreadsArea, Threads)
             .WithView(ChatArea, Chat)
+            .WithView(PromptArea, PromptComposerArea)
             .WithView(NodeTypesArea, NodeTypes)
             // AccessControl and Groups VIEWS ride the MeshWeaver.Graph.Views MODULE. Their area
             // names stay here (the node menu links them) and so do their base helpers —
@@ -1801,6 +1808,43 @@ public static class MeshNodeLayoutAreas
         return Observable.Return<UiControl?>(new ThreadChatControl()
             .WithInitialContext(nodePath)
             .WithInitialContextDisplayName(nodeName));
+    }
+
+    /// <summary>
+    /// The composer a markdown ```` ```prompt ```` fence lowers to (#2511) — the SAME
+    /// <see cref="ThreadChatControl"/> the side panel and the Threads app mount, pre-filled with the
+    /// prompt the page author wrote and editable in place. The authored text arrives as the area's
+    /// reference ID (base64url — <see cref="PromptFence.DecodeDraft"/>), because the fence renderer
+    /// has no other channel to a layout area.
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl?> PromptComposerArea(LayoutAreaHost host, RenderingContext _)
+        // NormalizeScalar, not a cast: the reference ID round-trips through JSON, so it arrives as a
+        // JsonElement on the way back from a client and `Id as string` would be a silent null — the
+        // composer would then render with no draft and nobody would see why.
+        => Observable.Return<UiControl?>(PromptComposer(
+            host.Hub.Address.ToString(),
+            PromptFence.DecodeDraft(LayoutAreaReference.NormalizeScalar(host.Reference.Id))));
+
+    /// <summary>
+    /// The prompt composer's composition — pure (no hub) so the shape is directly assertable, the
+    /// same way <c>UserActivityLayoutAreas.ThreadsAppComposer</c> is.
+    ///
+    /// <para>🚨 <c>HideEmptyState</c> is the load-bearing flag, not cosmetics: <c>ThreadChatView</c>
+    /// reads it as <c>isCompact</c> and, on submit, navigates to the newly created thread FULL PAGE
+    /// (<c>NavigateTo("/{path}")</c>) instead of handing it to the side panel. "Submit starts a
+    /// full-page thread" IS this flag.</para>
+    /// </summary>
+    /// <param name="nodePath">The page node the prompt was authored on — the thread's context.</param>
+    /// <param name="draft">The authored prompt, or null for a composer with nothing seeded.</param>
+    internal static ThreadChatControl PromptComposer(string nodePath, string? draft)
+    {
+        var nodeName = nodePath.Contains('/') ? nodePath[(nodePath.LastIndexOf('/') + 1)..] : nodePath;
+        var composer = new ThreadChatControl()
+            .WithHideEmptyState(true)
+            .WithInitialContext(nodePath)
+            .WithInitialContextDisplayName(nodeName);
+        return string.IsNullOrEmpty(draft) ? composer : composer.WithInitialDraft(draft);
     }
 
     #endregion

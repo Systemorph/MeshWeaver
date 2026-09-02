@@ -81,7 +81,10 @@ vocabulary. There are only two shapes, and a new fence should reuse one rather t
 
 The layout-area marker is the powerful one. A fence that can be expressed as *"render this
 `UiControl` here"* needs **no client change at all** — the clients already hydrate that div, and the
-control travels through the normal layout-area machinery.
+control travels through the normal layout-area machinery. It comes in two forms, from the same
+builder (`LayoutAreaMarkdownRenderer.GetLayoutAreaDiv` / `GetLayoutAreaDivOpenTag`): **empty**, and
+**wrapping fallback content** for a client that cannot hydrate it — the ```` ```prompt ```` fence uses
+the second, and the degradation rule below is why.
 
 ## 🚨 The degradation rule
 
@@ -96,53 +99,69 @@ block it replaced, and nothing in CI can see it, because the platform's own test
 the marker.
 
 Concretely: emit the authored content as ordinary markup **as well as** the marker, or wrap the
-marker so an un-hydrated client still shows the text.
+marker so an un-hydrated client still shows the text. The ```` ```prompt ```` fence below is the
+worked example of the second — the marker carries the read-only fenced block as its children, which a
+hydrating client drops on its way to mounting the live area.
 
 ## Worked example: the `prompt` fence (#2511)
 
-Course pages author suggested AI prompts as ```` ```prompt ```` fences. Today no extension claims the
-`prompt` language, so they render as static fenced code: readable, but not editable and not
-runnable. The request is that such a fence become a **composer pre-filled with the authored text**,
-whose Submit starts a real agent thread and opens it **full-page**.
+Course pages author suggested AI prompts as ```` ```prompt ```` fences. They used to render as static
+fenced code: readable, but not editable and not runnable. The request was that such a fence become a
+**composer pre-filled with the authored text**, whose Submit starts a real agent thread and opens it
+**full page**.
 
-Walking it through the seam gives the whole change set, and shows why the interesting part is not in
-this repository:
+Walking it through the seam gives the whole change set — and shows why the interesting half is not in
+this repository.
 
-1. **Platform — parse.** A fence extension for the `prompt` info string, patterned on
-   `ExecutableCodeBlockExtension`, carrying the fence body as the authored prompt.
-2. **Platform — emit.** Lower it to the **layout-area marker** rather than a new one, pointing at a
-   layout area that returns the composer. Nothing new has to be taught to any client to get the
-   composer on screen.
-3. **Platform — the control.** The composer already exists: `ThreadChatControl`
-   (`src/MeshWeaver.Layout/ThreadChatControl.cs`), the same control the side panel and the Threads
-   app mount. In compact mode (`WithHideEmptyState`) its submit already opens the new thread
-   **full-page** rather than in the side panel — precisely the behaviour asked for.
-4. **Clients — the two gaps.** Both are in `MeshWeaver.Plugins`, and neither has a platform-side
-   substitute:
-   - **Pre-filling.** `ThreadChatControl` carries no initial draft, and the only prefill path that
-     exists — `SidePanelStateService.OpenNewThreadWithDraft` / `ConsumePendingComposerDraft`, used by
-     "new thread from this cell" — is a client-side service that opens the **side panel**, not a
-     full page. A declarative initial draft on the control, honoured by `ThreadChatView`, is the
-     missing seam.
-   - **Starting the thread.** `hub.StartThread` and the `Thread` node type ship with the AI engine,
-     which lives in `MeshWeaver.Plugins`. The platform can *query* threads
-     (`nodeType:Thread` searches in `UserActivityLayoutAreas`) and can *reference* the composer
-     control, but it has no thread-creation API and must not grow one — see
-     [Repository Dependency Direction](/Doc/Architecture/RepositoryDependencyDirection).
+### The platform half (this repository)
 
-So: the platform half is the fence extension plus a declarative initial-draft property on the
-control; the client half — the half a reader can actually see — is `ThreadChatView` honouring it.
-Landing only the platform half yields an empty composer where the authored prompt used to be, which
-is exactly the degradation the rule above forbids. **Land them together, platform first.**
+1. **Parse.** `ExecutableCodeBlock.Initialize` derives `PromptDraft` from the fence body whenever the
+   info string is `prompt`, next to the `layout` block it already parses. A prompt fence never
+   produces a `SubmitCodeRequest` — it is prose for an agent, not source for the kernel, and saying so
+   in `GetSubmitCodeRequest` means a stray `--render` on one cannot turn it into a code cell.
+2. **Emit.** `ExecutableCodeBlockRenderer.WritePromptComposer` lowers it to the **layout-area marker**
+   rather than a new one, pointing at the `Prompt` area on the page node's own hub. Nothing new has to
+   be taught to any client for the composer to appear.
+3. **Carry the draft.** The authored text rides as the area's **reference id**, base64url-encoded
+   (`PromptFence.EncodeDraft`). Not raw: an area id is concatenated into hrefs, and everything after a
+   `?` in one is parsed as reference *parameters* — and a prompt is prose, full of `/`, `?`, `&` and
+   newlines. This is the same encoding, for the same reason, as
+   `LayoutAreaReference.GetMeshNodeDataContext`.
+4. **The control.** `MeshNodeLayoutAreas.PromptComposer` returns the composer that already exists —
+   `ThreadChatControl`, the same control the side panel and the Threads app mount — with the decoded
+   draft on its new `InitialDraft` property and `HideEmptyState` on. That flag is load-bearing:
+   `ThreadChatView` reads it as `isCompact` and navigates to the created thread **full page** instead
+   of handing it to the side panel. "Submit starts a full-page thread" *is* that flag.
+5. **Degrade.** The marker **wraps** the ordinary read-only fenced block. A client that hydrates
+   layout areas replaces the div and drops its children; one that does not renders them — the authored
+   prompt, exactly as it read before. With no owning node there is no hub to serve the area, so the
+   fence stays a plain block rather than emitting an ownerless address.
 
-### Verification, when it is built
+### The client half (`MeshWeaver.Plugins`)
 
-The platform half is testable in this repository (the fence produces the expected marker; the layout
-area produces a `ThreadChatControl` carrying the authored text). The half that matters is not —
-there is no Blazor in this repository — so the acceptance check is a **rendered page**, not a
-platform unit test: open a course lesson that ships a ```` ```prompt ```` fence, confirm the composer shows
-the authored text, edit it, submit, and land on the full-page thread. A green platform build says
-nothing about any of that.
+`ThreadChatView` must seed its composer from `ThreadChatControl.InitialDraft` — one-shot, into a NEW
+chat only, so a draft can never clobber text the user is already typing. The machinery is there
+already: `SeedPendingDraftIfAny` does exactly this job from a different source (the side panel's
+one-shot `PendingComposerDraft`, the "new thread from this cell" hand-off), and the declarative draft
+is the second source feeding it.
+
+Starting the thread needs nothing new: `Hub.StartThread` and the full-page navigation are what
+`ThreadChatView`'s submit already does in compact mode.
+
+The React client hydrates layout-area markers with a regex that matches an **empty** div
+(`interactiveMarkdown.ts`), so a wrapped marker falls through to the fallback there and shows the
+prompt read-only — correct by the degradation rule, and a one-line widening away from the composer
+when that client wants it.
+
+### Verification
+
+The platform half is testable here (`PromptFenceComposerTest` in `MeshWeaver.Graph.Test`): the fence
+produces the expected marker, the draft round-trips through the area id, the marker wraps the
+read-only fence, and the layout area produces a compact `ThreadChatControl` carrying the authored
+text. The half that a learner can actually see is not — there is no Blazor in this repository — so
+the acceptance check is a **rendered page**: open a course lesson that ships a ```` ```prompt ````
+fence, confirm the composer shows the authored text, edit it, submit, and land on the full-page
+thread. A green platform build says nothing about that.
 
 ## Related
 

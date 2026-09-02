@@ -23,6 +23,19 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
     public string? InitialContextDisplayName { get; init; }
 
     /// <summary>
+    /// The text the composer opens PRE-FILLED with, editable in place before Submit — the
+    /// declarative counterpart to the side panel's one-shot
+    /// <c>SidePanelStateService.PendingComposerDraft</c> hand-off, for a composer that is DECLARED
+    /// rather than opened by a click. A ```` ```prompt ```` markdown fence is the first caller: the
+    /// authored prompt becomes the draft, the learner edits it, and Submit starts a real thread
+    /// (#2511, <c>Doc/Architecture/MarkdownFenceExtensions</c>).
+    ///
+    /// <para>Seeded ONCE, into a NEW chat only — a draft must never clobber text the user is
+    /// already typing, nor reappear on a thread that has moved on.</para>
+    /// </summary>
+    public string? InitialDraft { get; init; }
+
+    /// <summary>
     /// When true, hides the empty-state placeholder (icon + text) shown when there are no messages.
     /// Useful for compact/embedded chat (e.g., dashboard).
     /// </summary>
@@ -63,6 +76,9 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
     /// <summary>Returns a copy with <paramref name="displayName"/> as the label shown on the initial context chip.</summary>
     /// <param name="displayName">Human-readable name for the context chip.</param>
     public ThreadChatControl WithInitialContextDisplayName(string displayName) => this with { InitialContextDisplayName = displayName };
+    /// <summary>Returns a copy whose composer opens pre-filled with <paramref name="draft"/>.</summary>
+    /// <param name="draft">The initial draft text, editable in place before Submit.</param>
+    public ThreadChatControl WithInitialDraft(string draft) => this with { InitialDraft = draft };
     /// <summary>Returns a copy with <paramref name="hide"/> controlling whether the empty-state placeholder is hidden.</summary>
     /// <param name="hide">When <c>true</c>, the icon and text shown for an empty thread are suppressed.</param>
     public ThreadChatControl WithHideEmptyState(bool hide = true) => this with { HideEmptyState = hide };
