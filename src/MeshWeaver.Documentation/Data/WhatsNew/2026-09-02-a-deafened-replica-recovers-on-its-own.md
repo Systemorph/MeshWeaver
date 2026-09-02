@@ -3,7 +3,7 @@ Name: A deafened replica now recovers on its own
 Category: Fix
 Description: If a piece of the portal lost its cross-replica messaging during a long cluster reshuffle, it stayed lost until a restart. It now gets it back the next time the cluster changes.
 Icon: ArrowSync
-Order: -20260903
+Order: -20260902
 ---
 
 # A deafened replica now recovers on its own
