@@ -1188,6 +1188,27 @@ public static class JsonSynchronizationStream
             ? new ChangeItem<TReduced>(live.Value, stream.StreamId, live.Version)
             : null;
 
+    /// <summary>
+    /// Whether <paramref name="error"/> is a stream/hub TEARDOWN rather than a genuine failure to
+    /// produce a snapshot — the classification a refused re-subscribe carries (#3058).
+    /// <para><c>SynchronizationStream.SignalDisposedToProducer</c> raises an
+    /// <see cref="ObjectDisposedException"/> when the stream's hub is gone, and
+    /// <c>HubDisposingException</c> derives from it, so one walk covers both. A teardown is
+    /// TRANSIENT — the owner's server-side stream is going away, the mirror must be kept alive and
+    /// re-ask on its next proven gap (the #2745 policy), never faulted and never counted toward the
+    /// give-up. Everything else is terminal: this owner cannot answer, so the subscriber is better
+    /// off failing and re-establishing than waiting.</para>
+    /// </summary>
+    /// <param name="error">The failure reported by the re-assert.</param>
+    /// <returns><c>true</c> when the stream or its hub is tearing down.</returns>
+    private static bool IsTearingDown(Exception? error)
+    {
+        for (var e = error; e is not null; e = e.InnerException)
+            if (e is ObjectDisposedException)
+                return true;
+        return false;
+    }
+
     internal static ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
         this IWorkspace workspace,
         IMessageDelivery<SubscribeRequest> delivery
@@ -1197,6 +1218,147 @@ public static class JsonSynchronizationStream
         var hub = workspace.Hub;
         var logger = GetLogger(hub.ServiceProvider);
         var request = delivery.Message with { Subscriber = delivery.Sender };
+
+        // 🚨🚨 THE ACKNOWLEDGEMENT MUST NOT OVERTAKE THE ANSWER — Systemorph/MeshWeaver#3058.
+        //
+        // SubscribeAck closes the subscriber's hub.Observe(subscribeRequest) pending callback (a
+        // DataChangedEvent cannot: RouteStreamMessage intercepts it before HandleCallbacks). It
+        // used to be posted from HandleSubscribeRequest the instant SubscribeToClient returned —
+        // i.e. BEFORE the snapshot answering this subscribe had been produced, because the
+        // re-assert below only QUEUES an UpdateStreamRequest on the stream's own action block.
+        //
+        // For an initial subscribe that ordering costs nothing. For a RE-subscribe it inverts the
+        // meaning of the word: SynchronizationStream.RequestFreshSnapshot reads an ack as "the
+        // owner has processed my re-subscribe and done whatever it is going to do", counts the ask
+        // as answered-or-not on that basis, and faults the mirror past MaxUnansweredResyncs
+        // acknowledged-and-unanswered asks. When the ack precedes the answer, "acknowledged and
+        // unanswered" is true of every ask the moment it is made, so the
+        // count measures the owner's QUEUE DEPTH rather than non-convergence: during a bulk install
+        // the re-assert waits behind the burst's own frames, every one of those frames re-proves
+        // the mirror has no base, each re-ask is acked in ~1 ms, and three of them land inside 9 ms
+        // — measured, run 33593426491 — while the first Full is still queued and perfectly healthy.
+        // That faulted a mirror mid-install and reddened the samples content gate on roughly a
+        // third of all runs, on unmodified main.
+        //
+        // So the ack now follows the frame it acknowledges: on the re-assert path it is posted from
+        // the update turn's <c>applied</c> callback, which runs in the SAME turn immediately after
+        // SetCurrent — by which point the outbound forwarding subscription has already handed the
+        // Full to <c>hub.Post</c>, so the two arrive at the subscriber in that order. Nothing waits
+        // and nothing polls: the ack rides the work it describes.
+        //
+        // 🚨 EVERY PATH ANSWERS EXACTLY ONCE, AND ONLY A PATH THAT SENT A SNAPSHOT MAY ACK.
+        //
+        // Two obligations, and they pull in opposite directions unless both are met by the same
+        // one-shot:
+        //
+        //   • A path that answers NOTHING leaves the subscriber's pending callback open until the
+        //     hub's RequestTimeout — with its resync gate shut for that whole window, which is the
+        //     wedge the ack exists to prevent (#2654).
+        //   • A path that ACKS without having sent a Full re-commits #3058 one branch over. If an
+        //     ack means "your snapshot is on the wire", then acking a re-assert that could not be
+        //     applied — the stream was disposed, the update turn threw — feeds an OWNER-side
+        //     failure into the mirror's acknowledged-and-unanswered count, which is reserved for
+        //     evidence that the LEG is eating snapshots. The give-up would then fire on a
+        //     recycling owner instead of on a lossy leg: the same miscount, narrower door.
+        //
+        // So a failure arm REFUSES instead. `DeliveryFailure` is the verdict
+        // SynchronizationStream.ResyncRefused already classifies, one policy per ErrorType, and it
+        // is deliberately NOT counted toward the give-up:
+        //
+        //   • the stream or its hub is tearing down (ObjectDisposedException, from
+        //     SynchronizationStream.SignalDisposedToProducer) ⇒ ShuttingDown, which is TRANSIENT:
+        //     the mirror is kept alive, its gate re-opens, and the next proven gap re-asks — the
+        //     #2745 rolling-deploy policy, and the right answer for an owner whose server-side
+        //     stream is simply going away;
+        //   • the re-assert genuinely threw ⇒ Exception, which ResyncRefused treats as TERMINAL:
+        //     this owner cannot produce a snapshot for this stream, so waiting is pointless and the
+        //     mirror faults, gets evicted by StreamLiveness.IsUsable, and the next natural caller
+        //     opens a fresh one. Strictly more actionable than the silent ack this replaces.
+        //
+        // CreateExternalClient's own Resubscribe arm reads the same verdict the same way (transient
+        // ⇒ push back through the recycle re-arm; otherwise Warning and clear the flag), so both
+        // callers of the re-assert path are served by one classification.
+        var answered = 0;
+        bool ClaimTheAnswer() => Interlocked.Exchange(ref answered, 1) == 0;
+
+        // The AccessContext comes off the SUBSCRIBE delivery, exactly as the outbound
+        // DataChangedEvent's does below: the deferred arm runs on the STREAM's turn, where the
+        // ambient identity is the stream's, not the subscriber's, and PostPipeline fails closed on
+        // an absent one.
+        PostOptions RespondTo(PostOptions o)
+        {
+            var opt = o.ResponseFor(delivery);
+            return delivery.AccessContext is not null
+                ? opt.WithAccessContext(delivery.AccessContext)
+                : opt;
+        }
+
+        void Ack()
+        {
+            // Idempotent by construction: `applied` and the exception callback are both reachable
+            // for one Update, and a second answer would land in a callback .Take(1) has closed.
+            if (!ClaimTheAnswer())
+                return;
+            try
+            {
+                hub.Post(new SubscribeAck(), RespondTo);
+            }
+            catch (Exception ex)
+            {
+                // The owner can begin winding down between the decision and the post. Debug, not
+                // swallowed silence: the subscriber's own request/response terminal fires and
+                // ResyncRefused releases its gate — the recoverable verdict, not a latch.
+                logger.LogDebug(ex,
+                    "Owner {Owner} could not acknowledge the subscribe of stream {StreamId} for {Subscriber}",
+                    hub.Address, request.StreamId, request.Subscriber);
+            }
+        }
+
+        // The answer for a path that HAS a stream but nothing to put on the wire yet: hold the
+        // answer until that stream first produces state, which is the moment a Full really does go
+        // out. The forwarding subscription was registered when the stream was created — ahead of
+        // this one — so by the time this runs it has already handed the frame to hub.Post, exactly
+        // as `applied` does on the re-assert path.
+        //
+        // Not a poll and not a retry: one Rx one-shot on the very state the subscriber is waiting
+        // for, disposed by Take(1) when it fires and by the stream when it does not. If the state
+        // never arrives, the subscriber's own request/response terminal fires and ResyncRefused
+        // re-opens its gate WITHOUT counting the ask — the correct reading, since an owner with
+        // nothing to send has not failed to answer.
+        void AnswerWhenTheStreamFirstEmits(ISynchronizationStream<TReduced> stream)
+        {
+            logger.LogDebug(
+                "Owner {Owner} has nothing to re-assert on stream {StreamId} for {Subscriber} yet — "
+                + "holding the acknowledgement until its first frame",
+                hub.Address, request.StreamId, request.Subscriber);
+            var pending = stream.Take(1).Subscribe(_ => Ack(), Refuse);
+            stream.RegisterForDisposal(pending);
+        }
+
+        // The answer for a path that produced NO snapshot — never an ack. See the note above.
+        void Refuse(Exception error)
+        {
+            if (!ClaimTheAnswer())
+                return;
+            var tearingDown = IsTearingDown(error);
+            try
+            {
+                hub.Post(
+                    new DeliveryFailure(delivery)
+                    {
+                        ErrorType = tearingDown ? ErrorType.ShuttingDown : ErrorType.Exception,
+                        Message = $"Stream {request.StreamId} could not re-assert its snapshot for "
+                                  + $"{request.Subscriber}: {error.Message}",
+                    },
+                    RespondTo);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex,
+                    "Owner {Owner} could not refuse the subscribe of stream {StreamId} for {Subscriber}",
+                    hub.Address, request.StreamId, request.Subscriber);
+            }
+        }
 
         // 🚨 RE-SUBSCRIBE IS A REFRESH, NOT A SECOND SUBSCRIPTION (issue #606).
         //
@@ -1246,14 +1408,58 @@ public static class JsonSynchronizationStream
             // snapshot — the orphaned mirror re-converges (a Full always lands, and the mirror
             // that resubscribed is by definition not ahead) — but it can neither erase newer
             // state nor poison the mirror's version.
-            if (alreadyServing.Current is { Value: not null })
-                alreadyServing.Update(
-                    _ => BuildReassertFrame(alreadyServing),
-                    ex => logger.LogWarning(ex,
+            // 🚨 THE DEFERRED ACK (#3058). `applied` runs in the update's OWN turn right after
+            // SetCurrent — and SetCurrent drives the outbound forwarding subscription synchronously
+            // (Store.OnNext → ToDataChanged → hub.Post), so the answering Full is already in the
+            // owner's outbound queue when this runs. Acking there therefore means what the
+            // subscriber's give-up reads it as: "your snapshot has been SENT".
+            //
+            // 🚨 …AND ONLY WHEN A FRAME WAS ACTUALLY BUILT. `BuildReassertFrame` returns null when
+            // the stream has no state to assert — the ordinary condition for a server-side stream
+            // whose reduce has not produced yet, which during an INSTALL is not a moment but a
+            // PHASE: the owner is a NodeType hub that cannot emit until its source compiles, and it
+            // sits Current-less for as long as that takes. Acking there was the same defect this
+            // change exists to remove, one branch over, and worse because it REPEATS: every re-ask
+            // for the whole compile window was answered "acknowledged" with nothing behind it, so
+            // three of them tripped MaxUnansweredResyncs on a stream whose owner was merely busy.
+            // (Measured: the fault survived the ordering fix and still named 'Course/Card', a
+            // NodeType, in MeshWeaver.PluginTester.Test.)
+            //
+            // So a re-assert that produced no frame defers its answer to the stream's FIRST
+            // emission, which is the moment a Full really does go out. Nothing polls and nothing
+            // retries — it is one Rx one-shot on the state the subscriber is waiting for. If that
+            // state never arrives, the subscriber's own request/response terminal fires and
+            // ResyncRefused re-opens its gate WITHOUT counting the ask, which is the correct
+            // reading: an owner with nothing to send has not failed to answer, it has nothing to
+            // answer with.
+            //
+            // The failure arm REFUSES rather than acks, for the same reason: nothing was sent, so
+            // an ack there would feed an OWNER-side failure into the mirror's
+            // acknowledged-and-unanswered count. The subscriber still gets a verdict either way.
+            var reasserted = 0;
+            alreadyServing.Update(
+                _ =>
+                {
+                    var frame = BuildReassertFrame(alreadyServing);
+                    if (frame is not null)
+                        Interlocked.Exchange(ref reasserted, 1);
+                    return frame;
+                },
+                ex =>
+                {
+                    logger.LogWarning(ex,
                         "Stream {StreamId}: could not re-assert snapshot for resubscribing subscriber {Subscriber}",
-                        alreadyServing.StreamId, request.Subscriber));
-            // Nothing yet to re-assert (the initial subscribe is still hydrating) — its own
-            // first Full is already on its way to this subscriber; do NOT build a second stream.
+                        alreadyServing.StreamId, request.Subscriber);
+                    Refuse(ex);
+                },
+                () =>
+                {
+                    if (Volatile.Read(ref reasserted) == 1)
+                        Ack();
+                    else
+                        AnswerWhenTheStreamFirstEmits(alreadyServing);
+                });
+            // Do NOT build a second stream — see the #606 note above.
             return alreadyServing;
         }
 
@@ -1435,6 +1641,17 @@ public static class JsonSynchronizationStream
         // stream that has no way to reach the subscriber. Unregisters itself on disposal.
         (workspace as Workspace)?.RegisterClientSubscription(
             request.Subscriber, request.StreamId, request.Reference, reduced);
+
+        // 🚨 A FRESH stream acks IMMEDIATELY, and the asymmetry with the re-assert path above is
+        // deliberate (#3058). This subscribe has no answer to overtake — the stream was just built
+        // and its first Full comes out of the reduce's own hydration, which is IO-bound and
+        // unbounded (a cold data source, a per-node hub activating). Waiting for it before
+        // acknowledging would hold the subscriber's pending callback open across that hydration and
+        // risk the very RequestTimeout the ack exists to prevent, for a subscribe that cannot
+        // produce the miscount: the mirror's give-up counts CONSECUTIVE unanswered re-asks, and a
+        // re-ask reaches this path at most once per gap (the registration above makes the next one
+        // a re-assert), so the hydrating Full always lands and resets the count.
+        Ack();
 
         return reduced;
     }
