@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace MeshWeaver.Messaging.Serialization;
 
 /// <summary>
@@ -86,7 +84,7 @@ public static class MessageSizeGuard
     /// against the real <c>FixedSizeBuffer</c>, so an Orleans upgrade that moved the block size
     /// fails a test instead of silently mis-tuning the guard.
     /// </summary>
-    public const int MemoryStreamBlockBytes = 1 << 20;
+    public const int MemoryStreamBlockBytes = DeliveryPayloadBounds.MemoryStreamBlockBytes;
 
     /// <summary>
     /// The FALLBACK ceiling on one Orleans grain-call body: Orleans'
@@ -106,7 +104,7 @@ public static class MessageSizeGuard
     /// its <c>$type</c> discriminator and first fields sit at the front of the JSON — without
     /// pasting a multi-megabyte blob into a log line that is itself size-capped.
     /// </summary>
-    public const int PayloadPreviewChars = 200;
+    public const int PayloadPreviewChars = DeliveryPayloadBounds.PayloadPreviewChars;
 
     /// <summary>
     /// True when <paramref name="delivery"/>'s packaged payload cannot fit
@@ -126,16 +124,8 @@ public static class MessageSizeGuard
     /// that is almost always "no".</para>
     /// </summary>
     public static bool IsOversized(
-        IMessageDelivery? delivery, int limitBytes, out int payloadBytes)
-    {
-        payloadBytes = 0;
-        if (delivery?.Message is not RawJson { Content: { } content })
-            return false;
-        if ((long)content.Length * 3 < limitBytes)
-            return false;
-        payloadBytes = Encoding.UTF8.GetByteCount(content);
-        return payloadBytes >= limitBytes;
-    }
+        IMessageDelivery? delivery, int limitBytes, out int payloadBytes) =>
+        DeliveryPayloadBounds.IsOversized(delivery, limitBytes, out payloadBytes);
 
     /// <summary>
     /// The refusal an operator and the sender both read: WHAT was rejected (target, delivery id,
@@ -230,18 +220,21 @@ public static class MessageSizeGuard
     /// stripped only when carrying it is what would lose the report. The default bound is the
     /// TIGHTER of the two transports (the 1 MiB memory-stream block), so one call protects a NACK
     /// regardless of which transport it will take back to the sender.</para>
+    ///
+    /// <para>🚨 <b>Calling this is no longer how the rule is enforced — it is a second belt.</b>
+    /// The rule shipped as two hand-applied call sites (<c>RoutingGrain.PostFailure</c> #1890,
+    /// <c>OrleansRoutingService.SendDeliveryFailure</c> #2885) and the site that then took a
+    /// production pod down was a THIRD one that had never been told:
+    /// <c>MessageService.ReportFailure</c> (#3044/#3049). With ~20 <c>new DeliveryFailure(delivery)</c>
+    /// sites in this repository, "remember to strip" was never a control. It is now
+    /// <see cref="DeliveryFailure"/>'s own construction invariant — see
+    /// <see cref="DeliveryPayloadBounds.WithoutOversizedPayload"/>, which this delegates to — so the
+    /// two explicit calls are idempotent and kept only because their surrounding comments carry the
+    /// incident history.</para>
     /// </summary>
     public static IMessageDelivery WithoutOversizedPayload(
-        IMessageDelivery delivery, int limitBytes = MemoryStreamBlockBytes)
-    {
-        ArgumentNullException.ThrowIfNull(delivery);
-        if (!IsOversized(delivery, limitBytes, out var payloadBytes))
-            return delivery;
-        return delivery.WithMessage(new RawJson(
-            $"{{\"payloadOmitted\":\"{payloadBytes} bytes exceeded the {limitBytes}-byte "
-            + "memory-stream limit; the failure report would not have been deliverable with it "
-            + $"attached\",\"bytes\":{payloadBytes},\"head\":{Quote(Head(delivery))}}}"));
-    }
+        IMessageDelivery delivery, int limitBytes = MemoryStreamBlockBytes) =>
+        DeliveryPayloadBounds.WithoutOversizedPayload(delivery, limitBytes);
 
     /// <summary>
     /// The head of the payload, for identification. 🚨 The CALLER JSON-quotes it before it reaches
@@ -251,16 +244,8 @@ public static class MessageSizeGuard
     /// log record. Quoting also keeps the refusal a single parseable line.
     /// </summary>
     private static string Preview(IMessageDelivery delivery) =>
-        delivery.Message is RawJson { Content: { } content }
-            ? Head(content) is var head && head.Length < content.Length ? head + "…" : head
-            : delivery.Message?.GetType().Name ?? "<null>";
-
-    private static string Head(IMessageDelivery delivery) =>
-        delivery.Message is RawJson { Content: { } content } ? Head(content) : string.Empty;
-
-    private static string Head(string content) =>
-        content.Length <= PayloadPreviewChars ? content : content[..PayloadPreviewChars];
+        DeliveryPayloadBounds.Preview(delivery);
 
     private static string Quote(string value) =>
-        System.Text.Json.JsonSerializer.Serialize(value);
+        DeliveryPayloadBounds.Quote(value);
 }

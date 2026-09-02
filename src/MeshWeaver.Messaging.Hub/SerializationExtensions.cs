@@ -175,6 +175,17 @@ public static class SerializationExtensions
             baseOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver()
         );
 
+        // 🚨 The resolver above cannot reach a type claimed by a CUSTOM converter — issues
+        // #3044/#3049. It strips [PreventLogging] by removing properties from a resolved
+        // JsonTypeInfo, and a custom-converted type has Kind == None and no properties, so
+        // RawJson.Content's [PreventLogging] was silently inert and every log render transcoded the
+        // whole payload (3 bytes per char out of the shared array pool) — the allocation that threw
+        // OutOfMemoryException on a production pod while it tried to report a delivery failure.
+        // Insert at 0: System.Text.Json takes the FIRST converter in the list that CanConvert, so
+        // this outranks the RawJsonConverter copied from the base options. Only these options are
+        // affected; the wire options must still round-trip a payload verbatim.
+        loggingOptions.Converters.Insert(0, new LoggingRawJsonConverter());
+
         return loggingOptions;
     }
 

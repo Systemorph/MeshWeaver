@@ -45,6 +45,27 @@ public class DeliveryFailureException : Exception
 public record DeliveryFailure(IMessageDelivery Delivery, string? Message = null)
 {
     /// <summary>
+    /// The message delivery that failed.
+    ///
+    /// <para>🚨 <b>A NACK about an oversized message must not BE one.</b> This report embeds the
+    /// original delivery and travels the SAME transport back to the sender, so a failure report
+    /// about a 142 MB message is itself a 142 MB message and dies at exactly the wall it is
+    /// describing — leaving the producer with neither the message nor the report. An undeliverable
+    /// payload is therefore replaced, on construction, by a description of itself: see
+    /// <see cref="DeliveryPayloadBounds.WithoutOversizedPayload"/> for the full argument and for why
+    /// the strip belongs HERE rather than at the ~20 sites that build one. A payload that fits is
+    /// echoed unchanged, so this is invisible to every ordinary failure; senders correlate a
+    /// <see cref="DeliveryFailure"/> on <c>RequestId</c>, never on the echoed payload.</para>
+    /// </summary>
+    /// <remarks>
+    /// Null-tolerant on purpose: a <see cref="DeliveryFailure"/> arriving from the wire can be
+    /// missing its delivery, and this invariant must not turn that into a deserialization throw on
+    /// the error path — where it would replace a diagnosable NACK with an undiagnosable one.
+    /// </remarks>
+    public IMessageDelivery Delivery { get; init; } =
+        Delivery is null ? null! : DeliveryPayloadBounds.WithoutOversizedPayload(Delivery);
+
+    /// <summary>
     /// The category of failure (see <see cref="MeshWeaver.Messaging.ErrorType"/>).
     /// </summary>
     public ErrorType ErrorType { get; init; }
