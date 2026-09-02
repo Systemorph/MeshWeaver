@@ -69,7 +69,7 @@ public class PatchAckTotalityTest
         using var h = new Harness();
 
         using var sub = DataExtensions.ArmPatchAckWatcher(
-            Observable.Empty<int>(), _ => Observable.Return(true), FlushTimeout, h.AckOnce, h.Register, HubPath);
+            Observable.Empty<int>(), _ => Observable.Return(true), FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
 
         h.Acks.Should().ContainSingle(
             "a stream that completes without emitting is Rx's third termination; a two-arm subscribe "
@@ -100,7 +100,7 @@ public class PatchAckTotalityTest
         var flush = new Subject<bool>();
 
         using var sub = DataExtensions.ArmPatchAckWatcher(
-            Observable.Return(42), _ => flush, FlushTimeout, h.AckOnce, h.Register, HubPath);
+            Observable.Return(42), _ => flush, FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
 
         h.Acks.Should().BeEmpty(
             "Take(1) has completed right after the echo while the flush is in flight — a completion "
@@ -120,7 +120,7 @@ public class PatchAckTotalityTest
         using var h = new Harness();
 
         using var sub = DataExtensions.ArmPatchAckWatcher(
-            Observable.Return(42), _ => null, FlushTimeout, h.AckOnce, h.Register, HubPath);
+            Observable.Return(42), _ => null, FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
 
         h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null));
     }
@@ -138,7 +138,7 @@ public class PatchAckTotalityTest
         using var h = new Harness();
 
         using var sub = DataExtensions.ArmPatchAckWatcher(
-            Observable.Return(42), _ => Observable.Empty<bool>(), FlushTimeout, h.AckOnce, h.Register, HubPath);
+            Observable.Return(42), _ => Observable.Empty<bool>(), FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
 
         h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null),
             "nothing to persist is not a failure; a NACK here would fail a write that committed");
@@ -153,7 +153,7 @@ public class PatchAckTotalityTest
 
         using var sub = DataExtensions.ArmPatchAckWatcher(
             Observable.Throw<int>(new TimeoutException("owner echo timed out")),
-            _ => Observable.Return(true), FlushTimeout, h.AckOnce, h.Register, HubPath);
+            _ => Observable.Return(true), FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
 
         h.Acks.Should().ContainSingle();
         h.Acks[0].Success.Should().BeFalse();
@@ -170,7 +170,7 @@ public class PatchAckTotalityTest
 
         using var sub = DataExtensions.ArmPatchAckWatcher(
             Observable.Return(42), _ => Observable.Throw<bool>(new UnauthorizedAccessException("row-level security")),
-            FlushTimeout, h.AckOnce, h.Register, HubPath);
+            FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
 
         h.Acks.Should().ContainSingle();
         h.Acks[0].Success.Should().BeFalse();
@@ -254,5 +254,45 @@ public class PatchAckTotalityTest
                 + "latches, that NACK would win over the flush's later true");
         }
         foreach (var d in inner) d.Dispose();
+    }
+
+    /// <summary>
+    /// 🚨 THE TEARDOWN TRAP (Plugins <c>LateNackReenqueueTest</c> / <c>NackReachesTheWaiterDuringTeardownTest</c>,
+    /// red on core main 2026-09-02). The echo stream ends empty because the OWNER is shutting down —
+    /// its sync hub disposes in the DisposeHostedHubs phase and completes the store. The watcher must
+    /// post NOTHING: the ShutDown-phase disposal NACK owns that verdict. Minted here it is one phase
+    /// too early (the dying activation still holds the address, so the writer's immediate re-enqueue is
+    /// rejected ShuttingDown and the write fails Unknown) and, under a whole-mesh teardown, on a
+    /// transport that is dropped — having claimed the once-only gate, the registrant's direct
+    /// <c>Dispatch</c> to the armed waiter is then skipped and the caller hears nothing.
+    /// </summary>
+    [Fact]
+    public void EchoStreamThatEndsWhileTheOwnerIsShuttingDown_LeavesTheVerdictToTheDisposalNack()
+    {
+        using var h = new Harness();
+
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Empty<int>(), _ => Observable.Return(true), FlushTimeout, h.AckOnce, h.Register, HubPath,
+            ownerIsShuttingDown: () => true);
+
+        h.Acks.Should().BeEmpty(
+            "the stream ended as part of the owner's own teardown; the ShutDown-phase disposal NACK "
+            + "(RegisterOwnerDisposingNack) is the verdict for a patch in flight at owner teardown — it fires "
+            + "when the address is released, so the writer's re-enqueue lands on a fresh activation, and it "
+            + "hands the verdict to the armed late watch directly, which a post from a disposing hub cannot");
+    }
+
+    /// <summary>The live-owner counterpart: the same empty completion, owner alive, still NACKs promptly.</summary>
+    [Fact]
+    public void EchoStreamThatEndsWhileTheOwnerLives_StillNacksPromptly()
+    {
+        using var h = new Harness();
+
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Empty<int>(), _ => Observable.Return(true), FlushTimeout, h.AckOnce, h.Register, HubPath,
+            ownerIsShuttingDown: () => false);
+
+        h.Acks.Should().ContainSingle().Which.Error!.Code.Should().Be(MeshNodeErrorCode.OwnerDisposing,
+            "mirror eviction while the hub lives is #3033's case, and it has no other seam to answer on");
     }
 }
