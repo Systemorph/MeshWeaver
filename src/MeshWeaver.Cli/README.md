@@ -25,11 +25,34 @@ The whole CI contract for a plugin repo, in three lines:
 ```yaml
 - uses: actions/checkout@v7
 - run: dotnet tool install -g MeshWeaver.Cli
-- run: memex build plugin . --image meshweaver.azurecr.io/mw-plugin-test:<tag>
+- run: |
+    memex build plugin . \
+      --image meshweaver.azurecr.io/mw-plugin-test@${{ vars.MW_IMAGE_DIGEST }} \
+      --platform-image meshweaver.azurecr.io/memex-portal-ai@${{ vars.MW_PORTAL_IMAGE_DIGEST }}
 ```
 
-The tool pulls the image, **pins it by digest**, and runs the platform's own builder and tester
-inside it. Nothing in the job needs to know about docker, mounts, seeds or allow-files.
+The tool pulls both images, **pins them by digest**, and runs the platform's own builder and tester
+inside them. Nothing in the job needs to know about docker, mounts, seeds or allow-files.
+
+### Two images, two roles
+
+**`--image` EXECUTES; `--platform-image` supplies the reference set.** The tester image's `/app` is a
+strict SUBSET of the portal's — 88 vs 219 assemblies on `3.0.0-rc9.ci.7534`; `MeshWeaver.Maps`,
+`.AI`, `.ContentCollections.Indexing`, the Blazor and hosting halves exist only in the portal — so a
+build that compiled against the tester's could not see what every portal compiles against. Content
+binding a portal-shipped assembly then fails with `CS0234 … does not exist in the namespace
+'MeshWeaver'`: a CONTENT-shaped failure with an INFRASTRUCTURE cause, on source nobody changed.
+
+Both stages therefore run from a **composed gate host** — the portal's `/app` with the tester CLI
+laid beside it, started by the portal image's own `dotnet` — composed by
+`.github/scripts/compose-gate-host.sh`, the same file the reusable node-repo lanes fetch. The CLI
+embeds that script and runs it; it does not carry a second copy of the rules.
+
+🚨 **There is no fallback to the tester's `/app`.** Omit `--platform-image` and the build is REFUSED
+before anything is pulled, and passing the tester image as the platform is refused by name. Pin the
+two digests from ONE CD wave: the run asserts, with the tester's own `framework-identity` verb, that
+the two images resolve ONE framework identity, and that the bake it produces is keyed to the identity
+the platform host resolves.
 
 It runs the two stages the plugin build contract defines, in order:
 
@@ -41,14 +64,15 @@ It runs the two stages the plugin build contract defines, in order:
 
 | option | meaning |
 |---|---|
-| `--image` *(required)* | image to build against; pulled and pinned by digest |
+| `--image` *(required)* | the TESTER image (`mw-plugin-test`); pulled and pinned by digest. It executes the build |
+| `--platform-image` *(required)* | the PORTAL image (`memex-portal-ai`); pulled and pinned by digest. It supplies the reference set, the framework identity and the runtime. No default, no fallback |
 | `--bake-output <dir>` | where the bundles land (default: a temp dir) |
 | `--external-modules <dir>` | module DLLs to mount at `/ext` |
 | `--source-sha <sha>` | commit stamped into the bake |
 | `--allow <file>` | allow-file relative to the plugin path (default `plugin-gate.allow`, used only if present) |
 
-The image is an **argument, not an ambient**: which image a plugin is built against decides the
-result, so it belongs where a reader can see it. A gate that resolves its framework from an
+The images are **arguments, not ambients**: which images a plugin is built against decide the
+result, so they belong where a reader can see them. A gate that resolves its framework from an
 environment variable while advertising a branch name will eventually report a missing type against
 the wrong repository — which is exactly what happened on 2026-08-30.
 
@@ -101,7 +125,9 @@ contains it. From a platform checkout it runs directly:
 
 ```bash
 dotnet run --project src/MeshWeaver.Cli -c Release -- \
-  build plugin ../MeshWeaver.Plugins --image meshweaver.azurecr.io/mw-plugin-test:<tag>
+  build plugin ../MeshWeaver.Plugins \
+  --image meshweaver.azurecr.io/mw-plugin-test:<tag> \
+  --platform-image meshweaver.azurecr.io/memex-portal-ai:<same-wave-tag>
 ```
 
 Same behaviour, no install — useful for trying it on a repo before the tool version is out.

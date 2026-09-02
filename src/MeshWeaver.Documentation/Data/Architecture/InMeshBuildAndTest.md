@@ -132,23 +132,68 @@ The maintainer's shape for a CI job, in four lines:
 ```yaml
 - uses: actions/checkout@v7                                   # 0. checkout git
 - run: dotnet tool install -g MeshWeaver.Cli                  # 1. install the CLI
-- run: memex build plugin <path> --image <image>              # 2. pull it, run in it, build + test
+- run: memex build plugin <path>                              # 2. pull them, run in them, build + test
+    --image <tester> --platform-image <portal>
 ```
 
-**`memex build plugin <path> --image <image>` is the whole contract.** A workflow says *which plugin
-this job is about* and *which image to build it against*; the tool pulls that image, runs the build
-inside it, works out what actually changed, closes over everything that depends on it, builds that,
-runs its tests, and publishes. Nothing else in the job knows about modules, closures, bundles,
-registries or the mesh — and a plugin repo's CI stops being a program about MeshWeaver and becomes
-three lines.
+**`memex build plugin <path> --image <tester> --platform-image <portal>` is the whole contract.** A
+workflow says *which plugin this job is about* and *which images to build it against*; the tool pulls
+them, runs the build inside them, works out what actually changed, closes over everything that
+depends on it, builds that, runs its tests, and publishes. Nothing else in the job knows about
+modules, closures, bundles, registries or the mesh — and a plugin repo's CI stops being a program
+about MeshWeaver and becomes three lines.
 
 The verb shape matters as much as the behaviour: `build` is the command group and `plugin` names
 the subject, so the same tool has room for the other subjects CI needs without every repo growing
 its own script for each.
 
+### Two IMAGES, two roles — the tester executes, the portal is the reference set
+
+**`--image` is the TESTER; `--platform-image` is the PORTAL, and both are required.** The tester
+image's `/app` is a strict SUBSET of the portal's — measured on `3.0.0-rc9.ci.7534`, 88 assemblies
+against 219: `MeshWeaver.Maps`, `MeshWeaver.AI`, `MeshWeaver.ContentCollections.Indexing`, the Blazor
+and hosting halves are in the portal and nowhere else. A build that took its reference set from the
+tester therefore could not see what every portal compiles against, and content binding one of those
+assemblies failed with `CS0234 The type or namespace name 'Maps' does not exist in the namespace
+'MeshWeaver'` — a CONTENT-shaped failure with an INFRASTRUCTURE cause, reported against source nobody
+had changed.
+
+The reusable node-repo lanes moved to the two-image shape first. The CLI path kept running
+`--entrypoint /app/mw-plugin-test` straight from the tester image until
+MeshWeaver.Manufacturing's first adoption went red on `AppleMaps/Gallery` and `Cornerstone/Pricing`
+at the `3.0.0-rc9.ci.7574` pin — the same defect, one lane later.
+
+Both stages now run from a **composed gate host**: the portal's `/app`, complete, with the tester CLI
+laid beside it, started by the portal image's own `dotnet` as
+`dotnet /host/mw-plugin-test.dll … --app /app --shared-frameworks /usr/share/dotnet/shared`. The
+composition rules live in exactly one file, `.github/scripts/compose-gate-host.sh` — the portal's
+files win any collision because the process IS the portal, the tester's surface manifest and
+`deps.json` are never copied, and a directory missing any of those is refused by name. The lanes
+fetch that file from the platform at their pinned ref; the CLI embeds it and runs it. Neither
+carries a second copy of the rules, and a test pins the two to the same bytes.
+
+Embedding rather than fetching also closes the skew the lanes have to live with. A workflow pinned by
+its caller's `uses:` and a script fetched at `platform-ref` are two INDEPENDENTLY pinned artefacts,
+and an old workflow driving a new script is how an empty module set was once sealed while every
+signal stayed green. The CLI ships the caller and the script in ONE package, so the version that
+composes and the version that decides what to do with the composition cannot disagree.
+
+🚨 **There is no fallback to the tester's `/app`, and that is deliberate.** A missing
+`--platform-image` is a refusal before anything is pulled, and the tester passed as the platform is
+refused by name. Silently compiling against the subset is not backwards compatibility — it is the
+defect, and it is invisible on any plugin that happens not to bind a portal-only assembly.
+
+The two pins must come from ONE CD wave, and that is asserted rather than assumed: the tester's own
+`framework-identity` verb reads the portal's `/app` as files and must resolve the identity the tester
+resolves, naming the canonical assemblies each side lacks when it does not. The bake the run produces
+is then checked against that same identity — bundles published under an identity no portal asks for
+are inert, which is how a whole release wave once recompiled everything at boot while CI stayed
+green.
+
 ### The image is an ARGUMENT, not an ambient
 
-`memex build plugin <path> --image <image>` — **the image to build against is passed in.**
+`memex build plugin <path> --image <tester> --platform-image <portal>` — **the images to build
+against are passed in.**
 
 A plugin is built by taking the MeshWeaver image and installing its dependencies as built artifacts
 into it ([the four steps](/Doc/Architecture/PluginBuildContract)). Which image that is decides the

@@ -20,4 +20,12 @@
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- 🚨 THE gate-host composition rules, embedded from the ONE file that holds them. The reusable
+         lanes fetch this same path from the platform at their pinned ref; `memex build plugin`
+         extracts it and runs it. A second copy of the rules in C# is exactly the drift trap this
+         repository has paid for repeatedly, so the CLI links the script rather than reimplementing
+         it, and GateHostCompositionTest pins the two to the same bytes. -->
+    <EmbeddedResource Include="..\..\.github\scripts\compose-gate-host.sh" LogicalName="compose-gate-host.sh" />
+  </ItemGroup>
 </Project>
