@@ -208,7 +208,8 @@ public static class BuildNodeType
                     ex => logger?.LogWarning(
                         ex, "Build claim arbitration failed on {Address}", hub.Address));
 
-        var onEmission = ActivityControlPlaneExtensions.SubscribeWithReEstablish(
+        var onEmission = ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            hub,
             () => workspace.GetMeshNodeStream()
                 .Select(node => node?.ContentAs<BuildState>(hub.JsonSerializerOptions))
                 .Where(state => state?.RequestedClaims is { Count: > 0 })
@@ -228,7 +229,6 @@ public static class BuildNodeType
                     .Select(_ => key)
                     .StartWith(key)),
             _ => TryArbitrate(),
-            hub.Address,
             logger,
             "build claim arbiter");
 

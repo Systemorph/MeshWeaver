@@ -210,7 +210,8 @@ internal static class NodeTypeCompilationHelpers
         // again) while the hub kept running. Transient stream faults re-establish; poisoned
         // own content (undeserializable NodeTypeDefinition) parks the type — the visible,
         // bounded sink — and stops instead of looping on the replayed emission.
-        var watcherSub = ActivityControlPlaneExtensions.SubscribeWithReEstablish(
+        var watcherSub = ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            hub,
             () => ownStream
             .Where(node => node?.Content is NodeTypeDefinition)
             .DistinctUntilChanged(node => ((NodeTypeDefinition)node!.Content!).CompilationStatus)
@@ -519,7 +520,6 @@ internal static class NodeTypeCompilationHelpers
                         }
                     }
                 },
-            hub.Address,
             logger,
             "Compile watcher",
             onPoisonedContent: ex => parkRegistry?.OnCompileFailed(
@@ -1196,7 +1196,8 @@ internal static class NodeTypeCompilationHelpers
         // instead of being mistaken for non-convergence.
         var stampHighWater = new MonotonicHighWaterMark();
 
-        return ActivityControlPlaneExtensions.SubscribeWithReEstablish(
+        return ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            hub,
             () => ownStream
                 .Where(node => node?.Content is NodeTypeDefinition def
                     && def.RequestedSourceStampAt is not null
@@ -1257,7 +1258,6 @@ internal static class NodeTypeCompilationHelpers
                         "[AdoptedSourceStamp] {HubPath}: failed to stamp the adopted build's source "
                         + "snapshot — the next release request will recompile it", hubPath));
             },
-            hub.Address,
             logger,
             "Adopted source-stamp watcher");
     }
@@ -1342,7 +1342,8 @@ internal static class NodeTypeCompilationHelpers
         // never fired again. Transient faults re-establish (the DistinctUntilChanged resets
         // and the current source set re-resolves — idempotent); poisoned own content stops
         // loudly (the compile watcher's park is the visible sink for the same emission).
-        return ActivityControlPlaneExtensions.SubscribeWithReEstablish(
+        return ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            hub,
             () => ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && !IsStaticOnlyNodeType(node, def))
@@ -1557,7 +1558,6 @@ internal static class NodeTypeCompilationHelpers
                             "SourcesWatcher: failed to write CurrentSourceVersions for {HubPath}",
                             hubPath));
                 },
-            hub.Address,
             logger,
             "Sources watcher");
     }
@@ -1696,7 +1696,8 @@ internal static class NodeTypeCompilationHelpers
         // trigger replayed by the fresh subscription fails the IsPast gate — no double compile.
         // Poisoned own content stops loudly (the compile watcher parks the type on the same
         // emission — the visible sink).
-        return ActivityControlPlaneExtensions.SubscribeWithReEstablish(
+        return ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            hub,
             () => ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.RequestedReleaseAt is { } req
@@ -1876,7 +1877,6 @@ internal static class NodeTypeCompilationHelpers
                         ex => logger?.LogWarning(ex,
                             "[ReleaseRequestWatcher] {HubPath}: failed to dispatch release", hubPath));
                 },
-            hub.Address,
             logger,
             "ReleaseRequestWatcher");
     }

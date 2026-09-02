@@ -80,12 +80,12 @@ public static class ActivityControlPlaneExtensions
         // ThreadExecution.InitializeThreadLifecycle. A disposed guard + SerialDisposable
         // make the re-establish stop cleanly when the hub tears down. See
         // Doc/Architecture/ActivityControlPlane.md → "Recovery on activation".
-        return SubscribeWithReEstablish(
+        return SubscribeHubWatcher(
+            hub,
             () => workspace.GetMeshNodeStream()
                 .Select(node => node.ContentAs<ActivityLog>(hub.JsonSerializerOptions)?.RequestedStatus)
                 .DistinctUntilChanged(),
             onRequestedStatus,
-            hub.Address,
             logger,
             "ActivityControlPlane subscription");
     }
@@ -161,7 +161,8 @@ public static class ActivityControlPlaneExtensions
         // sibling of the init-recovery deadlock). On fault we reset the single-flight
         // guard and re-establish after a short delay. Mirrors WatchControlPlane and
         // ThreadExecution.InitializeThreadLifecycle.
-        return SubscribeWithReEstablish<System.Reactive.Unit>(
+        return SubscribeHubWatcher<System.Reactive.Unit>(
+            hub,
             () => hub.GetWorkspace().GetMeshNodeStream()
                 .DistinctUntilChanged(fingerprint)
                 .Where(needsDispatch)
@@ -176,7 +177,6 @@ public static class ActivityControlPlaneExtensions
                     })
                     .Finally(() => System.Threading.Interlocked.Exchange(ref dispatching, 0))),
             _ => { },
-            hub.Address,
             logger,
             "Submission watcher",
             // Release the single-flight guard a faulted in-flight dispatch may have
@@ -298,6 +298,14 @@ public static class ActivityControlPlaneExtensions
     /// <param name="onPoisonedContent">Optional visible sink invoked (once, with the fault) when
     /// the watcher stops on poisoned own content — route it somewhere a user/operator can see
     /// (park registry, health surface), not just a log.</param>
+    /// <remarks>
+    /// 🚨 For a watcher that a HUB owns — one whose <see cref="IDisposable"/> goes to
+    /// <c>hub.RegisterForDisposal</c> — use <see cref="SubscribeHubWatcher{T}"/> instead: this
+    /// shape knows only the hub's ADDRESS and therefore nothing of its teardown, so the watcher
+    /// keeps running through the hub's whole disposal window until the ShutDown phase finally
+    /// disposes it (Systemorph/MeshWeaver#3026). This address-only form remains for watchers
+    /// with no owning hub.
+    /// </remarks>
     public static IDisposable SubscribeWithReEstablish<T>(
         Func<IObservable<T>> source,
         Action<T> onNext,
@@ -307,6 +315,77 @@ public static class ActivityControlPlaneExtensions
         Action? onTransientFault = null,
         Func<Action, IDisposable>? scheduleReEstablish = null,
         Action<Exception>? onPoisonedContent = null)
+        => SubscribeWithReEstablishCore(
+            source, onNext, address, logger, faultLogContext,
+            onTransientFault, scheduleReEstablish, onPoisonedContent, hub: null);
+
+    /// <summary>
+    /// <see cref="SubscribeWithReEstablish{T}"/> for a watcher OWNED BY <paramref name="hub"/> —
+    /// the shape every hub-installed watcher must use, because it ties the watcher's lifetime to
+    /// the hub's TEARDOWN STATE rather than to the hub's last disposal phase
+    /// (Systemorph/MeshWeaver#3026). A distinct name rather than an overload, deliberately: a
+    /// <c>cref</c> to the generic method without a parameter list — which other repositories carry
+    /// — would become ambiguous the moment a second overload existed, and every satellite builds
+    /// with warnings as errors.
+    ///
+    /// <para><b>The defect this closes.</b> A watcher's <see cref="IDisposable"/> is handed to
+    /// <c>hub.RegisterForDisposal</c>, which disposes it in the hub's ShutDown phase — the LAST
+    /// phase, after Quiescing has waited up to its whole budget for pending callbacks and after
+    /// the hosted subtree has been joined. And <see cref="IMessageHub.IsShuttingDown"/> flips even
+    /// earlier than the hub's own <c>Dispose()</c>: an ANCESTOR's disposal freezes the subtree
+    /// first and reaches this hub only in its DisposeHostedHubs phase. Through that whole window
+    /// the watcher kept working: every emission still ran its callback, still issued cross-hub
+    /// requests — which are exactly the callbacks Quiescing then waited 2 s for and errored with
+    /// <c>ObjectDisposedException</c> (the 22 <c>SourceIncludeUnavailableException</c> faults per
+    /// FutuRe.Test shard) — and still ran on whatever scheduler thread delivered the emission,
+    /// against a hub whose lifetime scope may already be gone. One such callback escaping on a
+    /// raw thread is the exit-139 host kill.</para>
+    ///
+    /// <para><b>What this does differently.</b> (1) It subscribes
+    /// <see cref="IMessageHub.ShuttingDown"/> and tears the watcher down — live subscription AND any
+    /// pending re-establish — at the FIRST instant of teardown, own or ancestral. Because that
+    /// disposal propagates into the watched pipeline, an in-flight cross-hub read is unsubscribed
+    /// (its pending callback is removed from the hub's response registry) rather than waited on,
+    /// so Quiescing drains at once. (2) Every delivery is GATED on
+    /// <see cref="IMessageHub.IsShuttingDown"/>, so an emission already dispatched when the signal
+    /// fires is dropped instead of running the callback against a disposing hub. (3) Installing on
+    /// a hub that is already shutting down is inert. The fault classification is unchanged.</para>
+    /// </summary>
+    /// <typeparam name="T">Element type produced by the observed source.</typeparam>
+    /// <param name="hub">The hub that OWNS this watcher — whose teardown ends it.</param>
+    /// <param name="source">Factory that (re-)creates the observable to watch.</param>
+    /// <param name="onNext">Invoked for every element the source emits while the hub is live.</param>
+    /// <param name="logger">Optional logger for transient-fault and terminal-stop diagnostics.</param>
+    /// <param name="faultLogContext">Short human-readable name of the watcher, for fault logs.</param>
+    /// <param name="onTransientFault">Optional callback run before a transient re-establish.</param>
+    /// <param name="scheduleReEstablish">Test seam for how a transient re-establish is scheduled.</param>
+    /// <param name="onPoisonedContent">Optional visible sink for a poisoned-own-content stop.</param>
+    public static IDisposable SubscribeHubWatcher<T>(
+        IMessageHub hub,
+        Func<IObservable<T>> source,
+        Action<T> onNext,
+        ILogger? logger,
+        string faultLogContext,
+        Action? onTransientFault = null,
+        Func<Action, IDisposable>? scheduleReEstablish = null,
+        Action<Exception>? onPoisonedContent = null)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return SubscribeWithReEstablishCore(
+            source, onNext, hub.Address, logger, faultLogContext,
+            onTransientFault, scheduleReEstablish, onPoisonedContent, hub);
+    }
+
+    private static IDisposable SubscribeWithReEstablishCore<T>(
+        Func<IObservable<T>> source,
+        Action<T> onNext,
+        Address address,
+        ILogger? logger,
+        string faultLogContext,
+        Action? onTransientFault,
+        Func<Action, IDisposable>? scheduleReEstablish,
+        Action<Exception>? onPoisonedContent,
+        IMessageHub? hub)
     {
         var serial = new System.Reactive.Disposables.SerialDisposable();
         // 🚨 #991 — the PENDING re-establish must be cancellable, and cancelled by teardown.
@@ -328,11 +407,46 @@ public static class ActivityControlPlaneExtensions
         var schedule = scheduleReEstablish
             ?? (reEstablish => Observable.Timer(TimeSpan.FromSeconds(1)).Subscribe(_ => reEstablish()));
 
+        // 🚨 #3026 — the callback is GATED on the hub's teardown state. `Stop()` below disposes the
+        // subscription at the first instant of teardown, but an emission that was already
+        // dispatched on another thread can still arrive; a hub that is shutting down must not run
+        // watcher work (a cross-hub read, an own-node write) for it. Dropping it is correct: the
+        // fresh activation installs a fresh watcher and observes the current state anew.
+        Action<T> deliver = hub is null
+            ? onNext
+            : x =>
+            {
+                if (hub.IsShuttingDown)
+                {
+                    logger?.LogDebug(
+                        "{Context}: dropping an emission on {Address} — the hub is shutting down",
+                        faultLogContext, address);
+                    return;
+                }
+                onNext(x);
+            };
+
+        void Stop()
+        {
+            disposed = true;
+            // Drop the pending re-establish FIRST — that is the TimerQueue entry rooting
+            // this whole closure graph (#991); `serial` only holds the live subscription.
+            pendingReEstablish.Dispose();
+            serial.Dispose();
+        }
+
         void Establish()
         {
             if (disposed) return;
-            serial.Disposable = source().Subscribe(
-                onNext,
+            // 🚨 Observable.Defer, never a bare `source()`. A factory that throws SYNCHRONOUSLY —
+            // `GetMeshNodeStream()` on a hub whose scope is gone, evaluated inside the factory —
+            // would otherwise throw out of Establish(): on the first call that is the installer's
+            // problem, but on a RE-establish the caller is the 1 s Observable.Timer tick, i.e. a
+            // raw scheduler thread with nothing above it, and an unhandled throw there kills the
+            // host (#2468's shape, #3026's crash). Defer forwards a factory throw to OnError, where
+            // the classifier below owns it like any other fault.
+            serial.Disposable = Observable.Defer(source).Subscribe(
+                deliver,
                 ex =>
                 {
                     if (IsOwnHubDisposing(ex, address))
@@ -385,14 +499,30 @@ public static class ActivityControlPlaneExtensions
                         pendingReEstablish.Disposable = schedule(Establish);
                 });
         }
+
+        // 🚨 #3026 — the watcher's lifetime is the hub's TEARDOWN STATE, not its ShutDown phase.
+        // ShuttingDown replays, so a hub that is already shutting down stops the watcher right
+        // here, before Establish() ever subscribes: installing on a disposing hub is inert.
+        var teardown = hub is null
+            ? System.Reactive.Disposables.Disposable.Empty
+            : hub.ShuttingDown.Take(1).Subscribe(
+                _ =>
+                {
+                    if (disposed) return;
+                    logger?.LogDebug(
+                        "{Context}: hub {Address} is shutting down — the watcher stops with it "
+                        + "(a fresh activation installs a new one)",
+                        faultLogContext, address);
+                    Stop();
+                },
+                ex => logger?.LogDebug(ex,
+                    "{Context}: the ShuttingDown signal of {Address} faulted", faultLogContext, address));
+
         Establish();
         return System.Reactive.Disposables.Disposable.Create(() =>
         {
-            disposed = true;
-            // Drop the pending re-establish FIRST — that is the TimerQueue entry rooting
-            // this whole closure graph (#991); `serial` only holds the live subscription.
-            pendingReEstablish.Dispose();
-            serial.Dispose();
+            teardown.Dispose();
+            Stop();
         });
     }
 

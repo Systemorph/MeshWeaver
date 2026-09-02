@@ -277,6 +277,32 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     bool IsShuttingDown { get; }
 
     /// <summary>
+    /// <see cref="IsShuttingDown"/> as a SOURCE: fires <see cref="Unit"/> exactly once — at the
+    /// FIRST instant this hub becomes part of a shutdown — then completes. A late subscriber is
+    /// told at once (the source replays), so subscribing can never race the moment.
+    ///
+    /// <para>That first instant is either this hub's own <see cref="IDisposable.Dispose"/> or an
+    /// ANCESTOR's: the ancestor's creation freeze cascades through the whole subtree synchronously
+    /// inside its <c>Dispose()</c> (<c>HostedHubsCollection.CloseCreation</c>), strictly BEFORE
+    /// this hub's own disposal phase reaches it — potentially seconds before, because the ancestor
+    /// first drains its own callbacks for the whole <c>QuiesceTimeout</c>. Neither
+    /// <see cref="RunLevelChanged"/> (this hub's own phases only) nor <see cref="DisposalCompleted"/>
+    /// (the END of teardown) can see that window.</para>
+    ///
+    /// <para>🚨 <b>This is the signal a hub-owned WATCHER stops on</b> (Systemorph/MeshWeaver#3026).
+    /// <see cref="RegisterForDisposal(IDisposable)"/> disposes its registrants in the ShutDown
+    /// phase — the LAST one, after Quiescing has waited up to its budget for pending callbacks.
+    /// A watcher registered there therefore keeps running through the whole teardown window: it
+    /// still reacts to emissions, still issues cross-hub requests (which are the very callbacks
+    /// Quiescing then waits for and finally errors with <c>ObjectDisposedException</c>), and its
+    /// callbacks still run on scheduler threads against a hub whose scope may already be gone.
+    /// <c>ActivityControlPlaneExtensions.SubscribeWithReEstablish</c> observes this signal so a
+    /// watcher dies at the first instant of teardown instead — releasing its in-flight requests
+    /// (so Quiescing drains immediately) and delivering nothing further.</para>
+    /// </summary>
+    IObservable<Unit> ShuttingDown { get; }
+
+    /// <summary>
     /// Observable completion of disposal — fires <see cref="Unit"/> once, then completes, when
     /// the hub has finished disposing (or OnError on a disposal fault). Hubs dispose
     /// SYNCHRONOUSLY (only the mesh-level IO pools drain async), so disposal completion is
