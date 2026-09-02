@@ -414,8 +414,58 @@ jobs:
           else
             # 🚨 Server-side truth, not the event payload. A fork can push anything to a branch
             # called "main" in its own repo; it can never be the tip of THIS repo's main.
-            sha=$(gh api "repos/${{ github.repository }}/commits/main" --jq '.sha')
+            tip=$(gh api "repos/${{ github.repository }}/commits/main" --jq '.sha')
             reason="reconcile"
+
+            # 🚨 SHIP THE NEWEST COMMIT CI HAS VOUCHED FOR — NOT NECESSARILY THE TIP (#3077).
+            #
+            # The reconcile used to target the tip unconditionally. Under sustained merging the tip
+            # is always seconds old with no required check yet, so the gate declined on every tick —
+            # correctly, by its own contract, which deliberately separates "no check YET" from "no
+            # check EVER". Meanwhile the push path's runs were being evicted from the single pending
+            # concurrency slot. BOTH delivery paths starved together, and neither reported a
+            # failure: the reconcile went green having published nothing, and the evicted push runs
+            # reported `cancelled`, which nothing alerts on.
+            #
+            # Measured 2026-09-02: nothing promoted between 03:33:50 and 08:19:44 — 4h46m — while
+            # every dashboard stayed green. At 07:32 the gate logged
+            # `Required check … → absent/none (commit is 0 min old)` and skipped every publishing
+            # job, then annotated "main <sha> does NOT have a complete image set" and reported
+            # SUCCESS. A correct decision on a badly chosen target.
+            #
+            # The healing mechanism was being defeated by the very condition it exists to heal, and
+            # it got WORSE the busier the repo was. So the reconcile now walks back from the tip to
+            # the newest commit whose required check is COMPLETED/SUCCESS. Shipping a slightly older
+            # green commit strictly beats shipping nothing: the next tick ships newer, and the
+            # image-set probe below makes a re-target idempotent (a complete set means bake-only).
+            #
+            # 🚨 Bounded, and it FALLS BACK TO THE TIP. If no commit in the window is green, `sha`
+            # stays the tip and the existing age/absent logic reports it unchanged — which is how
+            # "CI has never run on main" (AGENTS.md trap #1) keeps being said out loud instead of
+            # being silently re-targeted onto some older commit that happens to be green.
+            # 🚨 `while read`, never `for x in $list`. Word-splitting a newline-separated list
+            # depends on IFS and on the shell: the same loop written with `for` silently treats the
+            # whole list as ONE value under zsh, which does not word-split at all. Actions runs
+            # bash, so it would have worked here — and that is precisely the kind of difference
+            # that makes a shell bug survive review and surface somewhere else. Reading line by
+            # line is unambiguous in every shell.
+            sha="$tip"
+            while IFS= read -r candidate; do
+              [ -n "$candidate" ] || continue
+              read -r c_status c_concl < <(gh api \
+                "repos/${{ github.repository }}/commits/$candidate/check-runs?per_page=100" \
+                --jq '[.check_runs[] | select(.name=="Consolidate test results")]
+                      | sort_by(.started_at) | last // {}
+                      | "\(.status // "absent") \(.conclusion // "none")"')
+              echo "  candidate ${candidate:0:7} → $c_status/$c_concl"
+              if [ "$c_status" = "completed" ] && [ "$c_concl" = "success" ]; then
+                sha="$candidate"
+                break
+              fi
+            done < <(gh api "repos/${{ github.repository }}/commits?sha=main&per_page=10" --jq '.[].sha')
+            if [ "$sha" != "$tip" ]; then
+              echo "::notice::main's tip ${tip:0:7} has no completed required check yet; targeting ${sha:0:7}, the newest commit CI has vouched for. The tip ships on a later tick."
+            fi
           fi
           # 🚨 The ONE definition of the short SHA — every job, and the image-set check, use this
           # output. `git rev-parse --short` uses core.abbrev=auto, which can hand out 8 characters
