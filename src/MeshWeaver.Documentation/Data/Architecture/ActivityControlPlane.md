@@ -154,7 +154,7 @@ public static class JobNodeType
 
 `hub.WatchControlPlane(...)` lives in `MeshWeaver.Mesh.Contract` (`ActivityControlPlaneExtensions.cs`). It projects the hub's own `MeshNodeReference` stream down to `ActivityLog.RequestedStatus`, applies `DistinctUntilChanged`, and forwards each transition to your handler. **The handler parameter is `ActivityStatus?`** — `null` means no request is pending (never set, or cleared after a transition), so always compare against the specific status you handle.
 
-Faults are handled by `SubscribeWithReEstablish`, not by a bare log-and-die `OnError`, because a dead control plane leaves the hub half-alive (process running, control plane gone):
+Faults are handled by `SubscribeHubWatcher` (the hub-owned form of `SubscribeWithReEstablish`), not by a bare log-and-die `OnError`, because a dead control plane leaves the hub half-alive (process running, control plane gone). Being hub-owned also fixes the watcher's *lifetime*: it stops at the hub's `ShuttingDown` signal — the first instant the hub is part of a shutdown, its own or an ancestor's — rather than in the ShutDown phase where `RegisterForDisposal` would finally reach it, and it delivers nothing to a hub that is shutting down (see [Hub Disposal Model](/Doc/Architecture/HubDisposalModel) → "The first instant of teardown", #3026):
 
 | Fault class | Behaviour |
 |---|---|
@@ -193,7 +193,7 @@ hub.WatchSubmission(
 `WatchSubmission` lives next to `WatchControlPlane` in `MeshWeaver.Mesh.Contract`. Internally it is:
 
 ```csharp
-SubscribeWithReEstablish(() => hub.GetWorkspace().GetMeshNodeStream()
+SubscribeHubWatcher(hub, () => hub.GetWorkspace().GetMeshNodeStream()
     .DistinctUntilChanged(fingerprint)
     .Where(needsDispatch)
     // Single-flight: only one dispatch in flight per watcher, released in Finally.

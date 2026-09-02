@@ -175,6 +175,17 @@ If the budget elapses with callbacks still pending, the hub sets the sticky
 subscription that never got its reply is a real bug, not a teardown oddity. Either
 path then posts `DisposeHostedHubs` from `OnQuiesceComplete`'s `finally`.
 
+> 🚨 **Known blind spot: the verdict does not see children that have already LEFT.**
+> A hosted hub removes itself from its parent's registry in its own ShutDown phase —
+> before the parent's teardown completes — so `AnyHubQuiescingTimedOut()`, which walks
+> the parent's *live* children, finds none of them by the time a test base asks. That
+> is how a per-NodeType hub could time out its 2 s budget on 22 consecutive fixture
+> teardowns (#3026) while the fixture's leak gate read the mesh as clean on all 22.
+> Making the verdict keep each departing child's summary is straightforward, but it
+> immediately surfaces pre-existing hosted-hub timeouts in unrelated test classes
+> (measured: two in `MeshWeaver.Graph.Test` alone), so it is tracked as its own change
+> rather than folded into the watcher fix.
+
 > **There is no separate "dispose-action drain" phase.** Registered cleanups —
 > including the reactive `Func<IMessageHub, IObservable<Unit>>` ones — are run in the
 > **ShutDown** phase by `DisposeImpl`, and the reactive ones are **fired and not
@@ -421,8 +432,90 @@ teardown; silent on a direct `Dispose()`).
 
 ---
 
+## The first instant of teardown: `ShuttingDown`
+
+`Dispose()` is not the first moment a hub is part of a shutdown. An **ancestor's**
+`Dispose()` freezes hosted-hub creation across the whole subtree, synchronously,
+before it returns (see "The creation window" above);
+a descendant's own `Dispose()` — its `DisposeRequest` — arrives only in the ancestor's
+DisposeHostedHubs phase, after the ancestor has spent up to its whole `QuiesceTimeout`
+draining its own callbacks. `IsShuttingDown` reports that window as a property;
+`RunLevelChanged` reports only this hub's own phases; `DisposalCompleted` reports the
+end. Nothing reported the *beginning* as an event, so a watcher could only sample it.
+
+**`IMessageHub.ShuttingDown`** is that event: it fires once, at the first instant the
+hub becomes part of a shutdown — its own `Dispose()` or the ancestor cascade
+(`CloseHostedHubCreation`), whichever comes first — then completes, and it replays to
+a late subscriber (an `AsyncSubject`, the same contract as `DisposalCompleted` at the
+other end).
+
+### Why it exists: a watcher that outlived the start of teardown (#3026)
+
+Every per-NodeType hub installs watchers over its own node — compile, release-request,
+sources / `IsDirty`, adopted-stamp — and hands each one's `IDisposable` to
+`hub.RegisterForDisposal`. That disposes them in the **ShutDown** phase: the last one.
+Through the entire window before it — the ancestor's quiesce, the ancestor's hosted
+join, this hub's own Quiescing — the watchers kept working. The sources watcher in
+particular recomputes the source fingerprint on every emission, and resolving the
+`@@`-include closure issues cross-hub `GetDataRequest`s **from the hub that is
+tearing down**. Those requests are exactly the pending callbacks Quiescing then waits
+for; when the budget elapsed, `CancelCallbacks` errored them:
+
+```
+DISPOSE_INVOKED
+  … 2 052 ms …
+[FAULT] [Warning] SourcesWatcher: the @@-include closure for FutuRe/LocalAnalysis could not be established
+  SourceIncludeUnavailableException ---> ObjectDisposedException:
+  Hub FutuRe/LocalAnalysis was disposed before the response arrived
+  (GetDataRequest, target FutuRe/GroupAnalysis/Source/ExternalDependencies)
+DISPOSE_DONE elapsed=2088ms teardown clean — all pooled I/O joined
+```
+
+Twenty-two times in one `MeshWeaver.FutuRe.Test` shard — one per fixture teardown,
+each exactly one quiesce budget after `DISPOSE_INVOKED` — and once a sibling of that
+callback ran on a raw scheduler thread against a hub whose scope was gone and killed
+the host (exit 139). The teardown verdict read *clean* every time because the
+timed-out hub had already left its parent's registry (the blind spot noted under the
+Quiescing phase above).
+
+### The rule for hub-owned watchers
+
+Install every watcher a hub owns through
+`ActivityControlPlaneExtensions.SubscribeHubWatcher(hub, source, onNext, …)` — the
+hub-aware form of `SubscribeWithReEstablish`. It differs in three ways, all of them
+this signal:
+
+1. **It stops at `ShuttingDown`.** The live subscription *and* any pending
+   re-establish are disposed at the first instant of teardown. Because that disposal
+   propagates into the watched pipeline, an in-flight cross-hub read is *unsubscribed*
+   — its pending callback leaves the hub's response registry — rather than waited on,
+   so Quiescing drains at once instead of timing out on the watcher's own traffic.
+2. **Every delivery is gated on `IsShuttingDown`.** An emission already dispatched on
+   another thread when the signal fires is dropped, never run against a disposing hub.
+   Dropping is correct: the fresh activation installs a fresh watcher and reads the
+   current state anew.
+3. **The source factory runs under `Observable.Defer`.** A re-establish evaluates the
+   factory on the 1 s `Observable.Timer` tick — a scheduler thread with nothing above
+   it — so a factory that throws synchronously there (a `GetMeshNodeStream()` on a
+   hub whose scope is gone) used to be an unhandled exception on a timer thread. Under
+   `Defer` it is a stream fault the classifier owns.
+
+The address-only `SubscribeWithReEstablish(source, onNext, address, …)` remains for
+watchers with no owning hub. It knows nothing of teardown, so for a hub-owned watcher
+it *is* the #3026 defect.
+
+Pinned by `HubWatcherStopsAtTeardownStartTest` (the primitive, with the action block
+deliberately parked so no disposal phase can run during the assertions),
+`ShuttingDownSignalTest` (the signal on a whole subtree, synchronously inside the
+ancestor's `Dispose()`) and `SourcesWatcherStopsAtTeardownTest` (the sources watcher
+with a deterministically in-flight `@@`-include read, disposed mid-read: no quiesce
+timeout, no `[FAULT]`).
+
 ## Adding disposal work — the rule
 
+- **Installing a WATCHER the hub owns?** `SubscribeHubWatcher(hub, …)`, then hand the
+  result to `RegisterForDisposal` as before. The registration is the backstop; the
+  `ShuttingDown` signal is what actually ends the watcher — see the section above.
 - **Need to run sync cleanup on dispose?** `hub.RegisterForDisposal(IDisposable)`
   (the common case) or `RegisterForDisposal(Action<IMessageHub>)`. These run in the
   ShutDown phase on the action block.
@@ -435,7 +528,9 @@ teardown; silent on a direct `Dispose()`).
 - **Need to wait for the hub to finish disposing?** Subscribe to
   `hub.DisposalCompleted`. Only at the test / grain edge may you bridge it once, and
   only with `.FirstOrDefaultAsync().ObserveCompletion(reportLateFault, ct)` — never
-  `.ToTask()`. To ask "is it shutting down?", read `IsDisposing`.
+  `.ToTask()`. To ask "is it shutting down?", read `IsShuttingDown` (which also sees
+  an ancestor's teardown; `IsDisposing` sees only this hub's own). To *react* to it
+  beginning, subscribe to `hub.ShuttingDown`.
 - **Tempted to `await` something during disposal?** Don't — it deadlocks the action
   block. Express the wait as an `Observable` (`Interval` poll, `Timer`/`Amb` deadline,
   subscribe to a child's `DisposalCompleted`) and post the next phase from its
