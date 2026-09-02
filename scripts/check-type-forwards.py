@@ -110,11 +110,25 @@ THE ESCAPE HATCH
 entry is a statement that no shipped module can be holding that TypeRef — not a way to make the
 gate quiet. A STALE entry (listed, but the type did not move in this diff) FAILS, exactly like
 the repo's other ratchets, so it cannot outlive its change and hide the next break.
+
+THE REPORT MODE: `--surface-json <path>` (#2689)
+------------------------------------------------
+The set this script computes — "which public top-level types did this diff remove from `src/`" —
+is also the trigger for a SECOND, unrelated question: **did the other half of a cross-repo change
+land first?** MeshWeaver#2689 records five incidents where a core merge reddened a plugin repo's
+trunk minutes to hours later, on unrelated pull requests, in a repository the change never
+touched. `scripts/check-cross-repo-pair.py` gates that, and it consumes this report rather than
+re-deriving the set — one detector, proven by one set of self-tests.
+
+`--surface-json` writes the removals as JSON and ALWAYS exits 0: it is a report, not a verdict.
+See `surface_removals` for why its set is deliberately WIDER than the forwarder verdict's, and
+why the allow file is not consulted for it.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -456,13 +470,101 @@ def find_moves(
     return failures, moved, departed
 
 
+def surface_removals(
+    before: dict[str, Decl], after: dict[str, Decl], head_assemblies: set[str]
+) -> list[dict]:
+    """Every public TOP-LEVEL type declared under `src/` at BASE and no longer declared at HEAD.
+
+    This is the REPORT half of this script (`--surface-json`), and it is deliberately a WIDER set
+    than the verdict `find_moves` returns. `find_moves` answers ONE question — "will a module
+    already compiled against the old platform still BIND?" — and it correctly stays silent on the
+    two cases where the answer is yes: a move that left a forwarder, and a whole assembly that
+    left the repo (no forwarder is possible, and the assembly keeps its name wherever it is now
+    built).
+
+    `scripts/check-cross-repo-pair.py` asks a DIFFERENT question of the same diff: did the OTHER
+    half of this change land first? Every category below can red a consuming repo's trunk while
+    the binary contract is intact:
+
+      * `moved` — a forwarder keeps the type IDENTITY, but the consumer's compile still needs the
+        DESTINATION assembly referenced (`CS0012` otherwise). A `.csproj` in another repo does
+        not update itself.
+      * `departed` — gone from this repo's `src/` while the assembly it left is still built here.
+        Post-#2276 this is what a move INTO a plugin repo looks like from in here, and it is
+        MeshWeaver#2678 exactly: nine Graph view classes, allow-listed as "proven cross-repo
+        moves nothing binds" — correct about binding, and the plugin repo's trunk went red for
+        two hours anyway because the module that replaces them had not merged.
+      * `assembly-left` — the carve-out wave. The biggest cross-repo pair there is, and the one
+        `find_moves` skips hardest (537 types at once would train people to allow-list).
+
+    So the allow file is NOT consulted here, and must not be: an entry there is a statement about
+    BINARY compatibility ("no shipped module holds this TypeRef"), which says nothing at all about
+    whether the consuming repo's source still compiles.
+    """
+    by_simple_name: dict[str, list[Decl]] = {}
+    for d in after.values():
+        by_simple_name.setdefault(d.name, []).append(d)
+
+    removed: list[dict] = []
+    for key, old in sorted(before.items()):
+        if key in after:
+            continue
+        if old.assembly not in head_assemblies:
+            category, landed = "assembly-left", []
+        else:
+            landed = [d for d in by_simple_name.get(old.name, []) if d.assembly != old.assembly]
+            category = "moved" if landed else "departed"
+        removed.append({
+            "key": key,
+            "assembly": old.assembly,
+            "fullName": old.full_name,
+            "category": category,
+            "landedIn": sorted(f"{d.assembly} ({d.full_name})" for d in landed),
+        })
+    return removed
+
+
 def check(
-    root: Path, base: str, head: str | None = None, sibling_paths: list[str] | None = None
+    root: Path,
+    base: str,
+    head: str | None = None,
+    sibling_paths: list[str] | None = None,
+    surface_json: str | None = None,
 ) -> int:
     before, _, _ = read_base_tree(base)
     after, forwards, head_assemblies = (
         read_base_tree(head) if head else read_work_tree(root)
     )
+
+    if surface_json is not None:
+        # ── REPORT MODE, not a verdict ──────────────────────────────────────────────────────
+        # Writes the machine-readable surface-removal set and ALWAYS returns 0. The forwarder
+        # verdict is a separate question and is already a separate step in CI: mixing them would
+        # make the pair gate red on a missing `TypeForwardedTo` and the forwarder gate red on an
+        # unlanded counterpart, so neither error would say what it means.
+        #
+        # `publicTypesAtBase` is the CONTROL ARM the consumer asserts on. Every other field can
+        # legitimately be empty on an ordinary pull request, so "no removals" and "the scan read
+        # nothing" would otherwise be the same JSON — the green-on-zero-evidence shape.
+        payload = {
+            "base": base,
+            "head": head or "<working tree>",
+            "publicTypesAtBase": len(before),
+            "publicTypesAtHead": len(after),
+            "removed": surface_removals(before, after, head_assemblies),
+        }
+        Path(surface_json).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        print(
+            f"Surface report written to {surface_json}: {payload['publicTypesAtBase']} public "
+            f"top-level type(s) under src/ at {base}, {payload['publicTypesAtHead']} at "
+            f"{payload['head']}, {len(payload['removed'])} removed."
+        )
+        for entry in payload["removed"][:40]:
+            print(f"  [{entry['category']}] {entry['assembly']} :: {entry['fullName']}")
+        if len(payload["removed"]) > 40:
+            print(f"  … and {len(payload['removed']) - 40} more (all of them are in the JSON).")
+        return 0
+
     allow = read_allow(root)
     siblings = {Path(p).resolve().name: read_sibling_tree(Path(p)) for p in (sibling_paths or [])}
     for label, index in siblings.items():
@@ -856,6 +958,106 @@ SELF_TESTS: list[tuple] = [
 ]
 
 
+# ── the REPORT mode's own cases (#2689) ─────────────────────────────────────────────────────
+#
+# `--surface-json` feeds a REQUIRED gate, so its set has to be proven on both sides: every
+# category it must report, and — just as important — the ordinary diffs it must stay SILENT on,
+# because a reporter that fires on everything makes the pair gate a tax rather than a gate.
+#
+# (label, base files, head files, expected category per removed key)
+SURFACE_TESTS: list[tuple[str, dict[str, str], dict[str, str], dict[str, str]]] = [
+    (
+        # MeshWeaver#2678, in miniature: the nine Graph view classes left for a plugin module.
+        "a DEPARTURE (the #2678 shape) is reported — the trigger the pair gate exists for",
+        {
+            "src/MeshWeaver.GitSync/AiContentSyncArea.cs": GITSYNC_SYNC_AREA,
+            "src/MeshWeaver.GitSync/Keep.cs": GITSYNC_KEEP,
+        },
+        {"src/MeshWeaver.GitSync/Keep.cs": GITSYNC_KEEP},
+        {"MeshWeaver.GitSync:MeshWeaver.GitSync.AiContentSyncArea": "departed"},
+    ),
+    (
+        # 🚨 The forwarder gate is SILENT on this one (it is binary-safe), and the pair gate must
+        # NOT be: a consumer in another repo now needs the DESTINATION assembly referenced in its
+        # own .csproj or it fails CS0012. Same diff, two different questions.
+        "a forwarded MOVE is still reported — a forwarder keeps identity, not the consumer's refs",
+        {"src/A/Foo.cs": FOO_N, "src/A/Keep.cs": KEEP_A},
+        {
+            "src/B/Foo.cs": FOO_N,
+            "src/A/Keep.cs": KEEP_A,
+            "src/A/Fwd.cs": "[assembly: TypeForwardedTo(typeof(N.Foo))]\n",
+        },
+        {"A:N.Foo": "moved"},
+    ),
+    (
+        # 🚨 And so is the carve-out, which the forwarder gate skips HARDEST (537 types at once).
+        # It is the largest cross-repo pair there is — #2941's Maps wave is exactly this shape.
+        "a whole ASSEMBLY leaving the repo is reported — the carve-out is the biggest pair of all",
+        {
+            "src/MeshWeaver.Blazor/Infrastructure/PortalApplication.cs": BLAZOR_PORTAL_APP,
+            "src/MeshWeaver.Hosting.AspNetCore/Other.cs": ASPNET_KEEP,
+        },
+        {"src/MeshWeaver.Hosting.AspNetCore/Other.cs": ASPNET_KEEP},
+        {"MeshWeaver.Blazor:MeshWeaver.Blazor.Infrastructure.PortalApplication": "assembly-left"},
+    ),
+    (
+        "moving a file WITHIN one assembly removes nothing — an ordinary PR must not be taxed",
+        {"src/A/Foo.cs": FOO_N, "src/A/Keep.cs": KEEP_A},
+        {"src/A/Sub/Foo.cs": FOO_N, "src/A/Keep.cs": KEEP_A},
+        {},
+    ),
+    (
+        "an INTERNAL type leaving is not public surface, so it is not a pair",
+        {"src/A/Foo.cs": "namespace N;\ninternal class Foo\n{\n}\n", "src/A/Keep.cs": KEEP_A},
+        {"src/A/Keep.cs": KEEP_A},
+        {},
+    ),
+    (
+        "an in-mesh doc sample is content, not a compiled assembly — never a pair",
+        {
+            "src/MeshWeaver.Documentation/Data/X/Source/Foo.cs": FOO_N,
+            "src/MeshWeaver.Documentation/Doc.cs": DOC_KEEP,
+        },
+        {"src/MeshWeaver.Documentation/Doc.cs": DOC_KEEP},
+        {},
+    ),
+    (
+        "adding public surface is not removing it",
+        {"src/A/Keep.cs": KEEP_A},
+        {"src/A/Keep.cs": KEEP_A, "src/A/Foo.cs": FOO_N},
+        {},
+    ),
+]
+
+
+def _index(files: dict[str, str]) -> tuple[dict[str, Decl], set[str]]:
+    decls: dict[str, Decl] = {}
+    assemblies: set[str] = set()
+    for path, text in files.items():
+        if not _is_scanned(path):
+            continue
+        assemblies.add(_assembly_of(path))
+        for d in parse_declarations(path, text):
+            decls[d.key] = d
+    return decls, assemblies
+
+
+def surface_self_test() -> int:
+    failed = 0
+    for label, base_files, head_files, expected in SURFACE_TESTS:
+        before, _ = _index(base_files)
+        after, head_assemblies = _index(head_files)
+        got = {e["key"]: e["category"] for e in surface_removals(before, after, head_assemblies)}
+        if got != expected:
+            failed += 1
+            print(f"SURFACE SELF-TEST FAILED: {label}")
+            print(f"  expected {expected}")
+            print(f"  got      {got}")
+        else:
+            print(f"ok: {label}")
+    return failed
+
+
 def self_test() -> int:
     failed = 0
     for entry in SELF_TESTS:
@@ -908,10 +1110,12 @@ def self_test() -> int:
                 print(message)
         else:
             print(f"ok: {label}")
+    failed += surface_self_test()
     if failed:
         print(f"\n{failed} self-test(s) failed — the gate cannot be trusted.")
         return 1
-    print(f"\nAll {len(SELF_TESTS)} self-tests passed.")
+    print(f"\nAll {len(SELF_TESTS) + len(SURFACE_TESTS)} self-tests passed "
+          f"({len(SELF_TESTS)} forwarder verdict, {len(SURFACE_TESTS)} surface report).")
     return 0
 
 
@@ -934,6 +1138,14 @@ def main() -> int:
         "DELETION. It only ever relaxes the verdict, so omitting it is the conservative mode; CI "
         "omits it deliberately (see the module docstring).",
     )
+    ap.add_argument(
+        "--surface-json",
+        metavar="PATH",
+        help="REPORT mode (#2689): write the public top-level types this diff removed from src/ "
+        "to PATH as JSON and exit 0 without judging forwarders. Consumed by "
+        "scripts/check-cross-repo-pair.py, which asks a different question of the same set — "
+        "did the other half of this cross-repo change land first?",
+    )
     ap.add_argument("--self-test", action="store_true", help="prove the matcher is not vacuous")
     args = ap.parse_args()
 
@@ -952,7 +1164,7 @@ def main() -> int:
             # A typo'd sibling path would silently turn every cross-repo move into a "proven
             # deletion" — the flag's one dangerous failure mode, since it RELAXES the verdict.
             ap.error(f"--sibling {path}: no src/ directory there")
-    return check(root, args.base, args.head, args.sibling)
+    return check(root, args.base, args.head, args.sibling, args.surface_json)
 
 
 if __name__ == "__main__":

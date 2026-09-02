@@ -97,8 +97,22 @@ the missed-repo case, because a repo with no pull request never runs its own gat
 were updated" and "all seven were updated" produce identical evidence. The scheduled half
 (`shared-rules.yml`) exists for the weeks nobody opens a pull request here.
 
-It is listed anyway, because it is the one remaining edge on core's *pull-request* path, and anyone
-auditing "does core's build touch plugins?" must be able to find it rather than rediscover it.
+It is listed anyway, because anyone auditing "does core's build touch plugins?" must be able to find
+it rather than rediscover it.
+
+`dotnet-test.yml` (`cross-repo-pair`) is the SECOND edge of this class, added for #2689. It resolves
+the pull request a surface-removing change declares (`Pairs-with: Systemorph/MeshWeaver.Plugins#904`)
+and refuses to let core merge until that counterpart is merged into its repo's default branch — see
+[The Cross-Repo Pair Gate](../CrossRepoPairGate). It exists because a public type leaving core's
+`src/` reddened MeshWeaver.Plugins' trunk for two hours on a change none of that repo's pull requests
+had made, and core's CI cannot see it: **core does not build the plugin repos, so the coupling can
+surface nowhere except CD, after the fact.**
+
+🚨 **The distinction that makes this class permitted while a checkout is not**: *a checkout puts
+another repository's SOURCE into core's build; an API read puts only a FACT about it into a verdict.*
+Core still compiles, tests and ships with no sibling on disk. Both edges of this class are now
+ASSERTED as well as documented — `PlatformNeverDependsOnPluginsGuard.ApiReadLedger` enumerates them
+and fails in both directions, so a third one has to be a decision rather than a diff nobody noticed.
 
 ## What is NOT an inverted edge
 
