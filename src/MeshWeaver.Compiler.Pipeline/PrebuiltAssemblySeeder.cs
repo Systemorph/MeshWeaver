@@ -339,116 +339,211 @@ public static class PrebuiltAssemblySeeder
             return Observable.Return(false);
         }
 
-        var workspace = hub.GetWorkspace();
-
-        // 🚨 RESERVE BEFORE TOUCHING THE STREAM (#1763). Opening the type's node stream ACTIVATES
-        // its hub, and activation is what arms the first-build kickoff — so without the
-        // reservation the seeder's own probe started the Roslyn compile this adoption exists to
-        // avoid, and that compile overwrote the adopted build milliseconds later. The reservation
-        // has to be taken before the subscribe below, which is why it wraps the whole pipeline in
-        // an Observable.Using rather than sitting inside a SelectMany. See
-        // NodeTypeAdoptionRegistry for the measured trace.
-        var reservations = hub.ServiceProvider.GetService<NodeTypeAdoptionRegistry>();
-
-        return Observable.Using(
-            () => reservations?.Reserve(nodeTypePath) ?? NoReservation.Instance,
-            _ => workspace.GetMeshNodeStream(nodeTypePath)
-            .Where(node => node is not null)
-            .Take(1)
-            .SelectMany(node =>
+        // 🚨 DEFERRED — the leaving check below must run at SUBSCRIBE time, not at call time. The
+        // bundle seeder builds one Seed per assembly and runs them under Concat, so each is
+        // subscribed only when its predecessor completes; a check taken when the pipeline was
+        // BUILT would describe the process as it was minutes earlier. Evaluated here, it is the
+        // per-node boundary at which a pass in flight stops once shutdown begins.
+        return Observable.Defer(() =>
+        {
+            // 🚨 #3129 — A LEAVING HUB WRITES NOTHING ON A NODE EVERY GENERATION SHARES. The
+            // NodeType node is one record for the whole deployment; a pod under SIGTERM (a 30-minute
+            // termination grace period, circuits still held) is not the pod that will serve this
+            // type, and its adoption is exactly as authoritative as a healthy pod's — which is the
+            // problem: the stamp below REPLACES the coordinates the live build serves under, and
+            // when the owner then refuses the adoption (#2813) it CLEARS them. On the roll measured
+            // in #3129 the terminating pod did that 1424 times in 25 minutes, and every healthy
+            // pod's instances of the type sat on the fallback card for the 120 s self-heal bound,
+            // per type, per roll. Same rule as #3109 gave BuildupActions: nothing starts on a hub
+            // that is leaving. Emits false — "not adopted", the caller's ordinary compile signal —
+            // so a seeding pass is never parked on it. IsLeaving reads the host lifetime too, not
+            // only IsShuttingDown: the mesh is disposed at the very END of host shutdown, so the
+            // hub signal alone is false for the whole grace period (see HubLeavingExtensions).
+            if (hub.IsLeaving())
             {
-                if (node!.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is null)
+                logger?.LogInformation(
+                    "Prebuilt assembly for {NodeTypePath} NOT seeded: this hub is leaving (#3129) — "
+                    + "a shutting-down process writes nothing on a NodeType every generation shares; "
+                    + "the next generation seeds its own bundles",
+                    nodeTypePath);
+                return Observable.Return(false);
+            }
+
+            var workspace = hub.GetWorkspace();
+
+            // 🚨 RESERVE BEFORE TOUCHING THE STREAM (#1763). Opening the type's node stream ACTIVATES
+            // its hub, and activation is what arms the first-build kickoff — so without the
+            // reservation the seeder's own probe started the Roslyn compile this adoption exists to
+            // avoid, and that compile overwrote the adopted build milliseconds later. The reservation
+            // has to be taken before the subscribe below, which is why it wraps the whole pipeline in
+            // an Observable.Using rather than sitting inside a SelectMany. See
+            // NodeTypeAdoptionRegistry for the measured trace.
+            var reservations = hub.ServiceProvider.GetService<NodeTypeAdoptionRegistry>();
+
+            return Observable.Using(
+                () => reservations?.Reserve(nodeTypePath) ?? NoReservation.Instance,
+                _ => workspace.GetMeshNodeStream(nodeTypePath)
+                .Where(node => node is not null)
+                .Take(1)
+                .SelectMany(node => SeedObserved(
+                    hub, workspace, node!, nodeTypePath, assemblyBytes, pdbBytes, logger,
+                    dependencies, sourceFingerprint)));
+        });
+    }
+
+    /// <summary>The half of <see cref="Seed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string)"/>
+    /// that runs once the owner's current snapshot of the node is in hand.</summary>
+    private static IObservable<bool> SeedObserved(
+        IMessageHub hub,
+        IWorkspace workspace,
+        MeshNode node,
+        string nodeTypePath,
+        byte[] assemblyBytes,
+        byte[]? pdbBytes,
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint)
+    {
+        var observed = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+        if (observed is null)
+        {
+            logger?.LogInformation(
+                "Prebuilt assembly for {NodeTypePath} DECLINED: node content is not a "
+                + "NodeTypeDefinition", nodeTypePath);
+            return Observable.Return(false);
+        }
+
+        // 🚨 #2813 / #3129 — DECLINE BEFORE WRITING WHEN THE REFUSAL IS ALREADY DECIDABLE. The
+        // owner's three-way check (ApplyAdoptedSourceStamp) exists because this write is
+        // cross-hub and the owner's live source set may not be published yet (#1834) — an
+        // INCONCLUSIVE snapshot must not refuse. But the snapshot in hand here is the owner's own
+        // current state, and when it ALREADY carries a live fingerprint that disagrees with the
+        // producer's, the refusal is certain: sources only ever move the live fingerprint further
+        // from a bundle baked earlier. Writing anyway is what #3129 measured as the clobber — the
+        // stamp REPLACES the coordinates of the build actually serving with the stale bundle's,
+        // the owner refuses, and the refusal has nothing left to leave in place but the rejected
+        // build's coordinates, so it clears them and every other pod's instances lose the type
+        // until a fresh compile lands. Declining here leaves the live build's record untouched,
+        // exactly like the framework and dependency declines above; the caller compiles, as it
+        // would have after the refusal. The owner's check stays for the pre-publication window
+        // this snapshot cannot decide (no live fingerprint yet) and as the last line of defence.
+        // A decline is always safe (a compile follows); a write that a refusal must undo is not.
+        if (sourceFingerprint is { Length: > 0 } producerFingerprint
+            && observed.CurrentSourceFingerprint is { Length: > 0 } liveFingerprint
+            && !string.Equals(producerFingerprint, liveFingerprint, StringComparison.Ordinal))
+        {
+            logger?.LogWarning(
+                "Prebuilt assembly for {NodeTypePath} DECLINED before writing (#2813): the bundle "
+                + "records source fingerprint {Producer} but the live sources are {Live} — the owner "
+                + "would refuse the adoption, so the live build's coordinates are left in place and "
+                + "the live source compiles instead. Rebake this package to adopt again.",
+                nodeTypePath, producerFingerprint, liveFingerprint);
+            return Observable.Return(false);
+        }
+
+        // 🚨 ONE version, used twice. ApplyCompileSuccess documents why: the stamp must name
+        // the SAME version the store upload used, or activation resolves a store key with no
+        // bytes behind it, TryGetAssemblyPath misses, and the instance silently falls back
+        // to the default configuration.
+        var version = node.Version;
+        var store = hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
+        // Set by the lambda on the run that produced the write; false when every run declined
+        // (the hub began leaving between the upload and the write), so the caller is told the
+        // truth — "not adopted" — rather than the ADOPTED line below over a write that no-opped.
+        var stamped = false;
+
+        return store
+            .PutWithLocation(nodeTypePath, version, assemblyBytes, pdbBytes)
+            .SelectMany(location => workspace.GetMeshNodeStream(nodeTypePath)
+                .Update(current =>
                 {
-                    logger?.LogInformation(
-                        "Prebuilt assembly for {NodeTypePath} DECLINED: node content is not a "
-                        + "NodeTypeDefinition", nodeTypePath);
-                    return Observable.Return(false);
-                }
+                    var def = current?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+                    if (current is null || def is null)
+                        return current!;
 
-                // 🚨 ONE version, used twice. ApplyCompileSuccess documents why: the stamp must name
-                // the SAME version the store upload used, or activation resolves a store key with no
-                // bytes behind it, TryGetAssemblyPath misses, and the instance silently falls back
-                // to the default configuration.
-                var version = node.Version;
-                var store = hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
-
-                return store
-                    .PutWithLocation(nodeTypePath, version, assemblyBytes, pdbBytes)
-                    .SelectMany(location => workspace.GetMeshNodeStream(nodeTypePath)
-                        .Update(current =>
-                        {
-                            var def = current?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
-                            if (current is null || def is null)
-                                return current!;
-
-                            return current with
-                            {
-                                Content = def with
-                                {
-                                    CompilationStatus = CompilationStatus.Ok,
-                                    CompilationError = null,
-                                    CompilationDiagnostics = null,
-                                    LastCompileSucceededAt = DateTimeOffset.UtcNow,
-                                    LastCompiledVersion = version,
-                                    LatestAssemblyCollection = location.Collection,
-                                    LatestAssemblyPath = location.ContentPath,
-                                    // The adopted bytes' own identity (#2471), read from the image
-                                    // in hand — no file, no load. An adopted build is exactly the
-                                    // case where a path says least: several pods adopt the same
-                                    // bundle under the same key, and a replica that later serves a
-                                    // different build is invisible to a path comparison.
-                                    LatestAssemblyMvid =
-                                        ServedBuildIdentity.OfBytes(assemblyBytes)
-                                        ?? def.LatestAssemblyMvid,
-                                    CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
-                                    // The adopted build retires any standing FAILURE verdict, so
-                                    // the inputs it was formed from go with it (#1793) — exactly as
-                                    // ApplyCompileSuccess does. A token left behind would describe a
-                                    // verdict this node no longer holds.
-                                    FailedBuildInputs = null,
-                                    // 🚨 The source snapshot is stamped BY THE OWNER, not here
-                                    // (#1834). The producer's own ticks are meaningless on this
-                                    // mesh (the bake writes zeros), so adoption asserts "these
-                                    // bytes correspond to the LIVE source set" — and only the
-                                    // owner knows that set. This write is CROSS-HUB: the lambda
-                                    // diffs against the MIRROR's snapshot, which predates the
-                                    // first-activation write of CurrentSourceVersions that this
-                                    // very subscribe triggers (InstallSourcesWatcher). Reading the
-                                    // field here therefore stamped CompiledSources = null under a
-                                    // non-empty CurrentSourceVersions — IsDirty — and the release
-                                    // request PackageInstaller issues one step later recompiled
-                                    // the type that had just been adopted. Requesting the stamp
-                                    // instead has no ordering to lose: whichever of the two writes
-                                    // lands second carries the owner's authoritative pair.
-                                    RequestedSourceStampAt = DateTimeOffset.UtcNow,
-                                    // 🚨 #2813 — WHAT the producer says these bytes were built
-                                    // from. The owner checks it against its own live source set
-                                    // when it fulfils the request above; it cannot be checked
-                                    // here, for the same cross-hub reason the request exists.
-                                    // Null (a legacy bundle) is carried as null, never as a
-                                    // match: the owner then records AdoptedUnverified rather
-                                    // than AdoptedVerified.
-                                    AdoptedSourceFingerprint = sourceFingerprint,
-                                    // The producer's dependency record (#1707 slice 2) — validated
-                                    // above; stamped so ongoing validity checks judge the adopted
-                                    // build like a locally-compiled one. Legacy bundles (null)
-                                    // leave any prior stamp untouched.
-                                    CompiledDependencies = dependencies is null
-                                        ? def.CompiledDependencies
-                                        : dependencies.ToImmutableSortedDictionary(
-                                            kv => kv.Key, kv => kv.Value, StringComparer.Ordinal),
-                                },
-                            };
-                        }))
-                    .Select(_ =>
+                    // 🚨 #3129 — re-checked at the write itself: the store upload above is real
+                    // I/O, and a shutdown that began during it must not land a stamp from a hub
+                    // that is leaving. Returning the node unchanged makes Update a NO-OP (nothing
+                    // is posted), so the record other generations read is exactly as it was.
+                    if (hub.IsLeaving())
                     {
                         logger?.LogInformation(
-                            "Prebuilt assembly ADOPTED for {NodeTypePath} at version {Version} "
-                            + "(framework {Framework}) — no compile needed",
-                            nodeTypePath, version, NodeTypeCompilationHelpers.FrameworkVersion);
-                        return true;
-                    });
-            }));
+                            "Prebuilt assembly for {NodeTypePath} NOT stamped: this hub began "
+                            + "leaving during the upload (#3129) — the node is left as it was",
+                            nodeTypePath);
+                        return current;
+                    }
+
+                    stamped = true;
+                    return current with
+                    {
+                        Content = def with
+                        {
+                            CompilationStatus = CompilationStatus.Ok,
+                            CompilationError = null,
+                            CompilationDiagnostics = null,
+                            LastCompileSucceededAt = DateTimeOffset.UtcNow,
+                            LastCompiledVersion = version,
+                            LatestAssemblyCollection = location.Collection,
+                            LatestAssemblyPath = location.ContentPath,
+                            // The adopted bytes' own identity (#2471), read from the image
+                            // in hand — no file, no load. An adopted build is exactly the
+                            // case where a path says least: several pods adopt the same
+                            // bundle under the same key, and a replica that later serves a
+                            // different build is invisible to a path comparison.
+                            LatestAssemblyMvid =
+                                ServedBuildIdentity.OfBytes(assemblyBytes)
+                                ?? def.LatestAssemblyMvid,
+                            CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
+                            // The adopted build retires any standing FAILURE verdict, so
+                            // the inputs it was formed from go with it (#1793) — exactly as
+                            // ApplyCompileSuccess does. A token left behind would describe a
+                            // verdict this node no longer holds.
+                            FailedBuildInputs = null,
+                            // 🚨 The source snapshot is stamped BY THE OWNER, not here
+                            // (#1834). The producer's own ticks are meaningless on this
+                            // mesh (the bake writes zeros), so adoption asserts "these
+                            // bytes correspond to the LIVE source set" — and only the
+                            // owner knows that set. This write is CROSS-HUB: the lambda
+                            // diffs against the MIRROR's snapshot, which predates the
+                            // first-activation write of CurrentSourceVersions that this
+                            // very subscribe triggers (InstallSourcesWatcher). Reading the
+                            // field here therefore stamped CompiledSources = null under a
+                            // non-empty CurrentSourceVersions — IsDirty — and the release
+                            // request PackageInstaller issues one step later recompiled
+                            // the type that had just been adopted. Requesting the stamp
+                            // instead has no ordering to lose: whichever of the two writes
+                            // lands second carries the owner's authoritative pair.
+                            RequestedSourceStampAt = DateTimeOffset.UtcNow,
+                            // 🚨 #2813 — WHAT the producer says these bytes were built
+                            // from. The owner checks it against its own live source set
+                            // when it fulfils the request above; it cannot be checked
+                            // here, for the same cross-hub reason the request exists.
+                            // Null (a legacy bundle) is carried as null, never as a
+                            // match: the owner then records AdoptedUnverified rather
+                            // than AdoptedVerified.
+                            AdoptedSourceFingerprint = sourceFingerprint,
+                            // The producer's dependency record (#1707 slice 2) — validated
+                            // above; stamped so ongoing validity checks judge the adopted
+                            // build like a locally-compiled one. Legacy bundles (null)
+                            // leave any prior stamp untouched.
+                            CompiledDependencies = dependencies is null
+                                ? def.CompiledDependencies
+                                : dependencies.ToImmutableSortedDictionary(
+                                    kv => kv.Key, kv => kv.Value, StringComparer.Ordinal),
+                        },
+                    };
+                }))
+            .Select(_ =>
+            {
+                if (!stamped)
+                    return false;
+                logger?.LogInformation(
+                    "Prebuilt assembly ADOPTED for {NodeTypePath} at version {Version} "
+                    + "(framework {Framework}) — no compile needed",
+                    nodeTypePath, version, NodeTypeCompilationHelpers.FrameworkVersion);
+                return true;
+            });
     }
 
     /// <summary>The no-op reservation handle for a host with no adoption registry (an older or
