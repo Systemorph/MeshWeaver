@@ -89,10 +89,10 @@ public class CdImageLegPropertiesDoNotForkTheIdentityGuard
         var tester = PropertiesOf(TesterPublishCommand);
 
         Assert.True(portal.Count >= 4,
-            $"only {portal.Count} `-p:` propert(ies) parsed off the portal publish command in {Workflow}. "
+            $"only {portal.Count} `-p:` switch(es) parsed off the portal publish command in {Workflow}. "
             + "The guard below would then probe almost nothing and pass vacuously.");
         Assert.True(tester.Count >= 4,
-            $"only {tester.Count} `-p:` propert(ies) parsed off the tester publish command in {Workflow}. "
+            $"only {tester.Count} `-p:` switch(es) parsed off the tester publish command in {Workflow}. "
             + "The guard below would then probe almost nothing and pass vacuously.");
 
         Assert.Contains("CIRun", portal);

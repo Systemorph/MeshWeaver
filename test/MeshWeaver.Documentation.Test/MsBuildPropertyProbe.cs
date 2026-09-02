@@ -89,7 +89,14 @@ internal static class MsBuildPropertyProbe
                 + "does not restore or build, so this is a wedged MSBuild, not a slow one.");
         }
 
-        // Only valid after WaitForExit() returned true: it is what flushes the final buffered lines.
+        // 🚨 The TIMED overload waits only for the PROCESS; the parameterless one is what waits for
+        // the async readers started above to finish flushing. Reading the buffers straight after
+        // WaitForExit(ms) can therefore catch a TRUNCATED stdout — and a truncated JSON document
+        // makes this guard fail on a parse error instead of on its subject, which is exactly the
+        // "measured the wrong thing" failure the guard exists to prevent. The process has already
+        // exited here, so this returns as soon as the readers drain.
+        process.WaitForExit();
+
         var stdout = outBuffer.ToString();
         var stderr = errBuffer.ToString();
 
