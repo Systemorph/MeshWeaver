@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
+using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -51,7 +52,14 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public class GrainAcknowledgementCarriesNoPayloadTest(TwoSiloCacheUpdateFixture fixture)
     : IClassFixture<TwoSiloCacheUpdateFixture>
 {
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// 🚨 <see cref="TestTimeouts.Convergence"/>, never a literal. A hand-written <c>30 s</c> is
+    /// wrong twice over — CI is ~1.7× slower than the machine such a number is chosen on, and 30 s
+    /// is the framework's OWN write bound (LateResponseWatchBound 30 s + VerdictBoundGrace 1 s), so
+    /// a test bounded there gives up one second before the framework can say why (#2819).
+    /// <c>TestTimeoutLiteralRatchetGuard</c> is what caught this file writing one.
+    /// </summary>
+    private static readonly TimeSpan Budget = TestTimeouts.Convergence;
 
     /// <summary>
     /// The token that must not come back. Long enough that a truncated echo could not contain it by
