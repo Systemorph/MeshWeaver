@@ -387,9 +387,14 @@ compile NREs). Swept core CI on 2026-09-02 across 958 `dotnet-test.yml` runs:
 The clean tail reads like a fix, and at that rate a 201-run gap is a ~4 % coincidence. It is neither.
 **PR #2847 merged at 2026-09-01T14:06:31Z and deleted `MeshWeaver.Hosting.Monolith.Test` and
 `MeshWeaver.PluginCatalog.Test` from core**; they now live in `MeshWeaver.Plugins/src/`. Every one of
-the 11 occurrences — and every occurrence in that issue's history — fired inside one of those two
-suites. The last one is 2 h 35 m before the removal. Core CI can no longer express the defect at all,
-so every core observation after that timestamp measures nothing.
+the 11 occurrences fired inside one of those two suites. The last one is 2 h 35 m before the removal.
+
+Be precise about what left, because "the suite moved" and "the repo is now immune" are different
+claims. Core still emits NodeType assemblies in `Compiler.Pipeline.Test` and `Graph.Test` — but those
+run in **9 s** and **100 s**, against the **13 m 38 s** of compile-heavy integration work that walked
+out, and the onset in every measured occurrence was ~2 minutes into such an assembly. What the
+removal took was not the possibility, it was **the exposure that made the rate measurable** — which
+is enough to make a post-removal null uninformative either way.
 
 **The rule:** before believing a null, ask *"does the code that produces this signal still run in
 this repository, in this window?"* Confirm it positively — name a run and the suite verdict line it
