@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using MeshWeaver.Compiler;
 using Xunit;
@@ -133,7 +134,14 @@ public class CompiledVersionAttributesIgnoreVersionOverrideGuard
 
         Assert.Equal(ProbeVersion, overridden);
         Assert.NotEqual(ProbeVersion, bare);
-        Assert.StartsWith("3.", bare, StringComparison.Ordinal);
+        // The control arm only has to prove the repo sets a real $(Version) — i.e. that the
+        // override actually CHANGED something and the bare evaluation is not the SDK default.
+        // 🚨 Deliberately NOT `StartsWith("3.")`: pinning the major would red this guard the day
+        // the platform rolls to 4.x, while the invariant it guards still holds perfectly. A guard
+        // that fails for a reason unrelated to its subject gets muted, and then the subject is
+        // unguarded.
+        Assert.NotEqual("1.0.0", bare);
+        Assert.False(string.IsNullOrWhiteSpace(bare), "the repo must set a real $(Version)");
     }
 
     /// <summary>
@@ -181,14 +189,37 @@ public class CompiledVersionAttributesIgnoreVersionOverrideGuard
 
         using var process = Process.Start(psi);
         Assert.NotNull(process);
-        var stdout = process!.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
+
+        // 🚨 Drain BOTH pipes concurrently via the event-based reader, never
+        // `StandardOutput.ReadToEnd()` then `StandardError.ReadToEnd()`. Sequential draining
+        // deadlocks whenever the child writes enough to the *undrained* pipe to fill its buffer:
+        // MSBuild blocks writing stderr, the test blocks reading stdout, and neither moves. That
+        // this guard exists to catch a wedge makes hanging in the same way particularly poor.
+        // Event-based reading needs no TaskCompletionSource and no async bridge, so it stays
+        // inside the house rules for `test/`.
+        var outBuffer = new StringBuilder();
+        var errBuffer = new StringBuilder();
+        process!.OutputDataReceived += (_, e) => { if (e.Data is not null) outBuffer.AppendLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) errBuffer.AppendLine(e.Data); };
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
         // `-getProperty` only EVALUATES (no restore, no compile) — sub-second warm, a few seconds
         // cold. A minute is far past any legitimate evaluation, so hitting it means MSBuild is
         // wedged, and the guard says so instead of hanging out xUnit's method timeout.
-        Assert.True(process.WaitForExit(60_000),
-            $"`dotnet msbuild {ProbeProject} -getProperty:…` did not finish within 60s. Evaluation "
-            + "does not restore or build, so this is a wedged MSBuild, not a slow one.");
+        if (!process.WaitForExit(60_000))
+        {
+            // Kill the TREE, not just `dotnet` — MSBuild spawns node processes that outlive the
+            // launcher, and a guard that leaks build nodes on every timeout degrades the machine
+            // it is measuring on.
+            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
+            Assert.Fail(
+                $"`dotnet msbuild {ProbeProject} -getProperty:…` did not finish within 60s. Evaluation "
+                + "does not restore or build, so this is a wedged MSBuild, not a slow one.");
+        }
+
+        // Only valid after WaitForExit() returned true: it is what flushes the final buffered lines.
+        var stdout = outBuffer.ToString();
+        var stderr = errBuffer.ToString();
 
         Assert.True(process.ExitCode == 0,
             $"`dotnet msbuild {ProbeProject} -getProperty:…` exited {process.ExitCode}.\n"
