@@ -2204,12 +2204,17 @@ public static class DataExtensions
                 }
 
                 // Identity flows through message-level AccessContext (stamped by PostPipeline).
+                //
+                // 🚨 THE ACK IS POSTED BY THE SUBSCRIBE ITSELF, NOT FROM HERE (#3058). It still
+                // exists for the same reason it always did — to close the
+                // hub.Observe(subscribeRequest) pending callback on the subscriber side, which
+                // DataChangedEvents cannot close because RouteStreamMessage intercepts them before
+                // HandleCallbacks sees them — but WHEN it is sent is now part of its meaning.
+                // Posting it from here acknowledged a re-subscribe BEFORE the snapshot answering it
+                // had been produced, and a subscriber that reads "acknowledged" as "the owner
+                // answered" then counts a promise as a result. See the ack sites in
+                // JsonSynchronizationStream.CreateSynchronizationStream for the full argument.
                 hub.GetWorkspace().SubscribeToClient(request);
-                // Send SubscribeAck immediately to close the hub.Observe(subscribeRequest)
-                // pending callback on the subscriber side. Without this, the callback stays
-                // in responseSubjects until the 30-s RequestTimeout fires (DataChangedEvents
-                // are intercepted by RouteStreamMessage before HandleCallbacks can close it).
-                hub.Post(new SubscribeAck(), o => o.ResponseFor(request));
                 logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
                     request.Sender, hub.Address);
             });
