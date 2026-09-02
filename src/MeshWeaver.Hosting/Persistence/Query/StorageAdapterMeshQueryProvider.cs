@@ -215,12 +215,28 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 IEnumerable<object> matchedNodes =
                     matched.Where(n => !IsExcludedFromResults(n, parsedQuery));
 
-                IEnumerable<object> sorted = matchedNodes;
+                // 🚨 EVERY branch below ends in PathTiebreak, and the `else` exists at all for
+                // that reason: the sequence this produces is CLIPPED a few lines down
+                // (`projected.Take(loadCap)`, loadCap = Skip + Limit) and then SKIPPED in
+                // MeshQuery.ClipMergedInitial, and a Skip/Take over a sequence with no defined
+                // order is not paging — it is three independent samples of an arbitrary order.
+                //
+                // The arbitrary order was real and it was NOT the store's: the scope walk reads
+                // each path with `SelectMany(path => persistence.Read(path))`, which MERGES, so
+                // the emission order is the order the pooled reads COMPLETE. Idle, that is the
+                // walk order and three successive page queries agree; under load the reads
+                // interleave differently each time and the pages re-serve one row while dropping
+                // another. Measured 2026-09-02 on MeshWeaver.Plugins#1135: the
+                // "Skip and Limit paginate without overlap" case fails 11/120 with 36 CPU
+                // burners and 0/120 idle, with every page COUNT correct (3+3+1=7) and one path
+                // duplicated — the signature of a re-ordering, not of a growing set.
+                IEnumerable<object> sorted;
                 if (parsedQuery.OrderBy != null)
                 {
-                    sorted = parsedQuery.OrderBy.Descending
+                    sorted = (parsedQuery.OrderBy.Descending
                         ? matchedNodes.OrderByDescending(n => GetSortableValue(n, parsedQuery.OrderBy.Property))
-                        : matchedNodes.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
+                        : matchedNodes.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property)))
+                        .ThenBy(PathTiebreak, StringComparer.Ordinal);
                 }
                 else if (!string.IsNullOrEmpty(parsedQuery.TextSearch))
                 {
@@ -233,10 +249,16 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     // file-system directory enumeration order. That is the CI-only
                     // SearchQueryTests.TextSearch_CaseInsensitive flake (10 content matches
                     // returned, the Alice-named nodes clipped away on ext4 ordering).
-                    // OrderByDescending is stable, so equal-score ties keep the walk order.
+                    // OrderByDescending is stable — but "keeps the walk order" is exactly the
+                    // non-order above, so equal-score ties now break on path instead.
                     // An explicit sort: (OrderBy above) still wins over relevance.
-                    sorted = matchedNodes.OrderByDescending(n =>
-                        _evaluator.GetFuzzyScore(n, parsedQuery.TextSearch));
+                    sorted = matchedNodes
+                        .OrderByDescending(n => _evaluator.GetFuzzyScore(n, parsedQuery.TextSearch))
+                        .ThenBy(PathTiebreak, StringComparer.Ordinal);
+                }
+                else
+                {
+                    sorted = matchedNodes.OrderBy(PathTiebreak, StringComparer.Ordinal);
                 }
 
                 // 🚨 NEVER hand a projection to a caller typed on MeshNode. ProjectToSelect returns a
@@ -875,6 +897,21 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
         return null;
     }
+
+    /// <summary>
+    /// The FINAL sort dimension of every result set this provider emits — the one that turns an
+    /// ordering into a TOTAL order, so that <c>Skip</c>/<c>Limit</c> over it is paging rather than
+    /// sampling. <see cref="MeshNode.Path"/> is the only field guaranteed present, unique and
+    /// stable across the three independent queries a caller issues for three pages.
+    ///
+    /// <para>A non-<see cref="MeshNode"/> row (a <c>select:</c> projection reaching here, a
+    /// partition object) sorts under the empty key: LINQ's sorts are stable, so those rows keep
+    /// their relative arrival order rather than being shuffled among themselves. Paging over a
+    /// result set made only of those is still undefined — no field of theirs can define it — and
+    /// that is a smaller surface than the one this closes, not a claim that it is safe.</para>
+    /// </summary>
+    private static string PathTiebreak(object item)
+        => item is MeshNode node ? node.Path ?? "" : "";
 
     /// <summary>
     /// Gets a sortable value from a node for the given property name.
