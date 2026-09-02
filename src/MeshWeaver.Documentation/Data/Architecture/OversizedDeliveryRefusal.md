@@ -349,11 +349,77 @@ placement of any bound changes that. Note that bounding *concurrency* (as the st
 already does, `BatchSize = 5`) is **not** that axis and does not help: it limits how many deliveries
 are in flight, never how big one of them is.
 
-> **This is why #3046 stays open** while #3047, #3048, #3049 and the rest of that burst do not. Its
-> leg — `BuildPodHubRoute`'s `IPodHubGrain.Deliver` to a bulk-import hub — has been guarded since
-> #2897 and the delivery went through anyway, which means the payload was *under* the bound and the
-> allocation multiple is what killed the pod. Everything above narrows that band; only the producer
-> closes it.
+## The producer that was building it whole (#2885)
+
+The producer axis stayed open for a day because none of the stacks names a message type, only a
+target: `import/{meshHubId}`, the dedicated bulk-import hub. Four incidents converged on it —
+#2885 (twice: 2026-08-31 05:52Z and 2026-09-02 03:08Z) and #3046/#3047/#3048 (2026-09-02
+02:59–03:00Z) — and the identification is arithmetic, not inference.
+
+**The trigger.** `AgenticBusiness/_GitSync` was written at 2026-09-02 02:49:58Z; the burst begins
+five minutes later. That is a forced GitSync re-import, which is exactly the event the first
+measurement on #2885 said a six-hour quiet window could not rule out.
+
+**The message.** A GitSync import mirrors a Space's git-committed `content/**` binaries into its
+content collection with `SyncContentFilesRequest`, whose `Files` carry the raw bytes **inline** —
+deliberately, so binary assets are never round-tripped through a text API.
+`ContentAssetMapper.ToContentSyncs` emits **one** `StaticContentSync` per Space (also deliberately:
+the mirror is meant to be one authoritative pass over the whole collection), and
+`SyncContentFilesBuilder.Post` turned that one group into **one message**. So the delivery's size
+was the size of the Space's entire asset tree.
+
+**The arithmetic.** `Systemorph/MeshWeaver.Education`, the repo `AgenticBusiness` syncs from:
+
+| Space | `content/**` bytes | as base64 | as a UTF-16 `RawJson` string | transcode rent (≤3 B/char) |
+|---|---|---|---|---|
+| `AgenticBusiness` | 28,484,421 (10 files) | ~38 MB | ~76 MB | **~114 MB** |
+| `AgenticEngineering` | 106,070,300 (12 videos) | **~141 MB** | ~283 MB | ~424 MB |
+
+The `AgenticBusiness` payload is comfortably **under** `MaxMessageBodySize`, which is why every
+bound on this page let it through and #3046 could correctly observe that "the leg is guarded and the
+delivery went through anyway". The rent is what failed. `AgenticEngineering` is the other end of the
+same defect and is not an OOM at all: its base64 form exceeds the 100 MiB frame limit outright, so
+once the producer-side refusals landed that Space's assets **could not sync at all** — a silent,
+total failure of a user-visible feature, produced by the same "one delivery per Space" shape.
+
+**The fix — chunk the writes, keep the prune one pass.** `SyncContentFilesBuilder.Post` now
+partitions the files into deliveries against a budget of
+`DeliveryPayloadBounds.MemoryStreamBlockBytes` — the *tighter* of the two transport ceilings this
+page already names, measured on the base64 form because that is what the message weighs — and posts
+them with `Concat`, so the pod holds one at a time. A file is never split: it is the atom the
+receiving handler writes, so the guarantee is `delivery ≤ budget + largest single file`, i.e. the
+delivery's size stops being a function of *how much* content the Space holds.
+
+The prune is the part that does not chunk. It asks "what is under this folder that the source no
+longer carries", and a chunk answering that from its own slice would delete the other chunks' files.
+So `SyncContentFilesRequest` gains `MirrorKeepPaths`: the full keep set as **paths**, which is all
+the prune ever needed and which costs nothing. Exactly one delivery mirrors — **the first**, not the
+last. That ordering is the safety property: were the keep set ever not honoured by the receiver, the
+files it would wrongly prune are precisely the ones the *following* deliveries are about to write,
+so the operation still converges on the correct folder. Last-position pruning has no such property.
+
+An unsplit sync is byte-for-byte what it was: one request, `MirrorKeepPaths` null, the mirror
+measured against its own `Files`.
+
+### What this still does not cover
+
+- **A single file larger than the budget travels whole.** The largest asset in the Education repo is
+  a 9.9 MB video → ~13 MB base64 → ~40 MB rent, which is survivable but is not *bounded* by
+  anything. A file that large belongs behind a content-store handle rather than inline. That is a
+  different defect from "the producer built the tree whole" and is deliberately not conflated with it.
+- **`DeliveryFailure`'s strip does not fire on a typed payload.** `DeliveryPayloadBounds.IsOversized`
+  returns false for anything that is not `RawJson` — by design, since guessing at the size of a CLR
+  object would mean serialising it on the hot path. But a NACK is very often built on the
+  **receiving** hub, where the message has already been deserialised into its CLR type, so the
+  construction invariant introduced in #3044 silently does not apply there and the body is echoed
+  back to the sender verbatim. On the content-sync path the producer fix makes that echo at most one
+  chunk; as a general property of the invariant it remains, and it is worth knowing before relying on
+  the strip.
+- **Other unbounded inbound bodies at `import/{id}`** are smaller but real: `CreateNodesResponse`
+  echoes up to 25 full `MeshNode`s the caller reads only `Path` off; `CreateOrUpdateNodeResponse`
+  echoes the node; `DeleteNodeResponse` carries every deleted path; the import/content manifests are
+  one entry per node and per content file. All are text and grow with the partition rather than with
+  its binaries.
 
 ## Rules
 
@@ -380,6 +446,18 @@ are in flight, never how big one of them is.
 - **A `[PreventLogging]`-style attribute cannot reach a type with its own converter.** The resolver
   strips *properties*; a custom-converted type has none. Check that a redaction attribute is actually
   read before trusting it.
+- **A stack that names only a target address is still identifiable — by arithmetic.** Ask what the
+  producer at that address builds, measure the SOURCE (the git tree, the collection, the partition),
+  and multiply through base64 → UTF-16 → transcode rent. #2885 sat open across four incidents for
+  want of a payload size that no stack carried and that a `du` of the source repository supplied in
+  one command.
+- **When a write is split, the PRUNE is not.** Chunking an operation that also deletes means the
+  delete must be handed the whole set — as identifiers, never as content — and must run as one pass.
+  Put that pass FIRST: any over-prune is then repaired by the writes queued behind it.
+- **A refusal that lands on an unfixed producer converts an OOM into a silent total failure.** Once
+  `AgenticEngineering`'s 141 MB sync exceeded the frame limit, the bound did its job and the assets
+  simply never synced. A bound is a diagnosis, not a remedy: check what the refused producer does
+  next.
 
 ## See also
 

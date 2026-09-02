@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -201,8 +202,15 @@ public static class ContentImportExtensions
                 if (!request.Mirror)
                     return writes;
 
-                var keep = request.Files
-                    .Select(f => FullPath(f.Path))
+                // 🚨 issue #2885: the WRITES are chunked so no delivery ever carries a whole asset
+                // tree, but the PRUNE is not chunkable — it asks "what is under this folder that the
+                // source no longer carries", and a chunk answering that from its own slice would
+                // delete the other chunks' files. So a split write names its FULL keep set here, in
+                // paths, and the prune stays one authoritative pass. Absent (the unsplit case) the
+                // set is this request's own Files, exactly as before.
+                var keep = (request.MirrorKeepPaths is { } declaredKeep
+                        ? declaredKeep.Select(NormalizePath)
+                        : request.Files.Select(f => FullPath(f.Path)))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
                 // 🚨 issue #435: when the caller declares which paths the SOURCE owns (a GitSync mirror
@@ -509,7 +517,86 @@ public sealed class SyncContentFilesBuilder
         return this;
     }
 
-    /// <summary>Post the sync to the target node's hub. Cold — subscribe to run.</summary>
+    /// <summary>
+    /// 🚨 <b>THE BUDGET — issue #2885.</b> How many packaged (base64) bytes of file content one
+    /// delivery may accumulate before the next file starts a new one.
+    ///
+    /// <para>It is <c>DeliveryPayloadBounds.MemoryStreamBlockBytes</c>, the tighter of the two
+    /// transport ceilings the mesh declares and the one a failure report about a delivery must
+    /// itself survive — not a number chosen to make a symptom stop. Measured on the base64 form
+    /// because that is what the message actually weighs: <c>System.Text.Json</c> renders a
+    /// <c>byte[]</c> as base64 (×4/3), the packaged payload is then held as a UTF-16 string (×2 in
+    /// bytes), and <c>Utf8JsonWriter.TranscodeAndWriteRawValue</c> rents up to 3 bytes per char to
+    /// write it — so the transient peak is several times the delivery, once per hop.</para>
+    ///
+    /// <para><b>What this bounds and what it does not.</b> It bounds the ACCUMULATION: a delivery
+    /// is never larger than this plus the one file that could not be split, so the delivery's size
+    /// stops being a function of how much content the Space holds. A single file larger than the
+    /// budget still travels whole — that is a different axis (a file that large belongs behind a
+    /// content-store handle, not inline) and it is not the defect this closes.</para>
+    /// </summary>
+    internal const int PayloadBudgetBytes = DeliveryPayloadBounds.MemoryStreamBlockBytes;
+
+    /// <summary>
+    /// What one file costs the packaged payload: its bytes as base64, plus its path. Exact enough
+    /// to partition against, and it never touches the bytes.
+    /// </summary>
+    private static long PackagedCost(InlineContentFile file)
+        => 4L * ((file.Content.Length + 2) / 3) + file.Path.Length;
+
+    /// <summary>
+    /// Splits the accumulated files into deliveries none of which exceeds
+    /// <see cref="PayloadBudgetBytes"/>, except where one file alone does. A file is never split —
+    /// it is the atom the receiving handler writes — so the guarantee is
+    /// <c>delivery ≤ budget + largest single file</c>, which is bounded by the CONTENT rather than
+    /// by how much of it there is.
+    /// </summary>
+    private ImmutableList<ImmutableList<InlineContentFile>> SplitIntoDeliveries()
+    {
+        // An empty sync is ONE request, deliberately: with Mirror it is the "the source carries
+        // nothing here any more" pass, and collapsing it to zero requests would silently skip a
+        // prune the caller asked for.
+        if (_files.Count <= 1)
+            return [_files.ToImmutableList()];
+
+        var deliveries = ImmutableList.CreateBuilder<ImmutableList<InlineContentFile>>();
+        var current = ImmutableList.CreateBuilder<InlineContentFile>();
+        var accumulated = 0L;
+        foreach (var file in _files)
+        {
+            var cost = PackagedCost(file);
+            if (current.Count > 0 && accumulated + cost > PayloadBudgetBytes)
+            {
+                deliveries.Add(current.ToImmutable());
+                current.Clear();
+                accumulated = 0L;
+            }
+            current.Add(file);
+            accumulated += cost;
+        }
+        deliveries.Add(current.ToImmutable());
+        return deliveries.ToImmutable();
+    }
+
+    /// <summary>
+    /// Post the sync to the target node's hub. Cold — subscribe to run.
+    ///
+    /// <para>🚨 <b>Issue #2885 — the write is split, and the PRUNE GOES FIRST.</b> A Space's
+    /// <c>content/**</c> binaries travel inline, so one request per Space made the delivery as
+    /// large as the Space's asset tree (28,484,421 bytes for <c>AgenticBusiness</c>; 106,070,300
+    /// for <c>AgenticEngineering</c>, whose base64 form does not even fit Orleans'
+    /// <c>MaxMessageBodySize</c>). Serialising that threw <c>OutOfMemoryException</c> on a
+    /// production pod — twice, on a payload UNDER every transport bound, because the transcode
+    /// peaks at several times the payload. No bound can fix an allocation that IS the failure, so
+    /// the producer stops making it.</para>
+    ///
+    /// <para><b>Why the mirror rides the FIRST delivery, not the last.</b> The prune is one
+    /// authoritative pass measured against the whole set (<c>MirrorKeepPaths</c>), and putting it
+    /// first makes the split safe under any receiver: were the keep set ever not honoured, the
+    /// files it would wrongly prune are precisely the ones the FOLLOWING deliveries are about to
+    /// write, so the operation still converges on the correct folder. Last-position pruning has no
+    /// such property.</para>
+    /// </summary>
     public IObservable<ImportContentResponse> Post()
     {
         // 🚨 A declared identity (WithAccessContext / ImpersonateAsSystem) wins outright: it is a
@@ -520,19 +607,59 @@ public sealed class SyncContentFilesBuilder
         // first stage, inside the System scope) and had all 409 SyncContentFilesRequest posts
         // (built in its second stage, outside) failed closed for a null AccessContext.
         var captured = _identity ?? ContentImportExtensions.CaptureCallerContext(_hub);
-        var request = new SyncContentFilesRequest(_targetCollection, _targetPath, _files.ToArray())
-        {
-            Mirror = _mirror,
-            SourceOwnedPaths = _sourceOwnedPaths,
-        };
         var address = new Address(_nodePath);
+        var deliveries = SplitIntoDeliveries();
+        var split = deliveries.Count > 1;
+        // Collection-relative, the form the mirror compares against — and the form
+        // SourceOwnedPaths already uses. Only computed when the write was actually split.
+        var keepPaths = split && _mirror
+            ? _files.Select(f => CombineTargetPath(f.Path)).ToImmutableList()
+            : null;
+
+        var requests = deliveries.Select((files, index) =>
+        {
+            // The mirror is ONE pass and it is the FIRST — see the remark on this method.
+            var prunes = _mirror && index == 0;
+            return new SyncContentFilesRequest(_targetCollection, _targetPath, files)
+            {
+                Mirror = prunes,
+                // An additive chunk prunes nothing, so it carries neither prune input.
+                SourceOwnedPaths = prunes ? _sourceOwnedPaths : null,
+                MirrorKeepPaths = prunes && split ? keepPaths : null,
+            };
+        });
+
         // Off-router issuing, same reason as ContentImportBuilder.Post: the router must be neither
         // end of the request/response pair (ROUTER_TRAFFIC); a non-router hub gets itself back.
-        return ContentImportExtensions.CarryPostIdentity(
-            Observable.Defer(() => _hub.NodeOperationIssuingHub()
+        // Concat, never Merge: the deliveries are sequential so the pod never holds more than one
+        // of them, which is the entire point — and it keeps the prune pass ordered ahead of the
+        // writes that follow it.
+        var posted = requests
+            .Select(request => Observable.Defer(() => _hub.NodeOperationIssuingHub()
                 .Observe(request, o => ContentImportExtensions.ConfigurePost(o, address, captured))
                 .Select(d => d.Message)
-                .Take(1)),
-            _hub, _identity);
+                .Take(1)))
+            .Concat()
+            // Fold the per-delivery answers into the one the caller has always seen. A failure is
+            // reported as itself and stops the sequence: TakeUntil disposes the Concat, so the
+            // deliveries behind it are never posted.
+            .Scan(ImportContentResponse.Ok(0), (total, answer) => answer.Success
+                ? ImportContentResponse.Ok(total.FilesImported + answer.FilesImported)
+                : answer)
+            .TakeUntil(answer => !answer.Success)
+            .LastAsync();
+
+        return ContentImportExtensions.CarryPostIdentity(posted, _hub, _identity);
+    }
+
+    /// <summary>
+    /// A file's path joined onto <see cref="To(string,string)"/>'s folder — the collection-relative
+    /// form the handler's mirror compares against (forward slashes, no leading slash).
+    /// </summary>
+    private string CombineTargetPath(string filePath)
+    {
+        var baseDir = (_targetPath ?? string.Empty).Replace('\\', '/').Trim('/');
+        var rel = (filePath ?? string.Empty).Replace('\\', '/').TrimStart('/');
+        return baseDir.Length == 0 ? rel : $"{baseDir}/{rel}";
     }
 }

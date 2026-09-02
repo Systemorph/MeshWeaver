@@ -208,6 +208,12 @@ Two things make that work end to end, and both are easy to break again:
 
 Test: `PackageContentAssetInstallTest` — the bytes land at the exact layout `/api/content/{root}/{file}` resolves to, a text asset still round-trips, and an untracked upload survives a re-install.
 
+### 🚨 One sync is MANY deliveries — the bytes are never sent whole (#2885)
+
+`ContentAssetMapper.ToContentSyncs` still emits **one `StaticContentSync` per Space** — the mirror has to be one authoritative pass over the whole collection — but `SyncContentFilesBuilder.Post` no longer turns that into one message. It partitions the files against `DeliveryPayloadBounds.MemoryStreamBlockBytes` (measured on the base64 form, which is what the message weighs) and posts them with `Concat`, so the portal ever holds one batch. A whole-Space message was 28 MB of course video for `AgenticBusiness` — ~114 MB of transient allocation per hop, which took a production pod down twice — and 141 MB packaged for `AgenticEngineering`, over the frame limit entirely, so that Space's assets silently stopped syncing once the producer-side refusals landed.
+
+The prune does not chunk: it rides the **first** delivery and carries `SyncContentFilesRequest.MirrorKeepPaths`, the full keep set as paths. First rather than last is the safety property — an over-prune would be repaired by the writes queued behind it. Full argument and arithmetic: [Oversized Delivery Refusal](/Doc/Architecture/OversizedDeliveryRefusal) → "The producer that was building it whole". Tests: `ContentSyncIsNeverBuiltWholeTest`, `ContentSyncMirrorSurvivesTheSplitTest`.
+
 ## The two primitives
 
 ### 1. Source fingerprint — the content-version
