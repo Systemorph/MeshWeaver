@@ -1,5 +1,8 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive;
+using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -36,5 +39,24 @@ public static class NodeTypeNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<NodeTypeDefinition>())
             .AddNodeTypeView()
+            // The dynamic lane of the nodeType → instance-locations projection (#3039): the
+            // definition's own hub mirrors its InstanceLocations into the mesh singleton for as
+            // long as it is live. The OBSERVABLE overload, as BuildNodeType: the own-node stream
+            // must be opened on the init turn, after Build returns, never inside it.
+            .WithInitialization(PublishInstanceLocations)
     };
+
+    /// <summary>
+    /// Couples <see cref="NodeTypeInstanceLocations.PublishFrom"/> to the definition hub's lifetime.
+    /// A static method group, so <c>WithInitialization</c>'s delegate-identity idempotency collapses
+    /// repeat registrations from composed configurators.
+    /// </summary>
+    /// <param name="hub">The definition node's own hub.</param>
+    /// <returns>An observable that completes once the mirror is installed.</returns>
+    private static IObservable<Unit> PublishInstanceLocations(IMessageHub hub) =>
+        Observable.Defer(() =>
+        {
+            hub.RegisterForDisposal(NodeTypeInstanceLocations.PublishFrom(hub));
+            return Observable.Return(Unit.Default);
+        });
 }

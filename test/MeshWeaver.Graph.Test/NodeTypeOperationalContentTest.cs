@@ -58,6 +58,7 @@ public class NodeTypeOperationalContentTest
             nameof(NodeTypeDefinition.Tests), nameof(NodeTypeDefinition.IncludeGlobalTypes),
             nameof(NodeTypeDefinition.Dependencies), nameof(NodeTypeDefinition.DefaultNamespace),
             nameof(NodeTypeDefinition.RestrictedToNamespaces), nameof(NodeTypeDefinition.CreatableTypes),
+            nameof(NodeTypeDefinition.InstanceLocations),
         ];
         foreach (var member in authored)
             Assert.False(NodeTypeOperationalContent.MemberNames.Contains(member),

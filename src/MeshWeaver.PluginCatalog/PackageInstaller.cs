@@ -2115,10 +2115,14 @@ public static class PackageInstaller
         // stamps, …), so a whole-content compare would ALWAYS look "changed" on re-install and pointlessly
         // rewrite + recompile it. Compare only the authored fields the installer writes — the
         // Configuration lambda AND the Sources list (a source-list change alters what compiles, so it
-        // must re-install + recompile; the source .cs are separate Code nodes, diffed on their own).
+        // must re-install + recompile; the source .cs are separate Code nodes, diffed on their own) —
+        // and the InstanceLocations declaration (#3039): authored on the type, read by the storage
+        // planner; a re-install that changes only WHERE instances live must land, or the planner keeps
+        // narrowing to the old declaration.
         if (current.Content is NodeTypeDefinition curDef && incoming.Content is NodeTypeDefinition inDef)
             return string.Equals(curDef.Configuration, inDef.Configuration, StringComparison.Ordinal)
-                && (curDef.Sources ?? []).SequenceEqual(inDef.Sources ?? [], StringComparer.Ordinal);
+                && (curDef.Sources ?? []).SequenceEqual(inDef.Sources ?? [], StringComparer.Ordinal)
+                && (curDef.InstanceLocations ?? []).SequenceEqual(inDef.InstanceLocations ?? [], StringComparer.Ordinal);
         // Otherwise compare the full content, applying the incoming over current so an omitted field
         // does not read as a change — with WHICHEVER side is a raw JsonElement ALIGNED to the other
         // side's TYPE first (see AlignToPeer). Both mirror cases are live:
