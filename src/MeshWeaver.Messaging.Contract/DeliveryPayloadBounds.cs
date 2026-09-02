@@ -120,18 +120,28 @@ public static class DeliveryPayloadBounds
     }
 
     /// <summary>
-    /// The exact UTF-8 size <paramref name="message"/> would occupy once packaged, computed in
-    /// <b>O(1) memory</b>.
+    /// The exact UTF-8 size <paramref name="message"/> would occupy once packaged, counted rather
+    /// than rendered.
     ///
     /// <para>🚨 <b>Counting, not rendering, is the whole point.</b> The failure this measurement
     /// serves is an ALLOCATION failure: #3049's <c>OutOfMemoryException</c> came out of
     /// <c>Utf8JsonWriter.TranscodeAndWriteRawValue</c> → <c>SharedArrayPool.Rent</c> →
     /// <c>GC.AllocateNewArray</c>, on a pod that was already in trouble. A measurement that
     /// materialised the JSON to read its <c>Length</c> would therefore reproduce the exact defect it
-    /// exists to prevent, at the exact moment the process can least afford it. Writing through
-    /// <see cref="ByteCountingBufferWriter"/> hands the serializer the same scratch span over and
-    /// over and keeps only a running total, so a 142 MB payload is measured without a 142 MB
-    /// allocation.</para>
+    /// exists to prevent, at the exact moment the process can least afford it.
+    /// <see cref="ByteCountingBufferWriter"/> keeps a running total and throws every byte away.</para>
+    ///
+    /// <para>🚨 <b>What that does and does not bound — measured, not assumed.</b>
+    /// <c>Utf8JsonWriter</c> asks its <see cref="IBufferWriter{T}"/> for a span large enough for the
+    /// token it is about to write, so a document of many small tokens is counted inside the 4 KB
+    /// scratch buffer, while ONE giant string value still asks for a span the size of its escaped
+    /// self. So this is not O(1) in the payload — it is one buffer, reused, whose peak is the
+    /// largest single token. That is still strictly cheaper than the path it replaces, which
+    /// materialised the whole document as a UTF-16 <see cref="string"/> (two bytes per char) AND
+    /// paid the three-bytes-per-char transcode rent on top; and it is the LAST allocation of that
+    /// size in the operation, because a payload found oversized here is then replaced by a marker of
+    /// a few hundred bytes and never serialised at all. Do not read this as "measuring cannot
+    /// OOM" — read it as "measuring costs less than the packaging it is deciding".</para>
     ///
     /// <para><b>Serialised as <see cref="object"/>, deliberately</b> — that is what
     /// <c>MessageDelivery.Package</c> does, so the polymorphic converter contributes its
@@ -174,9 +184,13 @@ public static class DeliveryPayloadBounds
     /// <summary>
     /// An <see cref="IBufferWriter{T}"/> that counts what is written to it and keeps none of it. The
     /// same span is handed out for every request and overwritten each time, so the peak footprint is
-    /// the largest single write the serializer asks for rather than the size of the document — which
-    /// is what makes <see cref="Measure"/> safe to run on the error path of a process that is already
-    /// short of memory.
+    /// the largest single write the serializer asks for rather than the size of the whole document.
+    ///
+    /// <para>Deliberately NOT an <c>ArrayPool</c> rental. The pool is exactly what
+    /// <c>SharedArrayPool.Rent</c> → <c>GC.AllocateNewArray</c> threw out of in #3049, and a
+    /// measurement that competes for the same pool on the error path would be contending for the
+    /// resource whose exhaustion it is there to prevent. A 4 KB array that the GC reclaims is the
+    /// cheaper and more predictable trade.</para>
     /// </summary>
     private sealed class ByteCountingBufferWriter : IBufferWriter<byte>
     {
