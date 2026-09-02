@@ -29,9 +29,20 @@ public class UiContributionProjectionTest
         string context = UiContribution.NodeContext,
         MeshNode? node = null,
         Permission perms = Permission.Read,
-        bool isAdmin = false)
+        bool isAdmin = false,
+        string menuPath = "Org/Doc",
+        string? viewerId = null)
         => UiContributionProjection.ProjectMenu(
-            [Contribution(content)], context, "Org/Doc", node ?? SomeNode, perms, isAdmin);
+            [Contribution(content)], context, menuPath, node ?? SomeNode, perms, isAdmin, viewerId);
+
+    private static IReadOnlyList<SettingsMenuItemDefinition> ProjectNodeSettings(
+        UiContribution content,
+        MeshNode? node = null,
+        bool isAdmin = false,
+        string menuPath = "Org/Doc",
+        string? viewerId = null)
+        => UiContributionProjection.ProjectNodeSettingsTabs(
+            [Contribution(content)], menuPath, node ?? SomeNode, isAdmin, viewerId);
 
     [Fact]
     public void AnonymousViewer_PermissionNone_GetsNothing_EvenWhenTheContributionDemandsNothing()
@@ -267,6 +278,212 @@ public class UiContributionProjectionTest
         var icon = Assert.IsType<Domain.Icon>(tab.Icon);
         Assert.Equal(Domain.Icon.FluentProvider, icon.Provider);
         Assert.Equal("Shield", icon.Id);
+        Assert.IsType<Domain.Icon>(tab.GroupIcon);
+    }
+
+    [Fact]
+    public void SyncedOnly_Subtracts_OnceTheNodeHasBeenClaimed()
+    {
+        // The gate the "Stop synchronization" entry needs: a node the viewer already claimed has
+        // nothing left to stop, so the entry must not offer it.
+        var gated = new UiContribution
+        {
+            Area = "StopSync",
+            Gates = new UiContributionGates { SyncedOnly = true },
+        };
+        var synced = new MeshNode("Doc", "Org") { NodeType = "Markdown", SyncBehavior = SyncBehavior.Include };
+        var claimed = new MeshNode("Doc", "Org") { NodeType = "Markdown", SyncBehavior = SyncBehavior.ExcludeThisOnly };
+        var subtreeClaimed = new MeshNode("Doc", "Org")
+            { NodeType = "Markdown", SyncBehavior = SyncBehavior.ExcludeThisAndChildren };
+
+        Assert.Single(Project(gated, node: synced));
+        Assert.Empty(Project(gated, node: claimed));
+        Assert.Empty(Project(gated, node: subtreeClaimed));
+
+        // Missing evidence NARROWS: an unresolved node cannot prove it is still synced.
+        Assert.Empty(UiContributionProjection.ProjectMenu(
+            [Contribution(gated)], UiContribution.NodeContext, "Org/Doc", null, Permission.Read, false));
+
+        // And the gate is opt-in — an ungated entry is unaffected by the node's sync state.
+        Assert.Single(Project(new UiContribution { Area = "StopSync" }, node: claimed));
+    }
+
+    [Fact]
+    public void ExcludeViewerHome_SubtractsOnTheViewersOwnHomeOnly()
+    {
+        // The gate the Edit/Move/Copy/Delete defaults need — the same comparison PinLayoutArea and
+        // PresentationLayoutArea already make ("you do not pin yourself to yourself").
+        var alice = new MeshNode("alice", "") { NodeType = "User" };
+        var gated = new UiContribution
+        {
+            Area = "Edit",
+            Gates = new UiContributionGates { ExcludeViewerHome = true },
+        };
+
+        Assert.Empty(Project(gated, node: alice, menuPath: "alice", viewerId: "alice"));
+        // Case-insensitive, like every other partition-key comparison on this path.
+        Assert.Empty(Project(gated, node: alice, menuPath: "Alice", viewerId: "alice"));
+        // Someone ELSE's home is not the viewer's home — this gate alone does not suppress there.
+        Assert.Single(Project(gated, node: alice, menuPath: "bob", viewerId: "alice"));
+        // No viewer id (anonymous, or a host with no AccessService): there is no home to be on.
+        Assert.Single(Project(gated, node: alice, menuPath: "alice", viewerId: null));
+    }
+
+    [Fact]
+    public void ExcludeViewerHome_IsStrictlyNarrowerThan_ExcludePartitionRoot()
+    {
+        // The two gate words are NOT interchangeable, and a contribution that means "never on any
+        // home" must keep declaring ExcludePartitionRoot: an admin browsing someone else's home
+        // still must not get a Delete entry there.
+        var alice = new MeshNode("alice", "") { NodeType = "User" };
+        var viewerHomeOnly = new UiContribution
+            { Area = "Delete", Gates = new UiContributionGates { ExcludeViewerHome = true } };
+        var anyRoot = new UiContribution
+            { Area = "Delete", Gates = new UiContributionGates { ExcludePartitionRoot = true } };
+
+        Assert.Single(Project(viewerHomeOnly, node: alice, menuPath: "alice", viewerId: "bob"));
+        Assert.Empty(Project(anyRoot, node: alice, menuPath: "alice", viewerId: "bob"));
+    }
+
+    [Fact]
+    public void NodeSettingsTabs_AreASeparateSurface_FromTheGlobalSettingsTabs()
+    {
+        // 🚨 The context-key decision of #3055, pinned. ONE shared key would list every one of the
+        // seven platform tabs already seeded for the GLOBAL settings page (What's New, About,
+        // Privacy, Invitations, Inbox, Updates, Published) on EVERY node's settings page — a
+        // visible regression shipped in the name of a refactor. Each surface answers its own key.
+        var globalTab = new UiContribution
+            { Context = UiContribution.SettingsContext, Area = "SettingsAbout", Label = "About" };
+        var nodeTab = new UiContribution
+            { Context = UiContribution.NodeSettingsContext, Area = "NotificationsTab", Label = "Notifications" };
+
+        Assert.Empty(ProjectNodeSettings(globalTab));
+        Assert.Empty(UiContributionProjection.ProjectSettingsTabs([Contribution(nodeTab)], isAdmin: true));
+
+        Assert.Equal("Notifications", Assert.Single(ProjectNodeSettings(nodeTab)).Label);
+        Assert.Equal("About", Assert.Single(
+            UiContributionProjection.ProjectSettingsTabs([Contribution(globalTab)], isAdmin: false)).Label);
+
+        // A NodeSettings entry is not a node-MENU entry either — the contexts do not bleed.
+        Assert.Empty(Project(nodeTab));
+    }
+
+    [Fact]
+    public void NodeSettingsTabs_CarryKeywords_SoAMigratedTabStaysSearchable()
+    {
+        // SettingsMenuItemDefinition.Keywords backs the settings SEARCH box. Without a keywords
+        // field on the contribution, migrating a tab onto this lane would silently remove it from
+        // search — PartitionSyncAdminLayoutArea alone ships fifteen terms.
+        var tab = ProjectNodeSettings(new UiContribution
+        {
+            Context = UiContribution.NodeSettingsContext,
+            Area = "PartitionSyncAdmin",
+            Label = "Partition Sync",
+            LabelKey = "settings.partitionSync",
+            Keywords = ["partitions", "sync source", "decouple", "delete space"],
+        });
+
+        Assert.Equal(
+            new[] { "partitions", "sync source", "decouple", "delete space" },
+            Assert.Single(tab).Keywords);
+    }
+
+    [Fact]
+    public void NodeSettingsTabs_StampRequiredPermission_RatherThanFilteringOnIt()
+    {
+        // 🚨 The #1962 property. This projection takes NO permission argument on purpose: baking a
+        // permission snapshot into a long-lived provider stream is what silently emptied the
+        // settings menu. The floor is stamped onto the definition and applied at the render fold.
+        var declaresNothing = Assert.Single(ProjectNodeSettings(new UiContribution
+            { Context = UiContribution.NodeSettingsContext, Area = "A" }));
+        Assert.Equal(Permission.Read, declaresNothing.RequiredPermission);
+        // Label falls back to the area when the contribution declares none.
+        Assert.Equal("A", declaresNothing.Label);
+
+        var demandsUpdate = Assert.Single(ProjectNodeSettings(new UiContribution
+        {
+            Context = UiContribution.NodeSettingsContext,
+            Area = "B",
+            RequiredPermission = Permission.Update,
+        }));
+        Assert.Equal(Permission.Update, demandsUpdate.RequiredPermission);
+
+        // …and the fold is what subtracts: a Read viewer keeps the first and loses the second, and
+        // an anonymous viewer (Permission.None at the fold) loses BOTH — the Read floor is what
+        // makes "declares nothing" still mean "not for the logged-out".
+        IReadOnlyList<SettingsMenuItemDefinition> both = [declaresNothing, demandsUpdate];
+        Assert.Equal(["A"], SettingsMenuItemsExtensions
+            .FilterByPermission(both, Permission.Read).Select(i => i.Label));
+        Assert.Empty(SettingsMenuItemsExtensions.FilterByPermission(both, Permission.None));
+    }
+
+    [Fact]
+    public void NodeSettingsTabs_EnforceTheSameClosedGateVocabulary_AsTheNodeMenu()
+    {
+        var adminTab = new UiContribution
+        {
+            Context = UiContribution.NodeSettingsContext,
+            Area = "AdminTab",
+            Gates = new UiContributionGates { AdminOnly = true },
+        };
+        Assert.Empty(ProjectNodeSettings(adminTab));
+        Assert.Single(ProjectNodeSettings(adminTab, isAdmin: true));
+
+        var typeGated = new UiContribution
+        {
+            Context = UiContribution.NodeSettingsContext,
+            Area = "SpaceTab",
+            Gates = new UiContributionGates { NodeTypes = ["Space"] },
+        };
+        Assert.Empty(ProjectNodeSettings(typeGated));
+        // Suffix-aware, exactly like the node menu: a plugin-installed "Publish/Space" matches.
+        Assert.Single(ProjectNodeSettings(typeGated,
+            node: new MeshNode("S", "Org") { NodeType = "Publish/Space" }));
+
+        var homeGated = new UiContribution
+        {
+            Context = UiContribution.NodeSettingsContext,
+            Area = "HomeTab",
+            Gates = new UiContributionGates { ExcludeViewerHome = true },
+        };
+        Assert.Empty(ProjectNodeSettings(homeGated, menuPath: "alice", viewerId: "alice"));
+        Assert.Single(ProjectNodeSettings(homeGated, menuPath: "alice", viewerId: "bob"));
+
+        // An empty Area is dropped before any gate runs, on this lane as on every other.
+        Assert.Empty(ProjectNodeSettings(new UiContribution
+            { Context = UiContribution.NodeSettingsContext, Label = "No target" }));
+    }
+
+    [Fact]
+    public void NodeSettingsTabs_KeepTheNodeIdAsTheTabId_AndResolveIcons()
+    {
+        // The node id becomes the /{nodePath}/Settings/{Id} route segment, so a compiled tab that
+        // migrates to a same-named seed keeps every bookmarked deep link it had.
+        var tab = Assert.Single(UiContributionProjection.ProjectNodeSettingsTabs(
+            [(new MeshNode("Notifications", "Admin/UiContribution")
+                  { NodeType = UiContributionNodeType.NodeType },
+              new UiContribution
+              {
+                  Context = UiContribution.NodeSettingsContext,
+                  Area = "SettingsNotifications",
+                  Label = "Notifications",
+                  LabelKey = "settings.notifications",
+                  Icon = "Alert",
+                  Group = "Management",
+                  GroupKey = "settings.groupManagement",
+                  GroupIcon = "Document",
+                  Order = 120,
+              })],
+            "Org/Doc", SomeNode, isAdmin: false, viewerId: "alice"));
+
+        Assert.Equal("Notifications", tab.Id);
+        Assert.Equal(120, tab.Order);
+        Assert.Equal("Management", tab.Group);
+        Assert.Equal("settings.notifications", tab.LabelKey);
+        Assert.Equal("settings.groupManagement", tab.GroupKey);
+        var icon = Assert.IsType<Domain.Icon>(tab.Icon);
+        Assert.Equal(Domain.Icon.FluentProvider, icon.Provider);
+        Assert.Equal("Alert", icon.Id);
         Assert.IsType<Domain.Icon>(tab.GroupIcon);
     }
 }

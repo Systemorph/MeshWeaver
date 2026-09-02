@@ -146,7 +146,8 @@ in its `TypeRegistry` or it degrades to an untyped `JsonElement` and the area re
 | A named area on a node type | `LayoutDefinition.WithView(name, generator)` | the NodeType's configuration — in-mesh or compiled |
 | Default areas on every node | `AddDefaultLayoutAreas()` composition | core only — extending it puts your area on *every node in the mesh*; prefer a NodeType-scoped area |
 | A left-rail navigation for a node family | `INodeNavigationProvider` | DI singleton (pack) — claimed by node shape at render time |
-| A settings tab | a `UiContribution` node (`Context: Settings`) pointing at a layout area — or compiled `AddGlobalSettingsMenuItems(...)` for content that needs code | mesh data / hub configuration |
+| A GLOBAL settings tab (`/_Setting/GlobalSettings/{id}`) | a `UiContribution` node (`Context: Settings`) pointing at a layout area — or compiled `AddGlobalSettingsMenuItems(...)` for content that needs code | mesh data / hub configuration |
+| A PER-NODE settings tab (`/{nodePath}/Settings/{id}`) | a `UiContribution` node (`Context: NodeSettings`) — or compiled `AddSettingsMenuItems(...)` | mesh data / hub configuration |
 | Node-menu entries / presentation | a `UiContribution` node (`Context: Node`/`Mesh`/`AI`/`SidePanel`/…) — or compiled `AddNodeMenuItems(...)`; presentation stays editable data (`MenuPresentationOverlay`) | mesh data / hub configuration |
 | A whole NEW top-bar menu | a `UiContribution` node (`Context: TopBar`) declaring the dropdown; entries target its key | mesh data — no code at all |
 | A home-screen tab | a `HomeTab` node | mesh data — no code at all |
@@ -171,7 +172,7 @@ The full field surface:
 
 | Field | Meaning |
 |---|---|
-| `Context` | Which menu: `Node` (default), `Mesh`, `Settings`, `AI`, `SidePanel`, `GitHub`, any registered context — or `TopBar` (below) |
+| `Context` | Which menu: `Node` (default), `Mesh`, `Settings` (GLOBAL settings page), `NodeSettings` (PER-NODE settings page), `AI`, `GitHub`, any registered context — or `TopBar` (below) |
 | `Area` | The layout area the entry opens (settings: embedded into the pane; menus: the link target) |
 | `Href` | Optional explicit link overriding the derived area URL — **portal-internal only** (a single-slash-rooted path like `/search?…`; schemes and `//host` forms are discarded by the compiled gate and the entry falls back to its area link) |
 | `Label` / `LabelKey` | Display text; the key resolves against the shared localization catalog |
@@ -179,17 +180,56 @@ The full field surface:
 | `Tooltip` / `TooltipKey` | Hover text (menus and top-bar buttons) |
 | `Order` | Sort position (default 100 — after the built-ins) |
 | `Group` / `GroupKey` / `GroupIcon` | Settings-tab grouping (entries sharing a group nest under its header) |
+| `Keywords` | Extra SEARCH terms for the per-node settings search box — what is *inside* the tab, not its name. Consumed by `NodeSettings` only (the global page has no search); omitting them on a migrating tab removes it from search silently |
 | `RequiredPermission` | Checked against the viewer's LIVE effective permission on the anchoring node, floored at `Read`; anonymous sees nothing |
 | `Gates.NodeTypes` | Suffix-aware node-type filter (`"Slide"` matches `Publish/Slide`) |
-| `Gates.ExcludePartitionRoot` | Never on a protected partition root — the built-in suppression's own predicate |
+| `Gates.ExcludePartitionRoot` | Never on ANY user's home — the built-in suppression's own predicate |
+| `Gates.ExcludeViewerHome` | Never on the VIEWER'S OWN home (the anchoring path is the viewer's partition key). Strictly narrower than `ExcludePartitionRoot`, not a replacement: declare both when both apply |
+| `Gates.SyncedOnly` | Only while the node still participates in sync (`SyncBehavior.Include`) — the shape the "Stop synchronization" action needs. The inverse is deliberately absent; the vocabulary stays closed |
 | `Gates.AdminOnly` | Platform admins only (`hub.IsGlobalAdmin()`, reactive) |
 
-**Settings tabs** (`Context: Settings`): the contributed area is embedded into the pane's styled
-stack; the tab id is the NODE id, so `/GlobalSettings/{id}` deep links stay stable when a compiled
-tab migrates to a same-named seed. The platform's own global tabs ship this way — What's New /
-About / Privacy plus the admin tabs Invitations / Inbox / Updates / Published to the web / Token
-Usage (`Admin/UiContribution/*` seeds); every admin tab's AREA re-asserts the admin gate, because
-an area is directly URL-addressable and `Gates.AdminOnly` only hides the menu entry.
+Every gate SUBTRACTS, and they are evaluated in ONE compiled place (`UiContributionProjection.PassesNodeGates`)
+so the node menu and the per-node settings page can never drift on what a gate word means.
+
+**Settings tabs — TWO surfaces, TWO keys.** The portal has two settings pages, and each answers
+its own context key:
+
+| Surface | Route | Context | Projects into |
+|---|---|---|---|
+| Global settings | `/_Setting/GlobalSettings/{id}` | `Settings` | `GlobalSettingsMenuItemDefinition` |
+| Per-node settings | `/{nodePath}/Settings/{id}` | `NodeSettings` | `SettingsMenuItemDefinition` |
+
+They are **not one key**, deliberately. A single key would list every tab on both pages — the seven
+platform tabs seeded for the global page would appear on every node's settings page, which is a
+visible regression rather than a migration — and it would make the two surfaces impossible to gate
+independently, which is the property the contribution lane exists for. A tab that genuinely belongs
+on both is two contributions, and says so.
+
+On both surfaces the contributed area is embedded into the pane's styled stack, and the tab id is
+the NODE id, so a `/…/Settings/{id}` deep link stays stable when a compiled tab migrates to a
+same-named seed. The platform's own global tabs ship this way — What's New / About / Privacy plus
+the admin tabs Invitations / Inbox / Updates / Published to the web / Token Usage
+(`Admin/UiContribution/*` seeds); every admin tab's AREA re-asserts the admin gate, because an area
+is directly URL-addressable and `Gates.AdminOnly` only hides the menu entry.
+
+🚨 **The per-node lane never filters on permission and takes none.** It stamps
+`RequiredPermission` (floored at `Read`) onto the definition and lets
+`SettingsMenuItemsExtensions.FilterByPermission` apply it at the render fold, against the LATEST
+permission value. Filtering inside the provider stream would bake a permission SNAPSHOT into a
+long-lived chain — the #1962 defect, where an early `Permission.None` seed stays subscribed and
+later re-renders the menu with every entitled tab silently missing. The Read floor is what still
+makes an anonymous viewer see nothing.
+
+🚨 **One compiled tab shape does not survive migration unchanged: `RequiredPermission =
+Permission.None`.** `FilterByPermission` treats a `None` tab as chrome *every* viewer sees, but a
+contribution can never demand less than `Read` (that floor is what makes the lane fail closed), so
+a `None` tab becomes `Read`-gated the moment it moves onto the lane. In practice that is the same
+set of viewers — you cannot open a node's settings page without reading the node — with one real
+difference: a viewer holding `Permission.None` on the node loses the tab. Per-node tabs registered
+as `None` today (Notifications is one) are therefore a deliberate decision at migration time, not a
+copy-paste: either accept the narrowing, or leave that tab compiled. This is the closed vocabulary
+working as designed — a contribution narrows, never widens — but it is a behaviour change, so it
+belongs in the migration PR's description rather than being discovered afterwards.
 
 **Whole top-bar menus** (`Context: TopBar`): the contribution declares a NEW dropdown — its `Area`
 names the menu's own context key, `Label`/`Icon`/`Order`/`Tooltip` style the button, and its
@@ -203,6 +243,23 @@ deliberately cannot express.
 **Seeding**: platform-static seeds ride `MeshBuilder.AddMeshNodes(...)`
 (`AddPlatformSettingsTabContributions`, `AddAiMenuContributions`); a plugin just ships
 `UiContribution` nodes as pack content under its own namespace.
+
+### 🚨 A contribution nobody consumes is DARK — check it statically
+
+A contributed entry naming a `Context` nobody declares renders **nowhere**, and nothing anywhere
+says so: no error, no warning, not even an area-not-found placeholder. Six shipped entries were
+dark for nine days that way. The same silence covers an empty `Area` (dropped before any gate
+runs), a non-portal-internal `Href` (discarded, so the entry quietly opens the derived area URL
+instead), a node whose `NodeType` is not `UiContribution` (the catalog query never returns it), a
+label with no `LabelKey` (English for every German viewer), and two seeds at the same path (the
+catalog is keyed on path — one silently replaces the other).
+
+`UiContributionSeedValidation.Validate(seeds, options, additionalContexts, registeredAreas)` is the
+pure check for all six; it folds in the context keys a `TopBar` declaration in the same set
+introduces. Core pins its own seed list with it (`PlatformSettingsTabSeedTest`); the Plugins repo's
+`scripts/check-menu-contexts.py` is the script form of the same check for content-authored packs.
+Any repo seeding contributions from compiled code should call it from a test — with a control arm,
+because a check that cannot fail reproduces exactly the silence it exists to break.
 
 ## What cannot be extended today
 
