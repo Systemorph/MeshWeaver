@@ -13,4 +13,8 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data.TestDomain\MeshWeaver.Data.TestDomain.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- TestScheduler: PatchAckTotalityTest drives the owner-side flush bound on a virtual clock. -->
+    <PackageReference Include="Microsoft.Reactive.Testing" />
+  </ItemGroup>
 </Project>

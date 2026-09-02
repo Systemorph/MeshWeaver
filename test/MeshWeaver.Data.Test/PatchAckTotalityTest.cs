@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Mesh;
+using Microsoft.Reactive.Testing;
 using Xunit;
 
 namespace MeshWeaver.Data.Test;
@@ -175,6 +176,85 @@ public class PatchAckTotalityTest
         h.Acks.Should().ContainSingle();
         h.Acks[0].Success.Should().BeFalse();
         h.Acks[0].Error!.Code.Should().Be(MeshNodeErrorCode.AccessDenied);
+    }
+
+    /// <summary>
+    /// 🚨 THE #3112 REGRESSION — a slow flush reported as a lost write. The commit echo has arrived
+    /// (the merge landed, the Version advanced), the durable flush is still queued behind a congested
+    /// store when the flush bound expires. Before: <c>Take(1).Timeout(bound)</c> faulted into the NACK
+    /// arm — <c>Unknown</c> + <c>TimeoutException</c>, "the write did NOT apply" — AND disposed the
+    /// flush, so the queued storage write was cancelled and re-queued through the sampler. On the
+    /// node-repo gate (Manufacturing run 33623113056) that NACK made the bake seed abandon an adoption
+    /// stamp that had committed; the sweep compiled over it and the gate DECLINED the bundle. After: the
+    /// bound acks <c>true</c> once — the commit IS the verdict — and the flush keeps its subscriber.
+    /// Driven on a virtual clock: no wall time, no race.
+    /// </summary>
+    [Fact]
+    public void FlushThatOutlivesTheBound_AcksTrueOnceOnTheCommit_AndKeepsTheFlushRunning()
+    {
+        using var h = new Harness();
+        var flush = new Subject<bool>();
+        var clock = new TestScheduler();
+
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Return(42), _ => flush, FlushTimeout, h.AckOnce, h.Register, HubPath, () => false,
+            logger: null, flushBoundScheduler: clock);
+
+        clock.AdvanceBy(FlushTimeout.Ticks - 1);
+        h.Acks.Should().BeEmpty("inside the bound the ack waits for the durable flush");
+        flush.HasObservers.Should().BeTrue("the flush is in flight");
+
+        clock.AdvanceBy(1);
+        h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null),
+            "the echo already proved the merge committed — on the bound the owner acks the commit; a NACK "
+            + "here told the writer a landed write had NOT applied (#3112)");
+        flush.HasObservers.Should().BeTrue(
+            "the bound is a wait bound on the ack, not a cancellation of the storage write — disposing it "
+            + "re-queued every slow flush through the sampler under the congestion that made it slow");
+
+        flush.OnNext(true);
+        h.Acks.Should().ContainSingle("the flush landing after the bound finds the once-only gate claimed");
+        flush.HasObservers.Should().BeFalse("Take(1) completes on the flush's own emission");
+    }
+
+    /// <summary>A flush that faults AFTER the bound acked the commit must not re-verdict it: the gate
+    /// is latched on the owner, so the fault is logged and the sampler stays the writer of record.</summary>
+    [Fact]
+    public void FlushThatFaultsAfterTheBound_LeavesTheAckedCommitStanding()
+    {
+        using var h = new Harness();
+        var flush = new Subject<bool>();
+        var clock = new TestScheduler();
+
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Return(42), _ => flush, FlushTimeout, h.AckOnce, h.Register, HubPath, () => false,
+            logger: null, flushBoundScheduler: clock);
+
+        clock.AdvanceBy(FlushTimeout.Ticks);
+        flush.OnError(new System.IO.IOException("disk full"));
+
+        h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null),
+            "the fault arrives after the commit was acked on the bound; it is a durability event, not a verdict");
+    }
+
+    /// <summary>The happy path is unchanged: a flush landing inside the bound acks once on its emission
+    /// and the bound timer is released with it — advancing the clock past the bound posts nothing more.</summary>
+    [Fact]
+    public void FlushThatLandsInsideTheBound_AcksOnce_AndTheBoundTimerIsReleased()
+    {
+        using var h = new Harness();
+        var flush = new Subject<bool>();
+        var clock = new TestScheduler();
+
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Return(42), _ => flush, FlushTimeout, h.AckOnce, h.Register, HubPath, () => false,
+            logger: null, flushBoundScheduler: clock);
+
+        flush.OnNext(true);
+        h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null));
+
+        clock.AdvanceBy(FlushTimeout.Ticks * 2);
+        h.Acks.Should().ContainSingle("the bound timer was disposed with the flush's terminal — no second ack");
     }
 
     /// <summary>
