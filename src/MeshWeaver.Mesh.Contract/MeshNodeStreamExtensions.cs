@@ -1458,7 +1458,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         .Take(1),
                     refusedBaseVersion: 0)
                 .Subscribe(
-                    _ =>
+                    // Named, not `_`: the discard identifier is wanted INSIDE this lambda for the
+                    // audit stamp's out-parameter, and a lambda parameter called `_` would shadow
+                    // it — `out _` then binds to this MeshNode and fails to compile as `out bool`.
+                    // The base state is genuinely unused here (the write reads Current on the
+                    // stream's own action block), so the name says that rather than hiding it.
+                    unusedBaseState =>
                     {
                         // 🚨 VALUE-based update — the sync stream builds the
                         // ChangeItem (per-entity Updates + ChangeType + owner-only
@@ -1471,7 +1476,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         Func<MeshNode?, MeshNode?> valueUpdate = current =>
                         {
                             if (current is null) return null;
-                            var updated = ApplyAuditStamp(current, update(current), capturedContext, out var _unusedStamped);
+                            var updated = ApplyAuditStamp(current, update(current), capturedContext, out _);
                             EmitOnce(updated);
                             return updated;
                         };
