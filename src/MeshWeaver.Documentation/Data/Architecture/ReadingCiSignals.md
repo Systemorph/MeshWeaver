@@ -370,6 +370,48 @@ and every run after it failed, with no downstream commit in between.
 **The rule:** record the **core tip** alongside any cross-repo verdict, and resolve it once per run
 rather than per checkout step. A verdict without that stamp cannot be reproduced or disputed.
 
+### 🚨 A sweep goes blind when its SUBJECT moves repos — not when its detector breaks
+
+The failure this page keeps naming is *"the sink appeared later than the window"*. There is a second
+shape, and it is harder to see because nothing about the detector changes: **the suite that carries
+the defect leaves the repository, and the sweep keeps returning a confident, calibrated zero.**
+
+Measured on **#890** (a Roslyn `Emit` that poisons a test host process, so every later NodeType
+compile NREs). Swept core CI on 2026-09-02 across 958 `dotnet-test.yml` runs:
+
+| window | occurrences |
+|---|---|
+| 2026-08-30T00:05Z → 2026-09-01T11:34Z | **11** — 1.76 % of non-cancelled runs |
+| 2026-09-01T11:34Z → 2026-09-02T10:27Z (201 runs) | **0** |
+
+The clean tail reads like a fix, and at that rate a 201-run gap is a ~4 % coincidence. It is neither.
+**PR #2847 merged at 2026-09-01T14:06:31Z and deleted `MeshWeaver.Hosting.Monolith.Test` and
+`MeshWeaver.PluginCatalog.Test` from core**; they now live in `MeshWeaver.Plugins/src/`. Every one of
+the 11 occurrences — and every occurrence in that issue's history — fired inside one of those two
+suites. The last one is 2 h 35 m before the removal. Core CI can no longer express the defect at all,
+so every core observation after that timestamp measures nothing.
+
+**The rule:** before believing a null, ask *"does the code that produces this signal still run in
+this repository, in this window?"* Confirm it positively — name a run and the suite verdict line it
+printed (`Passed! - … - <Suite>.dll`) — rather than inferring it from the sweep's own silence. A
+subject that moved and a defect that stopped are indistinguishable from inside one repo, and
+[deleted and relocated look identical too](/Doc/Architecture/CrossRepoPairGate).
+
+### The same fault surfaces through a DIFFERENT sink in each repo
+
+Having found where the suites went, the follow-up sweep in the other repo is not the same command.
+Core streams a test's log output into the job log as live `[OUTPUT]` lines — **5 852** of them in the
+calibrated #890 occurrence. The equivalent MeshWeaver.Plugins job, running the very same suite,
+carries **0**: it dumps `Standard Output Messages:` post-hoc, per *failing* test, and keeps the
+`_meshweaver-test-trace.log` phase trace only inside a `teardown-stragglers-*` artifact.
+
+A detector keyed on the framing (`[OUTPUT]`, a project-name-plus-`exit=124` string, a `(part N/M)`
+suffix) therefore returns a clean, fast, entirely vacuous zero. **Grep the signature the code emits**
+— here `canary=`, `PROCESS CANNOT EMIT`, `GetConsolidatedTypeParameters` — **never the harness's
+packaging around it**, and prove the sink is alive in the target repo with a positive control before
+reporting the null (17 of 43 Plugins trace artifacts carried real `Compile failure for …` records,
+which is what made that null worth stating).
+
 ### A grep hit is not a binder
 
 Twice in one day, prose was mistaken for the thing it described. A quoted phrase in a `//` comment
