@@ -1493,12 +1493,24 @@ public static class MeshExtensions
                             // in the sentence that is wrong.
                             logger.LogError(ex,
                                 "[CreateNodes] STORE UNREACHABLE for a batch of {Count}: {ExceptionType}: "
-                                + "{ExceptionMessage} — nothing was written. The fault is the data store, "
+                                + "{ExceptionMessage} — {Durability}. The fault is the data store, "
                                 + "not this batch; the caller is answered Unavailable.",
-                                nodes.Count, ex.GetType().Name, ex.Message);
+                                nodes.Count, ex.GetType().Name, ex.Message,
+                                attemptedPaths is { Length: > 0 }
+                                    ? "the write had STARTED, so an unknown subset may be durable"
+                                    : "nothing was written");
+                            // 🚨 Which sentence is a claim about the DATA, so pick it on evidence.
+                            // `attemptedPaths` is set once the batch has been stamped and handed to
+                            // the store, so a fault after that point may have landed part of it.
+                            // Saying "nothing was written" there would be false, and the caller's
+                            // natural response — retry the whole batch — would double-write
+                            // whatever did land.
                             PostFail(
-                                StoreReachability.DescribeNotAttempted(
-                                    $"Bulk creation of {nodes.Count} node(s)"),
+                                attemptedPaths is { Length: > 0 }
+                                    ? StoreReachability.DescribeMayHavePartiallyLanded(
+                                        $"Bulk creation of {nodes.Count} node(s)")
+                                    : StoreReachability.DescribeNotAttempted(
+                                        $"Bulk creation of {nodes.Count} node(s)"),
                                 NodeCreationRejectionReason.Unavailable);
                         }
                         else if (ex is InvalidOperationException)

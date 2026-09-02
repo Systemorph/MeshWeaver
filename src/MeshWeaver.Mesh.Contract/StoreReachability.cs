@@ -74,4 +74,23 @@ public static class StoreReachability
         => $"{operation} could not be attempted: the data store was unreachable. Nothing was written — "
            + "this is an availability failure, not a refusal, so retrying the same request "
            + "(with the same node id) is meaningful.";
+
+    /// <summary>
+    /// The same availability verdict for a write that had ALREADY STARTED when the store became
+    /// unreachable — so part of the batch may have landed.
+    ///
+    /// <para>🚨 Why this is a separate sentence rather than a nuance in the one above.
+    /// "Nothing was written" is a claim ABOUT THE DATA, and it is only true when the failure
+    /// preceded the write. Saying it after a partial landing tells a caller the store is in a state
+    /// it is not — and the natural next step, retrying the whole batch, then double-writes whatever
+    /// did land. A wrong claim about durability is worse than an vague one, so when we do not know,
+    /// we say we do not know.</para>
+    /// </summary>
+    /// <param name="operation">The operation, as a sentence subject.</param>
+    /// <returns>A message safe to hand to a caller, a log line and an activity alike.</returns>
+    public static string DescribeMayHavePartiallyLanded(string operation)
+        => $"{operation} failed part-way: the data store became unreachable after the write had "
+           + "started, so an UNKNOWN subset may already be durable. This is an availability failure, "
+           + "not a refusal — but read the current state before retrying, because re-sending the "
+           + "whole request could duplicate whatever landed.";
 }
