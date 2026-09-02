@@ -271,6 +271,8 @@
   "plugins.discovery.orphaned.body": "{0} is still synced here, but the plugin repository no longer ships it. {1}",
   "plugins.discovery.failed.title": "Module could not be added: {0}",
   "plugins.discovery.failed.body": "Setting up {0} from the plugin repository failed. {1}",
+  "plugins.reconcile.deferred.title": "Plugin updates were not checked: {0}",
+  "plugins.reconcile.deferred.body": "The plugin registry {0} ({1}) stayed unavailable for this installation's whole startup window ({2} attempts), so installed packages from it were not checked for updates. The check runs automatically the next time this installation reaches the registry — for example when someone opens the catalog or installs a package. Last answer: {3}",
   "settings.whatsNew": "What's new",
   "settings.invitations": "Invitations",
   "settings.updates": "Updates",

@@ -262,7 +262,8 @@ public static class PackageInstaller
     /// exist). Idempotent, promise-cached in the providers; providers that need no per-partition
     /// provisioning no-op. Emits exactly once.
     /// </summary>
-    private static IObservable<System.Reactive.Unit> EnsurePartitionsProvisioned(
+    // Internal: RegistryUpdateReconciler writes its ledger into the install-records partition too.
+    internal static IObservable<System.Reactive.Unit> EnsurePartitionsProvisioned(
         IMessageHub hub, params string?[] partitions)
     {
         var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToArray();

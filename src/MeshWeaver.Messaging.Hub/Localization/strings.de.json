@@ -271,6 +271,8 @@
   "plugins.discovery.orphaned.body": "{0} wird hier weiterhin synchronisiert, das Plugin-Repository enthält es aber nicht mehr. {1}",
   "plugins.discovery.failed.title": "Modul konnte nicht hinzugefügt werden: {0}",
   "plugins.discovery.failed.body": "Das Einrichten von {0} aus dem Plugin-Repository ist fehlgeschlagen. {1}",
+  "plugins.reconcile.deferred.title": "Plugin-Updates wurden nicht geprüft: {0}",
+  "plugins.reconcile.deferred.body": "Die Plugin-Registry {0} ({1}) war während des gesamten Startfensters dieser Installation nicht erreichbar ({2} Versuche), daher wurden installierte Pakete daraus nicht auf Updates geprüft. Die Prüfung läuft automatisch, sobald diese Installation die Registry das nächste Mal erreicht — etwa wenn jemand den Katalog öffnet oder ein Paket installiert. Letzte Antwort: {3}",
   "settings.whatsNew": "Neuerungen",
   "settings.invitations": "Einladungen",
   "settings.updates": "Updates",

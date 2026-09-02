@@ -38,12 +38,15 @@ public static class PluginCatalogConfigurationExtensions
             .AddMeshNodes(CreateSigningKeyNodeType())
             .AddMeshNodes(CreateModuleDiscoveryNodeType())
             .AddMeshNodes(CreateDefaultInstallLedgerNodeType())
+            .AddMeshNodes(CreateRegistryReconcileLedgerNodeType())
             // Infrastructure credential, never pickable content.
             .AddAutocompleteExcludedTypes(PluginRegistryCredentials.NodeType)
             // The registry's token signing key — infrastructure, never pickable content.
             .AddAutocompleteExcludedTypes(SyncTokenSigningKeys.NodeType)
             // Bookkeeping, never pickable content — same reason as the credential above.
             .AddAutocompleteExcludedTypes(InstanceAutoRegistrationService.LedgerNodeType)
+            // The per-registry reconcile state (#2888) — bookkeeping, never pickable content.
+            .AddAutocompleteExcludedTypes(RegistryUpdateReconciler.LedgerNodeType)
             // The build-completion subscriber. A mesh-scoped SINGLETON, so its subscriptions live
             // and die with the mesh rather than surviving disposal into the next test
             // (Doc/Architecture/NoStaticState). The IHostedService registration is what STARTS it —
@@ -206,7 +209,8 @@ public static class PluginCatalogConfigurationExtensions
             .WithType(typeof(PluginRegistryCredential), nameof(PluginRegistryCredential))
             .WithType(typeof(SyncTokenSigningKey), nameof(SyncTokenSigningKey))
             .WithType(typeof(ModuleDiscovery), nameof(ModuleDiscovery))
-            .WithType(typeof(DefaultInstallLedger), nameof(DefaultInstallLedger));
+            .WithType(typeof(DefaultInstallLedger), nameof(DefaultInstallLedger))
+            .WithType(typeof(RegistryReconcileLedger), nameof(RegistryReconcileLedger));
 
     private static MeshNode CreatePackageNodeType() => new(PackageInstaller.PackageNodeType)
     {
@@ -286,6 +290,23 @@ public static class PluginCatalogConfigurationExtensions
             ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
             HubConfiguration = config => config
                 .AddMeshDataSource(s => s.WithContentType<DefaultInstallLedger>()),
+        };
+
+    // The reconcile ledger (#2888): same shape and same two-half registration as the default-install
+    // ledger above — WithType registers the CONTENT type, this registers the NODE type CreateNode
+    // validates against; without it the write dies with "NodeType is not registered" and the
+    // deferred-reconcile record this exists to keep would be silently lost.
+    private static MeshNode CreateRegistryReconcileLedgerNodeType() =>
+        new(RegistryUpdateReconciler.LedgerNodeType)
+        {
+            Name = "Registry Reconcile Ledger",
+            Icon = "/static/NodeTypeIcons/box.svg",
+            // Bookkeeping, not a satellite of anything: a single node in the Plugins partition,
+            // addressed by a fixed path, exactly like the default-install ledger.
+            IsSatelliteType = false,
+            ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+            HubConfiguration = config => config
+                .AddMeshDataSource(s => s.WithContentType<RegistryReconcileLedger>()),
         };
 
     // Read-only, world-readable policy for the install-records partition — the same shape every
