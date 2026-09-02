@@ -33,7 +33,8 @@ public class ModuleBuildLedgerLaneGuard
     public void TheLane_DeclaresTheLedgerFlagAndItsToken_DefaultingToOff()
     {
         var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
-        var input = Regex.Match(text, @"\n      ledger:\n(?<body>(?:        .*\n)+)");
+        // The folded (`>`) description carries blank lines, so the body is "8-space-indented or empty".
+        var input = Regex.Match(text, @"\n      ledger:\n(?<body>(?:(?:        .*)?\n)+)");
         Assert.True(input.Success, $"{Lane} must declare a `ledger` input");
         Assert.Contains("default: off", input.Groups["body"].Value, StringComparison.Ordinal);
         Assert.True(Regex.IsMatch(text, @"\n      ledger-token:\n"), $"{Lane} must declare the `ledger-token` secret");
