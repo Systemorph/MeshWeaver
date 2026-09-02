@@ -93,9 +93,15 @@ and lists the entries currently queued.
 
 `.github/workflows/merge-queue-steward.yml` fires on `pull_request` with `action: dequeued`; the
 event carries a `reason`. The workflow is thin; `.github/scripts/merge-queue-steward.py` decides,
-mints nothing itself (the App installation token is minted the way `auto-arm.yml` does, so a
-re-queue's eventual merge is an ordinary push that triggers `main`'s lanes), and proves its own
-decision table with `--self-test` before every real decision.
+mints nothing itself, and proves its own decision table with `--self-test` before every real
+decision. It uses **two tokens, split by direction**: every *read* (the failed run's jobs and
+artifacts, the PR head's check-runs, commits, comments) goes through the job's own `GITHUB_TOKEN`
+with `actions: read` + `checks: read`; every *write* (comment, label, enqueue) goes through the App
+installation token minted the way `auto-arm.yml` does — the org grants that App exactly
+`contents: write` + `pull_requests: write`, so it cannot read Actions, and a re-queue performed with
+`GITHUB_TOKEN` would merge as the bot and start no run on `main` (#2916). The `queue-rejected`
+label is a repository fixture (creating a label needs `issues: write`, which the App does not hold;
+applying an existing one needs only `pull_requests: write`).
 
 | Reason | What the steward finds | Action | Cap per head sha |
 |---|---|---|---|
