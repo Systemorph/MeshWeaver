@@ -259,11 +259,27 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // the framework's own answer to "is this process a silo" — see CanHostGrains. Optional for
         // the same reason as the two above: a bare mesh in a unit test is neither silo nor client.
         CanHostGrains = serviceProvider.GetService<ILocalSiloDetails>() is not null;
-        // Issue #2885 — the bound the RouteMessage leg measures against. Optional for the same
-        // reason as the three above: a bare mesh in a unit test registers no Orleans messaging
-        // options, and then the guard falls back to Orleans' own default rather than to "unbounded".
+        // Issue #2885 — the bound the RouteMessage leg measures against.
+        //
+        // 🚨 Read the limit that ACTUALLY GOVERNS this process, not whichever one is handy. This
+        // service is registered on silo hosts as well as clients (OrleansServerRegistryExtensions),
+        // and the two are configured separately: a silo's outbound grain call is bounded by
+        // SiloMessagingOptions, a client's by ClientMessagingOptions. Reading only the client
+        // option would under-refuse where the silo bound is smaller (the oversized frame still
+        // tears the connection down — the exact failure this guard exists to prevent) and
+        // over-refuse where it is larger (refusing deliveries the transport would have carried).
+        // CanHostGrains is Orleans' own answer to "is this process a silo", resolved just above.
+        //
+        // Each is optional for the same reason as the three fields above: a bare mesh in a unit
+        // test registers no Orleans messaging options at all, and then the guard falls back to
+        // Orleans' own default rather than to "unbounded". The cross-fallback matters for a
+        // co-hosted process that registers only one of the two.
         GrainBodyLimitBytes =
-            serviceProvider.GetService<IOptions<ClientMessagingOptions>>()?.Value.MaxMessageBodySize
+            (CanHostGrains
+                ? serviceProvider.GetService<IOptions<SiloMessagingOptions>>()?.Value.MaxMessageBodySize
+                  ?? serviceProvider.GetService<IOptions<ClientMessagingOptions>>()?.Value.MaxMessageBodySize
+                : serviceProvider.GetService<IOptions<ClientMessagingOptions>>()?.Value.MaxMessageBodySize
+                  ?? serviceProvider.GetService<IOptions<SiloMessagingOptions>>()?.Value.MaxMessageBodySize)
             ?? MessageSizeGuard.DefaultGrainTransportBodyBytes;
     }
 

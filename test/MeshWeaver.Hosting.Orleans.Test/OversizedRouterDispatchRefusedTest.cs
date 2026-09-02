@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.Connection.Orleans;
@@ -80,8 +81,17 @@ public class OversizedRouterDispatchRefusedTest : TestBase
     // RunContinuationsAsynchronously: without it everything awaiting this TCS resumes INLINE on the
     // hub's message-handling thread, so the awaiting test body would run on the single-threaded
     // action block it is still driving. Same reason as OrleansRoutingShutdownClassificationTest.
-    private readonly TaskCompletionSource<DeliveryFailure> nack =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    /// <summary>
+    /// The NACK the router posts back, as an <see cref="AsyncSubject{T}"/> rather than a
+    /// <c>TaskCompletionSource</c>.
+    ///
+    /// <para>🚨 A TCS is a hand-woven async gate: its continuation can resume INLINE on the hub
+    /// thread that completed it, inside the action block, which is the shape AGENTS.md forbids in
+    /// `test/` as well as `src/`. An AsyncSubject carries the value the same way, replays it to a
+    /// late subscriber, and is awaited through the repo's reactive assertion — so the wait is
+    /// bounded by the assertion's own timeout and its failure names what did not arrive.</para>
+    /// </summary>
+    private readonly AsyncSubject<DeliveryFailure> nack = new();
 
     public OversizedRouterDispatchRefusedTest(ITestOutputHelper output) : base(output)
     {
@@ -89,7 +99,7 @@ public class OversizedRouterDispatchRefusedTest : TestBase
         // The hub sits AT the sender address, so the DeliveryFailure the router posts back to
         // delivery.Sender lands on this handler — the real NACK, not a stand-in.
         Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(SenderAddress, conf => conf
-            .WithHandler<DeliveryFailure>((_, d) => { nack.TrySetResult(d.Message); return d.Processed(); })
+            .WithHandler<DeliveryFailure>((_, d) => { nack.OnNext(d.Message); nack.OnCompleted(); return d.Processed(); })
             .WithPostingIdentity(PostingIdentity.System)));
     }
 
@@ -157,7 +167,8 @@ public class OversizedRouterDispatchRefusedTest : TestBase
 
         await routing.DeliverMessage(DeliveryOf(OversizedPayloadBytes)).FirstAsync().Await();
 
-        var failure = await nack.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var failure = await nack.Should().Within(10.Seconds())
+            .Emit("the router must post a DeliveryFailure back to the sender for an oversized dispatch");
         failure.ErrorType.Should().Be(ErrorType.Rejected,
             "an oversized body cannot become deliverable on a retry; ShuttingDown or a transient "
             + "classification would make the sender retry it forever");
@@ -189,7 +200,8 @@ public class OversizedRouterDispatchRefusedTest : TestBase
 
         await routing.DeliverMessage(DeliveryOf(OversizedPayloadBytes)).FirstAsync().Await();
 
-        var failure = await nack.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var failure = await nack.Should().Within(10.Seconds())
+            .Emit("the router must post a DeliveryFailure back to the sender for an oversized dispatch");
         var echoed = JsonSerializer.Serialize(failure.Delivery.Message);
 
         echoed.Should().NotContain(new string('x', 10_000),
