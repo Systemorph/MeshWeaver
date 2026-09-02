@@ -362,9 +362,10 @@ public static class PrebuiltAssemblySeeder
             if (hub.IsLeaving())
             {
                 logger?.LogInformation(
-                    "Prebuilt assembly for {NodeTypePath} NOT seeded: this hub is leaving (#3129) — "
-                    + "a shutting-down process writes nothing on a NodeType every generation shares; "
-                    + "the next generation seeds its own bundles",
+                    "Prebuilt assembly for {NodeTypePath} NOT seeded: this hub is LEAVING (#3129: "
+                    + "shutting down, or hosted by a process that has begun stopping) — a leaving hub "
+                    + "writes nothing on a NodeType every generation shares; the next generation seeds "
+                    + "its own bundles",
                     nodeTypePath);
                 return Observable.Return(false);
             }

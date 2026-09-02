@@ -317,8 +317,9 @@ public static class ShippedPrebuiltBundles
             if (mesh.IsLeaving())
             {
                 logger?.LogInformation(
-                    "ShippedPrebuiltBundles: this process is leaving (#3129) — no adoption pass "
-                    + "starts on a hub that is shutting down; the next generation seeds its own bundles");
+                    "ShippedPrebuiltBundles: this hub is LEAVING (#3129: shutting down, or hosted by a "
+                    + "process that has begun stopping) — no adoption pass starts on it; the next "
+                    + "generation seeds its own bundles");
                 return Observable.Return(0);
             }
 
