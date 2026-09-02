@@ -931,7 +931,46 @@ public static class MeshExtensions
                 ex =>
                 {
                     hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_ERROR {ex.GetType().Name}");
-                    if (ex is InvalidOperationException)
+                    if (StoreReachability.IsStoreUnreachable(ex))
+                    {
+                        // 🚨 AN UNREACHABLE STORE IS NOT A VERDICT (#3050/#3051). The existence Read
+                        // that opens this chain, the NodeType probe and the save all go to the same
+                        // backend, and when it is briefly unreachable the driver's connect timeout
+                        // arrives here. It used to fall into the branch below and be answered
+                        // `Unknown` under the words "Unexpected error during node creation" — which
+                        // sent operators hunting for a defect in a create path that was fine, and
+                        // told callers their create had been REFUSED when it had never been
+                        // ATTEMPTED. A caller that reads "refused" and mints a fresh id on its next
+                        // attempt writes a DUPLICATE (#2229); `Unavailable` is the reason value that
+                        // already means "not evaluated, retry is meaningful" (#1446), so this is the
+                        // wire the two ends were missing, not a new concept.
+                        //
+                        // 🚨 It is NOT a retry, and must never become one. The bounded retry already
+                        // ran upstream (TransientStorageFaults.RetryTransientConnect, #2521:
+                        // 250 → 500 → 1000 ms, then the last error surfaces). A fault that reaches
+                        // THIS arm is one whose budget is honestly spent; retrying it here would aim
+                        // a second, unbounded-in-aggregate retry at the resource that is already the
+                        // bottleneck — the non-choice #3031 states for the render path.
+                        //
+                        // 🚨 It is judged by the CONDITION and therefore outranks the type test
+                        // below: an InvalidOperationException WRAPPING a driver connect fault is
+                        // still the store being unreachable, and answering it `ValidationFailed`
+                        // would tell the caller their request was invalid because a database was
+                        // down. Same argument CancellationClassifier makes for the timeout impostor.
+                        //
+                        // Stays at Error — an availability failure is something an operator must see
+                        // (#974). What changes is the WORDING: it names the store, not the create.
+                        logger.LogError(ex,
+                            "[CreateNode] STORE UNREACHABLE at {Path}: {ExceptionType}: {ExceptionMessage} — "
+                            + "the create was NOT attempted and nothing was written. The fault is the data "
+                            + "store, not this create; the caller is answered Unavailable, so a retry with "
+                            + "the same node id is meaningful.",
+                            node.Path, ex.GetType().Name, ex.Message);
+                        Respond(CreateNodeResponse.Fail(
+                            StoreReachability.DescribeNotAttempted($"Node creation at '{node.Path}'"),
+                            NodeCreationRejectionReason.Unavailable));
+                    }
+                    else if (ex is InvalidOperationException)
                     {
                         logger.LogWarning(ex, "Node creation failed for path {Path}", node.Path);
                         Respond(CreateNodeResponse.Fail(ex.Message, NodeCreationRejectionReason.ValidationFailed));
@@ -1432,6 +1471,35 @@ public static class MeshExtensions
                                 written.Count);
                             PostFail($"Nodes persisted but a later step failed: {ex.Message}",
                                 NodeCreationRejectionReason.Unknown, created: written);
+                        }
+                        else if (StoreReachability.IsStoreUnreachable(ex))
+                        {
+                            // 🚨 The singular create's rule, on the sibling verb (#3050/#3051). A
+                            // guard that covers one create verb and not the other is a guard on
+                            // neither: an installer copying 50-250 nodes hits THIS handler, and a
+                            // whole batch answered `Unknown` under "unexpected error" reads as a
+                            // refusal it must not retry. See StoreReachability for why this is a
+                            // classification and never a retry.
+                            //
+                            // 🚨 Deliberately BELOW the partial-landing branch. "Nothing was written"
+                            // is half of what this answer asserts, and it is FALSE once the batch has
+                            // committed a window (Postgres writes each window in its own
+                            // transaction). A partially-landed batch keeps its own louder report,
+                            // whatever made the rest fail.
+                            //
+                            // The count is the REQUEST's, never `attemptedPaths` — the store can be
+                            // unreachable at the phase-1 existence ReadMany, long before anything is
+                            // stamped, and "Bulk creation of 0 node(s)" would then be the one number
+                            // in the sentence that is wrong.
+                            logger.LogError(ex,
+                                "[CreateNodes] STORE UNREACHABLE for a batch of {Count}: {ExceptionType}: "
+                                + "{ExceptionMessage} — nothing was written. The fault is the data store, "
+                                + "not this batch; the caller is answered Unavailable.",
+                                nodes.Count, ex.GetType().Name, ex.Message);
+                            PostFail(
+                                StoreReachability.DescribeNotAttempted(
+                                    $"Bulk creation of {nodes.Count} node(s)"),
+                                NodeCreationRejectionReason.Unavailable);
                         }
                         else if (ex is InvalidOperationException)
                         {
