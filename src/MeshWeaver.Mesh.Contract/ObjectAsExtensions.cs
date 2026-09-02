@@ -164,6 +164,77 @@ public static class ObjectAsExtensions
     }
 
     /// <summary>
+    /// The runtime-<see cref="Type"/> form of <see cref="As{T}"/>, for the seams that learn the
+    /// target type from a LIVE instance rather than from a type parameter — the update pipeline
+    /// handing validators an existing node typed like the proposed one is the canonical case.
+    /// Same contract: already an instance of <paramref name="type"/> → as-is; a degraded
+    /// <see cref="JsonElement"/> / <see cref="JsonNode"/> → deserialized as <paramref name="type"/>
+    /// (a concrete-type deserialization needs no registry entry for the <c>$type</c> discriminator);
+    /// a same-named foreign CLR type → recovered by a JSON round-trip; anything else → <c>null</c>,
+    /// logged loud. Callers keep their original value when this answers <c>null</c>.
+    /// </summary>
+    public static object? As(
+        this object? value,
+        Type type,
+        JsonSerializerOptions options,
+        ILogger? logger = null,
+        string? what = null)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        switch (value)
+        {
+            case null:
+                return null;
+            case var typed when type.IsInstanceOfType(typed):
+                return typed;
+            case JsonElement je:
+                try
+                {
+                    return je.Deserialize(type, options);
+                }
+                catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
+                {
+                    logger?.LogError(ex, "As<{TargetType}> could not recover {What}: {RawJson}",
+                        type.Name, what ?? "value", Excerpt(je.GetRawText()));
+                    return null;
+                }
+            case JsonNode jn:
+                try
+                {
+                    return jn.Deserialize(type, options);
+                }
+                catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
+                {
+                    logger?.LogError(ex, "As<{TargetType}> could not recover {What}: {RawJson}",
+                        type.Name, what ?? "value", Excerpt(jn.ToJsonString()));
+                    return null;
+                }
+            default:
+                if (value.GetType().Name == type.Name)
+                {
+                    try
+                    {
+                        // Same reasoning as the generic overload: serialize AS the concrete runtime
+                        // type so the read does not adopt a foreign type into the caller's registry.
+                        var element = JsonSerializer.SerializeToElement(value, value.GetType(), options);
+                        var recovered = element.Deserialize(type, options);
+                        if (recovered is not null)
+                            return recovered;
+                    }
+                    catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
+                    {
+                        // fall through to the loud log below
+                    }
+                }
+                logger?.LogError(
+                    "As<{TargetType}> for {What}: value is {ActualType} ({ActualAssembly}), not convertible",
+                    type.Name, what ?? "value", value.GetType().FullName,
+                    value.GetType().Assembly.GetName().Name);
+                return null;
+        }
+    }
+
+    /// <summary>
     /// The head of a payload, for a diagnostic log line. Bounded because the value being logged is
     /// by definition the one we could NOT parse — a degraded content blob or a whole snapshot can be
     /// megabytes, and these lines ship to the log store. The first 2 KB is what a human reads to
