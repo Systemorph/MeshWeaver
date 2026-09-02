@@ -1583,6 +1583,43 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     public bool IsShuttingDown => disposalStarted || hostedHubs.IsCreationFrozen;
 
+    /// <summary>
+    /// Backing source for <see cref="ShuttingDown"/>. An AsyncSubject so a subscriber attaching
+    /// after the moment still receives it — the same replay contract as
+    /// <see cref="disposalCompleted"/>, at the OTHER end of teardown. Completed exactly once
+    /// (CAS-guarded) by <see cref="SignalShuttingDown"/>, from whichever of the two entry points
+    /// — this hub's own <see cref="Dispose"/> or an ancestor's <see cref="CloseHostedHubCreation"/>
+    /// cascade — fires first.
+    /// </summary>
+    private readonly AsyncSubject<Unit> shuttingDown = new();
+    private int shuttingDownSignalled;
+
+    /// <inheritdoc />
+    public IObservable<Unit> ShuttingDown => shuttingDown.AsObservable();
+
+    /// <summary>
+    /// Completes <see cref="shuttingDown"/> exactly once. Idempotent — both entry points can run
+    /// for one hub (an ancestor freezes the subtree, then this hub's own Dispose arrives seconds
+    /// later) and only the first is the "first instant". Subscribers run INLINE on the caller's
+    /// thread (the disposing ancestor's <c>Dispose()</c>), so the notification is guarded: a
+    /// teardown signal must never fault the teardown it announces.
+    /// </summary>
+    private void SignalShuttingDown()
+    {
+        if (Interlocked.CompareExchange(ref shuttingDownSignalled, 1, 0) != 0)
+            return;
+        try
+        {
+            shuttingDown.OnNext(Unit.Default);
+            shuttingDown.OnCompleted();
+        }
+        catch (Exception ex)
+        {
+            TryLog(LogLevel.Warning, ex,
+                "[SHUTTING-DOWN] {Address}: a ShuttingDown subscriber threw — teardown proceeds", Address);
+        }
+    }
+
     /// <inheritdoc />
     // Native reactive view of the completion subject — NOT bridged from a Task. Fires Unit +
     // completes when disposal finishes (or OnError on a disposal fault); a subscriber attaching
@@ -1675,8 +1712,17 @@ public sealed class MessageHub : IMessageHub
     /// the moment an ANCESTOR begins disposing, so no straggler emission anywhere in
     /// the tree can enter hub construction during teardown (issue #613). Does NOT
     /// dispose anything — existing hubs keep draining until their own dispose phase.
+    ///
+    /// <para>It IS, however, the first instant this hub is part of a shutdown
+    /// (<see cref="IsShuttingDown"/> flips here), so it also raises <see cref="ShuttingDown"/> —
+    /// the watchers this hub owns stop NOW, not when its own ShutDown phase disposes their
+    /// registrations seconds later (#3026).</para>
     /// </summary>
-    internal void CloseHostedHubCreation() => hostedHubs.CloseCreation();
+    internal void CloseHostedHubCreation()
+    {
+        hostedHubs.CloseCreation();
+        SignalShuttingDown();
+    }
 
     public void Dispose()
     {
@@ -1704,6 +1750,10 @@ public sealed class MessageHub : IMessageHub
         // (see HostedHubsCollection.CloseCreation — the FutuRe.Test teardown SIGSEGV,
         // issue #613). Existing hubs still resolve for the drain.
         hostedHubs.CloseCreation();
+        // The first instant of THIS hub's teardown — every watcher it owns stops here, before the
+        // Quiescing phase starts waiting for the callbacks those watchers would otherwise keep
+        // issuing (#3026). Descendants were signalled by the cascade above.
+        SignalShuttingDown();
 
         // Log all hosted hubs that will be disposed
         var hostedHubAddresses = hostedHubs.Hubs.Select(h => h.Address.ToString()).ToArray();
