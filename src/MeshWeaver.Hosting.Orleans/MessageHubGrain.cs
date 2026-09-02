@@ -749,7 +749,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         HubReady.Take(1).Subscribe(
             hub =>
             {
-                try { tcs.TrySetResult(hub.DeliverMessage(delivery)); }
+                // 🚨 THE ACKNOWLEDGEMENT CARRIES THE VERDICT, NOT THE BODY — issue #3045. Orleans
+                // deep-copies a grain call's RESULT with the same JsonCodec as its arguments, so
+                // returning the delivery made every payload cross the boundary TWICE. The caller
+                // (RoutingGrain.DeliverToGrainRoute) reads State, SenderWasNacked and
+                // GetFailureMessage() — all of which survive — and never Message. The failure arms
+                // below strip for the same reason: a NACK's own transport must not be the thing it
+                // is reporting on.
+                try { tcs.TrySetResult(Acknowledge(hub.DeliverMessage(delivery))); }
                 catch (Exception ex) { tcs.TrySetException(ex); }
             },
             // 🚨 CLASSIFY, at the one place that knows. Both arms used to take the UNCLASSIFIED
@@ -768,14 +775,25 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             // MonolithRoutingService already mints for it, so the two hosting models agree, and the
             // consumers with their own recovery machinery (SynchronizationStream's resubscribe
             // latch) ride it out instead of tearing down.
-            ex => tcs.TrySetResult(delivery.Failed(
+            ex => tcs.TrySetResult(Acknowledge(delivery).Failed(
                 $"Hub activation failed for {this.GetPrimaryKeyString()}: {ex.Message}",
                 ErrorType.Unavailable)),
-            () => tcs.TrySetResult(delivery.Failed(
+            () => tcs.TrySetResult(Acknowledge(delivery).Failed(
                 $"Hub disposed before delivery for {this.GetPrimaryKeyString()}.",
                 ErrorType.ShuttingDown)));
         return tcs.Task;
     }
+
+    /// <summary>
+    /// The delivery as an ACKNOWLEDGEMENT — state, id, sender, target, access context and every
+    /// property intact, body replaced by a marker. See
+    /// <see cref="DeliveryPayloadBounds.WithoutEchoedPayload"/> (issue #3045) for why the body's
+    /// return trip is pure cost.
+    /// </summary>
+    /// <param name="delivery">The delivery this grain is about to answer with.</param>
+    /// <returns>The same verdict, without the body.</returns>
+    private static IMessageDelivery Acknowledge(IMessageDelivery delivery) =>
+        DeliveryPayloadBounds.WithoutEchoedPayload(delivery);
 
 
     /// <inheritdoc />

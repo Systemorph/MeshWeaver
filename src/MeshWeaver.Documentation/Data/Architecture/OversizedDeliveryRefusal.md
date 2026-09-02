@@ -1,7 +1,7 @@
 ---
 Name: Oversized Delivery Refusal
 Category: Architecture
-Description: A message too large for its transport is refused at the producer, never dispatched. Why an oversized grain frame destroys a shared connection rather than one delivery, why the limit is never the thing to raise, and where the bound still cannot reach.
+Description: A message too large for its transport is refused at the producer, never dispatched — and the report about it, the acknowledgement of it and the log line describing it must never carry it. Why an oversized grain frame destroys a shared connection rather than one delivery, why the limit is never the thing to raise, and where the bound still cannot reach.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><path d="M12 8v4"/><path d="M12 16h.01"/><path d="m16 4 5 5"/><path d="m21 4-5 5"/></svg>
 ---
 
@@ -56,7 +56,7 @@ routed delivery's packaged `RawJson` payload against a transport's bound. It is 
 path — a UTF-16 char is at most 3 UTF-8 bytes, so `3 × Length < limit` is an O(1) proof that a
 payload fits and the common case never scans — and exact only for a delivery that might be over.
 
-It is applied at **four** producer sites:
+It is applied at **four** producer sites — every leg on which a delivery travels FORWARD:
 
 - `RoutingGrain.PostToStream` — the memory-stream leg, against the 1 MiB block.
 - `RoutingGrain.RefuseOversizedGrainDispatch`, on **both** forward grain legs: `BuildGrainRoute`'s
@@ -65,6 +65,10 @@ It is applied at **four** producer sites:
   covers one strand and misses the other.
 - `OrleansRoutingService.DeliverMessage` — the router's own `IRoutingGrain.RouteMessage` call, which
   is strictly **upstream** of the other three (#2885, below).
+
+Two more legs carry the same payload and are **not** producer legs at all, so no bound placed on the
+way out could ever have reached them. Both are covered by rules rather than by measurements, and both
+are below: the **failure report** (#3044/#3049) and the **acknowledgement** (#3045).
 
 > **Why the guard lives in `MeshWeaver.Messaging.Hub` and is public.** It began beside the first
 > three sites in `MeshWeaver.Hosting.Orleans`, but the fourth site is in
@@ -101,13 +105,35 @@ pair, and nothing about the message; that gap is the whole reason the guard logs
 `DeliveryFailure` embeds the **original** delivery, payload and all, and travels back to the sender
 over the same transport. So a failure report about a 142 MB message is itself a 142 MB message and
 dies at exactly the wall it is describing — leaving the producer with neither the message nor the
-report. `MessageSizeGuard.WithoutOversizedPayload` replaces the echo with a description of itself
-before the report is posted; the sender correlates a `DeliveryFailure` on `RequestId`, never on the
-echoed payload. It defaults to the **tighter** of the two bounds, so one call protects a report
-whichever way it travels back.
+report. `DeliveryPayloadBounds.WithoutOversizedPayload` replaces the echo with a description of itself
+(`MessageSizeGuard.WithoutOversizedPayload` is the same call under the name the routers already use);
+the sender correlates a `DeliveryFailure` on `RequestId`, never on the echoed payload. It defaults to
+the **tighter** of the two bounds, so one report is protected whichever way it travels back.
 
 This is a second-order defect of the same shape, and it is why "just NACK it" is not a fix on its
 own.
+
+### And it is the RECORD's invariant, not a call site's
+
+This rule shipped twice as a hand-applied call at one site each — `RoutingGrain.PostFailure` (#1890),
+then `OrleansRoutingService.SendDeliveryFailure` (#2885). On 2026-09-02 it failed at a **third**:
+`MessageService.ReportFailure`, the hub's own reporter, which every one of that burst's occurrences
+ran through and which neither earlier fix had been told about.
+
+There are around **twenty** `new DeliveryFailure(delivery)` sites in this repository, written over
+years by people who had not read this page. "Remember to strip" was never a control — it was a
+convention that two sites happened to follow. The strip is now applied inside `DeliveryFailure`'s own
+construction, in `MeshWeaver.Messaging.Contract`, so a report cannot be built with an undeliverable
+payload attached no matter which site builds it. The two explicit calls remain, idempotent, because
+their surrounding comments carry the incident history.
+
+> **Why the measurement moved to the contract assembly.** `MessageSizeGuard` lives in
+> `MeshWeaver.Messaging.Hub` because both routers reference it (see the box above). `DeliveryFailure`
+> lives one assembly lower, so a helper in the Hub assembly is unreachable from the one type whose
+> invariant this is. The measurement itself is now `DeliveryPayloadBounds` in
+> `MeshWeaver.Messaging.Contract`; `MessageSizeGuard` delegates to it and keeps its wording, its
+> incident history and its public surface. This is the same move #2885 made one assembly earlier, for
+> the same reason, and the alternative is the same one it rejected: a copy-paste of the check.
 
 ## The fourth leg: the router's OWN grain call (#2885)
 
@@ -162,25 +188,172 @@ with the payload attached. On this leg that is worse than a lost report: echoing
 the identical 3×-payload transcode, so the refusal becomes a *second* allocation failure. Both sites
 now call `MessageSizeGuard.WithoutOversizedPayload`.
 
+## The fifth leg: the report about the failure (#3044, #3049)
+
+On 2026-09-02 one portal pod logged, four times in fourteen minutes:
+
+```text
+fail: MeshWeaver.Messaging.MessageService[0]
+      Failed to post DeliveryFailure message for RawJson (ID: …) — breaking error cascade
+      System.OutOfMemoryException
+```
+
+The sender was left with **neither the message nor the notification**: from its side the delivery
+simply vanished and its `Observe(...)` waited out its budget. Two frames were recorded, and they are
+two halves of one event — `JsonReaderHelper.TranscodeHelper` beneath `MessageService.Post` (#3044),
+and `MessageDeliveryConverter.Write` → `Utf8JsonWriter.TranscodeAndWriteRawValue` →
+`SharedArrayPool.Rent` → `GC.AllocateNewArray` (#3049).
+
+Three defects, all on the reporting path, none of them the transport:
+
+1. **The NACK carried the payload it was reporting on** — the section above; the site had never been
+   told.
+2. **`Post` rendered every delivery to JSON for a log line nobody read.** The line was
+
+   ```csharp
+   logger.LogDebug("Posting message {Delivery} …", JsonSerializer.Serialize(ret, LoggingSerializerOptions), …);
+   ```
+
+   A method argument is evaluated *before* the call, so the render ran on **every post in the
+   process** and was then discarded by the logger whenever Debug was off — which in production it
+   always is. This is the exact rule `LogSummary` was written for after the 2026-07-22 allocation
+   storm (+3.9 GiB, 14k gen-0 GCs, 2.7 GB of live log strings in one test's heap): the hot Debug
+   logs must never serialise a payload. `Post` is the hottest of all the sites that rule governs, and
+   it was simply never converted. It now checks `IsEnabled(LogLevel.Debug)` first and renders
+   `LogSummary`.
+3. **`[PreventLogging]` did not reach `RawJson`.** `RawJson.Content` has carried the attribute since
+   it was written, and its doc comment states the intent — "logging it in full is just re-dumping the
+   message as a string". `LoggingTypeInfoResolver` implements that by removing properties from a
+   resolved `JsonTypeInfo`, which requires `Kind == Object`. **A type claimed by a custom
+   `JsonConverter<T>` has `Kind == None` and no properties at all**, so there was nothing to remove
+   and `RawJsonConverter` went on emitting the body verbatim. The logging options now register a
+   `LoggingRawJsonConverter` ahead of it, which writes the byte count and the head of the payload
+   instead — so the cost of a log line no longer depends on the size of the message, and a log
+   render can no longer be the thing that exhausts the pod.
+
+> 🚨 **Marking a member of a custom-converted type `[PreventLogging]` silently does nothing.** That
+> is the worst kind of control: the declaration reads as though the protection is in place. If a type
+> has its own converter, the redaction has to be in a converter too.
+
+**Why none of this is fixed by a bound.** An `OutOfMemoryException` *during serialisation* means the
+allocation was the failure, so refusing the delivery afterwards is too late — and a `try/catch`
+around it (which the log line above already is) turns a lost message into a lost message *plus* a
+lost report. The fix is to stop making the allocation: a log nobody reads is not rendered, a payload
+is never a log's content, and a report about a message does not carry the message.
+
+## The sixth leg: the way BACK (#3045)
+
+```text
+fail: MeshWeaver.Connection.Orleans.OrleansRoutingService[0]
+      Failed to deliver to AppleMusic/_Issue/1059
+      System.OutOfMemoryException
+         at Orleans.Serialization.JsonCodec…IDeepCopier.DeepCopy(Object input, CopyContext context)
+         at Orleans.Serialization.Invocation.PooledResponseCopier`1.DeepCopy(Response`1 input, …)
+         at Orleans.Runtime.InsideRuntimeClient.SafeSendResponse(Message message, Response response)
+```
+
+Every frame is on the **return** leg. Nothing in the request path failed; the callee could not send
+its own answer, and the requesting hub simply never got a reply.
+
+Five bounds existed by then and every one measures a delivery on the way **out**. None had asked what
+the way **back** was carrying, and the answer was: the same payload, again. All three of the mesh's
+Orleans delivery legs are declared `Task<IMessageDelivery>` and **return the delivery they were
+handed, body included**:
+
+| Leg | Returns | What the caller reads |
+|---|---|---|
+| `IRoutingGrain.RouteMessage` | `delivery.Forwarded(address)` | `State`, `SenderWasNacked`, `GetFailureMessage()` |
+| `IPodHubGrain.Deliver` | `delivery.Forwarded(address)` | **nothing** — `BuildPodHubRoute` does `.Select(_ => Unit.Default)` |
+| `IMessageHubGrain.DeliverMessage` | the hub's own result | `State`, `SenderWasNacked`, `GetFailureMessage()` |
+
+Orleans copies a call's **result** with the same `JsonCodec` it copies its **arguments** with, so an
+*n*-byte body cost *n* bytes outbound and *n* bytes inbound on every hop — to deliver a state word and
+two properties. **Not one caller reads `Message`.**
+
+`DeliveryPayloadBounds.WithoutEchoedPayload` replaces the body with a marker at all three return
+points. State, id, sender, target, access context and every property survive; only the body — which
+nobody reads — does not travel.
+
+> 🚨 **Unconditional, not bound-conditional.** The NACK rule strips only what a transport provably
+> cannot carry, because an echoed payload there is at least arguably diagnostic. This one has no such
+> excuse: the acknowledgement's body is read by nobody **at any size**. Making the strip conditional
+> on a bound would keep paying the full cost for every payload just under it — and just under the
+> bound is exactly where this incident sat.
+
+**The generalisable question**, and the one this family keeps re-learning: when a bound exists on one
+leg, ask which other legs carry the same delivery. #2885 asked it about the leg that *reaches* the
+guarded code. #3045 is the same question asked about the leg that *comes back from* it.
+
+## Read the frame order to tell a copy from a hop
+
+The 2026-09-02 burst was filed as six separate incidents because six different loggers recorded it.
+Sorting them takes one rule: **the frames say which leg, and the leg says which fix.**
+
+| Frames | Leg | Where the fix is |
+|---|---|---|
+| `RawJsonConverter.Read` / `MessageDeliveryConverter.Read` under `JsonCodec.DeepCopy` | the argument copy, inbound | the copy path (below) |
+| `ObjectPolymorphicConverter.Write` under `Proxy_*.Deliver` | the argument copy, outbound | the copy path (below) |
+| `…Write` under `Orleans.Runtime.Messaging.Connection` | the wire frame | the producer bound |
+| `PooledResponseCopier` / `SafeSendResponse` | **the response** | #3045, above |
+| `MessageService.Post` / `MessageDeliveryConverter.Write` under `JsonTypeInfo.SerializeAsObject` | **a log render** | #3044/#3049, above |
+
+A stack under `Connection.ProcessOutgoing` and a stack under `PooledResponseCopier` are the same
+payload at two different ends of one call, and they need different fixes. So do a serialisation and a
+log render, which look identical until you read what is above `MessageDeliveryConverter.Write`.
+
+## The copy path allocated ~6× the payload to copy it once
+
+Both `JsonCodec` directions round-tripped through a **UTF-16 string** that nothing needed:
+
+- **Reading** (`MessageDeliveryConverter.Read`): `JsonDocument.ParseValue` into pooled UTF-8 bytes,
+  then `root.GetRawText()` — which transcodes the whole envelope into a fresh string (2× the bytes,
+  on the large-object heap; this is `JsonReaderHelper.TranscodeHelper`) — then
+  `JsonSerializer.Deserialize(string, …)`, which transcodes it straight **back** to UTF-8 into a
+  rented buffer (up to 3×) and parses it a second time.
+- **Writing** (`ObjectPolymorphicConverter.Write`, both discriminator branches):
+  `JsonSerializer.Serialize(...)` to a string (2×, and its writer rents up to 3× to transcode the
+  `RawJson` member into it), then `JsonDocument.Parse(string)` back to UTF-8 (up to 3× again) — all
+  to inject one `$type` property ahead of the object's own.
+
+`JsonElement.Deserialize` and `JsonSerializer.SerializeToUtf8Bytes` reach the same values from the
+same UTF-8 bytes with **no transcode in either direction**, so a hop now costs about one buffer where
+it cost four. That does not make the copy path allocation-safe — see the next section — but a large
+share of the gap between "the bound says it fits" and "the pod could not allocate it" was
+self-inflicted, and it did not have to be paid.
+
 ## Where the bound still cannot reach
 
 Refusing at the frame limit is not the same as making the router allocation-safe, and the difference
-is a factor of three:
+is a multiple:
 
 - The **bound** is the transport's frame limit (100 MiB by default).
-- The **peak allocation** while transcoding is up to **3×** the payload.
+- The **peak allocation** while transcoding is up to **3×** the payload, per direction.
 
 So a payload comfortably *under* `MaxMessageBodySize` can still fail to allocate on a
 memory-pressured pod, and no bound calibrated to the transport can prevent that. The #2885 incident
-carries **no payload size at all**, so it cannot be shown that the new refusal would have caught
-that particular delivery — only that the leg is now bounded and attributable, where before it was
-neither.
+carries **no payload size at all**, and neither does the 2026-09-02 burst — so it cannot be shown
+that any refusal would have caught those deliveries, only that the legs are now bounded and
+attributable where before they were neither.
 
-The remaining work is at the producer, and it is a different axis from anything on this page: *do
+**What the 2026-09-02 work removed from that gap, and what it did not.** The multiple was never only
+3×: the copy path spent another ~4× on UTF-16 round trips nothing needed, the acknowledgement made
+the payload cross every boundary a second time, and a log render nobody read serialised it once more
+per post. Those were self-inflicted and are gone. **The irreducible ~3× transcode remains**, and the
+producer axis is untouched.
+
+The remaining work is at the producer, and it is a different axis from everything on this page: *do
 not build the payload whole.* Bulk producers — imports above all — must stream or batch rather than
-serialise a tree into one delivery. Note that bounding *concurrency* (as the static-repo importer
-already does, `BatchSize = 5`) is not that axis and does not help: it limits how many deliveries are
-in flight, never how big one of them is.
+serialise a tree into one delivery. A bound refuses a delivery *after* something has already
+allocated it; an OOM during serialisation means the **allocation itself** was the failure, and no
+placement of any bound changes that. Note that bounding *concurrency* (as the static-repo importer
+already does, `BatchSize = 5`) is **not** that axis and does not help: it limits how many deliveries
+are in flight, never how big one of them is.
+
+> **This is why #3046 stays open** while #3047, #3048, #3049 and the rest of that burst do not. Its
+> leg — `BuildPodHubRoute`'s `IPodHubGrain.Deliver` to a bulk-import hub — has been guarded since
+> #2897 and the delivery went through anyway, which means the payload was *under* the bound and the
+> allocation multiple is what killed the pod. Everything above narrows that band; only the producer
+> closes it.
 
 ## Rules
 
@@ -195,6 +368,18 @@ in flight, never how big one of them is.
   the payload; `MessageDeliveryConverter` serialises the envelope. A stack showing the latter proves
   the payload was already a measurable `RawJson` string, so "packaging itself ran out of memory" was
   not what happened — and the difference decided whether #2885 was fixable at the router at all.
+- **An acknowledgement is not an echo.** A reply carries the verdict; the body goes one way only.
+  Before adding a `Task<T>` to a grain interface, ask what the caller reads off `T` — and whether the
+  rest of it is worth a second copy on every hop.
+- **A rule enforced by remembering is not enforced.** If a payload rule can be violated by
+  constructing a type, it belongs in that type's construction, not in the call sites. Two hand-applied
+  call sites and a third that had never been told is how #1890 became #3044 two weeks later.
+- **Never build a log argument eagerly.** `logger.LogDebug("…", Serialize(x), …)` renders `x`
+  whether or not anyone is listening. Guard with `IsEnabled`, and on any per-message path render a
+  summary rather than a payload.
+- **A `[PreventLogging]`-style attribute cannot reach a type with its own converter.** The resolver
+  strips *properties*; a custom-converted type has none. Check that a redaction attribute is actually
+  read before trusting it.
 
 ## See also
 
