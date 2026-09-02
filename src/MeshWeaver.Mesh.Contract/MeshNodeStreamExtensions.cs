@@ -1464,16 +1464,14 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         // ChangeItem (per-entity Updates + ChangeType + owner-only
                         // Version) consistently. We supply only the value transform;
                         // we never hand-roll a ChangeItem (a hand-rolled EntityUpdate
-                        // silently failed the owner's write-back). Audit identity
-                        // (LastModifiedBy) is content, so we still stamp it here.
+                        // silently failed the owner's write-back). The audit fields are
+                        // CONTENT, so they are stamped here — through the same
+                        // ApplyAuditStamp the own-stream path uses, never a second copy.
                         // Explicit Func type disambiguates from the ChangeItem overload.
                         Func<MeshNode?, MeshNode?> valueUpdate = current =>
                         {
                             if (current is null) return null;
-                            var updated = update(current);
-                            if (updated.LastModifiedBy == current.LastModifiedBy
-                                && !string.IsNullOrEmpty(capturedContext?.ObjectId))
-                                updated = updated with { LastModifiedBy = capturedContext.ObjectId };
+                            var updated = ApplyAuditStamp(current, update(current), capturedContext, out var _unusedStamped);
                             EmitOnce(updated);
                             return updated;
                         };
@@ -1694,18 +1692,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // the outgoing patch, so a client can't forge a different author.
                             // This preserves the audit trail UpdateNodeRequest used to stamp
                             // from UpdatedBy now that writes go through stream.Update.
-                            var stamped = false;
-                            if (updated.LastModified == current.LastModified)
-                            {
-                                updated = updated with { LastModified = DateTimeOffset.UtcNow };
-                                stamped = true;
-                            }
-                            if (updated.LastModifiedBy == current.LastModifiedBy
-                                && !string.IsNullOrEmpty(capturedContextAtEntry?.ObjectId))
-                            {
-                                updated = updated with { LastModifiedBy = capturedContextAtEntry.ObjectId };
-                                stamped = true;
-                            }
+                            updated = ApplyAuditStamp(current, updated, capturedContextAtEntry, out var stamped);
                             if (stamped)
                                 // 🚨 O(1) in the node — issue #1284. The stamp touches exactly two
                                 // TOP-LEVEL SCALARS, and the answer to "what did that change in the
@@ -2357,6 +2344,54 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             composite.Add(initialSub);
             return composite;
         });
+    /// <summary>
+    /// 🚨 <b>THE AUDIT STAMP, IN ONE PLACE.</b> <c>LastModified</c> and <c>LastModifiedBy</c> are
+    /// stamped here for EVERY <c>stream.Update</c> write, whoever owns the node.
+    ///
+    /// <para><b>Why it is a function and not two copies.</b> It used to be inlined twice, and the
+    /// two copies disagreed: the own-stream path stamped both fields, while the sync-stream
+    /// write-through path stamped only <c>LastModifiedBy</c>. A write through the second therefore
+    /// minted a NEW version while carrying the snapshot's OWN <c>LastModified</c> — so the node's
+    /// version order and its timestamp order disagreed, which is precisely what MeshWeaver#3021
+    /// reports: a Markdown node whose newest version carried a timestamp identical, to the second,
+    /// to a much earlier version's, with a 45-minute editing session's content gone. Nothing
+    /// errored; the loss surfaced only because someone remembered the content had been there
+    /// before lunch.</para>
+    ///
+    /// <para>A wrong timestamp is not cosmetic here. <c>NodeUpdatePipeline</c> re-stamps for the
+    /// same reason, and NodeType <c>IsDirty</c> / <c>CurrentSourceVersions</c> key on
+    /// <c>LastModified.UtcTicks</c> — so a stale stamp leaves an edited source looking clean and
+    /// the recompile never fires. And once on disk, a stale write is indistinguishable from a
+    /// legitimate one.</para>
+    ///
+    /// <para><b>Only when the lambda left them untouched.</b> A caller that deliberately sets
+    /// either field — an importer preserving source timestamps, a migration — keeps its value.
+    /// Equality against <paramref name="current"/> expresses "the lambda did not care", and it is
+    /// the same test both call sites already used.</para>
+    /// </summary>
+    /// <param name="current">The live node the lambda diffed against.</param>
+    /// <param name="updated">The lambda's result.</param>
+    /// <param name="ctx">The caller's AUTHENTICATED context — never a client-supplied author.</param>
+    /// <param name="stamped">True when either field was written; the own-stream path splices
+    /// exactly these two scalars into its outgoing patch and needs to know.</param>
+    private static MeshNode ApplyAuditStamp(
+        MeshNode current, MeshNode updated, AccessContext? ctx, out bool stamped)
+    {
+        stamped = false;
+        if (updated.LastModified == current.LastModified)
+        {
+            updated = updated with { LastModified = DateTimeOffset.UtcNow };
+            stamped = true;
+        }
+        if (updated.LastModifiedBy == current.LastModifiedBy
+            && !string.IsNullOrEmpty(ctx?.ObjectId))
+        {
+            updated = updated with { LastModifiedBy = ctx.ObjectId };
+            stamped = true;
+        }
+        return updated;
+    }
+
 
     /// <summary>
     /// Writes the audit stamp (<see cref="MeshNode.LastModified"/> /
