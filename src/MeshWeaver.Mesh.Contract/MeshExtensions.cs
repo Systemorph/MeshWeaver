@@ -755,23 +755,12 @@ public static class MeshExtensions
                         // (b) IStaticNodeProvider (the canonical seed surface — see
                         //     Doc/Architecture/TestStateIsolation), and
                         // (c) persistence (dynamically-created NodeType definitions).
-                        IObservable<bool> typeExistsObs;
-                        if (string.IsNullOrEmpty(node.NodeType))
-                        {
-                            typeExistsObs = Observable.Return(true);
-                        }
-                        else if (hub.ServiceProvider.FindStaticNode(node.NodeType) is not null)
-                        {
-                            typeExistsObs = Observable.Return(true);
-                        }
-                        else if (persistence != null)
-                        {
-                            typeExistsObs = persistence.Exists(node.NodeType);
-                        }
-                        else
-                        {
-                            typeExistsObs = Observable.Return(false);
-                        }
+                        //
+                        // 🚨 The rule itself lives on NodeTypeResolution and is shared with the
+                        // UPDATE boundary (issue #2993). Two copies of this predicate is how a
+                        // create that refuses and an update that accepts drift apart — and the
+                        // difference only ever surfaces as an instance nobody can read.
+                        var typeExistsObs = NodeTypeResolution.Resolves(hub, node.NodeType);
 
                         return typeExistsObs.SelectMany(typeExists =>
                         {
@@ -4096,7 +4085,7 @@ public static class MeshExtensions
                     SkipNoOpIfAuthorized(existing);
                     return;
                 }
-                ApplyUpdateViaStream(existing);
+                ApplyUpdateViaStream(existing, existing.NodeType);
             },
             ex =>
             {
@@ -4182,7 +4171,14 @@ public static class MeshExtensions
                             logger.LogDebug(
                                 "[CreateOrUpdate] lost the create race for {Path}; applying as update",
                                 node.Path);
-                            ApplyUpdateViaStream(node);
+                            // 🚨 existingNodeType: null — NOT node.NodeType. We lost the race, so we
+                            // never read the node that won it and have no idea what type it carries;
+                            // the inner create was refused at its existence check, BEFORE its own
+                            // NodeType check ever ran. Passing the incoming type here would make the
+                            // gate compare a value against itself and pass having checked nothing —
+                            // the create-race shape of the #2993 hole. Unknown means: prove the type
+                            // resolves.
+                            ApplyUpdateViaStream(node, existingNodeType: null);
                         }
                         else
                             PostFail(
@@ -4235,18 +4231,88 @@ public static class MeshExtensions
                         else
                             // Not (provably) authorized → the normal owner path stays the single
                             // authority on allow/deny; it will refuse exactly as before.
-                            ApplyUpdateViaStream(existing);
+                            ApplyUpdateViaStream(existing, existing.NodeType);
                     },
                     ex =>
                     {
                         logger.LogDebug(ex,
                             "[CreateOrUpdate] no-op permission probe failed for {Path}; taking the write path",
                             node.Path);
-                        ApplyUpdateViaStream(existing);
+                        ApplyUpdateViaStream(existing, existing.NodeType);
                     });
         }
 
-        void ApplyUpdateViaStream(MeshNode existing)
+        // 🚨 THE UPDATE-PATH NODETYPE GATE (issue #2993). The CREATE branch has always refused a
+        // NodeType that resolves to nothing; this branch did not, which made `update` a supported
+        // route to CREATE the orphan condition — an instance whose per-node hub can never activate,
+        // so it reads as Unavailable, renders empty and never reaches a verdict, with nothing
+        // naming why. Every upsert writer (GitSync import, plugin install, node copy/move, webhook,
+        // instance sync, MCP) arrives here, so this is the one seam that covers them all.
+        //
+        // It judges a CHANGE, never a state: an upsert that keeps the node's current NodeType (or
+        // omits it — the null-keeps-state convention) is preserving what is already stored, and
+        // refusing that would make an already-mistyped node permanently un-editable. See
+        // NodeTypeResolution.ChangesNodeType.
+        //
+        // The ONE bypass is CreateOrUpdateNodeRequest.AllowUnresolvableNodeType — the import
+        // ordering escape hatch, documented on the property and pinned to its single caller by
+        // UnresolvableNodeTypeBypassGuard. It is never silent: taking it logs a warning here.
+        void ApplyUpdateViaStream(MeshNode existing, string? existingNodeType)
+        {
+            if (!NodeTypeResolution.ChangesNodeType(node.NodeType, existingNodeType))
+            {
+                WriteThroughStream(existing);
+                return;
+            }
+
+            if (inboundRequest.AllowUnresolvableNodeType)
+            {
+                logger.LogWarning(
+                    "[CreateOrUpdate] {Path}: writing NodeType '{NodeType}' WITHOUT the existence "
+                    + "check — the caller took CreateOrUpdateNodeRequest.AllowUnresolvableNodeType "
+                    + "(the import ordering escape hatch). If '{NodeType}' never lands, this node "
+                    + "is stranded: it will read as Unavailable. See Doc/Architecture/DanglingNodeTypes.",
+                    node.Path, node.NodeType, node.NodeType);
+                WriteThroughStream(existing);
+                return;
+            }
+
+            NodeTypeResolution.Resolves(hub, node.NodeType)
+                .Subscribe(
+                    resolves =>
+                    {
+                        if (resolves)
+                        {
+                            WriteThroughStream(existing);
+                            return;
+                        }
+                        logger.LogWarning(
+                            "[CreateOrUpdate] REFUSED {Path}: NodeType '{NodeType}' is not registered "
+                            + "(it was '{ExistingNodeType}'). An update may not introduce a NodeType "
+                            + "that resolves to nothing.",
+                            node.Path, node.NodeType, existingNodeType);
+                        PostFail(
+                            NodeTypeResolution.RejectionMessage(node.Path, node.NodeType!),
+                            NodeUpsertRejectionReason.InvalidNodeType);
+                    },
+                    ex =>
+                    {
+                        // 🚨 A VERDICT AND A NON-VERDICT ARE NOT THE SAME ANSWER. The probe faulted,
+                        // so we do NOT know whether the type exists — refuse (a write here could
+                        // strand the node permanently) but say which of the two it is, and classify
+                        // it as Unknown rather than InvalidNodeType so a caller cannot read it as
+                        // "go create that type".
+                        logger.LogWarning(ex,
+                            "[CreateOrUpdate] {Path}: the NodeType existence probe for '{NodeType}' "
+                            + "faulted; refusing the update rather than risking a dangling type.",
+                            node.Path, node.NodeType);
+                        PostFail(
+                            NodeTypeResolution.ProbeFailedMessage(node.Path, node.NodeType!, ex),
+                            NodeUpsertRejectionReason.Unknown);
+                    });
+        }
+
+        void WriteThroughStream(MeshNode existing)
         {
             // Apply the update through the canonical mesh-node stream write API
             // (UpdateNodeRequest retired). hub.GetMeshNodeStream(path).Update routes

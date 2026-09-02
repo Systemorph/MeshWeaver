@@ -41,6 +41,22 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     public ImmutableList<string> PrunedPaths { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// The NodeType definition paths this import pruned <b>while the mesh still held instances of
+    /// them</b> — issue #2993's hole B. Those instances are now STRANDED: an instance whose type
+    /// resolves to nothing has no per-node hub, so it reads as <c>Unavailable</c> on a timeout,
+    /// renders empty, and never reaches a verdict.
+    ///
+    /// <para>🚨 The prune is NOT refused — pruning a retired NodeType is intended and shipped
+    /// behaviour (<c>WhatsNew/2026-08-28-retired-node-prune</c>), and refusing it would strand the
+    /// definition instead. What was missing is the ANSWER to the question
+    /// <c>Doc/Architecture/RetiringANodeType</c> already tells an operator to ask by hand as step 1
+    /// of every retirement ("establish the instance count is zero"). The activity carries a ⚠ line
+    /// naming the type and the instance paths, the activity's terminal status is Warning, and this
+    /// list is the same fact in a form a caller can act on. See <see cref="NodeTypeInstanceProbe"/>.</para>
+    /// </summary>
+    public ImmutableList<string> StrandedNodeTypePaths { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
     /// How many source nodes this import could NOT land — the per-file failures the
     /// <c>ImportedWithErrors</c> outcome and the activity's ⚠ lines report.
     ///
@@ -1053,11 +1069,17 @@ public static class StaticRepoImporter
                 return ProbeUnsatisfiableTypes(hub, nodes, plan, logger).SelectMany(unsatisfiableTypes =>
                 {
                 // A node whose NodeType this pass CANNOT put in place first — carried by no source and
-                // absent from the mesh, or carried but inside a cycle with it. Only when the node does
-                // not exist yet: an UPDATE never runs the create path's type check.
-                bool TypeCannotLand(MeshNode sourceNode, MeshNode? target) =>
-                    target is null
-                    && !string.IsNullOrEmpty(sourceNode.NodeType)
+                // absent from the mesh, or carried but inside a cycle with it.
+                //
+                // 🚨 This used to carry `target is null` inside it, with the comment "an UPDATE never
+                // runs the create path's type check". That was true and is no longer: #2993 closed the
+                // update path too, so the two cases have to be told apart HERE rather than relying on
+                // the write boundary to look the other way. A node that does not exist yet is still a
+                // blocked create (no write attempted, reported, self-heals — see
+                // Doc/Architecture/ImportWriteOrdering); a node that ALREADY exists still takes the
+                // write, now through the named bypass, and is reported as such.
+                bool TypeCannotLand(MeshNode sourceNode) =>
+                    !string.IsNullOrEmpty(sourceNode.NodeType)
                     && unsatisfiableTypes.Contains(sourceNode.NodeType!)
                     && !ImportWriteOrder.TypeIsOrderedAhead(plan, sourceNode);
 
@@ -1096,7 +1118,12 @@ public static class StaticRepoImporter
                         // ——— Decide, in stage order, without touching the mesh. ———
                         var settled = new List<ImportItem>();
                         var bulk = new List<MeshNode>();
-                        var singles = new List<MeshNode>();
+                        // 🚨 A single carries its BYPASS DECISION with it (#2993). An update that
+                        // retypes an existing node to something this pass cannot put in place first
+                        // has to ask the write boundary for the import ordering escape hatch BY NAME,
+                        // and name what it did — so the flag and its ⚠ line are decided here, in the
+                        // same pure pass as every other per-node decision, and travel to WriteOne.
+                        var singles = new List<(MeshNode Node, bool Bypass, LogMessage? Log)>();
                         // A stage may carry the SAME path twice (ImportWritePlan keeps duplicates
                         // together in input order). The bulk verb refuses a batch with a duplicate
                         // path, and last-writer-wins is the semantics a duplicate has always had —
@@ -1140,7 +1167,7 @@ public static class StaticRepoImporter
                             // moment the defining source is installed), the path and the missing type are
                             // reported, and the baseline is free to move on. No write is attempted, so the
                             // refusal — and its log line — is not produced at all.
-                            if (TypeCannotLand(sourceNode, target))
+                            if (target is null && TypeCannotLand(sourceNode))
                             {
                                 logger?.LogWarning(
                                     "[StaticRepoImport] {Partition}: {Path} declares NodeType '{NodeType}', which "
@@ -1262,9 +1289,49 @@ public static class StaticRepoImporter
                             // MeshExtensions.PreserveMeshOwnedOperational, inside the upsert's merge —
                             // where the answer is authoritative and every upsert writer gets it.
                             if (seenInStage.Add(path) && IsBulkCreate(materialized, target))
+                            {
                                 bulk.Add(materialized);
-                            else
-                                singles.Add(materialized);
+                                continue;
+                            }
+
+                            // 🚨 THE ORDERING ESCAPE HATCH, MADE EXPLICIT (#2993). The node EXISTS and
+                            // the source retypes it to something this pass cannot put in place first —
+                            // a cycle member, or a type that arrives from another repo. Before #2993
+                            // this landed because the update path checked nothing; now the update path
+                            // refuses, so the importer has to ASK for the exemption by name. It is
+                            // granted only for exactly the case that needs it (the type is
+                            // unsatisfiable AND the write actually CHANGES the node's type — a
+                            // re-import carrying the same already-dangling type is a round-trip the
+                            // gate lets through on its own), and it is never silent: a ⚠ line names the
+                            // path and the type in the import activity on every pass until the type
+                            // lands, and the upsert handler logs a warning of its own.
+                            //
+                            // Refusing instead was rejected: a refusal counts as a per-file FAILURE,
+                            // and Failed>0 holds the caller's git baseline — one cyclic pair would
+                            // freeze every later commit of the repo. That is #2556's non-convergent
+                            // loop, re-created.
+                            var needsTypeBypass = target is not null
+                                && TypeCannotLand(sourceNode)
+                                && NodeTypeResolution.ChangesNodeType(sourceNode.NodeType, target.NodeType);
+                            if (needsTypeBypass)
+                                logger?.LogWarning(
+                                    "[StaticRepoImport] {Partition}: {Path} is retyped to '{NodeType}', "
+                                    + "which this pass cannot put in place first — taking the import "
+                                    + "ordering escape hatch (AllowUnresolvableNodeType). See "
+                                    + "Doc/Architecture/DanglingNodeTypes.",
+                                    source.Partition, path, sourceNode.NodeType);
+                            singles.Add((
+                                materialized,
+                                needsTypeBypass,
+                                needsTypeBypass
+                                    ? new LogMessage(
+                                        $"⚠ {path}: written with NodeType '{sourceNode.NodeType}', which "
+                                        + "this source does not carry ahead of it and the mesh does not "
+                                        + "have. The node is STRANDED until that type lands — it will read "
+                                        + "as Unavailable. Import the source that defines it, or retype "
+                                        + "the node.",
+                                        Microsoft.Extensions.Logging.LogLevel.Warning)
+                                    : null));
                         }
 
                         // ——— Write. Settled outcomes first (they cost nothing), then the bulk
@@ -1287,7 +1354,8 @@ public static class StaticRepoImporter
                                 .Select(chunk => WriteBulk(hub, source.Partition, chunk, logger, tally))
                                 .ToObservable()
                                 .Merge(BatchSize),
-                            singles.Select(node => WriteOne(hub, source.Partition, node, logger, tally))
+                            singles.Select(x => WriteOne(
+                                    hub, source.Partition, x.Node, logger, tally, x.Bypass, x.Log))
                                 .ToObservable()
                                 // The barrier is BETWEEN stages (Observable.Concat above); inside one it is
                                 // the same BatchSize fan-out the import always used.
@@ -1401,8 +1469,29 @@ public static class StaticRepoImporter
                             .ToList()
                             .Select(list => list.ToImmutableList());
 
-                    return pruned.SelectMany(prunedPaths =>
+                    // 🚨 A PRUNED NODETYPE TAKES ITS INSTANCES' RENDERER WITH IT (#2993, hole B).
+                    // ComputePrunableNodes has five guards and none of them is type-aware: a NodeType
+                    // definition is pruned exactly like a Markdown node, recursively, and the instances
+                    // that name it are left with no per-node hub — they do not error, they read as
+                    // Unavailable and render empty, with nothing anywhere naming the type that went
+                    // away. The prune still happens (retiring a type by dropping it from the repo is
+                    // the shipped contract, and refusing would strand the DEFINITION instead) — but it
+                    // is no longer silent. Probed BEFORE the deletes, so the answer describes the state
+                    // the deletion is about to destroy. Costs one query per NodeType actually being
+                    // deleted, i.e. nothing at all for the overwhelming majority of imports.
+                    var pruneWithReport = NodeTypeInstanceProbe.Probe(hub, toPrune, logger)
+                        .SelectMany(stranded => pruned
+                            .Select(paths => (Stranded: stranded, PrunedPaths: paths)));
+
+                    return pruneWithReport.SelectMany(pruneOutcome =>
                     {
+                        var prunedPaths = pruneOutcome.PrunedPaths;
+                        var stranded = pruneOutcome.Stranded;
+                        var strandedReport = NodeTypeInstanceProbe.Describe(stranded);
+                        if (strandedReport is not null)
+                            logger?.LogWarning(
+                                "[StaticRepoImport] {Partition}: {Report}", source.Partition, strandedReport);
+
                         // 🚨 PHASE LOG #2 — the prune phase's whole audit trail (every kept server
                         // addition + every pruned path) in ONE Update, same O(n) reason as above.
                         NodeTypeCompilationActivity.AppendLogs(hub, activityPath,
@@ -1413,6 +1502,9 @@ public static class StaticRepoImporter
                                 .Concat(prunedPaths.Select(p => new LogMessage(
                                     $"🗑 Pruned {p} (absent from the repo).",
                                     Microsoft.Extensions.Logging.LogLevel.Information)))
+                                .Concat(strandedReport is null
+                                    ? Array.Empty<LogMessage>()
+                                    : [new LogMessage(strandedReport, Microsoft.Extensions.Logging.LogLevel.Warning)])
                                 .ToArray(),
                             logger!);
 
@@ -1456,7 +1548,13 @@ public static class StaticRepoImporter
                             var blockedCreates = partitionDecoupled
                                 ? ImmutableList<string>.Empty
                                 : count.Blocked;
-                            var status = failed > 0 || blockedCreates.Count > 0
+                            // Stranding joins failures and blocked creates on the Warning side: the
+                            // import DID what it was asked, and it also destroyed the renderer for
+                            // live content. A green terminal status on that is the "my page went
+                            // blank and nothing says why" shape, one level up. It is self-clearing —
+                            // the pruned type is gone from `existing` next pass, so it can never be a
+                            // prune candidate again and the very next import stamps Succeeded.
+                            var status = failed > 0 || blockedCreates.Count > 0 || stranded.Count > 0
                                 ? ActivityStatus.Warning
                                 : ActivityStatus.Succeeded;
                             // Two-way preserved local changes: kept-not-overwritten (upsert conflicts) PLUS
@@ -1487,9 +1585,13 @@ public static class StaticRepoImporter
                             var prunedNote = prunedPaths.Count > 0
                                 ? $"pruned {prunedPaths.Count} ({string.Join(", ", prunedPaths)})"
                                 : "pruned 0";
+                            // The stranding report rides on the terminal summary too, not only on the
+                            // ⚠ line above: the summary is what a reader sees first, and "pruned 3"
+                            // reads as routine housekeeping unless it says what the prune broke.
+                            var strandedNote = strandedReport is null ? "" : " " + strandedReport;
                             var summary = failed > 0
-                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}"
-                                : $"Imported {count.Imported} node(s){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}";
+                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}{strandedNote}"
+                                : $"Imported {count.Imported} node(s){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}{strandedNote}";
                             NodeTypeCompilationActivity.Complete(hub, activityPath, status,
                                 new[]
                                 {
@@ -1524,6 +1626,9 @@ public static class StaticRepoImporter
                             {
                                 WrittenPaths = count.Written,
                                 PrunedPaths = prunedPaths,
+                                StrandedNodeTypePaths = stranded
+                                    .Select(x => x.NodeTypePath)
+                                    .ToImmutableList(),
                                 // 🚨 Carried to the CALLER, not just to the activity's ⚠ lines: the
                                 // last-sync guard has to know a node did not land, or it advances
                                 // the baseline past it and the miss is permanent (#2229 item C).
@@ -2221,14 +2326,28 @@ public static class StaticRepoImporter
     /// tally drives the terminal Warning status — the activity never reports a green Succeeded while
     /// hiding failures.</para>
     /// </summary>
+    /// <param name="hub">The hub issuing the write.</param>
+    /// <param name="partition">The partition being imported, for the log lines.</param>
+    /// <param name="node">The materialized source node.</param>
+    /// <param name="logger">Optional logger.</param>
+    /// <param name="tally">The round-trip counter this import reports back.</param>
+    /// <param name="allowUnresolvableNodeType">🚨 The import ordering escape hatch, and the ONLY
+    /// place in the fleet that sets it — see
+    /// <see cref="CreateOrUpdateNodeRequest.AllowUnresolvableNodeType"/>. Decided in the stage loop,
+    /// only for a node that ALREADY EXISTS whose NodeType this pass provably cannot put in place
+    /// first, and always accompanied by <paramref name="extraLog"/>.</param>
+    /// <param name="extraLog">A line that rides along with a SUCCESSFUL write — the ⚠ that names a
+    /// node written with a NodeType which does not resolve yet. Batched into the phase log with
+    /// every other per-file line, never written per item (O(n²) — see the phase-level AppendLogs).</param>
     private static IObservable<ImportItem> WriteOne(
-        IMessageHub hub, string partition, MeshNode node, ILogger? logger, WriteTally tally) =>
+        IMessageHub hub, string partition, MeshNode node, ILogger? logger, WriteTally tally,
+        bool allowUnresolvableNodeType = false, LogMessage? extraLog = null) =>
         Observable.Defer(() =>
         {
             Interlocked.Increment(ref tally.Requests);
-            return Upsert(hub, node);
+            return Upsert(hub, node, allowUnresolvableNodeType);
         })
-            .Select(_ => new ImportItem(Imported: 1, Written: node.Path))
+            .Select(_ => new ImportItem(Imported: 1, Written: node.Path, Log: extraLog))
             .Catch<ImportItem, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
@@ -2332,8 +2451,20 @@ public static class StaticRepoImporter
     /// satellite + access). This is the documented step 4 of the static-repo import (see
     /// StaticRepoImport.md) — NOT a hand-rolled CreateNode/stream-Overwrite split. Returns 1.
     /// </summary>
-    private static IObservable<int> Upsert(IMessageHub hub, MeshNode node) =>
-        AsSystem(hub, () => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)))
+    /// <param name="hub">The hub issuing the upsert.</param>
+    /// <param name="node">The materialized source node to write.</param>
+    /// <param name="allowUnresolvableNodeType">🚨 The import ordering escape hatch, and the ONLY
+    /// place in the fleet that sets it. See
+    /// <see cref="CreateOrUpdateNodeRequest.AllowUnresolvableNodeType"/> and <see cref="WriteOne"/>,
+    /// which grants it only for a node that ALREADY EXISTS whose NodeType this pass provably cannot
+    /// put in place first — and names it in the import activity when it does.</param>
+    private static IObservable<int> Upsert(
+        IMessageHub hub, MeshNode node, bool allowUnresolvableNodeType = false) =>
+        AsSystem(hub, () => hub.Observe<CreateOrUpdateNodeResponse>(
+                new CreateOrUpdateNodeRequest(node)
+                {
+                    AllowUnresolvableNodeType = allowUnresolvableNodeType,
+                }))
             .FirstAsync()
             .Select(d => d.Message)
             // "Node already exists" is SUCCESS for an idempotent upsert: the node is present, which IS

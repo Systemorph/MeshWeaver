@@ -145,8 +145,14 @@ internal static class NodeUpdatePipeline
             .Concat()
             .Where(r => !r.IsValid)
             .Take(1)
+            // 🚨 Unavailable belongs on the LEFT of this fork, with NotFound and InvalidNodeType.
+            // It is a validator saying "I reached NO decision because a read I depend on did not
+            // answer" — mapping it to UnauthorizedAccessException would tell the caller they lack a
+            // permission they may well hold, which is the same verdict/non-verdict conflation the
+            // Catch above exists to prevent.
             .Select(r => (Exception?)(r.Reason is NodeRejectionReason.NodeNotFound
                     or NodeRejectionReason.InvalidNodeType
+                    or NodeRejectionReason.Unavailable
                 ? new InvalidOperationException(r.ErrorMessage ?? $"Update rejected for: {node.Path}")
                 : new UnauthorizedAccessException(r.ErrorMessage ?? "Update rejected by validator")))
             .DefaultIfEmpty(null);

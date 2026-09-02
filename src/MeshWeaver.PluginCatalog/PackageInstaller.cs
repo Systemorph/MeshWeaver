@@ -2997,7 +2997,7 @@ public static class PackageInstaller
                     : Observable.Return<MeshNode?>(null))
                 .SelectMany(current =>
                     current is not null && current.SyncBehavior != SyncBehavior.Include
-                        ? Observable.Return<string?>(null)
+                        ? Observable.Return<(string? Deleted, MeshNode? Node)>((null, current))
                         // Sealed at Subscribe (RunAsSystem), never Observable.Using(ImpersonateAsSystem):
                         // impersonation is an AsyncLocal store/restore pair, and Using disposes on the
                         // TERMINATING thread — for a cross-hub delete, the owning hub's response thread,
@@ -3005,14 +3005,36 @@ public static class PackageInstaller
                         // runs next on the subscribing thread (#1790).
                         : accessService.RunAsSystem(() => meshService.DeleteNode(path))
                             .Take(1)
-                            .Select(deleted => deleted ? path : null))
-                .Catch<string?, Exception>(ex =>
+                            .Select(deleted => (Deleted: deleted ? path : null, Node: current)))
+                .Catch<(string? Deleted, MeshNode? Node), Exception>(ex =>
                 {
                     logger?.LogWarning(ex, "Pruning removed node {Path} failed.", path);
-                    return Observable.Return<string?>(null);
+                    return Observable.Return<(string? Deleted, MeshNode? Node)>((null, null));
                 }))
             .ToObservable().Concat().ToList()
-            .Select(outcomes => outcomes.Where(p => p is not null).Select(p => p!).ToImmutableList());
+            .SelectMany(outcomes =>
+            {
+                var deleted = outcomes
+                    .Where(o => o.Deleted is not null)
+                    .Select(o => o.Deleted!)
+                    .ToImmutableList();
+                // 🚨 A PRUNED NODETYPE TAKES ITS INSTANCES' RENDERER WITH IT (#2993, hole B). The
+                // prune is intended — "whatever the repo no longer ships is removed from the
+                // installed partition" is this method's whole contract, and the
+                // 2026-08-28 What's New entry says so — but an instance whose type resolves to
+                // nothing has no per-node hub: it reads as Unavailable on a timeout, renders empty,
+                // and never reaches a verdict, with nothing naming the type that went away. So the
+                // deletion is REPORTED rather than blocked. Probed off the nodes this pass actually
+                // read and actually deleted (instances are unaffected by the deletion, so probing
+                // after it is as accurate as probing before), and only for the NodeType definitions
+                // among them — zero queries for the overwhelming majority of installs.
+                var prunedNodes = outcomes
+                    .Where(o => o.Deleted is not null && o.Node is not null)
+                    .Select(o => o.Node!)
+                    .ToArray();
+                return NodeTypeInstanceProbe.ProbeAndReport(hub, prunedNodes, logger)
+                    .Select(_ => deleted);
+            });
     }
 
     /// <summary>
