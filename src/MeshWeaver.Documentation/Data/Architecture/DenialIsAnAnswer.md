@@ -1,7 +1,7 @@
 ---
 Name: A Denial Is an Answer
 Category: Architecture
-Description: A permission check on a hub that carries no evaluator grants Permission.All — which is how every session surface (MCP, REST, gRPC, CLI) shipped a pre-flight that could not fail. Plus the rule the crash on the other side taught - a refusal the mesh decided is rendered as the operation's answer, never raised as a fault.
+Description: A permission check on a hub that carries no evaluator grants Permission.All — which is how every session surface (MCP, REST, gRPC, CLI) shipped a pre-flight that could not fail. Plus the rule the crash on the other side taught: a refusal the mesh decided is rendered as the operation's answer, never raised as a fault.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/><path d="M4.5 4.5 19 19"/></svg>
 ---
 
@@ -60,14 +60,9 @@ Measured on a real mesh, a `Viewer` (`Read|Execute|Api`) asking the SAME questio
 | the session hub (`portal/mcp-…`) | **granted** |
 | the mesh hub | denied |
 
-**This was not an authorization hole by itself.** The owner's `AccessControlPipeline` was, and
-remains, the authority on every write, and it fails closed. What the inert pre-flight cost was
-*legibility* — and, where an operation's authorization rode on a write that turned out to be a
-no-op, rather more than that.
-
-### The three things it actually cost
-
-Measured before and after, same mesh, same Viewer, through a real session hub:
+**For a `PatchDataRequest` this cost only legibility** — the owner's `AccessControlPipeline` was, and
+remains, the authority on that write, and it fails closed. But not every operation's authorization
+runs there. Measured before and after, same mesh, same Viewer, through a real session hub:
 
 | Operation | Before | After |
 |---|---|---|
@@ -76,7 +71,7 @@ Measured before and after, same mesh, same Viewer, through a real session hub:
 | `create` | `Created: …` — **the node was written** | `Access denied: Create permission required` |
 | `export` | every node in the subtree | only nodes the caller may `Export` |
 
-The middle two are the interesting ones.
+### The three that were more than legibility
 
 **`recycle` on a plain node.** Recycle is two halves of one operation: stamp a release request, then
 dispose the hub. The [2026-08-30 fix](/Doc/WhatsNew/2026-08-30-a-refused-recycle-no-longer-tears-the-hub-down)
@@ -84,6 +79,16 @@ made a refused stamp refuse the whole recycle. But the stamp only writes anythin
 node — on anything else the update is the identity function, so nothing was posted, nothing was
 gated, and the destructive half ran for free. Authorization that is a *side effect* of a write
 disappears exactly when the write does.
+
+**`create`.** `AddRowLevelSecurity()` registers `RlsNodeValidator` as a **scoped** service, and it
+asks `hub.CheckPermission(...)` on whichever hub it was resolved against. A session hub opts into
+`WithNodeOperationExecution()`, so node CRUD runs *there* rather than on the shared
+`NodeOperationExecutionHub` — which is the one place that had been taught to copy the evaluator.
+`RlsNodeValidator` therefore granted every create issued through a session, which is not a
+legibility problem at all. `MeshExtensions.NodeOperationExecutionHub`'s comment predicted this
+exactly — *"moving node CRUD onto a hub that did not copy the evaluator would make RlsNodeValidator
+grant EVERY write"* — and named the hazard for its own hub without noticing that the session hub had
+the same one.
 
 **`export`.** `MeshOperations.Export` filters the subtree per node against the caller's `Export`
 permission, and its own comment said the check "runs on the mesh hub". It did not: it resolves
