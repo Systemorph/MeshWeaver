@@ -983,6 +983,99 @@ public static class DataExtensions
     }
 
     /// <summary>
+    /// 🚨 Totality for a one-shot watcher: runs <paramref name="onEmptyCompletion"/> when
+    /// <paramref name="source"/> COMPLETES WITHOUT EVER EMITTING — Rx's third termination, the one a
+    /// <c>Subscribe(onNext, onError)</c> settles as silence (issue #3033; the owner-side twin of the
+    /// writer-side <c>RequireBaseState</c>, #3001/#3020). Emissions, errors, and a completion that FOLLOWS
+    /// an emission pass through untouched — so a <c>.Take(1)</c> completing right after its single value,
+    /// while work started in <c>onNext</c> is still in flight, never triggers it. That guard is the whole
+    /// point: a bare completion arm on the ack watcher would NACK every SUCCESSFUL write, because
+    /// <c>Take(1)</c> completes while the durable flush is still in flight and <c>AckOnce</c> latches.
+    /// Internal for the deterministic pins in <c>MeshWeaver.Data.Test</c>.
+    /// </summary>
+    internal static IObservable<T> WhenCompletesEmpty<T>(this IObservable<T> source, Action onEmptyCompletion)
+        => Observable.Create<T>(observer =>
+        {
+            // Rx serialises an observer's notifications, so a flag written in OnNext and read in
+            // OnCompleted is ordered without further synchronisation.
+            var emitted = false;
+            return source.Subscribe(
+                value =>
+                {
+                    emitted = true;
+                    observer.OnNext(value);
+                },
+                observer.OnError,
+                () =>
+                {
+                    if (!emitted)
+                        onEmptyCompletion();
+                    observer.OnCompleted();
+                });
+        });
+
+    /// <summary>
+    /// The owner-side ack watcher for a cross-hub <see cref="PatchDataRequest"/>, armed as a PURE
+    /// composition so that its totality — every path posts exactly ONE terminal — is testable without a
+    /// mesh (issue #3033). The caller supplies the already-shaped commit echo (identity-filtered,
+    /// <c>Take(1)</c>, bounded), the durable-flush factory (<c>null</c> when no
+    /// <see cref="IPostCommitFlush"/> is registered), and its latching <c>AckOnce</c>.
+    /// <list type="bullet">
+    ///   <item><b>Echo arrives</b> → flush durably → ack <c>true</c> on the flush's emission. Nothing is
+    ///     posted between the echo and the flush landing: the echo's own <c>Take(1)</c> completion is NOT
+    ///     a verdict (see <see cref="WhenCompletesEmpty{T}"/>).</item>
+    ///   <item><b>Echo stream ENDS without the echo</b> — a <c>SynchronizationStream</c> disposed by mirror
+    ///     eviction while the hub lives completes its store — → NACK
+    ///     <see cref="MeshNodeErrorCode.OwnerDisposing"/>, naming the condition. That code, not
+    ///     <see cref="MeshNodeErrorCode.OwnerUnreachable"/> and not a new one: a stream ending under a live
+    ///     patch IS the owner's stream going away, which is what the code means, and it is the writer's
+    ///     auto-retried code — a re-enqueue re-runs the update lambda against the FRESH state and re-diffs,
+    ///     so a merge that DID commit before the stream ended becomes a no-op. "Fate unknown, safe to retry"
+    ///     is the honest verdict; the timeout verdict stays <c>Unknown</c> + <c>TimeoutException</c>, so the
+    ///     two are separable by <c>Code</c> (Doc/Architecture/ReadingAWriteVerdict).</item>
+    ///   <item><b>Flush ENDS without emitting</b> → ack <c>true</c>. <see cref="IPostCommitFlush.Flush"/> is
+    ///     contracted to "complete immediately for entity types this hook does not persist": nothing to
+    ///     make durable means the in-memory commit IS the durable state — the same verdict as when no hook
+    ///     is registered. (<c>StoragePostCommitFlush</c> itself ends in <c>DefaultIfEmpty(true)</c>, so this
+    ///     arm is the contract made explicit, not a behaviour change for it.) A NACK here would fail every
+    ///     successful write on a hook honouring the contract.</item>
+    ///   <item><b>Either stream faults</b> → NACK with the classified code.</item>
+    /// </list>
+    /// </summary>
+    internal static IDisposable ArmPatchAckWatcher<TEcho>(
+        IObservable<TEcho> commitEcho,
+        Func<TEcho, IObservable<bool>?> flush,
+        TimeSpan flushTimeout,
+        Action<bool, MeshNodeError?> ackOnce,
+        Action<IDisposable> registerForDisposal,
+        string hubPath)
+        => commitEcho
+            .WhenCompletesEmpty(() => ackOnce(false, new MeshNodeError(
+                MeshNodeErrorCode.OwnerDisposing, hubPath,
+                "the owner's stream ended before this patch's commit echo arrived — the owner reported no "
+                + "verdict, so the write's fate is UNKNOWN; safe to retry: a re-enqueue re-diffs against the "
+                + "fresh state, so a merge that did commit is a no-op")))
+            .Subscribe(
+                committed =>
+                {
+                    var durable = flush(committed);
+                    if (durable is null)
+                    {
+                        ackOnce(true, null);
+                        return;
+                    }
+                    var flushSub = durable
+                        .Take(1)
+                        .Timeout(flushTimeout)
+                        .WhenCompletesEmpty(() => ackOnce(true, null))
+                        .Subscribe(
+                            _ => ackOnce(true, null),
+                            ex => ackOnce(false, ClassifyPatchException(ex, hubPath)));
+                    registerForDisposal(flushSub);
+                },
+                ex => ackOnce(false, ClassifyPatchException(ex, hubPath)));
+
+    /// <summary>
     /// Typed helper for <see cref="HandlePatchDataRequest"/>. Reads the stream's
     /// current value synchronously via <c>.Take(1)</c>, applies the JSON merge
     /// patch, then posts the merged instance through the hub's regular
@@ -1383,6 +1476,15 @@ public static class DataExtensions
 
         stream
             .Take(1)
+            // 🚨 Totality (#3033): this initial read had NEITHER an error nor a completion arm. A
+            // stream that faults or ENDS before delivering the state to merge against left the
+            // request accepted and silently unanswered — the writer then burned its full
+            // confirmation window and reported OwnerUnreachable. Here the merge provably never
+            // ran, so OwnerDisposing ("the patch was NOT applied; safe to retry") is exact.
+            .WhenCompletesEmpty(() => AckOnce(false, new MeshNodeError(
+                MeshNodeErrorCode.OwnerDisposing, hubPath,
+                "the owner's stream ended before it delivered the current state to merge against — "
+                + "the patch was NOT applied; safe to retry against the fresh activation")))
             .Subscribe(change =>
             {
                 try
@@ -1513,74 +1615,24 @@ public static class DataExtensions
                     // deadlock under load. The post-commit response timing
                     // is preserved (caller's Observe subscription fires after the
                     // commit lands, before any subsequent Get).
-                    var postSub = stream
-                        .Skip(1)
-                        .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(5))
-                        .Subscribe(
-                            committed =>
-                            {
-                                // Chain the ack off DURABLE persistence (not just the
-                                // in-memory commit) so the owner's PatchDataResponse —
-                                // and therefore a cross-hub stream.Update completion —
-                                // guarantees read-after-write: a subsequent Query's
-                                // initial snapshot (which reads storage) reflects this
-                                // write instead of racing the per-node hub's ~200ms
-                                // persistence debounce. Mirrors the commit → persist →
-                                // Ok shape of the deleted UpdateNodeRequest handler.
-                                // No hook registered (non-MeshNode data hub) → ack on
-                                // the in-memory commit, unchanged.
-                                var flush = hub.ServiceProvider.GetService<IPostCommitFlush>();
-                                if (flush is null)
-                                {
-                                    AckOnce(true);
-                                    return;
-                                }
-                                var flushSub = flush.Flush(committed.Value!)
-                                    .Take(1)
-                                    .Timeout(TimeSpan.FromSeconds(10))
-                                    .Subscribe(
-                                        _ => AckOnce(true),
-                                        ex => AckOnce(false, ClassifyPatchException(ex, hubPath)),
-                                        // Same completion gap as the outer subscription below:
-                                        // `.Take(1)` over a flush that ENDS without emitting runs
-                                        // neither arm, and the durable-flush ack is never posted.
-                                        () => AckOnce(false, new MeshNodeError(
-                                            MeshNodeErrorCode.OwnerDisposing,
-                                            hubPath,
-                                            "the post-commit flush stream ended before it reported "
-                                            + "durability — the merge committed in memory but the "
-                                            + "durable flush is UNCONFIRMED; safe to retry")));
-                                hub.RegisterForDisposal(flushSub);
-                            },
-                            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)),
-                            // 🚨 THE COMPLETION ARM. Without it this subscription had two ways out
-                            // for three outcomes: `.Skip(1).Take(1)` needs TWO emissions, so a
-                            // stream that ENDS before the commit is observed completes EMPTY —
-                            // neither onNext nor onError runs, and no acknowledgement is ever
-                            // posted. The writer then burns its full confirmation window and
-                            // reports OwnerUnreachable for a patch the owner may already have
-                            // committed (#3033; the user-visible half was #2896, whose own
-                            // re-measurement showed the owner DID produce a terminal — the ack was
-                            // simply never sent).
-                            //
-                            // OwnerDisposing rather than a new code: a stream ending under a live
-                            // patch IS the owner's stream going away, which is what that code
-                            // means, and it is documented TRANSIENT and retry-worthy — the
-                            // resubscribe latch rides it out (#2986) instead of tearing down.
-                            // Reporting "unknown, retry-worthy" is the honest verdict: the merge
-                            // may or may not have committed, and the caller must be free to retry
-                            // rather than left waiting on silence.
-                            //
-                            // AckOnce is an Interlocked gate, so this cannot double-post — a real
-                            // ack that already won makes it a no-op, which is what makes adding a
-                            // third arm safe rather than a race.
-                            () => AckOnce(false, new MeshNodeError(
-                                MeshNodeErrorCode.OwnerDisposing,
-                                hubPath,
-                                "the owner's stream ended before the patch's commit was observed — "
-                                + "the write's fate is UNKNOWN and it is safe to retry against the "
-                                + "fresh activation; the owner did not report a verdict")));
+                    // Chain the ack off DURABLE persistence (not just the in-memory commit) so
+                    // the owner's PatchDataResponse — and therefore a cross-hub stream.Update
+                    // completion — guarantees read-after-write; no hook registered (non-MeshNode
+                    // data hub) → ack on the in-memory commit. Emission-COUNTING (Skip(1).Take(1))
+                    // is tolerated ONLY on this generic path — the MeshNode path is identity-gated
+                    // (see ApplyMeshNodePatchInTurn). Armed through the totality seam so a stream
+                    // that ENDS before the commit is observed, or a flush that ends without
+                    // emitting, still posts exactly one terminal (#3033).
+                    var postSub = ArmPatchAckWatcher(
+                        stream
+                            .Skip(1)
+                            .Take(1)
+                            .Timeout(TimeSpan.FromSeconds(5)),
+                        committed => hub.ServiceProvider.GetService<IPostCommitFlush>()?.Flush(committed.Value!),
+                        TimeSpan.FromSeconds(10),
+                        AckOnce,
+                        d => hub.RegisterForDisposal(d),
+                        hubPath);
                     hub.RegisterForDisposal(postSub);
 
                     // Route via the hub's DataChangeRequest pipeline — the workspace
@@ -1592,7 +1644,8 @@ public static class DataExtensions
                 {
                     AckOnce(false, ClassifyPatchException(ex, hubPath));
                 }
-            });
+            },
+            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
     }
 
     /// <summary>
@@ -1662,32 +1715,29 @@ public static class DataExtensions
         // 30068597014 / 30079395006 (post-recycle store frozen at the pre-recycle
         // version despite a fast Success ack). Write-echo detection is identity-based,
         // never emission-count-based (PR #584 rule).
-        var postSub = stream
-            .Where(c => ChangeContainsStampedWrite(
-                c.Value,
-                System.Threading.Volatile.Read(ref stampedId),
-                System.Threading.Interlocked.Read(ref stampedVersion),
-                idKey, versionKey, jsonOpts))
-            .Take(1)
-            // Bounded: covers the one-shot cold-store defer below (10s) + flush. On
-            // expiry the AckOnce guard means this NACK only fires if no terminal was
-            // posted yet (e.g. commit emission lost in a teardown) — the caller's
-            // retry machinery takes over; never a silent hang.
-            .Timeout(TimeSpan.FromSeconds(20))
-            .Subscribe(
-                committed =>
-                {
-                    var flush = hub.ServiceProvider.GetService<IPostCommitFlush>();
-                    if (flush is null) { AckOnce(true); return; }
-                    var flushSub = flush.Flush(committed.Value!)
-                        .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(10))
-                        .Subscribe(
-                            _ => AckOnce(true),
-                            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
-                    hub.RegisterForDisposal(flushSub);
-                },
-                ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+        var postSub = ArmPatchAckWatcher(
+            stream
+                .Where(c => ChangeContainsStampedWrite(
+                    c.Value,
+                    System.Threading.Volatile.Read(ref stampedId),
+                    System.Threading.Interlocked.Read(ref stampedVersion),
+                    idKey, versionKey, jsonOpts))
+                .Take(1)
+                // Bounded: covers the one-shot cold-store defer below (10s) + flush. On
+                // expiry the AckOnce guard means this NACK only fires if no terminal was
+                // posted yet (e.g. commit emission lost in a teardown) — the caller's
+                // retry machinery takes over; never a silent hang.
+                .Timeout(TimeSpan.FromSeconds(20)),
+            // Durable flush (persist + publish the cache-eviction feed event), then ack; no hook
+            // registered → ack on the in-memory commit. Armed through the totality seam so a
+            // stream that ENDS before the echo arrives, or a flush that ends without emitting,
+            // still posts exactly one terminal (#3033) — ArmPatchAckWatcher names each path's
+            // verdict and why a bare completion arm would NACK successful writes.
+            committed => hub.ServiceProvider.GetService<IPostCommitFlush>()?.Flush(committed.Value!),
+            TimeSpan.FromSeconds(10),
+            AckOnce,
+            d => hub.RegisterForDisposal(d),
+            hubPath);
         hub.RegisterForDisposal(postSub);
         // Registered AFTER postSub so the composite disposes the watcher FIRST, then this NACK
         // claims the gate — an unacked in-flight patch always gets a terminal, never silence.
