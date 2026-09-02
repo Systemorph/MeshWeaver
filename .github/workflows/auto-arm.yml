@@ -58,6 +58,7 @@ jobs:
   arm:
     name: Arm auto-merge on this PR
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     # A draft is the opt-out, and a fork must never arm itself. Both are properties of the
     # event, not configuration — there is no variable here to forget to set.
     if: >-

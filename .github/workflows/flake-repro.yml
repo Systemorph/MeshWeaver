@@ -58,7 +58,7 @@ jobs:
     name: "Loop suspect test until fail"
     # ubuntu-latest == the 2-vCPU GitHub-hosted runner the real flake needs.
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     # Effective params: workflow_dispatch inputs when present, else push-trigger defaults.
     env:
       REPRO_PROJECT: ${{ inputs.project || 'test/MeshWeaver.Hosting.Orleans.Test' }}

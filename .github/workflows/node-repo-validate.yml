@@ -21,6 +21,14 @@ name: Node repo validate (reusable)
 on:
   workflow_call:
     inputs:
+      platform-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref the CENTRAL guard scripts are fetched at (check-workflow-timeouts.py).
+          Pin it to the same platform commit as the `uses:` sha of this lane; `main` floats and makes two runs
+          of identical code able to disagree (the same argument as the image digest).
+        required: false
+        type: string
+        default: main
       check-versions-always:
         description: >-
           Run the derived-version check on EVERY event instead of main-only. Correct for a repo
@@ -48,6 +56,27 @@ jobs:
           python-version: "3.12"
       - name: Validate every node JSON (+ NodeType Source)
         run: python3 scripts/validate-repos.py
+      # 🚨 THE 45-MINUTE CAP, fleet-wide (maintainer, 2026-09-02: "hard cut CI runs after 45min — we pay all
+      # this"). GitHub's default job timeout is 360 minutes; an uncapped job that hangs bills a runner for six
+      # hours and, when a required check `needs:` it, blocks every merge behind it (the Plugins Mcp bundle,
+      # 19 runs in_progress at once). The guard is the PLATFORM's script fetched at platform-ref — the same
+      # centralization as compile-check.py — and it runs against the CALLER's tree. No fallback: a ref the
+      # script cannot be fetched at fails RED naming it, never "skipped".
+      - name: Fetch the platform's workflow-timeout guard at the pinned ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM_REF: ${{ inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the timeout guard has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-workflow-timeouts.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-workflow-timeouts.py" \
+            || { echo "::error::could not fetch .github/scripts/check-workflow-timeouts.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-workflow-timeouts.py" | grep -q "check-workflow-timeouts" || { echo "::error::the fetched check-workflow-timeouts.py at ${PLATFORM_REF} does not look like the guard"; exit 1; }
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
+      - name: "Every job is capped at 45 minutes — the gate can fail (self-test)"
+        run: python3 "$RUNNER_TEMP/check-workflow-timeouts.py" --self-test
+      - name: "Every job in this repo's workflows is capped at 45 minutes"
+        run: python3 "$RUNNER_TEMP/check-workflow-timeouts.py" --root .
       # manifest.lock calls itself CI-verified; this is what verifies it. A stale lock means a
       # module's recorded content hash — and the version derived from it — describes a tree that
       # no longer exists, which is exactly what a dependent's pin would be trusting.

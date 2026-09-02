@@ -202,11 +202,6 @@ on:
         required: false
         type: string
         default: ''
-      timeout-minutes:
-        description: Job timeout.
-        required: false
-        type: number
-        default: 40
       allow-file:
         description: Known-debt ratchet file passed as --allow (repo-relative). Empty = none.
         required: false
@@ -336,7 +331,10 @@ jobs:
   publish-bake:
     name: Bake + publish NodeType assemblies to portal storage
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.timeout-minutes }}
+    # 🚨 A LITERAL, never an input: the fleet cap is 45 minutes for every job (check-workflow-timeouts.py
+    # refuses an expression here because a caller-supplied bound cannot be proven by reading the file).
+    # Measured 2026-09-02 the bake runs ~20 min; past 45 it is stuck, not slow.
+    timeout-minutes: 45
     outputs:
       # Read by dispatch-dependents below: a run that baked NOTHING (already sealed) publishes
       # nothing and therefore wakes nobody.
