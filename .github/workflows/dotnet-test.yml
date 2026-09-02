@@ -1837,6 +1837,13 @@ jobs:
     - name: "Every job is capped at 45 minutes"
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
 
+    # The merge-queue steward (merge-queue-steward.yml) decides whether a DEQUEUED pull request is
+    # re-queued or left out; a wrong row in its table re-queues on nothing or rejects a flake. The
+    # steward runs this same self-test before every real decision, but that lane only fires on a
+    # dequeue — so a classifier regression would otherwise merge on a branch that never queued.
+    - name: "The merge-queue steward's decision table holds (self-test)"
+      run: python3 .github/scripts/merge-queue-steward.py --self-test
+
     - name: "Gate the shell CI itself runs"
       run: python3 .github/scripts/check-workflow-shell.py
 

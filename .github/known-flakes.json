@@ -1,0 +1,31 @@
+{
+  "$schema-note": [
+    "The flake catalogue the merge-queue steward (.github/scripts/merge-queue-steward.py) re-queues on.",
+    "Doc: src/MeshWeaver.Documentation/Data/Architecture/MergeQueue.md (Doc/Architecture/MergeQueue).",
+    "",
+    "An entry is a TEMPORARY, EVIDENCE-BEARING allowance for one known race while its root cause is",
+    "fixed — never a permanent tolerance. Every field is required and the steward's loader refuses",
+    "the file (and `MergeQueueStewardGuard` reds the build) when one is missing or malformed:",
+    "",
+    "  id                a short stable handle, unique in this file",
+    "  assertionPattern  a regex over the failure MESSAGE + STACK TRACE — never over the test name.",
+    "                    It must be specific to the defect (a bare 'timed out' is not evidence);",
+    "                    a pattern that matches the empty string is refused.",
+    "  testName          informational: the fully-qualified test the assertion belongs to",
+    "  issue             the GitHub issue tracking the root cause (https://github.com/Systemorph/<repo>/issues/N)",
+    "  evidence          run URLs: at least one FAILING run showing the assertion, ideally beside a",
+    "                    PASSING run of the same tree — the control arm (Doc/Architecture/ReadingCiSignals)",
+    "  addedOn / expires ISO dates; expires is at most 30 days after addedOn. An expired entry is",
+    "                    inert (the steward treats it as uncatalogued) AND reds the guard until it is",
+    "                    deleted or renewed with fresh evidence.",
+    "  addedBy           who vouches for the evidence",
+    "",
+    "Seeded EMPTY on 2026-09-02 after mining the 700 Build-and-Test runs since the queue was first",
+    "enabled (2026-08-30, 83 failures). Nothing met the bar: the repeated signatures belonged to",
+    "MeshWeaver.Hosting.Monolith.Test, which has since moved to MeshWeaver.Plugins; the six-times",
+    "TestTimeoutLiteralRatchetGuard red was the queue doing its job (two PRs each moved a ratchet",
+    "count — a real semantic conflict, not a flake); and every remaining candidate was a single",
+    "occurrence or had its subject changed after the failing runs."
+  ],
+  "entries": []
+}
