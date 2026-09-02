@@ -538,11 +538,12 @@ transport end to end — there is deliberately no second distribution channel:
    bundle, verifies the **platform floor** (`ModulePlatformFloor.DeclineReason` — the one notion
    of the module platform requirement, checked at the index, at the manifest, and again at
    placement), and lands it through `ModuleLandingService` into `modules/<name>/` with its
-   activation entry (version + floor recorded; the built-against MVID recorded as diagnostics).
-   Deliberately **not** MVID equality — that is bake semantics, the NodeType lane's gate: a
-   module binds by simple name, so a bundle built against an older platform installs ex post on
-   any deployment satisfying its floor. Restart-as-activation as above: `PendingRestart` is the
-   signal, the next restart loads it.
+   activation entry (version + floor recorded, plus the **framework identity the registry
+   advertised for those bytes** — the producer's value, which the update decision reads back).
+   The landing GATE is deliberately **not** MVID equality — that is bake semantics, the NodeType
+   lane's gate: a module binds by simple name, so a bundle built against an older platform
+   installs ex post on any deployment satisfying its floor. Restart-as-activation as above:
+   `PendingRestart` is the signal, the next restart loads it.
 
 ### Auto-update
 
@@ -550,11 +551,43 @@ Store-installed modules **update themselves by default**. The boot reconcile
 (`RegistryUpdateReconciler`) runs a module pass after the content pass: for every installed
 module-declaring package it consults the registry's bundle index and applies the one pure decision
 (`ModuleUpdateDecision`) — a newer version whose **floor this platform satisfies** lands via
-`ModuleLandingService` and flags `PendingRestart`; the same served version is skipped without a
-download; a bundle whose floor **exceeds** the running platform is skipped silently-with-log (it
-becomes installable once the platform has updated, and the same reconcile lands it then). Nothing
-is ever rolled back unattended — and an ordinary platform update needs no module re-land at all:
-landed modules keep loading across platform builds.
+`ModuleLandingService` and flags `PendingRestart`; the same served version **built against the same
+framework** is skipped without a download; a bundle whose floor **exceeds** the running platform is
+skipped silently-with-log (it becomes installable once the platform has updated, and the same
+reconcile lands it then). Nothing is ever rolled back unattended.
+
+#### "Already landed" means this content against this FRAMEWORK
+
+🚨 **A module's version encodes its CONTENT only.** Rebuild the same source against a new platform
+and it republishes under the *same* version — so a reconcile that compared the version alone
+answered "already landed" for an artifact the deployment does not hold, and nothing ever looked
+again (Plugins#931). Measured in Plugins#723: after a platform identity flip the updater landed the
+~12 modules whose versions had moved and then went quiet with no new `MeshWeaver.AI.OpenAI` build,
+because OpenAI's had not; rolling the image anyway crash-looped deterministically (the pre-flip
+build cannot resolve `ProviderModelLister` on the new platform, whose registration had moved) and
+the fleet was held on an old image.
+
+So the skip is keyed on **(version, framework identity)**. The registry records the identity of a
+module's bytes when their owning repo's CI publishes them (`ModulePublish` → `ShelveModule`) and
+advertises it **per bundle** on the index (`BundleRef.FrameworkMvid` — never the index's top-level
+identity, which is the registry's own bake and says nothing about a module it did not build); the
+consumer records what it landed on the activation entry and compares the two before downloading a
+byte.
+
+**The two sides are deliberately not symmetric, and that asymmetry is what stops the fix becoming a
+download loop:**
+
+| landed | served | verdict |
+|---|---|---|
+| known | known, **different** | **Land** — same content, different platform build. The reason names both identities. |
+| **unknown** (entry predates the field) | known | **Land**, once. The landing writes the identity back, so the next reconcile has two known values. |
+| any | **unknown** | **Skip**, and the reason SAYS the identity could not be checked. Landing could never turn "the registry states nothing" into evidence — it would state nothing next time too — so answering Land there re-downloads every module on every reconcile, forever, against any registry that predates the field. |
+| known | known, equal | **Skip** — the genuine no-op, with the framework named. |
+
+The remaining blind spot (a registry that states no identity) is closed **where it is created**, not
+by churning consumers: a bundle that cannot say what it was built against must not be publishable.
+See [Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) → "Content-addressed outputs" for the
+producer half.
 
 The policy gate is the deployment's **existing update policy — `Admin/UpdatePolicy`**, the same
 single surface that governs the platform image roll; there is no module-specific knob.
