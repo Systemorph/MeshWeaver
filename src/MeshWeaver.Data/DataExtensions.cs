@@ -1541,10 +1541,46 @@ public static class DataExtensions
                                     .Timeout(TimeSpan.FromSeconds(10))
                                     .Subscribe(
                                         _ => AckOnce(true),
-                                        ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+                                        ex => AckOnce(false, ClassifyPatchException(ex, hubPath)),
+                                        // Same completion gap as the outer subscription below:
+                                        // `.Take(1)` over a flush that ENDS without emitting runs
+                                        // neither arm, and the durable-flush ack is never posted.
+                                        () => AckOnce(false, new MeshNodeError(
+                                            MeshNodeErrorCode.OwnerDisposing,
+                                            hubPath,
+                                            "the post-commit flush stream ended before it reported "
+                                            + "durability — the merge committed in memory but the "
+                                            + "durable flush is UNCONFIRMED; safe to retry")));
                                 hub.RegisterForDisposal(flushSub);
                             },
-                            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+                            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)),
+                            // 🚨 THE COMPLETION ARM. Without it this subscription had two ways out
+                            // for three outcomes: `.Skip(1).Take(1)` needs TWO emissions, so a
+                            // stream that ENDS before the commit is observed completes EMPTY —
+                            // neither onNext nor onError runs, and no acknowledgement is ever
+                            // posted. The writer then burns its full confirmation window and
+                            // reports OwnerUnreachable for a patch the owner may already have
+                            // committed (#3033; the user-visible half was #2896, whose own
+                            // re-measurement showed the owner DID produce a terminal — the ack was
+                            // simply never sent).
+                            //
+                            // OwnerDisposing rather than a new code: a stream ending under a live
+                            // patch IS the owner's stream going away, which is what that code
+                            // means, and it is documented TRANSIENT and retry-worthy — the
+                            // resubscribe latch rides it out (#2986) instead of tearing down.
+                            // Reporting "unknown, retry-worthy" is the honest verdict: the merge
+                            // may or may not have committed, and the caller must be free to retry
+                            // rather than left waiting on silence.
+                            //
+                            // AckOnce is an Interlocked gate, so this cannot double-post — a real
+                            // ack that already won makes it a no-op, which is what makes adding a
+                            // third arm safe rather than a race.
+                            () => AckOnce(false, new MeshNodeError(
+                                MeshNodeErrorCode.OwnerDisposing,
+                                hubPath,
+                                "the owner's stream ended before the patch's commit was observed — "
+                                + "the write's fate is UNKNOWN and it is safe to retry against the "
+                                + "fresh activation; the owner did not report a verdict")));
                     hub.RegisterForDisposal(postSub);
 
                     // Route via the hub's DataChangeRequest pipeline — the workspace
