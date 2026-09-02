@@ -115,6 +115,21 @@ refused this at version N and the mirror never moved past it" send an operator t
 The same two-callback subscribe existed on the sync-stream write path
 (`WriteViaSyncStream`, the Overwrite/bypass route) and carries the same guard for the same reason.
 
+### The owner side has the same seam
+
+The owner's ack watcher (`ApplyMeshNodePatchInTurn`, `DataExtensions.cs`) is a `.Take(1)` over the
+owner's reduced stream waiting for the emission that carries the write, and it was subscribed with the
+same two arms. A reduced stream that completes without emitting — mirror eviction disposing a
+`SynchronizationStream` while the hub lives — ended the watcher with no ack posted, and the writer
+reported `OwnerUnreachable` for a write the owner may have committed (issue #3033). It is now armed
+through `ArmPatchAckWatcher` over the `WhenCompletesEmpty` operator — "run this callback if the
+source completes without ever having emitted" — which is `RequireBaseState`'s idea in operator form,
+with one twist the owner side needs and the writer side does not: the callback must fire ONLY for a
+completion that no emission preceded, because on the happy path `Take(1)` completes while the durable
+flush started in `onNext` is still in flight, and a bare completion arm would NACK the write that is
+about to succeed. Which verdict each path posts, and why the code is `OwnerDisposing`, is in
+[Reading a Write Verdict](../ReadingAWriteVerdict).
+
 ## What this is NOT
 
 **It is not a timeout, a retry, or a watchdog.** No bound moves; nothing is re-attempted; no poller is
