@@ -229,7 +229,47 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // the framework's own answer to "is this process a silo" — see CanHostGrains. Optional for
         // the same reason as the two above: a bare mesh in a unit test is neither silo nor client.
         CanHostGrains = serviceProvider.GetService<ILocalSiloDetails>() is not null;
+        // 🚨 Optional, and registered by the SILO only. Its presence is what turns the pod-hub claim
+        // from a one-shot assertion into one whose lifetime is the registration's — see
+        // AttachPodHub. Where it is absent (client, monolith, bare mesh) membership cannot change
+        // under this process, so a single assertion is the whole correct behaviour and the claim
+        // behaves exactly as it did before this existed.
+        membershipFeed = serviceProvider.GetService<IClusterMembershipFeed>();
     }
+
+    /// <summary>
+    /// The cluster's membership-change feed, or null where membership cannot change under this
+    /// process. See <see cref="AttachPodHub"/> for what it governs.
+    /// </summary>
+    private readonly IClusterMembershipFeed? membershipFeed;
+
+    /// <summary>
+    /// When a pod-hub claim for <paramref name="addressPath"/> must be (re-)asserted: once
+    /// immediately, and then once per cluster membership change.
+    ///
+    /// <para>🚨 <b>The membership change is the EVENT that can invalidate the claim, not a poll.</b>
+    /// The claim publishes an address→silo mapping into Orleans' own grain directory, and that
+    /// directory is re-partitioned on every membership change — which is precisely the window the
+    /// pod-hub transport's design note names as the one it traded into
+    /// (<c>Doc/Architecture/PodHubDeliveryRollPlan</c> → "What the swap traded"). A mapping lost in
+    /// that window is lost SILENTLY on the owning side: the router that can no longer resolve the
+    /// address answers the SENDER, and the owner — the one process that could repair it — is never
+    /// told. Re-asserting here is the same move Orleans' own <c>ClientDirectory</c> makes when it
+    /// re-publishes its client routing table to every silo on every membership change, and for the
+    /// same reason.</para>
+    ///
+    /// <para>Where there is no feed the sequence is a single immediate emission, i.e. exactly the
+    /// behaviour that existed before: assert once, never re-assert.</para>
+    /// </summary>
+    /// <param name="addressPath">The address being claimed — used only for the trace line.</param>
+    /// <returns>The trigger sequence the claim subscribes to.</returns>
+    private IObservable<long> ClaimTriggers(string addressPath) =>
+        membershipFeed is null
+            ? Observable.Return(0L)
+            : membershipFeed.Changes
+                .Do(seq => OrleansRouteTrace.Write(
+                    $"OrleansRoutingService.AttachPodHub REASSERT addr={addressPath} membershipChange={seq}"))
+                .StartWith(0L);
 
     /// <summary>
     /// Routes a message delivery to its target. Locally registered streams are invoked
@@ -943,6 +983,20 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     ///     an activation on the silo that is leaving.</item>
     /// </list>
     ///
+    /// <para>🚨 <b>…and the half that was missing: LANDING IS NOT A TERMINAL EITHER (#2938).</b> The
+    /// claim used to stop the instant <c>Attach</c> first answered <c>true</c>, which made it a
+    /// ONE-SHOT assertion — and the thing it asserts into, Orleans' own grain directory, is
+    /// re-partitioned on every membership change. A mapping lost in that window is lost SILENTLY on
+    /// this side: the router that can no longer resolve the address answers the SENDER, so the
+    /// owner — the only process that could repair it — is never told, and
+    /// <c>[PreferLocalPlacement]</c> then guarantees that every subsequent delivery re-creates a
+    /// throw-away activation on the CALLER's silo and refuses there. Measured on memex-cloud: a
+    /// live pod's <c>cache/{meshId}</c> refused from three other live pods for twelve hours, a flat
+    /// ~40 refusals/hour, surviving a container restart, and <b>not one</b> claim-recovery line in
+    /// eight days across 36 M log lines. The claim is therefore re-asserted on every membership
+    /// change — see <see cref="ClaimTriggers"/> — which is the same move Orleans' own
+    /// <c>ClientDirectory</c> makes with its client routing table, for the same reason.</para>
+    ///
     /// <para>🚨 <b>The third terminal is IMPOSSIBILITY, and it is derived too.</b> A process that
     /// cannot host a grain can never win this claim — <c>PodHubGrain.Attach</c> is
     /// <c>[PreferLocalPlacement]</c>, so from a client it lands on some silo which has no local
@@ -950,7 +1004,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// before, and the give-up stays at <c>Debug</c> because it is the expected permanent outcome.
     /// Retrying it indefinitely would not be a derived lifetime, it would be a poll that cannot
     /// converge — and a measurable one: each attempt makes the SILO log
-    /// <c>[POD-HUB] Attach … landed on a silo that has no local route</c> at
+    /// <c>[POD-HUB] Attach for … landed on silo …, which has no local route for it</c> at
     /// <c>Information</c>, i.e. one line per hub per backoff interval, which is the log-storm shape
     /// #2426/#2546 exist to remove.</para>
     ///
@@ -968,94 +1022,128 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             return Disposable.Empty;
 
         var addressPath = address.ToString();
-        var attempt = 0;
-        var reported = false;
+        // Claim-level, spanning every round: a hub that cannot claim its own address is named ONCE,
+        // and its recovery is reported ONCE. The per-round retry state (the attempt counter) lives
+        // inside ClaimOnce, so a round started by a membership change gets the fast first retry
+        // again instead of inheriting a previous round's backoff ceiling.
+        var budgetWarned = false;
+        var recoveryLogged = false;
+        var landedOnce = 0;
         var attach = new SingleAssignmentDisposable();
         // Armed BEFORE the claim is subscribed, so there is no window in which the claim could
         // terminate unobserved. AsyncSubject: it completes once and replays that completion to
         // whoever asks afterwards, so an observer arriving late still sees the terminal.
         var settled = podHubClaimSettled[address] = new AsyncSubject<Unit>();
         inFlight.Add(attach);
-        attach.Disposable = Observable
-            .Defer(() =>
-            {
-                // Inside the Defer on purpose: RetryWhen re-subscribes, so a claim that is still
-                // bouncing between pods when shutdown begins stops asking instead of spending its
-                // remaining attempts placing an activation on the silo that is leaving.
-                var grain = GrainWhileRunning<IPodHubGrain>(addressPath);
-                if (grain is null)
-                {
-                    logger.LogDebug(
-                        "Pod-hub claim for {Address} not attempted — the host has begun stopping, and "
-                        + "claiming an address for a process that is going away would only place a new "
-                        + "activation on the silo that is leaving.",
-                        addressPath);
-                    return Observable.Empty<bool>();
-                }
 
-                return grain.Attach().ToObservable();
-            })
-            // `false` is "landed on a silo that is not the owner". Turning it into an error is what
-            // lets the retry policy below express "bounce off the old activation and try again"
-            // without a hand-rolled loop.
-            .SelectMany(claimed => claimed
-                ? Observable.Return(true)
-                : Observable.Throw<bool>(new PodHubNotHereException(addressPath)))
-            // The claim's own state, per registration: how many attempts have failed (CLAMPED at
-            // the initial budget, so an indefinite claim settles at the backoff ceiling and the
-            // counter can never overflow) and whether the budget-exhausted line has been reported.
-            // Locals in this closure, never fields and never static — one claim, one lifetime. The
-            // error sequence RetryWhen hands us is serialised (one error, then its signal, then
-            // the next), so plain reads and writes are correct here.
-            .RetryWhen(errors => errors.SelectMany(ex =>
-            {
-                if (attempt >= PodHubAttachRetries)
+        // ONE ROUND of the claim: ask, retry the bounce, and complete when it lands. Composed per
+        // subscription so its retry state is genuinely per-round.
+        IObservable<bool> ClaimOnce()
+        {
+            // Per-round: how many attempts of THIS round have failed, CLAMPED at the initial budget
+            // so a round that keeps retrying settles at the backoff ceiling and the counter can
+            // never overflow. A local of this closure, never a field and never static.
+            var attempt = 0;
+            return Observable
+                .Defer(() =>
                 {
-                    // 🚨 THE TERMINAL, and the only one that is a decision rather than an event: a
-                    // process that cannot host a grain can never win this claim, so the budget IS
-                    // the end there. Everywhere else the budget only buys the line below.
-                    if (!CanHostGrains)
-                        return Observable.Throw<long>(ex);
-                    if (!reported)
+                    // Inside the Defer on purpose: RetryWhen re-subscribes, so a claim that is still
+                    // bouncing between pods when shutdown begins stops asking instead of spending its
+                    // remaining attempts placing an activation on the silo that is leaving.
+                    var grain = GrainWhileRunning<IPodHubGrain>(addressPath);
+                    if (grain is null)
                     {
-                        reported = true;
-                        OrleansRouteTrace.Write(
-                            $"OrleansRoutingService.AttachPodHub BUDGET_EXHAUSTED addr={addressPath} ex={ex.Message}");
-                        // 🚨 Warning, ONCE, naming the hub — the signal #1742 was missing. A silo
-                        // that cannot claim its own hub is abnormal: until the claim lands that hub
-                        // is reachable only over the stream, which is the transport this design
-                        // retires. The claim keeps trying, so this line is "still trying", not
-                        // "gave up" — and its resolution is logged below.
-                        logger.LogWarning(ex,
-                            "Pod-hub claim for {Address} did not land within its initial budget of "
-                            + "{Attempts} attempts. This process CAN host grains, so a hub that cannot "
-                            + "claim its own address is abnormal — until the claim lands, the cluster "
-                            + "can only reach it over the Orleans stream. The claim keeps retrying with "
-                            + "a capped backoff until this hub's registration is disposed or the host "
-                            + "stops; there is no give-up.",
-                            addressPath, PodHubAttachRetries);
+                        logger.LogDebug(
+                            "Pod-hub claim for {Address} not attempted — the host has begun stopping, and "
+                            + "claiming an address for a process that is going away would only place a new "
+                            + "activation on the silo that is leaving.",
+                            addressPath);
+                        return Observable.Empty<bool>();
                     }
-                }
 
-                var wait = ClaimBackoff(attempt);
-                attempt = Math.Min(attempt + 1, PodHubAttachRetries);
-                return Observable.Timer(wait, Scheduler.Default);
-            }))
+                    return grain.Attach().ToObservable();
+                })
+                // `false` is "landed on a silo that is not the owner". Turning it into an error is what
+                // lets the retry policy below express "bounce off the old activation and try again"
+                // without a hand-rolled loop.
+                .SelectMany(claimed => claimed
+                    ? Observable.Return(true)
+                    : Observable.Throw<bool>(PodHubNotHereException.ClaimRefused(addressPath)))
+                // The error sequence RetryWhen hands us is serialised (one error, then its signal,
+                // then the next), so plain reads and writes are correct here.
+                .RetryWhen(errors => errors.SelectMany(ex =>
+                {
+                    if (attempt >= PodHubAttachRetries)
+                    {
+                        // 🚨 THE TERMINAL, and the only one that is a decision rather than an event: a
+                        // process that cannot host a grain can never win this claim, so the budget IS
+                        // the end there. Everywhere else the budget only buys the line below.
+                        if (!CanHostGrains)
+                            return Observable.Throw<long>(ex);
+                        if (!budgetWarned)
+                        {
+                            budgetWarned = true;
+                            OrleansRouteTrace.Write(
+                                $"OrleansRoutingService.AttachPodHub BUDGET_EXHAUSTED addr={addressPath} ex={ex.Message}");
+                            // 🚨 Warning, ONCE, naming the hub — the signal #1742 was missing. A silo
+                            // that cannot claim its own hub is abnormal: until the claim lands that hub
+                            // is reachable only over the stream, which is the transport this design
+                            // retires. The claim keeps trying, so this line is "still trying", not
+                            // "gave up" — and its resolution is logged below.
+                            logger.LogWarning(ex,
+                                "Pod-hub claim for {Address} did not land within its initial budget of "
+                                + "{Attempts} attempts. This process CAN host grains, so a hub that cannot "
+                                + "claim its own address is abnormal — until the claim lands, the cluster "
+                                + "can only reach it over the Orleans stream. The claim keeps retrying with "
+                                + "a capped backoff until this hub's registration is disposed or the host "
+                                + "stops, and is re-asserted from scratch on every cluster membership "
+                                + "change; there is no give-up.",
+                                addressPath, PodHubAttachRetries);
+                        }
+                    }
+
+                    var wait = ClaimBackoff(attempt);
+                    attempt = Math.Min(attempt + 1, PodHubAttachRetries);
+                    return Observable.Timer(wait, Scheduler.Default);
+                }));
+        }
+
+        attach.Disposable = ClaimTriggers(addressPath)
+            .Select(_ => ClaimOnce())
+            // 🚨 SWITCH, not Concat or Merge. A membership change makes every placement decision the
+            // in-flight round has already made stale — its next retry would be aimed at a cluster
+            // shape that no longer exists — so the new round REPLACES it rather than queueing behind
+            // it. Switch also bounds the work absolutely: exactly one claim in flight per address, no
+            // matter how fast membership churns, which is what keeps a scale event from turning into
+            // a claim storm.
+            .Switch()
             .Subscribe(
                 _ =>
                 {
                     OrleansRouteTrace.Write($"OrleansRoutingService.AttachPodHub OK addr={addressPath}");
-                    if (reported)
+                    var first = Interlocked.Exchange(ref landedOnce, 1) == 0;
+                    if (budgetWarned && !recoveryLogged)
+                    {
+                        recoveryLogged = true;
                         // The close of the Warning above — without it a Loki reader cannot tell an
                         // address that recovered from one that is still stranded.
                         logger.LogInformation(
                             "Pod-hub claim for {Address} landed after its initial budget was exhausted — "
                             + "the cluster reaches this hub by directed grain call again.",
                             addressPath);
-                    else
+                    }
+                    else if (first)
                         logger.LogDebug("Pod-hub claim for {Address} landed on this process", addressPath);
-                    settled.OnNext(Unit.Default);
-                    settled.OnCompleted();
+                    else
+                        logger.LogDebug(
+                            "Pod-hub claim for {Address} re-asserted after a cluster membership change",
+                            addressPath);
+
+                    if (first)
+                    {
+                        settled.OnNext(Unit.Default);
+                        settled.OnCompleted();
+                    }
                 },
                 ex =>
                 {
