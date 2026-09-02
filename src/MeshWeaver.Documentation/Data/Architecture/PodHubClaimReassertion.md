@@ -104,8 +104,15 @@ Two Loki queries, no mutation, and the first one alone settles the family:
 
 ```
 sum by (namespace,pod) (count_over_time({namespace=~"memex|memex-cloud"} |= "Content read timed out" [24h]))
-sum by (pod)           (count_over_time({namespace="memex-cloud"} |= "portal/nodeops-<meshId>" |= "was refused" [1h]))
+sum by (pod)           (count_over_time({namespace="memex-cloud"} |= "portal/nodeops-" |= "was refused" [1h]))
 ```
+
+🚨 The second filter is `portal/nodeops-` — the **prefix**, deliberately, with no mesh id. Every
+pod-hub address shares it, so the query runs as written against any deployment. An earlier draft
+wrote `portal/nodeops-<meshId>`, which returns zero rows unless the reader first substitutes a value
+they do not have yet — and a zero-row answer here reads exactly like "the refusals have stopped",
+which is the one conclusion this page exists to prevent someone drawing by accident. If you want a
+single mesh, add ` |= "<meshId>"` as a third filter once you have one from the first query's output.
 
 🚨 **`sum by (pod)` is the whole method.** An aggregate count reads as a low-grade cluster-wide
 flake; per pod it is one replica at 33 and six at zero, which names the cause. See
