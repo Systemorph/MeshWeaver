@@ -333,9 +333,38 @@ on:
         required: false
         type: string
         default: install
+      ledger:
+        description: >
+          The CI MODULE BUILD LEDGER on the registry portal (Doc/Architecture/ModuleBuildArchitecture →
+          "Content-addressed outputs"; Plugins#889). Two values, both printed in the job summary on
+          every run so the two outcomes can never be told apart only by what is missing:
+
+          `off` — the DEFAULT, and what a caller that says nothing inherits: every selected module is
+          built, exactly as before the ledger existed.
+
+          `required` — `select` computes the content address of every selected module
+          (module-build-key.py: package, moduleVersion, in-repo closure, both image digests,
+          platform-ref, recipe) and asks the ledger at `registry-url` what is already built, tested
+          or published under that key: a usable record is REUSED (the pack job downloads that run's
+          bundle and runs only the phases the record lacks), a fresh claim by another run is WAITED
+          for (never the same key built twice at once), a compile failure of the same key is a hard
+          red with the holder's evidence, everything else is CLAIMED and every transition recorded.
+          Needs the `ledger-token` secret — asserted RED in `select` when empty, never skipped. When
+          the registry portal itself is unavailable (5xx, unreachable) the lane builds WITHOUT
+          coordination and says so in yellow: the ledger may cost a duplicate build, never a green.
+
+          Anything else — the empty string included — is RED.
+        required: false
+        type: string
+        default: off
     secrets:
       publish-token:
         description: The registry's Plugins:Registry:PublishToken. Required when publish is true.
+        required: false
+      ledger-token:
+        description: >-
+          A `mw_` ApiToken of the registry portal's CI user for the module build ledger
+          (`Admin/ModuleBuilds`). Required when ledger is `required`; asserted RED, never skipped.
         required: false
       acr-username:
         description: Pull credential for platform-image's registry. Required when platform-image-digest is set.
@@ -378,7 +407,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
-      modules: ${{ steps.scope.outputs.modules }}
+      # The matrix the pack job expands: the scope's selection, each entry annotated by the ledger
+      # (`ledger.decision` build|reuse, `ledger.key`, …) when the ledger is on.
+      modules: ${{ steps.ledger.outputs.modules }}
+      # The SUBSET the one-workspace build compiles — every entry the ledger did not hand a reusable
+      # bundle for. The postcondition in build-workspace is fed the SAME list.
+      build-modules: ${{ steps.ledger.outputs.build }}
       count: ${{ steps.scope.outputs.count }}
       selected: ${{ steps.scope.outputs.selected }}
       scope: ${{ steps.scope.outputs.scope }}
@@ -479,6 +513,8 @@ jobs:
           set -euo pipefail
           python3 meshweaver/.github/scripts/node-repo-scope.py --self-test
           python3 meshweaver/.github/scripts/node-repo-pack-verify.py --self-test
+          python3 meshweaver/.github/scripts/module-build-key.py --self-test
+          python3 meshweaver/.github/scripts/module-build-ledger.py --self-test
       - name: Decide which module bundles this diff can reach
         id: scope
         env:
@@ -503,6 +539,76 @@ jobs:
           python3 meshweaver/.github/scripts/node-repo-scope.py \
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
             --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" > "$RUNNER_TEMP/scope.json"
+      # ───────────── THE LEDGER: what of this selection is ALREADY BUILT, and who builds the rest ─────────────
+      # 🚨 "we should not start the same build multiple times ⇒ coordinate which packages are in
+      # progress; track progress through memex … if Plugin X was built against Platform version Y,
+      # we don't have to rebuild this" (maintainer, 2026-09-02). Every selected entry gets a CONTENT
+      # ADDRESS (module-build-key.py) and the ledger on the registry portal answers per key: reuse,
+      # wait, build, or blocked. The scope above still decides what this diff REACHES; the ledger
+      # decides what of that must actually be COMPILED. On a `push` the scope is FULL by policy
+      # (a publishing run has no diff baseline) and the ledger narrows it to "every module whose key
+      # has no Published record" — which is exactly the baseline argument Plugins#889 asked for: a
+      # cancelled, red or superseded run left no Published record, so its modules are rebuilt.
+      #
+      # ONE step, unconditional, that prints which way it went. `off` passes the selection through
+      # untouched (today's behaviour); `required` asserts the token RED (a skipped ledger and a
+      # consulted one must never look alike) and runs the two scripts. A registry portal that is
+      # UNAVAILABLE degrades to "build everything, uncoordinated", in yellow — the ledger is a
+      # coordination layer over a build that is correct without it, and its outage may cost a
+      # duplicate build, never a green (core #3119).
+      - name: Consult the module build ledger
+        id: ledger
+        env:
+          LEDGER: ${{ inputs.ledger }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ steps.lane.outputs.id }}
+          GH_TOKEN: ${{ github.token }}
+          SCOPE_MODULES: ${{ steps.scope.outputs.modules }}
+          COUNT: ${{ steps.scope.outputs.count }}
+          PUBLISH: ${{ inputs.publish }}
+          TESTER_DIGEST: ${{ inputs.tester-image-digest }}
+          PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
+          PLATFORM_REF: ${{ inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${SCOPE_MODULES:-[]}" > "$RUNNER_TEMP/selection.json"
+          case "$LEDGER" in
+            off)
+              echo "module build ledger: OFF — every selected module is built (set ledger: required on the caller to coordinate builds across runs)"
+              printf '### Module build ledger\n\nOFF — every one of the %s selected module(s) is built. Set `ledger: required` on the caller to reuse builds across runs.\n' "$COUNT" >> "$GITHUB_STEP_SUMMARY"
+              modules="$(cat "$RUNNER_TEMP/selection.json")"
+              echo "modules=$modules" >> "$GITHUB_OUTPUT"
+              echo "build=$modules" >> "$GITHUB_OUTPUT"
+              ;;
+            required)
+              [ -n "${MW_LEDGER_TOKEN:-}" ] || { echo "::error::inputs.ledger is 'required' but the ledger-token secret is empty. Mint a mw_ ApiToken for the registry portal's CI user (a partition admin on Admin/ModuleBuilds — see Doc/Architecture/ModuleBuildArchitecture), store it as a repository secret, and pass it as secrets.ledger-token. A ledger that silently does not run and one that ran must never look alike."; exit 1; }
+              if [ "${COUNT:-0}" = "0" ]; then
+                echo "module build ledger: nothing selected — nothing to key"
+                echo "modules=[]" >> "$GITHUB_OUTPUT"
+                echo "build=[]" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "module build ledger: REQUIRED — keying $COUNT selected module(s) against $MW_LEDGER_URL"
+              python3 meshweaver/.github/scripts/module-build-key.py --root repo \
+                --modules "@$RUNNER_TEMP/selection.json" \
+                --tester-digest "$TESTER_DIGEST" --platform-digest "$PLATFORM_DIGEST" --platform-ref "$PLATFORM_REF" \
+                > "$RUNNER_TEMP/keys.json"
+              # Waits at most 40 of this job's 45 minutes on a live holder; a holder still busy then is
+              # built anyway (a duplicate build, flagged), never a red. Exit 1 ONLY for a key the same
+              # inputs already compiled RED elsewhere — that is a verdict, not the ledger's outage.
+              python3 meshweaver/.github/scripts/module-build-ledger.py decide \
+                --keys "@$RUNNER_TEMP/keys.json" --matrix "@$RUNNER_TEMP/selection.json" \
+                --publish "$PUBLISH" --lane "$MW_LEDGER_LANE" --wait-max 2400 --poll 30 \
+                --out-matrix "$RUNNER_TEMP/matrix.out.json" --out-build "$RUNNER_TEMP/build.out.json"
+              echo "modules=$(jq -c . "$RUNNER_TEMP/matrix.out.json")" >> "$GITHUB_OUTPUT"
+              echo "build=$(jq -c . "$RUNNER_TEMP/build.out.json")" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::inputs.ledger is '$LEDGER'. The only values are 'off' (the default) and 'required'. An unreadable flag must NEVER resolve to 'do not coordinate' — that is a skipped check wearing a green tick."
+              exit 1
+              ;;
+          esac
 
   # ─────────────────── THE SHARED BUILD ENVIRONMENT, WARMED ONCE ───────────────────
   # "see we update *once at beginning for everyone* and not by module" (maintainer, 2026-08-31).
@@ -527,6 +633,10 @@ jobs:
     if: needs.select.result == 'success' && needs.select.outputs.count != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      # The framework identity the PLATFORM host resolves for its /app — what every ledger record
+      # and bundle is keyed to (the portal adopts, so the portal's identity is the honest one).
+      platform-identity: ${{ steps.identity.outputs.identity }}
     steps:
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
@@ -629,6 +739,41 @@ jobs:
             docker rm "$tcid" >/dev/null
             [ -f "$RUNNER_TEMP/tester-app/mw-plugin-test.dll" ] || { echo "::error::the tester image's /app carries no mw-plugin-test.dll — not a tester image"; exit 1; }
           fi
+      # ───────── THE PLATFORM'S FRAMEWORK IDENTITY — resolved by the PORTAL's own /app (#3022) ─────────
+      # The ledger records which framework a bundle was built against, and the honest identity is the
+      # one the ADOPTING host resolves: the tester's `framework-identity <dir>` verb, run with the
+      # platform image's dotnet over the platform image's /app — the same reading the node-repo bake
+      # takes, never the tester image's own identity (a strict subset of the portal's). Metadata for
+      # the ledger only: an older tester without the verb yields an empty identity and a warning, not
+      # a red — nothing verifies against it here.
+      - name: Resolve the platform's framework identity (for the ledger)
+        id: identity
+        if: inputs.ledger == 'required' && inputs.platform-image-digest != '' && inputs.tester-image-digest != ''
+        env:
+          IMAGE: ${{ inputs.platform-image }}
+          DIGEST: ${{ inputs.platform-image-digest }}
+        run: |
+          set -euo pipefail
+          case "${IMAGE##*/}" in *:*) NOTAG="${IMAGE%:*}" ;; *) NOTAG="$IMAGE" ;; esac
+          img="${NOTAG}@${DIGEST}"
+          if ! docker image inspect "$img" >/dev/null 2>&1; then
+            zstd -dc "$RUNNER_TEMP/platform-image/image.tar.zst" | docker load >/dev/null
+            img="$(cat "$RUNNER_TEMP/platform-image/image-id.txt")"
+          fi
+          # `if out=…` rather than `|| true`: a failing verb still PRINTS, and that text must not be
+          # read as the identity.
+          identity=""
+          if out=$(docker run --rm --init --platform linux/amd64 --user "$(id -u):$(id -g)" -e HOME=/tmp \
+                     -v "$RUNNER_TEMP/tester-app:/tester:ro" --entrypoint dotnet "$img" \
+                     /tester/mw-plugin-test.dll framework-identity /app 2>&1); then
+            identity=$(printf '%s\n' "$out" | tail -1 | tr -d '[:space:]')
+          fi
+          if [ -z "$identity" ]; then
+            echo "::warning::could not resolve the platform image's framework identity (the tester's framework-identity verb answered: ${out:-<nothing>}) — ledger records for this run carry no platformIdentity"
+          else
+            echo "platform framework identity: $identity (resolved by the portal's /app)"
+          fi
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
 
   # ─────────────────────── ONE GLOBAL BUILD — LOCAL BUILDS ARE DISCONTINUED ───────────────────────
   # "we want *one* central build *no* per project build … just collect all under scope in global
@@ -692,10 +837,12 @@ jobs:
         with:
           path: ${{ runner.temp }}/tester-app
           key: tester-app-${{ inputs.tester-image-digest }}
+      # 🚨 `build-modules`, not `modules`: the ledger handed some entries a reusable bundle, and those
+      # are NOT compiled here. The postcondition below is fed the SAME list — one enumerator.
       - name: Build every selected container entry in ONE workspace
         id: build
         env:
-          MODULES: ${{ needs.select.outputs.modules }}
+          MODULES: ${{ needs.select.outputs.build-modules }}
           IMAGE: ${{ inputs.platform-image }}
           DIGEST: ${{ inputs.platform-image-digest }}
           TESTER_IMAGE: ${{ inputs.tester-image }}
@@ -706,7 +853,7 @@ jobs:
           set -euo pipefail
           mapfile -t projects < <(jq -r '.[] | select(.build == "container") | .project' <<< "$MODULES")
           if [ "${#projects[@]}" -eq 0 ]; then
-            echo "no container entries in the selection — the global build has nothing to do (sdk-only selection)"
+            echo "no container entries to compile — the global build has nothing to do (sdk-only selection, or every container entry is reused from the ledger)"
             echo "built=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -801,7 +948,7 @@ jobs:
       # exactly the thing #1051 is about.
       - name: The global build emitted every selected module (postcondition)
         env:
-          MODULES: ${{ needs.select.outputs.modules }}
+          MODULES: ${{ needs.select.outputs.build-modules }}
         run: |
           set -euo pipefail
           python3 meshweaver/.github/scripts/workspace-build-verify.py --self-test
@@ -809,6 +956,49 @@ jobs:
           python3 meshweaver/.github/scripts/workspace-build-verify.py \
             --modules "@$RUNNER_TEMP/selection.json" \
             --output "$RUNNER_TEMP/module-build"
+      # ───────── THE LEDGER HEARS ABOUT THIS JOB — a heartbeat on success, the verdict on failure ─────────
+      # A claim taken in `select` must stay fresh across this job (queue + up to 30 min of compile);
+      # a heartbeat here keeps a follower from taking the key over mid-build. On failure the verdict
+      # is per key: an entry whose assembly the workspace never emitted and whose project the log
+      # names in a compiler error FAILED in `compile` (blocking — same inputs, same result); every
+      # other claimed entry was ABORTED by fail-fast on someone else's error (`workspace`, never
+      # blocking). Neither step can red the job: the ledger is coordination, not verification.
+      - name: Ledger — heartbeat every claimed key
+        if: inputs.ledger == 'required'
+        env:
+          MODULES: ${{ needs.select.outputs.build-modules }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r key; do
+            [ -n "$key" ] || continue
+            python3 meshweaver/.github/scripts/module-build-ledger.py heartbeat --key "$key"
+          done < <(jq -r '.[] | select(.build == "container") | .ledger.key // empty' <<< "$MODULES")
+      - name: Ledger — record the compile verdict of a failed workspace
+        if: failure() && inputs.ledger == 'required'
+        env:
+          MODULES: ${{ needs.select.outputs.build-modules }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/module-build"
+          log="$out/workspace-build.log"
+          while IFS=$'\t' read -r module project key; do
+            [ -n "$key" ] || continue
+            phase=workspace
+            evidence="$RUNNER_TEMP/failure-$module.txt"
+            if [ ! -f "$out/$module/$module.dll" ] && [ -f "$log" ] && grep -F "$(dirname "$project")/" "$log" | grep -q 'error CS'; then
+              phase=compile
+              grep -F "$(dirname "$project")/" "$log" | grep 'error CS' | head -50 > "$evidence"
+            else
+              { echo "the one-workspace build failed before this module's verdict; log tail:"; tail -40 "$log" 2>/dev/null; } > "$evidence"
+            fi
+            python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$key" --status Failed --phase "$phase" --failure-file "$evidence" || true
+          done < <(jq -r '.[] | select(.build == "container") | select(.ledger.key != null) | [.module, .project, .ledger.key] | @tsv' <<< "$MODULES")
       - name: Hand the workspace to the matrix
         if: steps.build.outputs.built == 'true'
         uses: actions/upload-artifact@v7

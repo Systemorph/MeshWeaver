@@ -44,8 +44,12 @@ THE PROTOCOL
                phase, failure text) — never silently.
 
 🚨 A read that could not reach a verdict (a 5xx, a timeout, an "Error: …" answer) is UNAVAILABLE, not
-"absent": it is retried a bounded number of times honouring Retry-After and then FAILS the job. Claiming
-on an unavailable read would be the fault-becomes-fact defect (#2695) one more time.
+"absent": it is retried a bounded number of times honouring Retry-After, and then the lane proceeds AS IF
+THERE WERE NO RECORD — the module is BUILT, without coordination, and the job summary says so in yellow.
+Never claimed-on-faith (that would be the fault-becomes-fact defect, #2695) and never red: the ledger is
+a coordination layer over a build that is correct without it, so its unavailability may cost a duplicate
+build and may never cost a green (maintainer, 2026-09-02, after the registry answered 503 to three
+Reinsurance bakes — core #3119). Every write command degrades the same way: a `::warning`, exit 0.
 
 USAGE (the lane's steps; every command reads the run identity from GITHUB_* and the endpoint from
 MW_LEDGER_URL / MW_LEDGER_TOKEN)
@@ -85,6 +89,7 @@ BLOCKING_TEST_ATTEMPTS = 2       # a test failure blocks from this many failed a
 PROTOCOL_VERSION = "2025-06-18"
 HTTP_TIMEOUT_S = 60
 HTTP_ATTEMPTS = 3
+RETRY_DELAY_S = float(os.environ.get("MW_LEDGER_RETRY_DELAY_S", "10"))
 FAILURE_TEXT_CAP = 4000
 TEST_NAMES_CAP = 50
 
@@ -165,6 +170,9 @@ class Ledger:
         self._next_id = 0
         self._initialized = False
         self.say = say or (lambda *_: None)
+        # Set once the endpoint has exhausted its retries: every later caller answers "unavailable" at
+        # once instead of paying the retry budget again for each of 30 modules.
+        self.down: str | None = None
 
     def _headers(self) -> dict:
         h = {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json",
@@ -179,6 +187,8 @@ class Ledger:
             self._next_id += 1
             body["id"] = self._next_id
         data = json.dumps(body).encode("utf-8")
+        if self.down:
+            raise LedgerError(f"{method}: the ledger is unavailable ({self.down})")
         last = ""
         for attempt in range(1, HTTP_ATTEMPTS + 1):
             req = urllib.request.Request(self.endpoint, data=data, headers=self._headers(), method="POST")
@@ -196,20 +206,24 @@ class Ledger:
                 text = exc.read().decode("utf-8", "replace")[:500]
                 if exc.code in (429, 502, 503, 504) and attempt < HTTP_ATTEMPTS:
                     wait = exc.headers.get("Retry-After")
-                    delay = float(wait) if wait and wait.replace(".", "", 1).isdigit() else 10.0
+                    delay = float(wait) if wait and wait.replace(".", "", 1).isdigit() else RETRY_DELAY_S
                     self.say(f"ledger: HTTP {exc.code} from {self.endpoint} (attempt {attempt}) — retrying in {delay:g}s "
                              f"(a retryable fault, NOT a verdict): {text}")
                     time.sleep(min(delay, 60.0))
                     last = f"HTTP {exc.code}: {text}"
                     continue
+                if exc.code in (429, 502, 503, 504):
+                    self.down = f"HTTP {exc.code} after {HTTP_ATTEMPTS} attempts: {text}"
+                    raise LedgerError(f"{method}: the ledger stayed unavailable ({self.down})") from exc
                 raise LedgerError(f"{method} → HTTP {exc.code} from {self.endpoint}: {text}") from exc
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 last = str(exc)
                 if attempt < HTTP_ATTEMPTS:
-                    self.say(f"ledger: {self.endpoint} unreachable (attempt {attempt}: {exc}) — retrying in 10s")
-                    time.sleep(10.0)
+                    self.say(f"ledger: {self.endpoint} unreachable (attempt {attempt}: {exc}) — retrying in {RETRY_DELAY_S:g}s")
+                    time.sleep(RETRY_DELAY_S)
                     continue
-        raise LedgerError(f"{method}: the ledger stayed unavailable after {HTTP_ATTEMPTS} attempts ({last})")
+        self.down = f"unreachable after {HTTP_ATTEMPTS} attempts: {last}"
+        raise LedgerError(f"{method}: the ledger stayed unavailable ({self.down})")
 
     @staticmethod
     def _parse(raw: bytes, ctype: str, want_id) -> dict:
@@ -411,12 +425,20 @@ def decide(ledger: Ledger, matrix: list[dict], keys: list[dict], me: dict, publi
     problems: list[str] = []
     deadline = time.monotonic() + wait_max_s
     first = True
+    def uncoordinated(e: dict, k: dict | None, why: str) -> None:
+        # 🚨 The ledger's unavailability costs a duplicate build at worst — never a red. The module is
+        # built exactly as it was before the ledger existed, and the summary says so in yellow.
+        say(f"  {e['module']}: BUILD without coordination — {why}")
+        decided[e["module"]] = {**e, "ledger": {"key": k["key"] if k else "", "decision": "build",
+                                                "attempts": None, "unavailable": why[:300]}}
+
     while pending:
         if not first:
             if time.monotonic() > deadline:
                 for e in pending:
-                    problems.append(f"{e['module']}: another run still holds key {by_module[e['module']]['key'][:12]}… "
-                                    f"after {int(wait_max_s)}s — it is neither finished nor stale; read its run and re-run this one")
+                    uncoordinated(e, by_module.get(e["module"]),
+                                  f"another run still holds this key after {int(wait_max_s)}s — neither finished nor "
+                                  "stale; building anyway rather than holding this run hostage (a duplicate build, not a red)")
                 break
             time.sleep(poll_s)
         first = False
@@ -424,9 +446,16 @@ def decide(ledger: Ledger, matrix: list[dict], keys: list[dict], me: dict, publi
         for e in pending:
             k = by_module.get(e["module"])
             if k is None:
-                problems.append(f"{e['module']}: no build key was computed for it")
+                uncoordinated(e, None, "no build key was computed for it")
                 continue
-            verdict, detail = decide_one(ledger, e, k, me, publishing, say)
+            if ledger.down:
+                uncoordinated(e, k, f"the ledger is unavailable ({ledger.down})")
+                continue
+            try:
+                verdict, detail = decide_one(ledger, e, k, me, publishing, say)
+            except LedgerError as exc:
+                uncoordinated(e, k, f"the ledger is unavailable ({str(exc)[:200]})")
+                continue
             if verdict == "wait":
                 say(f"  {e['module']}: WAITING — {detail['status']} by {detail['holder']} (heartbeat {detail['heartbeatAgeS']}s ago)")
                 still.append(e)
@@ -650,6 +679,8 @@ def self_test() -> int:
             failures.append(name)
 
     quiet = lambda *a: None
+    global RETRY_DELAY_S
+    RETRY_DELAY_S = 0.01   # the self-test pays no real retry delays; the CLI children read the env below
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "fake.py").write_text(_FAKE_SERVER_SRC, encoding="utf-8")
@@ -819,11 +850,54 @@ def self_test() -> int:
                   not problems and by["Acme.Alpha"]["decision"] == "reuse" and by["Acme.Beta"]["decision"] == "build", f"{problems} {by}")
             store(**{f"{ROOT}/{key}": {**claim_content(entry, kinfo, run(run_id="950"), 1, None)}})
             out, problems = decide(L(), [entry], [kinfo], run(run_id="951"), False, 0.5, 0.2, quiet)
-            check("a holder that neither finishes nor goes stale within the budget is a named problem, not a build",
-                  len(problems) == 1 and "still holds" in problems[0] and out == [], f"{problems} {out}")
+            check("a holder that neither finishes nor goes stale within the budget ⇒ build anyway, flagged (never a red)",
+                  not problems and out[0]["ledger"]["decision"] == "build" and "still holds" in out[0]["ledger"]["unavailable"],
+                  f"{problems} {out}")
         finally:
             server.kill()
             server.wait()
+
+        print("the ledger is DOWN — a coordination layer may cost a duplicate build, never a green:")
+        dead = Ledger(url, "mw_test", quiet)
+        t0 = time.monotonic()
+        out, problems = decide(dead, [entry, entry2], [kinfo, kinfo2], run(run_id="960"), True, 10, 0.2, quiet)
+        check("an unreachable ledger ⇒ every module is BUILT without coordination, none blocked, no exception",
+              not problems and [e["ledger"]["decision"] for e in out] == ["build", "build"]
+              and all("unavailable" in e["ledger"] for e in out), f"{problems} {out}")
+        check("…and the retry budget is paid ONCE, not once per module",
+              dead.down is not None and time.monotonic() - t0 < 5, f"down={dead.down} took {time.monotonic() - t0:.1f}s")
+        rc = record(Ledger(url, "mw_test", quiet), argparse.Namespace(key=key, status="Published", trx=None, version=None,
+                    platform_identity=None, bundle=None, artifact_name=None, retention_days=7, phase=None, failure_file=None),
+                    run(run_id="960"), quiet) if False else None
+        try:
+            simple_patch(Ledger(url, "mw_test", quiet), key, run(run_id="960"), {"heartbeatAt": iso(now_utc())}, quiet, "hb")
+            check("a write against a dead ledger raises LedgerError (main() turns it into a ::warning, exit 0)", False, "no error")
+        except LedgerError:
+            check("a write against a dead ledger raises LedgerError (main() turns it into a ::warning, exit 0)", True)
+        del rc
+        env = {**os.environ, "MW_LEDGER_URL": url, "MW_LEDGER_TOKEN": "mw_test", "MW_LEDGER_RETRY_DELAY_S": "0.01"}
+        proc = subprocess.run([sys.executable, str(Path(__file__).resolve()), "heartbeat", "--key", key],
+                              capture_output=True, text=True, env=env, timeout=120)
+        check("the CLI: a write to a dead ledger exits 0 with a ::warning, never 1",
+              proc.returncode == 0 and "::warning" in proc.stderr, f"exit={proc.returncode} {proc.stderr[-200:]}")
+        mfile = root / "m.json"
+        mfile.write_text(json.dumps([entry]), encoding="utf-8")
+        kfile = root / "k.json"
+        kfile.write_text(json.dumps([kinfo]), encoding="utf-8")
+        proc = subprocess.run([sys.executable, str(Path(__file__).resolve()), "decide", "--keys", f"@{kfile}", "--matrix", f"@{mfile}",
+                               "--publish", "true", "--out-matrix", str(root / "om.json"), "--out-build", str(root / "ob.json")],
+                              capture_output=True, text=True, env=env, timeout=120)
+        got = json.loads((root / "om.json").read_text(encoding="utf-8")) if (root / "om.json").is_file() else []
+        check("the CLI: decide against a dead ledger exits 0 and hands the lane a full BUILD matrix",
+              proc.returncode == 0 and got and got[0]["ledger"]["decision"] == "build" and got[0]["ledger"].get("unavailable"),
+              f"exit={proc.returncode} {proc.stderr[-200:]} {got}")
+        proc = subprocess.run([sys.executable, str(Path(__file__).resolve()), "decide", "--keys", f"@{kfile}", "--matrix", f"@{mfile}",
+                               "--publish", "true", "--out-matrix", str(root / "om2.json"), "--out-build", str(root / "ob2.json")],
+                              capture_output=True, text=True, env={**env, "MW_LEDGER_TOKEN": ""}, timeout=120)
+        got = json.loads((root / "om2.json").read_text(encoding="utf-8")) if (root / "om2.json").is_file() else []
+        check("the CLI: decide with NO token configured exits 0, builds everything, and says why",
+              proc.returncode == 0 and got and got[0]["ledger"].get("unavailable") and "MW_LEDGER_TOKEN" in proc.stderr,
+              f"exit={proc.returncode} {proc.stderr[-200:]}")
 
     if failures:
         print(f"\n::error title=module-build-ledger self-test failed::{len(failures)} case(s) — this script decides "
@@ -873,6 +947,12 @@ def main() -> int:
 
     say = lambda *parts: print(*parts, file=sys.stderr, flush=True)
     me = run_identity(a.lane)
+
+    def summary(lines: list[str]) -> None:
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+
     try:
         ledger = Ledger(os.environ.get("MW_LEDGER_URL", ""), os.environ.get("MW_LEDGER_TOKEN", ""), say)
         if a.command == "decide":
@@ -894,6 +974,8 @@ def main() -> int:
                 if lg["decision"] == "reuse":
                     lines.append(f"- `{e['module']}` — **reused** ({lg['status']}) from {lg['holder']}"
                                  + (" — tests still run" if lg["needTest"] else "") + (" — published by this run" if lg["needPublish"] else ""))
+                elif lg["decision"] == "build" and lg.get("unavailable"):
+                    lines.append(f"- 🟡 `{e['module']}` — **build WITHOUT coordination**: {lg['unavailable']}")
                 elif lg["decision"] == "build":
                     lines.append(f"- `{e['module']}` — **build** (attempt {lg['attempts']}"
                                  + (f", taken over from {lg.get('previous')}" if lg.get("takeover") else "") + f") key `{lg['key'][:12]}…`")
@@ -901,9 +983,7 @@ def main() -> int:
                     lines.append(f"- `{e['module']}` — **BLOCKED** by {lg['holder']} ({lg.get('phase')})")
             for pr in problems:
                 lines.append(f"- 🚨 {pr.splitlines()[0]}")
-            if os.environ.get("GITHUB_STEP_SUMMARY"):
-                with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
-                    fh.write("\n".join(lines) + "\n")
+            summary(lines)
             if problems:
                 for pr in problems:
                     print(f"::error title=module build ledger::{pr}", file=sys.stderr)
@@ -927,8 +1007,21 @@ def main() -> int:
                 p.error("record needs --status")
             return record(ledger, a, me, say)
     except LedgerError as exc:
-        print(f"::error title=module build ledger::{exc}", file=sys.stderr)
-        return 1
+        # 🚨 Never red on the ledger's account. A decide that cannot even construct or reach the ledger
+        # builds every selected module without coordination; a write that fails is a warning.
+        why = str(exc)[:400]
+        print(f"::warning title=module build ledger unavailable::{why}", file=sys.stderr)
+        summary(["### Module build ledger", "", f"🟡 **unavailable** — {why}", "",
+                 "Every selected module is built without coordination (a duplicate build at worst, never a red)."
+                 if a.command == "decide" else f"`{a.command}` for key `{(a.key or '')[:12]}…` was not recorded."])
+        if a.command == "decide" and a.matrix and a.out_matrix and a.out_build:
+            matrix = load_json_arg(a.matrix)
+            keys = {k.get("module"): k for k in (load_json_arg(a.keys) if a.keys else [])}
+            out = [{**e, "ledger": {"key": (keys.get(e.get("module")) or {}).get("key", ""), "decision": "build",
+                                    "attempts": None, "unavailable": why[:300]}} for e in matrix]
+            Path(a.out_matrix).write_text(json.dumps(out), encoding="utf-8")
+            Path(a.out_build).write_text(json.dumps(out), encoding="utf-8")
+        return 0
     return 2
 
 
