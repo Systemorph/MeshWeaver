@@ -32,6 +32,7 @@ public sealed class RegistryPackageSource : IPackageSource
     // Immutable shared resource, not a cache, so it does not fall under the no-static-state rule.
     private static readonly HttpClient SharedHttp = new();
 
+    private readonly IMessageHub _hub;
     private readonly string _registryUrl;
     private readonly IIoPool _httpPool;
     private readonly HttpClient _http;
@@ -44,6 +45,7 @@ public sealed class RegistryPackageSource : IPackageSource
     /// empty → unauthenticated (only an open dev/e2e registry answers).</summary>
     public RegistryPackageSource(IMessageHub hub, string registryUrl, string? token = null)
     {
+        _hub = hub;
         _registryUrl = (registryUrl ?? "").TrimEnd('/');
         _token = (token ?? "").Trim();
         _httpPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
@@ -90,6 +92,23 @@ public sealed class RegistryPackageSource : IPackageSource
                     $"Registry catalog list failed ({(int)resp.StatusCode}): {json}");
             var parsed = JsonSerializer.Deserialize<ListResponse>(json, Json);
             return (IReadOnlyList<PackageManifest>)(parsed?.Packages ?? []);
+        })
+        // 🚨 A successful read is the EVENT a deferred boot reconcile waits for (#2888). Every
+        // registry contact this installation makes — a catalog open, an install, the Store's
+        // count, the boot reconcile itself — comes through here, so reporting the read from this
+        // one place is what lets the reconciler drain a registry that was down at boot without a
+        // timer and without every caller having to remember to. A no-op unless that registry is
+        // pending; the reconciler runs off this thread and never delays the read's subscriber.
+        // Gated on the hub's run level, never wrapped in a catch: once the hub has begun quiescing its
+        // service scope is being torn down and a resolve would throw ObjectDisposedException INTO the
+        // caller's successful read. A read during teardown has no boot reconcile left to drain, so it
+        // simply does not report.
+        .Do(packages =>
+        {
+            if (_hub.RunLevel > MessageHubRunLevel.Started)
+                return;
+            _hub.ServiceProvider.GetService<RegistryUpdateReconciler>()
+                ?.OnFeedRead(_registryUrl, gitRef, packages);
         });
 
     /// <inheritdoc />

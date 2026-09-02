@@ -79,6 +79,46 @@ boot** — plus immediately, on demand, whenever somebody opens the catalog page
 feed and offers the same **Update**. An installation that never restarts also never picks up
 framework fixes, which is a louder problem with its own alarm.
 
+### 🚨 A boot read that fails past its budget is deferred, not dropped (#2888)
+
+The boot read re-asks a *transient* answer — 503, 429, a gateway error, a connection that never
+landed — within a small budget (four attempts, ~26 s). That budget exists to survive a hiccup, not
+to wait out an outage, and it is **not** widened when an outage outlasts it: a registry that stays
+down for a minute leaves the boot with nothing to reconcile against. What happens then used to be
+one Error line on one pod, and the line's own promise — "the next chance is a human opening the
+catalog page" — was false: the catalog page only *renders* the feed; it never ran the reconcile.
+So the installation silently stopped noticing package and grant changes until its next restart.
+
+Two things now happen instead, and neither is a clock:
+
+1. **The skipped reconcile becomes a durable fact.** The reconciler owns one bookkeeping node,
+   `Plugins/_RegistryReconcileLedger` (a `RegistryReconcileLedger`, one entry per configured
+   registry), and the registry is recorded there as `Pending`, with the attempts spent and the
+   registry's own last answer. Platform admins get **one** bell notification anchored under `Admin`
+   — the same surface `StartupErrorNotifier` uses for a degraded boot — naming the registry and
+   pointing at that ledger.
+2. **The next successful feed read drains it.** Every contact this installation makes with a
+   registry goes through one class, `RegistryPackageSource.ListPackages` — the catalog page, an
+   install, the Store's package count, the boot reconcile itself. That method reports each
+   successful read back to the reconciler, which checks whether that registry is pending at the
+   ref that was read and, if so, **claims** the marker (one compare-and-swap, so two catalog opens
+   in the same second drain it once) and runs the reconcile the boot skipped — from the packages
+   that read already returned, so there is no second round-trip, and off the reader's thread, so
+   the catalog render is never delayed. The ledger entry then records when and how (`feed-read`)
+   the reconcile ran; a drain that faults re-marks the registry pending and says so.
+
+The ledger is the reconciler's in-memory state projected onto a node: the running process is the
+authority, the node is what an admin (or a test) reads. Its writes are serialised through one Rx
+channel (`Subject` + `Concat`), so a drain completing while the boot pass is still recording another
+registry can never land an older snapshot over a newer one — the same shape as every other
+"one at a time" in the codebase, never a lock
+([Removing Hand-Woven Gates](/Doc/Architecture/RemovingHandWovenGates)).
+
+What this deliberately does **not** do: retry on a timer, widen the budget, or add a new caller
+that has to remember to reconcile. The design decision above — no poll, the restart and the
+catalog open are the events — stands; the change is that a catalog open now *is* a reconcile when
+one is owed, which the log line had always claimed and the code had never done.
+
 ## Why a node and not a call
 
 The producer is `MeshWeaver.GitSync` (it owns webhook signature verification, payload parsing and
@@ -195,6 +235,7 @@ install-time seed.
 | A module never updates, and the log says it "has no module content identity" | The module's `manifest.lock` is missing or unparseable, so there is no `ModuleVersion` to compare and "has it changed" is unanswerable. A missing hash is the **absence of evidence**, not evidence of a change: treating it as changed would re-install the module on every green build of the repo *and* on every pod start, which is acting on the event rather than the content. It is refused, loudly, and the catalog card's manual **Update** stays available. Fix the module's CI to emit the sidecar. |
 | Nothing happens on a green build, **and the log says the delivery "matched NONE of the N sync config(s)"** | No `_GitSync` targets that repository — usually because the repository was **renamed** and the configs still store its old name. The matcher falls back to GitHub's canonical `full_name` (which follows the rename redirect) and repoints the config when it finds one, so this line surviving means the lookup could not be made either: the repository is unreachable with the config creator's credential, or the hook really is installed on a repository this mesh does not sync. The Warning names both sides — the incoming repository and everything it was compared against. |
 | Build node updates but no installation reacts | The package is not installed on that instance. A catalog lists far more packages than any instance installs; only packages with an install record are considered. |
+| The boot log says the feed of a registry could not be read after N attempts and was **recorded as PENDING**, and admins got a bell notification pointing at `Plugins/_RegistryReconcileLedger` | The registry stayed unavailable for longer than the boot's retry budget (#2888). Nothing is lost: the ledger entry for that registry reads `Pending: true`, and the reconcile runs on the next successful feed read — open the catalog page (or install anything from that registry) once the registry is back, then check the entry reads `LastReconciledVia: feed-read`. If the registry answers a *definite* refusal (401/403) instead, the entry is pending too, but no catalog open will drain it until the key or grant is fixed — the `LastFault` names which. |
 
 The webhook **never throws** on a write failure: GitHub retries a non-2xx delivery, so an unhandled
 fault would turn one bad write into a delivery storm. Failures are logged and reported as "nothing
