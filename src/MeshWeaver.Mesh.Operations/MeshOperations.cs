@@ -3121,10 +3121,20 @@ public class MeshOperations
                    ?? IoPool.Unbounded;
 
         // Access control: Export is its OWN permission (granted by Editor + Admin). Enforce it per
-        // node against the caller's real effective permissions — never bypass as system. The check
-        // runs on the mesh hub (which carries the RowLevelSecurity evaluator; when RLS is not
-        // configured the evaluator returns Permission.All, so an unsecured host exports everything).
-        // The caller identity is captured here, on the calling thread, before any Rx scheduler hop.
+        // node against the caller's real effective permissions — never bypass as system. When RLS is
+        // not configured the evaluator returns Permission.All, so an unsecured host exports
+        // everything. The caller identity is captured here, on the calling thread, before any Rx
+        // scheduler hop.
+        //
+        // 🚨 THIS RESOLVES THE HUB THE OPERATION RUNS ON, NOT THE MESH HUB, and the comment here
+        // claimed otherwise until #3121 measured it: on a session surface it hands back the SESSION
+        // hub (`portal/mcp-…`). That mattered, because a hub's configuration inherits nothing and
+        // HubPermissionExtensions.ResolveEvaluator falls back to DefaultEvaluator ⇒ Permission.All —
+        // so this per-node filter, the one thing standing between an MCP `export` and a subtree the
+        // caller may not read, answered GRANTED for every node. SessionHubFactory now copies the
+        // mesh's evaluator into every session hub, which is what makes this line correct rather than
+        // merely well-intentioned; the resolution is left as it is because "the hub this operation
+        // runs on" is the right question to ask, once every such hub can answer it.
         var permissionHub = hub.ServiceProvider.GetRequiredService<IMessageHub>();
         var callerUserId = ResolveCallerUserId();
 
@@ -3629,24 +3639,88 @@ public class MeshOperations
                         + "as retryable, not as a denial: {Reason}",
                         resolvedPath, outcome.UndeterminedReason);
                     return Observable.Return(JsonSerializer.Serialize(
-                        new
-                        {
-                            status = "Error",
-                            path = resolvedPath,
-                            message = "Could not determine whether you may recycle this node — the permission check did not complete. This is a temporary condition, not a refusal: try again in a moment."
-                        },
+                        new { status = "Error", path = resolvedPath, message = RecycleUndeterminedMessage },
                         hub.JsonSerializerOptions));
                 }
 
                 return Observable.Return(JsonSerializer.Serialize(
-                    new
-                    {
-                        status = "Error",
-                        path = resolvedPath,
-                        message = "Recycle requires Update permission on the target node — it disposes the node's hub and forces re-initialization. Ask someone with write access to the node (or a platform admin) to do it."
-                    },
+                    new { status = "Error", path = resolvedPath, message = RecycleDeniedMessage },
                     hub.JsonSerializerOptions));
             });
+    }
+
+    /// <summary>
+    /// The one sentence <see cref="Recycle"/> says when access was EVALUATED and the answer is "no"
+    /// — whoever reached it, the caller's own pre-flight or the owning hub's delivery gate.
+    ///
+    /// <para>ONE constant, deliberately: those are two different evaluators at two different
+    /// moments (see <see cref="IsWriteDenial"/>), and a caller who was refused should not be able
+    /// to tell them apart, nor be told two different things about the same fact. It is actionable
+    /// because a denial IS actionable — the caller cannot fix it themselves and the useful next
+    /// step is to ask someone who can. Nothing else in this operation may reuse it: an
+    /// unevaluated check gets <see cref="RecycleUndeterminedMessage"/>.</para>
+    ///
+    /// <para><b>i18n.</b> Deliberately NOT localised — this is a JSON envelope field on the machine
+    /// tool surface (MCP / REST / CLI), consumed by an agent runtime that reasons about it and
+    /// renders its own text to the human. Localising it here would translate a string on the model
+    /// side of the line AGENTS.md draws around tool-facing text, and would make the answer depend
+    /// on which locale happened to be attached to the session. The human-facing surfaces render
+    /// their own refusal (the portal's typed error card, via <c>AreaErrorClassifier</c>), and that
+    /// one IS localised.</para>
+    /// </summary>
+    internal const string RecycleDeniedMessage =
+        "Recycle requires Update permission on the target node — it disposes the node's hub and "
+        + "forces re-initialization. Ask someone with write access to the node (or a platform "
+        + "admin) to do it.";
+
+    /// <summary>
+    /// What <see cref="Recycle"/> says when the permission check reached NO verdict. Says the
+    /// opposite thing to <see cref="RecycleDeniedMessage"/> on purpose: retry, do not go asking
+    /// for rights you may already hold (#974).
+    /// </summary>
+    internal const string RecycleUndeterminedMessage =
+        "Could not determine whether you may recycle this node — the permission check did not "
+        + "complete. This is a temporary condition, not a refusal: try again in a moment.";
+
+    /// <summary>
+    /// Classifies a WRITE fault into "the mesh reached a verdict and it is no" versus everything
+    /// else — the write-side twin of <see cref="NodeReadOutcome.FromReadFailure"/>, and decided on
+    /// the TYPED failure, never by pattern-matching a message (which drifts the moment someone
+    /// rewords a banner).
+    ///
+    /// <para><b>Why an exception type is a sound verdict test here.</b>
+    /// <see cref="UnauthorizedAccessException"/> is minted on the write path in exactly one
+    /// situation: a <see cref="DeliveryFailure"/> carrying <see cref="ErrorType.Unauthorized"/>,
+    /// which <c>AccessControlPipeline</c> posts only after its permission fold reached a DECISIVE
+    /// denial. The fold's other two terminals are deliberately NOT this type — an undetermined fold
+    /// answers <see cref="ErrorType.Unavailable"/> and a hub that is going away answers
+    /// <see cref="ErrorType.ShuttingDown"/> — and <c>MeshNodeStreamHandle.UpdateRemote</c> keeps
+    /// that split, raising <c>MeshNodeStreamException</c> for them. So the tri-state survives the
+    /// hop as a type distinction, and this predicate reads the verdict half of it.</para>
+    ///
+    /// <para>🚨 <b>The default is NOT a denial.</b> An unrecognised fault is by definition one we
+    /// have not reasoned about, and the safe direction is the one that does not accuse: a false
+    /// "transient" costs a retry, while a false "you lack permission" sends a correctly-entitled
+    /// caller to request rights they already hold — the exact lie #974 removed from the pipeline
+    /// and #2901 removed from this file's own pre-flight.</para>
+    ///
+    /// <para>The chain is walked because the write path wraps: a denial that arrives after
+    /// <c>UpdateRemote</c>'s response bound is dispatched through
+    /// <c>LatePatchResponseRegistry</c> and can reach the caller nested.</para>
+    /// </summary>
+    /// <param name="error">The fault the write terminated with.</param>
+    /// <returns>True only when the mesh decided the caller may not write.</returns>
+    internal static bool IsWriteDenial(Exception error)
+    {
+        for (var e = error; e is not null; e = e.InnerException)
+        {
+            if (e is UnauthorizedAccessException)
+                return true;
+            if (e is DeliveryFailureException { Failure.ErrorType: ErrorType.Unauthorized })
+                return true;
+        }
+
+        return false;
     }
 
     private IObservable<string> RecycleCore(string resolvedPath)
@@ -3680,13 +3754,15 @@ public class MeshOperations
             // SettlesOkAndUnparks, which failed ~20-40% once #2748 stopped resuming test
             // continuations inline on the signalling thread and so stopped accidentally
             // holding this ordering.)
-            var stamped = hub.GetWorkspace().GetMeshNodeStream(resolvedPath).Update(curr =>
+            // Emits the tool's ANSWER when the owner REFUSED the stamp — a verdict, so this is where
+            // the operation ends and the hub is NOT disposed — or null when the recycle may proceed.
+            var stampRefusal = hub.GetWorkspace().GetMeshNodeStream(resolvedPath).Update(curr =>
                     IsNodeTypeNode(curr)
                         ? WithReleaseRequest(curr, DateTimeOffset.UtcNow)
                         : curr)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
-                .Select(_ => true)
+                .Select(_ => (string?)null)
                 .Catch((Exception ex) =>
                 {
                     // 🚨 A DENIAL IS NOT A TRANSIENT FAULT. A caller who may not write this node
@@ -3699,14 +3775,29 @@ public class MeshOperations
                     // release request to act on and its watcher went silent. Refusing outright
                     // leaves the caller exactly where they started, which is the right outcome
                     // for someone who was not permitted to change anything.
-                    if (ex is UnauthorizedAccessException)
+                    //
+                    // 🚨 AND THE REFUSAL IS AN ANSWER, NOT A FAULT — issue #3121. This arm used to
+                    // re-raise (`Observable.Throw<bool>(ex)`), and nothing above it translated the
+                    // fault: it travelled out of Recycle, out of MeshOperations, and hit the tool
+                    // transport's ONE Task bridge (McpToolResult.AsToolResult, in
+                    // MeshWeaver.Plugins), where the MCP SDK logged it as `"recycle" threw an
+                    // unhandled exception` with a stack trace. The caller could not tell "you were
+                    // refused" from "the tool is broken" — the exact refusal-legibility failure the
+                    // 2026-08-30 fix closed on the UI surface, still open on this one. A denial is
+                    // something the mesh DECIDED; deciding is the operation succeeding at its job,
+                    // so it is rendered in the operation's own envelope, in the same words the
+                    // pre-flight denial uses. Nothing is swallowed: the log line below is unchanged,
+                    // and every non-denial keeps its own separate answer.
+                    if (IsWriteDenial(ex))
                     {
                         logger.LogWarning(ex,
                             "Recycle REFUSED for {Path}: the release-request stamp was DENIED, so the "
                             + "hub is NOT disposed — a caller who may not write this node may not "
                             + "recycle it either. Nothing was changed.",
                             resolvedPath);
-                        return Observable.Throw<bool>(ex);
+                        return Observable.Return<string?>(JsonSerializer.Serialize(
+                            new { status = "Error", path = resolvedPath, message = RecycleDeniedMessage },
+                            hub.JsonSerializerOptions));
                     }
 
                     // Anything else IS transient (a timeout, an owner mid-move): the hub bounce is
@@ -3714,14 +3805,22 @@ public class MeshOperations
                     // ask — and the compile trigger is recoverable by a second Recycle/Compile.
                     // Surface it in the log rather than silently degrading to the old racy
                     // behaviour.
+                    //
+                    // 🚨 This leg must NOT borrow the denial's words. "We could not evaluate access"
+                    // and "you lack permission" are different answers (#974, #3017): a transient
+                    // owner fault that told the caller to go ask for permissions would send a
+                    // correctly-entitled user chasing rights they already hold. It stays a proceed.
                     logger.LogWarning(ex,
                         "Recycle: failed to stamp release request for {Path} — disposing the hub anyway",
                         resolvedPath);
-                    return Observable.Return(false);
+                    return Observable.Return<string?>(null);
                 });
 
-            return stamped.Select(_ =>
+            return stampRefusal.Select(refusal =>
             {
+                if (refusal is not null)
+                    return refusal;
+
                 var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
                 if (changeFeed != null)
                 {
