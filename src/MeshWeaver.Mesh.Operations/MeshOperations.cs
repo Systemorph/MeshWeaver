@@ -3739,6 +3739,25 @@ public class MeshOperations
     /// their own refusal (the portal's typed error card, via <c>AreaErrorClassifier</c>), and that
     /// one IS localised.</para>
     /// </summary>
+    /// <summary>
+    /// What <see cref="Compile"/> says when the caller is definitively refused (issue #3128).
+    /// Names the permission by the name it has in the role table, so the reader can ask for the
+    /// right thing — <c>Compile</c> is what Editor carries and Viewer does not.
+    /// </summary>
+    internal const string CompileDeniedMessage =
+        "Compile requires Compile permission on the target NodeType — it schedules a Roslyn build "
+        + "and records an activity under the node. Ask someone with editor access to the node (or a "
+        + "platform admin) to do it.";
+
+    /// <summary>
+    /// What <see cref="Compile"/> says when the permission check reached NO verdict. Says the
+    /// opposite thing to <see cref="CompileDeniedMessage"/> on purpose: retry, do not go asking for
+    /// a permission you may well already hold. Twin of <see cref="RecycleUndeterminedMessage"/>.
+    /// </summary>
+    internal const string CompileUndeterminedMessage =
+        "Compile could not be authorized because the permission check did not complete — this is "
+        + "not a statement about your access. Try again in a moment.";
+
     internal const string RecycleDeniedMessage =
         "Recycle requires Update permission on the target node — it disposes the node's hub and "
         + "forces re-initialization. Ask someone with write access to the node (or a platform "
@@ -4140,7 +4159,57 @@ public class MeshOperations
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
-        return Observable.Defer(() =>
+        // 🚨 PERMISSION GATE — issue #3128. Compile carried NO check at all: `Recycle` requires
+        // Update on the target and `Export` requires Export per node, and a caller who may only READ
+        // a NodeType could still trigger a Roslyn compile of it and mint an `_Activity` node
+        // underneath it. Measured on a real-RLS monolith mesh with a Viewer, through a real session
+        // hub: the Update gate answered granted=False and Compile answered `{"status":"Ok"}` anyway.
+        //
+        // 🚨 The permission is `Compile`, not `Update`. Both were defensible — `Recycle` is the
+        // nearest neighbour and requires Update — but `Permission.Compile` already exists and is
+        // already scoped for exactly this: Role.Editor carries it ("Space editors ship releases by
+        // default"), Role.Viewer and Role.Commenter do not, and Admin/PlatformAdmin add it
+        // EXPLICITLY because it is deliberately excluded from Permission.All. So the entitlement was
+        // modelled and simply never consulted; Update would have invented a second answer to a
+        // question the permission table had already settled.
+        //
+        // A bare Take(1), like Recycle's and for the same reason: leaving the fold's gate also
+        // leaves the HUB'S TURN, and the trigger stamped below must stay ordered against the
+        // caller's turn.
+        //
+        // The tri-state, not a swallow (#2901/#2742): a fold that merely hiccuped or completed
+        // without emitting must not be reported as "you may not compile this", which would send a
+        // caller who already holds Compile to go and request it. Still fail-closed — nothing is
+        // triggered without a positive verdict.
+        return hub.CheckPermissionOutcome(resolvedPath, MeshWeaver.Mesh.Security.Permission.Compile)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch((Exception ex) => Observable.Return(
+                MeshWeaver.Mesh.Security.PermissionCheckOutcome.Undetermined(
+                    $"the permission check for Compile on '{resolvedPath}' did not complete: "
+                    + $"{ex.GetType().Name}")))
+            .SelectMany(outcome =>
+            {
+                if (outcome.IsGranted)
+                    return CompileCore();
+
+                if (outcome.IsUndetermined)
+                {
+                    logger.LogWarning(
+                        "Compile: the permission fold for {Path} reached NO verdict — reporting it "
+                        + "as retryable, not as a denial: {Reason}",
+                        resolvedPath, outcome.UndeterminedReason);
+                    return Observable.Return(JsonSerializer.Serialize(
+                        new { status = "Error", path = resolvedPath, message = CompileUndeterminedMessage },
+                        hub.JsonSerializerOptions));
+                }
+
+                return Observable.Return(JsonSerializer.Serialize(
+                    new { status = "Error", path = resolvedPath, message = CompileDeniedMessage },
+                    hub.JsonSerializerOptions));
+            });
+
+        IObservable<string> CompileCore() => Observable.Defer(() =>
         {
             IWorkspace workspace;
             try { workspace = hub.GetWorkspace(); }
