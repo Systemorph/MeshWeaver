@@ -989,7 +989,10 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     /// <para><b>Named escape hatch: delete-then-recreate.</b> A same-path recreate legitimately
     /// restarts at <c>Version = 1</c>. The mesh-scoped tombstone (<see cref="RecentlyDeletedRegistry"/>)
     /// is the framework's existing record of exactly that, so a tombstoned path resets the floor
-    /// instead of dropping the emission. This mirrors the forward-only own-node refresh the
+    /// instead of dropping the emission — and so does a path whose tombstone the recreate has already
+    /// SUPERSEDED at or below this emission's version (<see cref="RecentlyDeletedRegistry.IsRecreatedAt"/>):
+    /// the write seam supersedes synchronously at the commit (#3008), typically before the
+    /// routing-supplied own-node stream delivers the recreate here. This mirrors the forward-only own-node refresh the
     /// change-notification handler in <c>MeshDataSourceExtensions.SubscribeToOwnDeletion</c>
     /// already applies ("a persisted snapshot may only REPLACE the in-RAM commit when it is
     /// STRICTLY NEWER").</para>
@@ -1016,12 +1019,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             return false;
         if (node.Version < floor)
         {
-            if (_recentlyDeletedRegistry?.IsRecentlyDeleted(node.Path) ?? false)
+            if (_recentlyDeletedRegistry is { } tombstones
+                && (tombstones.IsRecentlyDeleted(node.Path)
+                    || tombstones.IsRecreatedAt(node.Path, node.Version)))
             {
                 _logger?.LogDebug(
                     "MeshNodeTypeSource[{HubPath}]: own-node emission version {Version} is below the floor "
-                    + "{Floor}, but the path carries a delete tombstone — treating it as a recreate and "
-                    + "resetting the floor.",
+                    + "{Floor}, but the path carries a delete tombstone (live or superseded by a recreate at "
+                    + "or below this version) — treating it as a recreate and resetting the floor.",
                     _hubPath, node.Version, floor);
                 _ownNodeAdopted = 1;
                 Interlocked.Exchange(ref _ownNodeVersionFloor, node.Version);

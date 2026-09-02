@@ -18,8 +18,9 @@ namespace MeshWeaver.Messaging;
 /// <para>Implemented over the mesh's delete tombstone (<c>RecentlyDeletedRegistry</c>), which the
 /// delete handler populates SYNCHRONOUSLY — every planned path is marked before the delete's
 /// response returns — so a lookup here is authoritative at exactly the moment a racing delivery
-/// arrives at the dying hub. A legitimate re-create clears the tombstone, so a recycled or
-/// re-created address is never reported as deleted.</para>
+/// arrives at the dying hub. A legitimate re-create SUPERSEDES the tombstone just as synchronously —
+/// at the durable write's commit, before its <c>Created</c> is published (#3008) — so a recycled or
+/// re-created address is never reported as deleted once the store holds it again.</para>
 ///
 /// <para>Optional: meshes without a delete tombstone (bare messaging fixtures) register no
 /// implementation and the pipeline keeps its historical <see cref="ErrorType.ShuttingDown"/>
