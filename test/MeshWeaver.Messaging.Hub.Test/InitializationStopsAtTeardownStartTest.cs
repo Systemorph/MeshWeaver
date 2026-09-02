@@ -43,6 +43,7 @@ public class InitializationStopsAtTeardownStartTest(ITestOutputHelper output) : 
     {
         var parkEntered = new AsyncSubject<Unit>();
         var release = 0;
+        var parkTimedOut = 0;
         var laterActionRan = 0;
         var client = GetClient();
         var hub = client.ServiceProvider.CreateMessageHub(
@@ -54,7 +55,11 @@ public class InitializationStopsAtTeardownStartTest(ITestOutputHelper output) : 
                     parkEntered.OnNext(Unit.Default);
                     parkEntered.OnCompleted();
                     // Parks the init turn on the action block until the test has called Dispose().
-                    SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.Convergence);
+                    // A park that ends on its BUDGET rather than on the release is recorded, so the
+                    // later action running for that reason is reported as such — not as the rule
+                    // under test failing.
+                    if (!SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.Convergence))
+                        Interlocked.Exchange(ref parkTimedOut, 1);
                     return Observable.Return(Unit.Default);
                 }))
                 .WithInitialization(h => Observable.Defer(() =>
@@ -86,6 +91,9 @@ public class InitializationStopsAtTeardownStartTest(ITestOutputHelper output) : 
         // fire before the action it tests would have run.
         await hub.DisposalCompleted.Should().Within(TestTimeouts.Convergence)
             .Emit("a hub disposed mid-initialization must still finish disposing");
+        Volatile.Read(ref parkTimedOut).Should().Be(0,
+            "the park must end on the release the test writes in its finally, never on its budget — "
+            + "a timed-out park would let the later action run for a reason unrelated to the rule under test");
         Volatile.Read(ref laterActionRan).Should().Be(0,
             "a BuildupAction must never start after the hub began shutting down: the control plane it "
             + "would install is born dead and faults on the way out (a child creation refused with a "

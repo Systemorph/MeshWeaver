@@ -548,6 +548,23 @@ creates a child hub, the `_Exec` shape — must not have run by the time
 `DisposalCompleted` fires; a control arm on a live hub proves the same chain runs to the
 end and the child exists.
 
+**What the skip does NOT touch — and how to observe a probe.** Only the OBSERVABLE
+`WithInitialization` actions run on the init turn. The synchronous overload
+(`SyncBuildupActions`) runs inside `Build`, before message processing starts and therefore
+before any caller can `Dispose()` the hub — which is where content-type registration lives:
+`AddMeshDataSource` composes its `WithContentType` into `AddData`, whose
+`RegisterWorkspaceTypes` runs `DataContext.Initialize` synchronously and records the type in
+the mesh-wide `IMeshContentTypeRegistry`. So `ContentTypeRegistration.ProbeRegister`'s
+build-and-dispose shape registers every swept type whether or not its init turn ever runs;
+the skip removes only the born-dead control plane. Two consequences for tests: a test that
+needs to know a probe was swept must NOT take its signal from an observable init action
+(that action is legitimately skipped whenever `Dispose()` beats the init turn — the
+determinism `ContentTypeProbeControlPlaneTest` lost when this rule landed), it captures the
+probe's `DisposalCompleted` from a synchronous `WithInitialization` and waits on that; and an
+assertion that a probe wrote no fault line is complete once `DisposalCompleted` fires,
+because the `ShutdownRequest` is queued behind the init turn and the teardown has written
+whatever it writes by then.
+
 ## Adding disposal work — the rule
 
 - **Installing a WATCHER the hub owns?** `SubscribeHubWatcher(hub, …)`, then hand the
