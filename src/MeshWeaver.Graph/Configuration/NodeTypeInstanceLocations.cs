@@ -151,15 +151,19 @@ public sealed class NodeTypeInstanceLocations : INodeTypeInstanceLocations
             return Disposable.Empty;
         var logger = hub.ServiceProvider.GetService<ILogger<NodeTypeInstanceLocations>>();
         string? published = null;
+        // A NodeType hub emits on every change (compile status, releases, …); only a change to the
+        // DECLARATION is a projection event, so the stream is reduced to the declaration and
+        // de-duplicated before anything is recorded — no allocation, no dictionary write otherwise.
         var subscription = hub.GetWorkspace().GetMeshNodeStream()
             .Where(node => node is not null)
+            .Select(node => (Path: node!.Path,
+                Locations: node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.InstanceLocations))
+            .DistinctUntilChanged(x => x.Locations is null ? string.Empty : string.Join('\u0001', x.Locations))
             .Subscribe(
-                node =>
+                x =>
                 {
-                    published = node!.Path;
-                    projection.Record(
-                        node.Path,
-                        node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.InstanceLocations);
+                    published = x.Path;
+                    projection.Record(x.Path, x.Locations);
                 },
                 ex =>
                 {
