@@ -12,8 +12,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The settings-tab layout area is internal; the test project renders it directly. -->
+    <!-- The settings-tab layout area is internal; the test project renders it directly.
+         MeshWeaver.GitSync.Test itself lives in MeshWeaver.Plugins since the boots-a-mesh split — it
+         needs a mesh. -->
     <InternalsVisibleTo Include="MeshWeaver.GitSync.Test" />
+    <!-- The webhook's publish-signal predicates are pure functions of a payload and need no mesh, so
+         their decision table is pinned in core (GreenBuildPublishSignalTest) rather than travelling
+         to the satellite with the suite that boots one. -->
+    <InternalsVisibleTo Include="MeshWeaver.Documentation.Test" />
   </ItemGroup>
 
   <ItemGroup>
