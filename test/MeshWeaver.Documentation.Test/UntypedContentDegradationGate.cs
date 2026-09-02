@@ -3,6 +3,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace MeshWeaver.Documentation.Test;
@@ -87,14 +88,26 @@ public class UntypedContentDegradationGate
         // phrase. Mutating `PHRASE=` to something else left the comments intact and the test passed
         // while the gate matched nothing: a grep hit is not a binder, in a guard whose entire job is
         // to stop a silent no-op. Caught by mutating this test rather than by reading it.
-        var assignment = $"PHRASE='{Phrase}'";
+        // Match the ASSIGNMENT, tolerant of formatting. The invariant is "PHRASE is bound to this
+        // string", not "this file contains these exact characters" — so whitespace around `=` and
+        // either quote style pass, while the phrase itself must be exact.
+        //
+        // 🚨 Two failure modes had to be excluded together, and it took two attempts:
+        //   * too loose — an earlier version searched the WHOLE FILE, and the script's own comments
+        //     quote the phrase, so changing `PHRASE=` to something else still passed;
+        //   * too strict — the fix for that pinned the literal `PHRASE='…'`, which would red on a
+        //     harmless reformat (double quotes, a space around `=`) while the gate stayed correct.
+        // A guard that cries wolf on formatting gets deleted, which costs the same as one that
+        // never fires.
+        var assignment = new Regex(
+            @"PHRASE\s*=\s*[""']" + Regex.Escape(Phrase) + @"[""']", RegexOptions.Compiled);
         Assert.True(
-            script.Contains(assignment, StringComparison.Ordinal),
-            $"{Script} no longer assigns {assignment}. The source still emits that phrase, so the "
-            + "gate is now looking for something that is never written and will pass forever. Keep "
-            + "the two in step, or retire both together.\n"
-            + "(Asserted on the assignment specifically — the script's comments quote the phrase "
-            + "too, so a whole-file match would not notice.)");
+            assignment.IsMatch(script),
+            $"{Script} no longer binds PHRASE to \"{Phrase}\". The source still emits that phrase, "
+            + "so the gate is now looking for something that is never written and will pass "
+            + "forever. Keep the two in step, or retire both together.\n"
+            + "(Matched on the ASSIGNMENT, not the file — the script's comments quote the phrase "
+            + "too, so a whole-file match would not notice a rebinding.)");
 
         // A gate handed a directory that does not exist must FAIL, never pass. "Nothing to scan" is
         // a failed sweep, not a clean one — the same reading that makes an absent required check
