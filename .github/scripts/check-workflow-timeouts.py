@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Every CI job carries a hard wall-clock cap, and the cap is at most 45 minutes.
+"""check-workflow-timeouts.py — every CI job carries a hard wall-clock cap, and the cap is at most 45 minutes.
+
+(The name on this first line is load-bearing: node-repo-validate.yml fetches this file at platform-ref and
+refuses a body whose first 400 bytes do not name it — the same shape as compile-check.py's check.)
 
 WHY THIS EXISTS (maintainer, 2026-09-02: "hard cut ci runs after 45min — we pay all this")
 ------------------------------------------------------------------------------------------
