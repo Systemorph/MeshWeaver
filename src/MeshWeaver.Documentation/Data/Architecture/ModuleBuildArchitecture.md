@@ -133,6 +133,85 @@ the mesh compiles. This is not a preference — a container-built module referen
 false-red with CS0012 the moment the floor bundles were container-built) and which CS0433-s
 beside it. Measured: 80/80 NodeTypes in 44s vs 161s + 11 false regressions.
 
+## The NodeType bake and its gate run AS the platform image too (#3022)
+
+The rule above — *the platform image is the compiler and the reference set* — applied to module
+compiles since #2907 and did **not** apply to the NodeType bake until 2026-09-02. The node-repo
+bake (`node-repo-publish-bake.yml`) and the node-repo gate (`node-repo-gate.yml`) ran the tester
+image against **the tester's own `/app`**: reference set, framework identity and the environment
+the per-type dependency records were computed against all came from the process the bake happened
+to run in, while the bundles it produced are adopted by the **portal**. Measured on the two images
+of one promoted set, `3.0.0-rc9.ci.7534`, both `linux/amd64`:
+
+| | `mw-plugin-test` (baked) | `memex-portal-ai` (adopts) |
+|---|---|---|
+| assemblies in `/app` | 88 | 219 |
+| `MeshWeaver.*` assemblies | 26 | 46 |
+| `MeshWeaver.*` only in this image | 1 (`Hosting.Monolith`) | **21** — `Maps`, `AI`, `Markdown.Collaboration`, `ContentCollections.Indexing[.Graph]`, `Blazor[.Portal,.Views]`, `Hosting.{AspNetCore,Blazor,Orleans,PostgreSql,SignalR,Grpc,Embeddings}`, `Connection.Orleans`, `InstanceSync`, `Documentation`, `{Speech,Observability,Markdown.Export}.Contract` |
+| the 25 assemblies both carry | byte-identical (25/25) — one build |
+| surface-manifest lines | 26 | 46; the 25 shared names carry identical hashes |
+| framework identity | `s8fe4902c0b2f5974f824be2867221dbd` | the same |
+
+So the identity gate (#1814/#3041) was green — both hosts record the canonical set identically —
+while the bake could not see 21 assemblies every portal compiles against. Five NodeType sources in
+MeshWeaver.Plugins bind `MeshWeaver.Maps` (`Cornerstone/Pricing`, the AppleMaps, GoogleMaps and
+OpenStreetMap galleries); the day Maps left the tester's closure (#2941) all four went RED in the
+platform's `plugins-bake` with `CS0234 'Maps' does not exist in the namespace 'MeshWeaver'`, no
+seal was written, no dependent was woken, and no portal could adopt any release since — with every
+line of the verdict naming the CONTENT.
+
+**The shape now — the same as the module lane, deliberately:**
+
+* Both lanes take **`platform-image` + `platform-image-digest`** (required; resolved branch for
+  branch as the tester's `image-digest`, so a framework release, an upstream's publication and a
+  push can never pair two waves). The tester **executes**; the portal **supplies**.
+* The lane pulls both images, extracts both `/app` trees, and asserts with the tester's own
+  `framework-identity /portal --expect <tester identity>` that the two **resolve one identity** —
+  they are one build — before it trusts anything else. On a mismatch the verb names the canonical
+  assemblies each side lacks.
+* It composes the **gate host** (`.github/scripts/compose-gate-host.sh`): the portal's `/app`,
+  complete, with the tester CLI laid beside it. The portal's bytes win a shared file; the tester's
+  `meshweaver-surface.manifest` never rides (the host's identity is the portal's) and the tester's
+  `mw-plugin-test.deps.json` never rides (with an app-local deps.json the dotnet host builds the TPA
+  from that file's entries only, and every portal-only assembly would be on disk yet unloadable —
+  without it the host probes the directory and every assembly is in the TPA).
+* `compile` runs from that host, started by the **portal image's own `dotnet`**, with
+  **`--app /app --shared-frameworks /usr/share/dotnet/shared`**: the reference set is the portal's
+  `/app` plus its *implementation* frameworks (the ASP.NET Core framework included — a console
+  runtime does not have it), never the process's TPA; `framework-mvid.txt` carries the identity
+  **the portal's directory resolves**; every dependency record is computed against the portal's
+  manifest pairs and MVIDs. The same seam (`BakeHost`) serves the `build` verb.
+* 🚨 **One invariant makes recording the portal's identity honest: the toolchain that ran must be
+  the portal's own bytes.** The identity folds the implementation MVIDs of the toolchain closure
+  (`MeshWeaver.Compiler`, `MeshWeaver.NuGet` and their MeshWeaver dependencies) in because their
+  *code* shapes the compile input, and that code executes from the tester's copy. `BakeHost`
+  compares the closure member by member against the portal's files and **refuses** a mismatch
+  naming both MVIDs — a bake keyed to a host whose toolchain it did not run is never written.
+* The gate runs from the same host with `--app /app`, which is a **precondition**, not a
+  reference set: the process must resolve the portal's identity (`GateHostCheck`) or the run is
+  refused before a mesh boots. A gate running as any other host would not fail — it would decline
+  every bundle the bake addressed to the portal, compile the tree itself and exit green having
+  judged none of the bytes that ship.
+* A reference-set gap is **named in the verdict**. When a NodeType fails with CS0234/CS0246, the
+  bake indexes the reference set and the host's `modules/**` (assemblies the image ships outside
+  `/app` — not in any reference set unless composed) and appends `reference set lacks <assembly>
+  (portal-shipped, not composed: modules/…)` or `no assembly in the reference set declares
+  namespace '…'` with its two possible causes. A namespace some reference does declare adds
+  nothing — that is a content error, and the compiler's line is the whole truth.
+
+**What this does to the identity gate.** For the node-repo lanes the bake's identity is now the
+portal's *by construction*, so "the bake's identity is the one the portal resolves" is an invariant
+the lane asserts after the compile (cheap, kept so the day a lane edit drops `--app` is the day it
+goes red) rather than a comparison that can lose; the check that *can* lose moved in front of the
+composition and asks the honest question — **are the two images one build?** The platform's own
+Doc bake (`main-cd.yml` `publish-bake`) still bakes inside the tester image and keeps the original
+comparison against the promoted portal, where it is not tautological. `check-image-build-identity.sh`
+is a different check (`MESHWEAVER_PLATFORM_VERSION` in the image config) and is unaffected.
+
+**Cost.** One more image pull and `/app` extraction per bake or gate job (~1 min on a runner; the
+portal's `/app` is ~300 MB) and a larger reference set for Roslyn to map lazily. Unchanged: what is
+compiled, how the publication is sealed, every caller's other inputs.
+
 ## CI is silent — warn/error plus verdicts
 
 Per-item narration (resource names, per-package resolutions) sits behind `--verbose`; the

@@ -467,6 +467,44 @@ independent way to mint an unread address (`memex.localhost` is arm64 while the 
 amd64); the same guard covers it either way, because it compares the values two concrete hosts
 resolve rather than assuming which architecture either of them is.
 
+### 🚨 …and the bake must compile against the PORTAL, not against the process it runs in (#3022)
+
+The two checks above make the two hosts *record* one identity. They say nothing about what the
+bake *compiles against*, and the third outage came from there. After #3041 the identity gate was
+green — `mw-plugin-test` and `memex-portal-ai` of `3.0.0-rc9.ci.7534` both resolve
+`s8fe4902c0b2f5974f824be2867221dbd`, every one of the 25 assemblies they share is byte-identical —
+and the platform's `plugins-bake` was red on four NodeTypes with
+`CS0234 'Maps' does not exist in the namespace 'MeshWeaver'`. The bake took its reference set from
+the tester image's own `/app` (88 assemblies); the portal's has 219, and `MeshWeaver.Maps.dll` is
+one of the **21 `MeshWeaver.*` assemblies that exist only in the portal**. Nothing in the verdict
+named a reference — it named `Cornerstone/Pricing` and three map galleries, whose source nobody
+had touched. No seal, so no dependent was woken and no portal could adopt any release since.
+
+Since #3022 the node-repo lanes (`node-repo-publish-bake.yml`, `node-repo-gate.yml`) take
+**`platform-image` + `platform-image-digest`** (required — the portal), assert with the tester's
+`framework-identity /portal --expect <tester identity>` that the two images are **one build**,
+compose the **gate host** (`compose-gate-host.sh`: the portal's `/app` with the tester CLI laid
+beside it — the portal's bytes win, the tester's manifest and `deps.json` never ride), and run both
+verbs from it on the **portal image's own `dotnet`**: `compile … --app /app --shared-frameworks
+/usr/share/dotnet/shared` compiles against the portal's `/app` plus its implementation frameworks,
+keys `framework-mvid.txt` to the identity **the portal's directory resolves**, computes every
+dependency record against the portal's manifest and MVIDs, and **refuses** a host whose compile
+toolchain the process is not running (the closure's MVIDs must match member by member — the one
+invariant that makes recording the portal's identity honest). The gate's `--app /app` is the
+precondition that the process *is* the portal host; a gate running as another host would decline
+every bundle and pass. A CS0234/CS0246 the reference set explains is named in the verdict —
+`reference set lacks <assembly> (portal-shipped, not composed: modules/…)` — never left reading as
+a content bug. The full shape, the measurement table and the cost are in
+[Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) → "The NodeType bake and its
+gate run AS the platform image too".
+
+The address check this section describes stays where it is meaningful: the platform's own Doc bake
+(`main-cd.yml` `publish-bake`) still bakes inside the tester image and compares against the
+promoted portal. For the node-repo lanes the bake's identity is the portal's by construction; the
+lane keeps "the bake is keyed to what the portal's `/app` resolves" as a cheap invariant after the
+compile, and the comparison that can lose — the two images being one build — runs before anything
+is composed.
+
 🚨 **The fix direction is always "give the host the reference back", never "shrink the canonical
 list".** Removing a name would make the two hosts agree by making the identity blind to that
 assembly's surface — an under-invalidation, which is how a portal ends up adopting NodeType
@@ -675,8 +713,8 @@ deliberately deferred.
 |---|---|
 | `.github/workflows/node-repo-validate.yml` | JSON/manifest shape gate (`scripts/validate-repos.py`, `gen-manifests.py --check`, main-only `--check-versions`) |
 | `.github/workflows/node-repo-compile-check.yml` | the compile gate — every NodeType's resolved Source vs the assemblies of the digest-pinned platform image |
-| `.github/workflows/node-repo-gate.yml` | the tester gate — `mw-plugin-test` over the (optionally affected-narrowed) mount, cross-repo `requires` staged in |
-| `.github/workflows/node-repo-publish-bake.yml` | the main-only bake + publication — `--bake-output` over the full repo or (opt-in) the affected closure, staged-module exclusion, OIDC publish via the canonical `publish-bake-bundles.sh` |
+| `.github/workflows/node-repo-gate.yml` | the tester gate — `mw-plugin-test` over the (optionally affected-narrowed) mount, cross-repo `requires` staged in; since #3022 executed by the tester **as the portal** (`platform-image`, composed gate host, `--app /app`) |
+| `.github/workflows/node-repo-publish-bake.yml` | the main-only bake + publication — `compile --output` then `--seed` over the full repo or (opt-in) the affected closure, staged-module exclusion, OIDC publish via the canonical `publish-bake-bundles.sh`; since #3022 the bake compiles against and is keyed to the **portal** (`platform-image` + `platform-image-digest`, both required-or-explicit exactly like the tester's) |
 | `.github/workflows/node-repo-tag-modules.yml` | the `<Module>/vX.Y.Z` tag publisher (`scripts/tag-modules.py`) |
 
 The design rules the extraction preserves:
