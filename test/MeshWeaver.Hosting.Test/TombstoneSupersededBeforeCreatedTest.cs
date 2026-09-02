@@ -97,7 +97,7 @@ public class TombstoneSupersededBeforeCreatedTest
         registry.MarkDeleted(Path);
         tombstones.IsDeleted(Path).Should().BeTrue();
 
-        var saved = await adapter.WriteAndPublishCreated(Node("Second"), JsonOptions, feed).FirstAsync();
+        var saved = await adapter.WriteAndPublishCreated(Node("Second"), JsonOptions, feed).Await();
         saved.Should().NotBeNull();
 
         var observed = await tombstonedAtPublish.Should().Emit();
@@ -122,7 +122,7 @@ public class TombstoneSupersededBeforeCreatedTest
         });
         registry.MarkDeleted(Path);
 
-        var written = await adapter.WriteManyAndPublishCreated(new[] { Node("Second") }, JsonOptions, feed).FirstAsync();
+        var written = await adapter.WriteManyAndPublishCreated(new[] { Node("Second") }, JsonOptions, feed).Await();
         written.Count.Should().Be(1);
 
         var observed = await tombstonedAtPublish.Should().Emit();
@@ -136,16 +136,16 @@ public class TombstoneSupersededBeforeCreatedTest
         var (registry, adapter, _) = Rig();
         var tombstones = (IAddressTombstones)registry;
 
-        var first = await adapter.Write(Node("First", version: 1), JsonOptions).FirstAsync();
+        var first = await adapter.Write(Node("First", version: 1), JsonOptions).Await();
         first.Should().NotBeNull();
         registry.MarkDeleted(Path);
 
         // A mismatching expected version writes nothing — the tombstone must stay live.
-        var refused = await adapter.WriteIfVersion(Node("Second", version: 2), expectedVersion: 99, JsonOptions).FirstAsync();
+        var refused = await adapter.WriteIfVersion(Node("Second", version: 2), expectedVersion: 99, JsonOptions).Await();
         refused.Should().Be(false);
         tombstones.IsDeleted(Path).Should().BeTrue("a compare-and-set that did not commit supersedes nothing");
 
-        var committed = await adapter.WriteIfVersion(Node("Second", version: 2), expectedVersion: 1, JsonOptions).FirstAsync();
+        var committed = await adapter.WriteIfVersion(Node("Second", version: 2), expectedVersion: 1, JsonOptions).Await();
         committed.Should().Be(true);
         tombstones.IsDeleted(Path).Should().BeFalse("the compare-and-set committed — the path exists again");
         registry.IsRecreatedAt(Path, 2).Should().BeTrue();

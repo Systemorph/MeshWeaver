@@ -121,8 +121,16 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     {
         if (string.IsNullOrEmpty(path) || _deleted.IsEmpty)
             return;
+        var now = DateTimeOffset.UtcNow;
         while (_deleted.TryGetValue(path, out var current))
         {
+            // An expired tombstone is already dead for every reader (TryGetLive prunes it on
+            // access) — prune it here too rather than stamp a recreate version onto a corpse.
+            if (now - current.DeletedAt > Ttl)
+            {
+                _deleted.TryRemove(new KeyValuePair<string, Tombstone>(path, current));
+                return;
+            }
             if (current.SupersededAtVersion is { } already && already <= version)
                 return;
             if (_deleted.TryUpdate(path, current with { SupersededAtVersion = version }, current))
