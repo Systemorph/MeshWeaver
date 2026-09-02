@@ -565,7 +565,7 @@ public static class FrameworkBuildIdentity
         var fullMvid = ComputeToolchainClosure(
             ToolchainRoots, name => ReferencedMeshWeaverAssembliesInDirectory(appDirectory, name));
         return (
-            ComputeSurfaceIdentity(pairs, name => ImplMvidInDirectory(appDirectory, name), fullMvid),
+            ComputeSurfaceIdentity(pairs, name => ImplMvidInDirectoryCore(appDirectory, name), fullMvid),
             null);
     }
 
@@ -578,6 +578,30 @@ public static class FrameworkBuildIdentity
     public static ImmutableArray<string> CanonicalAssembliesAbsentFrom(
         IReadOnlyDictionary<string, string> surfaceByName) =>
         [.. ContentSurfaceAssemblies.Where(n => !surfaceByName.ContainsKey(n))];
+
+    /// <summary>
+    /// The toolchain closure (<see cref="FullMvidAssemblies"/>'s rule) computed over ANOTHER host's
+    /// binaries in <paramref name="appDirectory"/> — metadata only, nothing loaded. This is the set a
+    /// bake that compiles against a foreign host must prove it RAN: the identity it records for that
+    /// host folds these assemblies' implementation MVIDs in, so the bytes that generated the compile
+    /// input (skeleton, source-query resolution, emit) must be the host's own, member by member.
+    /// </summary>
+    /// <param name="appDirectory">The host's application directory (a container's <c>/app</c>).</param>
+    /// <returns>The closure's simple names, ordinal-sorted, roots included.</returns>
+    public static ImmutableArray<string> ToolchainClosureOf(string appDirectory) =>
+        ComputeToolchainClosure(
+            ToolchainRoots, name => ReferencedMeshWeaverAssembliesInDirectory(appDirectory, name));
+
+    /// <summary>
+    /// An assembly's implementation MVID ("N" format) read from the DLL in
+    /// <paramref name="appDirectory"/> — metadata only, nothing loaded — or null when the directory
+    /// carries no readable assembly of that simple name. The foreign-host counterpart of
+    /// <see cref="ProcessImplMvidOf"/>: a bake addressed to another host records THAT host's ids.
+    /// </summary>
+    /// <param name="appDirectory">The host's application directory (a container's <c>/app</c>).</param>
+    /// <param name="simpleName">The assembly's simple name.</param>
+    public static string? ImplMvidInDirectory(string appDirectory, string simpleName) =>
+        ImplMvidInDirectoryCore(appDirectory, simpleName);
 
     /// <summary>An assembly's MeshWeaver.* AssemblyRef simple names read from the DLL in
     /// <paramref name="directory"/> — metadata only, nothing loaded, so it answers for a FOREIGN
@@ -607,7 +631,7 @@ public static class FrameworkBuildIdentity
 
     /// <summary>An assembly's implementation MVID read from the DLL in
     /// <paramref name="directory"/> — metadata only, nothing loaded.</summary>
-    private static string? ImplMvidInDirectory(string directory, string simpleName)
+    private static string? ImplMvidInDirectoryCore(string directory, string simpleName)
     {
         var candidate = Path.Combine(directory, simpleName + ".dll");
         if (!File.Exists(candidate))

@@ -73,6 +73,14 @@ public static class CascadeBuild
         /// <summary>External module assemblies composed into the reference set (<c>--module</c>).</summary>
         public IReadOnlyList<string> ModuleAssemblyPaths { get; init; } = [];
 
+        /// <summary>The platform host's application directory to compile against and address the
+        /// bundles to (<c>--app</c>; see <see cref="TreeBake.Options.AppDirectory"/>). Null = this process.</summary>
+        public string? AppDirectory { get; init; }
+
+        /// <summary>The platform host's shared-frameworks root (<c>--shared-frameworks</c>); required
+        /// with <see cref="AppDirectory"/>.</summary>
+        public string? SharedFrameworksRoot { get; init; }
+
         /// <summary>Where per-package prebuilt bundles are written; null keeps the build verdict-only.</summary>
         public string? OutputDirectory { get; init; }
 
@@ -202,9 +210,9 @@ public static class CascadeBuild
     private static IObservable<Report> RunCore(Options options)
     {
         var wall = Stopwatch.StartNew();
+        // This process's identity — what a FATAL before the host is resolved is reported under.
+        // Every bundle is keyed to the HOST's identity, which Build() resolves (BakeHost).
         var frameworkIdentity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
-        if (PrebuiltAssemblySeeder.LiveFrameworkIdentityWarning is { } warning)
-            options.Output.WriteLine($"build: ⚠ framework identity degraded — {warning}");
 
         RepoSnapshot snapshot;
         try
@@ -263,12 +271,30 @@ public static class CascadeBuild
         {
             return Observable.Return(Fatal(frameworkIdentity, wall, ex.Message));
         }
-        var idOf = CompiledDependencies.CreateIdResolver(
-            FrameworkBuildIdentity.ProcessSurfacePairs,
-            TreeBake.ModuleMvidsOf(modules),
-            FrameworkBuildIdentity.ProcessImplMvidOf);
-        var toolchainId = CompiledDependencies.ComputeToolchainId(FrameworkBuildIdentity.ProcessImplMvidOf);
-        var baseReferences = CompileReferences.ComposeWithModules(modules);
+        // The PLATFORM HOST (#3022) — one directory for the reference set, the identity and the
+        // dependency records, refused by name when this process cannot honestly bake for it. See
+        // BakeHost; the same seam TreeBake.Run uses, so the two verbs cannot disagree about it.
+        if (options.AppDirectory is not null && options.SharedFrameworksRoot is null)
+            return Observable.Return(Fatal(frameworkIdentity, wall,
+                "AppDirectory was given without SharedFrameworksRoot — the platform host's shared "
+                + "frameworks are part of its reference set and are never inferred from the running "
+                + "runtime (pass --shared-frameworks <dotnet root>/shared)."));
+        var (host, hostProblem) = options.AppDirectory is null
+            ? ((BakeHost?)BakeHost.InProcess(modules), (string?)null)
+            : BakeHost.ResolveDirectory(options.AppDirectory, options.SharedFrameworksRoot!, modules);
+        if (host is null)
+            return Observable.Return(Fatal(frameworkIdentity, wall, hostProblem!));
+        frameworkIdentity = host.FrameworkIdentity;
+        options.Output.WriteLine($"{Stamp()} build: {host.Description}");
+        if (host.Note is { } hostNote)
+            options.Output.WriteLine($"{Stamp()} build: ⚠ {hostNote}");
+        var idOf = host.IdOf;
+        var toolchainId = host.ToolchainId;
+        var baseReferences = host.References;
+        // Built on the first reference-shaped failure only; shared by every package's build.
+        var attribution = new Lazy<ReferenceGapAttribution>(
+            () => ReferenceGapAttribution.Create(baseReferences, host.AppDirectory),
+            LazyThreadSafetyMode.ExecutionAndPublication);
         var nugetResolver = new NuGetAssemblyResolver(
             options.LoggerFactory?.CreateLogger<NuGetAssemblyResolver>()
             ?? NullLogger<NuGetAssemblyResolver>.Instance);
@@ -297,7 +323,7 @@ public static class CascadeBuild
                 {
                     var build = BuildPackage(
                         options, id, typesByPackage.TryGetValue(id, out var types) ? types : [],
-                        deps, byId, nodeSet, baseReferences, idOf, toolchainId, workDirectory, nugetResolver,
+                        deps, byId, nodeSet, baseReferences, idOf, toolchainId, attribution, workDirectory, nugetResolver,
                         entriesByPackage, entriesLock);
                     return (build, build.IsGreen);
                 },
@@ -383,6 +409,7 @@ public static class CascadeBuild
         IReadOnlyList<MetadataReference> baseReferences,
         Func<string, string?> idOf,
         string toolchainId,
+        Lazy<ReferenceGapAttribution> attribution,
         string workDirectory,
         INuGetAssemblyResolver nugetResolver,
         Dictionary<string, List<BundleWriter.AssemblyEntry>> entriesByPackage,
@@ -439,11 +466,19 @@ public static class CascadeBuild
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 typeClock.Stop();
+                // A reference-set gap is named in the verdict, never left reading as a content
+                // error — the same attribution TreeBake appends (#3022).
+                var gap = ReferenceGapAttribution.MayExplain(ex.Message)
+                    ? attribution.Value.Explain(ex.Message)
+                    : null;
                 built.Add(new TypeBuild(
-                    candidate.Node.Path, id, $"{ex.GetType().Name}: {ex.Message}", typeClock.Elapsed,
-                    resolution.Sources.Length, null, null, []));
+                    candidate.Node.Path, id,
+                    $"{ex.GetType().Name}: {ex.Message}" + (gap is null ? string.Empty : $"\n   {gap}"),
+                    typeClock.Elapsed, resolution.Sources.Length, null, null, []));
                 options.Output.WriteLine($"{Stamp()} [{id}]   RED {candidate.Node.Path} ({typeClock.Elapsed.TotalMilliseconds:F0} ms)");
                 options.Output.WriteLine(ex.Message);
+                if (gap is not null)
+                    options.Output.WriteLine($"   {gap}");
                 continue;
             }
             typeClock.Stop();

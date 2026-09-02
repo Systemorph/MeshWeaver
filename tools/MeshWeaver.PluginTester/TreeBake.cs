@@ -75,6 +75,28 @@ public static class TreeBake
         /// happens at the CLI boundary and the bake receives the answer.</para>
         /// </summary>
         public IReadOnlyList<string> ModuleAssemblyPaths { get; init; } = [];
+
+        /// <summary>
+        /// The PLATFORM HOST's application directory to compile against and address the bake to —
+        /// a portal image's <c>/app</c>, extracted or mounted (#3022). Null (the default) makes
+        /// this process the host, exactly as before: correct only when the process IS the platform.
+        ///
+        /// <para>With it, the reference set is that directory plus <see cref="SharedFrameworksRoot"/>
+        /// (never this process's TPA), <c>framework-mvid.txt</c> carries THAT host's identity, and
+        /// every dependency record is computed against its manifest and MVIDs — see
+        /// <see cref="BakeHost"/>, which also refuses a host whose toolchain this process is not
+        /// running.</para>
+        /// </summary>
+        public string? AppDirectory { get; init; }
+
+        /// <summary>
+        /// The platform host's <c>&lt;dotnet root&gt;/shared</c> — its IMPLEMENTATION frameworks,
+        /// which the bake compiles against exactly as the host's own runtime compile does. Required
+        /// with <see cref="AppDirectory"/>; the running runtime's root is deliberately never
+        /// inferred (it is the right answer only inside the host's own image, and a console
+        /// runtime lacks the ASP.NET Core framework a portal compiles against).
+        /// </summary>
+        public string? SharedFrameworksRoot { get; init; }
     }
 
     /// <summary>One NodeType's outcome.</summary>
@@ -127,9 +149,14 @@ public static class TreeBake
     public static Report Run(Options options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        var frameworkIdentity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
-        if (PrebuiltAssemblySeeder.LiveFrameworkIdentityWarning is { } warning)
-            options.Output.WriteLine($"bake: ⚠ framework identity degraded — {warning}");
+        // The identity a report carries when the bake stops BEFORE its host is resolved — this
+        // process's own, the only one known at that point. Every bundle is keyed to the HOST's.
+        var processIdentity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
+        if (options.AppDirectory is not null && options.SharedFrameworksRoot is null)
+            return new Report(processIdentity, [], [],
+                "AppDirectory was given without SharedFrameworksRoot — the platform host's shared "
+                + "frameworks are part of its reference set and are never inferred from the running "
+                + "runtime (pass --shared-frameworks <dotnet root>/shared).");
 
         RepoSnapshot snapshot;
         IReadOnlyList<PackageManifest> packages;
@@ -140,11 +167,11 @@ public static class TreeBake
         }
         catch (Exception ex)
         {
-            return new Report(frameworkIdentity, [], [],
+            return new Report(processIdentity, [], [],
                 $"{ex.GetType().Name}: {ex.Message}");
         }
         if (packages.Count == 0)
-            return new Report(frameworkIdentity, [], [],
+            return new Report(processIdentity, [], [],
                 $"No node-repo packages (top-level folders with an index.json root) found under "
                 + $"'{Path.GetFullPath(options.RepoRoot)}'.");
 
@@ -172,9 +199,6 @@ public static class TreeBake
                 + "a NodeType among them is a CONTENT defect, not a bake failure");
 
         var nodeSet = NodeSet.Create(treeNodes.Select(t => t.Node));
-        options.Output.WriteLine(
-            $"bake: {treeNodes.Length} node(s) from {packages.Count} package(s); "
-            + $"framework={frameworkIdentity}");
 
         // 🚨 The bake compiles against the SAME reference set a portal does — the TPA baseline PLUS
         // this deployment's installed modules. No mesh here, but "no mesh" never meant "no modules":
@@ -191,16 +215,27 @@ public static class TreeBake
         // self-update onto an image whose content had no bake (#2563) — a fleet held back by a
         // reference list, with nothing in the failure naming a reference.
         var modules = LoadExternalModules(options);
-        var idOf = CompiledDependencies.CreateIdResolver(
-            FrameworkBuildIdentity.ProcessSurfacePairs,
-            // Modules resolve FIRST and by exact-build MVID, so the record a consumer checks names
-            // the same build it will bind. Empty here (the old value) made a module-bound type
-            // fall through to the platform branch and record `ref:`/absent, which cannot match the
-            // `mvid:` a module-installing portal computes — the second half of #2563.
-            ModuleMvidsOf(modules),
-            FrameworkBuildIdentity.ProcessImplMvidOf);
-        var toolchainId = CompiledDependencies.ComputeToolchainId(FrameworkBuildIdentity.ProcessImplMvidOf);
-        var references = CompileReferences.ComposeWithModules(modules);
+        // 🚨 …and against the PLATFORM HOST's assemblies, not this process's (#3022). The tester
+        // image's /app is a strict SUBSET of the portal's (measured on rc9.ci.7534: 88 vs 219
+        // assemblies, 21 MeshWeaver.* only in the portal — Maps, AI, Indexing, the Blazor and
+        // hosting halves), so a bake taking its reference set from the process it runs in cannot
+        // see what every portal compiles against, and reports the gap as CONTENT errors on source
+        // nobody changed. With --app the reference set, the identity the bundles are keyed to and
+        // the environment the dependency records are computed against all come from ONE directory,
+        // and a host this process cannot honestly bake for is refused by name — see BakeHost.
+        // (Modules resolve FIRST inside the id resolver and by exact-build MVID, so the record a
+        // consumer checks names the same build it will bind — the second half of #2563.)
+        var (host, hostProblem) = options.AppDirectory is null
+            ? ((BakeHost?)BakeHost.InProcess(modules), (string?)null)
+            : BakeHost.ResolveDirectory(options.AppDirectory, options.SharedFrameworksRoot!, modules);
+        if (host is null)
+            return new Report(processIdentity, [], [], hostProblem);
+        options.Output.WriteLine(
+            $"bake: {treeNodes.Length} node(s) from {packages.Count} package(s); "
+            + $"framework={host.FrameworkIdentity}");
+        options.Output.WriteLine($"bake: {host.Description}");
+        if (host.Note is { } note)
+            options.Output.WriteLine($"bake: ⚠ {note}");
 
         // 🚨 The NuGet resolver is WIRED, not omitted. `#r "nuget:…"` is a compile input like any
         // other — samples/Graph/Data/MathDemo/Matrix declares `#r "nuget:MathNet.Numerics, 5.0.0"` —
@@ -218,8 +253,7 @@ public static class TreeBake
         try
         {
             return BakeAll(
-                options, treeNodes, nodeSet, packages, snapshot, frameworkIdentity,
-                idOf, toolchainId, references, workDirectory, nugetResolver);
+                options, treeNodes, nodeSet, packages, snapshot, host, workDirectory, nugetResolver);
         }
         finally
         {
@@ -316,13 +350,20 @@ public static class TreeBake
         NodeSet nodeSet,
         IReadOnlyList<PackageManifest> packages,
         RepoSnapshot snapshot,
-        string frameworkIdentity,
-        Func<string, string?> idOf,
-        string toolchainId,
-        IReadOnlyList<Microsoft.CodeAnalysis.MetadataReference> references,
+        BakeHost host,
         string workDirectory,
         INuGetAssemblyResolver nugetResolver)
     {
+        var frameworkIdentity = host.FrameworkIdentity;
+        var idOf = host.IdOf;
+        var toolchainId = host.ToolchainId;
+        var references = host.References;
+        // 🚨 Built on the FIRST reference-shaped failure only (metadata reads over the whole
+        // reference set), and never on the success path. A CS0234/CS0246 that the reference set
+        // explains is named as a REFERENCE-SET gap in the verdict itself — the thing four RED
+        // NodeTypes never said while a whole release wave waited behind them (#3022).
+        var attribution = new Lazy<ReferenceGapAttribution>(
+            () => ReferenceGapAttribution.Create(references, host.AppDirectory));
         var results = ImmutableArray.CreateBuilder<TypeResult>();
         var entriesByPackage = new Dictionary<string, List<BundleWriter.AssemblyEntry>>(StringComparer.Ordinal);
 
@@ -433,11 +474,17 @@ public static class TreeBake
             // about this type.
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                var gap = ReferenceGapAttribution.MayExplain(ex.Message)
+                    ? attribution.Value.Explain(ex.Message)
+                    : null;
                 results.Add(new TypeResult(
                     candidate.Node.Path, candidate.Package,
-                    $"{ex.GetType().Name}: {ex.Message}", []));
+                    $"{ex.GetType().Name}: {ex.Message}" + (gap is null ? string.Empty : $"\n   {gap}"),
+                    []));
                 options.Output.WriteLine($"   RED {candidate.Node.Path}");
                 options.Output.WriteLine(ex.Message);
+                if (gap is not null)
+                    options.Output.WriteLine($"   {gap}");
             }
         }
 
