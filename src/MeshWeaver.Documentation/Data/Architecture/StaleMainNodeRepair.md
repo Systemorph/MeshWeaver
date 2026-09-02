@@ -154,6 +154,18 @@ something a maintainer can act on.
 Every pass ends with one summary line whether or not it found anything — *"the repair never
 considered the row"* and *"the repair found nothing"* must not look the same.
 
+**Findings come back in path order, and that is a contract rather than an accident.**
+`IStorageAdapter.ReadMany` states outright that its order is not guaranteed — the default
+implementation merges N reads, and Postgres answers one batched `IN (…)` in whatever order the
+planner likes — so the candidates are sorted at the stage that loses the order, which makes
+classification, the per-node log lines and the report all follow the same sequence.
+
+It matters because this repair's deliverable *is* its evidence. A run against live data is read by a
+person deciding whether it did the right thing, so the report has to be diffable between the `Detect`
+dry run and the real run, and lineable-up against an expected set. A stable order is also what lets a
+second run's report be compared against the first — which is how the idempotence claim gets *checked*
+rather than merely asserted.
+
 ## Using it
 
 ```csharp

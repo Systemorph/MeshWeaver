@@ -213,6 +213,24 @@ public static class StaleMainNodeRepair
     /// <para>The row count is carried out alongside the candidates because it is the sweep's proof
     /// of work: candidates alone cannot distinguish "read 900 rows, none of them wrong" from "read
     /// nothing at all", and those are the two outcomes a clean report must never conflate.</para>
+    ///
+    /// <para>🚨 <b>The candidates are SORTED here, because this is where order is lost.</b>
+    /// <see cref="IStorageAdapter.ReadMany"/>'s contract says plainly that "order is not guaranteed"
+    /// — its default implementation is an <c>Observable.Merge</c> over N reads, and Postgres answers
+    /// one batched <c>IN (…)</c> whose row order is the planner's business. Sorting at the stage the
+    /// nondeterminism ENTERS (rather than sorting the finished report) makes the whole pass
+    /// deterministic: classification order, the per-node repair log lines, and the report's
+    /// <c>Findings</c> all follow one path order.</para>
+    ///
+    /// <para>That matters more here than it would elsewhere. This repair's deliverable IS its
+    /// evidence: it is meant to be run once against live data by a person reading the per-node
+    /// report to judge whether it did the right thing. A nondeterministically-ordered report cannot
+    /// be diffed between the <see cref="Detect"/> dry run and the real run, and cannot be lined up
+    /// against an expected set — which would make the one artifact that renders the run auditable
+    /// unreliable. A stable order is also what lets a second run's report be compared to the first,
+    /// which is how the idempotence claim gets checked in practice rather than merely asserted.
+    /// Ordinal-ignore-case, the same comparer <see cref="EnumeratePaths"/> orders paths with, so the
+    /// two stages cannot disagree.</para>
     /// </summary>
     private static IObservable<(ImmutableList<MeshNode> Candidates, int NodesRead)> ReadCandidates(
         IStorageAdapter storage, ImmutableList<string> paths, JsonSerializerOptions options)
@@ -226,7 +244,12 @@ public static class StaleMainNodeRepair
                     (Candidates: ImmutableList<MeshNode>.Empty, NodesRead: 0),
                     (acc, batch) => (
                         acc.Candidates.AddRange(batch.Where(n => n.IsStaleSelfDefaultMainNode())),
-                        acc.NodesRead + batch.Count));
+                        acc.NodesRead + batch.Count))
+                .Select(acc => (
+                    Candidates: acc.Candidates.Sort(
+                        (left, right) => string.Compare(
+                            left.Path, right.Path, StringComparison.OrdinalIgnoreCase)),
+                    acc.NodesRead));
 
     /// <summary>
     /// Classifies every candidate, and only THEN repairs them.

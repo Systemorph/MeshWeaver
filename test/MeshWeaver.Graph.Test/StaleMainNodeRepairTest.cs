@@ -239,6 +239,36 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     /// <summary>
+    /// The report's ordering is a CONTRACT, not an accident of how storage answered.
+    /// <c>IStorageAdapter.ReadMany</c> states that its order is not guaranteed, so without an
+    /// explicit sort the findings — and the per-node log lines — would come back in whatever order
+    /// the backend produced.
+    ///
+    /// <para>It matters because this repair's deliverable is its EVIDENCE: a run against live data
+    /// is read by a person deciding whether it did the right thing, and a nondeterministically
+    /// ordered report cannot be diffed between the dry run and the real run, nor lined up against an
+    /// expected set. The seeds below are written in deliberately non-alphabetical order so a
+    /// missing sort cannot pass by coincidence.</para>
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task Findings_come_back_in_path_order()
+    {
+        // Seeded high-to-low, so "insertion order" and "path order" disagree.
+        await SeedCorruptAsync("zeta-item", "Mu/Skill", "OtherMu/zeta-item");
+        await SeedCorruptAsync("mid-item", "Mu/Skill", "OtherMu/mid-item");
+        await SeedCorruptAsync("alpha-item", "Mu/Skill", "OtherMu/alpha-item");
+
+        var report = await DetectAsync("Mu");
+
+        var paths = report.Findings.Select(f => f.Path).ToArray();
+        paths.Should().HaveCount(3);
+        paths.Should().Equal(
+            paths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray(),
+            "the report must be ordered by path so a second run's evidence can be diffed "
+            + "against the first — ReadMany itself guarantees no order");
+    }
+
+    /// <summary>
     /// The DEFAULT call shape — no roots, so the sweep starts from the storage adapter's own root
     /// listing and walks the whole tree. Scoping every other test would leave
     /// <c>ListChildPaths(null)</c> — the branch a real run against a portal takes — never executed.
