@@ -433,6 +433,69 @@ and it failed immediately on a real defect. **"Red for a known reason" is the ch
 which to miss a second regression**, and it is an argument for fixing the first red rather than
 routing around it. Expect the count of problems to go *up* when you fix one.
 
+## 🚨 A check that is red on EVERY pull request is not telling you about any of them
+
+A signal carries information only to the extent that it *varies*. A check that fails on every open
+PR at the same instant has variance zero: it partitions nothing, exonerates nothing, and the
+correct reading of it on any individual PR is "ignore this". That is a strictly worse state than
+having no check at all, because the red is still spent — it dilutes every other red on the wall,
+and it trains readers to skip the one place they are supposed to look.
+
+**Measured here, 2026-09-01/02.** `auto-arm.yml` asserted that the `meshweaver-cloud` App could
+mint a token carrying `Contents: write` + `Pull requests: write`. The grant was missing, so
+`Arm auto-merge on this PR` failed — on **every PR in the repository, simultaneously and
+permanently**. The wall read as four red PRs. Two of them were entirely green on the required
+check; the other two had genuine, unrelated shard failures that the noise was actively hiding.
+
+### The discriminator: is the fact a property of the PR, or of the repository?
+
+That is the whole test, and it is mechanical:
+
+| the assertion is about… | where it belongs | what its red means |
+|---|---|---|
+| this branch's code, tests, build, contracts | a per-PR check | *this* PR is not ready |
+| the org installation, a secret, a registry grant, a quota | **one repo-scoped lane** | the *repository* is degraded; every PR is equally affected |
+
+A repository-scoped fact asserted per-PR is duplicated N times and actionable in none of them —
+nobody fixes an org installation from a pull request's Checks tab. Hoisting it does not weaken it:
+`arm-credential.yml` fails exactly as red, on a schedule, naming the grant and the acceptance step,
+in the one place where the fix is the obvious next action.
+
+### This is NOT the skip-trapdoor exemption, and the difference is worth stating precisely
+
+AGENTS.md forbids `continue-on-error` on a gate's input step, because a verification that silently
+does not run is indistinguishable from one that passed. `auto-arm.yml` now carries exactly that
+`continue-on-error` — and it is not the forbidden shape, because **arming is an action, not a
+gate**. It asserts nothing about the pull request. Every required context still runs, `Consolidate
+test results` still decides, and the honest per-PR consequence of a missing grant is "this PR was
+not armed, merge it by hand" — a lost convenience, not a lost check. Reporting that as a *failure
+of the pull request* was a false statement about the pull request.
+
+The load-bearing part is that the assertion was **moved, not deleted**. A tolerance whose companion
+assertion is gone *is* the trapdoor, so the two files are coupled by a test:
+`ArmedMergeMustTriggerMainsPushLanesGuard.ToleratingAFailedMintRequiresARepoScopedAssertion` fails
+the build if `auto-arm.yml` tolerates a failed mint while `arm-credential.yml` is missing, tolerates
+its own failure, or loses its schedule. **When you hoist an assertion out of a hot lane, guard the
+hoist** — otherwise the next person sees only the tolerance and reasonably concludes the check was
+abandoned.
+
+### Before you conclude "all the PRs are red"
+
+Read *which* context is red, not the rollup colour. The required check is the only one that gates,
+and a non-required red that is identical everywhere is the signature of a repo-scoped fact in the
+wrong place:
+
+```bash
+gh api graphql -f query='query{repository(owner:"Systemorph",name:"MeshWeaver"){
+  pullRequests(states:OPEN,first:20){nodes{number mergeStateStatus
+    commits(last:1){nodes{commit{statusCheckRollup{contexts(first:80){
+      nodes{... on CheckRun{name conclusion}}}}}}}}}}}'
+```
+
+If the same check name appears in every PR's failure list, stop triaging PRs and go fix the
+repository. `UNSTABLE` means the required set passed and something non-required did not — it is
+mergeable, and it is the state a hoistable assertion leaves behind.
+
 ## Related
 
 [Module Versioning](/Doc/Architecture/ModuleVersioning) · [Modules](/Doc/Architecture/Modules) ·

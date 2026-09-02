@@ -94,8 +94,25 @@ jobs:
       # step whose name says what it wanted — rather than degrading to a token that arms fine and
       # then merges in a way that starts no CI. There is deliberately no fallback: falling back to
       # `secrets.GITHUB_TOKEN` is precisely the outage this file's header documents.
+      # 🚨 `continue-on-error` — the ONE in this file, and the reason is that arming is an
+      # ACTION, not a GATE. AGENTS.md forbids this on a step that fetches a gate's input, because
+      # a verification that silently does not run is indistinguishable from one that passed. That
+      # hazard does not exist here: this job asserts NOTHING about the pull request. Every required
+      # context still runs, `Consolidate test results` still decides, and a PR that cannot be armed
+      # is merged by a human — the outcome is a lost convenience, not a lost check.
+      #
+      # What it buys is signal. A missing grant is a property of the REPOSITORY, identical on every
+      # PR at once, so failing here painted a red that was the same on all of them — a check whose
+      # value never varies carries no information about any PR, and a wall of permanent red is how
+      # a real red stops being read. The assertion still exists and is still RED; it moved to
+      # `arm-credential.yml`, which asks the repo-scoped question in the one place it is actionable.
+      #
+      # 🚨 That split is load-bearing: the tolerance below is only safe while that lane exists.
+      # `ArmedMergeMustTriggerMainsPushLanesGuard.ToleratingAFailedMintRequiresARepoScopedAssertion`
+      # fails the build if this `continue-on-error` outlives it.
       - name: Mint an installation token whose merges actually trigger workflows
         id: arm-token
+        continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.MESHWEAVER_APP_ID }}
@@ -105,25 +122,41 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      # PRESENT is not GRANTED. The mint above fails with a bare "not permitted" when the App is
+      # PRESENT is not GRANTED. The mint fails with a bare "not permitted" when the App is
       # installed but lacks one of the two permissions, and that message names neither the App nor
-      # the grant — so say it here, where a reader lands. Diagnostics on a failed step, not a gate:
-      # this cannot make a red run green.
-      # 🚨 Scoped to the MINT's own outcome, not to `failure()` alone. A bare `if: failure()` also
-      # fires when the secret-presence assert above failed — the mint never ran — and would then
-      # print "could not mint an installation token" over a run whose actual problem was a missing
-      # secret it had just named correctly. Diagnostics that describe a step that did not execute
-      # are worse than none: they send the reader to the wrong half of the lane.
-      - name: Name the grant, if the mint could not get it
-        if: failure() && steps.arm-token.outcome == 'failure'
+      # the grant — so say it here, where a reader lands.
+      #
+      # 🚨 This is a WARNING, not an error, and the distinction is the point. The honest per-PR
+      # outcome of a missing grant is "this PR was not armed" — degraded automation, not a fault in
+      # the branch. Reporting it as a failure of the pull request is a false statement about the
+      # pull request, and it was being made on every one of them simultaneously.
+      - name: Say why nothing was armed, if the mint could not get the grant
+        if: steps.arm-token.outcome == 'failure'
         run: |
-          echo "::error::could not mint an installation token with Contents:write + PullRequests:write."
-          echo "The meshweaver-cloud App must carry BOTH. Check:"
-          echo "  gh api orgs/${{ github.repository_owner }}/installations --jq '.installations[] | \"\(.app_slug) \(.permissions|tojson)\"'"
-          echo "Grant 'Pull requests: Read and write' in the App's settings, then ACCEPT the new"
-          echo "permission on the org installation — a requested-but-unaccepted permission is not granted."
+          echo "::warning::auto-merge was NOT armed on this PR — the meshweaver-cloud App could not"
+          echo "::warning::mint a token with Contents:write + PullRequests:write. Merge this PR by hand."
+          {
+            echo "### Auto-merge not armed"
+            echo
+            echo "The \`meshweaver-cloud\` App must carry **both** \`Contents: write\` and"
+            echo "\`Pull requests: write\`. It currently cannot mint one with both, so this PR was"
+            echo "left unarmed and needs a human merge once it is green."
+            echo
+            echo '```'
+            echo "gh api orgs/${{ github.repository_owner }}/installations \\"
+            echo "  --jq '.installations[] | \"\(.app_slug) \(.permissions|tojson)\"'"
+            echo '```'
+            echo
+            echo "Grant *Pull requests: Read and write* in the App's settings, then **accept** the"
+            echo "new permission on the org installation — a requested-but-unaccepted permission is"
+            echo "not granted. \`arm-credential.yml\` is the lane that stays red until that is done."
+          } >> "$GITHUB_STEP_SUMMARY"
 
+      # Conditioned on the MINT's outcome, never on whether a secret "looks set" — the shape
+      # AGENTS.md forbids. Without a token there is nothing to arm with; running gh anyway would
+      # fall back to the runner's default credential, which is the #2916 outage exactly.
       - name: Arm it
+        if: steps.arm-token.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.arm-token.outputs.token }}
           PR: ${{ github.event.pull_request.number }}
