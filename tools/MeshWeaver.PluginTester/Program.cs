@@ -89,6 +89,8 @@ static async Task<int> RunBuild(string[] args)
     string? outDir = null;
     string? reportPath = null;
     string? sourceSha = null;
+    string? buildApp = null;
+    string? buildSharedFrameworks = null;
     var maxParallel = Math.Max(1, Environment.ProcessorCount);
     var caseTimeout = TimeSpan.FromSeconds(60);
     var runTests = true;
@@ -98,6 +100,25 @@ static async Task<int> RunBuild(string[] args)
         {
             case "--module" when i + 1 < args.Length:
                 modules.Add(args[++i]);
+                break;
+            // The platform host, as for `compile` — see RunCompile's note and BakeHost.
+            case "--app" when i + 1 < args.Length:
+                buildApp = args[++i];
+                if (!Directory.Exists(buildApp))
+                {
+                    Console.Error.WriteLine(
+                        $"mw-plugin-test build: --app '{Path.GetFullPath(buildApp)}' does not exist.");
+                    return 2;
+                }
+                break;
+            case "--shared-frameworks" when i + 1 < args.Length:
+                buildSharedFrameworks = args[++i];
+                if (!Directory.Exists(buildSharedFrameworks))
+                {
+                    Console.Error.WriteLine(
+                        $"mw-plugin-test build: --shared-frameworks '{Path.GetFullPath(buildSharedFrameworks)}' does not exist.");
+                    return 2;
+                }
                 break;
             case "--out" when i + 1 < args.Length:
                 outDir = args[++i];
@@ -146,11 +167,20 @@ static async Task<int> RunBuild(string[] args)
         Console.Error.WriteLine(BuildUsage());
         return 2;
     }
+    if ((buildApp is null) != (buildSharedFrameworks is null))
+    {
+        Console.Error.WriteLine(
+            "mw-plugin-test build: --app and --shared-frameworks go together — the platform host's "
+            + "/app AND its <dotnet root>/shared are the reference set.");
+        return 2;
+    }
     var report = await CascadeBuild.Run(new CascadeBuild.Options
     {
         RepoRoot = root,
         Packages = packages,
         ModuleAssemblyPaths = modules,
+        AppDirectory = buildApp,
+        SharedFrameworksRoot = buildSharedFrameworks,
         OutputDirectory = outDir,
         ReportPath = reportPath,
         MaxParallel = maxParallel,
@@ -317,16 +347,20 @@ static string BuildProjectUsage() =>
 
 static string BuildUsage() =>
     "usage: mw-plugin-test build <repo-root> [<package>... | all] [--module <dll>]... [--out <dir>] "
-    + "[--report <file>] [--max-parallel <n>] [--case-timeout <s>] [--no-tests] [--source-sha <sha>]\n"
+    + "[--report <file>] [--max-parallel <n>] [--case-timeout <s>] [--no-tests] [--source-sha <sha>] "
+    + "[--app <dir> --shared-frameworks <dir>]\n"
     + "  Compiles AND tests each selected package (plus its in-repo requirements) as a dependency "
     + "cascade: a package starts when its dependencies are green, is blocked when one is red. "
-    + "'all' (default) rebuilds everything. Sources are read from disk; nothing is imported into a mesh.";
+    + "'all' (default) rebuilds everything. Sources are read from disk; nothing is imported into a mesh. "
+    + "--app/--shared-frameworks name the platform host to compile against (see `compile --help`).";
 
 static int RunCompile(string[] args)
 {
     string? compileRoot = null;
     string? outputDirectory = null;
     string? compileSourceSha = null;
+    string? compileApp = null;
+    string? compileSharedFrameworks = null;
     var compileAllow = GateAllowlist.Empty;
     var compileAllowApplied = false;
     var compileModules = new List<string>();
@@ -339,6 +373,33 @@ static int RunCompile(string[] args)
                 break;
             case "--source-sha" when i + 1 < args.Length:
                 compileSourceSha = args[++i];
+                break;
+            // 🚨 THE PLATFORM HOST (#3022) — the same two flags build-project takes, for the same
+            // reason: the reference set is the platform IMAGE's /app and its implementation shared
+            // frameworks, not this process's TPA. The bake is ADDRESSED to that host (its identity,
+            // its manifest, its MVIDs — see BakeHost), and a host this process cannot honestly bake
+            // for is refused by name rather than baked against anyway.
+            case "--app" when i + 1 < args.Length:
+                compileApp = args[++i];
+                if (!Directory.Exists(compileApp))
+                {
+                    Console.Error.WriteLine(
+                        $"compile: --app '{Path.GetFullPath(compileApp)}' does not exist. Pass the "
+                        + "platform image's application directory (its /app — the one holding "
+                        + $"{FrameworkBuildIdentity.SurfaceManifestFileName} beside its assemblies), "
+                        + "extracted or mounted into this container.");
+                    return 2;
+                }
+                break;
+            case "--shared-frameworks" when i + 1 < args.Length:
+                compileSharedFrameworks = args[++i];
+                if (!Directory.Exists(compileSharedFrameworks))
+                {
+                    Console.Error.WriteLine(
+                        $"compile: --shared-frameworks '{Path.GetFullPath(compileSharedFrameworks)}' "
+                        + "does not exist. Pass the platform image's <dotnet root>/shared directory.");
+                    return 2;
+                }
                 break;
             // 🚨 THE SAME RATCHET THE GATE READS. Splitting the bake out of the gate must not
             // split the VERDICT: a known-debt compile failure the gate tolerates has to be
@@ -391,13 +452,11 @@ static int RunCompile(string[] args)
                 compileModules.Add(compileModulePath);
                 break;
             }
-            case "--output" or "--source-sha" or "--allow" or "--module":
+            case "--output" or "--source-sha" or "--allow" or "--module" or "--app" or "--shared-frameworks":
                 Console.Error.WriteLine($"Option '{args[i]}' requires a value.");
                 return 2;
             case "--help" or "-h":
-                Console.WriteLine(
-                    "usage: mw-compiler compile <checkout-root> --output <dir> [--allow <file>] "
-                    + "[--source-sha <sha>] [--module <dll>]...");
+                Console.WriteLine(CompileUsage());
                 return 0;
             default:
                 if (args[i].StartsWith('-') || compileRoot is not null)
@@ -415,6 +474,17 @@ static int RunCompile(string[] args)
             "compile: --output <dir> is required (the directory the bundles are written into).");
         return 2;
     }
+    // Both or neither — "which shared frameworks" is never inferred (the running runtime's is the
+    // right answer only inside the host's own image), and shared frameworks without a host name
+    // nothing to compile against.
+    if ((compileApp is null) != (compileSharedFrameworks is null))
+    {
+        Console.Error.WriteLine(
+            "compile: --app and --shared-frameworks go together — the platform host's /app AND its "
+            + "<dotnet root>/shared are the reference set; one without the other is a reference set "
+            + "nobody can name.");
+        return 2;
+    }
 
     compileRoot ??= ".";
     Console.WriteLine(
@@ -425,6 +495,8 @@ static int RunCompile(string[] args)
         RepoRoot = compileRoot,
         OutputDirectory = outputDirectory,
         SourceSha = compileSourceSha,
+        AppDirectory = compileApp,
+        SharedFrameworksRoot = compileSharedFrameworks,
         // Resolved HERE, at the CLI boundary: TesterModules is the one list the gate reads too, and
         // resolution names MeshBuilder — which MeshFreeBakePathTest forbids anywhere the bake can
         // reach. The bake gets paths; it never meets a mesh type.
@@ -467,6 +539,18 @@ static int RunCompile(string[] args)
         return bake.ExitCode;
     return bake.FatalError is null && newFailures == 0 && stale.Count == 0 ? 0 : 1;
 }
+
+static string CompileUsage() =>
+    "usage: mw-compiler compile <checkout-root> --output <dir> [--allow <file>] "
+    + "[--source-sha <sha>] [--module <dll>]... [--app <dir> --shared-frameworks <dir>]\n"
+    + "  Compiles every NodeType of the node repos under <checkout-root> with MeshWeaver.Compiler "
+    + "— no mesh — and writes one prebuilt-assembly bundle per package plus framework-mvid.txt. "
+    + "--app names the PLATFORM HOST's application directory (a portal image's /app) and "
+    + "--shared-frameworks its <dotnet root>/shared: the bake then compiles against THAT host's "
+    + "assemblies and implementation frameworks, keys the bundles to THAT host's framework identity "
+    + "and computes the dependency records against its manifest — and refuses a host whose compile "
+    + "toolchain this process is not running. Without them the host is this process (correct only "
+    + "when the process IS the platform).";
 
 // 🚨 THE `framework-identity` VERB — the ADDRESS CHECK (#1814).
 //
@@ -588,6 +672,7 @@ static async Task<int> RunGate(string[] args)
     string? reportPath = null;
     string? bakeOutput = null;
     string? sourceSha = null;
+    string? gateApp = null;
     BakeSeed? seed = null;
     var externalModules = new List<string>();
 
@@ -595,6 +680,22 @@ static async Task<int> RunGate(string[] args)
     {
         switch (args[i])
         {
+            // 🚨 THE PLATFORM HOST this gate must RUN AS (#3022). A gate consumes a bake through the
+            // portal's own adoption code, which reads the PROCESS's manifest, MVIDs and identity —
+            // so a gate can only judge the platform's bake when its process IS the platform host
+            // (the portal's /app with this CLI laid beside it, compose-gate-host.sh). This flag
+            // makes that a checked precondition: the process must resolve the named directory's
+            // identity, or the run is refused before a mesh boots (GateHostCheck).
+            case "--app" when i + 1 < args.Length:
+                gateApp = args[++i];
+                if (!Directory.Exists(gateApp))
+                {
+                    Console.Error.WriteLine(
+                        $"mw-plugin-test: --app '{Path.GetFullPath(gateApp)}' does not exist. Pass the "
+                        + "platform host's application directory (a portal image's /app).");
+                    return 2;
+                }
+                break;
             case "--compile-timeout" when i + 1 < args.Length:
                 compileTimeout = TimeSpan.FromSeconds(
                     double.Parse(args[++i], CultureInfo.InvariantCulture));
@@ -677,7 +778,7 @@ static async Task<int> RunGate(string[] args)
             // A value-taking option as the LAST argument would otherwise fall through to the default
             // case as "Unknown argument" — a misleading message for a missing value.
             case "--compile-timeout" or "--render-timeout" or "--allow" or "--report"
-                or "--bake-output" or "--seed" or "--source-sha" or "--module":
+                or "--bake-output" or "--seed" or "--source-sha" or "--module" or "--app":
                 Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
                 return 2;
             // Diagnostic: print the framework build identity this process resolves — the exact value
@@ -698,7 +799,10 @@ static async Task<int> RunGate(string[] args)
                 Console.WriteLine(
                     "usage: mw-plugin-test build <repo-root> [<package>... | all] ...   (see build --help)\n       mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
                     + "[--allow <file>] [--report <file>] [--seed <dir>] [--bake-output <dir>] "
-                    + "[--source-sha <sha>] [--module <dll>]... [--print-framework-identity]");
+                    + "[--source-sha <sha>] [--module <dll>]... [--app <dir>] [--print-framework-identity]\n"
+                    + "  --app <dir>: the platform host this gate must RUN AS (a portal image's /app); the "
+                    + "run is refused before a mesh boots unless this process resolves that host's "
+                    + "framework identity.");
                 return 0;
             default:
                 if (args[i].StartsWith('-') || root is not null)
@@ -709,6 +813,19 @@ static async Task<int> RunGate(string[] args)
                 root = args[i];
                 break;
         }
+    }
+
+    if (gateApp is not null)
+    {
+        var live = MeshWeaver.Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid;
+        if (GateHostCheck.Verify(gateApp, live) is { } hostProblem)
+        {
+            Console.Error.WriteLine($"mw-plugin-test: --app — {hostProblem}");
+            return 2;
+        }
+        Console.WriteLine(
+            $"platform host: '{Path.GetFullPath(gateApp)}' — this process resolves its framework "
+            + $"identity {live}, so it judges as that host");
     }
 
     var options = new GateOptions

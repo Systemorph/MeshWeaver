@@ -1789,6 +1789,13 @@ jobs:
     - name: "NodeType import-scope parser can fail (self-test)"
       run: python3 .github/scripts/compile-check.py --self-test
 
+    # The gate host every node-repo bake and gate RUNS AS since MeshWeaver#3022 — the portal's /app
+    # with the tester CLI beside it (compose-gate-host.sh, fetched by the reusable lanes at their
+    # platform-ref). Its rules are load-bearing (the portal's bytes win, the tester's deps.json and
+    # manifest never ride), so the script proves it enforces them on every platform PR.
+    - name: "The gate host composes by its rules and refuses a partial one (self-test)"
+      run: bash .github/scripts/compose-gate-host.sh --self-test
+
     - name: "Gate the shell CI itself runs"
       run: python3 .github/scripts/check-workflow-shell.py
 

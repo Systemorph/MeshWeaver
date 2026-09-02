@@ -15,6 +15,22 @@ name: Node repo publish-bake (reusable)
 # `<base>/prebuilt-bundles/<framework-identity>/<bake-source>/`. A portal whose own framework
 # identity matches seeds them at boot and compiles nothing the repo ships.
 #
+# 🚨 TWO IMAGES, TWO ROLES (MeshWeaver#3022, the same split node-repo-module-pack.yml has carried
+# since #2907): the TESTER image (test-image) EXECUTES the bake and the gate; the PLATFORM image
+# (platform-image — the portal) SUPPLIES the reference set, the framework identity and the runtime
+# the gate's mesh runs on. Both verbs run from a COMPOSED HOST — the portal's /app with the tester
+# CLI laid beside it (compose-gate-host.sh) — started by the portal image's own `dotnet`, and the
+# bake compiles against `--app /app --shared-frameworks /usr/share/dotnet/shared`, i.e. exactly
+# what a portal's own runtime compile sees. The tester's /app is a strict SUBSET of the portal's
+# (measured on 3.0.0-rc9.ci.7534: 88 vs 219 assemblies; MeshWeaver.Maps, .AI,
+# .ContentCollections.Indexing, the Blazor and hosting halves exist only in the portal), so a bake
+# taking its reference set from the image it happened to run in could not see what every portal
+# compiles against and failed each NodeType binding one of them with a CS0234/CS0246 naming the
+# CONTENT — which is how Cornerstone/Pricing and three map galleries held the whole release wave
+# (no seal ⇒ no dependents ⇒ no adoption) the day MeshWeaver.Maps left the tester's closure. The
+# lane asserts, before it trusts the composition, that the two images resolve ONE framework
+# identity (they are one build), and the bake's identity is then the portal's by construction.
+#
 # The PUBLICATION is always the FULL set; the COMPILE need not be. The publication is atomic per
 # identity — the `_complete` sentinel (written LAST) lists the whole bundle set and the portal
 # seeds only what the sentinel lists, so a partial publish would SHRINK what portals adopt — and
@@ -71,6 +87,8 @@ name: Node repo publish-bake (reusable)
 #       narrow-by-affected: true      # rebuild only the modules a push actually affects
 #       test-image: ${{ vars.MW_TEST_IMAGE }}
 #       image-digest: ${{ vars.MW_IMAGE_DIGEST }}     # or a workflow env / literal pin
+#       platform-image: meshweaver.azurecr.io/memex-portal-ai        # the PORTAL — the reference set
+#       platform-image-digest: ${{ vars.MW_PORTAL_IMAGE_DIGEST }}    # same CD wave as image-digest
 #       bake-publish-targets: ${{ vars.BAKE_PUBLISH_TARGETS }}
 #       upstream-sources: plugins                    # exit unless `plugins` is published for the
 #                                                    # framework identity this bake targets
@@ -124,12 +142,37 @@ on:
         default: ''
       allow-unpinned:
         description: >-
-          Explicitly accept an empty image-digest and bake against the tag verbatim (a repo
-          that tracks :main accepts that its runs are not reproducible). Never a silent
-          fallback: an empty digest WITHOUT this flag fails red.
+          Explicitly accept an empty image-digest / platform-image-digest and bake against the
+          tags verbatim (a repo that tracks :main accepts that its runs are not reproducible).
+          Never a silent fallback: an empty digest WITHOUT this flag fails red.
         required: false
         type: boolean
         default: false
+      platform-image:
+        description: >-
+          The PORTAL image the bake compiles against and is ADDRESSED to, e.g.
+          meshweaver.azurecr.io/memex-portal-ai — REQUIRED (MeshWeaver#3022). The tester image
+          EXECUTES the bake and the gate; this image SUPPLIES the reference set (its /app + its
+          implementation shared frameworks), the framework identity the bundles are keyed to, and
+          the runtime the gate's mesh runs on. Its /app is a strict superset of the tester's (219 vs
+          88 assemblies on 3.0.0-rc9.ci.7534 — MeshWeaver.Maps, .AI, .ContentCollections.Indexing,
+          the Blazor and hosting halves exist only here), so a bake that took its reference set from
+          the tester failed every NodeType binding one of them with a CONTENT-shaped CS0234/CS0246.
+          The same input, same meaning, as node-repo-module-pack.yml's since MeshWeaver#2907. There
+          is deliberately no default and no fallback to the tester's /app.
+        required: true
+        type: string
+      platform-image-digest:
+        description: >-
+          Digest pin for platform-image, resolved EXACTLY as image-digest is for the tester: a
+          framework-release dispatch bakes against `<platform-image>:<client_payload.version>`, an
+          upstream-published wake against `client_payload.platform_image` (RED when the upstream's
+          payload has none), a push against this pin, and an empty pin is RED unless allow-unpinned
+          is set. Pin both digests from ONE CD wave — the lane asserts that the two images resolve
+          ONE framework identity and refuses a mixed pair by name.
+        required: false
+        type: string
+        default: ''
       narrow-by-affected:
         description: >-
           Rebuild only the modules the content diff AFFECTS, instead of every module on every
@@ -342,6 +385,9 @@ jobs:
       # nothing and therefore wakes nobody.
       published: ${{ steps.publish.outputs.published }}
       image: ${{ steps.image.outputs.ref }}
+      # The portal this bake compiled against — a dependent woken by this publication must bake
+      # against the SAME one, so it travels in the dispatch payload (client_payload.platform_image).
+      platform: ${{ steps.platform.outputs.ref }}
       identity: ${{ steps.identity.outputs.identity }}
     permissions:
       contents: read
@@ -368,9 +414,17 @@ jobs:
           REGISTRY_MODULES: ${{ inputs.registry-modules }}
           REGISTRY_URL_IN: ${{ inputs.registry-url }}
           REGISTRY_KEY: ${{ secrets.registry-key }}
+          PLATFORM_IMAGE: ${{ inputs.platform-image }}
         run: |
           set -euo pipefail
           missing=()
+          # 🚨 platform-image is the PORTAL (MeshWeaver#3022). GitHub already refuses a call that
+          # omits the required input; this catches the one wrong value that would still "work" —
+          # the tester image passed twice — which would silently restore the reference-set gap this
+          # lane exists to close (the tester's /app compiled against the tester's /app).
+          case "$PLATFORM_IMAGE" in
+            *mw-plugin-test*) missing+=("platform-image names the TESTER image ('$PLATFORM_IMAGE') — pass the PORTAL image (meshweaver.azurecr.io/memex-portal-ai): it supplies the reference set, the identity and the gate's runtime; the tester only executes") ;;
+          esac
           [ -n "${AZURE_CLIENT_ID:-}" ]        || missing+=("azure-client-id (secret) — client id of an Azure identity holding 'Storage File Data Privileged Contributor' on the portals' storage account, with a federated credential for repo:${GITHUB_REPOSITORY}:ref:refs/heads/main")
           [ -n "${AZURE_TENANT_ID:-}" ]        || missing+=("azure-tenant-id (secret) — tenant of that identity")
           [ -n "${AZURE_SUBSCRIPTION_ID:-}" ]  || missing+=("azure-subscription-id (secret) — subscription of the storage account")
@@ -521,6 +575,42 @@ jobs:
             echo "::error::image-digest is empty and allow-unpinned is not set — pin a digest (reproducible) or opt in to following the tag."
             exit 1
           fi
+      # 🚨 THE PLATFORM IMAGE — the portal (MeshWeaver#3022), resolved branch for branch as the
+      # tester above so the two can never name different waves: a framework release names both by
+      # its version tag, an upstream's publication names both in its payload, a push pins both.
+      # The one asymmetry is deliberate: an upstream-published payload WITHOUT a platform image is
+      # RED here rather than guessed — the upstream's lane predates this input (its pin needs
+      # bumping), and pairing its tester with THIS repo's portal pin would compose two waves.
+      - name: Resolve the platform image (the reference set, the identity, the gate's runtime)
+        id: platform
+        env:
+          PLATFORM_IMAGE: ${{ inputs.platform-image }}
+          PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
+          RELEASED_VERSION: ${{ github.event.client_payload.version }}
+          UPSTREAM_PLATFORM_IMAGE: ${{ github.event.client_payload.platform_image }}
+          UPSTREAM_SOURCE: ${{ github.event.client_payload.source }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.action }}" = "meshweaver-upstream-published" ]; then
+            [ -n "${UPSTREAM_PLATFORM_IMAGE:-}" ] || { echo "::error::meshweaver-upstream-published payload carries no client_payload.platform_image — upstream '${UPSTREAM_SOURCE:-?}' baked against a portal this run cannot name (its node-repo-publish-bake pin predates MeshWeaver#3022; bump it). Refusing to pair its tester with this repo's own portal pin: that would compose two CD waves."; exit 1; }
+            echo "ref=${UPSTREAM_PLATFORM_IMAGE}" >> "$GITHUB_OUTPUT"
+            echo "platform: the upstream's ${UPSTREAM_PLATFORM_IMAGE}"
+          elif [ "${{ github.event_name }}" = "repository_dispatch" ] && [ -n "${RELEASED_VERSION:-}" ]; then
+            echo "ref=${PLATFORM_IMAGE%%:*}:${RELEASED_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "platform: released ${PLATFORM_IMAGE%%:*}:${RELEASED_VERSION}"
+          elif [ "${{ github.event.action }}" = "meshweaver-framework-released" ]; then
+            echo "::error::meshweaver-framework-released payload carries no client_payload.version — cannot resolve the released platform image."
+            exit 1
+          elif [ -n "${PLATFORM_DIGEST:-}" ]; then
+            echo "ref=${PLATFORM_IMAGE%%:*}@${PLATFORM_DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "platform: the pinned digest ${PLATFORM_DIGEST}"
+          elif [ "${{ inputs.allow-unpinned }}" = "true" ]; then
+            echo "ref=${PLATFORM_IMAGE}" >> "$GITHUB_OUTPUT"
+            echo "platform: ${PLATFORM_IMAGE} verbatim (allow-unpinned)"
+          else
+            echo "::error::platform-image-digest is empty and allow-unpinned is not set — pin the portal digest from the same CD wave as image-digest, or opt in to following the tag. There is no fallback to the tester's /app: that is the reference-set gap this input closes (MeshWeaver#3022)."
+            exit 1
+          fi
       - name: Registry login mode
         id: acr
         env:
@@ -610,14 +700,76 @@ jobs:
       # bake runs at all. Same sparse checkout as the publish-side fetch further down, into its own
       # path: it carries no root index.json, so the tester never treats it as a module (identical
       # reasoning to `cross-repo-stage/`).
+      # Unconditional since MeshWeaver#3022: compose-gate-host.sh runs on every bake.
       - name: Fetch the canonical gate + bake-scope scripts (platform repo)
-        if: inputs.upstream-sources != '' || inputs.narrow-by-affected
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: mw-platform-gate
           sparse-checkout: .github/scripts
+      # ───────────── TWO IMAGES, ONE BUILD: pull, extract, compose (MeshWeaver#3022) ─────────────
+      # The portal image SUPPLIES (reference set, identity, runtime); the tester image EXECUTES.
+      # Both are pulled here, once, and their /app trees extracted with `docker cp` — no daemon
+      # mount, no tar flags that differ between tar flavours. Same daemon, same default platform
+      # for both, so the two /app trees describe the same architecture.
+      - name: Pull the tester and the platform image and extract their /app
+        id: hosts
+        env:
+          TESTER_REF: ${{ steps.image.outputs.ref }}
+          PORTAL_REF: ${{ steps.platform.outputs.ref }}
+        run: |
+          set -euo pipefail
+          docker pull -q "$TESTER_REF"
+          docker pull -q "$PORTAL_REF"
+          T="$RUNNER_TEMP/tester-app"; P="$RUNNER_TEMP/portal-app"
+          rm -rf "$T" "$P"
+          cid=$(docker create "$TESTER_REF"); docker cp -q "$cid:/app" "$T"; docker rm "$cid" >/dev/null
+          cid=$(docker create "$PORTAL_REF"); docker cp -q "$cid:/app" "$P"; docker rm "$cid" >/dev/null
+          [ -f "$T/mw-plugin-test.dll" ] || { echo "::error::$TESTER_REF ships no /app/mw-plugin-test.dll — test-image must be the mw-plugin-test image"; exit 1; }
+          [ -s "$P/meshweaver-surface.manifest" ] || { echo "::error::$PORTAL_REF ships no /app/meshweaver-surface.manifest — platform-image must be the PORTAL image; a host without a manifest resolves the fallback identity no bake may be published under (the #1699 shape)"; exit 1; }
+          echo "tester_app=$T" >> "$GITHUB_OUTPUT"
+          echo "portal_app=$P" >> "$GITHUB_OUTPUT"
+          echo "tester /app: $(find "$T" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ') assemblies; portal /app: $(find "$P" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ') assemblies ($(wc -l < "$P/meshweaver-surface.manifest" | tr -d ' ') manifest lines)"
+      # 🚨 ONE BUILD, asserted — never assumed from "the same tag". The bake is keyed to the
+      # PORTAL's identity and executed by the TESTER's toolchain; that is honest only when the two
+      # images are one build. The tester's own `framework-identity` verb reads the portal's /app as
+      # FILES and compares it with the identity the tester itself resolves — on a mismatch it names
+      # the canonical assemblies each side lacks (the #1814 finding was eight named assemblies, not
+      # "a hash that differs"). This is the address check the platform's own Doc bake runs, applied
+      # BEFORE the composition it protects instead of after a publish it cannot undo.
+      - name: "Resolve the framework identity this bake will target — the PORTAL's; the tester must resolve the same"
+        id: identity
+        env:
+          TESTER_REF: ${{ steps.image.outputs.ref }}
+          PORTAL_APP: ${{ steps.hosts.outputs.portal_app }}
+        run: |
+          set -euo pipefail
+          # `--init` so a crashed tester exits instead of spinning as an unkillable PID 1 (#1741).
+          line=$(docker run --rm --init --entrypoint /app/mw-plugin-test "$TESTER_REF" --print-framework-identity)
+          tester="${line#*identity=}"; tester="${tester%% *}"
+          [ -n "$tester" ] || { echo "::error::could not resolve the tester image's framework identity (got: '$line'). Nothing can be composed on an unknown identity."; exit 1; }
+          if ! identity=$(docker run --rm --init -v "$PORTAL_APP:/portal:ro" --entrypoint /app/mw-plugin-test "$TESTER_REF" framework-identity /portal --expect "$tester"); then
+            echo "::error::the tester image and the platform image do NOT resolve one framework identity — they are not one build (the verb's output above names the canonical assemblies each side lacks). Pin test-image/image-digest and platform-image/platform-image-digest from the SAME CD wave."
+            exit 1
+          fi
+          identity=$(printf '%s' "$identity" | tail -1 | tr -d '[:space:]')
+          [ -n "$identity" ] || { echo "::error::framework-identity printed no identity for the portal's /app"; exit 1; }
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+          echo "this bake targets framework identity $identity — resolved by the PORTAL's /app and by the tester alike"
+      # The process the bake and the gate RUN AS: the portal's /app with the tester CLI beside it.
+      # The rules (portal wins a shared file; the tester's deps.json and manifest never ride) and
+      # why each one is load-bearing are in the script's header.
+      - name: Compose the gate host (the portal's /app + the tester CLI)
+        id: host
+        env:
+          PORTAL_APP: ${{ steps.hosts.outputs.portal_app }}
+          TESTER_APP: ${{ steps.hosts.outputs.tester_app }}
+        run: |
+          set -euo pipefail
+          HOST="$RUNNER_TEMP/gate-host"
+          mw-platform-gate/.github/scripts/compose-gate-host.sh "$PORTAL_APP" "$TESTER_APP" "$HOST"
+          echo "dir=$HOST" >> "$GITHUB_OUTPUT"
       # A SECOND login, deliberately: the gate must authenticate before a bake that can run 40
       # minutes, and the publish side re-logs in afterwards rather than relying on a token minted
       # before it. Two cheap OIDC exchanges beat one that can expire mid-job.
@@ -628,26 +780,8 @@ jobs:
           client-id: ${{ secrets.azure-client-id }}
           tenant-id: ${{ secrets.azure-tenant-id }}
           subscription-id: ${{ secrets.azure-subscription-id }}
-      # Needed by BOTH the upstream gate and the scope decision: a publication is keyed by
-      # framework identity, so "what is already published" is unanswerable without it — and the
-      # identity is a property of the shipped BINARIES, so only the image can report it.
-      - name: "Resolve the framework identity this bake will target"
-        if: inputs.upstream-sources != '' || inputs.narrow-by-affected
-        id: identity
-        run: |
-          set -euo pipefail
-          # `--init` so a crashed tester exits instead of spinning as an unkillable PID 1 (#1741);
-          # this step would otherwise hang the job on a one-line diagnostic.
-          line=$(docker run --rm --init --entrypoint /app/mw-plugin-test "${{ steps.image.outputs.ref }}" \
-            --print-framework-identity)
-          identity="${line#*identity=}"
-          identity="${identity%% *}"
-          if [ -z "$identity" ]; then
-            echo "::error::could not resolve a framework identity from the bake image (got: '$line'). Availability CANNOT BE DETERMINED, which is not clearance to build."
-            exit 1
-          fi
-          echo "identity=$identity" >> "$GITHUB_OUTPUT"
-          echo "this bake targets framework identity $identity"
+      # The framework identity BOTH the upstream gate and the scope decision key on is resolved
+      # above (steps.identity) — from the PORTAL's /app, unconditionally, since MeshWeaver#3022.
       - name: "Gate: every upstream must be published for that identity"
         if: inputs.upstream-sources != ''
         env:
@@ -836,6 +970,9 @@ jobs:
           ALLOW_FILE: ${{ inputs.allow-file }}
           BAKE_SCOPE: ${{ steps.scope.outputs.scope || 'full' }}
           BAKE_MODULES: ${{ steps.scope.outputs.mount }}
+          HOST_DIR: ${{ steps.host.outputs.dir }}
+          PLATFORM_REF: ${{ steps.platform.outputs.ref }}
+          TARGET_IDENTITY: ${{ steps.identity.outputs.identity }}
         run: |
           set -euo pipefail
           # The mount the tester sees: the checkout, unless the pre-bake hook built its own
@@ -898,19 +1035,33 @@ jobs:
           # repo (Plugins, Education, Reinsurance, SocialMedia) still baked through a mesh.
           EXT_V=()
           [ -n "${EXT_MODULES_DIR:-}" ] && EXT_V=(-v "$EXT_MODULES_DIR:/ext")
+          # 🚨 AGAINST THE PORTAL, executed by the tester (MeshWeaver#3022). Both runs start the
+          # PORTAL image's own `dotnet` on the composed host (/host = the portal's /app + the
+          # tester CLI), as the runner's uid so /bake and the temp dirs stay writable and owned by
+          # the runner (HOME=/tmp keeps runtime probes off read-only image paths — the module lane's
+          # shape since #2922). `--app /app --shared-frameworks /usr/share/dotnet/shared` makes the
+          # bake's reference set the portal's /app plus its IMPLEMENTATION frameworks — what the
+          # portal's own runtime compile sees — and keys every bundle to the portal's identity.
           # shellcheck disable=SC2086  # EXT_MODULE_ARGS is a flag list built above; word-splitting is the point
-          docker run --rm --init "${EXT_V[@]}" -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
-            --entrypoint /app/mw-plugin-test "${{ steps.image.outputs.ref }}" compile /repo \
+          docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp "${EXT_V[@]}" \
+            -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
+            --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll compile /repo \
+            --app /app --shared-frameworks /usr/share/dotnet/shared \
             "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
             --output /bake --source-sha "${{ steps.content.outputs.sha }}"
 
-          # ══ 2. THE GATE — a mesh, CONSUMING the bake above ═════════════════════════════════
+          # ══ 2. THE GATE — a mesh RUNNING AS THE PORTAL, CONSUMING the bake above ════════════
           # Strictly stronger than the fused form as a gate: fused, the mesh rendered and ran
           # `Tests` against a PRIVATE recompile — bytes nothing ever ships. Seeded, it exercises
           # the very assemblies this lane is about to publish, which are the ones a portal adopts.
+          # `--app /app` is the precondition that this process IS the portal host (it resolves the
+          # portal's identity), refused before a mesh boots otherwise — a gate running as another
+          # host would decline every bundle and compile the tree itself, passing without judging
+          # the bytes that ship.
           # shellcheck disable=SC2086
-          docker run --rm --init "${EXT_V[@]}" -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
-            --entrypoint /app/mw-plugin-test "${{ steps.image.outputs.ref }}" /repo \
+          docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp "${EXT_V[@]}" \
+            -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
+            --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll /repo --app /app \
             "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
             --seed /bake
           # The module set this bake composed travels WITH the publication (publish-bake-bundles.sh
@@ -925,6 +1076,16 @@ jobs:
           # regression (or an image predating --bake-output support).
           if [ ! -s "$BAKE/framework-mvid.txt" ]; then
             echo "::error::the tester ran green but wrote no bake identity ($BAKE/framework-mvid.txt) — the bake stage regressed (or the image predates --bake-output support)."
+            exit 1
+          fi
+          # The ADDRESS check for this lane: the bake is keyed to the identity the PORTAL's /app
+          # resolves (steps.identity). True by construction once --app names the portal — kept as
+          # a cheap invariant so the day a lane edit drops --app, or hands a different /app to the
+          # two halves, is the day this line goes red rather than the day a fleet boots on an
+          # address nobody baked (#1814).
+          baked="$(tr -d '[:space:]' < "$BAKE/framework-mvid.txt")"
+          if [ "$baked" != "$TARGET_IDENTITY" ]; then
+            echo "::error::the bake is keyed to '$baked' but the portal's /app resolves '$TARGET_IDENTITY' — the bake did not compile against the platform host it is published for. Check that the compile run passes --app /app on the composed host."
             exit 1
           fi
           # 🚨 LOUD, never silent: staged modules were brought in only so the requires resolve —
@@ -1081,6 +1242,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           SOURCE: ${{ inputs.bake-source }}
           IMAGE: ${{ needs.publish-bake.outputs.image }}
+          PLATFORM_IMAGE: ${{ needs.publish-bake.outputs.platform }}
           IDENTITY: ${{ needs.publish-bake.outputs.identity }}
           CHAIN_IN: ${{ toJSON(github.event.client_payload.chain) }}
           RELEASED_VERSION: ${{ github.event.client_payload.version }}
@@ -1091,16 +1253,19 @@ jobs:
           # The chain: every source that led here, plus this one. A repo whose own bake-source is
           # already in it is never dispatched — that is the cycle guard, and it needs no registry.
           chain=$(jq -cn --argjson in "${CHAIN_IN:-null}" --arg s "$SOURCE" '(if ($in|type)=="array" then $in else [] end) + [$s]')
-          echo "source=$SOURCE image=$IMAGE identity=${IDENTITY:-?} chain=$chain"
+          echo "source=$SOURCE image=$IMAGE platform_image=${PLATFORM_IMAGE:-?} identity=${IDENTITY:-?} chain=$chain"
+          [ -n "${PLATFORM_IMAGE:-}" ] || { echo "::error::this bake resolved no platform image, so its dependents cannot be told which portal to bake against — a wave composed of two portals is exactly what the platform_image payload field prevents (MeshWeaver#3022)."; exit 1; }
           repos=$(gh api --paginate /installation/repositories --jq '.repositories[].full_name')
           [ -n "$repos" ] || { echo "::error::the dispatch App is installed on NO repository — nothing can subscribe. Install it on the dependent repos."; exit 1; }
           # A receiver's own gate wants the bare digest (its image-digest input); the bake wants
           # the full reference. Carry both — the digest is the part after '@' when the image was
           # resolved by digest, empty when it was a tag (then the receiver resolves it itself).
+          # `platform_image` is the portal this bake compiled against: the receiver bakes against
+          # the SAME one (MeshWeaver#3022), never against its own pin paired with our tester.
           digest=""; case "$IMAGE" in *@sha256:*) digest="${IMAGE#*@}" ;; esac
-          payload=$(jq -cn --arg s "$SOURCE" --arg i "$IMAGE" --arg d "$digest" --arg id "${IDENTITY:-}" --argjson c "$chain" \
+          payload=$(jq -cn --arg s "$SOURCE" --arg i "$IMAGE" --arg pi "$PLATFORM_IMAGE" --arg d "$digest" --arg id "${IDENTITY:-}" --argjson c "$chain" \
             --arg v "${RELEASED_VERSION:-}" --arg sha "${RELEASED_SHA:-}" \
-            '{source:$s, image:$i, digest:$d, identity:$id, chain:$c, version:$v, sha:$sha}')
+            '{source:$s, image:$i, platform_image:$pi, digest:$d, identity:$id, chain:$c, version:$v, sha:$sha}')
           dispatched=(); skipped=(); failed=()
           for repo in $repos; do
             if [ "$repo" = "$SELF" ]; then continue; fi

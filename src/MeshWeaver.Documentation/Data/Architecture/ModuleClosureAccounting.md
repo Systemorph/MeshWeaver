@@ -76,6 +76,20 @@ requested types.
 Could not load file or assembly 'Microsoft.Agents.AI, Version=1.17.0.0, …'
 ```
 
+## The same boundary, read the other way round: what a NodeType bake COMPILES against
+
+The compile rule ("the image is authoritative") has a mirror image that cost a release wave on
+2026-09-02 (#3022): the NodeType bake and gate compiled against the **tester** image's `/app`, and
+the tester's `/app` is a strict **subset** of the portal's — 88 vs 219 assemblies on
+`3.0.0-rc9.ci.7534`, with 21 `MeshWeaver.*` assemblies (`Maps`, `AI`, `ContentCollections.Indexing`,
+the Blazor and hosting halves) present only in the portal. Content binding one of them compiles in
+every portal and failed the bake with a CS0234 naming the content. Since then both lanes compile
+against the **portal** image's `/app` and its implementation shared frameworks, from a host
+composed of the portal's `/app` plus the tester CLI, and a reference-set gap is named in the
+verdict — see [Module Build Architecture](../ModuleBuildArchitecture) → "The NodeType bake and its
+gate run AS the platform image too". The two rules are the same rule: **what is compiled binds the
+host it is loaded into; what is bundled carries its own closure.**
+
 ## The blast radius is the consumer's trunk, not the producer's gate
 
 That is the reason this page exists rather than a comment on a workflow. The bundle is published

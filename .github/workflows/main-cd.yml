@@ -2170,7 +2170,7 @@ jobs:
       content-app-private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
 
   plugins-bake-image:
-    name: "Plugins: resolve this run's tester image digest"
+    name: "Plugins: resolve this run's tester + portal image digests"
     needs: [preflight, gate, plugin-test-image, promote]
     if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
     runs-on: ubuntu-latest
@@ -2181,6 +2181,10 @@ jobs:
     outputs:
       digest: ${{ steps.digest.outputs.digest }}
       image: ${{ steps.digest.outputs.image }}
+      # The PORTAL of the same promoted set — the reference set the Plugins bake compiles against
+      # and the identity it is keyed to (MeshWeaver#3022). Promote tags every image of the set with
+      # ONE version, so the tester's version names the portal too.
+      platform_digest: ${{ steps.digest.outputs.platform_digest }}
     steps:
       # 🚨 The retried ACR login is a SCRIPT (.github/scripts/acr-login.sh, #2857), and a script
       # needs a working tree — this job had none, so the first publishing run after #2857 failed
@@ -2213,6 +2217,13 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "image=meshweaver.azurecr.io/mw-plugin-test@$digest" >> "$GITHUB_OUTPUT"
           echo "plugins bake target: $ref = $digest"
+          # The portal of the SAME promoted set (MeshWeaver#3022) — the bake's reference set and
+          # the identity its bundles are keyed to. Same version tag: promote tags the whole set.
+          portal="meshweaver.azurecr.io/memex-portal-ai:${VERSION}"
+          platform_digest=$(docker buildx imagetools inspect "$portal" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          case "$platform_digest" in sha256:*) ;; *) echo "::error::could not resolve a digest for $portal (got '$platform_digest') — the promoted portal is not readable, and a Plugins bake without its reference set would compile against the tester's /app (the #3022 gap)"; exit 1 ;; esac
+          echo "platform_digest=$platform_digest" >> "$GITHUB_OUTPUT"
+          echo "plugins bake reference set: $portal = $platform_digest"
 
   plugins-bake:
     name: "Plugins: bake + seal the publication for this identity"
@@ -2229,6 +2240,12 @@ jobs:
       module-artifacts: module-bundle-MeshWeaver.{AI,Markdown.Collaboration}
       test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.plugin-test-image.outputs.version }}
       image-digest: ${{ needs.plugins-bake-image.outputs.digest }}
+      # 🚨 The PORTAL of this run's promoted set (MeshWeaver#3022): the tester EXECUTES the bake,
+      # the portal SUPPLIES its reference set, its identity and the gate's runtime. The bake's
+      # identity is the portal's by construction — the address check that #1814 needed becomes
+      # an invariant the lane asserts rather than a comparison that can lose.
+      platform-image: meshweaver.azurecr.io/memex-portal-ai:${{ needs.plugin-test-image.outputs.version }}
+      platform-image-digest: ${{ needs.plugins-bake-image.outputs.platform_digest }}
       bake-publish-targets: ${{ vars.BAKE_PUBLISH_TARGETS }}
       platform-ref: ${{ needs.gate.outputs.sha }}
       # Plugins is a ROOT: no upstream to wait for. And it does NOT dispatch its own dependents —
