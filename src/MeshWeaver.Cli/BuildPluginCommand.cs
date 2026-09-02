@@ -14,6 +14,12 @@ namespace MeshWeaver.Cli;
 /// then the gate runs with <c>--seed /bake</c> and stands a mesh up on <b>those bytes</b>. Testing
 /// the baked bytes is a strictly stronger claim than a fused pass, because the bytes judged are the
 /// bytes that ship.</para>
+///
+/// <para><b>Two IMAGES, and that split is deliberate too (#3022 for the lanes, #3113 here).</b> The
+/// TESTER image executes; the PLATFORM (portal) image supplies the reference set, the framework
+/// identity and the runtime. Both stages run from a host composed of the portal's <c>/app</c> with
+/// the tester CLI beside it — see <see cref="GateHost"/> for what the tester's subset <c>/app</c>
+/// cannot compile and why there is no fallback to it.</para>
 /// </summary>
 public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
 {
@@ -29,6 +35,24 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
     private const string BakeIdentityFile = "framework-mvid.txt";
 
     public async Task<int> RunAsync(BuildPluginOptions options, CancellationToken ct)
+    {
+        // Two /app extractions plus the composed host is roughly a gigabyte per invocation, and
+        // the path carries this process's id — so a later run never reuses it and stale copies
+        // accumulate until the disk is full. The bake is deliberately NOT in here: the caller asked
+        // for it and may well read it after this returns.
+        var hostRoot = Path.Combine(Path.GetTempPath(), $"memex-host-{Environment.ProcessId}");
+        try
+        {
+            return await RunCoreAsync(options, hostRoot, ct);
+        }
+        finally
+        {
+            await GateHost.DiscardTree(hostRoot, output);
+        }
+    }
+
+    private async Task<int> RunCoreAsync(
+        BuildPluginOptions options, string hostRoot, CancellationToken ct)
     {
         var repo = Path.GetFullPath(options.PluginPath);
         if (!Directory.Exists(repo))
@@ -51,21 +75,139 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
             return 6;
         }
 
+        // ── the PLATFORM image is REQUIRED, and there is no fallback to the tester's /app ────────
+        // 🚨 #3113. Composing only the tester's /app is not "backwards compatible", it is the
+        // defect: content that binds a portal-shipped assembly cannot compile against a strict
+        // subset of the portal's reference set, and the failure reads as a CONTENT error on source
+        // nobody changed. node-repo-gate.yml refuses the same way (`platform-image-digest is empty
+        // and allow-unpinned is not set … There is no fallback to the tester's /app`), so this
+        // refuses rather than silently compiling against the wrong reference set.
+        if (options.PlatformImage is not { Length: > 0 })
+        {
+            await error.WriteLineAsync(
+                "error: --platform-image is required — pass the PORTAL image "
+                + "(e.g. meshweaver.azurecr.io/memex-portal-ai@sha256:…, pinned from the SAME CD wave "
+                + "as --image). The tester image only EXECUTES; the portal supplies the reference "
+                + "set, the framework identity and the runtime. There is no fallback to the tester's "
+                + "/app: it is a strict subset of the portal's (88 vs 219 assemblies on "
+                + "3.0.0-rc9.ci.7534), so content binding MeshWeaver.Maps, .AI or .Indexing fails to "
+                + "compile against it (MeshWeaver#3022 / #3113).");
+            return 9;
+        }
+        if (GateHost.NamesTheTesterImage(options.PlatformImage))
+        {
+            await error.WriteLineAsync(
+                $"error: --platform-image names the TESTER image ('{options.PlatformImage}') — pass "
+                + "the PORTAL image (meshweaver.azurecr.io/memex-portal-ai); the tester only executes. "
+                + "Accepting it would silently restore the reference-set gap this argument closes.");
+            return 9;
+        }
+
         // Pin by DIGEST once, and use it for both stages. The workflow this replaces already did
         // this (`${IMAGE%%:*}@${DIGEST}`) for a reason: a tag can move between the compile and the
         // gate, and then the bytes tested are not the bytes baked — which is the one claim the
         // two-stage split exists to make.
         var pinned = await _runner.PullImage(options.Image, ct);
         if (pinned is null) return 4;
-        await output.WriteLineAsync($"image: {pinned}");
+        await output.WriteLineAsync($"tester image: {pinned}");
+        var platform = await _runner.PullImage(options.PlatformImage, ct);
+        if (platform is null) return 4;
+        await output.WriteLineAsync($"platform image: {platform}");
+
+        // ── the composed GATE HOST: the portal's /app with the tester CLI beside it ──────────────
+        // (hostRoot is created by RunAsync, which also removes it however this returns.)
+        var testerApp = Path.Combine(hostRoot, "tester-app");
+        var portalApp = Path.Combine(hostRoot, "portal-app");
+        var gateHost = Path.Combine(hostRoot, "gate-host");
+        if (!await _runner.ExtractApp(pinned, testerApp, ct)) return 10;
+        if (!await _runner.ExtractApp(platform, portalApp, ct)) return 10;
+        if (!File.Exists(Path.Combine(testerApp, GateHost.TesterCli)))
+        {
+            await error.WriteLineAsync(
+                $"error: {pinned} ships no /app/{GateHost.TesterCli} — --image must be the "
+                + "mw-plugin-test image.");
+            return 10;
+        }
+        var manifest = new FileInfo(Path.Combine(portalApp, GateHost.SurfaceManifest));
+        if (!manifest.Exists || manifest.Length == 0)
+        {
+            await error.WriteLineAsync(
+                $"error: {platform} ships no /app/{GateHost.SurfaceManifest} — --platform-image must "
+                + "be the PORTAL image; a host without one resolves the fallback identity no bake may "
+                + "be keyed to.");
+            return 10;
+        }
+        await output.WriteLineAsync(
+            $"tester /app: {Directory.GetFiles(testerApp, "*.dll").Length} assemblies; "
+            + $"platform /app: {Directory.GetFiles(portalApp, "*.dll").Length} assemblies");
+
+        // 🚨 ONE BUILD, ASSERTED. The bake is keyed to the PORTAL's identity and executed by the
+        // TESTER's toolchain, which is honest only when the two images are one build. The tester's
+        // own `framework-identity` verb reads the portal's /app as FILES and compares — naming the
+        // canonical assemblies each side lacks on a mismatch (#1814) — and it never degrades to a
+        // fallback identity, so this comparison cannot pass on a manifest-less directory.
+        var (testerRc, testerLine) = await _runner.CaptureVerbose("docker",
+            ["run", "--rm", "--init", "--entrypoint", "/app/mw-plugin-test", pinned,
+             "--print-framework-identity"], ct);
+        var idIdx = testerLine.IndexOf("identity=", StringComparison.Ordinal);
+        var testerIdentity = testerRc == 0 && idIdx >= 0
+            ? testerLine[(idIdx + "identity=".Length)..].Split(' ', '\n', '\r')[0].Trim()
+            : "";
+        if (testerIdentity.Length == 0)
+        {
+            await error.WriteLineAsync(
+                $"error: could not resolve the tester image's framework identity (got: '{testerLine.Trim()}').");
+            return 10;
+        }
+        var (identityRc, identityOut) = await _runner.CaptureVerbose("docker",
+            ["run", "--rm", "--init", "-v", $"{portalApp}:/portal:ro",
+             "--entrypoint", "/app/mw-plugin-test", pinned,
+             "framework-identity", "/portal", "--expect", testerIdentity], ct);
+        var frameworkIdentity = identityOut
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .LastOrDefault() ?? "";
+        if (identityRc != 0 || frameworkIdentity.Length == 0)
+        {
+            await error.WriteLineAsync(
+                "error: the tester image and the platform image do NOT resolve one framework identity "
+                + "— they are not one build (the verb's verdict above names the canonical assemblies "
+                + "each side lacks). Pin --image and --platform-image from the SAME CD wave.");
+            return 10;
+        }
+        await output.WriteLineAsync(
+            $"framework identity: {frameworkIdentity} (the platform's; the tester resolves the same)");
+
+        // The composition rules are the LANES' rules — one implementation, extracted and run, never
+        // reimplemented here. It fails closed and names the file it is missing.
+        var script = GateHost.ExtractComposeScript(hostRoot);
+        var composed = await _runner.Exec("bash", [script, portalApp, testerApp, gateHost], ct);
+        if (composed != 0)
+        {
+            await error.WriteLineAsync(
+                composed == 127
+                    ? $"error: could not run {GateHost.ComposeScriptName} — 'bash' is not on PATH. "
+                      + "Composing the gate host is not optional: without it the build has no portal "
+                      + "reference set."
+                    : $"error: composing the gate host failed (exit {composed}) — the refusal above "
+                      + "names the file that was missing.");
+            return 10;
+        }
+        // The two extractions are CONSUMED by the composition above (and by the identity check
+        // before it); only the composed host is mounted from here on. Dropping them now keeps peak
+        // disk at one copy instead of three across the compile and the gate, which are the long
+        // stages — the finally in RunAsync is the backstop, not the whole answer.
+        await GateHost.DiscardTree(portalApp, output);
+        await GateHost.DiscardTree(testerApp, output);
+
+        var invokingUser = await _runner.ResolveInvokingUser(ct);
 
         var bake = options.BakeOutput is { Length: > 0 }
             ? Path.GetFullPath(options.BakeOutput)
             : Path.Combine(Path.GetTempPath(), $"memex-bake-{Environment.ProcessId}");
         Directory.CreateDirectory(bake);
-        // 🚨 The tester image runs as a NON-ROOT user, so the bake mount must be writable by it —
-        // the `chmod 777 "$OWN_BAKE"` every docker-run gate performs. Proven the hard way on the
-        // verb's first production run (Manufacturing #37): 15/15 NodeTypes compiled, then
+        // 🚨 The container may run as a user this host never provisioned, so the bake mount must be
+        // writable by it — the `chmod 777 "$OWN_BAKE"` every docker-run gate performs. Proven the
+        // hard way on the verb's first production run (Manufacturing #37): 15/15 NodeTypes compiled, then
         // `UnauthorizedAccessException: Access to the path '/bake/Manufacturing.zip' is denied`
         // writing the first bundle. Applied to a caller-supplied directory too: the caller asked
         // for a bake THERE, and a mount the container cannot write is a promise this command
@@ -78,33 +220,19 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         // upstream types were DECLINED ('MeshWeaver.AI built against mvid:699963b6…, live is
         // 813bec7e…') because the composed module and the publication disagreed. The reusable gate
         // never has this skew: with an upstream seed, compose-sealed-modules takes the modules FROM
-        // the publication, identity-matched. Same here — the identity is asked of the IMAGE
-        // (--print-framework-identity, the gate's own pre-bake step), the seed is fetched before
-        // stage 1, and the requested modules come from the publication's SEALED MODULE SET
+        // the publication, identity-matched. Same here — the seed is fetched before stage 1, and the
+        // requested modules come from the publication's SEALED MODULE SET
         // (`…/prebuilt/{identity}/{source}/modules`, MeshWeaver#2698/#2707). Round 5's lesson: the
         // seed's own zips are the NODE-REPO content packs — no module bundle is among them, so
         // scanning them for 'AI'/'Essentials' refuses on every run. Only a build with NO upstream
         // seed falls back to the package index's latest.
+        //
+        // 🚨 The address is the PLATFORM's identity, resolved above from the portal's /app — not the
+        // tester's. The bake this run produces is keyed to the host it compiles on, and a seed
+        // fetched under the tester's identity would address a publication this gate never adopts.
         var seedDir = bake; // the gate consumes one dir: own bake + upstream bundles
-        string? sealedIdentity = null;
         if (options.UpstreamSeed is { Length: > 0 } upstreams)
         {
-            var line = await ImageRunner.Capture("docker",
-                ["run", "--rm", "--init", "--entrypoint", "/app/mw-plugin-test", pinned,
-                 "--print-framework-identity"], ct);
-            var idIdx = line.IndexOf("identity=", StringComparison.Ordinal);
-            var frameworkIdentity = idIdx >= 0
-                ? line[(idIdx + "identity=".Length)..].Split(' ', '\n', '\r')[0].Trim()
-                : "";
-            if (frameworkIdentity.Length == 0)
-            {
-                await error.WriteLineAsync(
-                    $"error: could not resolve a framework identity from the image (got: '{line.Trim()}') "
-                    + "— cannot address an upstream publication.");
-                return 8;
-            }
-            await output.WriteLineAsync($"framework identity: {frameworkIdentity} (from the image)");
-            sealedIdentity = frameworkIdentity;
             var seeded = await FetchUpstreamSeed(
                 options.RegistryUrl!, options.RegistryKey!, upstreams, frameworkIdentity, seedDir, ct);
             if (!seeded) return 8;
@@ -118,9 +246,9 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         if (options is { RegistryModules.Length: > 0 })
         {
             extDir ??= Path.Combine(Path.GetTempPath(), $"memex-ext-{Environment.ProcessId}");
-            var fetched = options.UpstreamSeed is { Length: > 0 } sources && sealedIdentity is { Length: > 0 }
+            var fetched = options.UpstreamSeed is { Length: > 0 } sources
                 ? await ComposeSealedModules(
-                    options.RegistryUrl!, options.RegistryKey!, sources, sealedIdentity,
+                    options.RegistryUrl!, options.RegistryKey!, sources, frameworkIdentity,
                     options.RegistryModules!, extDir, ct)
                 : await FetchRegistryModules(
                     options.RegistryUrl!, options.RegistryKey!, options.RegistryModules!, extDir, ct);
@@ -143,10 +271,17 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         // Module args go to BOTH stages: the compile needs the externals to RESOLVE their types,
         // the gate needs them to REGISTER them (the node-repo gate passes them to both for exactly
         // this reason, and dropping either half reintroduces one of the two failures).
-        var compile = await RunInImage(pinned, repo, extDir,
+        //
+        // 🚨 `--app /app --shared-frameworks …` makes the reference set the PLATFORM's /app plus its
+        // IMPLEMENTATION frameworks — what a portal's runtime compile sees — and keys the bake to the
+        // portal's identity. Same shape as node-repo-gate.yml, on purpose: the CLI and the lanes must
+        // not disagree about what a portal contains.
+        var compile = await RunOnHost(platform, gateHost, invokingUser, repo, extDir,
             mounts: [$"{bake}:/bake"],
             env: [],
-            args: ["compile", "/repo", ..AllowArgs(repo, options), ..moduleArgs, ..options.ExtraArgs,
+            args: ["compile", "/repo", "--app", "/app",
+                   "--shared-frameworks", GateHost.SharedFrameworks,
+                   ..AllowArgs(repo, options), ..moduleArgs, ..options.ExtraArgs,
                    "--output", "/bake", ..SourceShaArgs(options)],
             ct);
         if (compile != 0) return compile;
@@ -159,13 +294,25 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                 + "— the bake stage regressed. Refusing to test bytes that were never produced.");
             return 5;
         }
-
+        var baked = File.ReadAllText(identity).Trim();
+        if (!string.Equals(baked, frameworkIdentity, StringComparison.Ordinal))
+        {
+            await error.WriteLineAsync(
+                $"error: the run's own bake is keyed to '{baked}' but the platform's /app resolves "
+                + $"'{frameworkIdentity}' — the compile did not run against the platform host. Bundles "
+                + "published under an identity no portal asks for are INERT.");
+            return 5;
+        }
 
         // ── stage 2: CONSUME — stand a mesh up on the bytes stage 1 produced ───────────────────
-        return await RunInImage(pinned, repo, extDir,
+        // `--app /app`: the gate must RUN AS the platform host (it resolves the portal's identity),
+        // and is refused before a mesh boots otherwise — a gate running as another host would decline
+        // every bundle and compile the tree itself, passing without judging the bytes that ship.
+        return await RunOnHost(platform, gateHost, invokingUser, repo, extDir,
             mounts: [$"{bake}:/seed:ro"],
             env: ["MW_INSTALL_DIFF=1"],
-            args: ["/repo", ..AllowArgs(repo, options), ..moduleArgs, ..options.ExtraArgs, "--seed", "/seed"],
+            args: ["/repo", "--app", "/app", ..AllowArgs(repo, options), ..moduleArgs,
+                   ..options.ExtraArgs, "--seed", "/seed"],
             ct);
     }
 
@@ -498,8 +645,12 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         return true;
     }
 
-    private Task<int> RunInImage(
-        string image, string repo,
+    /// <summary>
+    /// Runs the tester CLI out of the composed gate host, inside the PLATFORM image, with this
+    /// verb's standing mounts (<c>/repo</c> and, when there are external modules, <c>/ext</c>).
+    /// </summary>
+    private Task<int> RunOnHost(
+        string platformImage, string hostDirectory, string? user, string repo,
         string? extDir,
         IEnumerable<string> mounts, IEnumerable<string> env, IEnumerable<string> args,
         CancellationToken ct)
@@ -508,7 +659,7 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         all.AddRange(mounts);
         if (extDir is { Length: > 0 } ext)
             all.Add($"{ext}:/ext");
-        return _runner.RunInImage(image, all, env, args, ct);
+        return _runner.RunOnComposedHost(platformImage, hostDirectory, user, all, env, args, ct);
     }
 }
 
@@ -536,6 +687,13 @@ public sealed record BuildPluginOptions(
     /// <summary>Space-separated upstream SOURCES whose sealed publication seeds the gate's mesh
     /// (e.g. "plugins") — the packages a `requires` chain reaches, not merely their DLLs.</summary>
     public string? UpstreamSeed { get; init; }
+
+    /// <summary>
+    /// The PORTAL image — REQUIRED (#3113). It supplies the reference set, the framework identity
+    /// and the runtime; <see cref="Image"/> only executes. There is deliberately no default and no
+    /// fallback to the tester's <c>/app</c>: see <see cref="GateHost"/>.
+    /// </summary>
+    public string? PlatformImage { get; init; }
 
     public IReadOnlyList<string> ExtraArgs => Extra ?? [];
 }

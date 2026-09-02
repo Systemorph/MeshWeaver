@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <!-- The CLI is an Exe; a test project referencing it gets memex.dll in its bin, which is all
+         these tests need — every assertion here is over PURE seams (the docker argv, the embedded
+         composition script, the argument refusals). Nothing here starts docker: the defect #3113
+         guards against is not a crash but a run that succeeds against the WRONG reference set, and
+         that is decided in the argv, which needs no daemon. A docker-shaped test would have to be
+         skipped on CI, and a skipped gate renders the same green tick as a passing one. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Cli\MeshWeaver.Cli.csproj" />
+  </ItemGroup>
+</Project>
