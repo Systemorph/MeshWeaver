@@ -59,6 +59,76 @@ Put those together and a mapping that is lost once is lost for the life of the p
 The startup population and the lost-after-landing population are two different triggers of one
 cause. Neither recovers, for the same reason: **there is no second assertion.**
 
+## The user-visible face of it: `/api/content` answers 503 (#2901)
+
+The measurement above is stated in routing terms. This is what the same fault looks like from a
+browser, and it is worth writing down because the shape was mis-attributed twice before the routing
+cause was found — once to a post-upload *settle window*, once to the memory `PubSubStore` and the
+streams-retirement program (#1729/#1742).
+
+`/api/content/{node}/{collection}/{file}` resolves the owning node's collection config with **one
+`GetDataRequest` per request** — deliberately uncacheable, because that round trip IS the permission
+check (`ContentFileResolver.Resolve`). It is issued from `portal/nodeops-{meshId}` and bounded by
+`ReadBudget.Default` (10 s). When the reply cannot get back, the budget is the only terminal, and the
+route answers **503 after ~10.3 s, per request, for as long as the process lives**.
+
+### The chain, measured end to end on `memex-cloud`, 2026-09-02
+
+| # | Observation | Reading |
+|---|---|---|
+| 1 | `Content read timed out for DoublePendulum/content/og-card.png` — **33 occurrences in 24 h, every one on a single pod**, zero on the other six replicas and zero in namespace `memex` | Per-pod and persistent. Neither a settle window nor a cluster-wide transport fault can produce that distribution |
+| 2 | Same millisecond: `HubUnreachableException: Reading content collection config from 'DoublePendulum' gave up after 10s … Reader: Hub portal/nodeops-Gpdh… RunLevel=Started Queue(buffer=0,deferred=0,exec=0) … Target: NO LOCAL HUB` | The reader is healthy and idle. Nothing arrived — this is the reply leg, not the request leg |
+| 3 | `[ROUTE] Directed delivery to pod hub 'portal/nodeops-Gpdh…' was refused: no silo in this cluster is currently serving that hub. Message RawJson (…) **from `AgenticEngineering`** was NOT posted` — logged by **four** different peer pods | The owning per-node hub DID produce the `GetDataResponse`. It had nowhere to go. Exactly the "reply produced, no route home" pair, now on the directed transport |
+| 4 | Onset: the refusals and the content timeouts start in the **same hour**, ~8 h after that pod had started clean and served fine | Lost-after-landing, not never-landed |
+| 5 | `03:12:52Z` — a peer silo logs `I have been told I am dead, so this silo will stop` and restarts | The membership change that re-partitioned the directory, immediately before the onset |
+
+Rows 3 and 5 together are the whole issue: a membership change moved the grain directory, one
+process's entry did not survive it, and every answer addressed to that process was refused from then
+on.
+
+### The two corrections this measurement makes
+
+**It is not a settle window.** Nothing about a freshly written file is involved. The discriminator is
+*which replica served the request*, which is why the same file alternated 200/503 across round-robin
+attempts and why a single-replica probe cannot see the fault at all.
+
+**It is not the memory `PubSubStore`.** The refusal line says in its own words that the message
+**was NOT posted to the Orleans stream** — the directed pod-hub call replaced that publish
+(`PodHubDeliveryRollPlan`). A discarded stream publish is a different failure with a different fix,
+and attributing this to the streams-retirement program would have parked a closed bug behind an open
+programme.
+
+### How to re-run it
+
+Two Loki queries, no mutation, and the first one alone settles the family:
+
+```
+sum by (namespace,pod) (count_over_time({namespace=~"memex|memex-cloud"} |= "Content read timed out" [24h]))
+sum by (pod)           (count_over_time({namespace="memex-cloud"} |= "portal/nodeops-" |= "was refused" [1h]))
+```
+
+🚨 The second filter is `portal/nodeops-` — the **prefix**, deliberately, with no mesh id. Every
+pod-hub address shares it, so the query runs as written against any deployment. An earlier draft
+wrote `portal/nodeops-<meshId>`, which returns zero rows unless the reader first substitutes a value
+they do not have yet — and a zero-row answer here reads exactly like "the refusals have stopped",
+which is the one conclusion this page exists to prevent someone drawing by accident. If you want a
+single mesh, add ` |= "<meshId>"` as a third filter once you have one from the first query's output.
+
+🚨 **`sum by (pod)` is the whole method.** An aggregate count reads as a low-grade cluster-wide
+flake; per pod it is one replica at 33 and six at zero, which names the cause. See
+[Measuring a Live Portal Read-Only](../MeasuringALivePortalReadOnly).
+
+### What closes it
+
+Re-assertion repairs the mapping at the next membership change, so the same measurement after the
+roll must show the failures **spread across replicas or absent**, never concentrated on one pod
+again. A fresh single-pod concentration would mean the re-assertion did not land for that address,
+and the next thing to look at is its ORDERING against the directory re-partition — the claim fires on
+the membership *notification*, which is not the same instant as the re-partition completing.
+
+> 🚨 A green probe through a load balancer in front of **one** replica has no power to detect a
+> per-replica fault. The replica count is part of the verification criterion, not context for it.
+
 ## Why the fix is an event and not a retry
 
 The claim already retried indefinitely on failure. That was never the gap. The gap is that **landing
