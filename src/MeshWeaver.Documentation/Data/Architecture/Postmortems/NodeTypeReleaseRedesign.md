@@ -346,3 +346,103 @@ un-skipped and running today.
    NodeType simultaneously will get different auto-stamped versions (timestamp
    differs). Both compile independently; the latest Succeeded wins active
    status. This is probably fine.
+
+---
+
+## 2026-09-02 — the post-condition at the settle (#781)
+
+**Symptom.** `Publish/Deck` had compiled the current source and instances kept binding the previous
+day's assembly. The node's own state said it, and said it quietly:
+
+```
+lastCompileSucceededAt        2026-08-27T21:53:01.850Z
+lastCompiledVersion           575
+latestAssemblyPath            Publish_Deck/v575-s8929555-aadb349047af.dll
+
+requestedReleaseAt            2026-08-27T21:52:59.898Z
+lastReleaseRequestHandledAt   2026-08-27T21:52:59.898Z   ← consumed
+latestReleasePath             Publish/Deck/Release/20260826065548-neI3XM25   ← the PREVIOUS DAY
+```
+
+`compilationStatus: Ok`, `compiledSources` identical to `currentSourceVersions`, an assembly built,
+a release path present. Healthy from every angle. **Only comparing `lastCompiledVersion` against the
+release reveals it**, and nothing was comparing them.
+
+### What was NOT the cause
+
+The obvious reading — "a release request fired while a compile was in flight" — is wrong, and
+chasing it would have produced a second gate that already exists. `InstallReleaseRequestWatcher`
+has gated on a SETTLED status (`not Pending and not Compiling`) since long before the incident:
+
+```csharp
+&& def.CompilationStatus is not CompilationStatus.Pending
+                          and not CompilationStatus.Compiling
+```
+
+Checked out at 2026-08-01, 2026-08-20 and 2026-08-27T21:00 — present in all three, all before the
+21:52:59 request. So at the moment the request was handled, nothing was in flight.
+
+### What it actually is: an ordering the request side cannot see
+
+Two ways to reach the same state, and the fix must not care which one happened:
+
+1. The request cut the build that was current at 21:52:59 — correctly, by its own contract — and the
+   compile that finished at 21:53:01 started *after* it. Nothing revisits the result.
+2. The release create simply did not land. `TryCreateReleaseNode` is **best-effort by design**
+   (compile correctness must not depend on a MeshNode create), so an expired bound, a fault, or a
+   refusal all emit `null`, logged at Warning and swallowed. The create runs under the REQUESTER's
+   identity for attribution, so a partition the requester may not create in refuses it — and
+   `Access denied: user 'rbuergi' lacks Update permission on 'Publish/Deck'` makes that the leading
+   candidate for that night.
+
+In both, `ApplyCompileSuccess` stamps `releasePath ?? def.LatestReleasePath` — the previous build's
+release — while `LastReleaseRequestHandledAt` was stamped on the DISPATCH commit and the trigger is
+therefore already spent. **Nothing retries, and asking again cannot repair it**: a second request is
+absorbed by the build already in hand (#1707 slice 3).
+
+### The fix: a post-condition, checked where the compile SETTLES
+
+> **`latestReleasePath` must never be older than `lastCompiledVersion` while `requestedReleaseAt`
+> has been consumed.**
+
+`ReleasePostCondition` (`MeshWeaver.Compiler.Pipeline`) evaluates it in the terminal chain of
+`RunCompile`, after the release create has answered and before the terminal stamp — the one moment
+at which every fact is in hand. The verdict is a pure function of (the definition at dispatch, the
+compile result, the release cut on this settle), so it is unit-testable with no mesh.
+
+It fires only on EVIDENCE, and stays silent wherever the answer is inconclusive:
+
+| Condition | Verdict |
+|---|---|
+| A release was cut on this settle | holds |
+| The request was never made, or is still standing (`handled < requested`) | not this check's business — the watcher re-fires a standing trigger itself |
+| Consumed request, no release at all | **violated** |
+| Consumed request, and the store version / assembly coordinates / compiled-source snapshot MOVED past the standing release | **violated** |
+| Nothing in the result can distinguish the builds (a producer with no store and unchanged sources) | inconclusive — never a violation |
+
+### Why RE-CUT rather than only report
+
+The remedy mints the missing release **from the bytes this compile just produced — no recompile** —
+under SYSTEM, with the requester cleared so it does not re-attempt the attribution that was refused.
+
+- **Reporting alone leaves the mesh in the incident's state**: unrepairable from the outside,
+  because the trigger is spent and a fresh request is absorbed by the build in hand. Only `force`
+  escaped, and the person who needed it could not write the node.
+- **Un-consuming the trigger is worse.** A release create that keeps failing would re-dispatch a
+  compile on every settle — a reconcile fed by its own writes, unbounded.
+- **System is the credential that produced the bytes.** The compile already runs as System precisely
+  so it succeeds on a partition the caller cannot write; the requester passed the `Compile` gate at
+  the entry point. Cutting the artefact that compile owed them widens nothing.
+
+### …and it stays LOUD
+
+Silence is what made this invisible for a day, so the violation is an **ERROR** naming the type, the
+stale path and the build that moved — whether or not the re-cut succeeds — and the outcome is
+written to the compile `_Activity`, the official diagnosis surface. A re-cut that also fails says so
+explicitly: *"the node advertises a build no release names"*.
+
+**Pinned by:** `ReleasePostConditionTest` (10 cases, `MeshWeaver.Compiler.Pipeline.Test`) for the
+verdict, and — on a real mesh, in MeshWeaver.Plugins — `ReleasePostConditionAtSettleTest`, which
+reproduces the incident end to end: an Editor who holds `Compile` asks for a release on a type whose
+`Release` subtree denies `Create`, the compile succeeds as System, the attributed create is refused
+and swallowed, and the settle must still leave a release naming `lastCompiledVersion`.
