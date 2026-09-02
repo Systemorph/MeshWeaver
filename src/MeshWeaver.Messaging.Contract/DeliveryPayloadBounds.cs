@@ -65,8 +65,18 @@ public static class DeliveryPayloadBounds
             return false;
         if ((long)content.Length * 3 < limitBytes)
             return false;
-        payloadBytes = Encoding.UTF8.GetByteCount(content);
-        return payloadBytes >= limitBytes;
+        // 🚨 Assigned only on the TRUE return, so the documented contract ("0 otherwise") holds even
+        // on the branch that DID compute a count. A payload big enough to defeat the O(1) pre-filter
+        // but still under the bound used to come back `false` with a real byte count in hand, which
+        // reads as evidence and is the one shape a caller could mistake for a small measurement of
+        // an oversized payload. No production caller looks at the value on a false return — every
+        // one of them reads it inside the branch — so this makes the promise true rather than
+        // changing what anyone observes.
+        var bytes = Encoding.UTF8.GetByteCount(content);
+        if (bytes < limitBytes)
+            return false;
+        payloadBytes = bytes;
+        return true;
     }
 
     /// <summary>
@@ -110,13 +120,13 @@ public static class DeliveryPayloadBounds
             return IsOversized(delivery, limitBytes, out payloadBytes);
         if (options is null)
             return false;
-        if (!Measure(delivery.Message, options, out payloadBytes))
-        {
-            payloadBytes = 0;
+        // Same contract as the overload above, for the same reason: the count is published only when
+        // the answer is "oversized". A typed payload that was measured and FITS is a false return
+        // with nothing in the out parameter, not a false return carrying a number.
+        if (!Measure(delivery.Message, options, out var bytes) || bytes < limitBytes)
             return false;
-        }
-
-        return payloadBytes >= limitBytes;
+        payloadBytes = bytes;
+        return true;
     }
 
     /// <summary>

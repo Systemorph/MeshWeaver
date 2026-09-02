@@ -396,6 +396,42 @@ public class OversizedFailureReportSurvivesTest : TestBase
     }
 
     /// <summary>
+    /// 🚨 THE <c>out</c> COUNT IS PUBLISHED ONLY WITH A "YES" — both overloads, every branch.
+    ///
+    /// <para>Both document <c>payloadBytes</c> as "the exact UTF-8 byte count when oversized; 0
+    /// otherwise", and both had a branch that broke the promise: a payload big enough to defeat the
+    /// O(1) pre-filter (or, for a typed one, big enough to be worth measuring) but still UNDER the
+    /// bound returned <c>false</c> with a real count sitting in the out parameter.</para>
+    ///
+    /// <para>Nothing in production reads the value on a false return — every caller reads it inside
+    /// the branch — so this costs nothing to make true. It is worth making true because a
+    /// non-zero count next to a "no" is the one shape a reader can mistake for evidence, and the
+    /// next caller to reach for it would have no way to tell a measured-and-fits from an
+    /// oversized-and-measured. Caught by review on this PR, not by a test — hence a test.</para>
+    /// </summary>
+    [Fact]
+    public void A_payload_that_fits_reports_no_byte_count()
+    {
+        // RawJson, big enough that the 3 × Length pre-filter cannot prove it fits, so the exact
+        // count IS computed — the branch that used to leak it.
+        var justUnder = DeliveryOf(DeliveryPayloadBounds.MemoryStreamBlockBytes - 1, "d-just-under");
+        DeliveryPayloadBounds
+            .IsOversized(justUnder, DeliveryPayloadBounds.MemoryStreamBlockBytes, out var rawBytes)
+            .Should().BeFalse("one byte under the block still fits");
+        rawBytes.Should().Be(0,
+            "the count is the answer to 'how far over', and there is no over — a measured-and-fits "
+            + "must be indistinguishable from a proved-and-fits at the out parameter");
+
+        // The same, through the typed path, which measures by serialising.
+        var typed = TypedDeliveryOf(SmallPayloadBytes, "d-fits-typed");
+        DeliveryPayloadBounds
+            .IsOversized(typed, Hub.JsonSerializerOptions,
+                DeliveryPayloadBounds.MemoryStreamBlockBytes, out var typedBytes)
+            .Should().BeFalse("a small typed payload fits");
+        typedBytes.Should().Be(0, "and it reports no count either");
+    }
+
+    /// <summary>
     /// 🚨 UNMEASURABLE IS NOT "TOO BIG". A payload the serializer refuses has an UNKNOWN size, and the
     /// honest answer to unknown is the behaviour that predates the measurement: echo it.
     ///

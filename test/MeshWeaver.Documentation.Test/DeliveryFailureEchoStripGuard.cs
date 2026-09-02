@@ -354,9 +354,16 @@ public class DeliveryFailureEchoStripGuard(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// The masked code of a repo-relative source file. A missing file FAILS: this guard's subjects
-    /// are three named seams, and one of them having moved is exactly the condition that would
-    /// otherwise turn every assertion here into a silent no-op.
+    /// The masked code of a repo-relative NAMED seam. Both ways of not getting the text FAIL, and
+    /// deliberately do not share <see cref="Read"/>'s behaviour.
+    ///
+    /// <para>🚨 <see cref="Read"/> returns empty on an <see cref="IOException"/> because in a
+    /// whole-tree SCAN a file a concurrent build is writing is not evidence of an offence — the
+    /// worst case there is one file not counted. Here the file IS the subject: an unreadable seam
+    /// would be masked to the empty string, every pattern below would fail to match, and the guard
+    /// would report the seam as non-compliant for a reason that has nothing to do with the code. So
+    /// each case gets its own message and neither is silently absorbed: a missing file means the
+    /// subject MOVED (follow it), an unreadable one means the scan itself failed (re-run it).</para>
     /// </summary>
     private static string Masked(string relative)
     {
@@ -364,6 +371,19 @@ public class DeliveryFailureEchoStripGuard(ITestOutputHelper output)
         Assert.True(File.Exists(path),
             $"{relative} is missing — this guard's subject moved; follow it in the same change. An "
             + "assertion about a file that is not there passes having checked nothing.");
-        return SourceScan.MaskCommentsAndStrings(File.ReadAllText(path));
+        try
+        {
+            return SourceScan.MaskCommentsAndStrings(File.ReadAllText(path));
+        }
+        catch (IOException e)
+        {
+            Assert.Fail(
+                $"{relative} could not be read ({e.GetType().Name}: {e.Message}). This is a FAILED "
+                + "SCAN, not a non-compliant seam — most likely a concurrent build holding the file. "
+                + "Re-run. Do not 'fix' it by treating an unreadable subject as absent: that turns "
+                + "the one file this assertion is about into a guaranteed pass or a guaranteed "
+                + "failure, and neither says anything about the code.");
+            throw; // unreachable — Assert.Fail throws; present so the compiler sees a value on every path
+        }
     }
 }
