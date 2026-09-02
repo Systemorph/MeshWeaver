@@ -376,6 +376,7 @@ An ad-hoc `workspace.GetRemoteStream<MeshNode, …>(addr, …)` would open a **s
 
 ## Cross-references
 
+- [Reading a Write Verdict](/Doc/Architecture/ReadingAWriteVerdict) — when a write here fails, which site minted the error and which hub to investigate. An owner that never answered and an owner that answered with its own timeout look identical to a user.
 - [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — when to stream vs. query.
 - [Request via Stream Update](/Doc/Architecture/RequestViaStreamUpdate) — building control planes on `.Update` + watchers.
 - [Thread Execution Streaming](/Doc/Architecture/ThreadExecutionStreaming) — the canonical writer/renderer pair on one handle.
