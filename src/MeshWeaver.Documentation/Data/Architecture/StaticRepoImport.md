@@ -142,7 +142,7 @@ The answer is a **bulk verb, not a bypass**. `CreateNodesRequest` is the bulk si
 `CreateNodeRequest` and runs the identical pipeline — partition bootstrap once per partition, every
 validator including RLS for every node, the type-existence probe per distinct type, then **one**
 `WriteMany`, the `Created` change-feed publishes in caller order post-commit, and the post-creation
-handlers. So the importer splits each **write stage** (see [Import Write Ordering](ImportWriteOrdering)
+handlers. So the importer splits each **write stage** (see [Import Write Ordering](/Doc/Architecture/ImportWriteOrdering)
 — everything inside a stage may be written concurrently, a stage begins only after the previous one
 completed):
 
