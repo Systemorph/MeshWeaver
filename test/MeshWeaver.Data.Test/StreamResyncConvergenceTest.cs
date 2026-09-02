@@ -106,12 +106,15 @@ public class StreamResyncConvergenceTest(ITestOutputHelper output) : HubTestBase
                     if (eatTheFreshSnapshot
                         && Interlocked.Exchange(ref droppedFreshSnapshots, 1) == 0)
                     {
-                        // Signalling HERE is ORDERED, not hopeful: the owner posts its SubscribeAck
-                        // from HandleSubscribeRequest the moment SubscribeToClient returns, while
-                        // the re-assert runs later on the stream's own turn — so by the time this
-                        // frame exists the ack is already on its way and the subscriber's gate is
-                        // opening. The write the test makes next therefore lands on an OPEN gate
-                        // with still no base: the frame that has to earn a second re-ask.
+                        // Signalling HERE is ORDERED, not hopeful — and since #3058 the ordering
+                        // runs the other way round. The owner posts its SubscribeAck from the
+                        // re-assert's own update turn, immediately AFTER this frame was handed to
+                        // hub.Post (CreateSynchronizationStream's Update(…, applied:)), so the ack
+                        // is one enqueue behind the frame this pipeline is eating and is already on
+                        // its way — far ahead of the write the test makes next, which cannot be
+                        // posted until this signal has travelled back out to the test thread. That
+                        // write therefore lands on an OPEN gate with still no base: the frame that
+                        // has to earn a second re-ask.
                         failureInjected.OnNext(Unit.Default);
                         return d.Ignored();
                     }

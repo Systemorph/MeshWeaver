@@ -288,16 +288,59 @@ while the breadcrumb, banner and menus around it rendered fine.
 | release | meaning |
 |---|---|
 | the fresh **Full** lands | the mirror has its base — the success case; also resets the did-not-converge counter |
-| the owner's **`SubscribeAck`** | the owner has processed the re-subscribe and done whatever it is going to do |
+| the owner's **`SubscribeAck`** | the owner has **sent** the snapshot answering the re-subscribe (see the ordering rule below) |
 | a **verdict** on the request (`DeliveryFailure`, or the hub's own no-response terminal) | the request cannot be answered — `ResyncRefused` |
 
 🚨 **Releasing the gate asks for nothing.** Nothing polls, retries or runs on a timer:
 only the *next frame that proves the mirror still has no base* drives a new re-ask, so
 the rate is bounded by the round trip **and** by the owner actually emitting — the same
 bound `JsonSynchronizationStream.Resubscribe`'s in-flight flag has always lived with.
-Because the owner ACKs before its re-assert reaches the wire, the common case costs at
-most **one redundant round trip** per gap, and that redundant re-ask is itself answered
-with a Full, which ends the cycle.
+The common case therefore costs at most **one redundant round trip** per gap, and that
+redundant re-ask is itself answered with a Full, which ends the cycle.
+
+#### 🚨 The ack must not overtake its own answer (#3058)
+
+That last sentence is only true because of an ordering rule the ack did not originally
+have. `SubscribeAck` was posted from `DataExtensions.HandleSubscribeRequest` the instant
+the re-subscribe was received — but the `alreadyServing` branch only *queues* an
+`UpdateStreamRequest` on the stream's action block, so the ack raced ahead of the frame it
+was supposed to acknowledge, down a different path (a direct hub response) from the one the
+Full takes (the stream's outbound forwarding subscription).
+
+**The gate then bounded one round trip to the owner, not one outstanding answer** — and the
+give-up below, which reads an ack as evidence, counted a promise as a result:
+
+```
+05:14:07.039  Fresh-snapshot request acknowledged by owner   ← re-assert still queued
+05:14:07.043  Fresh-snapshot request acknowledged by owner   ← behind the burst's own frames
+05:14:07.048  Fresh-snapshot request acknowledged by owner
+              Resync gave up: 3 consecutive fresh-snapshot requests to owner
+              'FutuRe/AmountType' were acknowledged and none produced a base snapshot
+```
+
+Three acks in **9 ms**, one healthy Full still in the queue. During a bulk install the
+re-assert waits behind the install's own frames, every one of those frames re-proves the
+mirror has no base and earns a fresh re-ask, and each re-ask is acknowledged in about a
+millisecond — so the count measured the owner's **queue depth** and called it
+non-convergence. It faulted mirrors mid-install and reddened the samples content gate on
+roughly a third of all runs, on unmodified `main`.
+
+So `CreateSynchronizationStream` owns the ack now, and posts it **from the re-assert's own
+update turn** via `Update(…, applied:)` — the callback that runs in the same turn right
+after `SetCurrent`, by which point `Store.OnNext` has already driven the forwarding
+subscription and handed the Full to `hub.Post`. Ack and frame leave through the same
+outbound queue, in that order.
+
+A **fresh** stream still acks immediately, and the asymmetry is deliberate: that subscribe
+has no answer to overtake, its first Full comes out of the reduce's own hydration (IO-bound
+and unbounded), and waiting would hold the subscriber's pending callback across it — risking
+the very `RequestTimeout` the ack exists to prevent. It also cannot produce the miscount: a
+re-ask reaches that path at most once per gap, because `RegisterClientSubscription` makes the
+next one a re-assert.
+
+Every path posts exactly **one** ack, failure arms included — a path that posts none leaves
+the subscriber's pending callback open until `RequestTimeout`, which is the wedge the ack
+exists to prevent.
 
 Three properties this contract needs, each of which was missing:
 
@@ -344,11 +387,12 @@ answered" (the healthy shape above) from "a stream that keeps asking and never c
 **What a re-subscribe is owed by the owner.** `CreateSynchronizationStream`'s
 `alreadyServing` branch re-asserts the current snapshot as a Full. When there is nothing to
 assert yet — the initial subscribe is still hydrating, `Current` is null — it returns
-without sending, and that is correct rather than a hole: `Current` and the outbound JSON
-cursor are set by the *same* emission, so a stream with no `Current` has an empty cursor,
-and `ToDataChanged`'s `currentJson is null` branch makes its **first** frame a `Full` by
-construction. The subscriber is therefore always answered with a Full; if that Full is lost
-in transport, the gate above — not the chain — is what recovers it.
+without sending (acknowledging immediately, since there is no answer to overtake), and that
+is correct rather than a hole: `Current` and the outbound JSON cursor are set by the *same*
+emission, so a stream with no `Current` has an empty cursor, and `ToDataChanged`'s
+`currentJson is null` branch makes its **first** frame a `Full` by construction. The
+subscriber is therefore always answered with a Full; if that Full is lost in transport, the
+gate above — not the chain — is what recovers it.
 
 Pinned by `StreamResyncConvergenceTest`: the answer lost in transport, the answer arriving
 on a rebased clock, the re-ask refused **terminally** (must fault), and the re-ask refused
@@ -384,8 +428,13 @@ So the count of consecutive **acknowledged-and-unanswered** re-asks is bounded, 
 
 🚨 **The count is of ACKS, not of asks, and that is the #2745 policy in one line.** The
 increment lives in the ack arm of `RequestFreshSnapshot` and nowhere else. An
-acknowledgement means the owner *processed* the re-subscribe, so a base snapshot that never
-follows died on the leg — evidence. A re-ask **refused transiently** (`ShuttingDown`, the
+acknowledgement means the owner **sent** the snapshot answering the re-subscribe — it is
+posted from the re-assert's own update turn, after the frame is already in the owner's
+outbound queue (see *The ack must not overtake its own answer*, #3058) — so a base snapshot
+that never follows died on the leg. That ordering is what makes an ack evidence at all: an
+ack that precedes its own answer makes "acknowledged and unanswered" true of every ask the
+moment it is made, and the bound then fires on a burst rather than on a wedge. A re-ask
+**refused transiently** (`ShuttingDown`, the
 rolling-deploy overlap window) is deliberately ridden out by the table above, and counting
 it would fault every mirror in that window, which is worse than the bug this fixes. An
 increment that races an answering Full is undone by that Full's own reset a moment later.
@@ -409,11 +458,22 @@ frame that proves the mirror still has no base. Raising the bound buys a longer 
 a better chance; that is the opposite of a widened timeout, and it is why the number is
 small.
 
+🚨 **A give-up counter must count outstanding FAILURES, never attempts — #3058, and it is
+the general lesson.** The two are the same number only when each attempt has been given its
+answer's round trip. The moment the counter can be incremented by something that has not yet
+had a chance to succeed, it stops measuring the condition it names and starts measuring
+*load*: a bound written against "the owner is not answering" fires hardest exactly when the
+owner is busiest — during an install, a burst, a cold start — which is when a healthy system
+looks most like a broken one. The cure is never a bigger bound (that just moves the burst
+size that trips it, and re-hides the underlying frame loss); it is to make each increment
+cost a completed failure. Here that meant fixing the *ordering of the evidence*, not the
+arithmetic: the ack had to start following its own answer.
+
 **Why 3.** The one healthy way to spend an attempt without converging is a Patch overtaking
-the answering Full. The owner queues its re-assert on the **same** stream hub that produces
-the patches, so a patch can only overtake a re-assert that was already in flight when the
-re-ask landed — one redundant round trip, twice over at the very worst. The two failure
-directions are also not symmetric:
+the answering Full — the re-assert was already in flight when the re-ask landed. With the
+ordering rule above, that is bounded by one redundant round trip, twice over at the very
+worst; without it, it was bounded by nothing at all. The two failure directions are also not
+symmetric:
 
 | bound too low | bound too high |
 |---|---|
@@ -442,10 +502,19 @@ permanently by construction) and it is already how the code reads since #2654. I
 what produced the incident above: `LayoutAreaReference` *is* a `WorkspaceReference`, so the
 Present-area stream took the ordinary path, asked, was acknowledged, and was never answered.
 
-Pinned by `StreamResyncGivesUpTest`: one mid-burst Patch eaten to start the resync, then
-**every** fresh snapshot eaten, one write per proven gap — the mirror must fault with a
-`StreamNotConvergingException`, and a fresh subscriber must then get a new stream that
-converges on the owner's complete state. It hangs on the pre-#1384 tree.
+Pinned by **two** tests, one per direction, and neither passes without the other's code:
+
+- `StreamResyncGivesUpTest` — one mid-burst Patch eaten to start the resync, then **every**
+  fresh snapshot eaten, one write per proven gap. The mirror must fault with a
+  `StreamNotConvergingException`, and a fresh subscriber must then get a new stream that
+  converges on the owner's complete state. It hangs on the pre-#1384 tree, and it passes
+  **unchanged** across #3058 — which is the evidence that correcting the ack's ordering did
+  not weaken the termination it enables.
+- `StreamResyncAnswerInFlightTest` — the answer is **held**, not destroyed: the re-assert
+  Full and the ack the owner posts once that frame is on its way, together, because on a real
+  leg they leave through the same queue. The burst's own patches keep flowing. The mirror
+  must ask **once**, never fault, and converge the moment the answer is released. On the
+  pre-#3058 tree the ack escapes the hold and the mirror asks again per frame.
 
 ---
 
@@ -517,6 +586,8 @@ mirror and the convergence rules above hold.
 | Cross-hub: subscriber sends a delta, owner reconstructs the exact entity | `EntityDeltaTest`, `StringDeltaTransportTest` |
 | A value-equal **Full** still applies (no dedup) — rollback / resync lands | `SynchronizationStream.SetCurrent` Fulls-bypass |
 | Out-of-sync subscriber can request a Full | `RequestFreshSnapshot` |
+| A re-subscribe is acknowledged only AFTER its answering Full is on the wire | `JsonSynchronizationStream.CreateSynchronizationStream` (`Update(…, applied:)`); `StreamResyncAnswerInFlightTest` |
+| A resync that never converges faults the mirror; one merely SLOW does not | `StreamResyncGivesUpTest`; `StreamResyncAnswerInFlightTest` |
 
 ---
 
