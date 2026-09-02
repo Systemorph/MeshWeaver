@@ -32,6 +32,8 @@ set -euo pipefail
 
 PHRASE='stayed an untyped JsonElement'
 DIR="${1:?usage: check-untyped-content.sh <collected-logs-dir>}"
+scan_err="$(mktemp)"
+trap 'rm -f "$scan_err"' EXIT
 
 if [ ! -d "$DIR" ]; then
   echo "::error::$DIR does not exist — this gate had nothing to scan. That is a FAILED sweep, not a clean one: it must never be possible to pass by scanning nothing."
@@ -44,10 +46,26 @@ fi
 # file count — it is UntypedContentDegradationGate, which fails the build if the phrase stops
 # existing in the source that emits it, or if this script stops grepping the identical phrase.
 # Without that test, a reworded log message would silently retire this gate.
-matches=$(grep -rl "$PHRASE" "$DIR" 2>/dev/null || true)
+# 🚨 SEPARATE "found nothing" FROM "the scan failed". grep exits 0 on a match, 1 on no match, and
+# 2+ on a real error (unreadable file, bad path, I/O). The first version of this line was
+# `$(grep … 2>/dev/null || true)`, which collapses all three into an empty string — so a scan that
+# ERRORED reported "no degradation" and passed the gate. That is precisely the silent pass this file
+# exists to prevent, committed inside the file that prevents it. Caught by the repo's own
+# `CI's own shell` gate, which flags a captured command substitution that swallows stderr and status.
+set +e
+matches=$(grep -rl "$PHRASE" "$DIR" 2>"$scan_err")
+scan_rc=$?
+set -e
+
+if [ "$scan_rc" -gt 1 ]; then
+  echo "::error::the scan itself FAILED (grep exit $scan_rc) — this gate reached no verdict about $DIR."
+  echo "Treat this as a failed sweep, not a clean one: an unreadable log is not an absent degradation."
+  sed 's/^/  /' "$scan_err" 2>/dev/null | head -20
+  exit 1
+fi
 
 if [ -z "$matches" ]; then
-  echo "No content-type degradation in $DIR."
+  echo "No content-type degradation in $DIR (scan exit $scan_rc)."
   exit 0
 fi
 

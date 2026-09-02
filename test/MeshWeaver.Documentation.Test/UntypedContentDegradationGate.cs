@@ -104,5 +104,17 @@ public class UntypedContentDegradationGate
             && script.Contains("FAILED sweep", StringComparison.Ordinal),
             $"{Script} lost its missing-directory guard. Without it, a rename of the log-collection "
             + "directory turns this gate into a no-op that reports success on every shard.");
+
+        // 🚨 grep exits 0 on a match, 1 on NO match, and 2+ on a real error. Collapsing those — the
+        // `$(grep … 2>/dev/null || true)` idiom — makes an ERRORED scan indistinguishable from a
+        // clean one, so an unreadable log file reports "no degradation" and the gate passes. The
+        // first version of the script did exactly that; the repo's own `CI's own shell` gate caught
+        // it. Pinned here so it cannot come back under a reformat.
+        Assert.True(
+            script.Contains("scan_rc", StringComparison.Ordinal)
+            && script.Contains("-gt 1", StringComparison.Ordinal),
+            $"{Script} no longer distinguishes a FAILED scan from an EMPTY one. grep's exit code is "
+            + "the only thing that separates 'nothing degraded' from 'I could not look', and this "
+            + "gate's whole purpose is to make the second one impossible to mistake for the first.");
     }
 }
