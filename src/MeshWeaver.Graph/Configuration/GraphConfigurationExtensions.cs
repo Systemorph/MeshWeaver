@@ -37,6 +37,7 @@ public static class GraphConfigurationExtensions
                 .AddScopeType()
                 .AddReleaseType()
                 .AddBuildType()
+                .AddModuleBuildType()
                 .AddMarkdownType()
                 // Slide/Deck are NOT built-in any more: the Publish pack owns them as dynamic
                 // NodeTypes (Publish/Slide, Publish/Deck) with in-mesh layout areas; V53 retyped
