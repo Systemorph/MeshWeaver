@@ -11,15 +11,23 @@ namespace MeshWeaver.Markdown;
 
 /// <summary>
 /// Markdig extension that turns fenced code blocks into <see cref="ExecutableCodeBlock"/> instances,
-/// enabling <c>--execute</c>/<c>--render</c> code submission and <c>layout</c> area embedding.
+/// enabling <c>--execute</c>/<c>--render</c> code submission, <c>layout</c> area embedding, and the
+/// <c>prompt</c> composer fence.
 /// </summary>
-public class ExecutableCodeBlockExtension : IMarkdownExtension
+/// <param name="currentNodePath">
+/// The path of the node the markdown belongs to, or null when the document has no owning node. A
+/// ```` ```prompt ```` fence needs it: the composer is a layout area on that node's OWN hub, so
+/// without an owner there is no address to point the marker at and the fence stays read-only (the
+/// same reason <c>MarkdownViewLogic.DisableKernelPlaceholder</c> refuses to embed an ownerless
+/// kernel area — an empty address is the NotFound-storm shape, not a blank space).
+/// </param>
+public class ExecutableCodeBlockExtension(string? currentNodePath = null) : IMarkdownExtension
 {
     /// <summary>The fenced-code-block parser that produces <see cref="ExecutableCodeBlock"/> nodes.</summary>
     public ExecutableCodeBlockParser Parser { get; } = new();
 
     /// <summary>The HTML renderer for executable code blocks.</summary>
-    public ExecutableCodeBlockRenderer Renderer { get; } = new();
+    public ExecutableCodeBlockRenderer Renderer { get; } = new(currentNodePath);
 
     /// <summary>
     /// Replaces Markdig's default fenced-code-block parser with <see cref="Parser"/>.
@@ -73,7 +81,8 @@ public class ExecutableCodeBlockParser : FencedCodeBlockParser
 
 /// <summary>
 /// A fenced code block that carries parsed fence arguments and may be executed against a kernel
-/// (<c>--execute</c>/<c>--render</c>) or rendered as an embedded layout area (<c>layout</c> info string).
+/// (<c>--execute</c>/<c>--render</c>), rendered as an embedded layout area (<c>layout</c> info string),
+/// or lowered to a prompt composer (<c>prompt</c> info string — see <see cref="PromptFence"/>).
 /// </summary>
 /// <param name="parser">The block parser that created this block.</param>
 public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
@@ -100,6 +109,14 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 
     /// <summary>Validation error from parsing a <c>layout</c> block, or null when parsing succeeded.</summary>
     public string? LayoutAreaError { get; set; }
+
+    /// <summary>
+    /// The authored prompt when the fence's info string is <see cref="PromptFence.Language"/>;
+    /// otherwise null. Populated by <see cref="Initialize"/>. Empty string for an empty fence — a
+    /// composer with nothing to seed it with is still a composer, so "is a prompt fence" is
+    /// <c>is not null</c>, never <c>is not empty</c>.
+    /// </summary>
+    public string? PromptDraft { get; set; }
 
     /// <summary>
     /// Parses a fence argument string (e.g. <c>--execute id --render Area</c>) into key/value pairs.
@@ -140,6 +157,12 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
     public SubmitCodeRequest? GetSubmitCodeRequest()
     {
         if (Info == "layout")
+            return null;
+
+        // A prompt fence is prose for an agent, never source for the kernel. Excluded here rather
+        // than only in the renderer so a stray `--render` on one cannot turn it into a code cell
+        // that submits the prompt text to Roslyn.
+        if (Info == PromptFence.Language)
             return null;
 
         // The fence language ("csharp", "python", …) flows onto the submission so a foreign-language
@@ -304,7 +327,8 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 
     /// <summary>
     /// (Re)computes the derived state of the block — <see cref="Args"/>, <see cref="SubmitCode"/>,
-    /// <see cref="LayoutAreaError"/>, and <see cref="LayoutAreaComponent"/> — from the raw fence content.
+    /// <see cref="LayoutAreaError"/>, <see cref="LayoutAreaComponent"/> and <see cref="PromptDraft"/>
+    /// — from the raw fence content.
     /// Safe to call multiple times; the rendering and extraction paths call it before use.
     /// </summary>
     public void Initialize()
@@ -313,5 +337,6 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         SubmitCode = GetSubmitCodeRequest();
         LayoutAreaError = null; // Reset error state
         LayoutAreaComponent = GetLayoutAreaComponent();
+        PromptDraft = Info == PromptFence.Language ? Body() : null;
     }
 }
