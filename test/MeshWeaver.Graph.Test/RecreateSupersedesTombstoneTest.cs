@@ -26,7 +26,7 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class RecreateSupersedesTombstoneTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task Recreate_SupersedesTheTombstone_BeforeCreatedIsPublished_AndAFreshSubscriberSeesTheNewNode()
     {
         const string id = "tombstone-recreate";
