@@ -187,6 +187,58 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
         }
     }
 
+    /// <summary>
+    /// 🚨 A step that authenticates with an App INSTALLATION token must not assert on
+    /// <c>repos/{owner}/{repo}</c>'s <c>.permissions</c> object.
+    ///
+    /// <para>That object reports the <b>authenticated user's</b> permissions on the repository. An
+    /// installation token has no user, so GitHub answers every field <c>false</c> —
+    /// <c>{"admin":false,"maintain":false,"pull":false,"push":false,"triage":false}</c> — for a
+    /// token that works perfectly. Grepping it for <c>"push":true</c> therefore yields a check that
+    /// <b>can never pass</b>.</para>
+    ///
+    /// <para><b>Measured.</b> <c>arm-credential.yml</c> shipped with exactly that probe and was red
+    /// on runs 33605406624 and 33605578037 — <i>after</i> the org grant had landed, and after
+    /// <c>auto-arm.yml</c> had demonstrably armed a pull request on its own using a token from the
+    /// same mint. The lane was reporting a broken credential while the credential worked.</para>
+    ///
+    /// <para>An assertion that cannot pass is the same defect as one that cannot fail: it stops
+    /// carrying information. It is arguably worse, because a permanent red slanders something that
+    /// is healthy and trains readers to disbelieve the lane. The endpoint an installation token can
+    /// actually answer about itself is <c>/installation/repositories</c>.</para>
+    /// </summary>
+    [Fact]
+    public void NoInstallationTokenStepAssertsOnTheRepositoryPermissionsObject()
+    {
+        var offenders = Directory
+            .EnumerateFiles(WorkflowsDir(), "*.yml")
+            .Select(path => (path, text: File.ReadAllText(path)))
+            .Where(w =>
+            {
+                var lines = ExecutableLines(w.text);
+                // Only lanes that actually mint an installation token can hit this.
+                if (!lines.Any(l => l.Contains("create-github-app-token", StringComparison.Ordinal)))
+                    return false;
+                return lines.Any(l =>
+                    l.Contains("repos/", StringComparison.Ordinal) &&
+                    l.Contains(".permissions", StringComparison.Ordinal));
+            })
+            .Select(w => Path.GetFileName(w.path))
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(
+            offenders.Length == 0,
+            "These workflows mint a GitHub App installation token and then assert on "
+            + $"repos/{{owner}}/{{repo}}'s .permissions object: {string.Join(", ", offenders)}.\n"
+            + "That object reports the AUTHENTICATED USER's permissions. An installation token has no "
+            + "user, so every field comes back false for a token that works — the assertion can never "
+            + "pass, and it reports a broken credential while arming succeeds elsewhere in the same "
+            + "run (measured on arm-credential.yml, runs 33605406624 and 33605578037).\n"
+            + "Use /installation/repositories, which an installation token answers about itself, and "
+            + "let the mint's explicit permission-* requests assert the permissions.");
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
