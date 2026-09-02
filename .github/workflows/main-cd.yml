@@ -74,9 +74,34 @@ name: Continuous Delivery (main)
 # commit server-side as the tip of THIS repo's main and re-check the required test check on it,
 # which a fork's code can never be.
 on:
+  # 🚨 `branches:` IS LOAD-BEARING — without it, EVERY pull request's build starts a CD run.
+  #
+  # A `workflow_run` trigger fires on every completion of the named workflow on ANY branch, and the
+  # resulting run's own `head_branch` is always the default branch (it is the workflow FILE's ref),
+  # so a PR-triggered CD run is indistinguishable from a real one in the run list. They all key into
+  # the same concurrency group below, and `cancel-in-progress: false` keeps exactly ONE pending run
+  # per group — so each arrival CANCELS the pending one. A genuine main push-path delivery run
+  # waiting its turn is therefore evicted by the next PR build that happens to finish.
+  #
+  # Measured 2026-09-02, 07:35–07:43, six CD runs on two main shas, every one cancelled:
+  #   07:35 PR fix/arm-red-is-repo-scoped          → CD run, cancelled
+  #   07:37 PR ci/hard-cap-every-job-at-45-minutes → CD run, cancelled
+  #   07:39 main push                              → CD run, cancelled   ← real delivery
+  #   07:40 PR fix/oversized-pod-hub-delivery      → CD run, cancelled
+  #   07:41 PR fix/3022-identity-fork-remainder    → CD run, cancelled
+  #   07:43 main push                              → CD run, cancelled   ← real delivery
+  # Nothing was promoted between 03:33:50 and that window, while every dashboard was green: the
+  # runs existed, they were just never allowed to finish. The failure SCALES WITH PR THROUGHPUT,
+  # which is the worst possible shape — delivery stops hardest exactly when the repo is busiest,
+  # and it looks like "CD is slow today" rather than a defect.
+  #
+  # `branches:` filters on the TRIGGERING run's branch, which is the only place that information
+  # survives. This is not a batching or a cadence knob: a PR build is not a delivery event and must
+  # never enter this lane at all.
   workflow_run:
     workflows: ["MeshWeaver Build and Test"]
     types: [completed]
+    branches: [main]
   # Reconcile cadence. Off the hour on purpose (the top of the hour is GitHub's most contended
   # scheduling slot).
   #

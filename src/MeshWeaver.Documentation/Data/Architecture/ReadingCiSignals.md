@@ -496,6 +496,61 @@ If the same check name appears in every PR's failure list, stop triaging PRs and
 repository. `UNSTABLE` means the required set passed and something non-required did not — it is
 mergeable, and it is the state a hoistable assertion leaves behind.
 
+## 🚨 Delivery can stop for hours with every dashboard green — look for CANCELLED, not failed
+
+A cancelled run is not a failed run, and nothing alerts on it. `alert-on-failure` keys on failure;
+the delivery verdict never runs; the required check on main is green because the *tests* passed. The
+only symptom is a registry that stops receiving digests, which nobody watches minute to minute.
+
+**Measured 2026-09-02.** `main-cd` promoted nothing between 03:33:50 and 07:50 — over four hours —
+while the repository looked entirely healthy. In one ten-minute window, six CD runs were created and
+**every one was cancelled**:
+
+```
+07:35  PR fix/arm-red-is-repo-scoped           -> CD run, cancelled
+07:37  PR ci/hard-cap-every-job-at-45-minutes  -> CD run, cancelled
+07:39  main push                               -> CD run, cancelled   <- real delivery
+07:40  PR fix/oversized-pod-hub-delivery       -> CD run, cancelled
+07:41  PR fix/3022-identity-fork-remainder     -> CD run, cancelled
+07:43  main push                               -> CD run, cancelled   <- real delivery
+```
+
+### The mechanism: an unfiltered `workflow_run` plus a shared concurrency group
+
+`main-cd` triggers on `workflow_run` of *MeshWeaver Build and Test*. That fires on completions from
+**every branch**, pull-request builds included. All of those runs key into the same `concurrency`
+group, and GitHub keeps exactly **one pending run per group** — each arrival cancels the pending one.
+So a genuine push-path delivery run, sitting pending behind whatever is in flight, is evicted by the
+next PR build that happens to finish.
+
+**The failure scales with pull-request throughput.** Delivery stops hardest exactly when the repo is
+busiest, and it presents as "CD is slow today". Draining a PR queue makes it strictly worse, which
+inverts the usual intuition that merging more is progress.
+
+### Why this survives review, and why the run list actively misleads
+
+For a `workflow_run` event, the resulting run's `head_branch` is the **workflow file's** ref — always
+the default branch. A CD run started by a PR build therefore reports `head_branch=main`, exactly like
+a real one. Querying the CD runs *confirms* the wrong hypothesis. The triggering branch survives in
+only one place: the trigger's own `branches:` filter.
+
+To see what actually started them, list the *triggering* workflow's runs in the window instead:
+
+```bash
+gh run list --repo <owner>/<repo> --workflow "MeshWeaver Build and Test" --limit 20   --json headBranch,event,conclusion,updatedAt   --jq '.[] | select(.updatedAt >= "<from>" and .updatedAt <= "<to>") |
+        "\(.updatedAt[11:19]) \(.headBranch) \(.event)"'
+```
+
+### The rule
+
+**A `workflow_run` trigger on a workflow that declares a `concurrency` group MUST carry
+`branches:`.** Without the concurrency group an unfiltered trigger is usually harmless and sometimes
+intended — `retry-known-transients.yml` deliberately retries transients on PR builds and evicts
+nothing. The two together are what makes off-branch triggers destructive.
+
+Guarded by `WorkflowRunTriggerBranchFilterGuard`, which carries a control arm: if its block matcher
+ever stops recognising `workflow_run:`, it fails rather than passing having examined nothing.
+
 ## Related
 
 [Module Versioning](/Doc/Architecture/ModuleVersioning) · [Modules](/Doc/Architecture/Modules) ·
