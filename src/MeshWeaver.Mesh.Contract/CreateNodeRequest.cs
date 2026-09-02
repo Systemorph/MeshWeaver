@@ -411,6 +411,33 @@ public record CreateOrUpdateNodeRequest(MeshNode Node) : IRequest<CreateOrUpdate
 
     /// <summary>The user or system requesting the upsert.</summary>
     public string? RequestedBy { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>THE IMPORT ORDERING ESCAPE HATCH, and nothing else.</b> Set this and the update branch
+    /// stops refusing a <see cref="MeshNode.NodeType"/> that resolves to nothing
+    /// (<c>NodeTypeResolution.Resolves</c>) — i.e. it lets this one write CREATE the dangling-type
+    /// condition issue #2993 is about.
+    ///
+    /// <para><b>Why it exists at all.</b> A static-repo import cannot always put a type in place
+    /// before the instances that name it: two nodes may type each other (a cycle), or the type may
+    /// arrive from another repo entirely. <c>Doc/Architecture/ImportWriteOrdering</c> settles the
+    /// CREATE half — such a node is a reported <i>blocked create</i> and no write is attempted. The
+    /// UPDATE half has no such classification, and until #2993 it needed none, because the update
+    /// path checked nothing. Refusing there without a bypass would turn every re-import of an
+    /// already-present cycle member into a failure that holds the caller's git baseline — the exact
+    /// non-convergent loop #2556 removed.</para>
+    ///
+    /// <para><b>What taking it costs.</b> It is never silent: the handler logs a warning naming the
+    /// path and the type on every write that takes it, and <c>StaticRepoImporter</c> — the ONE
+    /// sanctioned caller — additionally names it in the import activity as a ⚠ line, so an operator
+    /// sees it in the portal and it repeats on every import until the type lands.</para>
+    ///
+    /// <para>🚨 <b>Do not set this from anywhere else.</b> <c>UnresolvableNodeTypeBypassGuard</c>
+    /// pins the call-site set, so a new caller fails CI naming this property. If your write needs
+    /// it, the honest fix is almost always to write the NodeType first. Full reasoning:
+    /// <c>Doc/Architecture/DanglingNodeTypes</c>.</para>
+    /// </summary>
+    public bool AllowUnresolvableNodeType { get; init; }
 }
 
 /// <summary>
