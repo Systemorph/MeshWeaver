@@ -22,6 +22,11 @@ namespace MeshWeaver.Mesh.Services;
 /// are immutable. To allow runtime writes under the same partition prefix,
 /// layer a writable provider higher in the registration order so it wins
 /// first-match.</para>
+///
+/// <para>🚨 <b>This adapter is a SERVE surface, so it holds only nodes that are actually
+/// served</b> — see the constructor. Definition-only entries stay reachable as
+/// <i>definitions</i> through <see cref="StaticNodeProviderExtensions.FindStaticNode"/>, which
+/// enumerates the <see cref="IStaticNodeProvider"/>s directly and never goes through here.</para>
 /// </summary>
 public sealed class StaticNodeStorageAdapter : IStorageAdapter
 {
@@ -30,11 +35,33 @@ public sealed class StaticNodeStorageAdapter : IStorageAdapter
     /// <summary>
     /// Wraps <paramref name="nodes"/> in an immutable, path-keyed lookup. Duplicate
     /// paths are deduped to the last entry (caller wins).
+    ///
+    /// <para>🚨 <b><see cref="MeshNode.IsDefinitionOnly"/> entries are excluded — MeshWeaver#2899.</b>
+    /// That marker is what <c>serveFromPartition</c> stamps to say *the durable row owns this path;
+    /// I am only the type definition* (Doc/Architecture/NodeTypeCatalogs). Every other seam that
+    /// answers "which node is served here" already honours it —
+    /// <see cref="StaticNodeProviderExtensions.FindServedStaticNode"/>,
+    /// <c>MeshDataSource.WithMeshNodes</c>, <c>MessageHubGrain.TryResolveStaticNode</c>, the
+    /// <c>CreateNode</c> existing-node probe, <c>PartitionWriteGuardValidator</c> and
+    /// <c>StaticNodeQueryProvider</c> — and <c>FindServedStaticNode</c>'s own contract states the
+    /// invariant outright: keeping them on one resolution is what guarantees
+    /// "served static" ⇔ "not persistence-backed" can never drift apart.</para>
+    ///
+    /// <para>This adapter was the one seam that drifted, and it is the seam
+    /// <c>PersistenceService</c> reads. <c>StaticNodePartitionStorageProvider</c> carries a fixed
+    /// namespace, so it sorts into <c>PersistenceService</c>'s FIRST provider band — ahead of every
+    /// wildcard durable backend — while being <c>IsReadOnly</c> and therefore absent from the write
+    /// chain. Serving a definition from <see cref="Read"/> therefore made a DB-synced static
+    /// partition answer every read with the in-memory definition while writes landed durably: the
+    /// write was acknowledged (the non-null try-then-claim ACCEPT sentinel), the version-history row
+    /// was chained off that acknowledgement, and no reader could ever see the row again. Durable,
+    /// versioned, unreadable — Doc/Architecture/DurableButUnreadable. Pinned by
+    /// <c>AcknowledgedWriteIsReadableTest</c>.</para>
     /// </summary>
     public StaticNodeStorageAdapter(IEnumerable<MeshNode> nodes)
     {
         _nodes = nodes
-            .Where(n => !string.IsNullOrEmpty(n.Path))
+            .Where(n => !string.IsNullOrEmpty(n.Path) && !n.IsDefinitionOnly)
             .GroupBy(n => Norm(n.Path), StringComparer.OrdinalIgnoreCase)
             .ToImmutableDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
     }

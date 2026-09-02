@@ -110,13 +110,83 @@ will 503 forever with a message telling them to retry.
 The same applies to a per-file import manifest: record success on a read-back-visible write, or do
 not record it at all.
 
+## The core-side mechanism, found and fixed (2026-09-02)
+
+One producer of this signature lived in core, is now fixed, and is pinned by
+`AcknowledgedWriteIsReadableTest` (`test/MeshWeaver.Hosting.Test`). It is worth reading even if your
+instance turns out to have a different cause, because it shows the shape in full.
+
+`MeshNode.IsDefinitionOnly` is the marker `serveFromPartition` stamps on a static entry to say *the
+durable row owns this path; I am only the type definition*. **Six seams answer "which node is served
+here", and five honoured it** — `FindServedStaticNode`, `MeshDataSource.WithMeshNodes`,
+`MessageHubGrain.TryResolveStaticNode`, the `CreateNode` existing-node probe,
+`PartitionWriteGuardValidator` and `StaticNodeQueryProvider`. `FindServedStaticNode`'s own contract
+states the invariant outright: keeping them on one resolution is what guarantees *"served static" ⇔
+"not persistence-backed"* can never drift apart.
+
+**`StaticNodeStorageAdapter` — the sixth, and the one `PersistenceService` reads — did not.** It
+served definition-only entries from `Read`, `Exists`, `ListChildPaths` and `FindBestPrefixMatch`.
+That single gap produces the whole signature, because of how the provider chain is ordered:
+
+- `StaticNodePartitionStorageProvider` carries a fixed namespace, so it sorts into
+  `PersistenceService`'s **first** provider band — ahead of every wildcard durable backend.
+- It is `IsReadOnly`, so it is **absent from the write chain** (`Write` walks writable providers
+  only; `Read` walks *all* of them and takes the first non-null).
+
+So on a DB-synced static partition the write was claimed by the durable backend and acknowledged
+with the non-null try-then-claim ACCEPT sentinel; `VersionWritingStorageAdapter` chained the
+version-history row off that same acknowledgement; and every read from then on returned the
+in-memory definition instead of the row. **Read and Write disagreed about which provider owns the
+path, and only the write side was ever asked.**
+
+The fix is one predicate — the adapter is a *serve* surface, so it holds only nodes that are
+actually served. Definitions stay reachable as definitions through
+`StaticNodeProviderExtensions.FindStaticNode`, which enumerates the providers directly and never
+goes through the adapter.
+
+> **Residual, deliberately not widened:** the adapter sees one provider's node list, not the
+> cross-provider precedence `ResolveStaticNodes` applies. If a *higher*-precedence provider marks a
+> path definition-only while a *lower*-precedence one still offers a served node there, the storage
+> seam serves the lower one while `FindServedStaticNode` answers "nothing serves this" — the
+> MeshWeaver#2908 divergence, one layer down. That collision is reported by name today
+> (`DescribeStaticServeCollision`); closing it at this seam needs the adapter to consult the
+> resolution rather than a flat list.
+
+## What the 2026-09-02 re-measurement settled, and what it falsified
+
+Re-measured read-only on memex.systemorph.com. Two hypotheses died on evidence that could have gone
+the other way — record them so nobody spends the day again:
+
+| Probe | Answer | What it kills |
+|---|---|---|
+| `autocomplete @/AgenticEngineering/Introduction` | the node **and six of its children**, correct names and node types | **The write is not lost.** A row no reader can see cannot be returned by autocomplete. The failure is a read seam, not the write lane — which is what the issue title says and what three days were spent on. |
+| `get_version AgenticEngineering/WriteLaneProbe 1` | `mainNode == path` — and the node is **invisible** | The `is:main` / `n.main_node = n.path` filter (#2939) is **not** the discriminator here. |
+| `get_version AgenticEngineering/_Policy 1` | `mainNode != path` — and the node is **visible** | …and the correlation is exactly *inverted* from that filter, so it cannot be the cause. |
+| `search namespace:AgenticPrimer scope:descendants` | full content, same portal, same `_Access` shape (`Public — Viewer` + `Anonymous — Viewer`, nothing else) | It is not the grant shape, not the install date, and not a portal-wide query regression. |
+
+What survives, 5 cases out of 5 including one that could have falsified it: **a row in that
+partition passes the read filter iff its `main_node` is the partition root `AgenticEngineering`** —
+which is precisely the prefix its two grants project at (`COALESCE(main_node, namespace)` in
+`rebuild_user_effective_permissions`) and precisely the column the per-schema access clause folds
+the caller's effective permissions against (`n.main_node`, not `n.path`). So the surviving candidate
+for *that* instance is the access projection, and its SQL lives in
+`MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql`, not here.
+
+The three hypotheses the issue posed, resolved: **transport (the oversized Orleans frame) — ruled
+out** (see the Related link below: a transport refusal is loud, terminal, and leaves no version row,
+and the frames post-date the import by three days); **the untyped-content degrade (#2952/#3006) —
+ruled out** (a degrade leaves the node *in* the listing with unusable content, and `get_version`
+returns fully-typed content here, so the discriminator resolves); **the listing/index path — ruled
+in.**
+
 ## Open
 
-The underlying question — *why* the node row is unreachable while its version row is not — is not
-settled here, and cannot be settled from the MCP surface alone: it needs the partition schemas
-inspected on the portal in question. Both instances above are still live and reproduce on demand, so
-the evidence has not decayed. Do not repair either by restoring versions until the write lane is
-fixed; a restore would take the same path and can land the same way.
+*Why the AgenticEngineering rows specifically are unreachable* is not settled from the MCP surface
+alone — it needs the partition schema inspected on that portal (`main_node`, `partition_access` and
+`user_effective_permissions` for `agenticengineering`, against the same three columns for
+`agenticprimer`, which works). Both instances above are still live and reproduce on demand, so the
+evidence has not decayed. Do not repair either by restoring versions until the read seam is
+understood; a restore takes the same path and can land the same way.
 
 ### Candidates from the code (not yet confirmed against a live schema)
 
