@@ -1499,15 +1499,67 @@ code, and its exception text can carry an internal path, a connection string or 
 identifier — while the type is all a caller can act on ("retry, or ask an operator"). The full
 exception, message and stack, goes to the log where only an operator sees it.
 
-**What is still NOT routed through the rule, on purpose.** `DeleteNodeRequest` and
-`ValidateDeleteRequest` carry `[RequiresPermission(Permission.Delete)]`, so on a route that passes
-through a hub with the `AccessControlPipeline` (a per-node hub) the delivery gate still demands
-`Permission.Delete` on the *receiving hub's own path* before the handler runs. The off-router
-node-operation execution hub — where `IMeshService.DeleteNode` lands — carries no such pipeline, and
-that is the route the pre-flight governs. Widening the message-level gate is a separate decision with
-a much larger blast radius; it has not been made.
+### 🚨 …and the DELIVERY GATE is the third seam — it was left out, and that is #3061
 
-Pinned by `DeleteHonoursNodeTypeAccessRuleTest` (`test/MeshWeaver.Security.Test`), whose four cases
+The paragraph that used to stand here said the message-level gate was deliberately *not* routed
+through the rule: `DeleteNodeRequest` and `ValidateDeleteRequest` carry
+`[RequiresPermission(Permission.Delete)]`, so on a route that passes through a per-node hub the
+`AccessControlPipeline` demanded `Permission.Delete` on the receiving hub's own path before the
+handler ran, and widening that was "a separate decision with a much larger blast radius". **That
+decision has now been made, because the un-widened gate is a live defect** — and it is the SAME
+defect #2913 fixed one seam earlier, which is precisely the shape a rule stated as "every path that
+decides this node type's access consults it" exists to prevent.
+
+**Measured, memex 2026-09-02 (#3061).** A recursive delete of the orphan NodeType `Edu/Course` was
+refused with
+
+```
+Access denied: user 'rbuergi' lacks Delete permission on 'Edu/Course/_Activity/compile-…'
+```
+
+for all 72 of its `_Activity` satellites. Their registered `SatelliteAccessRule` says a satellite's
+Delete is `Permission.Update` on its `MainNode` — the very reasoning #2913 wrote down — but
+`RequiresPermissionAttribute.GetPermissionChecks` yields a RAW `(hubPath, Permission)` pair, the gate
+folded it with no rule in sight, and the gate runs **first**. So the one repair for a dangling
+NodeType was unavailable through any API.
+
+The gate now consults the same authority, resolved through the same index
+(`NodeTypeAccessRuleGate`, `src/MeshWeaver.Mesh.Contract/Services/NodeTypeAccessRuleGate.cs`), which
+also owns the evaluation both seams share — its three terminals and the "detail names the exception
+TYPE, never its message" rule. Reading it is what tells you the two cannot drift again.
+
+**Where the reconsideration sits, and why there.** It is reached ONLY from a definitive denial:
+
+| Fold outcome for `(hubPath, Permission)` | What happens |
+|---|---|
+| Granted | delivered — the rule is never consulted, so a hot `SubscribeRequest` reads no node |
+| **Denied** | **re-decided through the node type's rule** — the rule's answer is the gate's answer |
+| Undetermined | refused as `Unavailable` — "we could not check" is not a rule question |
+
+and four conditions each leave the denial exactly as it was: the check is not on this hub's own path;
+the permission names no operation a rule can decide about that node; nothing is served at that path;
+or no rule governs `(node type, operation)`.
+
+**`Permission.Create` deliberately maps to no operation.** A create names a node that does not exist
+yet and the gate evaluates on the PARENT's hub path, so the node type a lookup here would find is the
+parent's — and the parent's rule has no standing to decide a child's creation. `RlsNodeValidator`
+keys the Create rule off the node BEING CREATED, which only the handler can supply. Everything
+outside the CRUD four (Comment, Thread, Execute, Export, Compile, Api…) maps to nothing for the
+matching reason: `INodeTypeAccessRule.SupportedOperations` is expressed in `NodeOperation`s, so a
+rule cannot have an opinion about them.
+
+**A node read that FAULTS answers `Undetermined`, never the original denial.** Falling back to the
+denial would make a transient storage fault silently restore the pre-fix behaviour — the gate's own
+input deciding whether the gate ran, the shape AGENTS.md bans and `MissingEvaluatorFailsClosedTests`
+pins one level up. `Undetermined` is still fail-closed; it just stops claiming a verdict nobody
+reached.
+
+Pinned by `SatelliteDeliveryGateTest` (`test/MeshWeaver.Graph.Test`), whose three cases are the three
+verdicts on one mesh: an Editor's satellite pre-flight is served, a Viewer's is refused
+`Unauthorized` (the rule DENIES — consulting a rule never means granting), and the same Editor at a
+plain `Markdown` child of the same node is still refused (no rule, nothing widened).
+
+Pinned by `DeleteHonoursNodeTypeAccessRuleTest` (`MeshWeaver.Plugins`, `src/MeshWeaver.Security.Test`), whose four cases
 are the four rows of the table above — including the one that matters most, that an Editor still
 cannot delete a node whose type has no rule.
 
