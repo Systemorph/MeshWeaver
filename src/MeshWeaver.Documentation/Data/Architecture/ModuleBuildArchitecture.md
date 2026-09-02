@@ -124,6 +124,13 @@ minus the SHARED FRAMEWORK, exactly as the SDK lane's `--deps-closure` does — 
 [ModuleClosureAccounting](../ModuleClosureAccounting) for the rule and the two outages that came
 from conflating the two questions.
 
+> ⏳ **The bake's REFERENCE SET — which image's `/app` a NodeType bake compiles against — and the
+> framework identity that keys a publication are being redesigned** (branch
+> `fix/3022-bake-reference-set-is-the-portal`; the identity-fork guard is PR #3066, the
+> `-p:Version=` fork itself was fixed in #3041). This section describes the compile of a MODULE and
+> is unaffected; read [CiContentBake](../CiContentBake) → "The identity rule" and
+> [BakeIdentityMismatch](../BakeIdentityMismatch) for the bake half once those land.
+
 ## Gates compile against IMPLEMENTATION frameworks
 
 Every compile-check extracts the image's `/usr/share/dotnet/shared` beside `/app` and, seeing
@@ -151,18 +158,75 @@ No component ever publishes from the mesh router — the router names a spokesma
 | Module pack tool | 48–79s `dotnet build` × N jobs | ~5s download, built once |
 | Orleans test suite | ~90 silo boots + disposal drain | **3 clusters** (the mesh pool; see WritingTests § The Mesh Pool) |
 
+## Where the fleet stands — measured, not assumed (2026-09-02)
+
+The contract below is the TARGET. This table is what `origin/main` of every repo actually did on
+2026-09-02 (~07:15Z; sources: each repo's `.github/workflows/ci.yml`, `gh api …/branches/main/protection`
+and `…/rulesets`, `az acr manifest list-metadata`). Re-measure before acting on it: a row that has
+since moved is a row to fix here, not a row to trust.
+
+| Repo | Lanes called (`uses:`) | Lane pin(s) | Platform image pin | Pin gate | Skip-detector job required? |
+|---|---|---|---|---|---|
+| MeshWeaver.Plugins | module-pack ×2, gate, publish-bake — **validate, compile-check and tag-modules hand-rolled**; the required `Compile every NodeType (vs core)` runs a **vendored** `scripts/compile-check.py` | **three shas** (`e16e301e`, `f1ed4041`, `8ae946c4`) | one gated SET (`MW_PLATFORM_SET` names the promoted build; tester + portal digests, six copies agree) | `scripts/check-platform-pins.py` in `validate`, `--check-tags` in `preflight` | `Every gate executed` exists, **not required** |
+| MeshWeaver.Reinsurance | all five | one sha | one literal digest | none | no such job |
+| MeshWeaver.SocialMedia | all five + module-pack | **two shas**; module-pack's `platform-ref` a further 462 commits behind | one literal | none | no such job |
+| MeshWeaver.Manufacturing | compile-check, gate, publish-bake — validate and tag-modules hand-rolled | one sha | one literal | `check-ci-invariants.py` (job shape only) | `Every required gate actually ran` exists, **not required** |
+| MeshWeaver.Crm | all five | one sha | one literal | none | no such job |
+| MeshWeaver.Education | **none — fully hand-rolled**, with a vendored `publish-bake-bundles.sh` (194 lines against the platform's 434) | — | three literals from one CD run, no gate | none | no such job |
+
+Four facts from that table that the contract does not yet describe as achieved:
+
+* **The platform's scripts float at core `main` in every satellite today.**
+  `node-repo-{compile-check,gate,publish-bake}.yml` fetch `compile-check.py`,
+  `compose-sealed-modules.sh`, `bake-scope.sh`, `carry-forward-bundles.sh` and
+  `publish-bake-bundles.sh` at their `platform-ref` input (`node-repo-validate.yml` gains the same
+  input for `check-workflow-timeouts.py` with PR #3067). That input **defaults to `main`, and no
+  satellite passes it** to those three lanes — Plugins passes it only to module-pack, resolved once
+  from `MW_PLATFORM_REF: main`. So a core script change reaches every satellite on its next run, pin
+  or no pin (two `compile-check.py` fixes did on 2026-09-01, 18:03Z and 18:22Z), and two runs of
+  identical satellite code can disagree. There is a real tension underneath — the publish script's
+  layout must match the portals that consume it, and the portals self-update from `main`
+  ([CiContentBake](../CiContentBake) → "The one ref that still floats") — but the contract is
+  `platform-ref` = the `uses:` sha, bumped together; until a repo passes it, its scripts are unpinned
+  and this page says so rather than claiming otherwise.
+* **Vendored `compile-check.py` copies still exist in five repos — six different files.** In
+  Reinsurance, SocialMedia, Manufacturing and Crm CI does not run them: they are dead copies that lack
+  core's `using static` handling, and each repo's AGENTS.md still tells a developer to run one, so a
+  local verdict can disagree with CI's. In Plugins the vendored copy IS the required check.
+* **The image pin is one gated set only in Plugins.** Elsewhere one literal (nothing to disagree
+  with, and no gate that the literal names the build its comment claims — Plugins' own comment
+  records exactly that drift), or Education's three ungated literals.
+* **The skip-detector is required nowhere.** GitHub counts a skipped required context as satisfied
+  ([ReadingCiSignals](../ReadingCiSignals)), so the job asserting "every gate actually ran" is the
+  one context that must be required. Plugins and Manufacturing have the job and do not require it;
+  the other four have no such job.
+
 ## Adoption contract (every repo)
 
-1. Pin the reusable lanes (`node-repo-*.yml`) at a MeshWeaver main SHA — never copy them.
+1. Pin the reusable lanes (`node-repo-*.yml`) at **one** MeshWeaver main SHA per repo — never copy
+   them, never `@main`, never two shas in one file. Bump every `uses:` line in one commit.
 2. **Scripts are centralized**: the lane fetches the platform's `.github/scripts/compile-check.py`
-   at the pin and runs it against the caller's tree — a repo keeps ONLY its
-   `scripts/compile-check.allow` (policy). Per-repo script copies are retired; three had
-   already drifted apart when this landed. (*"We can ship in hosting"* — the endgame is a
-   `compile-check` verb inside the tester image itself, where the reference set is the
-   container's by construction; the fetched-script stage is the unified interim.)
-3. Reference this page from the repo's AGENTS.md — the build section defers here.
-4. Repo-specific policy (module lists, always-modules, allow-files, registry consumption)
-   stays in the caller; mechanics never do.
+   (and `compose-sealed-modules.sh`, `bake-scope.sh`, `carry-forward-bundles.sh`,
+   `publish-bake-bundles.sh`, `check-workflow-timeouts.py`) at its `platform-ref` input and runs
+   it against the caller's tree — a repo keeps ONLY its `scripts/compile-check.allow` (policy).
+   **Pass `platform-ref` = the `uses:` sha on every lane call**; the input defaults to `main`, and a
+   call that omits it floats (see the table above). Per-repo script copies are retired — delete
+   them, and point the repo's AGENTS.md at the lane, never at a local file. (*"We can ship in
+   hosting"* — the endgame is a `compile-check` verb inside the tester image itself, where the
+   reference set is the container's by construction; the fetched-script stage is the unified interim.)
+3. **The platform image pin is ONE SET, gated.** Every `sha256:` literal naming the tester image,
+   every literal naming the portal image, and every `Systemorph/MeshWeaver` checkout `ref:` in the
+   file agree, and the gate that says so (`scripts/check-platform-pins.py`; `--check-tags` resolves
+   each pin against the named promoted build) runs in `validate`. *"We always compile against
+   main"* is met by bumping the whole set to the newest **promoted** build — never by un-pinning
+   (MeshWeaver.Plugins#1067, which proposed resolving `:main` per run, was closed for exactly that).
+4. **Every job is hard-cut at 45 minutes** — a literal `timeout-minutes` ≤ 45 on every job;
+   `check-workflow-timeouts.py` refuses a missing, oversized or expression-valued cap and runs on
+   every satellite from the `validate` lane (core PR #3067). The rule and its evidence live in
+   AGENTS.md → "Every CI job is HARD-CUT at 45 minutes" and the `/ci` skill; not restated here.
+5. Reference this page from the repo's AGENTS.md — the build section defers here.
+6. Repo-specific policy (module lists, always-modules, allow-files, registry consumption, the
+   digest set) stays in the caller; mechanics never do.
 
 ## Roadmap (agreed, in flight)
 
@@ -177,5 +241,9 @@ No component ever publishes from the mesh router — the router names a spokesma
 
 See also: [ModuleClosureAccounting](../ModuleClosureAccounting) ·
 [ModuleVersioning](../ModuleVersioning) ·
+[CiContentBake](../CiContentBake) (the bake, the seal, the release wave) ·
+[ContinuousDeliveryContract](../ContinuousDeliveryContract) (what `main-cd` promises) ·
+[ReadingCiSignals](../ReadingCiSignals) (what a tick proves) ·
 [NodeTypeCompilation](../NodeTypeCompilation) · [PluginBuildContract](../PluginBuildContract) ·
-[BuildProcess](../BuildProcess) · [InMeshBuildAndTest](../InMeshBuildAndTest).
+[BuildProcess](../BuildProcess) (the cascade `build` verb — a design, not a lane) ·
+[InMeshBuildAndTest](../InMeshBuildAndTest).
