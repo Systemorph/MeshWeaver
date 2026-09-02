@@ -200,6 +200,10 @@ consulted anywhere (see "The one rule" above).
 
 ## What stays English on purpose
 
+- **Owner-side diagnostics** — the `Describe*` helper family and the strings they feed into
+  `ILogger` calls, exception messages, and error payloads carried on the wire. See the boundary
+  below; this is the entry reviewers most often challenge.
+
 - **Wire identifiers** — `nodeType:Thread` in help text, `RequestAction("New")` action keys, Fluent
   icon names. Translating these breaks the app.
 - **LLM tool-parameter descriptions** — model-facing (see above).
@@ -210,6 +214,52 @@ consulted anywhere (see "The one rule" above).
   Harness, Provider, Namespace, Partition, Store, Token, Chat, Layout Area*. These are explained in
   the course primer rather than translated. Note `Store` means "app store" — never translate it as
   the verb *speichern*.
+
+### 🚨 The boundary: a viewer's message vs. an owner's diagnostic
+
+"Errors are localized" is true of the errors a **viewer reads**, and reviewers reasonably read the
+rule that way. It is not true of the diagnostic layer underneath, and the distinction is not
+squeamishness about effort — localizing there makes the product *worse*.
+
+| | viewer message | owner diagnostic |
+|---|---|---|
+| reaches a human via | a control: label, toast, dialog, validation, empty state | `ILogger`, an exception message, an error payload on the wire |
+| written for | the person who tried to do the thing | whoever is debugging the mesh |
+| vocabulary | the user's domain | partitions, paths, stream ids, providers, node types |
+| **localize?** | **yes, always** | **no** |
+
+The `Describe*` family is the canonical diagnostic shape — `MessageSizeGuard.Describe` /
+`DescribeGrainDispatch` / `DescribeRouterDispatch`, `CancellationClassifier.Describe`,
+`QueryIdentity.DescribeUnresolved`, `StoreReachability.DescribeNotAttempted` /
+`DescribeMayHavePartiallyLanded`, `RequiredModuleStatus.Describe`,
+`ModuleActivationStatus.DescribeUnresolvable`. None is localized, and
+`MeshWeaver.Mesh.Contract` — which holds several of them — contains six `Localize(` calls in total,
+none on a `Describe*`.
+
+**Three reasons this is a decision and not a backlog item:**
+
+1. **A translated fragment in an English sentence is worse than English.** These strings are
+   composed into carriers that are themselves literals — `MeshNodeStreamExtensions` builds
+   `$"Update of '{path}' failed: {errorType}"` and falls back to the bare
+   `"Update rejected by owner"`. Localizing the inner clause yields a German phrase spliced into an
+   English frame: harder to read for the German viewer *and* harder to grep for the engineer.
+2. **The content is operator vocabulary in every language.** A message naming a namespace, a mesh
+   path, a stream id and a store provider does not become more comprehensible in German. What makes
+   it comprehensible is knowing the platform.
+3. **Grep-ability is a property of the diagnostic layer.** A log line or exception you cannot search
+   for by its English text — because it may have been emitted in any of N languages — is materially
+   harder to trace, and these are the strings that get pasted into issues.
+
+**If a diagnostic really is surfacing to a viewer, that is a bug at the SURFACE, not here.** The fix
+is for that surface to map an error code to a localized message, never to print an owner-side
+sentence. `MeshNodeErrorCode` exists precisely so a UI can do that without parsing prose. Localizing
+the diagnostic would hide the defect behind a translated version of a string the viewer should never
+have been shown.
+
+**Reviewing this:** an automated reviewer flagging a `Describe*` helper or an `Error` payload as an
+unlocalized user-visible string is applying the right rule at the wrong layer. Point it at this
+section. The rule genuinely bites the moment the string reaches a `Controls.*` literal, an
+`aria-label`, or anything a `LayoutArea` renders.
 
 ## Tests
 
