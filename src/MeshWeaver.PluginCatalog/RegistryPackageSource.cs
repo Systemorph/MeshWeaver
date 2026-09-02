@@ -99,8 +99,17 @@ public sealed class RegistryPackageSource : IPackageSource
         // one place is what lets the reconciler drain a registry that was down at boot without a
         // timer and without every caller having to remember to. A no-op unless that registry is
         // pending; the reconciler runs off this thread and never delays the read's subscriber.
-        .Do(packages => _hub.ServiceProvider.GetService<RegistryUpdateReconciler>()
-            ?.OnFeedRead(_registryUrl, gitRef, packages));
+        // Gated on the hub's run level, never wrapped in a catch: once the hub has begun quiescing its
+        // service scope is being torn down and a resolve would throw ObjectDisposedException INTO the
+        // caller's successful read. A read during teardown has no boot reconcile left to drain, so it
+        // simply does not report.
+        .Do(packages =>
+        {
+            if (_hub.RunLevel > MessageHubRunLevel.Started)
+                return;
+            _hub.ServiceProvider.GetService<RegistryUpdateReconciler>()
+                ?.OnFeedRead(_registryUrl, gitRef, packages);
+        });
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>

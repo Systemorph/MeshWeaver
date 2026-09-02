@@ -133,7 +133,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// snapshot over a newer one. Serialization through Rx, never a lock
     /// (Doc/Architecture/RemovingHandWovenGates).
     /// </summary>
-    private readonly Subject<Unit> ledgerDirty = new();
+    // Synchronized: Mark(...) is reached from the boot pass AND from a feed read on another thread;
+    // a bare Subject<T> does not serialise concurrent OnNext calls (Rx contract), so the producers are
+    // serialised here and the Concat below sees one well-formed sequence.
+    private readonly ISubject<Unit> ledgerDirty = Subject.Synchronize(new Subject<Unit>());
 
     private sealed record TrackedRegistry(PluginRegistryReference Registry, RegistryReconcileEntry Entry);
 
@@ -336,6 +339,12 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// </summary>
     internal void OnFeedRead(string registryUrl, string gitRef, IReadOnlyList<PackageManifest> packages)
     {
+        // A feed read that lands while this service is tearing down has nothing to drain into: the
+        // subscriptions it would register are being disposed (CompositeDisposable.Add throws once
+        // disposed), and the read itself must still succeed for ITS caller. Gate on the teardown
+        // state — the same shape as every hub watcher — never catch the throw.
+        if (subscriptions.IsDisposed)
+            return;
         var key = Key(registryUrl);
         if (!tracked.TryGetValue(key, out var candidate) || !candidate.Entry.Pending)
             return;
