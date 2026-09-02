@@ -1004,7 +1004,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// before, and the give-up stays at <c>Debug</c> because it is the expected permanent outcome.
     /// Retrying it indefinitely would not be a derived lifetime, it would be a poll that cannot
     /// converge — and a measurable one: each attempt makes the SILO log
-    /// <c>[POD-HUB] Attach … landed on a silo that has no local route</c> at
+    /// <c>[POD-HUB] Attach for … landed on silo …, which has no local route for it</c> at
     /// <c>Information</c>, i.e. one line per hub per backoff interval, which is the log-storm shape
     /// #2426/#2546 exist to remove.</para>
     ///
