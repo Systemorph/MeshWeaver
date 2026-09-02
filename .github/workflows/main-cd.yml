@@ -2326,8 +2326,26 @@ jobs:
         run: .github/scripts/check-image-set.sh "${{ needs.gate.outputs.short_sha }}" "${{ needs.gate.outputs.plugins_short }}"
       # A heal that WORKED has to say so on the same issue that recorded the attempt, or the
       # ledger only ever grows and nobody can tell a fixed hole from an open one.
+      # 🚨 HEALING IS AN OUTCOME, NOT A PATH. This used to require
+      # `needs.gate.outputs.reason == 'reconcile'`, on the reasoning that the reconciler is what
+      # repairs a failed delivery. But the PUSH path publishes far more often, and when it is the
+      # one that carries main past a failure the heal went unreported — the `ci-failure` issue
+      # stayed open, with zero comments, describing a state that no longer existed.
+      #
+      # Measured 2026-09-02: #3074 was filed at 08:01 for `cb1dd360`. Delivery recovered at
+      # 08:19:44 on `1b044e5` — six commits later, full set in ACR, pair tag present — via the PUSH
+      # path. This step was skipped, so nothing said so, and the issue was still open reporting a
+      # broken delivery long after it worked.
+      #
+      # That matters more than one stale issue: a `ci-failure` issue that outlives its cause is the
+      # same defect as a check that is red on every pull request. It costs nothing to file and
+      # everything to trust — the next real one arrives into a backlog of alerts that were already
+      # known to be wrong, and gets read as more of the same.
+      #
+      # The condition is now the fact the comment actually asserts: main's HEAD has a complete image
+      # set, whoever put it there.
       - name: Report a successful heal
-        if: needs.gate.outputs.reason == 'reconcile' && needs.promote.result == 'success'
+        if: needs.promote.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
