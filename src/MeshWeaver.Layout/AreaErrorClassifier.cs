@@ -1,3 +1,4 @@
+using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Layout;
@@ -233,6 +234,41 @@ public static class AreaErrorClassifier
         }
         return false;
     }
+
+    /// <summary>
+    /// 🚨 True when the render failed because the DATA STORE could not be REACHED — a transient
+    /// database connect/timeout fault, at any wrapping depth. The FIFTH area frame state
+    /// (<c>AreaFrameClassifier.StorageUnavailableId</c>), and it is genuinely distinct from the
+    /// other four.
+    ///
+    /// <para><b>The gap this closes (#2876).</b> The query fan-in already retries this class,
+    /// bounded, before the fault ever reaches a render (<c>TransientStorageFaults</c>, #2521). What
+    /// was missing is what the area SHOWS when that budget is spent — a database that is
+    /// unreachable for 21 s outlives 250+500+1000 ms of backoff, and the render then fell through
+    /// to the generic panel: <c>"⚠️ This area failed to render."</c> plus the raw driver text
+    /// (<c>"Npgsql.NpgsqlException (0x80004005): The operation has timed out"</c>). That is wrong
+    /// twice — it leaks a framework-internal diagnostic to an end user, and it presents an
+    /// infrastructure blip as a defect in the view, which sends whoever reads it looking in exactly
+    /// the wrong place.</para>
+    ///
+    /// <para>🚨 <b>Deliberately NOT a retry, and not part of
+    /// <c>AreaFrameClassifier.IsTransientFrame</c>.</b> The bounded retry already ran and lost; a
+    /// second one composed here would be an unbounded resubscribe against a database that is down,
+    /// which is the storm shape this codebase keeps paying for. And <c>IsTransientFrame</c> means
+    /// "this WILL be replaced without anyone acting" — nothing pushes a new frame when a connect
+    /// times out, so claiming it would make every waiter wait forever. The honest answer is a
+    /// frame that says the store is temporarily unavailable and that the view is worth re-opening,
+    /// while the fault stays logged at Error so an operator sees the outage.</para>
+    ///
+    /// <para>The RULE is <see cref="StorageFaults.IsTransientConnectFault"/> — one definition,
+    /// shared with the retry that runs first, so the two layers can never disagree about which
+    /// faults are the store's fault. A real query/schema error (<c>42P01</c>, <c>23505</c>) is NOT
+    /// matched and keeps the generic error panel: it IS a defect, and dressing it up as "come back
+    /// later" would hide it.</para>
+    /// </summary>
+    /// <param name="ex">The exception to classify; may be null.</param>
+    public static bool IsStorageUnavailable(Exception? ex)
+        => StorageFaults.IsTransientConnectFault(ex);
 
     /// <summary>
     /// True when the failure is a routing <b>NotFound</b> — the target node/hub no longer exists

@@ -793,6 +793,17 @@ public record LayoutAreaHost : IDisposable
             // the reference really is broken and somebody should fix it.
             logger.LogWarning(ex, "Area {Area} references a node that does not exist: {MissingPath}",
                 area, AreaErrorClassifier.TryGetMissingNodePath(ex) ?? "(path not recoverable)");
+        else if (AreaErrorClassifier.IsStorageUnavailable(ex))
+            // The DATA STORE could not be reached (#2876) — not a fault in this area. Still ERROR,
+            // deliberately: an availability failure is exactly what an operator must see (the same
+            // argument #974 makes for IsAvailabilityFailure), and the query fan-in has ALREADY spent
+            // its bounded transient-connect retry before the fault got here (TransientStorageFaults,
+            // #2521), so this line means the database stayed unreachable across it. What changes is
+            // the WORDING - "Rendering failed for area Catalog" sent every reader hunting for a bug
+            // in the Catalog view - and, below, what the viewer is shown.
+            logger.LogError(ex,
+                "Area {Area} could not render: the data store was unreachable and the query "
+                + "fan-in's bounded transient-connect retry did not recover it", area);
         else
             logger.LogError(ex, "Rendering failed for area {Area}", area);
 
@@ -875,6 +886,24 @@ public record LayoutAreaHost : IDisposable
                 Id = AreaFrameClassifier.MissingReferenceId
             };
         }
+
+        // The store could not be reached (#2876). The generic panel below would carry the driver's
+        // own text - "Npgsql.NpgsqlException (0x80004005): The operation has timed out" - to an end
+        // user, and read as a defect in this view. It is neither: the area and its content are fine,
+        // the database was not answering. Degrade HONESTLY instead: say what happened, say it is
+        // temporary, and stamp the well-known frame id so a consumer can tell this FIFTH state from
+        // the four AreaFrameClassifier already distinguishes.
+        //
+        // There is deliberately NO retry here. The query fan-in already ran a bounded one
+        // (TransientStorageFaults, #2521) and it was spent before this render failed; composing a
+        // second one on the render path would be an unbounded resubscribe against a database that is
+        // down - the storm shape, aimed at the resource that is already the bottleneck.
+        if (AreaErrorClassifier.IsStorageUnavailable(ex))
+            return new MarkdownControl(
+                $"**{this.Localize("error.storageUnavailable")}**\n\n{this.Localize("error.storageUnavailableHint")}")
+            {
+                Id = AreaFrameClassifier.StorageUnavailableId
+            };
 
         // `error.areaFailed` already existed in both catalogs; this banner was hard-coded English.
         return Controls.Markdown(
