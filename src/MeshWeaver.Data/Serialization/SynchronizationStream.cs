@@ -1954,20 +1954,27 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // it would kill an owner's stream for a subscriber-side race. Convergence is a claim about
         // a REMOTE owner; only a stream that has one can fail to converge. Same predicate as
         // OwnerVersion() uses to tell the two apart.
-        if (Volatile.Read(ref unansweredResyncs) >= MaxUnansweredResyncs
-            && !Owner.Equals(Host.Address))
+        //
+        // Read ONCE into a local, and report from that local everywhere. The verdict, the Warning and
+        // the exception must be the same number: a diagnostic that says "gave up after 3" beside an
+        // exception that says "after 4" costs the next reader more than it tells them, and a second
+        // read is one more thing they would have to prove is stable. (It is — the gate is HELD from
+        // here, so the ack arm cannot increment, and the reset runs on this same hub turn — but the
+        // local means nobody has to reconstruct that argument to trust the number.)
+        var unanswered = Volatile.Read(ref unansweredResyncs);
+        if (unanswered >= MaxUnansweredResyncs && !Owner.Equals(Host.Address))
         {
             Volatile.Write(ref resyncGaveUp, 1);
             ReleaseResyncGate();
             logger.LogWarning(
                 "[SYNC_STREAM] Resync gave up for {StreamId}: {Attempts} consecutive fresh-snapshot requests to {Owner} were acknowledged and none produced a base snapshot — faulting the mirror so its subscribers can re-establish",
-                StreamId, Volatile.Read(ref unansweredResyncs), StreamIdentity.Owner);
+                StreamId, unanswered, Owner);
             OnError(new StreamNotConvergingException(
                 $"Synchronization stream '{StreamId}' could not recover from a lost frame: "
-                + $"{Volatile.Read(ref unansweredResyncs)} consecutive fresh-snapshot requests to owner "
-                + $"'{StreamIdentity.Owner}' were acknowledged and none produced a base snapshot. The "
-                + "mirror holds no state it can patch onto, so it is faulted rather than left waiting "
-                + "for a snapshot that is not arriving."));
+                + $"{unanswered} consecutive fresh-snapshot requests to owner '{Owner}' were "
+                + "acknowledged and none produced a base snapshot. The mirror holds no state it can "
+                + "patch onto, so it is faulted rather than left waiting for a snapshot that is not "
+                + "arriving."));
             return;
         }
 
