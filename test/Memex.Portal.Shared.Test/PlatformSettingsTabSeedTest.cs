@@ -96,4 +96,49 @@ public class PlatformSettingsTabSeedTest
             Assert.Equal("Admin/UiContribution", seed.Namespace);
         });
     }
+
+    [Fact]
+    public void Every_Seed_Passes_The_Contribution_Integrity_Check()
+    {
+        // 🚨 The check core did not have. A contributed entry naming a context nobody declares
+        // renders NOWHERE — no error, no warning, not even an area-not-found placeholder; six
+        // shipped entries were dark for nine days that way (Systemorph/MeshWeaver.Plugins#1162,
+        // which is why that repo grew scripts/check-menu-contexts.py). Core seeds its
+        // contributions from COMPILED code, so the cheap equivalent is a pinning test over the
+        // seed list — this one.
+        var problems = UiContributionSeedValidation.Validate(
+            PlatformSettingsTabAreas.Seeds,
+            registeredAreas: PlatformSettingsTabAreas.Areas);
+        Assert.Empty(problems);
+
+        // CONTROL ARM 1 — the subject is still there. A Seeds list that emptied (a moved module, a
+        // renamed property, a refactor that stopped populating it) would make the assertion above
+        // pass having checked nothing at all.
+        Assert.Equal(ExpectedIds.Length, PlatformSettingsTabAreas.Seeds.Count);
+
+        // CONTROL ARM 2 — the checker can still fail. Break one real seed in each of the ways that
+        // ship dark and require the validator to say so; a validator degenerated into "no
+        // problems" (or one whose vocabulary drifted away from the projection's) reds HERE.
+        var sample = PlatformSettingsTabAreas.Seeds[0];
+        var content = Assert.IsType<UiContribution>(sample.Content);
+
+        Assert.NotEmpty(UiContributionSeedValidation.Validate(
+            [sample with { Content = content with { Context = "SettingsTypo" } }],
+            registeredAreas: PlatformSettingsTabAreas.Areas));
+        Assert.NotEmpty(UiContributionSeedValidation.Validate(
+            [sample with { Content = content with { Area = null } }],
+            registeredAreas: PlatformSettingsTabAreas.Areas));
+        Assert.NotEmpty(UiContributionSeedValidation.Validate(
+            [sample with { Content = content with { Area = "NotRegisteredAnywhere" } }],
+            registeredAreas: PlatformSettingsTabAreas.Areas));
+        Assert.NotEmpty(UiContributionSeedValidation.Validate(
+            [sample with { Content = content with { Href = "https://evil.example/phish" } }],
+            registeredAreas: PlatformSettingsTabAreas.Areas));
+        Assert.NotEmpty(UiContributionSeedValidation.Validate(
+            [sample with { Content = content with { LabelKey = null } }],
+            registeredAreas: PlatformSettingsTabAreas.Areas));
+        Assert.NotEmpty(UiContributionSeedValidation.Validate(
+            [sample with { NodeType = "Markdown" }],
+            registeredAreas: PlatformSettingsTabAreas.Areas));
+    }
 }
