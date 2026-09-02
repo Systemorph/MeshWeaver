@@ -1,5 +1,6 @@
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -66,20 +67,55 @@ public static class SessionHubFactory
         var address = AddressExtensions.CreatePortalAddress($"{prefix}-{sessionId}-{InstanceId}");
         logger.LogInformation("Materialising {Prefix} session hub at {Address}", prefix, address);
 
+        // 🚨 INHERIT THE MESH'S PERMISSION EVALUATOR — issue #3121. A hub's configuration starts
+        // EMPTY (MessageHubExtensions.CreateMessageHub builds a fresh MessageHubConfiguration and
+        // inherits nothing from the parent) and HubPermissionExtensions.ResolveEvaluator does NOT
+        // walk the parent chain: `hub.Configuration.Get<EffectivePermissionsDelegate>() ??
+        // DefaultEvaluator`, whose default returns Permission.All. So WITHOUT this line every
+        // client-side permission check a session issues — every CheckPermission /
+        // CheckPermissionOutcome in MeshOperations, on the MCP, REST, gRPC and CLI surfaces alike —
+        // answered GRANTED unconditionally, for every caller, on every path.
+        //
+        // Measured on this tree before the fix, with a Viewer (Read|Execute|Api) calling through a
+        // session hub: the pre-gate answered granted=True for Update on a node the SAME check
+        // answers granted=False for on the mesh hub. That is a gate that cannot fail, and it is the
+        // reason MeshOperations.Recycle's legible "Recycle requires Update permission …" refusal was
+        // dead code on the MCP surface: the only gate that ever fired was the OWNER's, whose
+        // DeliveryFailure arrives as an Rx fault — so a denial reached the caller as an
+        // UnauthorizedAccessException stack trace, and for a node whose recycle writes nothing (any
+        // non-NodeType node) it did not fire at all and the DisposeRequest went out unauthorised.
+        //
+        // Fail-closed is UNCHANGED and this widens nothing: the OWNER's AccessControlPipeline was,
+        // and remains, the authority on every write. What changes is that the session's own
+        // pre-flight now asks the same question the owner will, so the caller gets an ANSWER instead
+        // of a crash — and a mesh deliberately built WITHOUT RLS stays ungated, because there is
+        // then no delegate to copy. MeshExtensions.NodeOperationExecutionHub already does exactly
+        // this, for exactly this reason; this is the same fix, applied where every surface picks up
+        // its hub. It also repairs MeshOperations.Export, whose per-node Export filter believed it
+        // ran on the mesh hub and in fact runs on THIS one — so an `export` returned every node in
+        // the subtree regardless of entitlement. See Doc/Architecture/DenialIsAnAnswer.
+        var permissionEvaluator = rootHub.GetMeshHub().Configuration.Get<EffectivePermissionsDelegate>();
+
         // AddData() ensures the session hub has its own IWorkspace so MeshOperations.Compile can
         // subscribe to the NodeType MeshNode stream and Update its compilationStatus through the
         // canonical write path. RegisterStream wires routing so every response (Get / Search /
         // Patch / ExecuteScript / …) lands back here.
         return rootHub.GetHostedHub(
             address,
-            sessionConfig => sessionConfig
-                .AddData()
-                // 🚨 Node CRUD from a session runs HERE, not on the mesh router. Without this opt-in
-                // MeshService falls back to the mesh hub and every create/move/delete executes on
-                // the router's action block, starving routing (see MeshExtensions.NodeOperationTarget).
-                .WithNodeOperationExecution()
-                .WithInitialization(hub =>
-                    hub.RegisterForDisposal(routingService.RegisterStream(hub))),
+            sessionConfig =>
+            {
+                sessionConfig = sessionConfig
+                    .AddData()
+                    // 🚨 Node CRUD from a session runs HERE, not on the mesh router. Without this opt-in
+                    // MeshService falls back to the mesh hub and every create/move/delete executes on
+                    // the router's action block, starving routing (see MeshExtensions.NodeOperationTarget).
+                    .WithNodeOperationExecution()
+                    .WithInitialization(hub =>
+                        hub.RegisterForDisposal(routingService.RegisterStream(hub)));
+                return permissionEvaluator is null
+                    ? sessionConfig
+                    : sessionConfig.WithPermissionEvaluator(permissionEvaluator);
+            },
             HostedHubCreation.Always)
             ?? throw new InvalidOperationException(
                 $"Failed to materialise {prefix} session hub at {address}.");
