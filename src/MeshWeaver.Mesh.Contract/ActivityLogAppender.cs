@@ -150,14 +150,56 @@ public static class ActivityLogAppender
         System.Text.Json.JsonSerializerOptions options,
         ILogger? logger)
     {
-        if (final.ContentAs<ActivityLog>(options, logger) is not { } log || !log.Status.IsTerminal())
+        if (final.ContentAs<ActivityLog>(options, logger) is not { } log)
+            return;
+        ReleaseMirrorWhenFinal(hub, activityPath, log.Status, logger);
+    }
+
+    /// <summary>
+    /// THE release, for a writer that already knows the status it just wrote — the shared seam every
+    /// terminal <c>_Activity</c> writer calls, whether or not it goes through <see cref="Append"/>.
+    ///
+    /// <para>🚨 <b>Why this is a seam and not a line of code copied three more times (#3117).</b>
+    /// Three terminal writers bypass <see cref="Append"/> entirely and so never fired this release:
+    /// <c>ActivityLogLogger.PublishSnapshotLocked</c> — by far the highest volume, every kernel run,
+    /// script, markdown execution and test run — <c>CodeNodeType.FailActivity</c>, and
+    /// <c>BuildProtocolDriver.FinishActivity</c>. Their hubs stayed pinned until the ten-minute idle
+    /// sweep instead of retiring on the terminal write.</para>
+    ///
+    /// <para>Giving each of them its own <c>ReleaseIfUnwatched</c> call would be the exact shape that
+    /// caused #3110: <c>EvictFaultedEntry</c> documented itself as "the single teardown … so they
+    /// cannot drift", and a fourth site had a hand-rolled copy that disposed only half the state. One
+    /// implementation, four callers — never four implementations.</para>
+    ///
+    /// <para><b>Best-effort by construction, exactly as on the <see cref="Append"/> path.</b> A
+    /// non-terminal status is a no-op; a mesh with no cache is a no-op; a reader still watching the
+    /// activity keeps it, because <c>ReleaseIfUnwatched</c> makes the same atomic zero-subscriber
+    /// check the idle sweep makes and simply declines. Nothing here may fail the write that reported
+    /// the status — if the release does not happen, the sweep still gets there.</para>
+    ///
+    /// <para>🚨 <b>Call it on the write's COMPLETION, never on its emission.</b> Releasing tears the
+    /// path's upstream sync streams down, and the write is still in flight when its value is emitted
+    /// — cutting the stream out from under it strands the write's own terminal and leaves the
+    /// per-path queue to advance on its 5 s backstop. See the <c>Do</c> arm in <see cref="Append"/>.</para>
+    /// </summary>
+    /// <param name="hub">The hub that performed the terminal write.</param>
+    /// <param name="activityPath">Path of the activity node.</param>
+    /// <param name="status">The status just written. A non-terminal status is a no-op.</param>
+    /// <param name="logger">Logger for best-effort diagnostics.</param>
+    public static void ReleaseMirrorWhenFinal(
+        IMessageHub hub,
+        string activityPath,
+        ActivityStatus status,
+        ILogger? logger = null)
+    {
+        if (!status.IsTerminal())
             return;
         var cache = hub.ServiceProvider.GetService<IMeshNodeStreamCache>();
         if (cache is null)
             return;
         if (cache.ReleaseIfUnwatched(activityPath))
             logger?.LogDebug(
-                "Activity {Path}: reached {Status} — released its shared mirror", activityPath, log.Status);
+                "Activity {Path}: reached {Status} — released its shared mirror", activityPath, status);
     }
 
     /// <summary>
