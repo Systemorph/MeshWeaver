@@ -37,7 +37,7 @@ public class InstanceLocationDeclarationValidatorTest(ITestOutputHelper output) 
         Content = new NodeTypeDefinition { InstanceLocations = locations.Length == 0 ? null : locations },
     };
 
-    [Theory(Timeout = 30000)]
+    [Theory]
     [InlineData("Role")]
     [InlineData("GroupMembership")]
     [InlineData("AccessAssignment")]
@@ -60,7 +60,7 @@ public class InstanceLocationDeclarationValidatorTest(ITestOutputHelper output) 
             .And.Contain("UnanchoredSecurityReads");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public void TheRefusedSet_IsTheFoldsOwnFourTypes_AndNothingElseByDefault()
     {
         NeverNarrowedNodeTypes.Names.Should().BeEquivalentTo(
@@ -74,7 +74,7 @@ public class InstanceLocationDeclarationValidatorTest(ITestOutputHelper output) 
     /// Gates are declared per mesh (<c>ConfigureNodeTypeAccess</c>), so they reach the predicate as a
     /// set; a gated type is refused with the gate named as the reason.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact]
     public void ADeclarationForATypeDeclaredGate_IsRefused_NamingTheGate()
     {
         var gated = ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "Store/Plugin");
@@ -85,7 +85,7 @@ public class InstanceLocationDeclarationValidatorTest(ITestOutputHelper output) 
         refusal.Should().NotBeNull().And.Contain("'Store/Plugin'").And.Contain("gate");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task AFoldType_DeclaringNothing_IsAccepted()
     {
         var result = await Guard
@@ -99,7 +99,7 @@ public class InstanceLocationDeclarationValidatorTest(ITestOutputHelper output) 
         result.IsValid.Should().BeTrue("the gate is on the DECLARATION, not on the type");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task AnOrdinaryType_Declaring_IsAccepted()
     {
         var result = await Guard

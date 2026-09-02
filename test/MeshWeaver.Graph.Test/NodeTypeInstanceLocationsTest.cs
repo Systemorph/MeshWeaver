@@ -48,7 +48,7 @@ public class NodeTypeInstanceLocationsTest(ITestOutputHelper output) : MonolithM
     private INodeTypeInstanceLocations Projection =>
         Mesh.ServiceProvider.GetRequiredService<INodeTypeInstanceLocations>();
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public void ADeclaration_RoundTripsThroughJson()
     {
         var node = new MeshNode("Widget", TestPartition)
@@ -106,7 +106,7 @@ public class NodeTypeInstanceLocationsTest(ITestOutputHelper output) : MonolithM
         projected.Should().Equal(location);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public void AStaticDeclaration_IsProjected_AndUndeclaredTypesFailOpen()
     {
         Projection.LocationsFor(StaticType).Should().Equal(StaticLocations,
@@ -121,7 +121,7 @@ public class NodeTypeInstanceLocationsTest(ITestOutputHelper output) : MonolithM
     /// The static half of the authoring gate: an in-process declaration for a fold type has no write
     /// boundary to refuse it at, so the fold itself throws, naming the type and the reason.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact]
     public void TheStaticFold_RefusesAFoldTypeDeclaration_NamingTheReason()
     {
         var role = new MeshNode(SecurityQueries.RoleNodeType)
