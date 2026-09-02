@@ -159,7 +159,12 @@ names[]}, failure, previous.
   with the platform image's own `dotnet` over the platform image's `/app` — the `s…` surface identity
   the adopting host resolves (#3022), not the tester image's own and not the `g…` provenance stamp of
   one assembly. That is #931's producer half: the record says which framework these bytes are for.
-  The consumer half (comparing it in `ModuleUpdateDecision`) is a separate change.
+  The consumer half landed beside it: the registry advertises a module bundle's identity **per
+  bundle** on `/api/plugins/bundles/index.json`, and `ModuleUpdateDecision` skips as up to date
+  only when the version AND that identity match what is landed — so a rebuild of unchanged
+  source against a new platform, which republishes under the same version, is no longer
+  invisible to the updater ([Modules](../Modules) → "Already landed means this content against
+  this FRAMEWORK").
 
 ### The protocol
 
@@ -357,9 +362,11 @@ No component ever publishes from the mesh router — the router names a spokesma
 ## Roadmap (agreed, in flight)
 
 * **The one-workspace lane** — landed: one `build-workspace` job compiles the ledger's build subset
-  as one graph; pack/tests fan out from it. Still open: the consumer half of #931 (compare the
-  ledger's `platformIdentity` in `ModuleUpdateDecision`), and pinning satellites' `MW_PLATFORM_REF`
-  to the promoted set so keys survive core commits.
+  as one graph; pack/tests fan out from it. The consumer half of #931 landed too —
+  `ModuleUpdateDecision` compares the served bundle's framework identity, not the version alone.
+  Still open: making a bundle that cannot state what it was built against UNPUBLISHABLE (a served
+  identity is optional today, so a consumer can only skip-and-say-so when it is missing), and
+  pinning satellites' `MW_PLATFORM_REF` to the promoted set so keys survive core commits.
 * **`pack-module`, `compile-check` and test verbs inside the tester** — the last runner-side
   `dotnet`/python uses move into the image the fleet already ships.
 * **Self-hosted runners with a mounted git mirror + warm image store** (MeshWeaver#2926): bare
