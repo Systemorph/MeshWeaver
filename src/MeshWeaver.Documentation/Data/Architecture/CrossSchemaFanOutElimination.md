@@ -59,7 +59,7 @@ schema(s)".
 |---|---|---|---|---|
 | 1 | **Notification bell + panel** — `NotificationCenter.razor` / `NotificationCenterPanel.razor` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Portal`) | `nodeType:Notification sort:CreatedAt-desc` — unanchored, unbounded, LIVE (re-queries on matching change) | `notifications` | **To eliminate** — see plan 1 |
 | 2 | **Security fold globals** — `SecurityQueries.Roles` / `.Memberships` / `.GatedNodes(type)` (per gated type!) via `PermissionEvaluator` | `nodeType:Role scope:subtree … complete`, `nodeType:GroupMembership …`, `nodeType:{gated} …` | `mesh_nodes` | **To eliminate** — see plan 2 |
-| 3 | **Root-scope grants/policies** — `SecurityQueries.Scoped` on `namespace:_Access` / root `_Policy` (the root scope resolves to no partition, falls through to fan-out) | `namespace:_Access nodeType:AccessAssignment …` | `access` | **To eliminate** — see plan 2 |
+| 3 | **Root-scope grants/policies** — `SecurityQueries.RootAssignments` / `.RootPolicy` | `namespace:_Access nodeType:AccessAssignment …` / `path:_Policy nodeType:PartitionAccessPolicy …` | `system_access.access` / — | **Done** 2026-09-02 (#2194) — the grants leg never fanned out (the router pins `_Access` to its registered schema); the policy leg was `namespace: id:_Policy`, path-less, and DID fan out 179×/5 min for a row that cannot exist on Postgres — now read by path, see below |
 | 4 | `node_type ILIKE $1` wildcard (seen live; caller not yet named) | suffix/wildcard nodeType | `mesh_nodes` | **Identify via the shape log** (Plugins #1035), then anchor or fold into plan 2 |
 | 5 | `Admin/Menu/{X}` per-render route misses | point probes | `mesh_nodes` | **Fixed** 2026-08-29 (`83b1892be`, anchored existence query) |
 
@@ -77,6 +77,66 @@ They are now per-PARTITION (`path:{partition} scope:descendants …`), which is 
 32-node listing 69; both are 5 now. Rows 2 and 3 of the census are unchanged — the *global* legs
 still fan out, and [Unanchored Security Reads](/Doc/Architecture/UnanchoredSecurityReads) says why
 they must.
+
+### The 2026-09-02 census — memex-cloud on ci.7616, after #3125 (#2194)
+
+Maintainer directive (2026-09-02 19:40Z): *"profile it and improve"* — the portal was still slow
+after rolling to ci.7616, which carries #3125's per-partition fold. Measured on the new pods: the
+portal pods were **light (0.1–1.3 cores each)** while Azure Postgres `memexaks-pg`
+(Standard_D8ds_v5) ran at **94–98 % CPU with 225–292 active connections**; `[CrossSchema] SLOW`
+averaged **4.0 s (max 9.8 s), 2 917 lines in five minutes across 8 pods**. So the bottleneck had
+moved entirely into the database, and the fan-outs were what it was doing. The shapes, by count in
+that window (the shape is what `DescribeQueryShape` logs — `nodeType path scope`), each attributed
+to its reader:
+
+| Lines / 5 min | Shape | Reader | Verdict |
+|---|---|---|---|
+| 444 | `Notification path:- scope:Exact` | the bell — `NotificationCenter.razor:45` + `NotificationCenterPanel.razor:247` (MeshWeaver.Plugins, per CIRCUIT, live), plus `NotificationTriageService.cs:75` | **Plan 1** (recipient delivery) — a Plugins change; nothing in core issues this shape |
+| 313 | `AccessAssignment path:- scope:Subtree` | **unattributed.** Not the fold: `SecurityQueryShapesTest.TheFoldNeverIssuesAMeasuredFanOutShape` pins that no fold shape describes to it. No `.cs`/`.razor` in this repo or in MeshWeaver.Plugins builds it (the two `scope:subtree nodeType:AccessAssignment` builders — `PackageInstaller.ContradictingDenies`, `Store/Licensing/Source/PluginGate.SnapshotQueries` — both carry `path:{partition}`); a `search_chunks` sweep of the live mesh answered `"searched": false` (no embedding provider on that MCP endpoint), i.e. the in-mesh sweep FAILED and is still owed | **Open** — find the caller (Plugins #1035's shape log names it per line; correlate with `select:`/`limit:` on the same line) |
+| 278 | `Email path:- scope:Exact` | **unattributed** — no source in either repo spells a path-less `nodeType:Email` (`EmailInboundProcessor.cs:339` is `namespace:`-anchored); the in-mesh sweep failed as above | **Open** |
+| 179 | `PartitionAccessPolicy path:- scope:Children` | the fold's ROOT policy leg — `PermissionEvaluator.ObserveScopePolicies`, spelled `namespace: id:_Policy` | **Fixed here** — see "What moved" |
+| 172 | `GroupMembership path:- scope:Subtree` | `SecurityQueries.Memberships` (`PermissionEvaluator.ObserveAllMembershipNodes`) | **Cannot be anchored** — memberships live under the GROUP node in any partition ([Unanchored Security Reads](../UnanchoredSecurityReads)); the count is the multiplier below, not the subscription count |
+| 103 | `User path:- scope:Exact` | `UserIdentityCache.DirectoryQuery` (`nodeType:User`, process-wide), `SpaceInviteService.cs:66` / `GroupInviteExtensions.cs:93` (`content.email:` filtered), `EventSubscriptionRunner.Reconcile`/`WatchTriggerNodeType` for `TriggerNodeType = "User"` | **Already pinned**: `UserNodeType.cs:76` registers the `nodeType:User` → `Auth` routing rule and `PostgreSqlPartitionedMeshQuery.EnumerateFanOutAsync` consumes it (the "inert hint" note on the companion page is out of date). These lines are therefore the provider's *"ALREADY PINNED … look at the statement itself"* variant — slow because the database was saturated, not because they fanned out. Inferred from the code paths; the census counted lines by shape without separating the two variants |
+| 53 | `Store/Plugin path:- scope:Subtree` | `SecurityQueries.GatedNodes("Store/Plugin")` | Cannot be anchored (gate map matched against every partition) — multiplier below |
+| 49 | `Thread path:- scope:Exact` | `ThreadQueries.cs:43/50`, `ChatHistorySelector.razor:236` (Plugins, `createdBy:` filtered) | Plugins; a thread lives at `{owner}/_Thread` in every partition |
+| 39 | `UiContribution path:- scope:Exact` | `UiContributionCatalog.cs:95` (process-wide live) | contributions are authored wherever the plugin lives |
+
+**The multiplier — why a "process-wide cached subscription" shows up 170 times in five minutes.**
+A fan-out live query re-runs when a change notification is *relevant*, and
+`PostgreSqlPartitionedMeshQuery.FanOutQuery`'s relevance filter classifies a notification by its
+`Entity`: a `MeshNode` is matched against the query (`_evaluator.Matches`, node type included), but
+`n.Entity is not MeshNode → return true` — *"unclassifiable — re-query rather than miss it"*. Every
+notification that arrives from ANOTHER process is unclassifiable by construction:
+`PostgreSqlChangeListener.cs:211` builds `new DataChangeNotification(path, kind, null, …)` because
+the `pg_notify('mesh_node_changes', …)` payload carries only `path` and `op`. On an 8-pod portal
+7/8 of all writes arrive that way, so **every write anywhere in the fleet re-runs every unanchored
+live query on every pod** — memberships, roles, gated types, the root policy leg, the user
+directory, the UI-contribution catalog, and every circuit's bell. That is the 172 / 179 / 53 / 39
+above, and it is why the fold's globals were "the single biggest DB load" on code that reads them
+once per process. The lever is in MeshWeaver.Plugins: put `node_type` on the notify payload and
+classify the cross-process notification by it (a node type that no fan-out query names cannot
+enter its result set), keeping the fail-safe re-query for a payload without one. It removes the
+multiplier from every fan-out that survives, and it is independent of anchoring.
+
+**What moved (this change, core):**
+
+- The root **policy** leg is spelled `path:_Policy nodeType:PartitionAccessPolicy`
+  (`SecurityQueries.RootPolicy`) instead of `namespace: id:_Policy …`. The two name the same node
+  (namespace `""` + id `_Policy` IS the path `_Policy`), but the old spelling had no first segment,
+  so the router UNION-ed every partition schema for it — 179 times in the window, every one
+  necessarily empty: an unregistered `_`-prefixed first segment is unroutable, so no write can land
+  a root `_Policy` row on Postgres at all. With a first segment the router never fans out; today it
+  answers empty (nothing registered for `_Policy`), and registering `_Policy` as a global satellite
+  the way `_Access` is would make the read pinned without touching the query.
+- The root **grants** leg is `SecurityQueries.RootAssignments` and is reclassified: `_Access` is a
+  REGISTERED global satellite (`DefaultPartitionProvider` → schema `system_access`), and the router
+  resolves a `_`-prefixed first segment through that registry — so this leg was served by one schema
+  all along. The census on both pages called it a fan-out on the strength of a comment; it never
+  appeared in the Loki shape counts, which is the measurement that should have been consulted.
+- `SecurityQueryShapesTest` now classifies every fold shape into the router's three real outcomes
+  (`Pinned` / `Unroutable` / `FanOut`), pins the four measured `path:-` shapes as never-the-fold's,
+  and mirrors the global-satellite registry; `SecurityQueryRootLegRegistryTest` asserts that mirror
+  against the real registry of a running mesh.
 
 ## The elimination plan
 
