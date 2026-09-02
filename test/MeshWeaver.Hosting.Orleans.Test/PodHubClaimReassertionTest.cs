@@ -84,22 +84,30 @@ public class PodHubClaimReassertionTest
         };
 
     /// <summary>
-    /// Bounded wait on a POSITIVE signal — the claim has been asserted at least this many times.
-    /// The bound is a backstop against a hang, never the measurement.
+    /// Waits on the CONDITION itself — the grain publishes its running attach count, so this is a
+    /// filter on a live sequence rather than a poll. The <see cref="Budget"/> is a backstop against
+    /// a hang, never the measurement, and the failure it raises names what was expected.
+    ///
+    /// <para>🚨 <c>ObservableAwait.Await</c>, never <c>.ToTask()</c> and never a bare
+    /// <c>await source</c>: Rx's own awaiter is an <c>AsyncSubject</c> that resumes the test INLINE
+    /// on the signalling thread, still inside Rx's trampoline, and every later <c>await</c> in the
+    /// method inherits that scheduler.</para>
     /// </summary>
     private static async Task<int> WaitForAttaches(AcceptingGrainFactory factory, int target, string because)
     {
-        var deadline = DateTime.UtcNow + Budget;
-        while (DateTime.UtcNow < deadline)
+        try
         {
-            var now = factory.AttachCalls;
-            if (now >= target)
-                return now;
-            await Task.Delay(25);
+            return await factory.Attaches
+                .Where(count => count >= target)
+                .Take(1)
+                .Timeout(Budget)
+                .Await();
         }
-
-        throw new TimeoutException(
-            $"the claim was asserted {factory.AttachCalls} time(s), short of {target}: {because}");
+        catch (TimeoutException)
+        {
+            throw new TimeoutException(
+                $"the claim was asserted {factory.AttachCalls} time(s), short of {target}: {because}");
+        }
     }
 
     /// <summary>
@@ -150,7 +158,7 @@ public class PodHubClaimReassertionTest
                       ?? throw new InvalidOperationException(
                           "the routing service recorded no pod-hub claim for the address — the seam "
                           + "this test waits on is gone");
-        await settled.Timeout(Budget).LastOrDefaultAsync();
+        await settled.Timeout(Budget).LastOrDefaultAsync().Await();
 
         feed.PushChange();
         feed.PushChange();
@@ -244,15 +252,29 @@ public class PodHubClaimReassertionTest
     /// what <c>PodHubGrain.Attach</c> returns on the silo that owns the address. Counting happens on
     /// the GRAIN, so a <c>Detach</c> during teardown can never be mistaken for another assertion.
     /// </summary>
-    private sealed class AcceptingPodHubGrain : IPodHubGrain
+    private sealed class AcceptingPodHubGrain : IPodHubGrain, IDisposable
     {
+        // 🚨 A BehaviorSubject, so a waiter that subscribes AFTER the count already reached its
+        // target still sees it. With a plain Subject the test would be a race it usually wins,
+        // which is the worst kind of green.
+        private readonly BehaviorSubject<int> attaches = new(0);
         private int attachCalls;
         public int AttachCalls => Volatile.Read(ref attachCalls);
 
+        /// <summary>The running attach count — the CONDITION the tests wait on.</summary>
+        public IObservable<int> Attaches => attaches;
+
         public Task<bool> Attach()
         {
-            Interlocked.Increment(ref attachCalls);
+            // Switch keeps exactly one claim in flight per address, so these are serialised.
+            attaches.OnNext(Interlocked.Increment(ref attachCalls));
             return Task.FromResult(true);
+        }
+
+        public void Dispose()
+        {
+            attaches.OnCompleted();
+            attaches.Dispose();
         }
 
         public Task Detach() => Task.CompletedTask;
@@ -270,6 +292,9 @@ public class PodHubClaimReassertionTest
         private readonly AcceptingPodHubGrain podHub = new();
 
         public int AttachCalls => podHub.AttachCalls;
+
+        /// <summary>The running attach count — see <see cref="AcceptingPodHubGrain.Attaches"/>.</summary>
+        public IObservable<int> Attaches => podHub.Attaches;
 
         public TGrainInterface GetGrain<TGrainInterface>(string primaryKey, string? grainClassNamePrefix = null)
             where TGrainInterface : IGrainWithStringKey

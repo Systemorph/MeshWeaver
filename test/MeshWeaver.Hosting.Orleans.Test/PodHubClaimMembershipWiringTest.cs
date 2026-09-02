@@ -2,7 +2,9 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -71,8 +73,11 @@ public class PodHubClaimMembershipWiringTest : IClassFixture<TwoSiloCacheUpdateF
             "a silo must register the membership feed — without it the pod-hub claim silently "
             + "reverts to the one-shot assertion that is #2938's root cause");
 
-        var changes = new ConcurrentQueue<long>();
-        using var membership = feed!.Changes.Subscribe(changes.Enqueue);
+        // Replay + Connect BEFORE the silo joins: the notification can land while the join call is
+        // still returning, and a plain subscription taken afterwards would miss it — a race the test
+        // would usually win, which is the worst kind of green.
+        var changes = feed!.Changes.Replay();
+        using var membership = changes.Connect();
 
         // An address claimed BEFORE the membership change — the population at risk.
         var address = new Address("client", $"wiring-{Guid.NewGuid():N}");
@@ -83,12 +88,7 @@ public class PodHubClaimMembershipWiringTest : IClassFixture<TwoSiloCacheUpdateF
             return Observable.Return(d);
         });
 
-        await WaitUntil(
-            () =>
-            {
-                SiloMeshHub(cluster, 1).Post(new PingRequest(), o => o.WithTarget(address));
-                return !inbox.IsEmpty;
-            },
+        await PostUntilDelivered(cluster, address, inbox,
             "the claim must be live BEFORE the membership change, or this test would prove nothing "
             + "about surviving one",
             ct);
@@ -97,34 +97,52 @@ public class PodHubClaimMembershipWiringTest : IClassFixture<TwoSiloCacheUpdateF
         // scale-up do, and what re-partitions Orleans' grain directory.
         await cluster.StartAdditionalSiloAsync();
 
-        await WaitUntil(() => !changes.IsEmpty,
-            "a silo joining must reach the feed. Silence here is the failure mode a registration "
-            + "check cannot see: the feed exists, nothing ever subscribed it to Orleans' silo-status "
-            + "oracle, and every claim is back to being asserted exactly once",
-            ct);
+        try
+        {
+            await changes.Take(1).Timeout(Budget).Await(ct);
+        }
+        catch (TimeoutException)
+        {
+            throw new TimeoutException(
+                "a silo joining must reach the feed. Silence here is the failure mode a registration "
+                + "check cannot see: the feed exists, nothing ever subscribed it to Orleans' "
+                + "silo-status oracle, and every claim is back to being asserted exactly once");
+        }
 
         // …and the address is still reachable across silos afterwards.
         inbox.Clear();
-        await WaitUntil(
-            () =>
-            {
-                SiloMeshHub(cluster, 1).Post(new PingRequest(), o => o.WithTarget(address));
-                return !inbox.IsEmpty;
-            },
+        await PostUntilDelivered(cluster, address, inbox,
             "a hub whose claim was made before the cluster's membership moved must still be "
             + "reachable by directed grain call afterwards — that is the whole of #2938",
             ct);
     }
 
-    private static async Task WaitUntil(Func<bool> condition, string because, CancellationToken ct)
+    /// <summary>
+    /// Posts on an interval until the delivery lands — the sanctioned shape for a request/response
+    /// source whose answer only becomes possible once a claim has settled (a single post could be
+    /// refused before the claim lands and would never be retried). The <see cref="Budget"/> is a
+    /// backstop against a hang, never the measurement.
+    ///
+    /// <para>🚨 <c>ObservableAwait.Await</c>, never <c>.ToTask()</c> and never a bare
+    /// <c>await source</c> — Rx's awaiter resumes the test inline on the signalling thread.</para>
+    /// </summary>
+    private static async Task PostUntilDelivered(
+        TestCluster cluster, Address address, ConcurrentQueue<IMessageDelivery> inbox,
+        string because, CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow + Budget;
-        while (DateTime.UtcNow < deadline)
+        try
         {
-            if (condition()) return;
-            await Task.Delay(250, ct);
+            await Observable.Interval(TimeSpan.FromMilliseconds(250), Scheduler.Default)
+                .StartWith(0L)
+                .Do(_ => SiloMeshHub(cluster, 1).Post(new PingRequest(), o => o.WithTarget(address)))
+                .Where(_ => !inbox.IsEmpty)
+                .FirstAsync()
+                .Timeout(Budget)
+                .Await(ct);
         }
-
-        throw new TimeoutException($"Timed out after {Budget}: {because}");
+        catch (TimeoutException)
+        {
+            throw new TimeoutException($"Timed out after {Budget}: {because}");
+        }
     }
 }
