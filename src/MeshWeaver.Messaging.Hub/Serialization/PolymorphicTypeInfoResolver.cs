@@ -1,5 +1,7 @@
 ﻿using System.Collections;
 using System.Collections.Concurrent;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -176,15 +178,23 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
     // (A) Polymorphic subtypes of baseType that EXIST in its assembly but are NOT registered in THIS hub
     // serialise fine here yet DROP to FallBackToNearestAncestor when this hub RECEIVES them, with no other
     // signal (the silent-skin-drop class). Warn once per type (instance dict — no static state) so the
-    // missing registration surfaces. Scoped to baseType.Assembly to avoid a full AppDomain scan; STJ caches
-    // JsonTypeInfo so this runs at most once per base type.
+    // missing registration surfaces. Scoped to baseType.Assembly to avoid a full AppDomain scan, and the
+    // assembly's type list comes from the per-assembly cache below, so STJ's once-per-type resolution
+    // costs one enumeration per ASSEMBLY, not one per base type.
+    //
+    // 🚨 This is a DIAGNOSTIC running inside GetTypeInfo — i.e. inside every serialization on the hub,
+    // including MessageService.ReportFailure's DeliveryFailure post. It must never throw: when it did
+    // (Assembly.GetTypes() on a module whose closure lacked Microsoft.Agents.AI threw
+    // ReflectionTypeLoadException), the sender of the failed request never learned it had failed —
+    // "Failed to post DeliveryFailure message … breaking error cascade". A diagnostic degrades to a
+    // diagnostic (GetLoadableTypes + WarnUnloadableTypes), never to a lost delivery.
     private readonly ConcurrentDictionary<Type, byte> warnedMissingDerived = new();
     private void WarnMissingDerivedRegistrations(Type baseType, List<JsonDerivedType> derivedTypes)
     {
         if (logger is null || baseType == typeof(object) || baseType.IsSealed)
             return;
         var present = derivedTypes.Select(d => d.DerivedType).ToHashSet();
-        foreach (var t in baseType.Assembly.GetTypes())
+        foreach (var t in GetLoadableTypes(baseType.Assembly))
         {
             if (t.IsAbstract || t.IsInterface || t.IsGenericTypeDefinition || t == baseType
                 || !baseType.IsAssignableFrom(t) || present.Contains(t)
@@ -197,6 +207,60 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
                 + "and receiving hub.",
                 t.FullName, baseType.Name, owner ?? "(unknown)", t.Name, t.Name);
         }
+    }
+
+    // (B) Loadable types per assembly, computed ONCE per assembly per resolver. Weak-keyed on purpose: the
+    // resolver belongs to a long-lived hub, and a strong Assembly → Type[] entry would root every
+    // collectible module/dynamic-node assembly whose type was ever serialised here (the recompile-ALC leak
+    // TypeRegistry's weak shadow exists to prevent). ConditionalWeakTable keeps the array alive only while
+    // the assembly is otherwise reachable. Instance field — dies with the hub's options; never static.
+    private readonly ConditionalWeakTable<Assembly, Type[]> loadableTypesByAssembly = new();
+    // Warn ONCE per offending assembly (keyed by name — a string never pins the assembly).
+    private readonly ConcurrentDictionary<string, byte> warnedUnloadableAssemblies = new();
+
+    private Type[] GetLoadableTypes(Assembly assembly)
+    {
+        if (loadableTypesByAssembly.TryGetValue(assembly, out var cached))
+            return cached;
+        Type[] types;
+        try
+        {
+            types = assembly.GetTypes();
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            // The canonical loader-safe enumeration: keep every type that DID load, report the rest once.
+            types = ex.Types.OfType<Type>().ToArray();
+            WarnUnloadableTypes(assembly, ex);
+        }
+        // A concurrent caller may have computed the same array first; either copy is equally valid.
+        loadableTypesByAssembly.TryAdd(assembly, types);
+        return types;
+    }
+
+    /// <summary>
+    /// One or more types in <paramref name="assembly"/> could not be loaded — in practice a module whose
+    /// dependency closure is missing an assembly (measured: a closure without <c>Microsoft.Agents.AI</c>
+    /// on Plugins CI and Reinsurance main). The derived-type scan has already continued with the types
+    /// that did load, so the serialization this runs inside is unaffected; what is lost is only the
+    /// scan's own coverage of the unloadable types, and THAT is what this warning reports — once per
+    /// assembly per hub, naming the assembly and the de-duplicated loader messages, which name the
+    /// missing dependency. It is the actionable diagnostic for the closure defect; the closure itself is
+    /// fixed where closures are built, never here.
+    /// </summary>
+    private void WarnUnloadableTypes(Assembly assembly, ReflectionTypeLoadException ex)
+    {
+        var assemblyName = assembly.FullName ?? assembly.GetName().Name ?? "(unnamed)";
+        if (logger is null || !warnedUnloadableAssemblies.TryAdd(assemblyName, 0))
+            return;
+        var loaderMessages = string.Join("; ",
+            ex.LoaderExceptions.Where(e => e is not null).Select(e => e!.Message).Distinct());
+        logger.LogWarning(
+            "{UnloadableCount} of {TotalCount} types in assembly {Assembly} cannot be loaded on hub {Hub}: "
+            + "{LoaderMessages}. Serialization continued with the types that did load, but a polymorphic "
+            + "subtype among the unloadable ones cannot round-trip here. Fix the module's dependency closure "
+            + "so the assembly named in the loader message ships with it.",
+            ex.Types.Count(t => t is null), ex.Types.Length, assemblyName, owner ?? "(unknown)", loaderMessages);
     }
 
     /// <summary>
