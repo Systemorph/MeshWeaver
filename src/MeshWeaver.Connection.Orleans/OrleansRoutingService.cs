@@ -11,10 +11,13 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Orleans.Configuration;
 using Orleans.Runtime;
 using Orleans.Streams;
 
@@ -148,6 +151,33 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     internal bool CanHostGrains { get; set; }
 
     /// <summary>
+    /// 🚨 Issue #2885. The bound this router measures a delivery against before handing it to
+    /// <c>IRoutingGrain.RouteMessage</c> — the FOURTH transport leg, and the only one the #2897
+    /// guard could not reach.
+    ///
+    /// <para><b>Why it has to be measured here and not in the grain.</b> <c>RoutingGrain</c> already
+    /// refuses an oversized body on both of its forward legs, but this call is how a delivery
+    /// REACHES <c>RoutingGrain</c> at all. Orleans serialises the argument with the mesh's own
+    /// System.Text.Json options, so the packaged <c>RawJson</c> is transcoded UTF-16 → UTF-8 by
+    /// <c>Utf8JsonWriter.TranscodeAndWriteRawValue</c>, which rents up to 3 bytes per char. In prod
+    /// (2026-08-31, routing to the bulk-import hub <c>import/xDAfkqsVUE-OMBHb0mVtSg</c>) that rent
+    /// threw <c>OutOfMemoryException</c> at <c>GC.AllocateNewArray</c> — the delivery was lost
+    /// upstream of every guarded site, and the stack named neither its size nor its producer.</para>
+    ///
+    /// <para><b>The live value, like the grain's.</b> Read from
+    /// <see cref="ClientMessagingOptions"/> — this assembly is the CLIENT connection, and the
+    /// client's own limit is what governs a client→silo call — so a deployment that tuned its
+    /// transport is measured against the number that transport actually enforces and never gets a
+    /// false refusal. The constant is only the fallback for a host that registered no messaging
+    /// options at all, and it IS Orleans' default.</para>
+    ///
+    /// <para>Settable as a test seam, exactly like <see cref="AttachBackoff"/> and
+    /// <see cref="CanHostGrains"/>: instance state, never static, so a test can drive the refusal
+    /// without allocating a 100 MiB string on a shared build machine.</para>
+    /// </summary>
+    internal int GrainBodyLimitBytes { get; set; }
+
+    /// <summary>
     /// 🚨 <b>THE ONLY DOOR to an Orleans grain from this class</b> — and therefore the one place
     /// where "this host has begun stopping" turns into "do not ask Orleans for an activation".
     /// Every <c>GetGrain</c> in this file goes through here; <c>grainFactory</c> is never touched
@@ -229,6 +259,28 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // the framework's own answer to "is this process a silo" — see CanHostGrains. Optional for
         // the same reason as the two above: a bare mesh in a unit test is neither silo nor client.
         CanHostGrains = serviceProvider.GetService<ILocalSiloDetails>() is not null;
+        // Issue #2885 — the bound the RouteMessage leg measures against.
+        //
+        // 🚨 Read the limit that ACTUALLY GOVERNS this process, not whichever one is handy. This
+        // service is registered on silo hosts as well as clients (OrleansServerRegistryExtensions),
+        // and the two are configured separately: a silo's outbound grain call is bounded by
+        // SiloMessagingOptions, a client's by ClientMessagingOptions. Reading only the client
+        // option would under-refuse where the silo bound is smaller (the oversized frame still
+        // tears the connection down — the exact failure this guard exists to prevent) and
+        // over-refuse where it is larger (refusing deliveries the transport would have carried).
+        // CanHostGrains is Orleans' own answer to "is this process a silo", resolved just above.
+        //
+        // Each is optional for the same reason as the three fields above: a bare mesh in a unit
+        // test registers no Orleans messaging options at all, and then the guard falls back to
+        // Orleans' own default rather than to "unbounded". The cross-fallback matters for a
+        // co-hosted process that registers only one of the two.
+        GrainBodyLimitBytes =
+            (CanHostGrains
+                ? serviceProvider.GetService<IOptions<SiloMessagingOptions>>()?.Value.MaxMessageBodySize
+                  ?? serviceProvider.GetService<IOptions<ClientMessagingOptions>>()?.Value.MaxMessageBodySize
+                : serviceProvider.GetService<IOptions<ClientMessagingOptions>>()?.Value.MaxMessageBodySize
+                  ?? serviceProvider.GetService<IOptions<SiloMessagingOptions>>()?.Value.MaxMessageBodySize)
+            ?? MessageSizeGuard.DefaultGrainTransportBodyBytes;
     }
 
     /// <summary>
@@ -300,7 +352,47 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                     : delivery.Failed(shutdownMessage, ErrorType.ShuttingDown));
             }
 
-            // 3. Background mesh dispatch via the routing grain. Path resolution
+            // 3. 🚨 Issue #2885 — the producer-side size bound, BEFORE the delivery is handed to
+            //    Orleans. RoutingGrain refuses an oversized body on both of its forward legs
+            //    (#2897), but this call is how a delivery reaches RoutingGrain in the first place,
+            //    so those guards sit strictly downstream of this hop and never executed for the
+            //    payload that killed it. Orleans serialises the RouteMessage ARGUMENT with the
+            //    mesh's own System.Text.Json options, so the packaged RawJson goes through
+            //    RawJsonConverter.WriteRawValue(string) and Utf8JsonWriter.TranscodeAndWriteRawValue
+            //    rents up to 3 bytes per char from SharedArrayPool to transcode UTF-16 → UTF-8.
+            //    In prod that rent threw OutOfMemoryException at GC.AllocateNewArray while routing
+            //    to the bulk-import hub import/xDAfkqsVUE-OMBHb0mVtSg, and the delivery vanished
+            //    with neither its size nor its producer recoverable from the stack.
+            //
+            //    Refusing cannot break anything that works: the bound is the transport's OWN, so a
+            //    payload at or over it is already undeliverable today — only silently, and while
+            //    endangering every other allocation in the pod. The NACK is TERMINAL
+            //    (ErrorType.Rejected, never the transient ShuttingDown) because a body over the
+            //    frame limit will not become deliverable on a retry: the size is a property of the
+            //    message, not of the attempt.
+            if (MessageSizeGuard.IsOversized(delivery, GrainBodyLimitBytes, out var payloadBytes))
+            {
+                var refusal = MessageSizeGuard.DescribeRouterDispatch(
+                    delivery, address.ToString(), payloadBytes, GrainBodyLimitBytes);
+                logger.LogError(
+                    "Orleans: REFUSED oversized delivery to {Address}: {Bytes} bytes against the "
+                    + "{Limit}-byte Orleans MaxMessageBodySize ({DeliveryId}, sender {Sender}) — "
+                    + "NOT routed, because serialising it for IRoutingGrain.RouteMessage transcodes "
+                    + "the payload through a rent of up to 3× its size and that allocation is what "
+                    + "threw OutOfMemoryException in production. {Refusal}",
+                    address, payloadBytes, GrainBodyLimitBytes, delivery.Id, delivery.Sender, refusal);
+                OrleansRouteTrace.Write($"OrleansRoutingService.Deliver REFUSED_OVERSIZED addr={address} id={delivery.Id} bytes={payloadBytes}");
+
+                // The same answer-once contract the shutdown branch above applies: senderNacked is
+                // the POST's verdict, not the permission to post.
+                var oversizedNacked = delivery.MayAnswer()
+                                      && SendDeliveryFailure(delivery, refusal, ErrorType.Rejected);
+                return Observable.Return(oversizedNacked
+                    ? delivery.FailedAndNacked(refusal)
+                    : delivery.Failed(refusal, ErrorType.Rejected));
+            }
+
+            // 4. Background mesh dispatch via the routing grain. Path resolution
             //    runs INSIDE the grain (silo-side) where the catalog is visible —
             //    on the client, MeshConfiguration.Nodes is empty. Fire-and-forget
             //    Subscribe — errors flow into SendDeliveryFailure inside the
@@ -548,11 +640,21 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 return false;
             }
 
+            // 🚨 The NACK must not BE the thing it is reporting — issues #1890/#2885, and the exact
+            // protection RoutingGrain.PostFailure already applies on the silo side. DeliveryFailure
+            // embeds the ORIGINAL delivery, payload and all, and this NACK travels the SAME
+            // transports the original could not survive: a failure report about an oversized
+            // message is itself an oversized message, so it dies at precisely the wall it is
+            // describing — and for #2885 it dies by re-running the 3×-payload transcode that OOM'd
+            // the pod, turning one refusal into a second allocation failure. Strip an undeliverable
+            // payload down to a description of itself; the sender matches a DeliveryFailure on
+            // RequestId, never on the echoed payload, and a payload that fits is echoed unchanged.
+            var echoedDelivery = MessageSizeGuard.WithoutOversizedPayload(delivery);
             var failureAccess = serviceProvider.GetService<AccessService>();
             using (delivery.AccessContext is null ? failureAccess?.ImpersonateAsSystem() : null)
             {
                 meshHub.Post(
-                    new DeliveryFailure(delivery)
+                    new DeliveryFailure(echoedDelivery)
                     {
                         ErrorType = errorType,
                         Message = message
