@@ -104,6 +104,7 @@ jobs:
   preflight:
     name: Assert the inputs exist
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       # No `if:` anywhere in this job. It asserts and fails; it does not decide whether to run.
       - name: Every external input, or a red build naming what to provision
@@ -215,6 +216,7 @@ jobs:
     name: Read the environment list
     needs: [preflight]
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     outputs:
       matrix: ${{ steps.envs.outputs.matrix }}
       aks_cluster: ${{ steps.envs.outputs.aks_cluster }}
@@ -293,6 +295,7 @@ jobs:
     name: ${{ matrix.env.ns }}
     needs: [preflight, discover]
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       AKS_CLUSTER: ${{ needs.discover.outputs.aks_cluster }}
       AKS_RESOURCE_GROUP: ${{ needs.discover.outputs.aks_resource_group }}

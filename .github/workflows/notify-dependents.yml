@@ -79,6 +79,7 @@ jobs:
   notify:
     name: Notify dependent repos
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       # Invariant #2: assert the inputs and fail RED naming what is missing, rather than skipping.
       - name: Assert the dispatch credential is configured

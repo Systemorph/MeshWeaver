@@ -31,6 +31,7 @@ jobs:
   scripts:
     name: Operator scripts (shellcheck + behaviour)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -198,6 +199,7 @@ jobs:
   image:
     name: Operator image builds
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       # Build only — nothing is pushed from a pull request. The point is that the Dockerfile and its

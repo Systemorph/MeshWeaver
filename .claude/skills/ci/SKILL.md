@@ -125,6 +125,37 @@ burst can no longer leave *nothing* completed, which is what silenced CD entirel
 merge queue (#2412), which tests the prospective combination before it lands; this repo is still
 missing the `merge_group:` trigger that MeshWeaver.Plugins already has.
 
+## 🚨 Every job is HARD-CUT at 45 minutes — `timeout-minutes` is mandatory, literal, ≤ 45
+
+Maintainer, 2026-09-02: *"hard cut ci runs after 45min — we pay all this."* GitHub's default job
+timeout is **360 minutes**. A job without an explicit cap that hangs therefore bills a runner for six
+hours — and when a required check `needs:` it, nothing behind it can merge for six hours either.
+
+What it cost, measured the morning the rule was written: the reusable module-pack lane's `pack` job
+had no cap; `dotnet test MeshWeaver.Mcp.Test` wedged before its first test on EVERY MeshWeaver.Plugins
+run; **19 runs sat `in_progress` at once** (11 of them on `main`), each holding a runner up to 360
+minutes; the three required checks all `needs:` that job, so no Plugins PR could merge and `main`
+never reached `publish-bake` — which starved every satellite of a sealed publication. One missing line.
+
+The rule, enforced by `.github/scripts/check-workflow-timeouts.py` (self-tested, fails RED):
+
+- every job in every workflow declares `timeout-minutes: <literal integer>` with `1 ≤ value ≤ 45`
+  — a `${{ … }}` expression is refused, because a cap that can only be evaluated at run time
+  cannot be proven by reading the file;
+- a job that `uses:` a reusable workflow is exempt *in the caller* (GitHub ignores the caller's
+  value there) — the cap lives on the jobs INSIDE the reusable workflow, gated in the repo that
+  defines it (this one, for every `node-repo-*.yml` lane);
+- core runs the guard on itself in `dotnet-test.yml` beside `check-workflow-shell.py`; every
+  satellite gets it through `node-repo-validate.yml`, which fetches the platform's script at
+  `platform-ref` and runs it against the caller's tree — pin `platform-ref` beside the `uses:` sha.
+
+Measured headroom on 2026-09-02: the longest honest jobs are the Plugins portal-host shards
+(25–30 min), `release-images` (36–41 min) and the Education install shards (~27 min). A job that
+reaches 45 is **stuck, not slow** — find what is not completing; never raise the bound (AGENTS.md →
+"No band-aids"). And a cap that fires destroys the hung test's transcript with it (a host-cap kill
+leaves no `.trx`), so when you are chasing a hang, capture the stack (`dotnet-stack report -p`)
+BEFORE the cap does.
+
 ## Satellite CI = thin callers of THIS repo's reusable workflows
 
 **Never hand-roll (or copy-paste) a node repo's CI.** The shared jobs live here as `workflow_call`
@@ -141,6 +172,7 @@ Full contract:
 
 ## Checklist
 
+- [ ] Every job I added or touched carries a literal `timeout-minutes` ≤ 45 (`python3 .github/scripts/check-workflow-timeouts.py --root .` is green).
 - [ ] No `continue-on-error` on a gate's input step; no `if:` asking whether a secret/variable is
       set. Fork-PR exemption expressed once, on the event.
 - [ ] Missing external inputs fail a `preflight` job RED, naming what to provision.
