@@ -128,6 +128,51 @@ the instruction, so it is stated rather than escalated.
 
 The importer must be **idempotent over existing rows** (re-imports, eventually-consistent snapshots, and especially the migration backfill's content-NULL shadow rows). Plain `CreateNode` faults on an existing node; a hand-rolled stream-`Overwrite` re-asserts the *same* Version, which the owner drops as not-newer — so content silently never lands. The canonical `CreateOrUpdateNodeRequest` does the right thing for both cases and **increments the Version on update**, so the write is accepted and persists. This is non-negotiable: do not re-implement create/update in the importer.
 
+### Creates travel in BULK; updates do not — and why that is not a compromise
+
+An import used to cost **one write request and one single-row upsert per node**. Storage has had the
+bulk contract all along — `IStorageAdapter.WriteMany`, which the PostgreSQL adapter implements as one
+`NpgsqlBatch` **per (schema, table) window**: N upserts, one round-trip, one implicit transaction, the
+same upsert SQL the singular `Write` uses. Nothing on the import path reached it, because **a node
+write has to route through the mesh's canonical verbs**, and `WriteMany` is an `IStorageAdapter` call
+one level below them. Calling the adapter from the importer would have bought the batching by dropping
+the typing, access check and per-node-hub observability the write depends on.
+
+The answer is a **bulk verb, not a bypass**. `CreateNodesRequest` is the bulk sibling of
+`CreateNodeRequest` and runs the identical pipeline — partition bootstrap once per partition, every
+validator including RLS for every node, the type-existence probe per distinct type, then **one**
+`WriteMany`, the `Created` change-feed publishes in caller order post-commit, and the post-creation
+handlers. So the importer splits each **write stage** (see [Import Write Ordering](ImportWriteOrdering)
+— everything inside a stage may be written concurrently, a stage begins only after the previous one
+completed):
+
+| Write | Verb | Why |
+|---|---|---|
+| **Plain create** (this pass read no node at the path) | `CreateNodesRequest`, chunked at 25 | Nobody owns the node yet — the create is executed by the mesh hub against storage either way, so batching changes only how many times it crosses the wire. |
+| **Update** (a node is already there) | `CreateOrUpdateNodeRequest` per node | An update is applied by the node's **own hub** through `GetMeshNodeStream(path).Update(...)`. The mesh hub does not write over a live node, so there is nothing to batch. |
+| **Satellite** (`_Access`, `_Policy`, …) **or `AccessAssignment`** | `CreateOrUpdateNodeRequest` per node | Per-node lifecycle guards and MainNode normalization. `CreateNodesRequest.BulkRefusal` is the single statement of that rule — the handler and the importer both ask it, so the two cannot drift. |
+
+Two properties are load-bearing and neither is free:
+
+1. **Per-file isolation survives.** `CreateNodesRequest` is validate-all-then-write: one offender
+   refuses the whole request and can name at most one path, while the import's contract is the
+   opposite — every other node still has to land, and the one that did not has to be **named**,
+   because `Failed > 0` is what holds the git baseline. So a **refused or faulted batch is re-run one
+   node at a time**, which attributes the failure to the file that caused it and lands everything
+   else. The extra pass is paid only on the failing chunk. Likewise a path the batch reports in
+   `CreateNodesResponse.Existing` — the snapshot said "absent", the authoritative read disagreed — is
+   an update, and falls through to the per-node verb rather than being dropped.
+2. **The chunks are MERGED, not concatenated.** `BatchSize` bounds *concurrent heavy operations*, and
+   one bulk request is internally sequential. Running the chunks back to back would cut the import's
+   concurrency from ~5 to 1 and could make a large first import **slower** than the per-node path it
+   replaces. Merged at `BatchSize`, the bound is unchanged and each of those in-flight operations now
+   carries 25 nodes instead of one.
+
+`StaticRepoImportResult.WriteRequests` reports the round-trip count — `⌈bulk creates ÷ 25⌉` plus one
+per node written individually — and the import's summary log line carries it, so "did this import
+batch?" is answerable from an operator's log rather than by reading code. A first import of 40 fresh
+nodes costs **2** requests; it used to cost 40.
+
 ## Scope: mesh nodes AND content-collection files
 
 The import materializes both **mesh nodes** (a node's `Content` + prerendered HTML, via the node upsert above) and, for sources that need it, the node's **content-collection files** — the assets a node references through the `content` collection, e.g. an `@@content/logo.svg` image embed on a Space page.
@@ -241,3 +286,4 @@ Shipped and enabled for `Doc` / `Agent` / `Model` on the distributed portal. The
 - Re-run with an unchanged source is a **no-op** (fingerprint short-circuit).
 - The import runs on the **dedicated `import/{meshHubId}` hub**, not the root mesh hub — the bulk create/upsert traffic never touches the router (verified end-to-end by `OrleansStaticRepoImportTest` / `OrleansContentImportSyncTest`, which complete only because the import hub is reachable).
 - A **single node failing does not abort the import**; it logs a `⚠` line and the activity ends **`Warning`**, not a green `Succeeded`.
+- A first import of a whole partition costs **⌈n ÷ 25⌉ write requests, not n** — and a node the batch cannot carry (a satellite) or that a validator refuses is routed around it / re-run individually, so it is still named and everything else still lands (`StaticRepoImportBulkWriteTest`).
