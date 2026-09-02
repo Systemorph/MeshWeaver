@@ -682,10 +682,33 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     ///     shared handle down on every post-commit broadcast would sever live
     ///     GUI subscribers.</item>
     /// </list>
-    /// Same discipline as the storm-breaker's own re-probe eviction (guard #2 in
-    /// <see cref="GetStreamRaw"/>): dispose ONLY the Rx hydration — a terminally
-    /// errored upstream has already torn down its own keep-alive, and posting
-    /// UnsubscribeRequest at a mid-recycle owner would race its re-activation.
+    /// Same teardown as the storm-breaker's and the transient breaker's own re-probe
+    /// evictions — literally the same method, <see cref="EvictFaultedEntry"/>, which
+    /// DETACHES the path's upstream sync streams before it claims the entry and disposes
+    /// them once the claim is won.
+    ///
+    /// <para>🚨 <b>This is the FOURTH faulted-entry eviction and it used to hand-roll its own
+    /// teardown, disposing only the Rx hydration (#3110).</b> The prose here claimed that was
+    /// safe because "a terminally errored upstream has already torn down its own keep-alive" —
+    /// true only of a NotFound, which is the one fault class that disposes the stream's
+    /// <c>keepAlive</c>. The class that actually matters is the TRANSIENT one — an
+    /// idle-collected grain, a 60 s request timeout — where the node EXISTS and its stream
+    /// stays live with the 45 s <c>HeartBeatEvent</c> running. Dropping the entry then orphans
+    /// that stream in the cache hub's workspace, and BOTH reclaimers are keyed on the entry:
+    /// the idle sweep ITERATES <c>_streams</c>, and <see cref="ReleaseIfUnwatched"/> — the
+    /// event-driven release a terminal activity write fires (#1435/#1324) — LOOKS THE PATH UP
+    /// in it. So nothing could ever reach the stream again unless that exact path was read
+    /// once more. A finished <c>_Activity/compile-…</c> never is: a <c>HeartBeatEvent</c> was
+    /// still routing to one 49 minutes after it succeeded, pinning its node hub and both
+    /// <c>sync/</c> sub-hubs for the process lifetime, and every compile storm multiplied the
+    /// set. Never re-open this by hand — the whole point of
+    /// <see cref="EvictFaultedEntry"/> is that these four sites cannot drift.</para>
+    ///
+    /// <para>Disposing here is safe for the same reason it is safe in the other three: the
+    /// detach happens FIRST, so a concurrent read builds a fresh stream and can never adopt
+    /// the doomed one, and the <c>UnsubscribeRequest</c> a disposal posts carries the OLD
+    /// StreamId — a mid-recycle owner cannot mistake it for its new activation's. A lost
+    /// claim re-parks what it detached.</para>
     /// </summary>
     internal void ResetFailureState(string path)
     {
@@ -717,23 +740,21 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     path, clearedStreak.FailCount);
         }
 
-        if (_streams.TryGetValue(path, out var lazy) && lazy.IsValueCreated && lazy.Value.IsFaulted
-            && _streams.TryRemove(new KeyValuePair<string, Lazy<Entry>>(path, lazy)))
+        try
         {
-            try
-            {
-                var stale = lazy.Value;
-                stale.MarkEvicted();
-                stale.HydrationSub.Dispose();
-                readStreamEvictions.OnNext(new ReadStreamEviction(path, false, "invalidate"));
-                logger.LogDebug(
-                    "MeshNodeStreamCache: evicted faulted read entry for {Path} on change-feed invalidation", path);
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex,
-                    "MeshNodeStreamCache: error disposing faulted entry for {Path}", path);
-            }
+            // The SHARED teardown, never a copy of it — see the remarks. EvictFaultedEntry
+            // applies the same IsFaulted gate this site used to apply inline, and adds the two
+            // things the copy was missing: the upstream detach + disposal (#3110) and the
+            // pair-exact claim that re-parks on a lost race.
+            EvictFaultedEntry(path, "invalidate");
+        }
+        catch (Exception ex)
+        {
+            // Eviction is state hygiene on the CHANGE FEED's publisher thread — a post-commit
+            // storage write. It must never break the writer, and OnMeshChange's own catch logs
+            // at Error, which would make a benign teardown hiccup look like a broken feed.
+            logger.LogDebug(ex,
+                "MeshNodeStreamCache: error evicting faulted entry for {Path} on change-feed invalidation", path);
         }
     }
 
