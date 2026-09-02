@@ -598,7 +598,21 @@ nothing. The two together are what makes off-branch triggers destructive.
 Guarded by `WorkflowRunTriggerBranchFilterGuard`, which carries a control arm: if its block matcher
 ever stops recognising `workflow_run:`, it fails rather than passing having examined nothing.
 
+## 🚨 A queue ejection is not a red on the PR — read the steward's comment, not the PR's checks
+
+With the merge queue on, a pull request's own checks can be entirely green while the PR is *not
+landing*: the queue built it on top of the entries ahead of it, that group build failed, and the
+entry was ejected. The red lives on a `merge_group` run whose head branch is
+`gh-readonly-queue/main/pr-<N>-<sha>`, not on the PR's commit — `gh pr checks` shows nothing.
+
+The merge-queue steward acts on every ejection and leaves a comment saying what it found and did:
+re-queued (a catalogued flake, an infrastructure death, a timeout, or a bisect of a multi-PR group),
+or left out with the failing assertion, the run URL and the `queue-rejected` label. Read that
+comment first. Never re-run the failed queue build and never re-queue by hand — a re-run hides the
+bug and destroys the control arm; the steward re-queues on evidence and records the attempt. The
+whole protocol is [The Merge Queue](/Doc/Architecture/MergeQueue).
+
 ## Related
 
-[Module Versioning](/Doc/Architecture/ModuleVersioning) · [Modules](/Doc/Architecture/Modules) ·
-[Deploying Plugin Changes](/Doc/Architecture/DeployingPluginChanges)
+[The Merge Queue](/Doc/Architecture/MergeQueue) · [Module Versioning](/Doc/Architecture/ModuleVersioning)
+· [Modules](/Doc/Architecture/Modules) · [Deploying Plugin Changes](/Doc/Architecture/DeployingPluginChanges)

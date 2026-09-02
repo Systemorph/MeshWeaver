@@ -539,11 +539,12 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
 
         return read
             .Timeout(budget)
-            .Catch((TimeoutException _) => Observable.Return(NodeReadOutcome.Unavailable(new TimeoutException(
+            .Catch((TimeoutException elapsed) => Observable.Return(NodeReadOutcome.Unavailable(new TimeoutException(
                 $"The live read of '{path}' produced no frame within {budget.TotalSeconds:F0}s — its "
                 + "listing or the owner's mirror has not hydrated yet. This is NOT 'node not found': the "
                 + "hydration continues in the process-wide cache, and the retry the 503 asks for reads "
-                + "the frame from memory once it lands."))))
+                + "the frame from memory once it lands.",
+                elapsed))))
             .Catch((Exception ex) => Observable.Return(NodeReadOutcome.Unavailable(ex)));
     }
 

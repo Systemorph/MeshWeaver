@@ -1062,6 +1062,92 @@ recently synced or baked: suspect a degraded-but-Ready replica, not a global wed
 pods far above their siblings in BOTH memory and CPU in `kubectl top pods` is this incident;
 `kubectl delete pod` them (grace-drain — the Deployment replaces them) and read #2194.
 
+### 🚨 A LEAVING pod never touches shared NodeType state — the adoption sweep observes host shutdown
+
+The NodeType node is **one record for the whole deployment**. Every generation of pods reads its
+assembly coordinates, and every generation's adoption sweep writes them — which is fine while every
+writer is a pod that will go on serving the type, and a clobber the moment one of them is not.
+
+**What was measured (issue #3129, memex.systemorph.com, 2026-09-02).** A rollout left the old pod
+terminating for 27 minutes (`terminationGracePeriodSeconds=1800`, circuits still held, 11.8 GB,
+3–5 s GC stalls every ~4 s). While draining it kept running the prebuilt-bundle adoption sweep
+against the shared NodeType nodes, and Loki shows the loop verbatim:
+
+```
+ADOPTION REFUSED for Underwriting/Workbench (#2813): bundle fingerprint aa0e63c8… vs live 572495ee…
+→ coordinates cleared, Roslyn compile dispatched
+→ LATE_NACK_TERMINAL code=Unknown TimeoutException (+10 s)   [UpdateQueue] FAILED path=Underwriting/Workbench elapsedMs=12344
+→ ShippedPrebuiltBundles: seeding … did not complete — the sweep compiles it instead
+→ next access repeats (Workbench/Guideline every 30–90 s; Crm/Client 388× in 30 min)
+```
+
+All 1424 `ADOPTION REFUSED` and 350 `[UpdateQueue] FAILED` lines of the window were on the dying
+pod; the two new pods logged 0 of either. **The cross-generation effect IS the reported
+navigation hang:** because the old pod kept clearing `Underwriting/Workbench`'s coordinates, the
+NEW pods logged `Overlay self-heal: instance 'Underwriting/Desk' still stuck on NodeType
+'Underwriting/Workbench' after 120s` → self-heal compile → Release, ~2 minutes later. A ≥120 s
+hang per Underwriting type, per roll — three rolls that day.
+
+**The clobber, step by step.** `PrebuiltAssemblySeeder.Seed` stamps the bundle's assembly
+coordinates onto the node *first* and asks the owner to judge the adoption *second*
+(`RequestedSourceStampAt`, #1834 — the seeder's snapshot may predate the owner's source
+publication, so only the owner can compare fingerprints). When the bundle is stale the owner
+**refuses** (#2813) and, because the coordinates on the node at that moment are the *rejected*
+bundle's, it **clears** them so proven-stale bytes stop executing — that clear is required by the
+#2813 design and stays. The build that was actually serving on the healthy pods is already gone at
+that point: the stamp replaced it one write earlier. Each access on the draining pod re-ran the
+sequence (the Pending flip's on-demand adoption), so the shared record was wiped every 30–90 s for
+as long as the pod lived.
+
+**Why the grace period is the amplifier, not the cause.** Thirty minutes is how long the wrong
+writer stayed alive; the defect is that it wrote at all. Cutting the grace period would shorten the
+window and leave the same clobber in it — a band-aid.
+
+**The rule.** *A hub that is leaving does not START a sweep pass, does not STAMP, does not CLEAR
+coordinates, and does not DISPATCH a compile through the refusal path.* The predicate is
+`hub.IsLeaving()` (`HubLeavingExtensions`, `MeshWeaver.Mesh.Contract`), and it reads **two**
+signals:
+
+- `IMessageHub.IsShuttingDown` — this hub's own teardown or an ancestor's cascade; the shape #3109
+  gave BuildupActions and `SubscribeHubWatcher` gives emissions.
+- `IHostApplicationLifetime.ApplicationStopping` — the **process** is leaving. This is the signal
+  that was live for the whole window above and the reason the hub signal alone would have changed
+  nothing: the mesh is disposed by `MeshTeardownHostedService.StoppedAsync`, i.e. at the very END
+  of host shutdown, after Kestrel has finished with the circuits the pod still holds. Every one of
+  the 1424 refusals was issued by a watcher `SubscribeHubWatcher` would have dropped had
+  `IsShuttingDown` been true — so on a draining pod it was false the entire time. It is the same
+  token `OrleansRoutingService` already consults for its shutdown routing decisions.
+
+It is asked at four places, and every route into adoption converges on them: the start of a
+`ShippedPrebuiltBundles` pass (no pass starts — boot, on-demand from the compile watcher, a push's
+recompile, an install); `PrebuiltAssemblySeeder.Seed` at **subscribe** time (the seeder runs one
+`Seed` per assembly under `Concat`, so a pass in flight stops at its next node boundary) and again
+inside the write lambda (an unchanged node is a no-op `Update`); and
+`ApplyAdoptedSourceStampAndReport` on the **owner**, reached from the stamp watcher, the sources
+watcher's fold and the release watcher's fold — a leaving owner judges nothing and leaves the
+request standing for the owner activation on a pod that stays. The answer everywhere is the
+caller's ordinary "not adopted / nothing to do" signal, so nothing is ever parked on it.
+
+**Decline before you write.** The seeder also now refuses to *start* the stamp-then-refuse
+sequence when the refusal is already decidable from the owner's snapshot in hand: a bundle whose
+`SourceFingerprint` disagrees with a **published** live `CurrentSourceFingerprint` is declined
+before any write, exactly like a framework or dependency mismatch, and the live build's
+coordinates are never replaced. The owner's three-way check stays for the pre-publication window
+the snapshot cannot decide (no live fingerprint yet) and as the last line of defence. A decline is
+always safe — a compile follows; a write a refusal must undo is not.
+
+**What a leaving pod still does, deliberately.** A user still held on the draining pod who opens a
+type with no usable build gets a compile dispatched by the ordinary first-access kickoff — that
+result is a *new* version, clobbers nothing, and #3115 made its result write land under the pod's
+own flush bound. Only the refusal-driven clear-and-compile, whose sole effect on a shared record
+is destructive, is withheld.
+
+**Triage fingerprint** — `Overlay self-heal: … still stuck on NodeType … after 120s` on the new
+pods right after a roll, while a pod of the *previous* ReplicaSet is still `Terminating`: read
+that pod's log for `ADOPTION REFUSED`. Pinned by `LeavingHubAdoptionSweepTest`
+(`MeshWeaver.Compiler.Pipeline.Test`): the same seed on a shutting-down hub leaves the shared
+record byte-for-byte untouched, and on a live hub adopts.
+
 ---
 
 ## 🚨 That recompile can FAIL — and nothing upstream can warn you

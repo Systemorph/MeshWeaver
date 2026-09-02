@@ -108,6 +108,174 @@ public sealed class ImageRunner(TextWriter output, TextWriter error)
     }
 
     /// <summary>
+    /// The docker argv for a run on the COMPOSED GATE HOST (#3113): the PLATFORM (portal) image's
+    /// own <c>dotnet</c> starting the tester CLI out of <paramref name="hostDirectory"/>, mounted
+    /// read-only at <see cref="GateHost.HostMount"/>.
+    ///
+    /// <para>Pure, and therefore pinned by a test rather than by a docker-shaped run CI would have
+    /// to skip — the defect this shape exists to prevent is not a crash but a run that succeeds
+    /// against the WRONG reference set, which looks identical from outside. Same reason
+    /// <c>DockerImageGateArgsTest</c> pins the combo gate's argv.</para>
+    ///
+    /// <para>🚨 Everything before the image reference is DOCKER's and everything after it is the
+    /// tool's. A flag that drifts past the image is not a flag any more: docker never sees it and
+    /// <c>mw-plugin-test</c> receives it as an unknown argument, so the run silently stops being
+    /// composed while still looking correct.</para>
+    /// </summary>
+    /// <param name="platformImage">The PORTAL image reference — it supplies <c>dotnet</c>, the
+    /// <c>/app</c> reference set and the implementation frameworks.</param>
+    /// <param name="hostDirectory">The composed host on this machine (portal <c>/app</c> + tester CLI).</param>
+    /// <param name="user">
+    /// <c>uid:gid</c> to run as, or null to accept the image's own user. The portal image runs as
+    /// ROOT, so without this every file the run writes into a mounted output directory lands
+    /// root-owned and a later step of the caller's job cannot rewrite it — the reason both
+    /// node-repo-publish-bake.yml and node-repo-module-pack.yml pass <c>$(id -u):$(id -g)</c>.
+    /// </param>
+    /// <param name="mounts">Bind mounts, each already in <c>host:container[:ro]</c> form.</param>
+    /// <param name="env">Environment assignments, each <c>NAME=value</c>.</param>
+    /// <param name="toolArgs">Arguments for the tester CLI.</param>
+    /// <returns>The complete argv for <c>docker</c>.</returns>
+    public static string[] ComposedHostRunArgs(
+        string platformImage,
+        string hostDirectory,
+        string? user,
+        IEnumerable<string> mounts,
+        IEnumerable<string> env,
+        IEnumerable<string> toolArgs)
+    {
+        // --init for the same reason as every other run of this tool here (#1741): without it the
+        // tool is the container's PID 1, and a PID-namespace init with SIG_DFL for SIGABRT is
+        // SIGNAL_UNKILLABLE — a crashed process SPINS at 100% CPU instead of exiting.
+        var docker = new List<string> { "run", "--rm", "--init" };
+        if (user is { Length: > 0 })
+        {
+            docker.Add("--user");
+            docker.Add(user);
+        }
+        // HOME=/tmp keeps the runtime's probes off the image's read-only paths — a run as a uid the
+        // image never provisioned has no home otherwise.
+        docker.Add("-e");
+        docker.Add("HOME=/tmp");
+        docker.Add("-v");
+        docker.Add($"{hostDirectory}:{GateHost.HostMount}:ro");
+        foreach (var mount in mounts) { docker.Add("-v"); docker.Add(mount); }
+        foreach (var assignment in env) { docker.Add("-e"); docker.Add(assignment); }
+        // 🚨 `dotnet`, not /app/mw-plugin-test: the ENTRY ASSEMBLY must live on the composed host,
+        // because the framework identity and the TPA are read from the entry assembly's directory.
+        // Starting the portal image's own /app/mw-plugin-test would be starting a binary that is
+        // not there; starting the tester image would restore the subset reference set (#3113).
+        docker.Add("--entrypoint"); docker.Add("dotnet");
+        docker.Add(platformImage);
+        docker.Add($"{GateHost.HostMount}/{GateHost.TesterCli}");
+        docker.AddRange(toolArgs);
+        return [.. docker];
+    }
+
+    /// <summary>Runs the tester CLI out of a composed gate host inside the platform image.</summary>
+    /// <param name="platformImage">The PORTAL image reference.</param>
+    /// <param name="hostDirectory">The composed host on this machine.</param>
+    /// <param name="user"><c>uid:gid</c> to run as, or null for the image's own user.</param>
+    /// <param name="mounts">Bind mounts, each already in <c>host:container[:ro]</c> form.</param>
+    /// <param name="env">Environment assignments, each <c>NAME=value</c>.</param>
+    /// <param name="toolArgs">Arguments for the tester CLI.</param>
+    /// <param name="ct">Cancellation.</param>
+    /// <returns>The container's exit code.</returns>
+    public Task<int> RunOnComposedHost(
+        string platformImage,
+        string hostDirectory,
+        string? user,
+        IEnumerable<string> mounts,
+        IEnumerable<string> env,
+        IEnumerable<string> toolArgs,
+        CancellationToken ct) =>
+        Exec("docker", ComposedHostRunArgs(platformImage, hostDirectory, user, mounts, env, toolArgs), ct);
+
+    /// <summary>
+    /// Extracts an image's <c>/app</c> onto this machine — <c>docker create</c>, <c>docker cp</c>,
+    /// <c>docker rm</c>, the same three commands the lanes run.
+    /// </summary>
+    /// <param name="image">The image reference to extract from.</param>
+    /// <param name="destination">Where <c>/app</c> lands; removed first if it exists.</param>
+    /// <param name="ct">Cancellation.</param>
+    /// <returns>True when the directory was extracted.</returns>
+    public async Task<bool> ExtractApp(string image, string destination, CancellationToken ct)
+    {
+        if (Directory.Exists(destination)) Directory.Delete(destination, recursive: true);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var container = (await Capture("docker", ["create", image], ct)).Trim();
+        if (container.Length == 0)
+        {
+            await error.WriteLineAsync($"error: could not create a container from '{image}' to read its /app.");
+            return false;
+        }
+        try
+        {
+            if (await Exec("docker", ["cp", $"{container}:/app", destination], ct) != 0)
+            {
+                await error.WriteLineAsync($"error: could not copy /app out of '{image}'.");
+                return false;
+            }
+        }
+        finally
+        {
+            await Exec("docker", ["rm", container], ct);
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// The <c>uid:gid</c> a container should run as so its output is owned by whoever invoked the
+    /// CLI, or null when this platform has no such mapping (Windows) or cannot report one.
+    /// </summary>
+    /// <param name="ct">Cancellation.</param>
+    /// <returns>The <c>uid:gid</c> pair, or null.</returns>
+    public async Task<string?> ResolveInvokingUser(CancellationToken ct)
+    {
+        if (OperatingSystem.IsWindows()) return null;
+        var uid = (await Capture("id", ["-u"], ct)).Trim();
+        var gid = (await Capture("id", ["-g"], ct)).Trim();
+        if (uid.Length > 0 && gid.Length > 0) return $"{uid}:{gid}";
+        await output.WriteLineAsync(
+            "note: could not resolve this user's uid/gid ('id' unavailable) — the run uses the "
+            + "platform image's own user, so anything it writes into an output directory will be "
+            + "owned by that user.");
+        return null;
+    }
+
+    /// <summary>
+    /// Runs a process, echoing its stderr to this runner's error writer, and returns its exit code
+    /// with its stdout.
+    ///
+    /// <para>🚨 Unlike <see cref="Capture"/> this does NOT discard the diagnostic. The
+    /// <c>framework-identity</c> verb writes its verdict — the canonical assemblies each side's
+    /// manifest lacks — to stderr, and that text IS the actionable half of a mismatch (#1814). A
+    /// refusal that swallowed it would report "the images disagree" and name nothing.</para>
+    /// </summary>
+    /// <param name="file">The executable.</param>
+    /// <param name="args">Its arguments.</param>
+    /// <param name="ct">Cancellation.</param>
+    /// <returns>The exit code (127 when the process could not be started) and standard output.</returns>
+    public async Task<(int ExitCode, string StdOut)> CaptureVerbose(
+        string file, IEnumerable<string> args, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo(file)
+        { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        await output.WriteLineAsync($"$ {file} {string.Join(' ', psi.ArgumentList)}");
+        using var p = Process.Start(psi);
+        if (p is null)
+        {
+            await error.WriteLineAsync($"error: could not start '{file}' — is it installed and on PATH?");
+            return (127, string.Empty);
+        }
+        var stdout = await p.StandardOutput.ReadToEndAsync(ct);
+        var stderr = await p.StandardError.ReadToEndAsync(ct);
+        await p.WaitForExitAsync(ct);
+        if (stderr.Length > 0) await error.WriteAsync(stderr);
+        return (p.ExitCode, stdout);
+    }
+
+    /// <summary>
     /// Resolves an image that must NOT be pulled — a locally built one, which no registry has.
     ///
     /// <para>🚨 Never a fallback for a failed pull, and never inferred: <c>docker buildx</c> stamps

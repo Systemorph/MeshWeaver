@@ -1122,6 +1122,26 @@ internal static class NodeTypeCompilationHelpers
         string hubPath,
         ILogger? logger)
     {
+        // 🚨 #3129 — A LEAVING OWNER JUDGES NOTHING. Every branch below either stamps the record
+        // or, on a refusal, CLEARS the assembly coordinates and flips Pending — a Roslyn compile
+        // dispatched on THIS hub. On a pod under SIGTERM (a 30-minute grace period, circuits still
+        // held) that compile's result write is the one its own flush bound NACKs, so the type is
+        // left with no coordinates on a node every other generation shares: the healthy pods'
+        // instances sit on the fallback card until the 120 s self-heal fires. The request is left
+        // STANDING, untouched, for the owner activation on a pod that will live to compile —
+        // exactly the shape #3109 gave BuildupActions and SubscribeHubWatcher gives emissions.
+        // Reached from all three call sites (the stamp watcher, the sources watcher's fold and the
+        // release watcher's fold), which is why the guard is here and not in any one of them.
+        if (hub.IsLeaving())
+        {
+            logger?.LogInformation(
+                "[AdoptedSourceStamp] {HubPath}: this hub is leaving (#3129) — the adoption is not "
+                + "judged here; its stamp request stays standing for the next owner activation, and "
+                + "nothing on this shared NodeType record is stamped, cleared or dispatched",
+                hubPath);
+            return def;
+        }
+
         var canCompileLocally = !PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider);
         var result = ApplyAdoptedSourceStamp(def, snapshot, canCompileLocally);
 
@@ -1218,6 +1238,20 @@ internal static class NodeTypeCompilationHelpers
             {
                 var observed = (NodeTypeDefinition)node!.Content!;
                 var requestedAt = observed.RequestedSourceStampAt!.Value;
+                // 🚨 #3129 — checked BEFORE the high-water mark moves. SubscribeHubWatcher already
+                // drops emissions once IsShuttingDown, but a pod under SIGTERM reads that false for
+                // its whole grace period (the mesh disposes at the END of host shutdown); the host
+                // lifetime is the signal that is live. Advancing the mark and then declining in the
+                // lambda would log the next emission as non-convergence — so decline here, leaving
+                // the request standing for the owner activation on a pod that stays.
+                if (hub.IsLeaving())
+                {
+                    logger?.LogInformation(
+                        "[AdoptedSourceStamp] {HubPath}: this hub is leaving (#3129) — request "
+                        + "{RequestedAt} is left standing for the next owner activation",
+                        hubPath, requestedAt);
+                    return;
+                }
                 if (!stampHighWater.IsPast(requestedAt))
                 {
                     // We already committed a stamp for this very trigger and it is STILL standing.
@@ -1245,6 +1279,9 @@ internal static class NodeTypeCompilationHelpers
                     // publication or a release dispatch got there first) — a legitimate no-op.
                     if (def.RequestedSourceStampAt is null) return curr;
                     if (def.CurrentSourceVersions is not { } liveSources) return curr;
+                    // #3129 — shutdown may have begun between the emission and this lambda; an
+                    // unchanged node is a NO-OP write, and the mark stays where it was.
+                    if (hub.IsLeaving()) return curr;
                     stampHighWater.Advance(def.RequestedSourceStampAt.Value);
                     return curr with { Content = ApplyAdoptedSourceStampAndReport(
                         def, liveSources, hub, hubPath, logger) };

@@ -84,21 +84,132 @@ selected modules beside them, so "emitted but not selected" is normal and is not
 opens, and assert them where they are produced. One accurate failure upstream is worth N accurate
 failures downstream, and a downstream failure can only ever describe its own shard.
 
-## Content-addressed outputs in blob storage = incremental CI
+## Content-addressed outputs = the module build ledger (as built, 2026-09-02)
 
-Build outputs are keyed by **(module source tree hash × tester-image digest × platform-image
-digest)** in the actions cache. Consumers restore by key; producers publish once.
+*"For Plugins, merge as quickly as possible, as tolerant as possible; only hard conflicts flagged. We
+should not start the same build multiple times ⇒ coordinate which packages are in progress; track
+progress through memex. Build and test only when we have to: if Plugin X was built against Platform
+version Y, we don't have to rebuild this."* (maintainer, 2026-09-02; Plugins#889, #931)
 
-Two consequences, both load-bearing:
+Every module build has a **content address**, and the fleet keeps a **ledger** of what happened at
+each address — on the registry portal, as mesh nodes. The lane consults it before it compiles, and
+writes it at every transition. This section is the contract; the two scripts that implement it are
+`.github/scripts/module-build-key.py` and `.github/scripts/module-build-ledger.py`, both self-tested
+on every lane run, and `ModuleBuildLedgerLaneGuard` pins the lane's wiring.
 
-* **"Build only what changed" falls out for free, below the selector**: an unchanged module on
-  unchanged toolchain digests is a pure cache hit — the restore IS the build, zero compile.
-  This composes with (does not replace) diff selection.
-* **No producer/consumer races**: downstream jobs `needs:` the build job and restore its
-  outputs — no artifact polling, no bounded waits.
+### The key — what a build is a function of
 
-Own-account blob storage would add auth and distance for nothing; the actions cache is the
-same Azure blob, colocated, already carrying the images.
+```
+K = sha256( canonical JSON of {
+      recipe          the lane's build-recipe version (a constant in module-build-key.py; bumped on a
+                      byte-changing lane edit, never on a cosmetic one)
+      package, module the matrix entry
+      entry           {build: sdk|container, accept: <sorted tokens>}
+      moduleVersion   <package>/manifest.lock → moduleVersion (the package's content hash, Plugins#878)
+      closure         {project dir → tree hash} — the entry project, its sibling <dir>.Test (the lane RUNS
+                      it) and every in-repo ProjectReference either reaches, transitively: module-owned
+                      MeshWeaver.* siblings RIDE the bundle, so their bytes are the bundle's bytes
+      packages        {package → moduleVersion} for every package whose module project is in that
+                      closure, and every package the entry `requires`, transitively
+      globals         {path → sha256 | null} for src/Directory.Build.props, src/Directory.Build.targets,
+                      src/platform-shipped.txt, Directory.Packages.props, global.json, nuget.config …
+                      (null records ABSENCE — an input too)
+      testerDigest, platformDigest, platformRef
+    } )
+```
+
+Design decisions, and why:
+
+* **Tree hashes over `moduleVersion` alone.** The version derivation covers the module's own project
+  (and, since Plugins#1118, its riders); the key hashes the whole compiled+tested closure directly,
+  so it cannot inherit a blind spot in `gen-manifests.py` — `MeshWeaver.Blazor` riding in seven
+  bundles unhashed (see [ModuleVersioning](../ModuleVersioning)) is exactly the shape the key must
+  never have. A `$(MeshWeaverRoot)`-relative reference is the platform's and never an edge: the
+  platform enters through the two digests and `platformRef`.
+* **`platformRef` IS in the key, deliberately.** `dotnet test` builds core FROM SOURCE at that ref,
+  so the verdict really depends on it. This is also the lever a satellite pulls: a caller whose
+  `MW_PLATFORM_REF` tracks `main` gets a new key on every core commit; a caller that pins the ref to
+  the promoted set's commit keys identical trees identically across runs. The lane cannot make that
+  choice for the caller, and must not hide it.
+* **Refusals, not guesses.** A package with no `manifest.lock`, or an entry whose project does not
+  exist, cannot be keyed and fails the selection RED — keying on nothing would collide every build.
+
+### The ledger — one node per key
+
+`Admin/ModuleBuilds/<K>`, nodeType `ModuleBuild`, content `ModuleBuildRecord`
+(`src/MeshWeaver.Graph.Contract/ModuleBuildRecord.cs`; the type ships in the framework, like `Build`,
+so every registry portal has it without a content package): package, module, moduleVersion, version,
+platformRef, both digests, **platformIdentity**, status ∈ {Claimed, Built, Tested, Published, Failed},
+phase, blocking, attempts, run {repo, runId, attempt, url, event, lane}, claimedAt, heartbeatAt,
+finishedAt, bundleSha256, bundleArtifact {repo, runId, name, expiresAt}, tests {passed, failed,
+names[]}, failure, previous.
+
+* **Why `Admin/ModuleBuilds` and not `Admin/Build/…`.** `Admin/Build` is the in-portal NodeType
+  bake's coordination root ([BuildCoordination](../BuildCoordination)) — its hub arbitrates claims over
+  its children with cluster-membership takeover. The CI ledger is a different protocol with a
+  different writer, and must not sit where that arbiter enumerates chunks. It stays in the Admin
+  partition because the subject of a build decision must not be able to write the decision for
+  everyone; the CI user gets a **partition-admin grant scoped to exactly that root**
+  (`Admin/ModuleBuilds/_Access/{user}_Access`, `MainNode = "Admin/ModuleBuilds"`) — never a
+  global-admin one ([AccessControl](../AccessControl) → "The Admin partition").
+* **The wire.** The lane speaks MCP JSON-RPC over HTTP to the portal's `/mcp` (`initialize`, then
+  `tools/call` `get` / `create` / `patch`; JSON or SSE answers), `Authorization: Bearer <mw_ token>`
+  — the same three tools every MCP client uses, no bespoke route.
+* **`platformIdentity` is the PORTAL's.** `prepare` runs the tester's `framework-identity /app` verb
+  with the platform image's own `dotnet` over the platform image's `/app` — the `s…` surface identity
+  the adopting host resolves (#3022), not the tester image's own and not the `g…` provenance stamp of
+  one assembly. That is #931's producer half: the record says which framework these bytes are for.
+  The consumer half (comparing it in `ModuleUpdateDecision`) is a separate change.
+
+### The protocol
+
+| step | what it is |
+|---|---|
+| **claim** | CREATE the node. Creation fails on an existing path, so exactly one run holds a key; *"already exists" is the follower's success case*. After every create the claimant re-reads the node and holds the key only if the record names ITS run — a claim you cannot read back is a claim you do not hold. |
+| **heartbeat** | the holder's sign of life: at claim, at pack-job start, after the workspace build, at every transition. A claim whose heartbeat is older than **45 min — the fleet's job cap** — is dead by construction (a job that cannot heartbeat inside its own cap has been killed) and may be taken over; the takeover is itself re-read for the same reason as the claim. |
+| **reuse** | a terminal record (Built/Tested/Published) whose bundle **artifact** this run can fetch is not rebuilt. The pack job downloads that run's `module-bundle-<module>` artifact, verifies its sha256 against the record, and runs ONLY the phases the record lacks — tests if this run needs a verdict and none is recorded, publish if this run publishes and nobody has. It drops the same artifact, built marker and receipt a built leg drops, so a caller composing the bundle cannot tell the two apart. |
+| **wait** | a fresh, unfinished claim by ANOTHER run: the follower polls the ledger every 30 s (bounded to 40 of `select`'s 45 min). The same key is never built twice at once. |
+| **tolerance** | a `Failed` record blocks a later run of the same key only when the same inputs give the same result: a **compile** failure blocks (RED with the holder's run URL and the compiler lines); a **test** failure blocks from the **second** failed attempt on — one re-claim, so a flaky suite does not pin the fleet (`attempts` counts); pack, publish, workspace-abort and cancellation never block. |
+| **degrade** | the registry portal answering 5xx or unreachable is **not** a verdict: after a bounded retry honouring `Retry-After`, `select` builds every affected module *without coordination* and says so in yellow in the job summary; every later write is a `::warning`. The ledger may cost a duplicate build, never a green (core #3119). |
+
+**Why run ARTIFACTS, not the actions cache.** The first design keyed bundles in the actions cache
+(`module-bundle-<K>`). The cache is **branch-scoped**: a run on `main` can restore only what `main`
+created, so the one flow that matters most — the PR built it, the push to `main` reuses it — is
+structurally impossible there. Run artifacts are repo-wide; the bundle artifact's retention is 7 days
+(the reuse window; the record carries the expiry) and the caller's job needs
+`permissions: actions: read` for `gh run download` — without it `select` observes the 403 and answers
+*build*, loudly. A bundle in ANOTHER repository's run is never fetchable with this run's token, so
+cross-repo keys (the platform CD packing Plugins) are rebuilt rather than reused.
+
+### What this does to the scope
+
+`node-repo-scope.py` still decides what a diff REACHES (a PR narrows; `push`, release-follow and
+manual dispatch are FULL). The ledger decides what of that must be COMPILED. So the `push` row is no
+longer "full by fiat": it is *every module whose key has no usable Published record* — which is
+exactly the baseline Plugins#889 asked for, derived correctly: a cancelled, red or superseded run left
+no Published record, so its modules are rebuilt and published; a PR that built and tested the same
+bytes minutes earlier is reused and only the hand-over runs. Release-follow (`repository_dispatch` /
+`schedule`) still builds everything, correctly: a new platform digest is a new key for every module.
+
+### What a satellite passes
+
+```yaml
+    permissions:
+      contents: read
+      actions: read          # gh run download of an earlier run's bundle — without it, no reuse
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-pack.yml@<sha>
+    with:
+      ledger: required       # default `off` = today's behaviour; the summary says which on every run
+      …
+    secrets:
+      publish-token: ${{ secrets.REGISTRY_PUBLISH_TOKEN }}
+      ledger-token:  ${{ secrets.REGISTRY_LEDGER_TOKEN }}   # a mw_ ApiToken of the registry's CI user
+```
+
+One-time on the registry portal (as a global admin): create the `Admin/ModuleBuilds` root node,
+grant the CI user the `Admin` role there (`MainNode = "Admin/ModuleBuilds"`), mint that user an API
+token, store it as the satellite's `REGISTRY_LEDGER_TOKEN`. `ledger: required` with an empty token
+is RED in `select` — a ledger that silently did not run and one that ran must never look alike.
 
 ## The compiler is the platform image
 
@@ -245,10 +356,10 @@ No component ever publishes from the mesh router — the router names a spokesma
 
 ## Roadmap (agreed, in flight)
 
-* **The one-workspace lane** — the builder takes every selected module as entries of one graph
-  (it already graph-builds with shared references and fail-fast); the per-module compile jobs
-  collapse into one `build-workspace` job publishing content-addressed outputs; pack/tests fan
-  out from it. *"After global build ⇒ run tests."*
+* **The one-workspace lane** — landed: one `build-workspace` job compiles the ledger's build subset
+  as one graph; pack/tests fan out from it. Still open: the consumer half of #931 (compare the
+  ledger's `platformIdentity` in `ModuleUpdateDecision`), and pinning satellites' `MW_PLATFORM_REF`
+  to the promoted set so keys survive core commits.
 * **`pack-module`, `compile-check` and test verbs inside the tester** — the last runner-side
   `dotnet`/python uses move into the image the fleet already ships.
 * **Self-hosted runners with a mounted git mirror + warm image store** (MeshWeaver#2926): bare

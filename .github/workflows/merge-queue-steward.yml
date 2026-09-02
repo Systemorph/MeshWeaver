@@ -1,0 +1,148 @@
+# Act on a pull request the MERGE QUEUE has dequeued — so nobody has to run after the queue.
+#
+# The queue's first outing (enabled 2026-08-30 by #2799, removed 2026-09-01) failed on two things,
+# both measured (Doc/Architecture/MergeQueue): the speculative stack rebuilt on every membership
+# mutation, so with several sessions each acting reasonably nothing landed for over an hour with
+# zero failures; and every entry a flake ejected had to be re-queued BY HAND. The first is fixed
+# by the queue settings the doc recommends (`max_entries_to_build: 1`). This lane is the second
+# half: the hand that re-queues, and it re-queues only on EVIDENCE.
+#
+# `pull_request` fires with `action: dequeued` and a `reason` whenever an entry leaves the queue
+# without merging. `.github/scripts/merge-queue-steward.py` reads the reason and decides:
+#
+#   CI_TIMEOUT                                  re-queue once (cap 2 per head sha)
+#   CI_FAILURE, only catalogued flakes failed   re-queue (cap 2) — the catalogue is
+#                                               .github/known-flakes.json, evidence-bearing by construction
+#   CI_FAILURE, shard died on an infra step     re-queue (cap 2) — no verdict was reached about the tree
+#   CI_FAILURE, uncatalogued, group > 1 PR and  re-queue ALONE once (bisect) — the culprit's solo group
+#     this PR's own run was green               fails and stays out
+#   CI_FAILURE, anything else                   leave it out, comment the assertion + run, label
+#                                               `queue-rejected`; a person owns it from here
+#   every other reason                          comment once, no action
+#
+# 🚨 It NEVER re-runs a workflow. A re-run of the same tree hides the bug the failing run found; a
+# re-QUEUE builds a new tree against the main that has moved — a different measurement.
+#
+# 🚨 The token is the App installation token, exactly as in auto-arm.yml, and for the same reason:
+# a re-queue performed with `secrets.GITHUB_TOKEN` would merge as `github-actions[bot]`, and a push
+# created by GITHUB_TOKEN triggers NO workflows — main's HEAD would get no run, `Consolidate test
+# results` would be absent on it, and CD would promote nothing (#2916, documented in auto-arm.yml).
+# There is no fallback token here on purpose: a steward that cannot mint fails RED on this PR, and
+# the human re-queues by hand knowing why. A steward that quietly did nothing would be the exact
+# shape this lane exists to remove.
+#
+# Deliberately NOT here:
+#   * no `if:` asking whether a secret is set — AGENTS.md invariant #3; the credential step asserts
+#     and fails naming what to provision;
+#   * no `continue-on-error` anywhere;
+#   * forks are skipped on the EVENT (a fork PR cannot be in the queue on this repo's credential).
+name: Merge queue steward
+
+on:
+  pull_request:
+    types: [dequeued]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request number to DRY-RUN the decision for (nothing is written)"
+        type: string
+        required: true
+      reason:
+        description: "Dequeue reason to simulate"
+        type: choice
+        options:
+          - CI_FAILURE
+          - CI_TIMEOUT
+          - MANUAL
+          - QUEUE_CLEARED
+          - ROLL_BACK
+          - BRANCH_PROTECTIONS
+          - GIT_TREE_INVALID
+          - INVALID_MERGE_COMMIT
+          - MERGE_CONFLICT
+          - UNKNOWN_REMOVAL_REASON
+        default: CI_FAILURE
+
+# Two tokens, split by direction. The job's own GITHUB_TOKEN does every READ — the failed run's
+# jobs and artifacts (`actions: read`), the PR head's check-runs (`checks: read`), commits and
+# comments — because the meshweaver-cloud App is granted exactly `contents: write` +
+# `pull_requests: write` and nothing else (measured 2026-09-02: `gh api orgs/Systemorph/installations`),
+# so it cannot read Actions at all. The App token does every WRITE (comment, label, enqueue), for
+# the #2916 reason in the header. A GITHUB_TOKEN read triggers nothing, so the split is also the
+# safe direction.
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  pull-requests: read
+
+# One steward per pull request at a time, and never cancelled: a dequeue followed seconds later by
+# another (the queue rebuilding) must produce two decisions in order, not one half-decision.
+concurrency:
+  group: merge-queue-steward-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  steward:
+    name: Decide what happens to the dequeued PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A fork's PR cannot carry this repo's credential; that is a property of the EVENT, not of a
+    # secret — the one exemption invariant #3 permits. A manual dispatch is a dry run and has no PR.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 1 }
+
+      # An unproven classifier is no classifier. Every row of the decision table is exercised, and
+      # every negative row shown to REJECT, before a single real decision is taken.
+      - name: "Prove the classifier is non-vacuous (self-test)"
+        run: python3 .github/scripts/merge-queue-steward.py --self-test
+
+      - name: The App credential, or a red run naming what to provision
+        env:
+          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        run: |
+          missing=()
+          [ -n "$MESHWEAVER_APP_ID" ]          || missing+=("secrets.MESHWEAVER_APP_ID           app id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet")
+          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the merge-queue steward cannot act — provision the following, then re-queue this PR by hand:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "App credential present."
+
+      # `enqueuePullRequest` needs Pull requests: write; the merge the queue later performs needs
+      # Contents: write. Both are requested explicitly so an installation missing either fails HERE,
+      # on a step whose name says what it wanted.
+      - name: Mint an installation token whose re-queue merges as an ordinary push
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Decide and act
+        env:
+          # Writes: comment, label, enqueue — the App token (see the permissions note above).
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          # Reads: runs, jobs, artifacts, check-runs, commits, comments — the job's own token.
+          GH_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
+          REASON: ${{ github.event.reason || inputs.reason }}
+          # A manual dispatch is always a dry run: it prints the decision and writes nothing.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          args=(act --pr "$PR" --reason "$REASON")
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          python3 .github/scripts/merge-queue-steward.py "${args[@]}"
