@@ -317,6 +317,81 @@ public class SessionDenialIsAnAnswerTest(ITestOutputHelper output) : MonolithMes
     /// the <c>message</c> field of the JSON envelope. A THROW propagates: the whole point is that
     /// the operation answers.
     /// </summary>
+    /// <summary>
+    /// 🚨 <b>Issue #3128 — <c>Compile</c> carried NO permission check at all.</b>
+    ///
+    /// <para><c>Recycle</c> requires <c>Update</c> on the target and <c>Export</c> requires
+    /// <c>Export</c> per node; <c>Compile</c> required nothing, so a caller who may only READ a
+    /// NodeType could trigger a Roslyn build of it — and mint an <c>_Activity</c> node underneath
+    /// it. This was measured BOTH before and after #3127: that PR fixed the session hub's inert
+    /// evaluator, which is why <c>create</c> / <c>recycle</c> / <c>export</c> changed answer there
+    /// and <c>Compile</c> did not. There was no check for the repaired evaluator to answer.</para>
+    ///
+    /// <para>The refusal envelope is itself the proof that nothing ran: the activity is minted
+    /// inside the compile body, which the denial arm returns in front of.</para>
+    /// </summary>
+    [Fact]
+    public async Task CompilingANodeTypeWithoutCompilePermissionIsRefusedNotPerformed()
+    {
+        ActAsViewer();
+        var answer = await Compile(NodeTypePath);
+        Output.WriteLine($"Compile({NodeTypePath}) as viewer → {answer}");
+
+        using var envelope = JsonDocument.Parse(answer);
+        envelope.RootElement.GetProperty("status").GetString().Should().Be("Error",
+            "the operation ran and produced a refusal, so its envelope must say so — a raised "
+            + "exception is not an answer");
+        envelope.RootElement.GetProperty("message").GetString().Should().Be(
+            MeshOperations.CompileDeniedMessage,
+            "a Viewer holds Read|Execute|Api and no Compile — pre-fix this answered "
+            + "{\"status\":\"Ok\",\"message\":\"Compile SUCCEEDED.\"} and left an _Activity node "
+            + "behind it (#3128)");
+    }
+
+    /// <summary>
+    /// 🚨 The case that could have FALSIFIED the one above. A gate that refused everybody would
+    /// satisfy it just as well, and would be a worse bug than the hole it closes — <c>Compile</c> is
+    /// how a Space editor ships a release.
+    ///
+    /// <para>Asserts the entitlement split the role table already declares: <c>Role.Editor</c>
+    /// carries <c>Permission.Compile</c> ("Space editors ship releases by default"),
+    /// <c>Role.Viewer</c> does not. Note that <c>Compile</c> is deliberately excluded from
+    /// <c>Permission.All</c>, which is exactly why Admin and PlatformAdmin add it explicitly — so
+    /// "does the holder have it?" cannot be answered by an <c>All</c> check.</para>
+    ///
+    /// <para>Deliberately does NOT assert a successful compile: whether Roslyn then succeeds is not
+    /// what this gate decides, and pinning it here would make an access test fail for a compiler
+    /// reason. Not-the-denial is the whole claim.</para>
+    /// </summary>
+    [Fact]
+    public async Task AnEditorHoldsCompile_AndTheGateLetsItThrough()
+    {
+        var editorMayCompile = await Mesh
+            .CheckPermissionOutcome(NodeTypePath, EditorUser, Permission.Compile)
+            .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+
+        editorMayCompile.IsGranted.Should().BeTrue(
+            "Role.Editor is declared with Permission.Compile — if this flips, the gate above is "
+            + "refusing the very role the permission was modelled for");
+
+        ActAs(EditorUser);
+        var answer = await Compile(NodeTypePath);
+        Output.WriteLine($"Compile({NodeTypePath}) as editor → {answer}");
+
+        using var envelope = JsonDocument.Parse(answer);
+        var message = envelope.RootElement.TryGetProperty("message", out var m) ? m.GetString() : null;
+        message.Should().NotBe(MeshOperations.CompileDeniedMessage,
+            "an Editor holds Compile, so the gate must pass the call through to the compile body — "
+            + "a gate that refuses everyone would pass the Viewer fact and break every release");
+        message.Should().NotBe(MeshOperations.CompileUndeterminedMessage,
+            "the fold reached a verdict for this caller a line above, so 'we could not check' here "
+            + "would mean the gate is asking a different question than the assertion that armed it");
+    }
+
+    private async Task<string> Compile(string path) =>
+        await new MeshOperations(SessionHub()).Compile(path)
+            .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+
     private async Task<string?> RecycleAsViewer(string path)
     {
         ActAsViewer();
