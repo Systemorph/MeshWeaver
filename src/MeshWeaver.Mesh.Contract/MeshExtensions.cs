@@ -4492,8 +4492,23 @@ public static class MeshExtensions
     /// question is asked through <see cref="MeshNode.HasExplicitMainNode"/> (which compares it
     /// segment-wise against <c>Namespace</c>/<c>Id</c>), and the partition comparison runs on
     /// <c>Namespace</c> directly, whose first segment IS the node's partition.</para>
+    ///
+    /// <para>🚨 <b>Public because the FORWARD fix and the BACKWARD repair must share one
+    /// predicate</b> (#2970). This method is what the write paths above apply to every node they
+    /// create or upsert, so new corruption cannot be minted; <c>StaleMainNodeRepair</c> applies the
+    /// SAME method to rows already persisted. Two predicates would drift, and the drift would be
+    /// invisible in exactly the way this defect already is — a repair that skipped a shape the
+    /// guard refuses would leave rows corrupt with nothing reporting it. Widening a shape here
+    /// therefore widens both halves at once, which is the point.</para>
     /// </summary>
-    private static bool IsStaleSelfDefaultMainNode(MeshNode node)
+    /// <param name="node">The node whose <see cref="MeshNode.MainNode"/> is under test.</param>
+    /// <returns>
+    /// <c>true</c> when <see cref="MeshNode.MainNode"/> is this node's own self-default frozen at a
+    /// path the node no longer occupies — the shape that drops it out of <c>is:main</c>
+    /// (SQL <c>n.main_node = n.path</c>). <c>false</c> for a healthy node AND for a deliberate
+    /// cross-node pointer, both of which must be left untouched.
+    /// </returns>
+    public static bool IsStaleSelfDefaultMainNode(this MeshNode node)
     {
         var mainNode = node.MainNode;
         var id = node.Id;
