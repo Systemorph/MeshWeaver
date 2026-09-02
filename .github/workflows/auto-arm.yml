@@ -7,19 +7,22 @@
 # nothing was landing either. A green PR nobody arms is indistinguishable from a red one.
 #
 # 🚨 THIS FILE IS THE FLEET'S ONLY COPY OF THE ARM LANE. It runs directly here on
-# `pull_request_target`, and every satellite (MeshWeaver.Plugins, .SocialMedia, .Reinsurance,
-# .Manufacturing, .Education, .Crm, Memex) reaches it through `workflow_call` with a two-line
-# caller that forwards the App credential and nothing else. The repos are NOT identical — core
-# runs a merge queue and the others do not — so the arm step handles both shapes rather than the
-# file forking per repo.
+# `pull_request_target`, and every OTHER repo in the fleet reaches it through `workflow_call` with
+# a caller that forwards the App credential and nothing else. (Deliberately no list of repo names
+# here: an enumeration in a comment is a copy of the fleet roster and would drift exactly the way
+# the copies below did. `gh search code --owner Systemorph "auto-arm.yml@"` answers who calls it.)
+# The repos are NOT identical — core runs a merge queue and the others do not — so the arm step
+# handles both shapes rather than the file forking per repo.
 #
-# It used to be hand-copied into all seven, and the copies DRIFTED exactly as AGENTS.md warns a
-# copy-pasted lane does. Measured 2026-09-02: core had already been moved to a minted App token
-# (below) while every satellite copy was still arming with `secrets.GITHUB_TOKEN` — so every
-# satellite was living the #2916 outage this file's header documents, silently. MeshWeaver.Reinsurance's
-# `main` had not seen a `push`-event run since 09:11Z despite PRs merging all afternoon. On top of
-# that, only .Crm carried the "landed:" read-back fix below, and several copies had no
-# `timeout-minutes` at all. One lane, called from seven repos, cannot drift.
+# It used to be hand-copied into every one of them, and the copies DRIFTED exactly as AGENTS.md
+# warns a copy-pasted lane does. Measured 2026-09-02 — the numbers below are a record of that
+# measurement, not a live count: core had already been moved to a minted App token (below) while
+# every satellite copy was still arming with `secrets.GITHUB_TOKEN`, so every satellite was living
+# the #2916 outage this file's header documents, silently. MeshWeaver.Reinsurance's `main` had not
+# seen a `push`-event run since 09:11Z despite PRs merging all afternoon. On top of that, only
+# .Crm carried the "landed:" read-back fix below, and several copies had no `timeout-minutes` at
+# all — four distinct variants of a file whose header claimed all copies were identical. One lane,
+# called from everywhere, cannot drift.
 #
 # 🚨 The `workflow_call` secrets are named `MESHWEAVER_APP_ID` / `MESHWEAVER_APP_PRIVATE_KEY` — the
 # SAME names as the repository secrets the direct `pull_request_target` trigger reads. That is
@@ -100,7 +103,7 @@ jobs:
     # Four API calls and a mint — the same shape as arm-credential.yml, capped the same way. The
     # fleet ceiling is 45 (check-workflow-timeouts.py); a lane whose whole job is to call gh three
     # times has no business sitting on a billed runner for three quarters of an hour because a
-    # socket hung. This cap now applies to seven repos at once.
+    # socket hung. This cap now applies to every repo that calls this lane.
     timeout-minutes: 10
     # A draft is the opt-out, and a fork must never arm itself. Both are properties of the
     # event, not configuration — there is no variable here to forget to set.

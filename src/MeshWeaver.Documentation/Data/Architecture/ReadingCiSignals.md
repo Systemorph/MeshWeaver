@@ -543,7 +543,7 @@ If the same check name appears in every PR's failure list, stop triaging PRs and
 repository. `UNSTABLE` means the required set passed and something non-required did not — it is
 mergeable, and it is the state a hoistable assertion leaves behind.
 
-## 🚨 A lane that was hand-copied into seven repos is SEVEN lanes, and six of them are stale
+## 🚨 A lane hand-copied into N repos is N lanes, and N−1 of them are stale
 
 The arm lane is a single file, `.github/workflows/auto-arm.yml` in this repository, and every
 satellite reaches it through `workflow_call`:
@@ -564,14 +564,16 @@ jobs:
       MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
 ```
 
-It was not always. Until 2026-09-02 the file was hand-copied into all seven repos with a comment at
-the top asserting the copies were identical, and **they were not** — a comment claiming "the single
-implementation, so they cannot drift" is a hypothesis, and this one was false in three separate
-ways at once. Core had been moved to a minted App installation token; every satellite copy was
-still arming with `secrets.GITHUB_TOKEN`. Only `.Crm` carried the `landed:` read-back branch. Some
-copies had no `timeout-minutes` at all.
+It was not always. Until 2026-09-02 the file was hand-copied into every repo in the fleet with a
+comment at the top asserting the copies were identical, and **they were not** — a comment claiming
+"the single implementation, so they cannot drift" is a hypothesis, and this one was false in three
+separate ways at once. Core had been moved to a minted App installation token; every satellite copy
+was still arming with `secrets.GITHUB_TOKEN`. Only `.Crm` carried the `landed:` read-back branch.
+Some copies had no `timeout-minutes` at all. (Figures below are a record of that day's measurement,
+not a live inventory of the fleet — the roster is read with
+`gh search code --owner Systemorph "auto-arm.yml@"`, never from prose.)
 
-**The consequence is the #2916 outage, running unnoticed in six repositories.** An auto-merge is
+**The consequence is the #2916 outage, running unnoticed in every satellite.** An auto-merge is
 performed as the identity that armed it; a push created with `GITHUB_TOKEN` does not trigger
 workflow runs; so each satellite's `main` was accumulating merges that started nothing.
 MeshWeaver.Reinsurance's `main` had no `push`-event run after 09:11Z that day, while PRs merged all
