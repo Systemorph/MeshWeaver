@@ -144,7 +144,26 @@ AutocompleteSnapshots.Combine(
     topN);
 ```
 
-For a request/response consumer (cross-hub `AutocompleteRequest`), take the settled snapshot (`LastOrDefaultAsync`) and post that. For a streaming UI consumer (the completion widget), subscribe to `IAutocompleteStreamProvider.Stream` directly.
+For a streaming UI consumer (the completion widget), subscribe to the merged stream directly and repaint on every emission. For a request/response consumer (cross-hub `AutocompleteRequest`), take the **settled** snapshot and post that — and settled has exactly one meaning, below.
+
+### 🚨 "Settled" means CONVERGED, never QUIET
+
+A one-shot request has to pick a moment on a stream that is deliberately progressive. There is only one correct way to pick it, and one very tempting wrong one.
+
+> **The rule: the merged stream's LAST value is the answer.** `Combine` is a `CombineLatest`, so it completes exactly when every provider's snapshot stream has completed — which is what the `IAutocompleteProvider.GetItems` contract already promises ("the stream completes when the provider has settled"). Taking the value at completion is *derived from the providers' own lifecycle*: no clock, nothing to tune, and under load the answer simply arrives later and arrives COMPLETE.
+
+The wrong one is a **quiet period** — "the snapshot has not changed for N ms, so it must be done". It is not done. `Combine` seeds every provider with an empty snapshot precisely so it can emit progressively, so a partial is always emitted first; any provider whose rows land more than N ms after the fast in-memory ones misses the window and the answer goes out without them. That was live in `HandleAutocompleteRequest` at N = 150 ms, and it truncated silently: the response still carried `AutocompleteResponse.IsComplete = true`, so no caller could tell a settled snapshot from a truncated one, and the chat orchestrator treated a truncated `Nearby` batch as final ([#3094](https://github.com/Systemorph/MeshWeaver/issues/3094)). Under parallel load a cross-partition row appeared and disappeared run to run; alone, the same test passed in 2.1 s. **Widening N would only move the threshold — the answer would still be a function of the clock rather than of the providers.**
+
+Two bounds remain, both in `AutocompleteBounds`, and neither is a settle window:
+
+| Bound | Who uses it | What it means |
+|---|---|---|
+| `AnswerDeadline` (2 s) | the handler | A **hang** bound. A one-shot request must always answer — the previous `LastAsync()` shape posted *nothing at all* when a provider never completed ([#2276](https://github.com/Systemorph/MeshWeaver/issues/2276)), which is indistinguishable from "still thinking". Reaching it means a provider violated the completion contract, so the answer is posted with `IsComplete = false` **and** a warning naming the offending provider type. |
+| `CallerBound` (= `AnswerDeadline` + `CallerGrace`) | every caller of `AutocompleteRequest` | A caller's bound must strictly **dominate** the producer's, never equal it. `ChatCompletionOrchestrator.SendAutocompleteRequest` and `UnifiedReferenceAutocompleteProvider`'s node delegation both waited exactly 2 s — the same value the handler answers at — so an answer that legitimately took the full deadline raced its own caller's timeout. Invisible while the handler answered at 150 ms; a coin toss the moment it is allowed to wait for convergence. Same rule as `LateResponseWatchBound` + `VerdictBoundGrace` on the write path. |
+
+> 🚨 **A provider that never completes is a defect in the provider, not a reason to move a number.** Live/synced-query sources (`hub.GetQuery`, `ObserveSnapshot`) never complete by design; a provider built on one must bound itself — `.Take(1)` on the first authoritative snapshot — before returning it from `GetItems`. Otherwise it costs every caller on that hub the full deadline and marks every answer incomplete.
+
+Note the same convergence rule already governs the query path: `MeshQuery.Query` emits its merged `Initial` only once **every** provider has produced an `Initial` (`EmitMergedInitialIfComplete`). Autocomplete's request/response leg is the same question with the same answer.
 
 ### Testing progressive-snapshot providers
 

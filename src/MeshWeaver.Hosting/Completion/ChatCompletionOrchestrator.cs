@@ -60,7 +60,8 @@ internal sealed class ChatCompletionOrchestrator(
     // fires even if a backend hangs (chat input then hides its spinner). The
     // window is generous because cold-start fan-out across partitions can be
     // slow (initial schema provisioning, JSON deserialization). Per-call hub
-    // timeouts (e.g., SendAutocompleteRequest = 2s) handle the fast paths.
+    // timeouts (SendAutocompleteRequest = AutocompleteBounds.CallerBound) handle
+    // the fast paths.
     private static readonly TimeSpan ProducerInactivityTimeout = TimeSpan.FromSeconds(30);
 
     /// <inheritdoc />
@@ -483,9 +484,15 @@ internal sealed class ChatCompletionOrchestrator(
 
     /// <summary>
     /// Sends an AutocompleteRequest to the given address via Post+Observe and emits the
-    /// response (or null) within a 2-second inactivity timeout. Pure reactive — no Task,
-    /// no async; the hub.Observe stream provides the response and Rx's Timeout enforces
+    /// response (or null) within <see cref="AutocompleteBounds.CallerBound"/>. Pure reactive — no
+    /// Task, no async; the hub.Observe stream provides the response and Rx's Timeout enforces
     /// the deadline.
+    ///
+    /// <para>🚨 The bound is DERIVED from the producer's, never written here. It used to be a
+    /// literal 2 s — exactly the handler's own answer deadline — so a response the handler
+    /// legitimately took its full deadline to produce raced this timeout and was dropped as often
+    /// as it was kept. Invisible while the handler answered on a 150 ms settle window; a coin toss
+    /// the moment it is allowed to wait for every provider to settle (#3094).</para>
     /// </summary>
     private IObservable<AutocompleteResponse?> SendAutocompleteRequest(
         string query, string? context, Address target)
@@ -501,7 +508,7 @@ internal sealed class ChatCompletionOrchestrator(
                 .Take(1)
                 .Select(d => d.Message as AutocompleteResponse);
         })
-        .Timeout(TimeSpan.FromSeconds(2))
+        .Timeout(AutocompleteBounds.CallerBound)
         .Catch<AutocompleteResponse?, Exception>(ex =>
         {
             if (ex is not (TimeoutException or OperationCanceledException))
