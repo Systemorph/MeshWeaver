@@ -87,7 +87,7 @@ and getting it wrong wastes a cycle in one direction or blocks you in the other.
 | MeshWeaver.Education (was education) | no branch protection | yes |
 | MeshWeaver.Reinsurance | false | yes |
 | MeshWeaver.SocialMedia | false | yes |
-| **MeshWeaver.Plugins** | **true** | **NO — `mergeStateStatus: BEHIND`, must update the branch** |
+| MeshWeaver.Plugins | false (measured 2026-09-02; was true until 2026-08-29) | yes |
 
 One command answers it for any repo, and beats trusting this table:
 

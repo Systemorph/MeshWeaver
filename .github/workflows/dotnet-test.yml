@@ -2252,8 +2252,13 @@ jobs:
         echo "Pruning ${#refspecs[@]} stale marker(s)."
         git push origin "${refspecs[@]}"
 
+    # `!= 'success'` rather than `== 'failure'` (2026-09-02 fleet audit, finding A5): a gate that
+    # was SKIPPED or CANCELLED produced no verdict, and no verdict must never read as passed — this
+    # is the repo's ONLY required check. The one legitimate skip is the reuse path (the tree was
+    # already tested green, so `build` — and with it `doc-gate` — did not run); it is exempted on
+    # precheck's own output, never on the gate's result.
     - name: Fail if the doc gate failed
-      if: needs.doc-gate.result == 'failure'
+      if: needs.precheck.outputs.skip != 'true' && needs.doc-gate.result != 'success'
       env:
         # Empty when the gate produced no verdict (it died before judging). Degrades to
         # "see the job", which is true either way.
@@ -2273,7 +2278,8 @@ jobs:
     # dependency licence that is incompatible with shipping under Apache-2.0 / MIT must be able
     # to turn the repo's ONLY required status check RED, or the gate is decorative.
     - name: Fail if the licence gate failed
-      if: needs.licence-gate.result == 'failure'
+      # Same shape as the doc gate: skipped/cancelled is not a pass; the reuse path is the one exemption.
+      if: needs.precheck.outputs.skip != 'true' && needs.licence-gate.result != 'success'
       run: |
         echo "::error::A dependency licence is incompatible with shipping MeshWeaver under Apache-2.0 / MIT — see the 'Dependency licences' job for the offending package(s) and their licence."
         echo "::error::Fix it by removing the package or replacing it with a permissively-licensed one. Do NOT add it to EXCEPTIONS unless the upstream licence genuinely IS permissive and only the package metadata is missing."
@@ -2286,7 +2292,9 @@ jobs:
     # moves assembly, or a public record whose primary constructor changes shape, breaks every
     # module built before the change while every compile in the repo stays green.
     - name: Fail if the binary-compatibility gate failed
-      if: needs.record-signatures.result == 'failure'
+      # The gate itself runs only on pull_request / merge_group (it diffs against a base), so the
+      # exemption is written on the EVENT — the same predicate the gate carries — never on its result.
+      if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.record-signatures.result != 'success'
       run: |
         echo "::error::A public surface changed in a way that breaks ALREADY-PUBLISHED modules — see the 'Public surface (binary compatibility)' job for the exact types."
         echo "::error::A moved public type needs [assembly: TypeForwardedTo] left behind in its ORIGINAL assembly (a forwarder keeps one type identity; a shim mints a second and reintroduces the is/as trap-door). A forwarder cannot rename, so the type keeps its original name."
