@@ -363,6 +363,19 @@ The protocol is the idle sweep's: **detach → claim pair-exact → tear down** 
 
 🚨 The guard lives in `GetStreamRaw`, **never in `GetEntry`** — `GetEntry` is a pin-or-recreate loop, and evicting there spins forever on an entry that faults during creation. Running once per read *call* also bounds the re-probe: only a terminal entry qualifies, so an in-flight probe is shared, giving one new upstream per **fault**, not per read.
 
+## A delete tombstone is superseded at the recreate's commit — before `Created` is published
+
+The one read failure a reader is *designed not to retry* is the delete tombstone's verdict: `No node found at '…' — the node was deleted, so this address will not reactivate`. A hub that is going down because its node was **deleted** NACKs an abandoned delivery with that authoritative `NotFound` (instead of the transient `ShuttingDown` a recycling hub answers), and the classifier here turns it into a definitive absence — the stream terminates, the negative entry is recorded, and by contract the caller stops. The verdict is read off `RecentlyDeletedRegistry` (`IAddressTombstones`), which the **delete marks synchronously** before its response returns.
+
+**The recreate must supersede that tombstone with the same discipline — synchronously, at the durable write, before `Created` is published (#3008).** Until it did, the only clear ran inside a *live per-node hub's* change handler: asynchronous, incidental (it needed a hub to be alive for the path at that instant — the delete had just disposed it), and conditional (a same-version recreate was skipped as a self-write echo). So after `Deleted` **and** `Created` had both been observed on the change feed, a fresh subscriber whose `SubscribeRequest` was routed to the still-disposing old hub — the hub stays resolvable until its `ShutDown` phase, potentially seconds after `DisposeHostedHubs` under load — was told, authoritatively, that a node which provably existed again would never come back.
+
+The seam is the outermost storage decorator (`SubtreeDeletionGuardStorageAdapter`), because **every durable write crosses it**: on the write's post-commit emission it calls `RecentlyDeletedRegistry.Supersede(path, version)`, and `StorageAdapterChangeFeedExtensions` composes the `IMeshChangeFeed` publish *downstream* of that emission — so by construction `Created` never reaches a subscriber while the tombstone still reads live. Two rules keep it correct:
+
+- **Supersede, never erase.** A superseded tombstone answers `IsDeleted` / `IsRecentlyDeleted` with `false` (the address is not gone for good; a save there is not a resurrection), but the delete stays on record for the TTL *with the version the recreate landed at*. `MeshNodeTypeSource`'s version floor recognises the recreate's rewind to `Version = 1` through `IsRecreatedAt(path, version)` — a hub whose routing-supplied own-node stream delivers the recreate *after* the commit would otherwise drop it as a stale replay.
+- **Only a commit supersedes.** The `null` write sentinel (no adapter owns the path), a `WriteIfVersion` that answers `false`, and a refused write under an active subtree deletion write nothing and leave the tombstone live.
+
+Pinned by `TombstoneSupersededBeforeCreatedTest` (the ordering, hub-free and deterministic) and `RecreateSupersedesTombstoneTest` (the end-to-end shape on a Monolith mesh).
+
 ## 🚨 Never go around the cache
 
 An ad-hoc `workspace.GetRemoteStream<MeshNode, …>(addr, …)` would open a **separate** stream instance. Writes through it are invisible to every reader on the cached handle (and vice versa) — this exact bug once made compile results never land on a NodeType's node. So the public overloads now **throw `InvalidOperationException`** for `MeshNode` (`Workspace.ThrowIfMeshNode`); framework plumbing that legitimately needs the raw reduce uses the internal `GetRemoteStreamUnchecked` overload.

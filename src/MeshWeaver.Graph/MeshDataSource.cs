@@ -1395,9 +1395,13 @@ public static class MeshDataSourceExtensions
             if (newNode.Version == lastSelfWrite.Value)
                 return;
             cache.IsDeleted = false;
-            // A genuine (re)create/update clears the tombstone so a same-id recreate
-            // persists normally (a self-write echo was already suppressed above).
-            recentlyDeleted?.Clear(ownPath);
+            // A genuine (re)create/update SUPERSEDES the tombstone so a same-id recreate persists
+            // normally (a self-write echo was already suppressed above). The storage write seam has
+            // usually done this already, synchronously at the commit (#3008); this covers the
+            // cross-process feed, where the write committed in another process. Supersede — not
+            // Clear — so the delete stays on record and AcceptOwnNodeEmission can still recognise
+            // the recreate's version rewind when the routing-supplied own-node stream delivers it.
+            recentlyDeleted?.Supersede(ownPath, newNode.Version);
             try
             {
                 // 🚨 ADOPTION, NOT A WRITE — `newNode` is the node as PERSISTED, at the version
