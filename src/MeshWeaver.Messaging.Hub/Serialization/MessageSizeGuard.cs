@@ -1,11 +1,31 @@
 using System.Text;
-using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Hosting.Orleans;
+namespace MeshWeaver.Messaging.Serialization;
 
 /// <summary>
 /// 🚨 The producer-side bound on a delivery that provably cannot be carried — issues #1890
-/// (Orleans MEMORY STREAMS) and #2897 (Orleans GRAIN CALLS).
+/// (Orleans MEMORY STREAMS), #2897 (Orleans GRAIN CALLS) and #2885 (the ROUTER's OWN grain call).
+///
+/// <para><b>Why this type lives in <c>MeshWeaver.Messaging.Hub</c> and not beside the router.</b>
+/// It began in <c>MeshWeaver.Hosting.Orleans</c>, next to the three legs #1890 and #2897 guard. But
+/// #2885 died on a FOURTH leg — <c>OrleansRoutingService.DispatchObservable</c>'s
+/// <c>IRoutingGrain.RouteMessage</c> call — which lives in <c>MeshWeaver.Connection.Orleans</c>, and
+/// <c>MeshWeaver.Hosting.Orleans</c> REFERENCES that assembly, so the guard was unreachable from the
+/// one site that needed it next. Duplicating the check there is precisely the shape this codebase
+/// has already paid for twice ("a fix landed on one site and missed the other" — #2346), so the
+/// guard moved DOWN to the assembly both routers already reference, beside
+/// <see cref="RawJsonConverter"/>, whose <c>WriteRawValue</c> is the allocation that fails.</para>
+///
+/// <para>🚨 <b>And it is PUBLIC, not internal + <c>InternalsVisibleTo</c>, for the reason
+/// <see cref="MessageStormBreaker"/> already documents.</b> An assembly-wide
+/// <c>InternalsVisibleTo</c> on THIS assembly makes the internal
+/// <c>IMessageHub.Observe(object, Func&lt;PostOptions, PostOptions&gt;)</c> visible as an INSTANCE
+/// method, which then beats the public generic <c>Observe&lt;TResponse&gt;</c> extension in overload
+/// resolution for every call site in the granted assembly — so <c>response.Message</c> silently
+/// becomes <see cref="object"/> and the whole test project stops compiling. Measured here on
+/// 2026-09-02: granting <c>MeshWeaver.Hosting.Orleans.Test</c> reddened 20+ untouched files with
+/// <c>CS1061 'object' does not contain a definition for 'Success'</c>. A framework utility that two
+/// assemblies must share is made public; it is not app API, and nobody constructs it.</para>
 ///
 /// <para><b>What happened, twice.</b> #1890: a ~37 MB delivery (37,483,597 bytes) was posted to
 /// <c>memory-7-0xE0000007</c>. The publish SUCCEEDED. Minutes later, on the consuming side,
@@ -55,7 +75,7 @@ namespace MeshWeaver.Hosting.Orleans;
 /// <para>Pure and static — no hub, no Orleans types — so the decision and its wording are asserted
 /// directly, without a cluster.</para>
 /// </summary>
-internal static class MessageSizeGuard
+public static class MessageSizeGuard
 {
     /// <summary>
     /// Orleans' memory-stream block size, and therefore the hard ceiling on one memory-stream
@@ -66,7 +86,7 @@ internal static class MessageSizeGuard
     /// against the real <c>FixedSizeBuffer</c>, so an Orleans upgrade that moved the block size
     /// fails a test instead of silently mis-tuning the guard.
     /// </summary>
-    internal const int MemoryStreamBlockBytes = 1 << 20;
+    public const int MemoryStreamBlockBytes = 1 << 20;
 
     /// <summary>
     /// The FALLBACK ceiling on one Orleans grain-call body: Orleans'
@@ -79,14 +99,14 @@ internal static class MessageSizeGuard
     /// the real <c>SiloMessagingOptions</c>, so an Orleans upgrade that moved the default fails a
     /// test instead of silently mis-tuning the fallback.
     /// </summary>
-    internal const int DefaultGrainTransportBodyBytes = 104_857_600;
+    public const int DefaultGrainTransportBodyBytes = 104_857_600;
 
     /// <summary>
     /// How much of an oversized payload the refusal quotes back. Enough to recognise the message —
     /// its <c>$type</c> discriminator and first fields sit at the front of the JSON — without
     /// pasting a multi-megabyte blob into a log line that is itself size-capped.
     /// </summary>
-    internal const int PayloadPreviewChars = 200;
+    public const int PayloadPreviewChars = 200;
 
     /// <summary>
     /// True when <paramref name="delivery"/>'s packaged payload cannot fit
@@ -105,7 +125,7 @@ internal static class MessageSizeGuard
     /// anything else would mean serialising it a second time on the hot path to answer a question
     /// that is almost always "no".</para>
     /// </summary>
-    internal static bool IsOversized(
+    public static bool IsOversized(
         IMessageDelivery? delivery, int limitBytes, out int payloadBytes)
     {
         payloadBytes = 0;
@@ -123,7 +143,7 @@ internal static class MessageSizeGuard
     /// WHICH limit — the three facts the Orleans-side <c>ArgumentOutOfRangeException</c> could not
     /// supply, since it knows only a queue id.
     /// </summary>
-    internal static string Describe(
+    public static string Describe(
         IMessageDelivery delivery, string addressPath, int payloadBytes, int limitBytes)
     {
         ArgumentNullException.ThrowIfNull(delivery);
@@ -142,7 +162,7 @@ internal static class MessageSizeGuard
     /// connection and takes every unrelated message queued on it along. That is the sentence an
     /// operator needs in order to stop reading the incident as "one slow request".
     /// </summary>
-    internal static string DescribeGrainDispatch(
+    public static string DescribeGrainDispatch(
         IMessageDelivery delivery, string addressPath, int payloadBytes, int limitBytes)
     {
         ArgumentNullException.ThrowIfNull(delivery);
@@ -152,6 +172,49 @@ internal static class MessageSizeGuard
             + "MessageSerializer.ThrowInvalidBodyLength and tear down the silo-to-silo connection "
             + "from Connection.ProcessOutgoing — losing this delivery AND every unrelated message "
             + "queued on that connection, then reconnecting and repeating. Sender "
+            + $"'{delivery.Sender}'. Payload head: {Quote(Preview(delivery))}";
+    }
+
+    /// <summary>
+    /// The ROUTER-leg refusal — issue #2885. The same bound as
+    /// <see cref="DescribeGrainDispatch"/>, but a different failure to describe, because this leg
+    /// fails one step EARLIER and therefore louder.
+    ///
+    /// <para><b>What happened.</b> <c>OrleansRoutingService</c> hands the delivery to
+    /// <c>IRoutingGrain.RouteMessage</c>, and Orleans serialises that ARGUMENT with the mesh's own
+    /// System.Text.Json options (<c>AddJsonSerializer(_ =&gt; true, …)</c> claims every type). So the
+    /// packaged <see cref="RawJson"/> goes through <see cref="RawJsonConverter"/>'s
+    /// <c>writer.WriteRawValue(value.Content)</c> — a <see cref="string"/>, i.e. UTF-16 — and
+    /// <c>Utf8JsonWriter.TranscodeAndWriteRawValue</c> rents up to <b>3 bytes per char</b> from
+    /// <c>SharedArrayPool</c> to transcode it. On 2026-08-31 that rent threw
+    /// <c>OutOfMemoryException</c> at <c>GC.AllocateNewArray</c> while routing to
+    /// <c>import/xDAfkqsVUE-OMBHb0mVtSg</c>, the bulk-import hub. The delivery was lost with no
+    /// size, no target and no producer recoverable from the stack — and an OOM in the routing path
+    /// endangers every other allocation in the pod, not just this one.</para>
+    ///
+    /// <para><b>Why the #2897 guard could not see it.</b> That guard runs INSIDE
+    /// <c>RoutingGrain</c>, on the two FORWARD legs. This leg is how a delivery REACHES the routing
+    /// grain, so it is strictly upstream of all three guarded sites: the payload OOMs on the way in
+    /// and the guarded code never executes. The bound itself was never the problem — its PLACEMENT
+    /// was.</para>
+    ///
+    /// <para>🚨 <b>What this does NOT claim.</b> The transcode peaks at ~3× the payload, while the
+    /// bound is the frame limit, so a payload comfortably under the limit can still exhaust a
+    /// memory-pressured pod. This refuses what the transport provably cannot carry and names the
+    /// producer; it does not make the router allocation-safe at any size. The remaining work is on
+    /// the PRODUCER — an import that batches instead of building one delivery whole.</para>
+    /// </summary>
+    public static string DescribeRouterDispatch(
+        IMessageDelivery delivery, string addressPath, int payloadBytes, int limitBytes)
+    {
+        ArgumentNullException.ThrowIfNull(delivery);
+        return $"Refused to route delivery '{delivery.Id}' to '{addressPath}': its payload is "
+            + $"{payloadBytes:N0} bytes, at or over the {limitBytes:N0}-byte Orleans "
+            + "MaxMessageBodySize, so handing it to IRoutingGrain.RouteMessage would serialise it "
+            + "through RawJsonConverter.WriteRawValue, whose UTF-16→UTF-8 transcode rents up to 3 "
+            + "bytes per char from the shared array pool — the allocation that threw "
+            + "OutOfMemoryException in production (#2885) — and Orleans would refuse the resulting "
+            + "frame in any case. Sender "
             + $"'{delivery.Sender}'. Payload head: {Quote(Preview(delivery))}";
     }
 
@@ -168,7 +231,7 @@ internal static class MessageSizeGuard
     /// TIGHTER of the two transports (the 1 MiB memory-stream block), so one call protects a NACK
     /// regardless of which transport it will take back to the sender.</para>
     /// </summary>
-    internal static IMessageDelivery WithoutOversizedPayload(
+    public static IMessageDelivery WithoutOversizedPayload(
         IMessageDelivery delivery, int limitBytes = MemoryStreamBlockBytes)
     {
         ArgumentNullException.ThrowIfNull(delivery);
