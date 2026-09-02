@@ -1152,16 +1152,66 @@ public sealed class MessageHub : IMessageHub
                     new TimeoutException(BuildTimeoutMessage(requestType, target, messageId)))));
 
     /// <summary>
-    /// Names the request that timed out. The previous form said only "No response
-    /// received in hub X within 30s" — diagnostics had to walk the call stack to
-    /// guess which Observe call timed out. Now the message includes the request
-    /// type, target address (the hub we expected to respond), and message id (so
-    /// you can grep MESSAGE_FLOW logs for the exact delivery).
+    /// Names the request that timed out, AND this hub's own state at the moment it gave up.
+    ///
+    /// <para>🚨 <b>The previous message blamed the target without ever looking at the caller.</b> It
+    /// ended "The request may have been undeliverable or the target hub was not found" — two
+    /// buckets, asserted as though they were exhaustive. They are not, and the third possibility is
+    /// the one a reader most needs to rule out first: <b>this hub never PROCESSED a response that
+    /// did arrive</b>, because its own action block was busy, gated, or backed up. A single-threaded
+    /// actor that is wedged looks, from inside, exactly like a peer that never answered.</para>
+    ///
+    /// <para>Measured on prod 2026-09-02: a document read failed with that message naming
+    /// <c>cache/…</c> as the waiting hub and a node path as the target. Both buckets it offered were
+    /// wrong — the node existed (version 53, edited the previous evening) and its hub resolved fine;
+    /// one per-node hub was wedged and a <c>recycle</c> cleared it with no data loss. The message
+    /// sent the reader to "does this node exist?", which is the one question that was not in doubt,
+    /// and the deployment ships no logs to Log Analytics so there was nothing else to read
+    /// (MeshWeaver#2896, open for weeks as "write verdict unconfirmed" for exactly this reason).</para>
+    ///
+    /// <para>So the message now carries the caller's <c>RunLevel</c> and queue snapshot — the same
+    /// fields the disposal diagnostic prints — and states the classification EXPLICITLY, including
+    /// an explicit unknown. A diagnostic that offers two buckets when there are three teaches the
+    /// reader to pick the nearer one; naming what this hub could and could not observe is what makes
+    /// it a measurement rather than a guess.</para>
     /// </summary>
-    private string BuildTimeoutMessage(string requestType, Address? target, string messageId) =>
-        $"No response received in hub {Address} within {Configuration.RequestTimeout} " +
-        $"for request {requestType} (id={messageId}) → target {target?.ToString() ?? "<unset>"}. " +
-        $"The request may have been undeliverable or the target hub was not found.";
+    private string BuildTimeoutMessage(string requestType, Address? target, string messageId)
+    {
+        var snapshot = (messageService is MessageService ms)
+            ? ms.GetQueueSnapshot()
+            : (Buffer: -1, Deferred: -1, Execution: -1, OpenGates: -1, DeliveryCompleted: false,
+               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
+
+        // The discriminator. A hub that was IDLE while waiting genuinely heard nothing: the silence
+        // is upstream. A hub that was busy, gated, or holding queued work cannot make that claim —
+        // the response may have arrived and be sitting behind the very work that delayed it.
+        var callerBusy = snapshot.Buffer > 0
+                         || snapshot.Deferred > 0
+                         || snapshot.OpenGates > 0
+                         || snapshot.CurrentMessage is not null;
+
+        var state =
+            $"This hub: RunLevel={RunLevel} Queue(buffer={snapshot.Buffer},deferred={snapshot.Deferred}," +
+            $"openGates={snapshot.OpenGates},deliveryActionCompleted={snapshot.DeliveryCompleted})" +
+            (snapshot.CurrentMessage is not null
+                ? $" Executing({snapshot.CurrentMessage}, {snapshot.CurrentMessageElapsedMs}ms)"
+                : string.Empty);
+
+        var verdict = callerBusy
+            ? "🚨 THIS HUB WAS NOT IDLE while waiting, so it cannot attribute the silence upstream: " +
+              "a response may have arrived and be queued behind the work above. Investigate THIS hub " +
+              "before the target."
+            : "This hub was idle while waiting, so it processed everything delivered to it and the " +
+              "silence is upstream of here. Cause is UNKNOWN between: the target never received the " +
+              "request (routing), the target received it and is wedged (a per-node hub that stops " +
+              "answering — MeshWeaver#2896), or the target answered and the reply was lost. This " +
+              "message cannot distinguish them; the target's own RunLevel and queue can.";
+
+        return
+            $"No response received in hub {Address} within {Configuration.RequestTimeout} " +
+            $"for request {requestType} (id={messageId}) → target {target?.ToString() ?? "<unset>"}. " +
+            $"{state}. {verdict}";
+    }
 
     private System.Reactive.Subjects.AsyncSubject<IMessageDelivery> GetOrAddResponseSubject(
         string messageId,

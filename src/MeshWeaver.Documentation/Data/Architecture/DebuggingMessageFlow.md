@@ -395,6 +395,75 @@ node CRUD serializes node `Content` on behalf of the whole mesh.
 
 ---
 
+## 🚨 Reading a request timeout: it describes the hub that GAVE UP, not the one that stayed silent
+
+`TimeoutException: No response received in hub X within 00:01:00 for request Y → target Z` is the
+most common banner in this system, and the most commonly misread. **It is written by the waiter.**
+The waiter cannot see the target at all — it can only report that nothing arrived, which is
+consistent with several different worlds.
+
+The message used to end *"The request may have been undeliverable or the target hub was not
+found"*. Two buckets, asserted as though they were the whole set. They are not, and the missing
+third is the one to rule out first:
+
+| world | what actually happened |
+|---|---|
+| routing | the target never received the request |
+| **the target is wedged** | it received it and stopped answering (a per-node hub that stops responding — #2896) |
+| the reply was lost | it answered and the response did not land |
+| **the CALLER is wedged** | the response arrived and this hub never processed it |
+
+**The last one is invisible from the sentence and indistinguishable from the others.** A
+single-threaded actor whose action block is busy, gated, or backed up looks — from inside — exactly
+like a peer that never replied. So the message now carries the waiter's own `RunLevel` and queue
+snapshot, and states the classification explicitly:
+
+- **queue non-empty, gates open, or a message executing** → *this hub was not idle, so it cannot
+  attribute the silence upstream.* Investigate **here** first; the answer may be sitting behind the
+  work in that snapshot.
+- **idle** → the silence really is upstream, and the message says so — then names the three
+  remaining worlds and states that it **cannot distinguish them**. An explicit unknown, because a
+  diagnostic offering two options when there are four teaches the reader to pick the nearer one.
+
+### The production case that motivated it
+
+2026-09-02: a document read failed with the old wording, naming `cache/…` as the waiter and a node
+path as the target. **Both offered buckets were wrong.** The node existed — version 53, edited the
+previous evening — and its hub resolved fine; exactly one per-node hub was wedged while every
+sibling answered instantly. The sentence sent the reader to *"does this node exist?"*, the one
+question never in doubt.
+
+The control arm is what settled it, and it is cheap enough to run every time:
+
+```
+point-read the failing path      -> times out (twice, different ids => deterministic, not transient)
+point-read a SIBLING path        -> instant  => partition, store and routing are fine
+list the namespace via the index -> healthy  => the node exists and is indexed
+```
+
+Two probes separate "the mesh is broken" from "one hub is wedged", and the second is the answer far
+more often.
+
+### 🚨 `recycle` fixes it and destroys the evidence
+
+`recycle` posts a `DisposeRequest` and forces re-initialisation. It cleared the wedge above with no
+data loss (all 53 versions intact) — and it also destroyed the only state that could have explained
+it. **Capture before recycling** when the situation allows: the owner's `RunLevel`, queue depth, and
+whether it sits in `Starting` with an open gate. Recycling first is the right call when someone is
+blocked on live data; just say so plainly rather than reporting a diagnosis you no longer have the
+evidence for.
+
+### The string coupling nobody can see
+
+🚨 **`MeshNodeStreamCache.IsTransientOwnerFailure` and `AreaErrorClassifier.IsTransientHubFailure`
+decide retryability by substring match on this message.** `"No response received in hub"` is what
+keeps a hub timeout classified RETRYABLE. Change the wording without that phrase and every such
+read becomes terminal — silently: no compiler error, no exception, just reads that stop being
+retried and wait out their budgets. `MessageService` documents the same hazard from the other
+direction (a *deleted-address* NACK must NOT contain any of those markers, or a provable absence
+degrades back into "retry shortly"). Pinned by
+`TimeoutMessageNamesTheCallersOwnStateTest.TheTimeoutMessage_KeepsTheMarkerThatClassifiesItAsTransient`.
+
 ## The Golden Rule
 
 > **Run once. Grep the trace. Fix the root cause.**
