@@ -79,7 +79,9 @@ public sealed record ModuleBuildRecord
     /// <summary>The package's derived SemVer at build time (<c>manifest.lock</c> <c>version</c>).</summary>
     public string? Version { get; init; }
 
-    /// <summary>The Systemorph/MeshWeaver commit the module was built and tested against.</summary>
+    /// <summary>The Systemorph/MeshWeaver ref the module was built and tested against, exactly as the lane received it in
+    /// <c>platform-ref</c> — a commit sha when the caller resolved its pin first (every satellite does), a branch or tag
+    /// name otherwise. Folded into the key verbatim, so two spellings of one commit are two keys.</summary>
     public string PlatformRef { get; init; } = "";
 
     /// <summary>The digest of the tester image that compiled it.</summary>
