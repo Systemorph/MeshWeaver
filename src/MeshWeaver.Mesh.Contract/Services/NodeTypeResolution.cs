@@ -31,21 +31,24 @@ public static class NodeTypeResolution
     /// <see cref="MeshNode.NodeType"/> than it currently has — the only case a write boundary has
     /// to judge.
     ///
-    /// <para>🚨 Both carve-outs matter and both are deliberate:</para>
-    /// <list type="bullet">
-    ///   <item>An empty incoming type is the upsert convention's "keep what state has"
-    ///     (<c>UpdateAccordingToSourceNode</c>'s <c>?? state.NodeType</c>) — it changes nothing, so
-    ///     it can introduce nothing.</item>
-    ///   <item>An incoming type EQUAL to the existing one is a round-trip of what is already
-    ///     stored, not a new write of a dangling type. Refusing it would make an already-stranded
-    ///     node un-editable — and <c>patch</c> refuses <c>nodeType</c> outright, so a full-node
-    ///     update is the ONLY repair route there is. This is the same carve-out, for the same
-    ///     reason, that <c>ContentDiscriminatorValidator</c> applies to a round-tripped
-    ///     <c>$type</c>.</item>
-    /// </list>
+    /// <para>🚨 <b>The "no change" test is NULL, not null-or-empty</b>, because that is what the
+    /// merge does: <c>UpdateAccordingToSourceNode</c> applies <c>sourceNode.NodeType ?? state.NodeType</c>,
+    /// so <c>null</c> means "keep what state has" and an EMPTY STRING is a real value the merge
+    /// WILL write. A predicate that folded empty into "no change" would name one rule while the
+    /// merge applied another, and a later caller reading the name would be wrong. Clearing a type
+    /// is still allowed — an untyped node is legal, activates on the mesh default chain, and is
+    /// therefore never the dangling condition — but it is allowed because
+    /// <see cref="Resolves"/> says an empty type resolves, NOT because this pretended it was a
+    /// no-op.</para>
+    ///
+    /// <para>An incoming type EQUAL to the existing one is a round-trip of what is already stored,
+    /// not a new write of a dangling type. Refusing it would make an already-stranded node
+    /// un-editable — and <c>patch</c> refuses <c>nodeType</c> outright, so a full-node update is
+    /// the ONLY repair route there is. This is the same carve-out, for the same reason, that
+    /// <c>ContentDiscriminatorValidator</c> applies to a round-tripped <c>$type</c>.</para>
     /// </summary>
     public static bool ChangesNodeType(string? incomingNodeType, string? existingNodeType) =>
-        !string.IsNullOrEmpty(incomingNodeType)
+        incomingNodeType is not null
         && !string.Equals(incomingNodeType, existingNodeType, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>

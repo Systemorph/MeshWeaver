@@ -81,9 +81,14 @@ which is #2556's non-convergent loop, re-created by the fix for #2993.
 by name.** Three properties make that different from leaving the hole open:
 
 1. **It judges a CHANGE, never a state.** An update that keeps the node's current `NodeType` — or
-   omits it, the upsert's null-keeps-state convention — introduces nothing and passes. Only a write
-   that *retypes* a node to something unresolvable is refused. (Same carve-out, for the same reason,
-   that `ContentDiscriminatorValidator` applies to a round-tripped `$type`.)
+   omits it (`null`, which the merge reads as "keep what state has") — introduces nothing and
+   passes. Only a write that *retypes* a node to something unresolvable is refused. (Same carve-out,
+   for the same reason, that `ContentDiscriminatorValidator` applies to a round-tripped `$type`.)
+   🚨 The "omitted" test is `null`, not null-or-empty, because that is exactly what the merge's
+   `sourceNode.NodeType ?? state.NodeType` does: an empty string is a real value the merge writes.
+   Clearing a type is still allowed — an untyped node is legal and activates on the mesh default
+   chain — but because the resolution rule says so, not because the predicate pretended a clear was
+   a no-op.
 2. **The bypass is asked for per write, not held open.** The importer sets
    `CreateOrUpdateNodeRequest.AllowUnresolvableNodeType` only when the node **already exists** *and*
    its type is provably unsatisfiable for this pass *and* the write actually changes the type.
