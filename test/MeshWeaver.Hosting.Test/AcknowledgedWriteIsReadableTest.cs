@@ -137,7 +137,7 @@ public class AcknowledgedWriteIsReadableTest
         // DEFINITION and the durable row owns the path.
         var (adapter, versions) = BuildStack(Static("in-memory type definition", definitionOnly: true));
 
-        var acknowledged = await adapter.Write(Durable("the durable row"), Options).Timeout(Budget);
+        var acknowledged = await adapter.Write(Durable("the durable row"), Options).Timeout(Budget).Await();
 
         acknowledged.Should().NotBeNull(
             "a non-null emission is the try-then-claim ACCEPT sentinel — the write was acknowledged");
@@ -145,7 +145,7 @@ public class AcknowledgedWriteIsReadableTest
             "the version-history row is chained off that same acknowledgement, so a caller that "
             + "checks history sees the write as landed");
 
-        var readBack = await adapter.Read(NodePath, Options).Timeout(Budget);
+        var readBack = await adapter.Read(NodePath, Options).Timeout(Budget).Await();
 
         readBack.Should().NotBeNull("a write that was acknowledged must be readable back");
         readBack!.Name.Should().Be("the durable row",
@@ -167,14 +167,14 @@ public class AcknowledgedWriteIsReadableTest
     {
         var adapter = new StaticNodeStorageAdapter([Static("in-memory type definition", definitionOnly: true)]);
 
-        (await adapter.Read(NodePath, Options).Timeout(Budget))
+        (await adapter.Read(NodePath, Options).Timeout(Budget).Await())
             .Should().BeNull("the durable row owns this path; the definition does not serve it");
-        (await adapter.Exists(NodePath).Timeout(Budget))
+        (await adapter.Exists(NodePath).Timeout(Budget).Await())
             .Should().BeFalse("Exists must agree with Read — a true here makes the create path "
                               + "refuse a path that has no durable row");
-        var (nodePaths, _) = await adapter.ListChildPaths(Partition).Timeout(Budget);
+        var (nodePaths, _) = await adapter.ListChildPaths(Partition).Timeout(Budget).Await();
         nodePaths.Should().BeEmpty("a definition is not a child node of its partition");
-        var (prefixNode, matched) = await adapter.FindBestPrefixMatch(NodePath, Options).Timeout(Budget);
+        var (prefixNode, matched) = await adapter.FindBestPrefixMatch(NodePath, Options).Timeout(Budget).Await();
         prefixNode.Should().BeNull("prefix routing must not resolve onto a definition-only entry");
         matched.Should().Be(0);
     }
@@ -192,10 +192,10 @@ public class AcknowledgedWriteIsReadableTest
     {
         var adapter = new StaticNodeStorageAdapter([Static("served static node", definitionOnly: false)]);
 
-        var served = await adapter.Read(NodePath, Options).Timeout(Budget);
+        var served = await adapter.Read(NodePath, Options).Timeout(Budget).Await();
 
         served.Should().NotBeNull("a served static node is the node at its path");
         served!.Name.Should().Be("served static node");
-        (await adapter.Exists(NodePath).Timeout(Budget)).Should().BeTrue();
+        (await adapter.Exists(NodePath).Timeout(Budget).Await()).Should().BeTrue();
     }
 }
