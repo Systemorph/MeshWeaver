@@ -99,31 +99,88 @@ with single-activation semantics, so on the clustered portal the status compare-
 cluster-wide. That does not hold for the monolith, and nothing in the compile pipeline asserts or
 tests it.
 
-## 🚨 A Store update does not rebuild its dependents
+## 🚨 A Store update does not rebuild its dependents — FIXED 2026-09-02
 
-This is the one live defect the programs contained, and it is the mechanism behind the 2026-08-25
-Store outage, in which every Store NodeType recompiled green and the page still went down.
+This was the one live defect the programs contained, and it is the mechanism behind the 2026-08-25
+Store outage, in which every Store NodeType recompiled green and the page still went down. **The
+history below is the point of this section — read it before touching the installer's release
+sequencing.**
 
 The correct closure exists. `ReleaseAffectedNodeTypes` enumerates NodeTypes **mesh-wide** and
 matches a changed path against every type's expanded source and test queries — so it *does* catch a
 cross-package `shared=@{package}/…` consumer, ordered topologically.
 
-**It has exactly one production caller, and it is not the installer.** The sync transaction uses it.
-The package installer instead releases the paths of the nodes it just wrote that happen to be
+**It had exactly one production caller, and it was not the installer.** The sync transaction used
+it. The package installer instead released the paths of the nodes it just wrote that happened to be
 NodeType definitions — which can only ever name types **inside the installed package**. So a Store
-package update rebuilds Store's own types and leaves every package that compiles Store's sources
-into its own assembly on the assembly it already had. The result is two hubs on different compiles
-of the same sources disagreeing about the type registry, which reads as `$type` is not registered
-and renders as an empty view.
+package update rebuilt Store's own types and left every package that compiles Store's sources into
+its own assembly on the assembly it already had. The result is two hubs on different compiles of the
+same sources disagreeing about the type registry, which reads as `$type` is not registered and
+renders as an empty view.
 
-The pieces for the fix are all present: the installer already tracks the paths it wrote and pruned,
-and the closure already accepts exactly that input.
+### What the fix is
 
-> While fixing it, note that the installer selects its release targets with an `is`
-> **pattern-match on an `object` payload**. Per the platform's own rule that is a trap-door: content
-> that arrived as JSON reads as absent, so the filter would silently select *nothing* and no release
-> would be issued at all — a second, quieter way to reach the same outage. Use the content
-> accessor.
+The derivation was split out of `ReleaseAffectedNodeTypes` as `hub.AffectedNodeTypes(changedPaths)`
+— the mesh-wide enumeration plus `RecompileClosure`, ordered dependencies-first, with no seeding and
+no release — so a caller that owns its own release sequencing can run exactly the same closure.
+`ReleaseAffectedNodeTypes` is now that derivation plus the seed and the trigger, unchanged for the
+sync transaction.
+
+`PackageInstaller` calls it on **every** install path, over what actually moved (the paths written ∪
+the paths actually deleted), after its own package-local releases:
+
+| Path | Package-local release, as before | …then the closure |
+|---|---|---|
+| Full node-repo install | two waves around the retyped root's recycle | every affected type outside the package |
+| Incremental delta | one wave over `releaseTargets` | same |
+| Single `Code` package | the one synthesized NodeType | same |
+| `Content` package | *(none — it declares no type)* | the whole affected set |
+
+Four paths, not three: the content-package path issued **no** release at all, and a content package
+can perfectly well ship the `Source/` a NodeType compiles — the same hole, reached differently.
+
+Three properties are load-bearing and easy to lose:
+
+- **The closure ADDS to the package-local set, it does not replace it.** Each half covers what the
+  other structurally cannot. The closure enumerates from the query index, which *trails* the store,
+  so a type the install just CREATED may not be listed — and the installer must release those anyway
+  (`SettleRetypedRoot` waits on the in-package type's rebuild). The package-local set, in turn, can
+  never see a cross-package consumer. The closure call subtracts what was already released, so
+  nothing is requested twice; when the install released nothing locally (a prune-only run), it
+  subtracts nothing and the closure covers the package's own types too.
+- **Dependents come last.** Every changed path is inside the installed package, so an affected type
+  either IS a package type (a dependency — released first) or reaches those files through `shared=`
+  (a dependent). Seed before release everywhere: adopt-before-compile is deliberate.
+- **Write outcomes travel as `(path, wrote)` pairs, not counts.** The writes fan out through
+  `Merge`, which does not preserve order, so a count — or a positional zip — cannot be turned back
+  into paths. `InstallResult.WrittenPaths` is now populated by every flavour, and the prune returns
+  the paths it *actually* deleted (a claimed or absent candidate is not a change).
+
+### The second defect, on the same line
+
+The package-local selector was `n.Content is NodeTypeDefinition` — a **pattern-match on an `object`
+payload**, the trap-door the platform's own rule forbids. Content that arrived as JSON does not
+match, so the filter selected *nothing* and no release was issued at all: the same outage, reached
+more quietly, with no exception and nothing to grep. Every such site in the installer now reads
+`ImportWriteOrder.IsNodeTypeDefinition` — the framework's shape-tolerant predicate (the CLR test OR
+the cast-free `NodeType` meta-marker).
+
+🚨 **A bare `ContentAs<NodeTypeDefinition>` is the wrong accessor *here*, and would be a second bug
+in the opposite direction:** every member of that record is optional, so *any* JSON object
+deserializes into one — and every plain content node would then read as a NodeType, land in the
+types' write bucket, and be handed a release request. The `NodeType` field is the discriminator that
+is both cast-free and cannot over-match. `ContentAs<T>` remains correct where the *definition* is
+what you want (`AffectedNodeTypes` reads each type's declared `Sources` that way).
+
+### What pins it
+
+`PackageInstallRebuildsDependentsTest` (Memex.Portal.Shared.Test): a dependent package's NodeType is
+seeded whose only source is `shared=@{provider}/…/Source`; the provider package is then installed,
+and the dependent must end up with a `RequestedReleaseAt` stamp. The cross-package assertion is the
+whole test — asserting that the provider's *own* types are released passes on the broken code and
+proves nothing. The provider's NodeType ships with an untyped content payload on purpose, so one
+install drives both fixes; a second, hub-free test compares the trap-door and its replacement on the
+same parsed node so the selector cannot be answered for by a query index that happened to catch up.
 
 ## What shipped elsewhere in the program, and is fine
 
