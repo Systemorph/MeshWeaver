@@ -42,13 +42,14 @@ namespace Memex.Portal.Shared.Test;
 /// and <c>MeshOperations.Export</c> works around it by resolving the mesh hub by hand.</para>
 ///
 /// <para><b>And the two shapes it produced were different, which is why both are pinned.</b>
-/// Measured on this tree before the fix, with a Viewer (<c>Read|Execute|Api</c>) calling
-/// <c>Recycle</c> through a real session hub:
+/// Measured on this tree before the fix — with a throwaway probe whose fixture is the one below,
+/// under its own path names — a Viewer (<c>Read|Execute|Api</c>) calling <c>Recycle</c> through a
+/// real session hub got:
 /// <list type="bullet">
 ///   <item><description>a <b>NodeType</b> node — the stamp is a real write, the owner refuses it,
 ///     and <c>RecycleCore</c> re-raised: <c>THREW System.UnauthorizedAccessException: Access
-///     denied: user 'probe-viewer' lacks Update permission on 'Probe3121/Ty'</c>. The production
-///     line, reproduced.</description></item>
+///     denied: user '…-viewer' lacks Update permission on '…/Ty'</c> — the production line's
+///     exception type and message template, reproduced.</description></item>
 ///   <item><description>a <b>non-NodeType</b> node — the stamp is an identity update that writes
 ///     nothing, so NOTHING was gated and the answer was
 ///     <c>{"status":"Recycled"}</c>: the <c>DisposeRequest</c> went out for a caller with no write
@@ -152,6 +153,12 @@ public class SessionDenialIsAnAnswerTest(ITestOutputHelper output) : MonolithMes
     /// The half the 2026-08-30 fix could not reach: an ordinary node, whose recycle stamp writes
     /// nothing and is therefore gated by nothing. Pre-fix this answered <c>{"status":"Recycled"}</c>
     /// and posted the <c>DisposeRequest</c> for a caller with no write access.
+    ///
+    /// <para>The envelope IS the assertion that nothing was performed, and deliberately so: the
+    /// <c>DisposeRequest</c> is posted on exactly one code path, the one that returns
+    /// <c>{"status":"Recycled"}</c>. A refusal envelope therefore proves that path was not taken.
+    /// The alternative — waiting to observe that no dispose arrived — is settle-by-silence, which
+    /// passes for the wrong reason on a slow mesh and reds for the wrong reason on a fast one.</para>
     /// </summary>
     [Fact]
     public async Task RecyclingAPlainNodeWithoutUpdateIsRefusedNotPerformed()
