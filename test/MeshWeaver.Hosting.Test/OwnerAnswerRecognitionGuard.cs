@@ -81,6 +81,31 @@ public class OwnerAnswerRecognitionGuard(ITestOutputHelper output)
             + new HubDisposingException(Owner, "/data/'x'").Message);
     }
 
+    /// <summary>
+    /// A HOSTED address renders as <c>path~host</c>, so the producer's banner and a caller holding
+    /// only the path disagree on the TEXT while meaning the same hub. Pinned separately because the
+    /// asymmetry is invisible from either side alone — the producer looks right, the caller looks
+    /// right, and the answer comes back "the routing layer refused you".
+    /// </summary>
+    [Fact]
+    public void AHostedOwner_IsRecognised_WhicheverHalfTheCallerHolds()
+    {
+        var hosted = new Address("TestData", "silent-read") { Host = new Address("portal") };
+        var refusal = ShutdownNack.RejectingNow(hosted, "RunLevel=Dead", "cannot process GetDataRequest");
+        output.WriteLine(refusal);
+        refusal.Should().Contain("~",
+            "the premise: a hosted address renders its host chain, so this case is only "
+            + "meaningful while Address.ToString() still does that");
+
+        ShutdownNack.IsAnsweredByOwner(refusal, hosted).Should().BeTrue(
+            "the producer's own address must recognise its own refusal");
+        ShutdownNack.IsAnsweredByOwner(refusal, hosted.Path).Should().BeTrue(
+            "and so must the PATH — a reader that resolved the node by path holds nothing else, "
+            + "and a false negative here reads as 'the routing layer answered'");
+        ShutdownNack.IsAnsweredByOwner(refusal, "TestData/other").Should().BeFalse(
+            "matching on the path must not degrade into matching any hosted address");
+    }
+
     public static TheoryData<string, string> ProducedOwnerAnswers()
     {
         var data = new TheoryData<string, string>();
@@ -136,15 +161,22 @@ public class OwnerAnswerRecognitionGuard(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// The producers are enumerated by hand, so the enumeration itself can silently empty out —
-    /// a Theory with no cases PASSES. Assert there are cases, and that each says something.
+    /// The producers are enumerated by hand, so the enumeration itself can silently shrink — and a
+    /// Theory with no cases PASSES, having tested nothing.
+    ///
+    /// <para>The floor is deliberately the CURRENT number rather than "not empty": a set that
+    /// quietly falls from seven producers to one still satisfies "non-empty" while covering almost
+    /// nothing, which is the same rubber stamp one level up. Consolidating a producer is a
+    /// legitimate change — it just has to move this number in the same commit, which is the point:
+    /// the shrink becomes a decision instead of an accident.</para>
     /// </summary>
     [Fact]
-    public void TheProducerSetIsNotEmpty()
+    public void TheProducerSetCoversEverySeam()
     {
         OwnerAnswers().Should().HaveCountGreaterThanOrEqualTo(7,
-            "a Theory with no data passes having tested nothing — the one failure mode a "
-            + "recognition guard must not have");
+            "one case per owner-side seam, plus the relayed shape — if a producer was genuinely "
+            + "consolidated away, lower this number deliberately rather than letting the coverage "
+            + "drop unnoticed");
         OwnerAnswers().Should().OnlyContain(p => !string.IsNullOrWhiteSpace(p.Message));
     }
 

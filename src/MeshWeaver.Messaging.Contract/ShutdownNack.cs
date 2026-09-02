@@ -89,7 +89,7 @@ public static class ShutdownNack
     /// subject of "is shutting down" — see <see cref="IsAnsweredByOwner"/>.</para>
     /// </summary>
     /// <param name="address">The owner — an <see cref="Address"/>, or its path.</param>
-    public static string Banner(object address) => $"Hub {address} is shutting down";
+    public static string Banner(object address) => $"{BannerOpen}{address}{BannerClose}";
 
     /// <summary>
     /// The refusal for a delivery this hub declines HERE AND NOW — it arrived (or was evaluated)
@@ -147,13 +147,57 @@ public static class ShutdownNack
     /// (<c>OrleansRoutingService.ClassifyRoutedFailure</c>), so an ErrorType test would answer this
     /// question with the routing layer's echo of it. The banner is the only evidence that
     /// identifies the speaker.</para>
+    ///
+    /// <para>🚨 It compares the banner's SUBJECT by PATH, not the whole rendered address. A HOSTED
+    /// address renders as <c>path~host</c> (<see cref="Address.ToString"/>), so a producer holding
+    /// the <see cref="Address"/> and a caller holding the path would otherwise disagree about the
+    /// same hub — a false negative that reads as "the routing layer answered", which is the exact
+    /// misclassification this predicate exists to prevent. The path IS the address's identity
+    /// (<see cref="Address.Path"/>); the host chain says where it is activated, not who it is.</para>
     /// </summary>
     /// <param name="message">A NACK message, typically <c>DeliveryFailure.Message</c>.</param>
     /// <param name="ownerAddress">The owner the caller addressed — an <see cref="Address"/>, or its path.</param>
     /// <returns><c>true</c> when the refusal came from that owner.</returns>
-    public static bool IsAnsweredByOwner(string? message, object ownerAddress) =>
-        !string.IsNullOrEmpty(message)
-        && message.Contains(Banner(ownerAddress), System.StringComparison.Ordinal);
+    public static bool IsAnsweredByOwner(string? message, object ownerAddress)
+    {
+        if (string.IsNullOrEmpty(message))
+            return false;
+        var owner = PathOf(ownerAddress);
+        if (owner.Length == 0)
+            return false;
+        // Every banner reads "Hub {subject} is shutting down". Walk them and compare SUBJECTS —
+        // a substring test on the whole banner cannot tell "Hub a/b" from "Hub a/b/child".
+        for (var i = message.IndexOf(BannerOpen, System.StringComparison.Ordinal);
+             i >= 0;
+             i = message.IndexOf(BannerOpen, i + BannerOpen.Length, System.StringComparison.Ordinal))
+        {
+            var start = i + BannerOpen.Length;
+            var end = message.IndexOf(BannerClose, start, System.StringComparison.Ordinal);
+            // No banner closes after this point, so none closes after any later "Hub " either.
+            if (end < 0)
+                return false;
+            if (string.Equals(PathOf(message[start..end]), owner, System.StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
+    private const string BannerOpen = "Hub ";
+    private const string BannerClose = " is shutting down";
+
+    /// <summary>
+    /// The identity half of an address: its <see cref="Address.Path"/>, or — for text lifted out of
+    /// a rendered banner, or a path a caller passed as a string — everything before the <c>~</c>
+    /// that introduces the host chain.
+    /// </summary>
+    private static string PathOf(object address)
+    {
+        if (address is Address typed)
+            return typed.Path;
+        var text = address.ToString() ?? string.Empty;
+        var host = text.IndexOf('~');
+        return host < 0 ? text : text[..host];
+    }
 
     /// <summary>The banner plus its parenthesised evidence, when there is any.</summary>
     private static string Open(object address, string? detail) =>
