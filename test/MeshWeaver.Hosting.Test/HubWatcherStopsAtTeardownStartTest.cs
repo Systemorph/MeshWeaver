@@ -52,7 +52,7 @@ public class HubWatcherStopsAtTeardownStartTest(ITestOutputHelper output) : HubT
         {
             Entered.OnNext(Unit.Default);
             Entered.OnCompleted();
-            SpinWait.SpinUntil(() => Volatile.Read(ref Release) == 1, TimeSpan.FromSeconds(30));
+            SpinWait.SpinUntil(() => Volatile.Read(ref Release) == 1, TestTimeouts.Convergence);
             return request.Processed();
         }
     }

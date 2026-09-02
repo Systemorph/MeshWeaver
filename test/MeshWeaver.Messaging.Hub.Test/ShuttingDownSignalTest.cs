@@ -50,7 +50,7 @@ public class ShuttingDownSignalTest(ITestOutputHelper output) : HubTestBase(outp
                     handlerEntered.OnCompleted();
                     // Deliberately ignores cancellation: keeps the root's action block busy so
                     // the ShutdownRequest posted by Dispose() cannot be processed until released.
-                    SpinWait.SpinUntil(() => Volatile.Read(ref releaseHandler) == 1, TimeSpan.FromSeconds(30));
+                    SpinWait.SpinUntil(() => Volatile.Read(ref releaseHandler) == 1, TestTimeouts.Convergence);
                     return request.Processed();
                 }));
         var child = root.GetHostedHub(new Address("shutting-down-child", "1"));
