@@ -72,7 +72,11 @@ public class PagedQueryTotalOrderTest
     {
         var change = await query.Query<MeshNode>(request, Options)
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(30))
+            // TestTimeouts, not a hand-written literal: nothing here is expected to WAIT — the
+            // fake provider answers synchronously and the in-memory adapter's reads are Defer'd —
+            // so this bound exists only so a regression that wedges the merge fails with a
+            // timeout instead of hanging the shard.
+            .Timeout(TestTimeouts.Convergence)
             .Await();
         return change.Items.Select(n => n.Path!).ToList();
     }
