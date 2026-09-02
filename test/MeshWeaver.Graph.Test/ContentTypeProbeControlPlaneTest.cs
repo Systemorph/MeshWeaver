@@ -8,6 +8,7 @@ using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -44,6 +45,22 @@ namespace MeshWeaver.Graph.Test;
 /// probe's own disposal (the WARNING). One root, two faces — a probe must not run the node control
 /// plane at all, which is what <c>AsTransientNodeProbe</c> already promised and
 /// <c>MeshDataSource.SubscribeToOwnDeletionInit</c> already honours.</para>
+///
+/// <para>🚨 <b>The probe's init turn RACES its own <c>Dispose()</c>, and both outcomes must be
+/// fault-free.</b> <c>ProbeRegister</c> builds the hub (which posts <c>InitializeHubRequest</c>)
+/// and disposes it on the next line. When the action block reaches the init turn first, the
+/// <c>WithInitialization</c> observables run and the ACP install above is exercised against the
+/// #2990 guards. When <c>Dispose()</c> lands first, <c>MessageHub.HandleInitialize</c> skips the
+/// remaining BuildupActions altogether — a hub that is leaving installs nothing (#3109,
+/// <c>Doc/Architecture/HubDisposalModel</c> → "The rule for initialization") — and the install
+/// never runs. The tests therefore take their determinism signal from the probe's
+/// <c>DisposalCompleted</c>, captured in the SYNCHRONOUS <c>WithInitialization</c> overload that
+/// runs inside <c>Build</c> (before the sweep can dispose the hub), not from the install point: the
+/// <c>ShutdownRequest</c> that <c>Dispose()</c> posts is queued BEHIND the init turn, so by the
+/// time disposal completes the init turn has ended (run or skipped) and the teardown has written
+/// whatever it writes. Content-type REGISTRATION is unaffected by the skip either way — it happens
+/// in <c>DataContext.Initialize</c>, a synchronous buildup action inside <c>Build</c>, which is what
+/// makes the sweep's build-and-dispose shape sufficient.</para>
 /// </summary>
 public class ContentTypeProbeControlPlaneTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -59,18 +76,28 @@ public class ContentTypeProbeControlPlaneTest(ITestOutputHelper output) : Monoli
     }
 
     /// <summary>
-    /// Emits once the swept probe of <see cref="BareActivityNodeType"/> has RETURNED from the ACP
-    /// install point. That ordering is the whole determinism of this test:
-    /// <c>SubscribeWithReEstablish</c> establishes synchronously and
-    /// <c>MeshNodeStreamHandle.Subscribe</c> reports a failed <c>AcquireStream</c> through
-    /// <c>OnError</c> on the calling thread — so by the time this emits, the Error line has either
+    /// Emits once the swept probe of <see cref="BareActivityNodeType"/> has COMPLETED its disposal.
+    /// That ordering is the whole determinism of this test: the init turn is queued at
+    /// <c>Build</c>, the <c>ShutdownRequest</c> behind it, so disposal completing proves the init
+    /// turn has ended — either it ran (and <c>SubscribeWithReEstablish</c> established
+    /// synchronously, <c>MeshNodeStreamHandle.Subscribe</c> reporting a failed
+    /// <c>AcquireStream</c> through <c>OnError</c> on the calling thread) or it was skipped because
+    /// teardown had begun (#3109). Either way, by the time this emits the Error line has either
     /// been written or provably will not be. An assertion on a log's ABSENCE with no such signal
     /// passes whenever it runs first, which is most of the time.
     /// </summary>
-    private readonly AsyncSubject<Unit> bareWatcherInstalled = new();
+    private readonly AsyncSubject<Unit> bareProbeDisposed = new();
 
     /// <summary>Same signal for <see cref="TypedActivityNodeType"/>.</summary>
-    private readonly AsyncSubject<Unit> typedWatcherInstalled = new();
+    private readonly AsyncSubject<Unit> typedProbeDisposed = new();
+
+    /// <summary>
+    /// Which way the init-turn-vs-dispose race went on each probe: 1 when the ACP install point
+    /// was reached (the init turn won), 0 when the BuildupActions were skipped (dispose won).
+    /// Diagnostic only — both outcomes are legitimate and both must be fault-free.
+    /// </summary>
+    private int bareInstallRan;
+    private int typedInstallRan;
 
     private readonly RecordingLoggerProvider recorder = new();
 
@@ -81,30 +108,37 @@ public class ContentTypeProbeControlPlaneTest(ITestOutputHelper output) : Monoli
                 new MeshNode(BareActivityNodeType)
                 {
                     Name = "ACP Probe Gadget",
-                    HubConfiguration = config => InstallControlPlane(config.AddData(), bareWatcherInstalled)
+                    HubConfiguration = config => InstallControlPlane(
+                        config.AddData(), bareProbeDisposed, () => Interlocked.Exchange(ref bareInstallRan, 1))
                 },
                 new MeshNode(TypedActivityNodeType)
                 {
                     Name = "ACP Probe Gadget With Content",
                     HubConfiguration = config => InstallControlPlane(
                         config.AddMeshDataSource(source => source.WithContentType<AcpGadgetContent>()),
-                        typedWatcherInstalled)
+                        typedProbeDisposed, () => Interlocked.Exchange(ref typedInstallRan, 1))
                 });
 
     /// <summary>
     /// Faithful copy of <c>KernelContainer</c>'s Activity Control Plane install: the OBSERVABLE
     /// initialization overload, running on the <c>InitializeHubRequest</c> turn, registering the
-    /// watcher for the hub's disposal.
+    /// watcher for the hub's disposal. The SYNCHRONOUS overload beside it is test instrumentation
+    /// only: it runs inside <c>Build</c>, the one point that is guaranteed to precede the sweep's
+    /// <c>Dispose()</c>, and forwards the probe's <c>DisposalCompleted</c> to the test.
     /// </summary>
     private static MessageHubConfiguration InstallControlPlane(
-        MessageHubConfiguration config, AsyncSubject<Unit> installed)
-        => config.WithInitialization(hub => Observable.Defer(() =>
-        {
-            hub.RegisterForDisposal(hub.WatchControlPlane(_ => { }));
-            installed.OnNext(Unit.Default);
-            installed.OnCompleted();
-            return Observable.Return(Unit.Default);
-        }));
+        MessageHubConfiguration config, AsyncSubject<Unit> probeDisposed, Action installRan)
+        => config
+            .WithInitialization((IMessageHub hub) =>
+            {
+                hub.DisposalCompleted.Take(1).Subscribe(probeDisposed);
+            })
+            .WithInitialization(hub => Observable.Defer(() =>
+            {
+                hub.RegisterForDisposal(hub.WatchControlPlane(_ => { }));
+                installRan();
+                return Observable.Return(Unit.Default);
+            }));
 
     /// <summary>
     /// 🚨 THE assertion of #2990: a clean mesh start writes no Error-level record about a faulted
@@ -114,7 +148,7 @@ public class ContentTypeProbeControlPlaneTest(ITestOutputHelper output) : Monoli
     [Fact(Timeout = 120_000)]
     public async Task BootSweep_OfActivityShapedNodeTypes_LogsNoControlPlaneFault()
     {
-        await ProbesReachedTheInstallPoint();
+        await ProbesWereBuiltAndTornDown();
 
         var faults = recorder.Records
             .Where(r => r.Level >= LogLevel.Error
@@ -139,7 +173,7 @@ public class ContentTypeProbeControlPlaneTest(ITestOutputHelper output) : Monoli
     [Fact(Timeout = 120_000)]
     public async Task BootSweep_OfActivityShapedNodeTypes_OpensNoSyncSubHubOnAProbe()
     {
-        await ProbesReachedTheInstallPoint();
+        await ProbesWereBuiltAndTornDown();
 
         var rejected = recorder.Records
             .Where(r => r.Message.Contains("Rejecting hosted hub creation", StringComparison.Ordinal)
@@ -184,15 +218,23 @@ public class ContentTypeProbeControlPlaneTest(ITestOutputHelper output) : Monoli
             + "IsProbeAddress stays exhaustive (#2990)");
     }
 
-    private async Task ProbesReachedTheInstallPoint()
+    /// <summary>
+    /// Waits for both swept probes to finish disposing — the positive signal that each was built
+    /// (so the NodeType WAS swept) and that its init turn has ended, run or skipped. A faulted
+    /// probe teardown surfaces here as the subject's error.
+    /// </summary>
+    private async Task ProbesWereBuiltAndTornDown()
     {
-        await bareWatcherInstalled.Should().Within(TestTimeouts.Quick)
-            .Emit("the sweep must probe the ACP NodeType that carries no data source, or this test "
-                  + "asserts nothing");
-        await typedWatcherInstalled.Should().Within(TestTimeouts.Quick)
-            .Emit("the sweep must probe the ACP NodeType that declares a content type, or this "
-                  + "test asserts nothing");
+        await bareProbeDisposed.Should().Within(TestTimeouts.Quick)
+            .Emit("the sweep must probe the ACP NodeType that carries no data source and dispose "
+                  + "that probe, or this test asserts nothing");
+        await typedProbeDisposed.Should().Within(TestTimeouts.Quick)
+            .Emit("the sweep must probe the ACP NodeType that declares a content type and dispose "
+                  + "that probe, or this test asserts nothing");
 
+        Output.WriteLine(
+            $"    init turn reached the ACP install point: bare={Volatile.Read(ref bareInstallRan) == 1}, "
+            + $"typed={Volatile.Read(ref typedInstallRan) == 1} (false = skipped, teardown had begun)");
         foreach (var r in recorder.Records)
             Output.WriteLine($"    {r.Level} {r.Category}: {r.Message}"
                              + (r.Error is null ? "" : $"  << {r.Error.GetType().Name}: {r.Error.Message}"));

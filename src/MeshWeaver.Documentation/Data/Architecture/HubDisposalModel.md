@@ -511,6 +511,60 @@ ancestor's `Dispose()`) and `SourcesWatcherStopsAtTeardownTest` (the sources wat
 with a deterministically in-flight `@@`-include read, disposed mid-read: no quiesce
 timeout, no `[FAULT]`).
 
+### The rule for initialization: a BuildupAction never starts after `ShuttingDown`
+
+The init turn (`InitializeHubRequest`, which runs the `WithInitialization` observables as
+a `Concat`) is queued at `Build` and runs whenever the action block reaches it. That can
+be **after this hub's own `Dispose()`** — a transient probe is created and disposed in
+one breath (`ContentTypeRegistration.ProbeRegister` at boot, the schema probes in
+`MeshOperations`) — or after an ancestor's cascade froze the subtree before any
+descendant had initialised. Every BuildupAction is a piece of the per-node control
+plane: a watcher over the own node, an eagerly created child hub, a ticker. Installed on
+a hub that is already leaving, each one is born dead and faults on the way out:
+`HostedHubsCollection` refuses the child with a Warning (`Rejecting hosted hub creation
+… during disposal - collection is disposing`), the teardown errors the watcher's stream.
+
+Measured on the Thread NodeType's boot-time registration probe: its `AddThreadExecution`
+chain reached the `_Exec` child creation after the probe's own `Dispose()` in **159 of
+643** test logs of one CI run (MeshWeaver CD 33619142646) — a Warning each time, at a
+random offset from boot — and the one test that asserts a fault-free probe teardown
+(`ProbeHubCostTest.ValidateContentWithSchema_OnInvalidContent_BuildsOneProbeNotTwo`,
+MeshWeaver.Plugins) red whenever the late creation landed inside its recording window.
+The same interleaving does not reproduce on an idle developer machine, which is why it
+cannot be bisected locally and must be reasoned from the CI evidence.
+
+`HandleInitialize` therefore checks `IsShuttingDown` **at every action boundary**: once
+teardown has begun, the remaining actions are skipped (one Debug line), the Initialize
+gate still opens so the disposal state machine flows, and nothing is installed. This is
+the init-turn form of the watcher rule above, and the same policy the existing `.Catch`
+already applies one step later ("teardown ENDED an action" is a recognised shutdown, not
+a failure). A single action that is already running when the signal fires is not
+interrupted — the boundary is the granularity, exactly as a watcher's in-flight delivery
+is the granularity of `SubscribeHubWatcher`.
+
+Pinned by `InitializationStopsAtTeardownStartTest`: the first action is parked on the
+action block, `Dispose()` is called, the park is released, and the second action — which
+creates a child hub, the `_Exec` shape — must not have run by the time
+`DisposalCompleted` fires; a control arm on a live hub proves the same chain runs to the
+end and the child exists.
+
+**What the skip does NOT touch — and how to observe a probe.** Only the OBSERVABLE
+`WithInitialization` actions run on the init turn. The synchronous overload
+(`SyncBuildupActions`) runs inside `Build`, before message processing starts and therefore
+before any caller can `Dispose()` the hub — which is where content-type registration lives:
+`AddMeshDataSource` composes its `WithContentType` into `AddData`, whose
+`RegisterWorkspaceTypes` runs `DataContext.Initialize` synchronously and records the type in
+the mesh-wide `IMeshContentTypeRegistry`. So `ContentTypeRegistration.ProbeRegister`'s
+build-and-dispose shape registers every swept type whether or not its init turn ever runs;
+the skip removes only the born-dead control plane. Two consequences for tests: a test that
+needs to know a probe was swept must NOT take its signal from an observable init action
+(that action is legitimately skipped whenever `Dispose()` beats the init turn — the
+determinism `ContentTypeProbeControlPlaneTest` lost when this rule landed), it captures the
+probe's `DisposalCompleted` from a synchronous `WithInitialization` and waits on that; and an
+assertion that a probe wrote no fault line is complete once `DisposalCompleted` fires,
+because the `ShutdownRequest` is queued behind the init turn and the teardown has written
+whatever it writes by then.
+
 ## Adding disposal work — the rule
 
 - **Installing a WATCHER the hub owns?** `SubscribeHubWatcher(hub, …)`, then hand the
