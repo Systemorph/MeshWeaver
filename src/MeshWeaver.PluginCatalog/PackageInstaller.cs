@@ -143,20 +143,29 @@ public static class PackageInstaller
         // the permission fold correctly denies because the grants are simply not there yet.
         var ownAccess = nodes.Where(n => IsPartitionAccessSatellite(n.Path, partition)).ToArray();
         var content = nodes.Where(n => !IsPartitionAccessSatellite(n.Path, partition)).ToArray();
+        // Carried as (path, wrote) PAIRS, not counts: the recompile closure below needs WHICH nodes
+        // moved, and `Merge` does not preserve order, so a positional zip could not recover them.
         return EnsureInstallPartitions(hub, partition, logger)
             .SelectMany(_ => ownAccess
-                .Select(n => UpsertIfChanged(hub, persistence, n, options))
+                .Select(n => UpsertIfChanged(hub, persistence, n, options)
+                    .Select(wrote => (n.Path, Wrote: wrote)))
                 .ToObservable().Concat().ToList())
             .SelectMany(accessWrites => EnsureDeclaredAccess(
                     hub, manifest, partition, logger, nodes.Select(n => n.Path))
                 .Select(_ => accessWrites))
             .SelectMany(accessWrites => content
-                .Select(n => UpsertIfChanged(hub, persistence, n, options))
+                .Select(n => UpsertIfChanged(hub, persistence, n, options)
+                    .Select(wrote => (n.Path, Wrote: wrote)))
                 .ToObservable().Merge(batchSize).ToList()
-                .Select(contentWrites => (IList<bool>)accessWrites.Concat(contentWrites).ToList()))
+                .Select(contentWrites => (IReadOnlyList<(string Path, bool Wrote)>)
+                    accessWrites.Concat(contentWrites).ToArray()))
             .SelectMany(writes =>
             {
-                var result = new InstallResult(nodes.Length, writes.Count(w => w));
+                var written = writes.Where(w => w.Wrote).Select(w => w.Path).ToImmutableList();
+                var result = new InstallResult(nodes.Length, written.Count)
+                {
+                    WrittenPaths = written,
+                };
                 logger?.LogInformation(
                     "Installed package {Id} v{Version}: {Written} written, {Unchanged} unchanged into {Partition} @ {Ref}",
                     manifest.Id, manifest.Version, result.Written, result.Unchanged, partition, installedFromRef);
@@ -165,6 +174,13 @@ public static class PackageInstaller
                 // reported LOUDLY — an install that reports success while its partition is
                 // unreadable is exactly the failure this ordering exists to make impossible.
                 return VerifyDeclaredAccess(hub, manifest, partition, logger)
+                    // 🚨 A content package declares no NodeType of its own, so this path issued NO
+                    // release at all — yet the nodes it writes can be a type's COMPILE INPUTS (a
+                    // package that ships shared `Source/` for others to compile is exactly the
+                    // Store shape). The mesh-wide closure is the only thing that can see those
+                    // consumers; with nothing released locally, `alreadyReleased` is empty.
+                    .SelectMany(_ => ReleaseDependentsOutsidePackage(
+                        hub, written, Array.Empty<string>(), manifest.Id, logger))
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, authorizingUserId: authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, manifest, nodes, logger))
@@ -1223,7 +1239,7 @@ public static class PackageInstaller
             .FirstOrDefault(n => string.Equals(n.Path, root, StringComparison.Ordinal))?.NodeType;
         if (string.IsNullOrEmpty(declaredType))
             return null;
-        return nodes.Any(n => n.Content is NodeTypeDefinition
+        return nodes.Any(n => ImportWriteOrder.IsNodeTypeDefinition(n)
                 && string.Equals(n.Path, declaredType, StringComparison.OrdinalIgnoreCase))
             ? declaredType
             : null;
@@ -1968,17 +1984,25 @@ public static class PackageInstaller
 
         // NodeType first (so its Source nodes attach under a present type), then the Source nodes;
         // each is skipped when unchanged.
+        // 🚨 The write outcomes are carried as (path, wrote) PAIRS, not as a count: the recompile
+        // closure below needs to know WHICH nodes moved, and `Merge` does not preserve order, so a
+        // count (or a positional zip against sourceNodes) cannot be turned back into paths.
         return EnsureInstallPartitions(hub, partition, logger)
-            .SelectMany(_ => UpsertIfChanged(hub, persistence, nodeTypeNode, options))
-            .SelectMany(typeWritten => sourceNodes
-                .Select(n => UpsertIfChanged(hub, persistence, n, options))
+            .SelectMany(_ => UpsertIfChanged(hub, persistence, nodeTypeNode, options)
+                .Select(wrote => (nodeTypeNode.Path, Wrote: wrote)))
+            .SelectMany(typeWrite => sourceNodes
+                .Select(n => UpsertIfChanged(hub, persistence, n, options)
+                    .Select(wrote => (n.Path, Wrote: wrote)))
                 .ToObservable().Merge(batchSize).ToList()
-                .Select(srcWrites => typeWritten
-                    ? srcWrites.Count(w => w) + 1
-                    : srcWrites.Count(w => w)))
-            .SelectMany(written =>
+                .Select(srcWrites => (IReadOnlyList<(string Path, bool Wrote)>)
+                    new[] { typeWrite }.Concat(srcWrites).ToArray()))
+            .SelectMany(writes =>
             {
-                var result = new InstallResult(all.Length, written);
+                var written = writes.Where(w => w.Wrote).Select(w => w.Path).ToImmutableList();
+                var result = new InstallResult(all.Length, written.Count)
+                {
+                    WrittenPaths = written,
+                };
                 logger?.LogInformation(
                     "Installed code package {Id} v{Version}: {Written} written, {Unchanged} unchanged ({Path}) @ {Ref}",
                     manifest.Id, manifest.Version, result.Written, result.Unchanged, nodeTypePath, installedFromRef);
@@ -1986,10 +2010,18 @@ public static class PackageInstaller
                 // kick a redundant Roslyn build. SEQUENCED, never fire-and-forget: the observable is
                 // cold, so a bare call would request no release at all, and an install that cannot
                 // order against the compiles it starts is the defect #1732 is about.
-                var releases = written > 0
+                var releases = result.Written > 0
                     ? SeedThenRequestReleases(hub, [nodeTypePath], logger)
                     : Observable.Return(System.Reactive.Unit.Default);
                 return releases
+                    // 🚨 …and every NodeType OUTSIDE this package that compiles these sources into
+                    // its own assembly through `shared=@…`. `[nodeTypePath]` is this package's ONE
+                    // type — package-local by construction, and the reason a Store update used to
+                    // leave every consumer stale (2026-08-25).
+                    .SelectMany(_ => ReleaseDependentsOutsidePackage(
+                        hub, written,
+                        result.Written > 0 ? [nodeTypePath] : Array.Empty<string>(),
+                        manifest.Id, logger))
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, all.Length, authorizingUserId: authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, manifest, all, logger))
@@ -2271,7 +2303,17 @@ public static class PackageInstaller
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
-        var nodeTypePaths = nodes.Where(n => n.Content is NodeTypeDefinition).Select(n => n.Path).ToArray();
+        // 🚨 NEVER `n.Content is NodeTypeDefinition` — a pattern-match on an `object` payload is the
+        // trap-door: content that arrived as an untyped JsonElement (the polymorphic converter
+        // degrades an unresolvable `$type`; a hub without NodeTypeDefinition in its TypeRegistry
+        // hands back JSON) does not match, so this filter would select NOTHING and the install would
+        // issue no release at all — the 2026-08-25 Store outage reached silently, with no exception
+        // and nothing to grep. ImportWriteOrder.IsNodeTypeDefinition is the framework's own
+        // shape-tolerant predicate: the CLR test OR the cast-free `NodeType` meta-marker, which is
+        // exactly what survives the degradation. (A bare ContentAs<NodeTypeDefinition> would be
+        // WRONG here in the other direction — every member of that record is optional, so any JSON
+        // object deserializes into one and every plain content node would read as a type.)
+        var nodeTypePaths = nodes.Where(ImportWriteOrder.IsNodeTypeDefinition).Select(n => n.Path).ToArray();
 
         // Ordering solves two chicken-and-eggs at once:
         // (1) a NodeType's Source must land BEFORE the NodeType itself — creating the NodeType
@@ -2299,7 +2341,7 @@ public static class PackageInstaller
                 return 4;                                        // satellites after their owners
             if (!n.Path.Contains('/', StringComparison.Ordinal))
                 return 2;                                        // the root (written in stage 0/2)
-            if (n.Content is NodeTypeDefinition)
+            if (ImportWriteOrder.IsNodeTypeDefinition(n))
                 return 1;                                        // the types (after their Source)
             if (nodeTypePaths.Any(t =>
                     n.Path.StartsWith(t + "/Source/", StringComparison.Ordinal)
@@ -2511,7 +2553,9 @@ public static class PackageInstaller
         IObservable<System.Reactive.Unit> ValidateBulkTypes(IReadOnlyList<MeshNode> bulk)
         {
             var inPackage = nodeTypePaths
-                .Concat(root?.Content is NodeTypeDefinition ? new[] { root.Path } : Array.Empty<string>())
+                .Concat(root is not null && ImportWriteOrder.IsNodeTypeDefinition(root)
+                    ? new[] { root.Path }
+                    : Array.Empty<string>())
                 .ToImmutableHashSet(StringComparer.Ordinal);
             var unknown = bulk
                 .Select(n => n.NodeType)
@@ -2645,7 +2689,7 @@ public static class PackageInstaller
                 // barrier; a bulk-written type is committed when its batch responds. (These paths
                 // already exist, so the barrier passes on its first probe — no 100 ms tail.)
                 var requestTypePaths = requestStage1
-                    .Where(n => n.Content is NodeTypeDefinition).Select(n => n.Path).ToArray();
+                    .Where(ImportWriteOrder.IsNodeTypeDefinition).Select(n => n.Path).ToArray();
                 var allBulk = bulkSources.Concat(bulkTypes).Concat(bulkInstances).ToArray();
 
                 return ValidateBulkTypes(allBulk)
@@ -2786,6 +2830,12 @@ public static class PackageInstaller
                 var releases = result.Written > 0
                     ? SeedPrebuiltAssemblies(hub, nodeTypePaths, logger)
                     : Observable.Return(0);
+                // What the two waves below actually released — the input
+                // ReleaseDependentsOutsidePackage subtracts, so nothing is requested twice. When
+                // the install wrote nothing, the waves are skipped and this is EMPTY: a prune-only
+                // install must still have its (package-local as well as foreign) consumers derived
+                // from the closure rather than silently left out.
+                var locallyReleased = result.Written > 0 ? nodeTypePaths : Array.Empty<string>();
 
                 // The declared access was published as a PHASE before the first content node
                 // landed (see the note at that call site, #1758) — there is deliberately no second
@@ -2804,29 +2854,45 @@ public static class PackageInstaller
                     // moved, then recompiled against zero sources and parked the portal's readiness.
                     .SelectMany(_ => PruneRetiredNodes(
                         hub, manifest, moduleManifest, nodes, persistence, meshService, options, logger))
-                    .SelectMany(_ => WriteInstalledRecord(
-                        hub, manifest, installedFromRef, nodes.Length, moduleManifest, authorizingUserId))
+                    // The pruned paths are carried THROUGH the rest of the chain: together with
+                    // `written` they are the change set the mesh-wide recompile closure runs over
+                    // at the end (a retired Source/*.cs is exactly as stale-making for a foreign
+                    // `shared=` consumer as a rewritten one).
+                    .SelectMany(pruned => WriteInstalledRecord(
+                            hub, manifest, installedFromRef, nodes.Length, moduleManifest, authorizingUserId)
+                        .Select(_ => pruned))
                     // Adoption first (it can settle a release without compiling at all), then the
                     // FIRST wave: the root's own in-package NodeType, whose rebuild is precisely
                     // what SettleRetypedRoot waits for.
-                    .SelectMany(_ => releases)
-                    .SelectMany(_ => result.Written > 0
-                        ? RequestReleases(hub, firstWave, logger)
-                        : Observable.Return(System.Reactive.Unit.Default))
+                    .SelectMany(pruned => releases.Select(_ => pruned))
+                    .SelectMany(pruned => (result.Written > 0
+                            ? RequestReleases(hub, firstWave, logger)
+                            : Observable.Return(System.Reactive.Unit.Default))
+                        .Select(_ => pruned))
                     // The retyped root's recycle, moved here from the write stage and made ORDERED
                     // (see the note there). Only now can it do its job: the in-package type has had
                     // its rebuild, so the hub that comes back binds the package's own configuration
                     // instead of the fallback — and the install no longer returns while a teardown
                     // it started is still running.
-                    .SelectMany(_ => SettleRetypedRoot(hub, retypedRoot, nodes, logger))
+                    .SelectMany(pruned => SettleRetypedRoot(hub, retypedRoot, nodes, logger)
+                        .Select(_ => pruned))
                     // …and ONLY NOW the rest of the package's types. Their compiles read the root
                     // (ValidateCellSurfaceSingleHome → GetMeshNode('<packageRoot>') for every
                     // `shared=` consumer), so launching them before the recycle above pointed a
                     // whole package's compiles at a hub this very method was about to dispose
                     // (#1732).
-                    .SelectMany(_ => result.Written > 0
-                        ? RequestReleases(hub, deferredWave, logger)
-                        : Observable.Return(System.Reactive.Unit.Default))
+                    .SelectMany(pruned => (result.Written > 0
+                            ? RequestReleases(hub, deferredWave, logger)
+                            : Observable.Return(System.Reactive.Unit.Default))
+                        .Select(_ => pruned))
+                    // 🚨 …and FINALLY every NodeType OUTSIDE this package that compiles the files
+                    // this install just moved into its OWN assembly. The waves above can only ever
+                    // name types inside the package; a `shared=@{package}/…` consumer lives
+                    // elsewhere, and leaving it on the assembly it already had is the 2026-08-25
+                    // Store outage. LAST because those consumers are the DEPENDENTS — dependencies
+                    // (this package's own types) release first.
+                    .SelectMany(pruned => ReleaseDependentsOutsidePackage(
+                        hub, written.AddRange(pruned), locallyReleased, manifest.Id, logger))
                     .SelectMany(_ => WarmInstalledRoots(hub, manifest, nodes, logger))
                     // …then the package's committed binaries (course videos/posters) into the
                     // warmed root's content collection — the half of "publish" that merging used
@@ -2859,16 +2925,17 @@ public static class PackageInstaller
     /// node path is still produced by a currently-shipped file (the <c>X.json</c> → <c>X/index.json</c>
     /// layout-move case) is never a prune candidate. Bounded by construction to paths THIS package's
     /// own record previously listed — never a scan of the shared partition — so it can never touch
-    /// another package's content. No-ops (returns 0) when the package ships no <c>manifest.lock</c>
+    /// another package's content. Returns the paths it actually deleted — half of the change set the
+    /// recompile closure runs over. No-ops (returns empty) when the package ships no <c>manifest.lock</c>
     /// (no file-level baseline exists at all) or has no prior record with a file map.</para>
     /// </summary>
-    private static IObservable<int> PruneRetiredNodes(
+    private static IObservable<ImmutableList<string>> PruneRetiredNodes(
         IMessageHub hub, PackageManifest manifest, ModuleManifest? moduleManifest,
         IReadOnlyList<MeshNode> nodes, IStorageAdapter? persistence, IMeshService? meshService,
         JsonSerializerOptions options, ILogger? logger)
     {
         if (moduleManifest is null || persistence is null)
-            return Observable.Return(0);
+            return Observable.Return(ImmutableList<string>.Empty);
 
         var recordPath = $"{InstalledPartition}/{manifest.Id}";
         return persistence.Read(recordPath, options).Take(1)
@@ -2878,7 +2945,7 @@ public static class PackageInstaller
             .SelectMany(previousFiles =>
             {
                 if (previousFiles is not { Count: > 0 })
-                    return Observable.Return(0);
+                    return Observable.Return(ImmutableList<string>.Empty);
 
                 var currentNodePaths = nodes.Select(n => n.Path)
                     .ToImmutableHashSet(StringComparer.Ordinal);
@@ -2891,10 +2958,10 @@ public static class PackageInstaller
                 return PruneRemovedNodes(hub, meshService, persistence, removedNodePaths, options, logger)
                     .Do(pruned =>
                     {
-                        if (pruned > 0)
+                        if (pruned.Count > 0)
                             logger?.LogInformation(
                                 "[PackageInstaller] {Id}: pruned {Pruned} node(s) the repo no longer "
-                                + "ships (full install).", manifest.Id, pruned);
+                                + "ships (full install).", manifest.Id, pruned.Count);
                     });
             });
     }
@@ -2911,13 +2978,18 @@ public static class PackageInstaller
     /// <see cref="SyncBehavior.Include"/>) is the user's, not the repo's — the repo dropping its
     /// file revokes the PACKAGE's copy, never the user's claim. The same fence
     /// <see cref="UpsertIfChanged"/> applies on the write side.</para>
+    ///
+    /// <para>Returns the paths it ACTUALLY deleted — a claimed, absent or failed one is omitted.
+    /// The recompile closure runs over "what actually changed" (written ∪ pruned), so a candidate
+    /// that was never removed must not enter it: nothing about that node moved, and naming it would
+    /// recompile a package for a change that did not happen.</para>
     /// </summary>
-    private static IObservable<int> PruneRemovedNodes(
+    private static IObservable<ImmutableList<string>> PruneRemovedNodes(
         IMessageHub hub, IMeshService? meshService, IStorageAdapter? persistence,
         IReadOnlyCollection<string> removedNodePaths, JsonSerializerOptions options, ILogger? logger)
     {
         if (meshService is null || removedNodePaths.Count == 0)
-            return Observable.Return(0);
+            return Observable.Return(ImmutableList<string>.Empty);
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         return removedNodePaths
             .Select(path => (persistence is not null
@@ -2925,7 +2997,7 @@ public static class PackageInstaller
                     : Observable.Return<MeshNode?>(null))
                 .SelectMany(current =>
                     current is not null && current.SyncBehavior != SyncBehavior.Include
-                        ? Observable.Return(0)
+                        ? Observable.Return<string?>(null)
                         // Sealed at Subscribe (RunAsSystem), never Observable.Using(ImpersonateAsSystem):
                         // impersonation is an AsyncLocal store/restore pair, and Using disposes on the
                         // TERMINATING thread — for a cross-hub delete, the owning hub's response thread,
@@ -2933,13 +3005,14 @@ public static class PackageInstaller
                         // runs next on the subscribing thread (#1790).
                         : accessService.RunAsSystem(() => meshService.DeleteNode(path))
                             .Take(1)
-                            .Select(deleted => deleted ? 1 : 0))
-                .Catch<int, Exception>(ex =>
+                            .Select(deleted => deleted ? path : null))
+                .Catch<string?, Exception>(ex =>
                 {
                     logger?.LogWarning(ex, "Pruning removed node {Path} failed.", path);
-                    return Observable.Return(0);
+                    return Observable.Return<string?>(null);
                 }))
-            .ToObservable().Concat().Sum();
+            .ToObservable().Concat().ToList()
+            .Select(outcomes => outcomes.Where(p => p is not null).Select(p => p!).ToImmutableList());
     }
 
     /// <summary>
@@ -3007,7 +3080,9 @@ public static class PackageInstaller
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
-        var nodeTypePaths = nodes.Where(n => n.Content is NodeTypeDefinition).Select(n => n.Path).ToArray();
+        // Shape-tolerant, never `Content is NodeTypeDefinition` — see the note at the full install's
+        // own nodeTypePaths (InstallNodeRepo).
+        var nodeTypePaths = nodes.Where(ImportWriteOrder.IsNodeTypeDefinition).Select(n => n.Path).ToArray();
 
         // Same landing order as the full install: a changed type's compile inputs before the type,
         // types before instances, satellites last.
@@ -3015,7 +3090,7 @@ public static class PackageInstaller
         {
             if (n.Path.Split('/').Any(seg => seg.StartsWith('_')))
                 return 4;
-            if (n.Content is NodeTypeDefinition)
+            if (ImportWriteOrder.IsNodeTypeDefinition(n))
                 return 1;
             if (OwningTypePath(n.Path) is not null)
                 return 0;
@@ -3051,7 +3126,7 @@ public static class PackageInstaller
         // unattended (opted-in) auto-update safe. Only ever narrows the existing prune set:
         // removedNodePaths is already restricted to previously-installed paths, so a user-ADDED
         // node was never a prune candidate to begin with.
-        IObservable<int> Prune() =>
+        IObservable<ImmutableList<string>> Prune() =>
             PruneRemovedNodes(hub, meshService, persistence, removedNodePaths, options, logger);
 
         // 🚨 The declared access is re-asserted BEFORE the delta's writes, not after them (#1758).
@@ -3076,13 +3151,16 @@ public static class PackageInstaller
                     .Where(x => x.wrote)
                     .Select(x => x.node)
                     .ToArray();
-                var result = new InstallResult(nodes.Length, written.Length);
+                var result = new InstallResult(nodes.Length, written.Length)
+                {
+                    WrittenPaths = written.Select(n => n.Path).ToImmutableList(),
+                };
 
                 // Recompile exactly what the delta touched: a written NodeType node, and the OWNER
                 // of any written Source/Test node whose type node itself did not change. A pruned
                 // source's owner recompiles too (stale code must leave the assembly).
                 var releaseTargets = written
-                    .Select(n => n.Content is NodeTypeDefinition ? n.Path : OwningTypePath(n.Path))
+                    .Select(n => ImportWriteOrder.IsNodeTypeDefinition(n) ? n.Path : OwningTypePath(n.Path))
                     .Concat(removedNodePaths.Select(OwningTypePath))
                     .Where(p => p is not null).Select(p => p!)
                     .Distinct(StringComparer.Ordinal)
@@ -3091,7 +3169,7 @@ public static class PackageInstaller
                 logger?.LogInformation(
                     "Updated node-repo plugin {Id} incrementally: {Written} written, {Unchanged} unchanged, " +
                     "{Pruned} pruned, {Releases} recompile(s) @ {Ref} (module {ModuleVersion})",
-                    manifest.Id, result.Written, result.Unchanged, t.Pruned,
+                    manifest.Id, result.Written, result.Unchanged, t.Pruned.Count,
                     releaseTargets.Length, installedFromRef, newManifest.ModuleVersion);
 
                 // SEQUENCED, never fire-and-forget (the observable is cold — a bare call requests
@@ -3100,10 +3178,19 @@ public static class PackageInstaller
                 var releases = releaseTargets.Length > 0
                     ? SeedThenRequestReleases(hub, releaseTargets, logger)
                     : Observable.Return(System.Reactive.Unit.Default);
+                // 🚨 …then every NodeType OUTSIDE this package that compiles the changed files into
+                // its OWN assembly. `releaseTargets` above resolves a compile input to the prefix
+                // before /Source|/Test, so it is package-LOCAL by construction — a cross-package
+                // `shared=@{package}/…` consumer can never appear in it, and leaving it on the
+                // assembly it already had is the 2026-08-25 Store outage. The change set is what
+                // actually moved: the paths written, plus the paths actually deleted.
+                var changed = written.Select(n => n.Path).Concat(t.Pruned).ToArray();
                 // The declared access was re-asserted BEFORE the writes (see the note at that call
                 // site, #1758). What stays here is its POST-CONDITION — a read, never a second
                 // write pass, so nothing can re-derive a shape from nodes it just wrote.
                 return releases
+                    .SelectMany(_ => ReleaseDependentsOutsidePackage(
+                        hub, changed, releaseTargets, manifest.Id, logger))
                     .SelectMany(_ => VerifyDeclaredAccess(
                         hub, manifest, manifest.TargetPartition ?? manifest.Id, logger))
                     .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
@@ -3252,8 +3339,12 @@ public static class PackageInstaller
     /// <para>The authored element is written instead, and the OWNING hub — the one place the node's
     /// own NodeType is known — types it on read. Statically-registered content
     /// (<see cref="NodeTypeDefinition"/>, markdown, access assignments) is a real, process-unique
-    /// registration rather than a name guess, so it stays typed: the installer's own ordering and
-    /// compile-trigger logic reads <c>Content is NodeTypeDefinition</c>.</para>
+    /// registration rather than a name guess, so it stays typed. 🚨 The installer's ordering and
+    /// compile-trigger logic must nevertheless NOT depend on that: a NodeType file authored without
+    /// a <c>$type</c> on its content — and any content read where the discriminator does not
+    /// resolve — arrives as a raw <see cref="JsonElement"/>, and a <c>Content is
+    /// NodeTypeDefinition</c> test then silently answers "not a type". It reads
+    /// <c>ImportWriteOrder.IsNodeTypeDefinition</c> instead.</para>
     ///
     /// <para>🚨 #2266: the re-read here MUST tolerate exactly what the PRIMARY parse tolerated —
     /// <see cref="FileFormatParserRegistry.TryParse"/> already produced <paramref name="parsed"/>
@@ -3619,6 +3710,70 @@ public static class PackageInstaller
         => SeedPrebuiltAssemblies(hub, nodeTypePaths, logger)
             .SelectMany(_ => RequestReleases(hub, nodeTypePaths, logger));
 
+    /// <summary>
+    /// 🚨 <b>IF STORE UPDATES, ALL DEPENDENT PACKAGES UPDATE AS WELL.</b> Seeds and releases every
+    /// NodeType OUTSIDE this package that the install's own changed nodes made stale — the
+    /// mesh-wide recompile closure (<see cref="NodeTypeRecompileExtensions.AffectedNodeTypes"/>)
+    /// over <paramref name="changedNodePaths"/>, minus the <paramref name="alreadyReleased"/> types
+    /// the install released itself.
+    ///
+    /// <para><b>The defect this closes.</b> The installer used to derive its release targets from
+    /// the nodes it had just written — which can only ever name types INSIDE the installed package.
+    /// A type in ANOTHER package that pulls those files in through <c>shared=@{package}/…</c>
+    /// compiles their TEXT into its OWN assembly, so it is stale the instant they move, and nothing
+    /// told it. A Store update therefore rebuilt Store's own types and left every consumer running
+    /// the assembly it already had: two hubs on different compiles of the same sources, disagreeing
+    /// about the type registry, which reads as <c>$type … is not registered</c> and renders as an
+    /// empty view. That is the mechanism behind the 2026-08-25 Store outage — see
+    /// <c>Doc/Architecture/CompileProgramStateOfRecord</c>. The correct closure already existed and
+    /// the sync transaction already used it; the installer did not.</para>
+    ///
+    /// <para><b>Why this ADDS to the package-local set rather than replacing it.</b> Each half
+    /// covers what the other structurally cannot. The closure enumerates types from the query index,
+    /// which TRAILS the store — so a type this very install CREATED may not be listed yet, and the
+    /// installer must release those anyway (<c>SettleRetypedRoot</c> waits on the in-package type's
+    /// rebuild). The package-local set, in turn, can never see a cross-package consumer. Releasing a
+    /// type twice is not a cost worth taking a hole for: this call excludes what the caller already
+    /// released, so nothing is requested twice within one install.</para>
+    ///
+    /// <para><b>Ordering.</b> Dependencies before dependents — which is why this runs AFTER the
+    /// package's own releases: every changed path is inside the installed package, so a type
+    /// affected by one either IS a package type (a dependency, released already) or reaches those
+    /// files through <c>shared=</c> (a dependent). Within the extra set the closure's own
+    /// topological order is preserved. Seed before release, exactly as every other release site
+    /// here — adopt-before-compile is deliberate.</para>
+    ///
+    /// <para>Never faults: <c>AffectedNodeTypes</c> reports a derivation failure loudly and emits
+    /// empty, and <see cref="RequestReleases"/> absorbs a per-type refusal — an install must not be
+    /// failed by the recompile of a package it does not own.</para>
+    /// </summary>
+    /// <returns>A cold observable; Subscribe to derive, seed and release.</returns>
+    private static IObservable<System.Reactive.Unit> ReleaseDependentsOutsidePackage(
+        IMessageHub hub,
+        IReadOnlyCollection<string> changedNodePaths,
+        IReadOnlyCollection<string> alreadyReleased,
+        string packageId,
+        ILogger? logger)
+    {
+        if (changedNodePaths.Count == 0)
+            return Observable.Return(System.Reactive.Unit.Default);
+        var own = alreadyReleased.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        return hub.AffectedNodeTypes(changedNodePaths)
+            .Take(1)
+            .SelectMany(affected =>
+            {
+                var extra = affected.Where(p => !own.Contains(p)).ToArray();
+                if (extra.Length == 0)
+                    return Observable.Return(System.Reactive.Unit.Default);
+                logger?.LogInformation(
+                    "[PackageInstaller] {Id}: {Count} NodeType(s) OUTSIDE this package compile its "
+                    + "changed sources into their own assemblies (shared=@…) and are now stale — "
+                    + "recompiling them too: {Types}",
+                    packageId, extra.Length, string.Join(", ", extra));
+                return SeedThenRequestReleases(hub, extra, logger);
+            });
+    }
+
 }
 
 /// <summary>
@@ -3633,11 +3788,15 @@ public readonly record struct InstallResult(int Total, int Written)
     public int Unchanged => Total - Written;
 
     /// <summary>
-    /// The PATHS that were actually written, when the install path tracked them (the node-repo
-    /// flavor does; older flavors leave this empty). A re-install of an unchanged snapshot must
+    /// The PATHS that were actually written. A re-install of an unchanged snapshot must
     /// write nothing — when it does, a bare count is undiagnosable, and an unnamed regression is
     /// how the placeholder-root churn shipped: every gate run said "wrote 1 node" and nothing said
     /// WHICH. Named paths turn the idempotence pin's failure into the fix's first line.
+    ///
+    /// <para>Every install flavour tracks this now (node-repo, its incremental delta, and the
+    /// single Code package): together with the pruned paths it is the change set the mesh-wide
+    /// recompile closure runs over, which is what makes a dependent package rebuild when the
+    /// package it shares sources from updates. A count cannot answer that question.</para>
     /// </summary>
     public System.Collections.Immutable.ImmutableList<string> WrittenPaths { get; init; } =
         System.Collections.Immutable.ImmutableList<string>.Empty;

@@ -23,6 +23,16 @@ namespace MeshWeaver.Graph;
 /// as part of the sync transaction; the release requests are ISSUED within the transaction (the
 /// compiles themselves run on the per-type hubs' compile watchers, serialized on the Compile
 /// IoPool — an update must not block on Roslyn).</para>
+///
+/// <para>🚨 <b>Two entry points, one closure.</b> <see cref="AffectedNodeTypes"/> is the DERIVATION
+/// alone — enumerate mesh-wide, run <see cref="RecompileClosure"/>, order topologically — for a
+/// caller that owns its own seed/release sequencing (the package installer, whose retyped-root
+/// recycle sits BETWEEN two release waves). <see cref="ReleaseAffectedNodeTypes"/> is that
+/// derivation plus adopt-before-compile plus the release trigger. A caller that derives its targets
+/// from "the nodes I just wrote" instead of from this closure can only ever name types inside its
+/// own package, and that is precisely how a Store package update left every <c>shared=</c> consumer
+/// on the assembly it already had (2026-08-25; see
+/// <c>Doc/Architecture/CompileProgramStateOfRecord</c>).</para>
 /// </summary>
 public static class NodeTypeRecompileExtensions
 {
@@ -33,28 +43,42 @@ public static class NodeTypeRecompileExtensions
     private static readonly TimeSpan PrebuiltSeedBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>
-    /// Requests a release for every NodeType affected by <paramref name="changedNodePaths"/>
-    /// (written or pruned node paths). Emits the release-requested type paths, in dependency
-    /// order, exactly once; an empty change set emits an empty list without querying anything.
+    /// The mesh-wide recompile closure for <paramref name="changedNodePaths"/> — every NodeType
+    /// whose own node changed OR whose expanded <c>Sources</c>/<c>Tests</c> queries reach a changed
+    /// path, in dependency order (dependencies before dependents). Derivation ONLY: nothing is
+    /// seeded and no release is requested, so a caller that owns its own seed/release sequencing
+    /// (the package installer, whose root recycle sits BETWEEN two release waves) can use exactly
+    /// the same closure as <see cref="ReleaseAffectedNodeTypes"/>. An empty change set emits an
+    /// empty list without querying anything.
     ///
-    /// <para>Runs as SYSTEM end-to-end — the type enumeration spans every partition
-    /// (infrastructure, not a user-attributable read; mirrors <c>DynamicTypePreWarmer</c>), and the
-    /// release trigger is a node write on types the syncing user may not own, consistent with how
-    /// the update's own writes land. A derivation failure is surfaced LOUDLY on
-    /// <paramref name="progress"/> (an <see cref="LogLevel.Error"/> line — on an activity sink this
-    /// flips the terminal status) and emits empty rather than failing the caller: the content is
-    /// applied either way, and the operator must learn the assemblies were left stale.</para>
+    /// <para>🚨 <b>Mesh-wide is the point.</b> The set a change touches is NOT confined to the
+    /// package/space the change landed in: a type in ANOTHER package that pulls those files in
+    /// through <c>shared=@{package}/…</c> compiles their TEXT into its OWN assembly, so it is stale
+    /// the moment they move. Deriving release targets from "the nodes I just wrote" instead can
+    /// only ever name types inside the changed package — which is exactly how a Store update left
+    /// every consumer running the assembly it already had (2026-08-25; see
+    /// <c>Doc/Architecture/CompileProgramStateOfRecord</c>).</para>
+    ///
+    /// <para>The enumeration runs as SYSTEM — it spans every partition (infrastructure, not a
+    /// user-attributable read; mirrors <c>DynamicTypePreWarmer</c>). A derivation failure is
+    /// surfaced LOUDLY on <paramref name="progress"/> (an <see cref="LogLevel.Error"/> line — on an
+    /// activity sink this flips the terminal status) and emits empty rather than failing the
+    /// caller: the content is applied either way, and the operator must learn the assemblies were
+    /// left stale.</para>
     ///
     /// <para>Types are enumerated from the query index (<c>nodeType:NodeType</c>) — eventually
     /// consistent, which is correct for an UPDATE channel: the affected types existed before the
     /// update by definition. A type CREATED by the very same update needs no release — its first
-    /// activation compiles it fresh.</para>
+    /// activation compiles it fresh. A caller that must release just-created types anyway (the
+    /// installer does: its root recycle waits on the in-package type's rebuild) unions them in
+    /// itself rather than relying on the index having caught up.</para>
     /// </summary>
     /// <param name="hub">The hub the update runs on.</param>
     /// <param name="changedNodePaths">The node paths the update wrote or pruned.</param>
-    /// <param name="progress">Optional progress sink (an activity's <c>ctx.Log</c>): receives the
-    /// recompile set, per-type release failures, and derivation failures.</param>
-    public static IObservable<IReadOnlyList<string>> ReleaseAffectedNodeTypes(
+    /// <param name="progress">Optional progress sink (an activity's <c>ctx.Log</c>): receives
+    /// dependency-cycle and derivation failures.</param>
+    /// <returns>A cold observable of the affected type paths in dependency order; Subscribe to run.</returns>
+    public static IObservable<IReadOnlyList<string>> AffectedNodeTypes(
         this IMessageHub hub,
         IReadOnlyCollection<string> changedNodePaths,
         Action<string, LogLevel>? progress = null)
@@ -72,10 +96,11 @@ public static class NodeTypeRecompileExtensions
         // `AsSystem(x)` IS `x.ImpersonateAsSystem()`, so the helper only hides the shape: `Using`
         // opens the AsyncLocal on the SUBSCRIBING thread and disposes it on whichever thread the
         // query terminates, latching the subscriber — here a content-update pipeline that continues
-        // as the USER who pushed. Only the enumeration needs System; the release trigger below
-        // already opens its own synchronous `using (accessService?.ImpersonateAsSystem())` around
-        // the loop, and the prebuilt-adoption leg (ShippedPrebuiltBundles.SeedBundles) opens its
-        // own, so nothing downstream depends on this scope leaking past the query.
+        // as the USER who pushed. Only the enumeration needs System; the release trigger in
+        // ReleaseAffectedNodeTypes opens its own synchronous
+        // `using (accessService?.ImpersonateAsSystem())` around the loop, and the prebuilt-adoption
+        // leg (ShippedPrebuiltBundles.SeedBundles) opens its own, so nothing downstream depends on
+        // this scope leaking past the query.
         return accessService.RunAsSystem(
                 () => meshService
                     .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
@@ -106,8 +131,51 @@ public static class NodeTypeRecompileExtensions
                         $"⚠ Dependency cycle among NodeTypes: {cycleList} — recompiled in flush order, not dependency order.",
                         LogLevel.Warning);
                 }
-                return ordered;
+                return (IReadOnlyList<string>)ordered;
             })
+            .Catch<IReadOnlyList<string>, Exception>(ex =>
+            {
+                // LOUD, not fatal: the content landed; what failed is DERIVING the recompile set.
+                // The Error line flips an owning activity's terminal status, so the stale-assembly
+                // state is impossible to miss — while the update itself stands.
+                logger?.LogError(ex, "[Recompile] Deriving the recompile set failed.");
+                progress?.Invoke(
+                    $"Recompile derivation failed: {ex.Message} — affected NodeType assemblies are STALE until compiled manually.",
+                    LogLevel.Error);
+                return Observable.Return<IReadOnlyList<string>>([]);
+            });
+    }
+
+    /// <summary>
+    /// Requests a release for every NodeType affected by <paramref name="changedNodePaths"/>
+    /// (written or pruned node paths) — <see cref="AffectedNodeTypes"/> plus adopt-before-compile
+    /// and the release trigger. Emits the release-requested type paths, in dependency order,
+    /// exactly once; an empty change set emits an empty list without querying anything.
+    ///
+    /// <para>Runs as SYSTEM end-to-end — the enumeration for the reasons on
+    /// <see cref="AffectedNodeTypes"/>, and the release trigger because it is a node write on types
+    /// the syncing user may not own, consistent with how the update's own writes land. Never faults
+    /// the caller: a derivation or release failure is logged and reported on
+    /// <paramref name="progress"/> instead.</para>
+    /// </summary>
+    /// <param name="hub">The hub the update runs on.</param>
+    /// <param name="changedNodePaths">The node paths the update wrote or pruned.</param>
+    /// <param name="progress">Optional progress sink (an activity's <c>ctx.Log</c>): receives the
+    /// recompile set, per-type release failures, and derivation failures.</param>
+    public static IObservable<IReadOnlyList<string>> ReleaseAffectedNodeTypes(
+        this IMessageHub hub,
+        IReadOnlyCollection<string> changedNodePaths,
+        Action<string, LogLevel>? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        if (changedNodePaths.Count == 0)
+            return Observable.Return<IReadOnlyList<string>>([]);
+
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.NodeTypeRecompileExtensions");
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+
+        return hub.AffectedNodeTypes(changedNodePaths, progress)
             .SelectMany(ordered =>
             {
                 if (ordered.Count == 0)
@@ -168,15 +236,15 @@ public static class NodeTypeRecompileExtensions
                     return ordered;
                 });
             })
-            .Select(ordered => (IReadOnlyList<string>)ordered)
             .Catch<IReadOnlyList<string>, Exception>(ex =>
             {
-                // LOUD, not fatal: the content landed; what failed is deriving/issuing the
-                // recompiles. The Error line flips an owning activity's terminal status, so the
-                // stale-assembly state is impossible to miss — while the update itself stands.
-                logger?.LogError(ex, "[Recompile] Deriving the recompile set failed.");
+                // LOUD, not fatal: the content landed; what failed is ISSUING the recompiles
+                // (deriving them has its own Catch inside AffectedNodeTypes). The Error line flips
+                // an owning activity's terminal status, so the stale-assembly state is impossible
+                // to miss — while the update itself stands.
+                logger?.LogError(ex, "[Recompile] Issuing the recompile requests failed.");
                 progress?.Invoke(
-                    $"Recompile derivation failed: {ex.Message} — affected NodeType assemblies are STALE until compiled manually.",
+                    $"Recompile requests failed: {ex.Message} — affected NodeType assemblies are STALE until compiled manually.",
                     LogLevel.Error);
                 return Observable.Return<IReadOnlyList<string>>([]);
             });
