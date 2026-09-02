@@ -28,15 +28,16 @@ public MeshNodeStreamException(MeshNodeError error)
 So a log line has the shape `MeshNode {Code} at '{Path}': {Message}`, and **`Code` alone separates
 the two investigations.**
 
-## The three shapes, and what each one means
+## The four shapes, and what each one means
 
 | `Code` | Message shape | What actually happened | Where to look |
 |---|---|---|---|
 | `OwnerUnreachable` | `The owner of '…' returned no verdict for this update within Ns. The patch was posted and may still apply… Request trail: …` | The owner produced **no terminal at all**. The writer's late-response window expired. | The **owner's** activation: is it alive, mid-recycle, pinned dead? |
 | `Unknown` | `{ExceptionTypeName}: {message}` — e.g. `TimeoutException: The operation has timed out.` | The owner **answered**, with a NACK carrying its own internal exception. | The owner's **ack chain**: which of its two internal bounds expired. |
 | `AccessDenied` / `Deserialization` / `Validation` | `Access denied: …` / `Patch deserialization failed: …` / `Validation failed: …` | The owner answered with a classified application-level refusal. | The patch itself. |
+| `OwnerDisposing` | `the owner's stream ended before this patch's commit echo arrived — … the write's fate is UNKNOWN; safe to retry …` | The owner **answered**: the stream its ack watcher was on completed before the echo — mirror eviction while the hub lives. The writer auto-retries it (a re-enqueue re-diffs, so a merge that did commit is a no-op). | The owner's **stream lifetime** (`ReclaimIfUnheld`, `SynchronizationStream.Dispose`), not its bounds. |
 
-The last three rows all come from one classifier on the **owner**:
+Rows two and three come from one classifier on the **owner**:
 
 ```csharp
 // src/MeshWeaver.Data/DataExtensions.cs — ClassifyPatchException
@@ -61,24 +62,18 @@ watches for its own commit echo and then flushes durably — two bounded steps, 
 
 ```csharp
 // src/MeshWeaver.Data/DataExtensions.cs
-var postSub = stream
-    .Where(c => ChangeContainsStampedWrite(...))   // identity-based echo detection
-    .Take(1)
-    .Timeout(TimeSpan.FromSeconds(20))             // ① commit echo
-    .Subscribe(
-        committed =>
-        {
-            var flush = hub.ServiceProvider.GetService<IPostCommitFlush>();
-            if (flush is null) { AckOnce(true); return; }
-            var flushSub = flush.Flush(committed.Value!)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(10))  // ② durable flush
-                .Subscribe(_ => AckOnce(true),
-                           ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
-            hub.RegisterForDisposal(flushSub);
-        },
-        ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+var postSub = ArmPatchAckWatcher(
+    stream
+        .Where(c => ChangeContainsStampedWrite(...))   // identity-based echo detection
+        .Take(1)
+        .Timeout(TimeSpan.FromSeconds(20)),            // ① commit echo
+    committed => hub.ServiceProvider.GetService<IPostCommitFlush>()?.Flush(committed.Value!),
+    TimeSpan.FromSeconds(10),                          // ② durable flush
+    AckOnce, d => hub.RegisterForDisposal(d), hubPath);
 ```
+
+`ArmPatchAckWatcher` subscribes the echo with all three arms (see "The ack watcher's completion arm"
+below); the two bounds are unchanged.
 
 **Which one fired is readable from the elapsed time** between the user's action and the log line:
 
@@ -95,22 +90,47 @@ write-side twin of the read-side hazard in
 [Durable But Unreadable](/Doc/Architecture/DurableButUnreadable): the durable state and the
 reported outcome disagree, in opposite directions.
 
-## A known gap: the ack watcher has no completion arm
+## The ack watcher's completion arm (the gap closed by #3033)
 
-`postSub` above subscribes with **`onNext` and `onError` only**. If the filtered stream *completes
+`postSub` used to subscribe with **`onNext` and `onError` only**. If the filtered stream *completed
 without emitting* — which `SynchronizationStream.Dispose` does by calling `Store.OnCompleted()`, and
-which mirror eviction can do while the hub still lives — then `Take(1)` ends empty, the `Timeout` is
-cancelled, **neither arm runs, and no ack is ever posted**. The writer then waits out its full
-window and reports `OwnerUnreachable`.
+which mirror eviction can do while the hub still lives — then `Take(1)` ended empty, the `Timeout` was
+cancelled, **neither arm ran, and no ack was ever posted**. The writer then waited out its full
+window and reported `OwnerUnreachable` for a write the owner may already have committed. This was the
+exact defect fixed on the *writer* side by `RequireBaseState`
+([Write Verdict Totality](../WriteVerdictTotality)), one hub over; `RegisterOwnerDisposingNack` covered
+a *disposing hub*, not a stream that completes while the hub lives.
 
-This is the exact defect that was fixed on the *writer* side by giving a write with no base a
-verdict (`RequireBaseState`), and it is still open on the owner side. `RegisterOwnerDisposingNack`
-covers the case where the hub is disposing, but not a stream that completes while the hub lives.
+The watcher is now armed through one pure composition, `DataExtensions.ArmPatchAckWatcher`, built on
+the `WhenCompletesEmpty` operator — "run this callback if the source completes without ever having
+emitted" — so every path posts exactly one terminal:
 
-The fix shape is a completion arm guarded on "the commit echo was never observed" — it must **not**
-be a bare `AckOnce(false)` on completion, because `Take(1)` completes immediately after `onNext` on
-the *successful* path, while the inner flush is still in flight; latching a failure there would NACK
-writes that are about to succeed.
+| Path | Verdict |
+|---|---|
+| commit echo arrives, flush emits | `Success` — posted once, on the flush's emission |
+| **echo stream ends without the echo** | NACK `OwnerDisposing`, message `the owner's stream ended before this patch's commit echo arrived — … the write's fate is UNKNOWN; safe to retry …` |
+| flush ends without emitting | `Success` — `IPostCommitFlush.Flush` is contracted to complete empty for entity types it does not persist, so the in-memory commit is the durable state (the same verdict as when no hook is registered) |
+| either stream faults | NACK with `ClassifyPatchException`'s code (a timeout stays `Unknown` + `TimeoutException`) |
+
+Two things about that shape are load-bearing:
+
+- 🚨 **The completion arm is guarded on "no emission was ever observed".** A bare
+  `onCompleted => AckOnce(false)` would NACK every *successful* write: on the happy path `Take(1)`
+  emits the echo and completes immediately, while the inner flush is still in flight, and `AckOnce`
+  latches — the completion arm would win the race against the flush's later `AckOnce(true)`.
+  `WhenCompletesEmpty` fires only for a completion that no emission preceded.
+- **`OwnerDisposing`, not `OwnerUnreachable` and not a new code.** A stream ending under a live patch
+  *is* the owner's stream going away, which is what the code means; it is the code the writer
+  auto-retries (bounded — `MaxOwnerDisposingReenqueues`), and a re-enqueue re-runs the update lambda
+  against the **fresh** state and re-diffs, so a merge that did commit before the stream ended becomes a
+  no-op. "Fate unknown, safe to retry" is the honest verdict — and because the timeout verdict stays
+  `Unknown`, the two are separable by `Code`.
+
+The generic deferred path (`ApplyJsonMergePatchAndUpdate`, non-MeshNode data hubs) had the same gap
+twice over — its initial `stream.Take(1)` read had *neither* an error nor a completion arm, and its
+`Skip(1).Take(1)` echo watcher had no completion arm — and is closed by the same two seams. An empty
+initial read NACKs `OwnerDisposing` with `the patch was NOT applied` (there the write provably never
+ran).
 
 ## Procedure
 
