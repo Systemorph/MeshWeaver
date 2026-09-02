@@ -8,7 +8,8 @@ namespace MeshWeaver.Graph.Configuration;
 /// <summary>
 /// The <c>UiContribution</c> node type — a MENU ENTRY contributed as mesh DATA (design #1645, the
 /// WS7 composition-first lane). A contribution adds an entry to one of the shell's menu contexts
-/// (<c>Node</c>, <c>Mesh</c>, <c>Settings</c>, <c>AiMenu</c>, <c>SidePanel</c>) pointing at a
+/// (<c>Node</c>, <c>Mesh</c>, <c>Settings</c> — the GLOBAL settings page, <c>NodeSettings</c> —
+/// the PER-NODE settings page, <c>TopBar</c>, <c>AI</c>) pointing at a
 /// layout AREA the contributing plugin already ships — rendering stays the existing layout
 /// pipeline; contributions never introduce a render surface.
 ///
@@ -60,8 +61,33 @@ public record UiContribution
     public const string NodeContext = "Node";
     /// <summary>The <c>Mesh</c> menu context — mesh-level operations (Create/Import/Export).</summary>
     public const string MeshContext = "Mesh";
-    /// <summary>The global settings tabs context.</summary>
+    /// <summary>
+    /// The GLOBAL settings tabs context (<c>/_Setting/GlobalSettings/{Id}</c>) — node-independent,
+    /// platform-wide tabs. Projects into <c>GlobalSettingsMenuItemDefinition</c>.
+    /// </summary>
     public const string SettingsContext = "Settings";
+
+    /// <summary>
+    /// The PER-NODE settings tabs context (<c>/{nodePath}/Settings/{Id}</c>) — tabs anchored on
+    /// the node whose settings page is open. Projects into <c>SettingsMenuItemDefinition</c>.
+    ///
+    /// <para><b>Why a SECOND key rather than reusing <see cref="SettingsContext"/>.</b> The two
+    /// surfaces are different pages with different definition types, different routes and
+    /// different content-builder signatures (the per-node builder receives the anchoring
+    /// <see cref="MeshNode"/>; the global one has no node at all). One shared key would make every
+    /// contribution appear on BOTH — the seven platform tabs already seeded for the global surface
+    /// (What's New, About, Privacy, Invitations, Inbox, Updates, Published) would suddenly list on
+    /// every node's settings page, which is a visible regression rather than a migration. Two keys
+    /// also make the surfaces independently gateable, which is the property the whole
+    /// contribution lane exists for: a plugin decides which page its tab belongs on. A tab that
+    /// genuinely belongs on both is two contributions, and says so.</para>
+    ///
+    /// <para>The per-node lane is additionally the only one that carries
+    /// <see cref="UiContribution.Keywords"/> and <see cref="UiContribution.RequiredPermission"/>
+    /// through to the rendered tab — the per-node settings page has a search box and a node to
+    /// bind permissions to; the global page has neither.</para>
+    /// </summary>
+    public const string NodeSettingsContext = "NodeSettings";
 
     /// <summary>
     /// The top-bar MENU-DECLARATION context: a contribution here declares a whole NEW top-bar
@@ -74,8 +100,13 @@ public record UiContribution
     public const string TopBarContext = "TopBar";
 
     /// <summary>
-    /// Which menu the entry contributes to: <c>Node</c>, <c>Mesh</c>, <c>Settings</c>,
-    /// <c>AiMenu</c> or <c>SidePanel</c>. Unset ⇒ <c>Node</c>.
+    /// Which menu the entry contributes to: <c>Node</c>, <c>Mesh</c>, <c>Settings</c> (the GLOBAL
+    /// settings page), <c>NodeSettings</c> (the PER-NODE settings page), <c>TopBar</c>, <c>AI</c>
+    /// or any key a <c>TopBar</c> declaration introduces. Unset ⇒ <c>Node</c>.
+    ///
+    /// <para>🚨 A context nobody consumes renders NOWHERE — no error, no warning, not even an
+    /// area-not-found placeholder. <see cref="UiContributionSeedValidation"/> is the static check
+    /// that catches a mistyped or retired context before it ships dark.</para>
     /// </summary>
     public string? Context { get; init; }
 
@@ -125,6 +156,24 @@ public record UiContribution
     public string? GroupIcon { get; init; }
 
     /// <summary>
+    /// Extra SEARCH terms describing the fields/content INSIDE the contributed tab — the data
+    /// equivalent of <c>SettingsMenuItemDefinition.Keywords</c>, and the reason a migrating tab
+    /// does not silently vanish from settings search. The per-node settings page matches a query
+    /// against Label, Group AND these terms, so a viewer finds a setting by what is in it, not
+    /// only by the section's name (<c>PartitionSyncAdminLayoutArea</c> ships fifteen: "partitions",
+    /// "sync source", "decouple", "delete space", …).
+    ///
+    /// <para>Consumed by <see cref="NodeSettingsContext"/> only — the global settings page has no
+    /// search box and <c>GlobalSettingsMenuItemDefinition</c> has no keyword slot; declaring them
+    /// on a <see cref="SettingsContext"/> contribution is harmless but inert.</para>
+    ///
+    /// <para>These are user-VISIBLE search terms: a contribution serving a localized portal
+    /// should list the terms of the languages it serves, since there is no per-key translation
+    /// lane for a free-text search vocabulary (the same shape the compiled tabs use).</para>
+    /// </summary>
+    public ImmutableList<string>? Keywords { get; init; }
+
+    /// <summary>
     /// The permission the VIEWER must hold on the node for the entry to appear — enforced by the
     /// compiled aggregator against the live effective-permission stream (never trusted from
     /// data alone). Unset ⇒ <see cref="Permission.Read"/>; contributions can never demand less
@@ -155,4 +204,30 @@ public record UiContributionGates
 
     /// <summary>Only for platform admins (<c>hub.IsGlobalAdmin()</c> — the ONE admin predicate).</summary>
     public bool AdminOnly { get; init; }
+
+    /// <summary>
+    /// Only on nodes still PARTICIPATING in static-repo synchronization — <see
+    /// cref="MeshNode.SyncBehavior"/> is <see cref="SyncBehavior.Include"/>. The gate the
+    /// "Stop synchronization" entry needs (design #1645): once a viewer has claimed a node
+    /// (<see cref="SyncBehavior.ExcludeThisOnly"/> / <see cref="SyncBehavior.ExcludeThisAndChildren"/>)
+    /// there is nothing left to stop.
+    ///
+    /// <para>Narrowing only, like every gate here. The INVERSE ("only on claimed nodes", which the
+    /// compiled "Resume synchronization" branch renders) is deliberately NOT in the vocabulary —
+    /// a second gate word is a separate decision, and the vocabulary stays closed.</para>
+    /// </summary>
+    public bool SyncedOnly { get; init; }
+
+    /// <summary>
+    /// Never on the VIEWER'S OWN home — the node whose path is the viewer's own partition key.
+    /// The same predicate <c>PinLayoutArea</c> and <c>PresentationLayoutArea</c> already apply
+    /// ("you do not pin yourself to yourself"; "hiding your own home empties the page you are
+    /// reading"), and the gate the Edit/Move/Copy/Delete defaults need when they migrate.
+    ///
+    /// <para>Strictly narrower than <see cref="ExcludePartitionRoot"/>, and NOT a replacement for
+    /// it: <c>ExcludePartitionRoot</c> suppresses on ANY user's home (so an admin browsing someone
+    /// else's home still cannot Delete it from the menu), while this one suppresses only on the
+    /// viewer's own. Declare both when both apply.</para>
+    /// </summary>
+    public bool ExcludeViewerHome { get; init; }
 }

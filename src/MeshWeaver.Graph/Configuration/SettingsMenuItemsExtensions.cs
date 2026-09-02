@@ -1,9 +1,11 @@
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
+using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -69,12 +71,20 @@ public static class SettingsMenuItemsExtensions
             RenderingContext ctx)
     {
         var collection = config.Get<SettingsMenuProviderCollection>();
-        if (collection == null || collection.Providers.Count == 0)
-            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
+        var providerDelegates = collection?.Providers ?? (IReadOnlyList<SettingsMenuItemProvider>)[];
 
-        var streams = collection.Providers.Select(provider =>
+        var streams = providerDelegates.Select(provider =>
             // Skip failing providers so one broken tab can't crash all settings.
             provider(host, ctx).Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(
+                _ => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([])))
+            .ToList();
+
+        // Data-contributed tabs (UiContribution nodes with Context = NodeSettings, design #1645):
+        // the per-node twin of GlobalSettingsMenuItemsExtensions.ContributedSettingsTabs. This lane
+        // is added UNCONDITIONALLY — a mesh with zero compiled providers still renders its
+        // contributed tabs, which is the point of the fallback the compiled defaults shrink to.
+        streams.Add(ContributedSettingsTabs(host)
+            .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(
                 _ => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([])));
 
         return Observable.CombineLatest(streams)
@@ -87,6 +97,57 @@ public static class SettingsMenuItemsExtensions
                 items.Sort((a, b) => a.Order.CompareTo(b.Order));
                 return (IReadOnlyList<SettingsMenuItemDefinition>)items;
             });
+    }
+
+    /// <summary>
+    /// The DATA-contributed PER-NODE settings tabs: every <see cref="UiContribution"/> in the
+    /// shared mesh-scoped catalog declaring <see cref="UiContribution.NodeSettingsContext"/>,
+    /// projected through the closed gate vocabulary in compiled code (#3055). The twin of
+    /// <c>GlobalSettingsMenuItemsExtensions.ContributedSettingsTabs</c>; the differences are the
+    /// ones the surface forces:
+    ///
+    /// <para>🚨 <b>Permission is NOT applied here.</b> The projection stamps
+    /// <see cref="SettingsMenuItemDefinition.RequiredPermission"/> (floored at
+    /// <see cref="Permission.Read"/>) and <see cref="FilterByPermission"/> applies it at the render
+    /// fold against the LATEST permission value — see <see cref="ObserveSettingsMenuItems"/> for
+    /// why a permission snapshot must never be baked into this stream (#1962).</para>
+    ///
+    /// <para>Fails CLOSED for an anonymous or virtual viewer, the same way the node menu forces
+    /// <see cref="Permission.None"/> for one: a settings page is an authoring surface, and a
+    /// public-read node must not hand a logged-out visitor its contributed tabs.</para>
+    ///
+    /// <para>The node-shape gates need the anchoring node, so the projection is combined with the
+    /// live own-node stream — which also makes a contributed tab appear/disappear the moment the
+    /// node's shape changes (a claim flipping <c>SyncBehavior</c>, say), with no reload.</para>
+    /// </summary>
+    private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>>
+        ContributedSettingsTabs(LayoutAreaHost host)
+    {
+        var catalog = host.Hub.ServiceProvider.GetService<UiContributionCatalog>();
+        if (catalog is null)
+            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
+
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var viewer = accessService?.Context ?? accessService?.CircuitContext;
+        var isAuthenticated = !string.IsNullOrEmpty(viewer?.ObjectId) && viewer?.IsVirtual != true;
+        if (!isAuthenticated)
+            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
+
+        var viewerId = accessService.ViewerId();
+        var menuPath = host.Hub.Address.ToString();
+
+        // Deferred so a hub without a MeshDataSource — where GetMeshNodeStream() throws
+        // SYNCHRONOUSLY — surfaces as OnError into the caller's Catch rather than as a throw out
+        // of the aggregator, taking every other settings tab with it.
+        return Observable.Defer(() =>
+        {
+            var ownNode = host.Workspace.GetMeshNodeStream()
+                .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!));
+            return catalog.Contributions
+                .CombineLatest(ownNode, host.Hub.IsGlobalAdmin().StartWith(false),
+                    (contributions, node, isAdmin) => UiContributionProjection
+                        .ProjectNodeSettingsTabs(contributions, menuPath, node, isAdmin, viewerId));
+        });
     }
 
     /// <summary>

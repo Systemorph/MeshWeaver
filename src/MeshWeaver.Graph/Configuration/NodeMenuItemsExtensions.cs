@@ -520,8 +520,9 @@ public static class NodeMenuItemsExtensions
     /// gate vocabulary — the viewer's live effective permission (floored at Read; anonymous is
     /// already forced to <see cref="Permission.None"/> by <see cref="GetMenuContext"/>, so the
     /// whole slice fails closed), <c>AdminOnly</c> against the reactive
-    /// <c>IsGlobalAdmin</c> stream, <c>ExcludePartitionRoot</c> against the same predicate the
-    /// built-in suppression uses, and suffix-aware <c>NodeTypes</c> matching. Enforcement lives
+    /// <c>IsGlobalAdmin</c> stream, <c>ExcludePartitionRoot</c> and <c>ExcludeViewerHome</c>
+    /// against the same predicates the built-in suppressions use, <c>SyncedOnly</c> against the
+    /// node's <c>SyncBehavior</c>, and suffix-aware <c>NodeTypes</c> matching. Enforcement lives
     /// HERE, in compiled code — a contribution can only ever narrow its own visibility (#1645).
     /// </summary>
     private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> ContributionStream(
@@ -532,10 +533,15 @@ public static class NodeMenuItemsExtensions
             return Observable.Return(EmptyItems);
 
         var adminStream = host.Hub.IsGlobalAdmin().StartWith(false);
+        // The viewer's own partition key, for the ExcludeViewerHome gate. Captured on the render
+        // turn — the same rule ViewerId() itself states, and the same value PinLayoutArea and
+        // PresentationLayoutArea already read here.
+        var viewerId = host.Hub.ServiceProvider.GetService<AccessService>().ViewerId();
         return catalog.Contributions
             .CombineLatest(GetMenuContext(host), adminStream,
                 (contributions, menuCtx, isAdmin) => UiContributionProjection.ProjectMenu(
-                    contributions, context, menuCtx.menuPath, menuCtx.menuNode, menuCtx.perms, isAdmin));
+                    contributions, context, menuCtx.menuPath, menuCtx.menuNode, menuCtx.perms,
+                    isAdmin, viewerId));
     }
 
     /// <summary>
