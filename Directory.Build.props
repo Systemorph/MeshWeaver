@@ -211,7 +211,33 @@
        below). The runtime still shows the run-numbered version: the container publish injects
        $(Version) as the MESHWEAVER_PLATFORM_VERSION environment variable (see
        Memex.Portal.Distributed.csproj), which rides the image CONFIG, not the assemblies.
-       A direct -p:Version=… still overrides everything (escape hatch). -->
+       🚨 A direct -p:Version=… overrides the PUBLISHABLE string and NOTHING ELSE (#3022). It used
+       to disable this WHOLE PropertyGroup — including the three compiled attributes below — and
+       that turned the escape hatch into a silent violation of the rule stated two lines up. CD
+       passes -p:Version= to the portal publish (so the image reports its own build, #2555), and
+       from the moment that landed (2026-09-01) every core assembly inside memex-portal-ai carried
+       AssemblyInformationalVersion `3.0.0-rc9.ci.<run>+<sha>` while the same assembly inside
+       mw-plugin-test — published from the same commit WITHOUT -p:Version= — carried
+       `3.0.0-rc9+<sha>`. A compiled attribute is part of the reference assembly, so ALL 25 shared
+       canonical surface hashes differed, the two images resolved different framework identities,
+       and every CD bake was published to an address no portal asks for: INERT, exactly #1814's
+       shape. See Doc/Architecture/BakeIdentityMismatch. The split below is what makes the rule
+       above true: the publishable string is guarded, the compiled attributes never are. -->
+  <!-- Pure functions of $(PlatformVersion). OUTSIDE the guard below, because the COMPILED
+       attributes derive from them and must not vary with whether a caller supplied -p:Version=. -->
+  <PropertyGroup>
+    <!-- Numeric version core: PlatformVersion with the -rc label stripped (3.0.0-rc1 → 3.0.0). -->
+    <_VersionDash>$(PlatformVersion.IndexOf('-'))</_VersionDash>
+    <_VersionNumeric Condition="'$(_VersionDash)' == '-1'">$(PlatformVersion)</_VersionNumeric>
+    <_VersionNumeric Condition="'$(_VersionDash)' != '-1'">$(PlatformVersion.Substring(0, $(_VersionDash)))</_VersionNumeric>
+    <!-- Pre-release separator for the .ci.N suffix: already a pre-release (3.0.0-rc1) → '.ci.N';
+         a clean release core (3.0.0) → start a pre-release with '-ci.N'. Both are valid SemVer. -->
+    <_CiSep Condition="'$(_VersionDash)' == '-1'">-</_CiSep>
+    <_CiSep Condition="'$(_VersionDash)' != '-1'">.</_CiSep>
+  </PropertyGroup>
+  <!-- THE PUBLISHABLE STRING — NuGet package version, Docker image tag, and the
+       MESHWEAVER_PLATFORM_VERSION a running portal reports. This group, and only this group, is
+       what -p:Version= replaces. -->
   <PropertyGroup Condition="'$(Version)' == ''">
     <!-- Fallback build number for the .ci.N suffix when CIRun is set OFF GitHub Actions (no
          $(GITHUB_RUN_NUMBER)): seconds-since-midnight / 2 (~2s granularity) so such packages are
@@ -231,16 +257,19 @@
     <_CiBuildNumber Condition="'$(CIRun)' == 'true' and '$(GITHUB_RUN_NUMBER)' != ''">$(GITHUB_RUN_NUMBER)</_CiBuildNumber>
     <_CiBuildNumber Condition="'$(CIRun)' == 'true' and '$(GITHUB_RUN_NUMBER)' == ''">$(_BuildNumber)</_CiBuildNumber>
     <_CiBuildNumber Condition="'$(CIRun)' != 'true'">0</_CiBuildNumber>
-    <!-- Numeric version core: PlatformVersion with the -rc label stripped (3.0.0-rc1 → 3.0.0). -->
-    <_VersionDash>$(PlatformVersion.IndexOf('-'))</_VersionDash>
-    <_VersionNumeric Condition="'$(_VersionDash)' == '-1'">$(PlatformVersion)</_VersionNumeric>
-    <_VersionNumeric Condition="'$(_VersionDash)' != '-1'">$(PlatformVersion.Substring(0, $(_VersionDash)))</_VersionNumeric>
-    <!-- Pre-release separator for the .ci.N suffix: already a pre-release (3.0.0-rc1) → '.ci.N';
-         a clean release core (3.0.0) → start a pre-release with '-ci.N'. Both are valid SemVer. -->
-    <_CiSep Condition="'$(_VersionDash)' == '-1'">-</_CiSep>
-    <_CiSep Condition="'$(_VersionDash)' != '-1'">.</_CiSep>
     <Version Condition="'$(PublicRelease)' == 'true'">$(PlatformVersion)</Version>
     <Version Condition="'$(PublicRelease)' != 'true'">$(PlatformVersion)$(_CiSep)ci.$(_CiBuildNumber)</Version>
+  </PropertyGroup>
+  <!-- 🚨 THE COMPILED VERSION ATTRIBUTES — UNCONDITIONAL, and deliberately so (#3022). These end
+       up inside every emitted assembly (and therefore inside its REFERENCE assembly, which is what
+       meshweaver-surface.manifest hashes), so they are inputs to the framework build identity a
+       bake is published under. They must be a function of the COMMIT — $(PlatformVersion) plus the
+       SDK's +$(SourceRevisionId) — and of nothing else, or two publishes of one commit fork the
+       identity and the bake goes inert. A caller who genuinely needs a different assembly version
+       passes -p:AssemblyVersion= / -p:FileVersion= / -p:InformationalVersion=: a global property
+       still wins here, but it now has to be asked for by name instead of arriving as a side effect
+       of -p:Version=. -->
+  <PropertyGroup>
     <!-- 🚨 CIRun compiles NOTHING per-build into InformationalVersion — commit-determinism IS the
          point (issue #1660 WS3, the fix the memex-bake retirement #1347 demanded). The property is
          the bare $(PlatformVersion); the SDK's AddSourceRevisionToInformationalVersion target then
