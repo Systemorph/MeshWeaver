@@ -35,7 +35,8 @@ the two investigations.**
 | `OwnerUnreachable` | `The owner of '…' returned no verdict for this update within Ns. The patch was posted and may still apply… Request trail: …` | The owner produced **no terminal at all**. The writer's late-response window expired. | The **owner's** activation: is it alive, mid-recycle, pinned dead? |
 | `Unknown` | `{ExceptionTypeName}: {message}` — e.g. `TimeoutException: The operation has timed out.` | The owner **answered**, with a NACK carrying its own internal exception. | The owner's **ack chain**: which of its two internal bounds expired. |
 | `AccessDenied` / `Deserialization` / `Validation` | `Access denied: …` / `Patch deserialization failed: …` / `Validation failed: …` | The owner answered with a classified application-level refusal. | The patch itself. |
-| `OwnerDisposing` | `the owner's stream ended before this patch's commit echo arrived — … the write's fate is UNKNOWN; safe to retry …` | The owner **answered**: the stream its ack watcher was on completed before the echo — mirror eviction while the hub lives. The writer auto-retries it (a re-enqueue re-diffs, so a merge that did commit is a no-op). | The owner's **stream lifetime** (`ReclaimIfUnheld`, `SynchronizationStream.Dispose`), not its bounds. |
+| `OwnerDisposing` | `the owner's stream ended before this patch's commit echo arrived — … the write's fate is UNKNOWN; safe to retry …` | The owner **answered**: the stream its ack watcher was on completed before the echo — mirror eviction **while the hub lives**. The writer auto-retries it (a re-enqueue re-diffs, so a merge that did commit is a no-op). | The owner's **stream lifetime** (`ReclaimIfUnheld`, `SynchronizationStream.Dispose`), not its bounds. |
+| `OwnerDisposing` | `owner activation disposing before the merge turn ran — the patch was NOT applied; safe to retry against the fresh activation` | The owner **answered from its ShutDown phase**: the patch was in flight when the owner hub tore down. This is the disposal NACK (`RegisterOwnerDisposingNack`), handed to the armed late watch directly; the writer's re-enqueue lands on the fresh activation. | The owner's **teardown** (`HubDisposalModel`): why did the activation go down under a live patch? |
 
 Rows two and three come from one classifier on the **owner**:
 
@@ -108,11 +109,12 @@ emitted" — so every path posts exactly one terminal:
 | Path | Verdict |
 |---|---|
 | commit echo arrives, flush emits | `Success` — posted once, on the flush's emission |
-| **echo stream ends without the echo** | NACK `OwnerDisposing`, message `the owner's stream ended before this patch's commit echo arrived — … the write's fate is UNKNOWN; safe to retry …` |
+| **echo stream ends without the echo, owner alive** | NACK `OwnerDisposing`, message `the owner's stream ended before this patch's commit echo arrived — … the write's fate is UNKNOWN; safe to retry …` |
+| **echo stream ends without the echo, owner shutting down** (`hub.IsShuttingDown`) | **nothing from the watcher** — the ShutDown-phase disposal NACK (`RegisterOwnerDisposingNack`) is the verdict; see the third point below |
 | flush ends without emitting | `Success` — `IPostCommitFlush.Flush` is contracted to complete empty for entity types it does not persist, so the in-memory commit is the durable state (the same verdict as when no hook is registered) |
 | either stream faults | NACK with `ClassifyPatchException`'s code (a timeout stays `Unknown` + `TimeoutException`) |
 
-Two things about that shape are load-bearing:
+Three things about that shape are load-bearing:
 
 - 🚨 **The completion arm is guarded on "no emission was ever observed".** A bare
   `onCompleted => AckOnce(false)` would NACK every *successful* write: on the happy path `Take(1)`
@@ -125,6 +127,21 @@ Two things about that shape are load-bearing:
   against the **fresh** state and re-diffs, so a merge that did commit before the stream ended becomes a
   no-op. "Fate unknown, safe to retry" is the honest verdict — and because the timeout verdict stays
   `Unknown`, the two are separable by `Code`.
+- 🚨 **The completion arm stands aside when the OWNER is shutting down** (`hub.IsShuttingDown`, passed
+  to `ArmPatchAckWatcher` as `ownerIsShuttingDown`). An owner hub's teardown completes the very same
+  stream — its sync hub disposes in the `DisposeHostedHubs` phase and `Store.OnCompleted()`s — but that
+  completion is not the eviction case, and answering it from the watcher broke both teardown-NACK tests
+  on 2026-09-02 (`LateNackReenqueueTest`, `NackReachesTheWaiterDuringTeardownTest`). Two defects in one
+  claim of the once-only ack gate: **one phase too early** — a hosted hub leaves its parent's registry
+  only in its ShutDown phase ([Hub Disposal Model](../HubDisposalModel)), so a "safe to retry against
+  the fresh activation" minted at DisposeHostedHubs sent the writer's immediate re-enqueue into the
+  *dying* activation, which rejected it `ShuttingDown`, and the write failed `Unknown`; and **the wrong
+  transport** — `hub.Post` from a hub past Quiescing is dropped under a whole-mesh teardown, and with
+  the gate already claimed the disposal registrant's direct `ILatePatchVerdictSink.Dispatch` (the one
+  route that still reaches the armed waiter) was skipped, so the caller burned its whole verdict budget
+  in silence (#2778's shape again). The ShutDown-phase `RegisterOwnerDisposingNack` — registered on the
+  same hub, total for a disposing hub — therefore owns the verdict for a patch in flight at owner
+  teardown, and the watcher's arm fires only while the owner lives.
 
 The generic deferred path (`ApplyJsonMergePatchAndUpdate`, non-MeshNode data hubs) had the same gap
 twice over — its initial `stream.Take(1)` read had *neither* an error nor a completion arm, and its
