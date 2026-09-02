@@ -3297,8 +3297,24 @@ internal static class NodeTypeCompilationHelpers
                         // contract; DefaultIfEmpty makes the write unconditional even if that
                         // contract is ever violated.
                         .DefaultIfEmpty()
-                        .Subscribe(newReleasePath =>
+                        // 🚨 THE POST-CONDITION (#781), checked where the compile SETTLES — the one
+                        // moment at which "does a release name the build this node is about to
+                        // advertise?" is answerable from facts all in hand. A consumed request whose
+                        // release did not land leaves LatestReleasePath on the PREVIOUS build and
+                        // nothing ever revisits it: status Ok, sources current, an assembly built, a
+                        // release path present — and every instance binding yesterday's bytes. The
+                        // remedy re-cuts from the bytes this compile just produced (no recompile,
+                        // under System) and is loud either way. Also totality-safe: exactly one
+                        // emission, never a fault.
+                        .SelectMany(newReleasePath => ok
+                            ? ReleasePostCondition.Restore(
+                                hub, hubPath, outcome.Result!, outcome.PendingNode,
+                                resolvedActivityPath, newReleasePath, logger)
+                            : Observable.Return<(string? ReleasePath, string? Diagnosis)>(
+                                (newReleasePath, null)))
+                        .Subscribe(settle =>
                     {
+                    var newReleasePath = settle.ReleasePath;
                     // Terminal writes run under System — same rule as every other
                     // deferred pipeline in RunCompile (the ambient scope from the
                     // compile subscription does not flow into this create-response
@@ -3352,6 +3368,11 @@ internal static class NodeTypeCompilationHelpers
                     if (newReleasePath is not null)
                         activityMessages.Add(new LogMessage(
                             $"Release created: {newReleasePath}", LogLevel.Information));
+                    // The post-condition's verdict belongs on the OFFICIAL diagnosis surface, not
+                    // only in a log sink — a stale release is invisible everywhere else (#781).
+                    if (settle.Diagnosis is { } diagnosis)
+                        activityMessages.Add(new LogMessage(diagnosis,
+                            newReleasePath is null ? LogLevel.Error : LogLevel.Warning));
                     NodeTypeCompilationActivity.Complete(hub, resolvedActivityPath,
                         ok ? ActivityStatus.Succeeded : ActivityStatus.Failed,
                         activityMessages.ToImmutable(), logger!);
