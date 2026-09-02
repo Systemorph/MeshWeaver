@@ -376,6 +376,7 @@ jobs:
   select:
     name: Select the affected bundles
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     outputs:
       modules: ${{ steps.scope.outputs.modules }}
       count: ${{ steps.scope.outputs.count }}
@@ -525,6 +526,7 @@ jobs:
     needs: select
     if: needs.select.result == 'success' && needs.select.outputs.count != '0'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
@@ -820,6 +822,7 @@ jobs:
     name: Module bundle (${{ matrix.entry.module }})
     needs: [select, prepare, build-workspace]
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
     # a matrix with no vectors, so an empty selection has to express itself as "this job does not
     # run". What makes it safe is that `verify` below runs UNCONDITIONALLY and asserts the pairing
@@ -1578,6 +1581,7 @@ jobs:
     needs: [select, pack]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     outputs:
       bundles-built: ${{ steps.verify.outputs.bundles_built }}
     steps:

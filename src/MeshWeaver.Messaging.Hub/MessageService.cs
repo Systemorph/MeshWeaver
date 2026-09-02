@@ -1701,9 +1701,27 @@ public class MessageService : IMessageService
                 return null;
 
             var ret = PostImpl(message, opt);
-            if (ShouldLogMessage(message))
+            // 🚨 THE LOG ARGUMENT IS BUILT EAGERLY — issues #3044 / #3049.
+            //
+            // This line read `logger.LogDebug("…", JsonSerializer.Serialize(ret, …), …)`. A method
+            // argument is evaluated BEFORE the call, so the whole delivery was serialised to JSON on
+            // EVERY post in the process and then thrown away by the logger whenever Debug was off,
+            // which in production it always is. On 2026-09-02 that discarded serialisation is what
+            // ran out of memory: `MessageService.ReportFailure` posts a DeliveryFailure embedding
+            // the delivery that failed, and for an oversized RawJson body the render went
+            // MessageDeliveryConverter.Write → RawJsonConverter.WriteRawValue →
+            // Utf8JsonWriter.TranscodeAndWriteRawValue → SharedArrayPool.Rent (up to 3 bytes per
+            // char) → OutOfMemoryException — so the FAILURE REPORT was lost, and the sender was left
+            // with neither its message nor any notification, three times in a row.
+            //
+            // Two changes, both required. IsEnabled first, so nothing is rendered when nobody will
+            // read it. And LogSummary rather than a payload render, because this runs once per post:
+            // that is precisely the hot-path rule LogSummary was written for after the 2026-07-22
+            // allocation storm (+3.9 GiB / 14k gen-0 GCs, 2.7 GB of live log strings), and Post is
+            // the hottest of all the sites it governs — it was simply never converted.
+            if (logger.IsEnabled(LogLevel.Debug) && ShouldLogMessage(message))
                 logger.LogDebug("Posting message {Delivery} (ID: {MessageId}) in {Address}",
-                    JsonSerializer.Serialize(ret, LoggingSerializerOptions), ret.Id, Address);
+                    LogSummary(ret), ret.Id, Address);
             return ret;
         }
     }

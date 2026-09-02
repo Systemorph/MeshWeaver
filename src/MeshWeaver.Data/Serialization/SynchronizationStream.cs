@@ -1830,6 +1830,17 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// your re-subscribe" and then produced nothing is evidence that the leg is eating this
     /// stream's snapshots.
     ///
+    /// <para>🚨 WHAT MAKES AN ACK EVIDENCE AT ALL is the owner's ordering, not this counter's
+    /// arithmetic (#3058). A <c>SubscribeAck</c> is posted only AFTER the frame answering that
+    /// subscribe has been handed to the owner's outbound queue
+    /// (<c>JsonSynchronizationStream.CreateSynchronizationStream</c>), so "acknowledged and no base
+    /// snapshot followed" says the snapshot was SENT and died on the leg. While the ack was posted
+    /// the instant the re-subscribe was received — i.e. before the re-assert had even left the
+    /// stream's action block — that sentence was true of every ask the moment it was made, and this
+    /// counter measured the owner's queue depth instead: a bulk install re-asked three times inside
+    /// 9 ms while the first, entirely healthy Full was still queued, and faulted a mirror
+    /// mid-install. A give-up must count outstanding FAILURES, never attempts.</para>
+    ///
     /// <para>Written from the response thread (the ack arm) and from the hub turn (the reset), so
     /// every access is interlocked.</para>
     /// </summary>
@@ -2041,8 +2052,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                         // re-ask is itself answered with a Full, which ends the cycle.
                         //
                         // 🚨 …AND THE ACK IS ALSO THE EVIDENCE (#1384). An acknowledgement says the
-                        // owner processed this re-subscribe; if a base snapshot never follows, the
-                        // answer died on the leg rather than never being sent, which is exactly the
+                        // owner SENT the snapshot answering this re-subscribe — the owner posts it
+                        // from the re-assert's own update turn, after the frame is already in its
+                        // outbound queue (#3058) — so if a base snapshot never follows, the answer
+                        // died on the leg rather than never being sent, which is exactly the
                         // non-convergence MaxUnansweredResyncs bounds. Counted HERE and nowhere
                         // else, deliberately: a re-ask REFUSED transiently is ridden out (#2745)
                         // and must not accumulate towards a fault, and an increment that races an

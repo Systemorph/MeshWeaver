@@ -18,6 +18,7 @@ permissions:
 jobs:
   images:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     # 🚨 The `release` environment is what makes the Azure OIDC login work on TAG runs. The
     # github-actions-deploy managed identity's federated credentials match on the token's
     # `sub` claim, which for a plain tag run is `…:ref:refs/tags/v<X>` — a NEW subject per

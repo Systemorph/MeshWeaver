@@ -286,10 +286,12 @@ public class ObjectPolymorphicConverter(
                 // Nested serializer session: its fresh writer restarts depth at 0, so account the
                 // depth consumed so far via the guard — otherwise a cyclic graph recurses past every
                 // MaxDepth check and exhausts the native stack (SIGABRT).
-                string json;
+                // 🚨 UTF-8, never a string — see the comment on the registered-type branch below
+                // (issues #3046 / #3048).
+                byte[] utf8;
                 using (depthGuard.Enter(writer, options, valueType))
-                    json = JsonSerializer.Serialize(value, valueType, options);
-                using var doc = JsonDocument.Parse(json);
+                    utf8 = JsonSerializer.SerializeToUtf8Bytes(value, valueType, options);
+                using var doc = JsonDocument.Parse(utf8);
 
                 writer.WriteStartObject();
                 writer.WriteString(EntitySerializationExtensions.TypeProperty, typeName);
@@ -327,10 +329,26 @@ public class ObjectPolymorphicConverter(
                 // Nested serializer session (fresh writer, depth restarts at 0): account the depth
                 // consumed so far via the guard so a self-referencing graph trips MaxDepth as a
                 // JsonException instead of recursing per edge until the native stack dies (SIGABRT).
-                string json;
+                // 🚨 SERIALIZE TO UTF-8 BYTES, NOT TO A STRING — issues #3046 / #3048.
+                //
+                // This nested session exists only to inject a $type property ahead of the object's
+                // own, and it used to do it via a UTF-16 string: JsonSerializer.Serialize(...)
+                // materialised the whole object — large raw payloads and all — as a string (2× the
+                // bytes, on the large-object heap, and its writer rented up to 3× to transcode the
+                // RawJson member into it), and JsonDocument.Parse(string) then transcoded that
+                // string back to UTF-8 (up to 3× again) to parse it. Two full transcodes and two
+                // full copies, to add one property. Both production stacks in the 2026-09-02 burst
+                // land inside this dance — Utf8JsonWriter.TranscodeAndWriteRawValue →
+                // SharedArrayPool.Rent on the way in, JsonDocument.Parse(ReadOnlyMemory<char>) on
+                // the way back — and both threw OutOfMemoryException.
+                //
+                // SerializeToUtf8Bytes produces the SAME JSON in the encoding JsonDocument already
+                // wants, so the round trip costs one buffer instead of four and neither transcode
+                // happens at all.
+                byte[] utf8;
                 using (depthGuard.Enter(writer, options, valueType))
-                    json = JsonSerializer.Serialize(value, valueType, options);
-                using var doc = JsonDocument.Parse(json);
+                    utf8 = JsonSerializer.SerializeToUtf8Bytes(value, valueType, options);
+                using var doc = JsonDocument.Parse(utf8);
 
                 if (doc.RootElement.ValueKind == JsonValueKind.Object)
                 {

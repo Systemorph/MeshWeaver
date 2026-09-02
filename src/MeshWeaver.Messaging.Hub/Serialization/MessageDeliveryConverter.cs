@@ -34,6 +34,24 @@ public class MessageDeliveryConverter(ITypeRegistry typeRegistry) : JsonConverte
         using var doc = JsonDocument.ParseValue(ref reader);
         var root = doc.RootElement;
 
+        // 🚨 NEVER `root.GetRawText()` HERE — issues #3046 / #3047.
+        //
+        // Both branches used to hand `JsonSerializer.Deserialize` a STRING obtained from
+        // GetRawText(). That is not a cheap accessor: it transcodes the whole envelope — payload
+        // included — from the document's pooled UTF-8 buffer into a fresh UTF-16 string
+        // (JsonReaderHelper.TranscodeHelper, 2× the bytes, on the large-object heap), and then
+        // Deserialize(string) transcodes it straight BACK to UTF-8 into a rented buffer (up to 3×)
+        // to parse it a second time. Every Orleans deep copy of an IMessageDelivery goes through
+        // here, so a single mesh hop was allocating roughly six times the payload to copy it once.
+        // On 2026-09-02 that is the arithmetic behind a delivery well under MaxMessageBodySize
+        // exhausting a portal pod: the guard measured the message, but the copy allocated a
+        // multiple of it. `JsonElement.Deserialize` reaches the same object from the SAME pooled
+        // UTF-8 bytes, with no transcode in either direction.
+        //
+        // This does not make the router allocation-safe at any size — see
+        // Doc/Architecture/OversizedDeliveryRefusal, "Where the bound still cannot reach". It
+        // removes the self-inflicted multiple; the producer must still not build the payload whole.
+
         // Check if this object has a type discriminator
         if (root.TryGetProperty(EntitySerializationExtensions.TypeProperty, out var typeElement))
         {
@@ -41,15 +59,13 @@ public class MessageDeliveryConverter(ITypeRegistry typeRegistry) : JsonConverte
             if (!string.IsNullOrEmpty(typeName) && typeRegistry.TryGetType(typeName, out var typeInfo))
             {
                 // Deserialize to the specific type
-                var json = root.GetRawText();
-                return (IMessageDelivery)JsonSerializer.Deserialize(json, typeInfo!.Type, options)!;
+                return (IMessageDelivery)root.Deserialize(typeInfo!.Type, options)!;
             }
         }
 
         // If no type discriminator, try to deserialize as a generic MessageDelivery with RawJson message
         // This is a fallback for cases where the specific type isn't available
-        var json2 = root.GetRawText();
-        return JsonSerializer.Deserialize<MessageDelivery<RawJson>>(json2, options)!;
+        return root.Deserialize<MessageDelivery<RawJson>>(options)!;
     }
 
     /// <summary>

@@ -53,6 +53,7 @@ jobs:
   invariants:
     name: Chart invariants
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - name: Install helm

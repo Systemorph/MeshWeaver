@@ -175,6 +175,7 @@ jobs:
     name: Publish inputs are provisioned
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Every publish input exists
         env:

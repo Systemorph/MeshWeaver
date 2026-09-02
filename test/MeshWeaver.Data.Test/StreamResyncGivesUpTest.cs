@@ -124,12 +124,18 @@ public class StreamResyncGivesUpTest(ITestOutputHelper output) : HubTestBase(out
                 // lets the mirror converge.
                 if (evt.ChangeType == ChangeType.Full)
                 {
-                    // Signalling HERE is ORDERED, not hopeful: the owner posts its SubscribeAck from
-                    // HandleSubscribeRequest the moment SubscribeToClient returns, while the
-                    // re-assert runs later on the stream's own turn — so by the time this frame
-                    // exists the ack is already on its way to the mirror's host hub, ahead of
-                    // anything the test posts next. The write below therefore lands on an OPEN gate
-                    // with still no base: the frame that earns the next re-ask.
+                    // Signalling HERE is ORDERED, not hopeful — and since #3058 the ordering runs
+                    // the other way round, which is what makes this test's "acknowledged" honest.
+                    // The owner posts its SubscribeAck from the re-assert's own update turn,
+                    // immediately AFTER this frame was handed to hub.Post (CreateSynchronizationStream's
+                    // Update(…, applied:)), so the ack is one enqueue behind the frame the pipeline
+                    // is eating right now — already on its way to the mirror's host hub, and far
+                    // ahead of the write below, which cannot be posted until this signal has
+                    // travelled back out to the test thread. The write therefore lands on an OPEN
+                    // gate with still no base: the frame that earns the next re-ask.
+                    //
+                    // That ordering is also why the ack is EVIDENCE here rather than noise: it now
+                    // means "the owner SENT your snapshot", and this pipeline is what destroys it.
                     freshSnapshotDropped.OnNext(Interlocked.Increment(ref droppedFreshSnapshots));
                     return d.Ignored();
                 }

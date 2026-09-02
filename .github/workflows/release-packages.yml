@@ -12,6 +12,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     # The tag IS the version; the fan-out below carries it to every subscriber.
     outputs:
       version: ${{ steps.extract_version.outputs.version }}

@@ -153,7 +153,13 @@ internal sealed class PodHubGrain(
                     "[POD-HUB] Delivery callback faulted for {MessageType} ({Id}) on {Address} — message dropped",
                     delivery.Message?.GetType().Name, delivery.Id, AddressPath));
 
-        return Task.FromResult(delivery.Forwarded(address));
+        // 🚨 THE ACKNOWLEDGEMENT CARRIES THE VERDICT, NOT THE BODY — issue #3045. This leg is the
+        // starkest of the three: BuildPodHubRoute discards the result outright
+        // (.Select(_ => Unit.Default)), so the body's entire return trip — an Orleans JsonCodec deep
+        // copy of the whole payload, then a frame back across the wire — bought nothing at all. See
+        // DeliveryPayloadBounds.WithoutEchoedPayload.
+        return Task.FromResult(
+            DeliveryPayloadBounds.WithoutEchoedPayload(delivery).Forwarded(address));
     }
 
     /// <inheritdoc />
