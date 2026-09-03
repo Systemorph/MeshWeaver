@@ -206,16 +206,14 @@ is open, draft, closed-unmerged, or **merged into anything but its repo's defaul
   contains `searched: false` is refused (#2741: no embedding provider, nothing was searched —
   #3137's PR read exactly that as "no callers"), and a reason that mentions a sweep without the
   positive marker is refused too.
-- **The structural answer runs beside it: `Dependent suites (MeshWeaver.Plugins)`**
-  (`dependent-suites.yml`). A PR that changes the public declaration set (type or member, added
-  or removed — 11 of the last 25 merges) dispatches `core-pr-suites` to MeshWeaver.Plugins, which
-  resolves its `platform-ref` to the PR's MERGE commit, runs `portal-hosts`, and records the
-  verdict as a marker ref `refs/dependent-suites/<run>` in ITS repo; core polls that ref and
-  finishes with the dependent's conclusion. It never passes on silence (no receiver → red before
-  dispatch; no verdict in 40 min → red). Not required yet; docs say how to require it.
+- **Core dispatches NOTHING to a plugin repository.** A dispatcher that asked MeshWeaver.Plugins to
+  build against a core pull request (`dependent-suites.yml`, #3103, 2026-09-03) was withdrawn the same
+  day by the maintainer: *"none of the top-level repos should have any dependency to anyone else"*.
+  The break a removed member causes downstream surfaces in the plugin repo's own CI when its
+  `platform-ref` moves — that is where it is fixed, by the plugin repo.
 - **It reads, it never checks out.** A checkout puts plugin SOURCE into core's build; an API read
   puts only a FACT into a verdict. That is the line `PlatformNeverDependsOnPluginsGuard` draws, and
-  its `ApiReadLedger` now enumerates both workflows on that side of it.
+  its `ApiReadLedger` enumerates the two reads on that side of it.
 - **The `none` escape is a declaration, not a skip** — printed into the log, and refused without a
   reason. Core cannot see a private repo's callers; what the gate removes is nobody being asked.
 
@@ -228,9 +226,6 @@ Full reference:
 - [ ] Removing public surface — a TYPE or a MEMBER of a kept type? `Pairs-with:` is in the PR body
       and the counterpart is MERGED into its repo's default branch; a `none` that cites a sweep
       quotes `searched: true`.
-- [ ] Changing public surface at all? Read `Dependent suites (MeshWeaver.Plugins)` on the PR — green
-      only when Plugins built and ran against THIS merge commit; "not dispatched" means the diff
-      changed no public declaration.
 - [ ] Every job I added or touched carries a literal `timeout-minutes` ≤ 45 (`python3 .github/scripts/check-workflow-timeouts.py --root .` is green).
 - [ ] No `continue-on-error` on a gate's input step; no `if:` asking whether a secret/variable is
       set. Fork-PR exemption expressed once, on the event.

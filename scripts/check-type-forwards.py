@@ -782,10 +782,10 @@ def surface_additions(
 ) -> list[dict]:
     """Public types and members declared at HEAD and not at BASE.
 
-    Not a pair trigger — nothing downstream stops compiling because core grew — but it IS the
-    signal `dependent-suites.yml` dispatches on: an ADDED overload made a dependent's `<see cref>`
-    ambiguous (`CS0419`, an error under -warnaserror) in the very incident that opened #2689, and
-    only running the dependent's build can see that.
+    Not a pair trigger — nothing downstream stops compiling because core grew — but it is worth
+    reporting: an ADDED overload made a dependent's `<see cref>` ambiguous (`CS0419`, an error under
+    -warnaserror) in the very incident that opened #2689, and only the dependent's own build (in ITS
+    repository, when its platform-ref moves) can see that.
     """
     members_before = members_before or {}
     members_after = members_after or {}

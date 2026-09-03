@@ -158,14 +158,15 @@ The structural answer to those is the one #2689 names as its acceptance criterio
 **compile-and-run the dependent's suite against the candidate core commit**, as a CI-time
 integration and never as a build-time reference. That keeps the dependency direction intact: core
 still builds and ships without the plugin repos present, and the integration is an *observation
-about* a candidate commit rather than a *link into* it. This gate is the half of that which needs no
-new infrastructure; the other half — `Dependent suites (MeshWeaver.Plugins)` — is described below.
+about* a candidate commit rather than a *link into* it. This gate is the half of that which core can do alone. The other
+half is **event-based and lives in the dependent**: see *"The dependent reacts to core's events"* below.
 
 ## The six shapes
 
-Collected on #2689 and #3103. Each column says which mechanism sees it.
+Collected on #2689 and #3103. Each column says which mechanism sees it — the pair gate here, or the
+dependent's own CI reacting to core's release event.
 
-| # | shape | incident | pair gate | `Dependent suites` |
+| # | shape | incident | pair gate | dependent's CI on the release event |
 |---|---|---|---|---|
 | 1 | a public **type** leaves `src/` (departure, forwarded move, whole assembly) | #2678 — nine Graph view classes; Plugins' trunk red two hours | **yes** | yes |
 | 2 | an **added overload** makes a dependent's `<see cref>` ambiguous (`CS0419`, an error under `-warnaserror`) | #2678 again, a second independent break from one merge | no — nothing is removed | yes — additions dispatch too |
@@ -211,100 +212,35 @@ now **refused**, and a reason that mentions a sweep (`sweep`, `swept`, `search_c
 quoting `searched: true` is refused too. A reason that rests on something else — *"only read by the
 test this PR rewrites"* — is judged on its length alone, as before.
 
-## The dependent's suites run from the core pull request
+## The dependent reacts to core's events — core never waits
 
-`.github/workflows/dependent-suites.yml` (the **dispatcher**, one job named
-`Dependent suites (MeshWeaver.Plugins)`) and the `core-pr-suites` event in
-`MeshWeaver.Plugins/.github/workflows/ci.yml` (the **receiver**).
+**Rule (maintainer, 2026-09-03): none of the top-level repositories depends on another, and the
+integration between them is event-based.** Core *emits*; a dependent *reacts* in its own CI, and
+the red lands in the repository that owns the fix.
 
-### The contract
+The event source is the MESH. The target shape (maintainer, 2026-09-03): **memex issues an event
+that something has a new version** — a platform build landed in `Hosting/PlatformBuilds`, a module
+bundle was published to the registry — and **the GitHub repositories subscribe to it** and trigger
+their builds. Today the transitional emitter is core's `main-cd.yml`, which sends a
+`repository_dispatch` to every node repository when it promotes a platform image set (the
+release-follow); moving that emitter into memex removes the last CI-to-CI link between repositories. Each dependent's `ci.yml`
+receives it, resolves its `platform-ref` to that release, builds its `src/` and content against it,
+runs its suites and — only if everything passes — seals and publishes its bundles for that platform
+identity. A shape-1…6 break therefore surfaces as a red release-follow run **in the dependent's
+repository**, minutes after the platform published, with the dependent's own test names in the
+log, and it is fixed there by a pull request in that repository. Nothing in core polls, reads back
+or blocks on it.
 
-1. **Trigger.** On every same-repo `pull_request` (a fork pull request or dependabot is exempt —
-   decided on the *event*, the one place that exemption is allowed) the dispatcher runs the pair
-   gate's own detector against the pull request's head vs its merge base. If the public
-   declaration set changed — a type or member **removed**, or (with `DISPATCH_ON_ADDITIONS`,
-   default `true`) **added** — it dispatches; otherwise it reports *"not dispatched"* and is green.
-   A `workflow_dispatch` with a pull request number runs the same path against
-   `refs/pull/<n>/merge`, so the wiring is testable on demand.
-2. **Dispatch.** An installation token of the org's `meshweaver-cloud` App
-   (`DEPENDENT_DISPATCH_APP_ID` / `_PRIVATE_KEY`, the pair notify-dependents already uses), scoped
-   to `MeshWeaver.Plugins` with `contents: write`, sends `repository_dispatch` type
-   `core-pr-suites` with
+What this deliberately does NOT do: put a context on the core pull request that only a plugin
+repository can turn green. A dispatcher of that shape (`dependent-suites.yml`, `core-pr-suites`) was
+built for #3103 on 2026-09-03 and withdrawn the same day — it coupled the two trunks (every core
+pull request went red until a receiver existed in the plugin repository), and a synchronous wait on
+a sibling repository is a dependency whatever token it uses.
+`PlatformNeverDependsOnPluginsGuard.ApiReadLedger` therefore lists only the two read-only edges
+core keeps (the shared-rules sweep and the `Pairs-with:` resolution) and refuses a third.
 
-   ```json
-   {"core_repo": "Systemorph/MeshWeaver", "core_pr": 3170,
-    "core_sha": "<the MERGE commit this run executed on — refs/pull/3170/merge>",
-    "head_sha": "<the pull request's head>", "core_run_id": "<run id>-<attempt>",
-    "core_run_url": "…", "surface": {"removed": 0, "added": 3}}
-   ```
-
-   Before sending, the dispatcher proves the token reads the dependent (401/403/404 each get their
-   own sentence) and that the dependent's **default branch** declares the receiver — a repository
-   with no receiver accepts a dispatch (204) and runs nothing, which would otherwise become forty
-   minutes of silence ending in a red that names the wrong cause.
-3. **Receive.** The dependent's `platform-ref` job resolves to `core_sha` instead of `main`, and
-   **binds the payload to core's history** before anything is built: `core_repo` must be
-   `Systemorph/MeshWeaver`, every sha must be 40 hex, and `core_sha` must be the merge commit whose
-   second parent is `head_sha` (read from core's public API). A payload naming an unrelated pair is
-   refused, not tested. `portal-hosts` then runs exactly as it does for the dependent's own pull
-   requests — the moved platform suites compile the dependent's `src/` against THAT core.
-   Everything else in that workflow (module bundles, compile-check, the Tests-area gate,
-   publish-bake, tag-modules, memex-template, rn-app) carries `github.event.action !=
-   'core-pr-suites'`: the publish lanes would otherwise **publish** against a pull request's core,
-   and compile-check compiles against the pinned image, so it would spend 45 minutes proving nothing
-   about the pull request. The run gets its own concurrency group, so it neither displaces nor is
-   displaced by the release lane.
-4. **Verdict.** `core-pr-verdict` (`always()`, so a red shard or a refused payload is a verdict
-   too) writes a **root commit** whose message is the verdict JSON and points
-   `refs/dependent-suites/<core_run_id>` at it — in the **dependent's own repository**, with its
-   own `GITHUB_TOKEN`:
-
-   ```json
-   {"schema": 1, "dependent": "Systemorph/MeshWeaver.Plugins", "core_repo": "…", "core_pr": 3170,
-    "core_sha": "…", "head_sha": "…", "core_run_id": "…-1", "conclusion": "success|failure",
-    "portal_hosts": "success", "platform_ref": "success", "platform_sha": "…",
-    "run_url": "…", "recorded_at": "2026-09-03T…Z"}
-   ```
-
-   Refs older than three days are pruned on the next dispatched run.
-5. **Read.** The dispatcher polls that ref every 60 s for `WAIT_MINUTES` (40; the shards take
-   25–30), refuses a verdict whose `core_repo`/`core_pr`/`core_sha`/`head_sha`/`core_run_id` are
-   not this run's, and finishes with the dependent's conclusion. **No verdict is a red**, never a
-   pass.
-
-### Why the verdict travels by a READ
-
-The obvious design has the dependent post a check-run on the core pull request. It was measured and
-rejected: the fleet's `meshweaver-cloud` App (id 4220566, installed org-wide) carries
-`contents: write`, `metadata: read`, `pull_requests: write` — and **no `checks: write`**
-(`GET /orgs/Systemorph/installations`, 2026-09-03). Granting it would hand every dependent's CI the
-power to post checks on core, which a compromised dependent could use to green-wash a core pull
-request. A marker ref in the dependent's own repository, read by core with `contents: read`, keeps
-the direction: **core asks, the dependent answers at home, core reads** — the same class of edge as
-`shared-rules` and the pair gate, and it is ledgered with them in
-`PlatformNeverDependsOnPluginsGuard.ApiReadLedger`. Marker refs are already this fleet's idiom
-(`refs/ci-executed/*` on core).
-
-### Requiring the context
-
-It is not required yet. The cost is real — every dispatch is four portal-host shards, 25–30
-minutes each, on the dependent's runners, and 11 of the last 25 merges would have dispatched — so
-let it run non-required for a week and read the reds. To require it: Settings → Rules → `main` →
-required status checks → `Dependent suites (MeshWeaver.Plugins)`; or, because the job skips on a
-fork pull request (a skipped required context reads as satisfied), make it a `needs:` of
-`Consolidate test results` with an explicit fail step, the way `cross-repo-pair` is wired. To
-narrow the trigger to removals only, set `DISPATCH_ON_ADDITIONS: "false"` in the dispatcher.
-
-### What it does not cover, said plainly
-
-- Only **MeshWeaver.Plugins**, and only its **portal-hosts** shards. The module-bundle lanes also
-  compile against `platform-ref` and would add the #2678 AI-bundle shape, but their reusable lane
-  publishes on `repository_dispatch` and has no verify-only mode yet; the other satellites build
-  against the *published* platform image, not core's source.
-- Shapes 4 and 5 (a parsed comment, an i18n value) are exercised by lanes the receiver deliberately
-  does not run on this event.
-- A pull request that changes **no public declaration** is not dispatched — a JSON envelope renamed
-  inside a private class is invisible here too. `workflow_dispatch` runs it anyway.
+The consequence the pair gate covers stays: a pull request that REMOVES public surface must name
+its merged counterpart. Everything additive (shapes 2–5) is the dependent's to catch on the event.
 
 ## Proving it
 

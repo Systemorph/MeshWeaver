@@ -114,17 +114,14 @@ Core still compiles, tests and ships with no sibling on disk. Every edge of this
 ASSERTED as well as documented — `PlatformNeverDependsOnPluginsGuard.ApiReadLedger` enumerates them
 and fails in both directions, so a new one has to be a decision rather than a diff nobody noticed.
 
-`dependent-suites.yml` is the THIRD edge, added for #3103, and it is the one the first two were
-waiting for. A pull request that changes the public declaration set asks MeshWeaver.Plugins — by
-`repository_dispatch`, under an App token scoped to that repository — to build its `src/` and run
-its suites against the pull request's **merge commit**, then reads the verdict the dependent
-recorded in its own repository and finishes with it. Two things keep it on the permitted side of
-the line: the dependent's source is compiled **there**, against a *candidate* core commit (an
-observation about the commit, never a link into core's build — `dotnet build` here still needs no
-sibling on disk), and the verdict travels by a **read** (the dependent writes a marker ref in its
-own repository; core polls it with `contents: read`), never by the dependent writing into core.
-See [The Cross-Repo Pair Gate](../CrossRepoPairGate) → *"The dependent's suites run from the core
-pull request"*.
+There is deliberately NO third edge. A dispatcher that asked MeshWeaver.Plugins to build against a
+core pull request (`dependent-suites.yml`, #3103) existed for a few hours on 2026-09-03 and was
+withdrawn by the maintainer: **"none of the top-level repos should have any dependency to anyone
+else."** Even an event-plus-read is a dependency — a red on a core pull request that only a plugin
+repository can turn green couples the two repositories' trunks. The rule is the strict one:
+core reads facts about sibling repositories (the two ledger entries above) and sends them nothing;
+a plugin repository discovers a platform break in ITS OWN CI when ITS `platform-ref` moves, and fixes
+it there. `PlatformNeverDependsOnPluginsGuard.ApiReadLedger` lists exactly the two permitted reads.
 
 ## What is NOT an inverted edge
 
