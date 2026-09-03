@@ -141,6 +141,26 @@ So the gate moves to the deploy boundary:
 This is a *deploy* gate, not a release gate. A broken candidate stops at whichever instances it would
 break and rolls everywhere else.
 
+### Availability is a CONSISTENT sealed set, not a present file (#3175)
+
+The first gate a candidate meets — before the combo — is `ReleaseAvailabilityService`: does every
+installed package have a sealed bake under the candidate's framework identity? Until 2026-09-03 that
+question was answered by PRESENCE, and memex-cloud rolled to ci.7621 on it: every bundle was there,
+and the portal then declined SocialMedia at adoption because its NodeTypes had been built against a
+`MeshWeaver.Markdown.Collaboration` build the same identity's sealed module set did not carry.
+
+**Available now means CONSISTENT**: every dependency record inside every installed package's sealed
+bundle names module builds that ARE the module builds sealed for that identity, and no module is
+sealed twice at different builds. Anything else is `SealedSetInconsistent` — a hold naming the
+bundle, the NodeType, the module and both MVIDs — and "nothing goes" (maintainer, 2026-09-03: *"we
+must have a clear confirmation that all plugins deployed to an instance are available for the
+correct platform version; if not ⇒ nothing goes"*). An unreadable module set is `Indeterminate`,
+which also holds; a false "available" rolls a fleet, a false "hold" freezes it, and the two are
+told apart in the verdict on purpose. The mechanism and its limit — a module an instance installed
+from the registry outside any publication is not visible to this check — are in
+[ModuleBuildArchitecture](../ModuleBuildArchitecture) → "One producer per (module, framework
+identity)".
+
 ### The unit of verification is the COMBO, and it includes TESTS
 
 Two things are easy to get subtly wrong here, and both were wrong in earlier drafts of this page.

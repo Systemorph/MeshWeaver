@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using MeshWeaver.Compiler;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -119,7 +120,79 @@ public static class ReleaseAvailability
                 + $"bundle '{package.BundleName}' is not published for release {target.Version}, so "
                 + "this instance would recompile it at boot");
 
+        // 🚨 PRESENT is not CONSISTENT (#3175). A sealed bundle is adoptable only if the module
+        // bytes its NodeTypes were built against are the module bytes sealed for the SAME identity.
+        if (package.HasContent && SealedSetProblem(package, target, artifacts) is { } inconsistent)
+            return inconsistent;
+
         return new PackageAvailability(package.Name, PackageAvailabilityKind.Available, null);
+    }
+
+    /// <summary>
+    /// 🚨 <b>The set, not the file (#3175).</b> memex-cloud rolled to ci.7621 on a verdict that
+    /// checked PRESENCE — every installed package had a sealed bundle under the target's identity —
+    /// and the portal then DECLINED SocialMedia at adoption: its NodeTypes recorded
+    /// <c>MeshWeaver.Markdown.Collaboration</c> at one MVID, the module sealed for the same identity
+    /// carried another. Two producers of one module for one identity; a set that was complete and
+    /// mutually inconsistent; a half-broken portal the gate exists to prevent. Same morning, every
+    /// satellite gate declined four map galleries whose records named <c>MeshWeaver.Maps</c> at an
+    /// MVID nothing composed. This is the assertion the maintainer asked for — <i>"a clear
+    /// confirmation that all plugins deployed to an instance are available for the correct platform
+    /// version; if not ⇒ nothing goes"</i>.
+    ///
+    /// <para>The rule: every <c>mvid:</c> entry in a bundle's dependency records that names a module
+    /// the identity's sealed module set carries must equal the MVID sealed for it, and no module may
+    /// be sealed at two MVIDs by two sources. A module the sealed set does NOT carry is one the
+    /// instance lands from the registry outside any publication — this gate cannot see those bytes
+    /// and does not pretend to. Records that cannot be checked because the module set is unreadable
+    /// answer <see cref="PackageAvailabilityKind.Indeterminate"/> — a HOLD, never an incompatibility
+    /// verdict, and never a pass: an unsealed or torn module set is exactly the case that let ci.7621
+    /// through.</para>
+    /// </summary>
+    private static PackageAvailability? SealedSetProblem(
+        RequiredPackage package, ReleaseTarget target, ReleaseArtifacts artifacts)
+    {
+        foreach (var record in artifacts.DependencyRecords
+                     .Where(r => string.Equals(r.Bundle, package.BundleName, StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (var (name, id) in record.Dependencies.OrderBy(d => d.Key, StringComparer.Ordinal))
+            {
+                if (name.StartsWith('!')
+                    || !id.StartsWith(CompiledDependencies.MvidScheme, StringComparison.Ordinal))
+                    continue;
+
+                var set = artifacts.Modules;
+                if (set is null || set.Refusal is not null)
+                    return new PackageAvailability(
+                        package.Name,
+                        PackageAvailabilityKind.Indeterminate,
+                        $"'{package.BundleName}' ({record.NodePath}) was built against module {name} {id}, "
+                        + $"but the module set sealed for framework identity {target.FrameworkIdentity} "
+                        + $"could not be read ({set?.Refusal ?? "it was not observed"}) — cannot determine "
+                        + "whether the bundle and the module are one build, which is not clearance to proceed");
+
+                if (set.Conflicts.FirstOrDefault(c => c.StartsWith($"module {name}:", StringComparison.Ordinal))
+                    is { } conflict)
+                    return new PackageAvailability(
+                        package.Name,
+                        PackageAvailabilityKind.SealedSetInconsistent,
+                        $"'{package.BundleName}' ({record.NodePath}) binds module {name}, which two sources "
+                        + $"sealed as DIFFERENT builds for framework identity {target.FrameworkIdentity} "
+                        + $"({conflict}) — whichever the instance composes, the other's NodeTypes are "
+                        + "declined at adoption; the set is inconsistent and nothing rolls");
+
+                if (set.MvidByModule.TryGetValue(name, out var sealedMvid)
+                    && !string.Equals(sealedMvid, id, StringComparison.Ordinal))
+                    return new PackageAvailability(
+                        package.Name,
+                        PackageAvailabilityKind.SealedSetInconsistent,
+                        $"'{package.BundleName}' ({record.NodePath}) was built against module {name} {id}, "
+                        + $"but the module set sealed for framework identity {target.FrameworkIdentity} "
+                        + $"carries {sealedMvid} — the bundle and the module it binds are two builds, and "
+                        + "the instance would decline it at adoption (dependency record mismatch)");
+            }
+        }
+        return null;
     }
 
     private static string Describe(ReleaseTarget target) =>
@@ -170,6 +243,19 @@ public sealed record ReleaseArtifacts(
     ImmutableHashSet<string> SealedBundles,
     string? ReadFailure = null)
 {
+    /// <summary>
+    /// The module bundles sealed for the target's identity across every complete source — simple
+    /// name → the <c>mvid:</c> id the dependency records spell — or null when the observation did
+    /// not read them. Null is NOT "consistent": a record naming a module then answers
+    /// <see cref="PackageAvailabilityKind.Indeterminate"/> (#3175).
+    /// </summary>
+    public SealedModuleSet? Modules { get; init; }
+
+    /// <summary>The per-NodeType dependency records of every sealed bundle — what each bundle's
+    /// assemblies were BUILT against — keyed by bundle id. Empty when the observation carried
+    /// none, in which case there is nothing to check and presence decides.</summary>
+    public ImmutableArray<BundleDependencyRecord> DependencyRecords { get; init; } = [];
+
     /// <summary>An observation that failed — the fail-safe constructor.</summary>
     public static ReleaseArtifacts Unreadable(string reason) =>
         new(ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase), reason);
@@ -219,7 +305,46 @@ public enum PackageAvailabilityKind
     /// serialized by an older build still deserializes correctly.</para>
     /// </summary>
     ComboVerificationFailed,
+
+    /// <summary>
+    /// 🚨 The bundle IS sealed under the target's identity, and it is still not adoptable: its
+    /// NodeTypes were built against a module build the SAME identity's sealed module set does not
+    /// carry (or two sources sealed two builds of one module). The instance would decline every
+    /// such NodeType at adoption — "dependency record mismatch" — which is what memex-cloud did on
+    /// ci.7621 after a presence-only verdict let it roll (#3175). A definite inconsistency of the
+    /// published SET, not an absence and not an unreadability. Appended, never inserted.
+    /// </summary>
+    SealedSetInconsistent,
 }
+
+/// <summary>
+/// The module bundles one framework identity's sealed publications composed, read across every
+/// complete source: what a consumer pinned to that identity composes, and therefore what every
+/// dependency record sealed for it must name (#3175).
+/// </summary>
+/// <param name="MvidByModule">Module simple name → its id in the dependency-record spelling
+/// (<c>mvid:&lt;32 hex&gt;</c>), for every module exactly one source sealed.</param>
+/// <param name="Conflicts">One line per module two sources sealed as DIFFERENT builds, each starting
+/// <c>module &lt;name&gt;:</c> and naming both sources and both ids. A conflict is an inconsistency
+/// of the set itself, whatever any bundle recorded.</param>
+/// <param name="Refusal">Why the set could not be read completely (a source sealed before module
+/// sealing existed, a torn module index, an unreadable module bundle), or null when it was. Non-null
+/// makes every record that names a module <see cref="PackageAvailabilityKind.Indeterminate"/>.</param>
+public sealed record SealedModuleSet(
+    ImmutableDictionary<string, string> MvidByModule,
+    ImmutableArray<string> Conflicts,
+    string? Refusal);
+
+/// <summary>One NodeType's dependency record inside one sealed bundle — the producer's
+/// <c>(referenced assembly → surface id)</c> pairs, exactly as the boot seeder validates them.</summary>
+/// <param name="Bundle">The bundle id (file name without <c>.zip</c>).</param>
+/// <param name="NodePath">The NodeType the assembly implements.</param>
+/// <param name="Dependencies">The record: module names carry <c>mvid:</c> ids, platform assemblies
+/// <c>ref:</c> hashes, and the reserved <c>!</c>-prefixed keys carry the toolchain and content key.</param>
+public sealed record BundleDependencyRecord(
+    string Bundle,
+    string NodePath,
+    ImmutableDictionary<string, string> Dependencies);
 
 /// <summary>One package's answer.</summary>
 /// <param name="Package">The package, as named to a human.</param>

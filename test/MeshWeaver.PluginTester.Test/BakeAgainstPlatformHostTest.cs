@@ -335,6 +335,58 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
         }
     }
 
+    /// <summary>
+    /// 🚨 ONE PRODUCER PER ASSEMBLY NAME (#3175). On 2026-09-03 every satellite gate declined four
+    /// map galleries — <i>"'MeshWeaver.Maps' built against mvid:4d04617…, live is ref:1D8FDE5B…"</i>
+    /// — because the portal host had taken a direct project reference to what is a Store module:
+    /// the bake composed Maps with <c>--module</c> (records say <c>mvid:</c>) while every portal
+    /// carried it in its app closure (resolves <c>ref:</c>). Nothing in any repo had changed. The
+    /// bake now refuses the double by name, at the moment both provenances are in one hand.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public void AComposedModuleTheHostAlsoShips_IsRefusedByName()
+    {
+        var repo = TempDirectory("mw-two-producers-repo");
+        var host = TempDirectory("mw-two-producers-app");
+        var mounted = TempDirectory("mw-two-producers-module");
+        var bake = TempDirectory("mw-two-producers-bake");
+        try
+        {
+            WriteWidget(repo);
+            SynthesizeHost(host);
+            // The host SHIPS the module in its app closure…
+            EmitModule(host, "MeshWeaver.DoublyShipped");
+            // …and the bake ALSO composes it, from a mount.
+            var modulePath = EmitModule(mounted, "MeshWeaver.DoublyShipped");
+
+            var log = new StringWriter();
+            var report = TreeBake.Run(new TreeBake.Options
+            {
+                RepoRoot = repo,
+                OutputDirectory = bake,
+                Output = log,
+                AppDirectory = host,
+                SharedFrameworksRoot = SharedFrameworksRoot(),
+                ModuleAssemblyPaths = [modulePath],
+            });
+            output.WriteLine(log.ToString());
+
+            Assert.NotNull(report.FatalError);
+            Assert.Contains("MeshWeaver.DoublyShipped", report.FatalError, StringComparison.Ordinal);
+            Assert.Contains("two builds of one assembly name", report.FatalError, StringComparison.Ordinal);
+            Assert.Contains("mvid:", report.FatalError, StringComparison.Ordinal);
+            Assert.Contains("ref:", report.FatalError, StringComparison.Ordinal);
+            Assert.Empty(report.Types);
+        }
+        finally
+        {
+            Cleanup(repo);
+            Cleanup(host);
+            Cleanup(mounted);
+            Cleanup(bake);
+        }
+    }
+
     [Fact]
     public void TheGateRefusesToRunAsAHostItIsNot_AndAcceptsTheOneItIs()
     {
@@ -441,12 +493,18 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
         Write(repo, "Widget/Thing/Source/Thing.cs", ThingSource);
     }
 
-    private static string EmitProbeModule(string directory)
+    private static string EmitProbeModule(string directory) =>
+        EmitModule(directory, "MeshWeaver.ProbeModule");
+
+    /// <summary>The probe module's source under another assembly name. <c>Assembly.LoadFrom</c>
+    /// binds a simple name once per process, so a test that loads its own copy of a module must
+    /// not reuse a name another test in this class has already loaded from a different path.</summary>
+    private static string EmitModule(string directory, string assemblyName)
     {
         Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, "MeshWeaver.ProbeModule.dll");
+        var path = Path.Combine(directory, assemblyName + ".dll");
         var compilation = CSharpCompilation.Create(
-            "MeshWeaver.ProbeModule",
+            assemblyName,
             [CSharpSyntaxTree.ParseText(ProbeModuleSource)],
             [
                 MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
