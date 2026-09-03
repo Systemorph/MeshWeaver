@@ -79,15 +79,36 @@ public static class SecurityQueries
     }
 
     /// <summary>
-    /// A GLOBAL (path-less) security read over every instance of <paramref name="nodeType"/> in the
-    /// mesh. Path-less on purpose — the subject and the grant that names it may live in different
+    /// A GLOBAL security read over every instance of <paramref name="nodeType"/> in the mesh.
+    /// Mesh-wide on purpose — the subject and the grant that names it may live in different
     /// partitions — and therefore always an enumeration.
+    ///
+    /// <para>🚨 <b><c>path:*</c> is what makes the fan-out DECLARED, and it is load-bearing.</b>
+    /// Fan-out is opt-in: a storage provider refuses a query that names no partition and did not ask
+    /// to span them, because a silent cross-schema UNION locks every relation it touches and stalls
+    /// unrelated pinned reads (measured memex-cloud 2026-09-02: 7 786 fan-outs in 30 min, 4 328 over
+    /// 199 of 199 schemas). These reads are the legitimate exception — so they SAY SO here rather
+    /// than being the accident that the refusal exists to catch.</para>
+    ///
+    /// <para>🚨 <b>Do not "fix" this by anchoring it.</b> Narrowing the fold to a viewer's partition
+    /// is TRUNCATION, not optimisation: a <c>GroupMembership</c> lives under its GROUP while the
+    /// grant naming it lives elsewhere, so a partition-scoped read silently drops memberships — and
+    /// a group-scoped DENY that loses its membership rows fails OPEN (#2011), with nothing logged.
+    /// The cost is real and the lever is materialisation, never a narrower query. See
+    /// <c>Doc/Architecture/CrossSchemaFanOutElimination</c> and <c>Doc/Architecture/UnanchoredSecurityReads</c>.</para>
     /// </summary>
     /// <param name="nodeType">The node type to enumerate.</param>
     /// <param name="projection">The <c>select:</c> projection; content by default.</param>
     /// <returns>The query string.</returns>
     public static string Global(string nodeType, string projection = ContentProjection)
-        => Enumeration($"nodeType:{nodeType} scope:subtree {projection}");
+        => Enumeration($"nodeType:{nodeType} {ExplicitFanOut} scope:subtree {projection}");
+
+    /// <summary>
+    /// The qualifier that turns an unanchored read into an EXPLICITLY cross-partition one. A query
+    /// carrying it has said "every partition" out loud; a query without any anchor at all has said
+    /// nothing, and is refused rather than silently served the most expensive plan the mesh has.
+    /// </summary>
+    public const string ExplicitFanOut = "path:*";
 
     /// <summary>Every custom <c>Role</c> definition in the mesh (<c>$security-roles</c>).</summary>
     public static string Roles => Global(RoleNodeType);
