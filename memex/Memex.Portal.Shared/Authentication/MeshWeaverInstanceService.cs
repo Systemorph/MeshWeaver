@@ -472,9 +472,9 @@ public sealed class MeshWeaverInstanceService(
             Query = MeshWideQuery.Declare(
                 $"nodeType:{MeshWeaverInstanceNodeType.NodeType} id:{instanceId}"),
         };
-        return Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => meshService.Query(request))
+        // RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)` — store and restore
+        // of the identity must land on the same thread (AGENTS.md; #1790).
+        return accessService.RunAsSystem(() => meshService.Query(request))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .SelectMany(results =>
@@ -550,9 +550,9 @@ public sealed class MeshWeaverInstanceService(
             Query = MeshWideQuery.Declare(
                 $"nodeType:{MeshWeaverInstanceNodeType.NodeType} id:{instanceId}"),
         };
-        return Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => meshService.Query(request))
+        // RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)` — store and restore
+        // of the identity must land on the same thread (AGENTS.md; #1790).
+        return accessService.RunAsSystem(() => meshService.Query(request))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .Select(results => results.Count == 0);

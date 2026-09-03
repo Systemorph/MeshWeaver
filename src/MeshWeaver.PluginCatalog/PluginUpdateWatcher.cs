@@ -101,14 +101,14 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
 
         // Catalogs are read as SYSTEM: this runs on mesh startup with no ambient user, and a
         // catalog node is not anonymous-readable on an access-gated portal.
-        var sub = Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => meshService
-                    .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                        // A catalog node is authored wherever its registry lives — mesh-wide by
-                        // nature (#3202 — fan-out is opt-in).
-                        MeshWideQuery.OfType(PluginCatalogConfigurationExtensions.CatalogNodeType)))
-                    .Take(1))
+        // RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)` — store and restore
+        // of the identity must land on the same thread (AGENTS.md; #1790).
+        var sub = accessService.RunAsSystem(() => meshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    // A catalog node is authored wherever its registry lives — mesh-wide by
+                    // nature (#3202 — fan-out is opt-in).
+                    MeshWideQuery.OfType(PluginCatalogConfigurationExtensions.CatalogNodeType)))
+                .Take(1))
             .Subscribe(
                 change =>
                 {

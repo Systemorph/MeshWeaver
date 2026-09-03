@@ -1,3 +1,5 @@
+using MeshWeaver.Mesh.Services;
+
 namespace MeshWeaver.Mesh;
 
 /// <summary>
@@ -39,7 +41,9 @@ public static class MeshWideQuery
 {
     /// <summary>
     /// <paramref name="query"/> with <see cref="ParsedQuery.CrossPartitionQualifier"/> appended
-    /// (idempotent — a query that already carries it is returned trimmed and unchanged).
+    /// (idempotent — a query the parser already reads as <see cref="ParsedQuery.CrossPartition"/> is
+    /// returned trimmed and unchanged; the decision is the parser's, not a substring's, so a value
+    /// that merely contains the text does not count and a token the parser sees always does).
     /// </summary>
     /// <param name="query">The query text, which names no partition on purpose.</param>
     /// <returns>The same query, declared mesh-wide.</returns>
@@ -47,7 +51,7 @@ public static class MeshWideQuery
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
         var trimmed = query.Trim();
-        return trimmed.Contains(ParsedQuery.CrossPartitionQualifier, StringComparison.OrdinalIgnoreCase)
+        return new QueryParser().Parse(trimmed).CrossPartition
             ? trimmed
             : $"{trimmed} {ParsedQuery.CrossPartitionQualifier}";
     }
