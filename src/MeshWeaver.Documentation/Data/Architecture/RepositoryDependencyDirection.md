@@ -110,9 +110,21 @@ surface nowhere except CD, after the fact.**
 
 🚨 **The distinction that makes this class permitted while a checkout is not**: *a checkout puts
 another repository's SOURCE into core's build; an API read puts only a FACT about it into a verdict.*
-Core still compiles, tests and ships with no sibling on disk. Both edges of this class are now
+Core still compiles, tests and ships with no sibling on disk. Every edge of this class is
 ASSERTED as well as documented — `PlatformNeverDependsOnPluginsGuard.ApiReadLedger` enumerates them
-and fails in both directions, so a third one has to be a decision rather than a diff nobody noticed.
+and fails in both directions, so a new one has to be a decision rather than a diff nobody noticed.
+
+`dependent-suites.yml` is the THIRD edge, added for #3103, and it is the one the first two were
+waiting for. A pull request that changes the public declaration set asks MeshWeaver.Plugins — by
+`repository_dispatch`, under an App token scoped to that repository — to build its `src/` and run
+its suites against the pull request's **merge commit**, then reads the verdict the dependent
+recorded in its own repository and finishes with it. Two things keep it on the permitted side of
+the line: the dependent's source is compiled **there**, against a *candidate* core commit (an
+observation about the commit, never a link into core's build — `dotnet build` here still needs no
+sibling on disk), and the verdict travels by a **read** (the dependent writes a marker ref in its
+own repository; core polls it with `contents: read`), never by the dependent writing into core.
+See [The Cross-Repo Pair Gate](../CrossRepoPairGate) → *"The dependent's suites run from the core
+pull request"*.
 
 ## What is NOT an inverted edge
 

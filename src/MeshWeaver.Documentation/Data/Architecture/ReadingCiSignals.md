@@ -480,6 +480,33 @@ and it failed immediately on a real defect. **"Red for a known reason" is the ch
 which to miss a second regression**, and it is an argument for fixing the first red rather than
 routing around it. Expect the count of problems to go *up* when you fix one.
 
+### 🔗 `Dependent suites (MeshWeaver.Plugins)` — the red lands on the pull request that causes it
+
+Since #3103 a core pull request that changes the **public declaration set** under `src/` — a type
+or member added or removed — asks MeshWeaver.Plugins to build its `src/` and run its portal-host
+shards against the pull request's **merge commit**, and carries the answer as one context. Read it
+in three states:
+
+| the context says | what happened | what to do |
+|---|---|---|
+| green, summary *"not dispatched"* | the diff changes no public declaration, so the dependent cannot stop compiling because of it; nothing ran | nothing — this is the ordinary case (14 of the last 25 merges) |
+| green, summary *"passed"* with a run link | the dependent built and ran against this merge commit and succeeded | nothing |
+| red *"Dependent suites failed"* with a run link | the dependent's `Portal hosts (shard N)` failed **against your merge commit** — the sixth shape (#3137: a removed public member, `CS0117`), or one of the four nobody can detect statically | open the linked Plugins run; fix the break here, or land the dependent's half first and declare it with `Pairs-with:` |
+| red *"did not answer"* / *"declares no receiver"* | not your code: the dependent recorded no verdict within 40 minutes, or its default branch has no `core-pr-suites` receiver | it is a property of the repository, not of the pull request (see the next section); the Plugins run is under its Actions tab, event `repository_dispatch` |
+
+The verdict itself is a marker ref in the **dependent's** repository —
+`refs/dependent-suites/<core run id>-<attempt>`, a root commit whose message is the verdict JSON —
+and the core job only *reads* it. The fleet App has no `checks: write`, and a dependent that could
+post checks on core could green-wash a core pull request, so the direction is deliberate: core
+asks, the dependent answers at home, core reads. Contract, payload and measurements:
+[The Cross-Repo Pair Gate](/Doc/Architecture/CrossRepoPairGate) → *"The dependent's suites run
+from the core pull request"*.
+
+**Attribution rule:** a red here is about the *combination* of this pull request with the
+dependent's current default branch. Before blaming your diff, check whether the same Plugins job
+is red on Plugins' own pull requests at the same instant — then it is theirs, and this context is
+telling you nothing about yours (exactly the zero-variance shape the next section describes).
+
 ## 🚨 A check that is red on EVERY pull request is not telling you about any of them
 
 A signal carries information only to the extent that it *varies*. A check that fails on every open
