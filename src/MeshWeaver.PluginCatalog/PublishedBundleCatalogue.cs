@@ -158,7 +158,8 @@ public static class PublishedBundleCatalogue
     /// dependency records spell it), and every sealed bundle's per-NodeType dependency record. The
     /// bytes were always on disk — <see cref="SealedModulesOf"/> already refused a torn set — and
     /// <see cref="ReleaseAvailability"/> can only assert CONSISTENCY when it is handed both halves.
-    /// Reads manifests and one PE header per module; never a bundle's assembly bytes.
+    /// Reads every bundle's MANIFEST, and for each sealed module bundle inflates its entry assembly into
+    /// memory to read the MVID from its PE metadata — never a content bundle's NodeType assembly bytes.
     /// </summary>
     /// <remarks>A module bundle that cannot be read, or a source sealed before module sealing
     /// existed, becomes the set's <see cref="SealedModuleSet.Refusal"/> — a named unreadability the
@@ -255,7 +256,7 @@ public static class PublishedBundleCatalogue
             ?? throw new InvalidOperationException(
                 $"{NuGetPackageWriter.ModuleFolder}/{name}.dll is missing from the bundle");
         using var stream = entry.Open();
-        using var bytes = new MemoryStream();
+        using var bytes = new MemoryStream(checked((int)entry.Length));
         stream.CopyTo(bytes);
         bytes.Position = 0;
         using var pe = new PEReader(bytes);
