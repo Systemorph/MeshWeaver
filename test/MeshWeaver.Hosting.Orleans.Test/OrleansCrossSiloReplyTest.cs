@@ -35,9 +35,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// <para>🚨 <b>READ THIS BEFORE TRUSTING THIS CLASS AS THE /api/content GUARD — it is not, any
 /// more.</b> The paragraph above still describes the ORIGINAL intent, but <c>2c796d297</c>
-/// (2026-08-10) moved <c>GetMeshNode</c>/<c>GetMeshNodeOutcome</c> onto
-/// <c>MeshExtensions.NodeOperationIssuingHub</c>, so the fact below now exercises the
-/// <c>portal/nodeops-…</c> reply path and no longer posts from <c>mesh/{id}</c> at all. That is
+/// (2026-08-10) moved <c>GetMeshNode</c>/<c>GetMeshNodeOutcome</c> off <c>mesh/{id}</c> onto a
+/// dedicated off-router hub — <c>portal/nodeops-…</c> then, and <c>portal/reads-…</c> since #2901
+/// split the READ seam out of the node-operation one
+/// (<c>MeshExtensions.ReadIssuingHub</c>) — so the fact below exercises THAT hub's reply path and
+/// no longer posts from <c>mesh/{id}</c> at all. That is
 /// worth keeping — but it silently stopped covering the static-content endpoint it names, and
 /// issue #1729 is what that cost: <c>ContentFileResolver.Resolve</c> was left posting from the
 /// router and hung ~half of all <c>/api/content</c> requests on the 2-replica memex-cloud portal.
@@ -106,8 +108,8 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
 
     /// <summary>
     /// 🚨 <b>THE INPUT THIS CLASS LOST — issue #1742.</b> The fact above no longer posts from
-    /// <c>mesh/{id}</c> at all (<c>2c796d297</c> moved <c>GetMeshNode</c> onto
-    /// <c>portal/nodeops-…</c>), so the class named for the root-mesh-hub reply leg stopped
+    /// <c>mesh/{id}</c> at all (<c>2c796d297</c> moved <c>GetMeshNode</c> onto a dedicated
+    /// off-router hub, <c>portal/reads-…</c> today), so the class named for the root-mesh-hub reply leg stopped
     /// exercising it — the gate silently stopped testing its own input, and #1729 is what that cost.
     /// This restores it in the smallest possible shape.
     ///

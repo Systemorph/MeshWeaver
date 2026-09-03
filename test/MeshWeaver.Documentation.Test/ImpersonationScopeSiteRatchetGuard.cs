@@ -64,7 +64,7 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     /// the shape; this stops the list as a WHOLE from growing — including by the trick of adding a
     /// new file's line. Lower it whenever you delete or lower an entry.
     /// </summary>
-    private const int TotalBudget = 69;
+    private const int TotalBudget = 68;
 
     /// <summary>Production roots. <c>test/</c> and <c>samples/</c> are deliberately out of scope —
     /// the leak there costs test isolation, not a user's permissions, and listing 21 more entries

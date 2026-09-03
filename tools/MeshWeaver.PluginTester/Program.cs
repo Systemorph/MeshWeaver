@@ -261,7 +261,9 @@ static async Task<int> RunBuildProject(string[] args)
             // reference set because this repository's source now defines types it still contains.
             // Declared, never inferred: an automatic collision-resolver would mask a real
             // two-producers defect (#3175). Fails closed in ProjectBuild on an empty name, a name
-            // the container lacks (wrong or STALE), or one the graph already builds.
+            // the container lacks, one the graph already builds — and, once a rebuilt image retires
+            // it, on the entry having nothing left to supersede (#3223: the image's copy defines
+            // none of the type names this repository's source declares).
             case "--superseded-image-assembly" when i + 1 < args.Length:
                 superseded.Add(args[++i]);
                 break;
