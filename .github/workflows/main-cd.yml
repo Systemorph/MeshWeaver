@@ -30,6 +30,15 @@ name: Continuous Delivery (main)
 # succeed does the `promote` job apply the real tags, and promotion is a MANIFEST-ONLY operation
 # (`docker buildx imagetools create`) — the layers are already in ACR, so it costs seconds.
 #
+# 🚨 "EVERY image built" is necessary, not sufficient (2026-09-03). A set can be complete and
+# still unable to serve a signed-in request: run #7658's portal was built from core e7f1d699
+# (08:05Z) paired with the Plugins head at resolve time, 12500c9 (13:31Z) — hours apart, because
+# the run's jobs queued for hours — and the two halves disagreed about whether the sign-in reads
+# were anchored. Promote tagged it, verify-images found every tag, and production answered 503 to
+# every signed-in request for 20 minutes. So `promote` ALSO needs `signin-smoke`, which boots the
+# run's own staging pair (migration → portal), signs in through DevLogin and asserts the
+# SIGNED-IN GET / and GET /Store are served. A pair that cannot sign in is never tagged.
+#
 # Why this shape and not "build to a tarball, push later": the bytes have to reach the registry
 # for a push to happen at all, and pushing them to a staging tag costs exactly what pushing them
 # to the real tag costs. The only thing worth withholding is the TAG, because the tag IS the
@@ -1330,9 +1339,79 @@ jobs:
   # portalNext is opt-in (chart default enabled: false) and the self-updater never rolls it —
   # nothing waits on it, so it does not belong to this repo's all-or-nothing set.
 
+  # ────────── BOOT THE PAIR AND SIGN IN — the behavioural half of "the set is complete" ──────────
+  # 🚨 A complete image set is not a servable one (2026-09-03). Run #7658 built memex-portal-ai
+  # from core e7f1d699 (08:05Z, before core #3206 anchored the sign-in reads) paired with the
+  # Plugins head at resolve time, 12500c9 (13:31Z, after Plugins #1263 made the Postgres planner
+  # REFUSE an unanchored query). Every leg was green; promote tagged it; verify-images found every
+  # tag. In production the first signed-in request faulted in OnboardingMiddleware.LoadUserRoles
+  # with UnanchoredQueryException and the portal answered 503 to every signed-in request for 20
+  # minutes; the Store page died the same way. The two halves of the pair can be hours apart —
+  # the run's jobs queue for hours — and nothing in CD had ever BOOTED the pair, let alone signed
+  # in. Nothing checked that the pair was coherent BEHAVIOURALLY.
+  #
+  # So this job does, on the run's own staging images, before `promote` can tag them: migration →
+  # portal → /health → DevLogin → the SIGNED-IN GET / and GET /Store → /_blazor/negotiate → grep
+  # the logs for the incident's signatures. `promote` needs it, so a pair that cannot serve a
+  # signed-in request never receives a consumer-selectable tag: the set stays incomplete, the
+  # reconciler re-drives HEAD, and the next Plugins pin or core fix is what heals it. Nothing rolls.
+  #
+  # 🚨 The assertions CARRY THE COOKIE. ci.7658 answered 200 to an anonymous GET / and to
+  # /_blazor/negotiate; only signed-in requests 503'd. An unauthenticated 200 is the /api/og trap
+  # — it proves the process is up and nothing more — so it is logged for diagnosis, never asserted.
+  #
+  # Runs unconditionally when the gate publishes: no continue-on-error, no `if:` on an input. Its
+  # inputs are the OIDC secrets `preflight` already asserts; the images are this run's own legs'.
+  # linux/amd64 only — the fault under test is managed code, identical on both architectures, and
+  # one boot is what the 20-minute cap buys. The gate IS the script (cd-signin-smoke.sh) so the
+  # same proof runs locally against any pair; it was verified against ci.7693 (passes) AND ci.7658
+  # (fails, on the signed-in GET /) before it was wired here. What it cannot prove: anything behind
+  # a language model, a registry bundle, Entra sign-in or multi-replica clustering.
+  signin-smoke:
+    name: "Smoke: boot the image pair and sign in"
+    needs: [gate, portal-image, migration-image]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # The gate is a script, and a script needs a working tree (promote's #2857 lesson). Sparse:
+      # the job needs exactly the scripts, not the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        # Bounded transport retry — the same script every image leg uses (#2857).
+        run: bash .github/scripts/acr-login.sh
+      # 🚨 The pairing goes into the job log AND the step summary — core sha, plugins sha, staging
+      # tag, and the migration version reached — so a future skew is diagnosable from the run
+      # summary instead of from a dump. Both shas are `gate`'s once-resolved outputs, never
+      # re-resolved here (#2622).
+      - name: Boot the pair, sign in, and serve a signed-in request
+        env:
+          PORTAL_IMAGE: ${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}
+          MIGRATION_IMAGE: ${{ env.ACR }}/memex-migration:${{ needs.gate.outputs.staging_tag }}
+          CORE_SHA: ${{ needs.gate.outputs.sha }}
+          PLUGINS_SHA: ${{ needs.gate.outputs.plugins_sha }}
+          STAGING_TAG: ${{ needs.gate.outputs.staging_tag }}
+        run: >
+          bash .github/scripts/cd-signin-smoke.sh
+          --portal-image "$PORTAL_IMAGE" --migration-image "$MIGRATION_IMAGE"
+          --platform linux/amd64
+          --core-sha "$CORE_SHA" --plugins-sha "$PLUGINS_SHA" --staging-tag "$STAGING_TAG"
+
   promote:
     name: "Promote: tag the full set (all-or-nothing)"
-    needs: [gate, portal-image, migration-image, plugin-test-image]
+    # 🚨 `signin-smoke` is a NEED on purpose: it is the behavioural half of "the set is complete"
+    # (see its comment). Removing it re-opens the 2026-09-03 hole exactly.
+    needs: [gate, portal-image, migration-image, plugin-test-image, signin-smoke]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -2369,7 +2448,7 @@ jobs:
     name: "CD delivered, or had a good reason not to"
     # 🚨 Every delivery leg is a NEED, not just [gate, promote]. The verdict cannot assert that a
     # publish actually happened while it can only see two of the nine jobs that make it happen.
-    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote,
+    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, signin-smoke, promote,
             publish-bake, notify-platform-update, verify-images,
             plugins-modules, plugins-bake-image, plugins-bake]
     if: always()
@@ -2504,6 +2583,7 @@ jobs:
             portal-image=${{ needs.portal-image.result }}
             migration-image=${{ needs.migration-image.result }}
             plugin-test-image=${{ needs.plugin-test-image.result }}
+            signin-smoke=${{ needs.signin-smoke.result }}
             promote=${{ needs.promote.result }}
             publish-bake=${{ needs.publish-bake.result }}
             notify-platform-update=${{ needs.notify-platform-update.result }}
@@ -2560,7 +2640,7 @@ jobs:
     # event that starts the cross-repo rebake wave used to be unfailable, and a failure nobody is
     # paged for is still invisible. A red notify job does NOT mean the images are missing —
     # `verify-images` answers that — it means no satellite learned about them.
-    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote, verify-images, publish-bake, notify-platform-update, delivery-verdict]
+    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, signin-smoke, promote, verify-images, publish-bake, notify-platform-update, delivery-verdict]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
