@@ -43,7 +43,27 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
 {
     private const string LiveAssemblyPath = "live/LeavingSweepType.dll";
     private const string LiveMvid = "11ee0000aaaa0000";
-    private const string FixtureLiveFingerprint = "live-fingerprint-fixture";
+    /// <summary>
+    /// 🚨 The fingerprint the OWNER will hold for this fixture type — computed with the product's
+    /// own function over the type's live source set, which for a fixture type is EMPTY.
+    ///
+    /// <para>It used to be the literal <c>"live-fingerprint-fixture"</c>, on the reasoning that "a
+    /// sourceless fixture type publishes nothing that could move it". That is false: a sourceless
+    /// type publishes the fingerprint of the empty source set, and the owner's sources watcher
+    /// writes it over whatever the fixture seeded — at a moment nothing in the test controls. When
+    /// it landed mid-test the CONTROL arm's matching bundle stopped matching, the owner refused the
+    /// adoption it was supposed to accept, cleared the coordinates and dispatched a fresh compile,
+    /// and the final assertion waited 20 s for an MVID that was never going to arrive. Twice on the
+    /// merge queue for PR #3143 (runs 33673071012 and 33669188031), where a queue red costs every
+    /// PR behind it.</para>
+    ///
+    /// <para>Stating the value the product itself computes removes the race rather than narrowing
+    /// it: the watcher's recompute now writes the SAME value, so there is no window in which the
+    /// two arms mean something different. The two arms still differ by exactly one thing — whether
+    /// the producer's fingerprint equals the live one — which is the whole subject of the test.</para>
+    /// </summary>
+    private static readonly string FixtureLiveFingerprint =
+        NodeTypeSourceFingerprint.Compute([], "type/FixtureLiveSources");
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -85,8 +105,14 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
             },
         };
         await MeshService.CreateNode(typeNode).Should().Within(20.Seconds()).Emit();
+        // Wait for BOTH fields, not just the MVID: the live fingerprint is what the seeder's
+        // pre-write check and the owner's stamp check both read, so a test that proceeds before it
+        // is observable is deciding against a record it has not established.
         await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
-            .Match(n => n?.Content is NodeTypeDefinition { LatestAssemblyMvid: LiveMvid });
+            .Match(n => n?.Content is NodeTypeDefinition d
+                        && string.Equals(d.LatestAssemblyMvid, LiveMvid, StringComparison.Ordinal)
+                        && string.Equals(d.CurrentSourceFingerprint, FixtureLiveFingerprint,
+                            StringComparison.Ordinal));
     }
 
     private static IObservable<bool> Seed(IMessageHub hub, string typePath, byte[] bytes, string? fingerprint) =>
@@ -152,11 +178,11 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
         var bytes = BundleBytes();
         var bundleMvid = ServedBuildIdentity.OfBytes(bytes);
 
-        // The seeder decides on the owner's CURRENT snapshot of the node. The fixture's published
-        // fingerprint stands for the one the owner's sources watcher writes on a real deployment;
-        // a sourceless fixture type publishes nothing that could move it (CreateLiveType waited
-        // for the record to be observable as written).
-        const string liveFingerprint = FixtureLiveFingerprint;
+        // The seeder decides on the owner's CURRENT snapshot of the node, and this IS that value:
+        // the owner's sources watcher computes the same function over the same (empty) source set,
+        // so its recompute writes the fingerprint back unchanged and cannot move under either arm.
+        // See FixtureLiveFingerprint for what a hand-picked literal cost here.
+        var liveFingerprint = FixtureLiveFingerprint;
 
         // THE STALE ARM — the producer names sources that are not the ones this mesh holds.
         var sweep = SweepHub("sweep");

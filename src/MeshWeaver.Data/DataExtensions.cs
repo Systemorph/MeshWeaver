@@ -908,6 +908,21 @@ public static class DataExtensions
         string hubPath,
         Func<bool> tryClaimAck)
     {
+        // 🚨 BOTH dependencies are resolved HERE, on the handler's turn, and closed over — never
+        // from inside the disposal action below. MessageHub's own ShutDown phase states the rule
+        // ("Never call DI from a disposal path") because a hub's lifetime scope, or an ancestor of
+        // it, can already be closed by the time disposal actions run: HostedHubsCollection closes a
+        // hosted hub's scope on DisposalCompleted, and the watchdog's out-of-band
+        // ForceTeardownAfterWatchdog runs hostedHubs.Dispose() BEFORE DisposeImpl(). A resolve then
+        // throws ObjectDisposedException ("Instances cannot be resolved … from this LifetimeScope"),
+        // which costs this NACK twice over: the verdict is never dispatched — so the writer burns
+        // the full 31 s WriteVerdictBound and reports OwnerUnreachable, the exact acked-write-loss
+        // this registration exists to prevent — and, because the hub's synchronous cleanups live in
+        // one Rx CompositeDisposable whose Dispose stops at the first throw, EVERY disposal action
+        // registered after this one is skipped as well. Observed on main shard 4, 2026-09-02
+        // (LateNackReenqueueTest, run 33630685580).
+        var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
+        var parent = hub.Configuration.ParentHub;
         hub.RegisterForDisposal(_ =>
         {
             if (!tryClaimAck())
@@ -947,7 +962,6 @@ public static class DataExtensions
             // teardown is still waiting, and it is the one guaranteed to get silence instead of its
             // NACK, then to burn the full 31 s WriteVerdictBound (#2778). Dispatch RETURNS whether
             // a caller was armed, so the question is now answered rather than assumed.
-            var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
             if (lateVerdicts is not null && lateVerdicts.Dispatch(request.Id, resp))
                 return;
 
@@ -956,7 +970,9 @@ public static class DataExtensions
             // cannot see. The existing post remains that case's only route, with its run-level
             // guard unchanged: removing it is the ~10x regression above, and a cross-process
             // caller during owner teardown is not the case #2778 reproduced.
-            var parent = hub.Configuration.ParentHub;
+            // (`parent` was captured at registration — Configuration.ParentHub re-resolves from
+            // ParentServiceProvider, the DI touch this path must not make. Its RunLevel is read
+            // here, live, because that is the guard's whole subject.)
             if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
                 parent.Post(resp, o => o.ResponseFor(request));
         });
@@ -2475,6 +2491,12 @@ public static class DataExtensions
         var state = 0;
         bool TryClaimSilentTerminal() => Interlocked.CompareExchange(ref state, 2, 0) == 0;
 
+        // 🚨 Captured on the handler's turn, while the scope is provably alive — the disposal arm
+        // below runs where Configuration.ParentHub's re-resolve out of ParentServiceProvider can
+        // throw ObjectDisposedException, and the parent post is the ONLY route left for the answer
+        // at that point. Same rule (and same reason) as RegisterOwnerDisposingNack.
+        var parentHub = hub.Configuration.ParentHub;
+
         var subscription = RunReadValidators(hub, request.Message.Reference)
             .SelectMany(validationResult =>
             {
@@ -2551,7 +2573,7 @@ public static class DataExtensions
                     // away" and the rate run came back 10/100 with every remaining failure being
                     // that missing marker — a product regression, not merely a red assertion.
                     // Both causes are named, but the marker stays.
-                    NackSilentRead(hub, request,
+                    NackSilentRead(hub, parentHub, request,
                         "the read faulted because the owning hub is shutting down — its hosted-hub "
                         + "creation is frozen or its service scope has been closed, so the data "
                         + $"stream for this reference could not be created ({cause.GetType().Name}: "
@@ -2569,7 +2591,7 @@ public static class DataExtensions
                     // otherwise stay silent here and let the disposal arm below be the one that
                     // speaks, since it cannot run except during teardown.
                     if (IsWindingDown(hub) && TryClaimSilentTerminal())
-                        NackSilentRead(hub, request,
+                        NackSilentRead(hub, parentHub, request,
                             "the data stream for this reference completed without ever producing a value "
                             + "while the owner is shutting down (the stream was disposed before the initial "
                             + "state landed). Retry against the fresh activation.");
@@ -2585,7 +2607,7 @@ public static class DataExtensions
         {
             subscription.Dispose();
             if (TryClaimSilentTerminal())
-                NackSilentRead(hub, request,
+                NackSilentRead(hub, parentHub, request,
                     "the owning hub was disposed while this read was still outstanding — it is "
                     + "shutting down and never produced a value. Retry against the fresh activation.");
         }));
@@ -2677,7 +2699,7 @@ public static class DataExtensions
     /// teardown the parent is past that mark too, the post is skipped, and nobody is waiting.</para>
     /// </summary>
     private static void NackSilentRead(
-        IMessageHub hub, IMessageDelivery<GetDataRequest> request, string reason)
+        IMessageHub hub, IMessageHub? parent, IMessageDelivery<GetDataRequest> request, string reason)
     {
         var message =
             $"GetDataRequest({request.Message.Reference}) at '{hub.Address}': {reason}";
@@ -2703,7 +2725,6 @@ public static class DataExtensions
                 hub.Post(failure, o => o.ResponseFor(request));
                 return;
             }
-            var parent = hub.Configuration.ParentHub;
             if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
                 parent.Post(failure, o => o.ResponseFor(request));
         }

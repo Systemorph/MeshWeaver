@@ -149,6 +149,33 @@ three places at once:
 Only `Red` reads as held. A `NotVerifiable` is not a hold — nothing refused that build — and
 rendering it as one would send an operator to fix an incompatibility that was never diagnosed.
 
+## 🚨 The verdict is read at DECISION time, never once at start-up
+
+`ComboVerificationGate.Recorded` folds `policy.VerificationFor(tag)` off the
+`UpdatePolicyContent` **the poller hands it**, so the gate is only ever as fresh as that read.
+And the shape production always has is a verdict that lands *after* the pod started: a portal
+runs for days, and `mw-combo-verify` records its verdict when a candidate is published.
+
+`SelfUpdateHostedService.CreatePolicySource` used to end in
+`DistinctUntilChanged(c => (c.Policy, c.RequireCiGreen))` — a leftover from the `Switch`-based
+shape it outlived. Once the build watch moved out of the policy stream there was nothing left
+for it to re-drive, so it no longer prevented a resubscribe; it filtered the **content**, and
+that same stream is what `StartAsync` reads at decision time (`policy.Take(1)` off the
+`Replay(1)`). Recording a verdict changes neither of those two fields, so the emission carrying
+it was dropped and every later check kept deciding on the content as it stood at start-up. Every
+other field went with it — `HeldTag`, `LastRolledTag`, an operator's edit on the Updates tab.
+
+The gate was therefore recorded, rendered on the tab, and **unable to refuse anything** — #2274's
+"built, documented, tested, and called by nothing" with one extra step. Nothing de-duplicates the
+content now. The trigger stream keeps its own `DistinctUntilChanged(content => content.Policy)`,
+so a content change that is not a policy change still triggers nothing — including the poller's
+own `LastCheckedAt`/`LastCheckVerdict` bookkeeping writes, which is why letting them through
+cannot loop.
+
+Pinned by `ComboGateRollTest.AVerdictRecordedAfterTheFirstCheck_RefusesTheNextRoll`, whose second
+check is driven by the **safety net** on purpose: a policy change would refresh the content even
+with the defect present, because it moves the very field the filter keyed on.
+
 ## Cost, and why the walk is cheap
 
 `VersionSelect.PickTargets` returns every eligible tag newest-first and the poller takes the first
