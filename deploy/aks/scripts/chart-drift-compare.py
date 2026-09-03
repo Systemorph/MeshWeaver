@@ -9,13 +9,23 @@ is test-chart-drift-compare.sh, which chart-gate.yml runs on every pull request.
 
 Arguments, in order:
   desired.yaml  live-configmap.json  live-deployment.json  expect-patch.json
-  live-poddisruptionbudgets.json  live-scaledobjects.json
+  live-poddisruptionbudgets.json  live-scaledobjects.json  live-envfrom-secret-keys.txt
+
+The last file is `secret<TAB>key` lines — the NAMES of the keys each envFrom secret supplies, and
+nothing else. No secret VALUE is read by this script, and none may be added to it.
 Exit 0 = no drift, 1 = drift or the comparison could not be made.
 """
 import json, sys, yaml
 
 desired_path, live_cm_path, live_dep_path, expect_patch = sys.argv[1:5]
 live_pdb_path, live_so_path = sys.argv[5:7]
+# `secret<TAB>key` lines. Key NAMES only — see the module docstring.
+secret_keys = {}
+if len(sys.argv) > 7 and sys.argv[7]:
+    for _line in open(sys.argv[7]):
+        if "\t" in _line:
+            _sec, _key = _line.rstrip("\n").split("\t", 1)
+            secret_keys.setdefault(_key, []).append(_sec)
 
 findings, comparisons = [], 0
 def finding(kind, what, detail=""):
@@ -105,6 +115,11 @@ def by_lower(d):
         out.setdefault(k.lower(), []).append(k)
     return out
 d_cm_by_lower, l_cm_by_lower = by_lower(d_data), by_lower(l_data)
+# An envFrom SECRET key reaches the container exactly like a ConfigMap key, so an inline env of the
+# same name shadows it identically — the case the ConfigMap-only comparison missed on memex
+# (MeshWeaver#3201). Its value is deliberately unknown here, so such a shadow is reported WITHOUT an
+# agree/disagree verdict rather than with a guessed one.
+sec_by_lower = by_lower(secret_keys)
 
 for n in sorted(d_env | l_env):
     comparisons += 1
@@ -116,12 +131,25 @@ for n in sorted(d_env | l_env):
     # live-only inline env. Does it collide with a key that reaches the pod via envFrom?
     d_twins = d_cm_by_lower.get(n.lower(), [])
     l_twins = l_cm_by_lower.get(n.lower(), [])
-    twins = sorted(set(d_twins) | set(l_twins))
+    s_twins = sec_by_lower.get(n.lower(), [])
+    twins = sorted(set(d_twins) | set(l_twins) | set(s_twins))
     if not twins:
         finding("CLUSTER-ONLY", f"inline env {n}",
                 "set on the Deployment (`kubectl set env`?) and NOT in the chart. A `helm upgrade` "
                 "PRESERVES it (measured), but it exists in no committed source — so it is lost on "
                 "any rebuild and no reviewer can see it")
+        continue
+    # A key supplied ONLY by an envFrom secret: same shadow, but the value is unknown by design.
+    if s_twins and not d_twins and not l_twins:
+        secs = sorted({sec for k in s_twins for sec in secret_keys.get(k, [])})
+        where = " and ".join("secret/" + x for x in secs)
+        finding("SHADOWS", f"inline env {n}",
+                f"{where} supplies this key through envFrom, and an inline env OVERRIDES envFrom — "
+                f"so this entry wins and the SECRET's value is dead. Whether the two agree is NOT "
+                f"checked here (this script never reads a secret value) and must not be assumed: on "
+                f"memex they differed, leaving the pod on a plaintext copy while the Key Vault "
+                f"credential went unused (MeshWeaver#3201). Establish which value is the live one "
+                f"FIRST, then put it in the secret and delete the inline entry")
         continue
     # Which ConfigMap value would the pod read if this inline entry were removed? The LIVE map is
     # what is mounted, so it decides the effective value; fall back to the render when the key is
