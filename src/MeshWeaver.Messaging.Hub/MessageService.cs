@@ -436,9 +436,16 @@ public class MessageService : IMessageService
             "Hub {Address} is tearing down with {Count} gate(s) still shut ([{Gates}]) — answering "
             + "every delivery parked behind them instead of leaving them to their own timeouts",
             Address, stillShut.Length, string.Join(",", stillShut));
+        // 🚨 The reason must name the DEFERRAL, not just the shutdown. The NACK is the only thing
+        // the caller will ever see, and "the hub is shutting down" sends the next investigator to
+        // the disposal path when the fact that matters is that the delivery was parked behind a
+        // gate that can now never open. Pinned by
+        // DeferredDeliveryNackedOnDisposeTest.DeferredRequest_IsNacked_WhenHubIsDisposedBeforeItsGateOpens,
+        // which already asserted this contract for the late NACK this one supersedes.
         FailDeferredBacklog(ShutdownNack.RetryForTheAuthoritativeAnswer(
             Address, null,
-            $"the hub began tearing down while [{string.Join(",", stillShut)}] were still shut"));
+            $"the hub began tearing down while [{string.Join(",", stillShut)}] were still shut, so "
+            + "the deferred delivery parked behind them can never be released"));
     }
 
     private void FailDeferredBacklog(string reason)
