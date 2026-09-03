@@ -111,6 +111,22 @@ public record PackageManifest
     /// third-party repo would assert a licence its author never gave. Surfacing "unspecified" is
     /// the honest answer, and it is what lets a UI ask before installing.</para>
     /// </summary>
+    /// <summary>
+    /// The <c>Graph:Storage:Type</c> this package PROVIDES, when it ships a storage backend —
+    /// <c>PostgreSql</c>, <c>Cosmos</c>, <c>Snowflake</c>. Null for every ordinary package.
+    ///
+    /// <para>🚨 This is what lets the first-run setup wizard offer a database it does not yet have.
+    /// A fresh instance has no storage, so it cannot install anything the ordinary way — but it CAN
+    /// register, list what its plan entitles it to, and land a module: module installation runs
+    /// BEFORE persistence selection reads <c>Graph:Storage</c>, which is the whole reason a storage
+    /// backend can arrive as a boot pack at all (see <c>CosmosStorageProviderAttribute</c>).</para>
+    ///
+    /// <para>The name must match the key the pack registers its <c>IStorageAdapterFactory</c> under,
+    /// or the wizard records a backend that never resolves and the instance fails at its NEXT boot
+    /// with <c>Unknown storage type</c> — after the wizard is gone.</para>
+    /// </summary>
+    public string? StorageType { get; init; }
+
     public string? License { get; init; }
 
     /// <summary>

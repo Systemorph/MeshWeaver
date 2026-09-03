@@ -19,17 +19,49 @@ namespace Memex.Portal.Shared.Setup;
 /// <param name="SignIn">The login routes this image can actually serve.</param>
 /// <param name="Ai">The model providers this image can actually call.</param>
 /// <param name="Modules">The module assemblies this image ships and can boot.</param>
+/// <param name="Packages">What the REGISTRY says this instance is entitled to, once it has
+/// registered. Empty before registration, and empty is a legitimate answer afterwards — a plan may
+/// grant nothing.</param>
+/// <param name="Identity">Who this instance registered as, or null before it has.</param>
+/// <param name="RegistryProblem">Why the catalog could not be listed, when it could not be. Shown
+/// to the operator rather than swallowed: an instance that registered but cannot see its plan is a
+/// state worth naming, not a silently empty list.</param>
 public sealed record SetupCatalog(
     ImmutableList<SetupStorageOption> Storage,
     ImmutableList<SetupSignInOption> SignIn,
     ImmutableList<SetupAiOption> Ai,
-    ImmutableList<SetupModuleOption> Modules)
+    ImmutableList<SetupModuleOption> Modules,
+    ImmutableList<SetupPackageOption> Packages = null!,
+    MeshWeaver.Mesh.InstanceIdentitySelection? Identity = null,
+    string? RegistryProblem = null)
 {
+    /// <summary>The entitled packages, never null.</summary>
+    public ImmutableList<SetupPackageOption> Packages { get; init; } = Packages ?? [];
+
     /// <summary>An image that offers nothing — the shape a host with no contributor answers with,
     /// which the surface renders as an explicit "this image ships no options" rather than as an
     /// empty form somebody could submit.</summary>
     public static SetupCatalog Empty { get; } = new([], [], [], []);
 }
+
+/// <summary>
+/// One package the registry says this instance may install.
+///
+/// <para>🚨 <see cref="StorageType"/> is what lets a package answer the DATABASE question. It is
+/// the <c>Graph:Storage:Type</c> the package's boot pack registers, and it is only offerable when
+/// the image can already load that backend — see <see cref="SetupStorageOption"/>.</para>
+/// </summary>
+/// <param name="Id">The package id, as the catalog serves it.</param>
+/// <param name="Name">Its display name.</param>
+/// <param name="Description">What it is.</param>
+/// <param name="StorageType">The storage backend it provides, or null.</param>
+/// <param name="PreSelected">Whether a "next, next, finish" install provisions it.</param>
+public sealed record SetupPackageOption(
+    string Id,
+    string Name,
+    string? Description = null,
+    string? StorageType = null,
+    bool PreSelected = false);
 
 /// <summary>One storage backend the image can open, as a keyed
 /// <c>IStorageAdapterFactory</c> registration named it.</summary>
@@ -39,12 +71,21 @@ public sealed record SetupCatalog(
 /// <param name="NeedsBasePath">Whether the backend is rooted at a directory instead.</param>
 /// <param name="ConnectionStringHint">An example, shown as the field's placeholder. Never a real
 /// credential — the hints are literals in code, seen by whoever is setting the instance up.</param>
+/// <param name="PackageId">The registry package that provides this backend, when one does. Null for
+/// a backend compiled into the image.
+///
+/// <para>🚨 A package is only listed here when the IMAGE can already open the backend — i.e. its
+/// keyed factory is registered. A storage module the image lacks cannot be offered, because landing
+/// it would have to happen BEFORE persistence selection reads <c>Graph:Storage</c>, and package
+/// provisioning runs after the mesh is up. Offering one anyway would record a backend that never
+/// resolves and fail at the NEXT boot, with the wizard gone.</para></param>
 public sealed record SetupStorageOption(
     string Type,
     string DisplayName,
     bool NeedsConnectionString = false,
     bool NeedsBasePath = false,
-    string? ConnectionStringHint = null);
+    string? ConnectionStringHint = null,
+    string? PackageId = null);
 
 /// <summary>One sign-in route the image can serve.</summary>
 /// <param name="Name">The scheme name — the value <c>/auth/login?provider=</c> takes.</param>
