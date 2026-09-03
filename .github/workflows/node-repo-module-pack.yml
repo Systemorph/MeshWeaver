@@ -258,6 +258,7 @@ on:
           selection fall back to the full set and say why.
         type: string
         required: false
+        default: ''
       superseded-image-assemblies:
         description: >
           Comma- or whitespace-separated IMAGE assembly names whose copy in the pinned platform
@@ -285,7 +286,6 @@ on:
           exactly as before.
         type: string
         required: false
-        default: ''
         default: ''
       platform-image:
         description: >
