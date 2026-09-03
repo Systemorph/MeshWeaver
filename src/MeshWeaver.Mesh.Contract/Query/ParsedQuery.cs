@@ -16,7 +16,6 @@ namespace MeshWeaver.Mesh;
 /// <param name="Context">Context for visibility filtering (from context: qualifier)</param>
 /// <param name="IsMain">When true, filters to main nodes only (MainNode is null or equals Path)</param>
 /// <param name="Paths">Multi-value path filter from <c>path:a|b|c</c> alternation. When set, backends should push down <c>WHERE path IN (...)</c>. <see cref="Path"/> is also set to the first value for back-compat with consumers that don't know about multi-path.</param>
-/// <param name="CrossPartition">From <c>partitions:all</c> — the caller has EXPLICITLY asked to span every partition. Fan-out is opt-in: a storage provider refuses a query that names no partition and did not set this, because a silent cross-schema UNION locks every relation it touches and stalls unrelated pinned reads. 🚨 This is a FLAG and not a path value on purpose — <c>path:*</c> looks like it should mean the same thing and does not: partition resolvers read a path's first segment as a schema NAME, so <c>path:*</c> pins the query to a partition literally called <c>*</c> and the query dies on <c>relation "*.threads" does not exist</c>, returning empty rather than erroring.</param>
 /// <param name="IsContent">From <c>is:content</c> — the caller is listing CONTENT, so REGISTRATION nodes are not wanted: the in-memory type definitions, module definitions and partition declarations that <c>AddMeshNodes</c> contributes exist so the platform knows a type exists, and are what a create menu or an autocomplete offers, not something a person browses. A surface that lists things for a human says so on its own query rather than being enumerated in a central list of context names somewhere else.</param>
 public record ParsedQuery(
     QueryNode? Filter,
@@ -30,10 +29,28 @@ public record ParsedQuery(
     string? Context = null,
     bool? IsMain = null,
     IReadOnlyList<string>? Paths = null,
-    bool? IsContent = null,
-    bool CrossPartition = false
+    bool? IsContent = null
 )
 {
+    /// <summary>
+    /// From <c>partitions:all</c> — the caller has EXPLICITLY asked to span every partition. Fan-out
+    /// is opt-in: a storage provider refuses a query that names no partition and did not set this,
+    /// because a silent cross-schema UNION locks every relation it touches and stalls unrelated
+    /// pinned reads.
+    ///
+    /// <para>🚨 A FLAG, not a path value, on purpose. <c>path:*</c> reads like the same statement and
+    /// is not: partition resolvers take a path's first segment as a schema NAME, so <c>path:*</c>
+    /// pins the query to a partition literally called <c>*</c>, the statement dies on
+    /// <c>relation "*.threads" does not exist</c>, and the caller gets an EMPTY result instead of an
+    /// error.</para>
+    ///
+    /// <para>🚨 An init-only PROPERTY, not a positional parameter, also on purpose: a record's
+    /// primary-constructor arity is binary contract, and adding a parameter — even one with a
+    /// default — breaks every compiled caller. The <c>Public surface (binary compatibility)</c> gate
+    /// catches it as <c>record ParsedQuery — arity</c>.</para>
+    /// </summary>
+    public bool CrossPartition { get; init; }
+
     /// <summary>
     /// The qualifier that sets <see cref="CrossPartition"/> — the EXPLICIT "span every partition"
     /// request, and the only thing that makes an otherwise unanchored query legal. Spelled once here

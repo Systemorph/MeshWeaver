@@ -50,7 +50,10 @@ public partial class QueryParser
         // working unchanged, instead of these surfaces continuing to claim `context:search`.
         // An explicit context: always wins.
         context ??= isContent == true ? MeshContexts.Content : null;
-        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent, crossPartition);
+        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent)
+        {
+            CrossPartition = crossPartition,
+        };
     }
 
     /// <summary>
