@@ -314,3 +314,6 @@ top-level types; `src/` declares 1832 across 35 assemblies today.
 [Shared Rule Blocks](/Doc/Architecture/SharedRuleBlocks) ·
 [Carving Projects Out Of Core](/Doc/Architecture/CarvingProjectsOutOfCore) ·
 [Module Versioning](/Doc/Architecture/ModuleVersioning)
+- [Image Pair Skew](/Doc/Architecture/ImagePairSkew) — the same class at the IMAGE level: CD pairs a
+  core commit with a Plugins head resolved hours later, and the pair is never executed before it is
+  promoted.
