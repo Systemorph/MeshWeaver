@@ -454,7 +454,9 @@ public static class CodeNodeType
     /// carries the caller's AccessContext across the Subscribe boundary); <see cref="ActivityLog.Fail"/>
     /// appends the error and stamps <c>End</c>, so the Output pane leaves "Running…" with the reason.
     /// </summary>
-    private static void FailActivity(IMessageHub hub, string activityPath, string error,
+    // internal, not private: MeshWeaver.Graph.Test drives this directly to pin the #3117
+    // release and the ContentAs fix. Nothing outside the test assembly can see it.
+    internal static void FailActivity(IMessageHub hub, string activityPath, string error,
         Exception? exception = null)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
@@ -472,12 +474,20 @@ public static class CodeNodeType
                 "CodeNodeType: failing run {Activity} dispatched from {Hub}: {Error}",
                 activityPath, hub.Address, error);
         hub.GetWorkspace().GetMeshNodeStream(activityPath).Update(curr =>
-            curr.Content is ActivityLog log
-                ? curr with { Content = log.Fail(error) }
-                : curr)
+                // 🚨 ContentAs, never `is ActivityLog`. This lambda runs against a LOCAL mirror whose
+                // Content can be a degraded JsonElement, and a plain type test is then null — the
+                // lambda no-ops, no patch is sent, and the run this method exists to FAIL is left
+                // Running for ever. Exactly the trap ActivityLogAppender.Append's own lambda names.
+                curr.ContentAs<ActivityLog>(hub.JsonSerializerOptions, logger) is { } log
+                    ? curr with { Content = log.Fail(error) }
+                    : curr)
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex,
-                    "CodeNodeType: failed to reconcile ActivityLog {Activity} to Failed", activityPath));
+                    "CodeNodeType: failed to reconcile ActivityLog {Activity} to Failed", activityPath),
+                // #3117 — retire the activity's per-node hub on the terminal write rather than
+                // leaving it to the 10-minute idle sweep. Completion, never emission.
+                () => ActivityLogAppender.ReleaseMirrorWhenFinal(
+                    hub, activityPath, ActivityStatus.Failed, logger));
     }
 }

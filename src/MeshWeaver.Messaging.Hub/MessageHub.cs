@@ -345,7 +345,7 @@ public sealed class MessageHub : IMessageHub
         // Also register in the disposables composite so a NORMAL teardown kills the
         // timer promptly (rather than waiting for the next tick after GC). Double-dispose
         // with the explicit Quiescing-phase dispose is harmless (Rx is idempotent).
-        disposables.Add(sub);
+        disposables.Add(GuardRegistrant(sub));
     }
 
     /// <summary>Single scan tick — extracted so the timer closure captures only a
@@ -1610,7 +1610,10 @@ public sealed class MessageHub : IMessageHub
         // CompositeDisposable. If disposal has already started the composite is
         // disposed and Add disposes the registrant immediately — late registrants
         // never leak. No bag, no imperative drain.
-        disposables.Add(disposable);
+        // Wrapped so a registrant that throws is named rather than truncating the
+        // whole teardown walk — see GuardRegistrant. Applies to the late-registrant
+        // path above too, which disposes through the same wrapper.
+        disposables.Add(GuardRegistrant(disposable));
         return this;
     }
 
@@ -2048,9 +2051,44 @@ public sealed class MessageHub : IMessageHub
         }
 
         // 2. Synchronous teardown of every registered subscription / Action cleanup —
-        //    normal Rx subscription logic, no bag.
+        //    normal Rx subscription logic, no bag. Every registrant went in wrapped by
+        //    GuardRegistrant, so one that throws is named and the walk continues.
         disposables.Dispose();
     }
+
+    /// <summary>
+    /// Wraps a registered cleanup so a fault in it is NAMED and the teardown continues.
+    ///
+    /// <para>🚨 Rx's <c>CompositeDisposable.Dispose</c> walks its list with no per-item guard, so
+    /// the FIRST registrant that throws ends the walk and every cleanup registered after it is
+    /// silently skipped — a subscription left live, a NACK never minted, and nothing in the log
+    /// naming which registrant did it (the caller sees one warning attributed to
+    /// <c>DisposeImpl</c> as a whole). Measured on main shard 4, 2026-09-02: one disposal action
+    /// resolving out of an already-closed lifetime scope threw <c>ObjectDisposedException</c>
+    /// here, and the <c>OwnerDisposing</c> NACK behind it never reached its waiting writer, which
+    /// then burned the full 31 s verdict budget (<c>LateNackReenqueueTest</c>, run 33630685580).</para>
+    ///
+    /// <para>This swallows nothing: the fault is logged with the registrant that raised it, and
+    /// the remaining cleanups still run. A registrant that throws is a bug IN THAT REGISTRANT —
+    /// it is now visible as one instead of as a truncated teardown. It is the same per-leg
+    /// isolation the reactive dispose actions already have in <see cref="DisposeImpl"/>.</para>
+    /// </summary>
+    private IDisposable GuardRegistrant(IDisposable registrant) =>
+        System.Reactive.Disposables.Disposable.Create(() =>
+        {
+            try { registrant.Dispose(); }
+            catch (Exception e)
+            {
+                // 🚨 The EXCEPTION, not its ToString(): a registrant that throws here is a bug in
+                // that registrant, and the only thing that says WHICH line raised it is the stack
+                // trace. Type+message alone names the symptom and hides the site — and this arm is
+                // now the ONLY report of that fault, since the walk no longer ends on it.
+                TryLog(LogLevel.Warning, e,
+                    "[DISPOSE-REGISTRANT] {Address}: a registered cleanup ({Registrant}) faulted. "
+                    + "The remaining cleanups still ran.",
+                    Address, registrant.GetType().Name);
+            }
+        });
 
     /// <summary>
     /// Multi-line snapshot of the hub's disposal state. Reports own RunLevel + disposal

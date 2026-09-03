@@ -565,8 +565,60 @@ assertion that a probe wrote no fault line is complete once `DisposalCompleted` 
 because the `ShutdownRequest` is queued behind the init turn and the teardown has written
 whatever it writes by then.
 
+## 🚨 A disposal path never resolves from DI — and never truncates itself
+
+Two rules, one incident. Both are enforced in `MessageHub`, and code that registers
+disposal work has to obey the first.
+
+**1. Never call DI from a disposal path.** By the time a hub's registered clean-ups run,
+its lifetime scope — or an ancestor of it — may already be closed:
+`HostedHubsCollection.CloseScopeWhenDisposed` closes a hosted hub's scope on
+`DisposalCompleted`, and the watchdog's `ForceTeardownAfterWatchdog` runs
+`hostedHubs.Dispose()` *before* `DisposeImpl()`. A resolve then throws
+
+```
+ObjectDisposedException: Instances cannot be resolved and nested lifetimes cannot be
+created from this LifetimeScope as it (or one of its parent scopes) has already been disposed.
+```
+
+`hub.Configuration.ParentHub` counts as a resolve — it re-reads `ParentServiceProvider`.
+So does `GetService<ILoggerFactory>()`. **Capture what the clean-up needs at REGISTRATION
+time**, on the handler's turn, and close over it:
+
+```csharp
+// ✅ resolved while the scope is provably alive, used later
+var sink = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
+var parent = hub.Configuration.ParentHub;
+hub.RegisterForDisposal(_ => { if (!sink!.Dispatch(id, verdict)) parent?.Post(verdict); });
+
+// ❌ resolved on the disposal path — throws once the scope is closed
+hub.RegisterForDisposal(_ =>
+    hub.ServiceProvider.GetService<ILatePatchVerdictSink>()!.Dispatch(id, verdict));
+```
+
+**2. A failing clean-up is isolated, not fatal to the rest.** The hub's synchronous
+clean-ups live in one Rx `CompositeDisposable`, and `CompositeDisposable.Dispose` walks
+its list with **no per-item guard**: the first registrant that throws ends the walk, and
+every clean-up registered behind it is skipped in silence. `RegisterForDisposal` therefore
+wraps every registrant (`MessageHub.GuardRegistrant`): a fault is logged as
+`[DISPOSE-REGISTRANT] {Address}: a registered cleanup ({Registrant}) faulted…` and the
+walk continues. This is the same per-leg isolation the *reactive* dispose actions already
+had — it is isolation, not tolerance: nothing is swallowed, and a registrant that throws
+is still a bug in that registrant.
+
+**What it cost, measured.** Main shard 4, 2026-09-02 (run 33630685580): a per-node owner
+hub went down through the watchdog's out-of-band teardown; one clean-up resolved from an
+already-closed scope; the walk stopped there; and the `OwnerDisposing` NACK behind it — the
+verdict that tells a writer "this did not apply, retry against the fresh activation" — was
+never minted. Its writer heard nothing and burned the full 31 s `WriteVerdictBound` before
+reporting `OwnerUnreachable`. An acked write lost to a teardown that had truncated itself.
+Pinned by `DisposalRegistrantFaultIsolationTest`.
+
 ## Adding disposal work — the rule
 
+- **Anything the clean-up needs from DI?** Resolve it at REGISTRATION time and close over
+  it — see the rule above. A disposal action that calls `GetService`, `GetRequiredService`
+  or `Configuration.ParentHub` is a defect even when it happens to work today.
 - **Installing a WATCHER the hub owns?** `SubscribeHubWatcher(hub, …)`, then hand the
   result to `RegisterForDisposal` as before. The registration is the backstop; the
   `ShuttingDown` signal is what actually ends the watcher — see the section above.

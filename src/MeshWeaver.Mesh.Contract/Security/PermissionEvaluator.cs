@@ -887,13 +887,12 @@ internal static class PermissionEvaluator
     private static IObservable<IEnumerable<MeshNode>> ObserveEffectiveAssignments(
         IMessageHub hub, IMeshNodeStreamCache cache, string nodePath, IReadOnlyList<MeshNode> staticNodes)
     {
-        // The ROOT scope's grants live under the `_Access` namespace of no partition, so this leg
-        // stays global (declared in SecurityQueryShapesTest.DeliberatelyGlobal) and stays ONE
-        // process-wide cached subscription for the whole mesh.
+        // The ROOT scope's grants live at `_Access/{id}` — the registered global satellite whose
+        // schema is `system_access`, so the router pins this read to that ONE schema
+        // (SecurityQueryShapesTest.TheRootAccessLegPinsTheRegisteredGlobalSchema). ONE process-wide
+        // cached subscription for the whole mesh.
         var root = SecurityQuery(cache, "$security-access:", hub.JsonSerializerOptions,
-            SecurityQueries.Scoped(
-                $"namespace:_Access nodeType:{SecurityCollections.AccessAssignmentNodeType} "
-                + SecurityQueries.ContentProjection));
+            SecurityQueries.RootAssignments);
 
         var statics = Observable.Return<IEnumerable<MeshNode>>(staticNodes.ToArray());
         var partition = GetPartition(nodePath);
@@ -920,11 +919,12 @@ internal static class PermissionEvaluator
         IMessageHub hub, IMeshNodeStreamCache cache, string scope,
         IReadOnlyDictionary<string, PartitionAccessPolicy> staticPolicies)
     {
-        // Root: the empty namespace belongs to no partition — global, one subscription, declared.
+        // Root: the node at exactly `_Policy`, read by PATH so the router has a first segment and
+        // never fans out (#2194 — the path-less spelling UNION-ed every partition schema 179× per
+        // five minutes on memex-cloud for a row that cannot exist there; see SecurityQueries.RootPolicy).
+        // One process-wide subscription.
         var root = SecurityQuery(cache, "$security-policy:", hub.JsonSerializerOptions,
-            SecurityQueries.Scoped(
-                $"namespace: id:_Policy nodeType:{SecurityCollections.PartitionAccessPolicyNodeType} "
-                + SecurityQueries.ContentProjection));
+            SecurityQueries.RootPolicy);
 
         var partition = GetPartition(scope);
         var nodes = string.IsNullOrEmpty(partition)

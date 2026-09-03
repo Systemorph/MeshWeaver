@@ -358,14 +358,23 @@ public static class BuildProtocolDriver
             });
     }
 
-    private static IObservable<MeshNode> FinishActivity(
+    // internal, not private: MeshWeaver.Graph.Test drives this directly to pin the #3117
+    // release. Nothing outside the test assembly can see it.
+    internal static IObservable<MeshNode> FinishActivity(
         IMessageHub mesh, string activityPath, ActivityStatus status) =>
         mesh.GetWorkspace().GetMeshNodeStream(activityPath).Update(node =>
-        {
-            var log = node?.ContentAs<ActivityLog>(mesh.JsonSerializerOptions);
-            if (node is null || log is null || log.Status.IsTerminal()) return node!;
-            return node with { Content = log.Finish(log.Version + 1, status) };
-        });
+            {
+                var log = node?.ContentAs<ActivityLog>(mesh.JsonSerializerOptions);
+                if (node is null || log is null || log.Status.IsTerminal()) return node!;
+                return node with { Content = log.Finish(log.Version + 1, status) };
+            })
+            // #3117 — a build-protocol completion is a terminal _Activity write that bypasses
+            // ActivityLogAppender.Append, so it never retired the activity's per-node hub. On
+            // COMPLETION, never on the emission — the write is still in flight when its value is
+            // emitted. An already-terminal log takes the no-op arm above and is released here too,
+            // which is correct: the status IS terminal, whoever wrote it.
+            .Do(_ => { },
+                () => ActivityLogAppender.ReleaseMirrorWhenFinal(mesh, activityPath, status));
 
     // ── the follower ────────────────────────────────────────────────────────────────────────────
 

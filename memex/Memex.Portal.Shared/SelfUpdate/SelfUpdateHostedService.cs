@@ -304,8 +304,22 @@ public class SelfUpdateHostedService : IHostedService
     /// the RetryWhen, so a retry re-establishes the read silently (Copilot review on #611).</item>
     /// </list>
     /// Retries are delayed, Rx-composed resubscribes at the polling cadence — not a hot retry loop,
-    /// not a watchdog. <c>DistinctUntilChanged</c> sits outermost so only a REAL policy change (or
-    /// the initial value) re-drives the Switch.
+    /// not a watchdog.
+    ///
+    /// <para>🚨 <b>Nothing de-duplicates the CONTENT here, and that is deliberate.</b> This source
+    /// used to end in <c>DistinctUntilChanged(c =&gt; (c.Policy, c.RequireCiGreen))</c> — a leftover
+    /// from the <c>Switch</c>-based shape, whose comment still said "re-switch only on a REAL policy
+    /// change" long after the <c>Switch</c> was gone. With the watch moved OUT of the policy stream
+    /// there is nothing left to re-drive, so the operator no longer prevented a resubscribe; it
+    /// FILTERED the content, and this stream is also what <c>StartAsync</c> reads AT DECISION TIME
+    /// (<c>policy.Take(1)</c> off the <c>Replay(1)</c>). Every field other than those two was
+    /// therefore pinned to the first emission for the life of the pod: a combo verdict landed by
+    /// <c>mw-combo-verify</c> after startup was invisible to the gate that exists to honour it, and
+    /// the poller rolled to an image it had been told this instance's modules cannot run. The
+    /// trigger stream keeps its OWN <c>DistinctUntilChanged(content =&gt; content.Policy)</c>, so a
+    /// content change that is not a policy change still triggers nothing — including this service's
+    /// own <c>LastCheckedAt</c>/<c>LastCheckVerdict</c> bookkeeping writes, which is why letting
+    /// them through cannot loop.</para>
     /// </summary>
     private IObservable<UpdatePolicyContent> CreatePolicySource()
     {
@@ -318,8 +332,7 @@ public class SelfUpdateHostedService : IHostedService
                 .Defer(ReadPolicyStream)
                 // The gate has opened: from here a fault costs freshness, not the feature.
                 .Do(_ => Interlocked.Exchange(ref _policyEstablished, 1))
-                .RetryWhen(ResubscribeAfterRetryInterval("policy stream")))
-            .DistinctUntilChanged(c => (c.Policy, c.RequireCiGreen)); // <-- re-switch only on a REAL policy change
+                .RetryWhen(ResubscribeAfterRetryInterval("policy stream")));
     }
 
     /// <summary>

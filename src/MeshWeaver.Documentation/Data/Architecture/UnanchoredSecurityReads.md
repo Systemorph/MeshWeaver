@@ -62,13 +62,26 @@ the overwhelming majority at runtime — so "everything is unanchored" cannot pa
 | `SecurityQueries.Roles` | a custom `Role` definition may live in any partition; a truncated role set silently drops every permission derived from the missing role |
 | `SecurityQueries.Memberships` | the group and the grant that names it live in different partitions (above) |
 | `SecurityQueries.GatedNodes(type)` | instances of a gated NodeType are authored wherever their owner lives, and the gate map is matched against target paths from every partition |
-| root `namespace:_Access` | the ROOT scope's anchor is the satellite segment `_Access`, which resolves to **no partition** — there is no partition name to write |
-| root `namespace:` + `id:_Policy` | the root scope's policy leg carries the EMPTY namespace by construction, for the same reason |
+
+**Struck from this table on 2026-09-02 (#2194) — the two ROOT legs.** Earlier revisions listed
+`namespace:_Access` ("resolves to no partition") and `namespace: id:_Policy` here. Both were wrong
+about the router, not about the data: a `_`-prefixed first segment is resolved through the
+REGISTERED global-satellite definitions (`DefaultPartitionProvider`: `_Access` → schema
+`system_access`), so the grants leg (`SecurityQueries.RootAssignments`) was always served by ONE
+schema. The policy leg had no first segment at all and DID fan out — 179 `[CrossSchema] SLOW` lines
+in five minutes on memex-cloud, for a row that cannot exist on Postgres (an unregistered `_` first
+segment is unroutable for writes too). It is now `SecurityQueries.RootPolicy` = `path:_Policy …`:
+the same node, with a first segment, so the router never UNIONs for it. Neither move anchors a read
+to the VIEWER — the root scope has exactly one home — so neither is the truncation this page is
+about. Measurement and attribution: [Cross-Schema Fan-Out Elimination](../CrossSchemaFanOutElimination)
+→ "The 2026-09-02 census".
 
 Note what is NOT on the list: the **per-partition** legs (`path:{partition} scope:descendants
 nodeType:AccessAssignment`, and its `_Policy` twin) pin their partition through the first path
-segment. The global legs are five process-wide cached subscriptions, not a per-render storm — which
-is why the ordering below matters.
+segment. The global legs are three process-wide cached subscriptions, not a per-render storm — but
+a process-wide subscription still RE-RUNS on every relevant change, and on a multi-pod portal every
+cross-process notification counts as relevant (it carries no entity to classify); that multiplier,
+not the subscription count, is what the Loki census counts. See the same section.
 
 ## The distinction that makes one anchoring sound and the other a regression (#3093)
 

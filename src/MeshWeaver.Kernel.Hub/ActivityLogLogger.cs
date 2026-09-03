@@ -318,7 +318,19 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
                         _ => { },
                         ex => _diagnostics?.LogDebug(ex,
                             "ActivityLogLogger: publishing the log snapshot for {Path} failed",
-                            activityLogPath));
+                            activityLogPath),
+                        // 🚨 #3117 — the highest-volume terminal _Activity writer in the platform
+                        // (every kernel run, script, markdown execution and test run) bypasses
+                        // ActivityLogAppender.Append, so it never fired the release that retires the
+                        // activity's per-node hub. Its hubs waited out the 10-minute idle sweep
+                        // instead. `status` is what THIS write asserted, so a Running snapshot is a
+                        // no-op inside the seam.
+                        //
+                        // On COMPLETION, never on the emission: releasing tears the path's upstream
+                        // sync streams down, and the write is still in flight when its value is
+                        // emitted. Same rule, same reason, as Append's own Do arm.
+                        () => ActivityLogAppender.ReleaseMirrorWhenFinal(
+                            hub, activityLogPath, status, _diagnostics));
         }
         catch { /* never let logging break the script */ }
     }
