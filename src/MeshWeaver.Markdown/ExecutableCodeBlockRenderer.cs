@@ -15,7 +15,9 @@ namespace MeshWeaver.Markdown;
 /// order (the Blazor <c>MarkdownHtmlRenderer</c>, the React <c>"toolbar"</c> segment, the React
 /// Native <c>RunCell</c>) gets the foot placement without knowing anything about it.</para>
 /// </summary>
-public class ExecutableCodeBlockRenderer : CodeBlockRenderer
+/// <param name="currentNodePath">The path of the node this markdown belongs to, or null. Only the
+/// ```` ```prompt ```` fence uses it — see <see cref="WritePromptComposer"/>.</param>
+public class ExecutableCodeBlockRenderer(string? currentNodePath = null) : CodeBlockRenderer
 {
     /// <summary>Fence argument that requests the code be displayed (<c>--show-code</c>).</summary>
     public const string ShowCode = "show-code";
@@ -74,6 +76,9 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
             return;
         }
         fenced.Initialize();
+
+        if (fenced.PromptDraft is not null && WritePromptComposer(renderer, obj, fenced.PromptDraft))
+            return;
 
         var args = fenced.Args;
         var showsHeader = args.TryGetValue(ShowHeader, out var showHeader) && showHeader is null
@@ -176,6 +181,42 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         renderer.EnsureLine();
     }
 
+
+    /// <summary>
+    /// Lowers a ```` ```prompt ```` fence (#2511) onto the layout-area marker for the page node's own
+    /// <see cref="PromptFence.AreaName"/> area — the composer, pre-filled with the authored prompt
+    /// and editable in place, whose Submit starts a real agent thread and opens it full-page.
+    ///
+    /// <para>It reuses the marker every client ALREADY hydrates rather than minting a new one, so no
+    /// client has to learn anything for the composer to appear; the authored prompt rides as the
+    /// area's reference id (base64url — see <see cref="PromptFence.EncodeDraft"/>).</para>
+    ///
+    /// <para>🚨 The degradation rule. The marker WRAPS the ordinary read-only fenced block: a client
+    /// that hydrates layout areas replaces the div and drops its children (Blazor's
+    /// <c>MarkdownHtmlRenderer.RenderLayoutArea</c>), and one that does not renders the children —
+    /// the authored prompt, exactly as it read before this extension existed. A fence must never
+    /// render as LESS than it did before, and the platform's own tests are the only place that can
+    /// see it, because every renderer lives in MeshWeaver.Plugins. See
+    /// <c>Doc/Architecture/MarkdownFenceExtensions</c>.</para>
+    ///
+    /// <para>Returns false — leaving the caller to render the plain fence — when the document has no
+    /// owning node. The composer is an area on THAT node's hub, so with no owner there is no address
+    /// to point at, and an empty <c>data-address</c> is the ownerless NotFound-storm shape the
+    /// kernel areas are gated against for the same reason.</para>
+    /// </summary>
+    private bool WritePromptComposer(HtmlRenderer renderer, CodeBlock obj, string draft)
+    {
+        if (string.IsNullOrEmpty(currentNodePath))
+            return false;
+
+        renderer.EnsureLine();
+        renderer.Write(LayoutAreaMarkdownRenderer.GetLayoutAreaDivOpenTag(
+            currentNodePath, PromptFence.AreaName, PromptFence.EncodeDraft(draft)));
+        base.Write(renderer, obj);
+        renderer.Write("</div>");
+        renderer.EnsureLine();
+        return true;
+    }
 
     /// <summary>
     /// The opening tag of the cell's code segment. Inside a cell frame it carries the submission id

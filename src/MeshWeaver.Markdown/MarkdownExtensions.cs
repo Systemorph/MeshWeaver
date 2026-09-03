@@ -66,7 +66,9 @@ public static class MarkdownExtensions
             .Use(new ImgPathMarkdownExtension(path => ResolveImageHref(path, collection)))
             .Use(new LinkUrlCleanupExtension(currentNodePath))
             .Use(new LayoutAreaMarkdownExtension(currentNodePath))
-            .Use(new ExecutableCodeBlockExtension())
+            // currentNodePath: the ```prompt fence lowers to a layout area on the page node's OWN
+            // hub, so the renderer needs the owner. Already part of the cache key above.
+            .Use(new ExecutableCodeBlockExtension(currentNodePath))
             .Build();
 
     /// <summary>
