@@ -183,6 +183,13 @@ AKS `runCommand` rights and each environment's SECRET-FREE `values.<env>.public.
 committed to the private deploy repo; that red is the honest report that drift detection is not
 wired up yet.
 
+**Reading its report.** The findings are ranked worst-first and the classes mean different things
+— and the two that matter most, `COLLIDES` and `SHADOWS`, are wrong on the cluster *right now*
+rather than at the next deploy. A `helm upgrade` neither deletes nor overwrites drift (measured;
+Helm's three-way merge removes only what Helm owns), so nothing on that list resolves itself.
+[Chart Drift — what a deploy actually does](/Doc/Architecture/ChartDriftSemantics) has the
+measurement and the per-class triage.
+
 ### The chart must also agree with ITSELF — `check-chart-invariants.sh`
 
 Drift is only half of it. The `memex-cloud` outage above needed no cluster to detect: the chart

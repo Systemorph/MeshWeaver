@@ -85,3 +85,14 @@ jobs:
       - name: Assert every config key a values file sets is read by a template
         if: ${{ !cancelled() }}
         run: deploy/aks/scripts/check-values-are-read.sh
+
+      # The drift COMPARATOR's own logic. check-chart-drift.sh decides which divergences are
+      # live-wrong (COLLIDES, SHADOWS — an inline env: entry that silently kills a ConfigMap value)
+      # and which are hygiene, but it only ever runs against the PRIVATE production cluster on a
+      # nightly schedule. So a regression in that classification could previously be found only by
+      # a human noticing the nightly report had gone quiet — the same blind spot the drift checker
+      # exists to close, one level up. This runs the comparator against committed fixtures: no
+      # cluster, no credentials, and a clean case that fails if it ever stops classifying at all.
+      - name: Assert the chart-drift comparator classifies each divergence correctly
+        if: ${{ !cancelled() }}
+        run: deploy/aks/scripts/test-chart-drift-compare.sh
