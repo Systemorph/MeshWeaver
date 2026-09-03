@@ -2048,9 +2048,20 @@ cmd_setup() {
            | awk '/^ *Token: /{ t=$2 } END { print t }')"
 
   if [ -z "$token" ]; then
-    # No token means the portal is not in setup mode — which is the ordinary state of a
-    # configured instance, and a success, not a failure.
-    if curl -sk -o /dev/null -w '' "https://${HOSTNAME_LOCAL}:${HOST_PORT}/healthz" 2>/dev/null; then
+    # 🚨 "No token in the log" and "this instance is configured" are DIFFERENT facts, and the first
+    # does not imply the second. This used to decide between them with /healthz — which the setup
+    # host answers too (it must, or the pod never goes READY), so a token that could not be read
+    # was reported as "already set up": false, and it sends the operator off to delete an
+    # instance.json that does not exist. Ask the instance what it IS, then explain the token.
+    if awaiting_setup; then
+      warn "This instance IS awaiting setup, but no token could be read from the portal log."
+      info "The token is minted PER PROCESS and only written at startup, so it is gone if the log"
+      info "has rotated or the pod has been replaced since. Mint a fresh one by restarting it:"
+      info "  kubectl rollout restart deploy/memex-portal-deployment -n $NAMESPACE"
+      info "  memex-local setup"
+      return 1
+    fi
+    if [ "$(probe_http /)" != "000" ]; then
       ok "This instance is already set up — no setup token is being offered."
       info "To re-run setup, remove its manifest and restart the portal:"
       info "  kubectl exec deploy/memex-portal-deployment -n $NAMESPACE -- rm -f /data/instance.json"

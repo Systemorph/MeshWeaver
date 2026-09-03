@@ -183,8 +183,27 @@ unreachable, which is the same inert-classifier shape as #2451.
 > [Durable Streams Are Mesh Nodes](/Doc/Architecture/DurableStreamsViaMeshNodes) retires the
 > fallback instead of hardening it.
 
+## A released address answers terminally
+
+`Detach` used to deactivate the activation on idle. That threw away the one fact the cluster cannot
+otherwise learn — that the **owner said goodbye** — so the next delivery re-created an activation on
+the caller's silo and the router could only answer "no silo serves this hub right now", the
+transient verdict above. For a hub moving between pods that is right. For a closed Blazor circuit it
+is a storm: the owner-side eviction (#2426/#2546) is gated against the transient verdict (#2756), so
+the owner fanned out to the corpse until the stream's idle release — 46 minutes, 300–1,169 refusals
+a minute, measured on memex 2026-09-03.
+
+Now `Detach` marks the activation **released** and keeps it for `ReleasedTombstoneLifetime`;
+`Deliver` answers `PodHubNotHereException { Released = true }`, and `AnswerPodHubNotHere` turns that
+into `ErrorType.NotFound` + `TargetUnserved` — the shape the eviction acts on. `Attach` clears the
+mark, so re-registration converges as before, and a peer predating the field degrades to the
+transient verdict, never to a wrong eviction. The full case: [Dead-Circuit Fan-Out
+Storm](/Doc/Architecture/DeadCircuitFanOutStorm).
+
 ## Related
 
+- [Dead-Circuit Fan-Out Storm](/Doc/Architecture/DeadCircuitFanOutStorm) — the release tombstone,
+  and the measured storm that showed the transient verdict alone could never end.
 - [Orleans Stream Pub-Sub Durability](/Doc/Architecture/OrleansStreamPubSubDurability) — the defect,
   the production evidence, and the subscriber check this plan builds on.
 - [Error Propagation & Wedges](/Doc/Architecture/ErrorPropagationAndWedges) — a silence is a wedge.

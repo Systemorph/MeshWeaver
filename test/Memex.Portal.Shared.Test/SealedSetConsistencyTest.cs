@@ -47,11 +47,30 @@ public class SealedSetConsistencyTest
     /// so the observation's PE read is exercised against genuine bytes, not a stub.</summary>
     private static readonly System.Reflection.Assembly ModuleBytesOf = typeof(ReleaseAvailability).Assembly;
 
-    private static string SealedMvid =>
-        CompiledDependencies.MvidScheme + ModuleBytesOf.ManifestModule.ModuleVersionId.ToString("N");
+    private static string SealedMvid => MvidOf(ModuleBytesOf);
 
     private static string AnotherBuild =>
         CompiledDependencies.MvidScheme + Guid.NewGuid().ToString("N");
+
+    /// <summary>The module-owned sibling of the #3221 fixtures — a REAL managed assembly, distinct
+    /// from the entry's, so the observation's PE read answers a genuine MVID for the riding copy.
+    /// Its simple name comes from the FILE name the bundle carries it under, which is exactly how the
+    /// loader and the observation both name it.</summary>
+    private const string Sibling = "MeshWeaver.ProbeSibling";
+
+    private static byte[] SiblingBytes => File.ReadAllBytes(typeof(BundleReader).Assembly.Location);
+
+    private static string SiblingMvid => MvidOf(typeof(BundleReader).Assembly);
+
+    /// <summary>A DIFFERENT real build to stand in for "the same assembly, compiled in another
+    /// wave" — the divergence the negative control needs.</summary>
+    private static byte[] AnotherBuildBytes =>
+        File.ReadAllBytes(typeof(CompiledDependencies).Assembly.Location);
+
+    private static string AnotherBuildMvid => MvidOf(typeof(CompiledDependencies).Assembly);
+
+    private static string MvidOf(System.Reflection.Assembly assembly) =>
+        CompiledDependencies.MvidScheme + assembly.ManifestModule.ModuleVersionId.ToString("N");
 
     // ── the observation: the bytes on disk become a module set and dependency records ───────────
 
@@ -181,6 +200,151 @@ public class SealedSetConsistencyTest
             Assert.Equal(PackageAvailabilityKind.SealedSetInconsistent, widget.Kind);
             Assert.Contains(recorded, widget.Reason!, StringComparison.Ordinal);
             Assert.Contains(SealedMvid, widget.Reason!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    // ── #3221: a module-owned sibling RIDES a second bundle, and every copy must be one build ────
+
+    /// <summary>
+    /// 🚨 THE SANCTIONED SHAPE, and the reason the closure rule was NOT changed (#3221). A
+    /// module-owned <c>MeshWeaver.*</c> sibling rides every bundle that references it, so one
+    /// assembly name is sealed by several bundles at once — measured on MeshWeaver.Plugins
+    /// <c>main</c> 2026-09-03, 19 of 37 module bundles carry a copy of an assembly another package
+    /// declares as its module. This must NOT hold: refusing it would freeze more than half the
+    /// fleet's modules, and excluding declared modules from the closure would invert the package
+    /// graph (<c>AI</c> requires only <c>Store</c> yet would need <c>Essentials</c>' module, while
+    /// <c>Essentials</c> requires <c>AI</c>).
+    /// </summary>
+    [Fact]
+    public void ASiblingRidingASecondBundle_AtTheSameBuild_IsAvailable()
+    {
+        var root = PublishedRootWithRide(
+            recorded: SiblingMvid, declared: SiblingBytes, riding: SiblingBytes);
+        try
+        {
+            var observation = PublishedBundleCatalogue.Read(root, Version);
+            Assert.Empty(observation.Artifacts.Modules!.Conflicts);
+            Assert.Null(observation.Artifacts.Modules.Refusal);
+            // The DECLARED module defines the set; the ride agrees with it.
+            Assert.Equal(SiblingMvid, observation.Artifacts.Modules.MvidByModule[Sibling]);
+
+            var verdict = ReleaseAvailability.IsUpdatable(
+                observation.Target, [Required], observation.Artifacts);
+            Assert.True(verdict.IsUpdatable, verdict.HoldReason);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE NEGATIVE CONTROL for #3221.</b> The same set, with the RIDING copy a different build
+    /// from the one its owning package declares. Every declared entry is still distinct and
+    /// self-consistent — <c>MeshWeaver.ProbeModule</c> is sealed once, <c>MeshWeaver.ProbeSibling</c>
+    /// is sealed once as a declared module — so the entry-only reading #3187 shipped sees a perfectly
+    /// consistent set and answers AVAILABLE. Only a reading that accounts for the RIDING copy can
+    /// fail here, which is what makes this a proof that the check binds to the sibling path and not
+    /// merely to the path already covered.
+    ///
+    /// <para>The failure it prevents is the one memex-cloud suffered on ci.7621: the loader binds
+    /// <c>MeshWeaver.*</c> by a strictly synchronised <c>AssemblyVersion</c>, so two copies under one
+    /// simple name collapse to whichever loaded first and every NodeType that recorded the other is
+    /// declined at adoption — <i>"dependency record mismatch — built against mvid:A, live is
+    /// mvid:B"</i>.</para>
+    /// </summary>
+    [Fact]
+    public void ASiblingRidingASecondBundle_AtAnotherBuild_IsHeld_NamingBothProducers()
+    {
+        var root = PublishedRootWithRide(
+            recorded: SiblingMvid, declared: SiblingBytes, riding: AnotherBuildBytes);
+        try
+        {
+            var observation = PublishedBundleCatalogue.Read(root, Version);
+
+            // The set itself says so, naming both producers and the ROLE of each.
+            var conflict = Assert.Single(observation.Artifacts.Modules!.Conflicts);
+            Assert.StartsWith($"module {Sibling}:", conflict, StringComparison.Ordinal);
+            Assert.Contains(AnotherBuildMvid, conflict, StringComparison.Ordinal);
+            Assert.Contains(SiblingMvid, conflict, StringComparison.Ordinal);
+            Assert.Contains("as a sibling riding 'probe.module.nupkg'", conflict, StringComparison.Ordinal);
+            Assert.Contains("as the declared module of 'probe.sibling.nupkg'", conflict, StringComparison.Ordinal);
+            // A name carried at two builds defines nothing — whichever loads first is a coin toss.
+            Assert.DoesNotContain(Sibling, observation.Artifacts.Modules.MvidByModule.Keys);
+            Assert.Null(observation.Artifacts.Modules.Refusal);
+
+            var verdict = ReleaseAvailability.IsUpdatable(
+                observation.Target, [Required], observation.Artifacts);
+
+            Assert.False(verdict.IsUpdatable);
+            Assert.False(verdict.IsIndeterminate,
+                "two builds of one assembly name is a DEFINITE inconsistency of the set, not an unreadability");
+            var package = Assert.Single(verdict.Packages);
+            Assert.Equal(PackageAvailabilityKind.SealedSetInconsistent, package.Kind);
+            Assert.Contains(conflict, package.Reason!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// 🚨 The reading a ride must NOT change. Only the DECLARED module defines
+    /// <see cref="SealedModuleSet.MvidByModule"/>: an instance registers declared modules as
+    /// <c>InstalledModuleAssembly</c>, and that registration is what
+    /// <c>NodeTypeCompilationHelpers.ModuleMvidsOf</c> reports back as "live". An assembly that only
+    /// ever RIDES is registered nowhere, so letting it define the set would start judging records
+    /// against bytes the instance never reports — a false HOLD, the expensive failure direction
+    /// (#1754). Here <c>MeshWeaver.ProbeSibling</c> rides but nothing declares it, and a record naming
+    /// it is left unjudged exactly as a module outside the sealed set is.
+    /// </summary>
+    [Fact]
+    public void ARideOnlyAssembly_DoesNotDefineTheModuleSet()
+    {
+        var root = PublishedRootWithRide(
+            recorded: AnotherBuildMvid, declared: null, riding: SiblingBytes);
+        try
+        {
+            var observation = PublishedBundleCatalogue.Read(root, Version);
+            Assert.Empty(observation.Artifacts.Modules!.Conflicts);
+            Assert.Null(observation.Artifacts.Modules.Refusal);
+            Assert.DoesNotContain(Sibling, observation.Artifacts.Modules.MvidByModule.Keys);
+            Assert.Contains(Module, observation.Artifacts.Modules.MvidByModule.Keys);
+
+            var verdict = ReleaseAvailability.IsUpdatable(
+                observation.Target, [Required], observation.Artifacts);
+            Assert.True(verdict.IsUpdatable, verdict.HoldReason);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>A non-<c>MeshWeaver.*</c> package riding two bundles at two builds is NOT a conflict:
+    /// a third-party diamond rides by design (Module Closure Accounting) and versions independently,
+    /// so it does not collapse to one identity the way a strictly-version-synchronised
+    /// <c>MeshWeaver.*</c> assembly does. Judging it would hold every bundle in the fleet.</summary>
+    [Fact]
+    public void AThirdPartyDiamondRidingTwoBundles_IsNotJudged()
+    {
+        var root = PublishedRootWithRide(
+            recorded: SiblingMvid, declared: SiblingBytes, riding: SiblingBytes,
+            thirdParty: ("Contoso.Sdk", AnotherBuildBytes));
+        try
+        {
+            var observation = PublishedBundleCatalogue.Read(root, Version);
+            Assert.Empty(observation.Artifacts.Modules!.Conflicts);
+            Assert.DoesNotContain("Contoso.Sdk", observation.Artifacts.Modules.MvidByModule.Keys);
+
+            var verdict = ReleaseAvailability.IsUpdatable(
+                observation.Target, [Required], observation.Artifacts);
+            Assert.True(verdict.IsUpdatable, verdict.HoldReason);
         }
         finally
         {
@@ -340,6 +504,84 @@ public class SealedSetConsistencyTest
                     {
                         [Module] = recorded,
                         ["MeshWeaver.Layout"] = CompiledDependencies.RefAsmScheme + "abc",
+                        [CompiledDependencies.ToolchainKey] = CompiledDependencies.MvidScheme + "toolchain",
+                    }),
+            ]);
+        WriteZip(Path.Combine(source, Bundle + ".zip"),
+            (NuGetPackageWriter.ManifestEntry,
+                JsonSerializer.SerializeToUtf8Bytes(manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web))));
+        File.WriteAllText(
+            Path.Combine(source, ShippedPrebuiltBundles.CompletionSentinelFileName), Bundle + ".zip\n");
+        return root;
+    }
+
+    /// <summary>
+    /// The #3221 layout: ONE identity, ONE source, and an assembly name reaching it from TWO module
+    /// bundles — the live shape of MeshWeaver.Plugins, where 19 of 37 bundles carry a copy of an
+    /// assembly some other package declares.
+    ///
+    /// <list type="bullet">
+    /// <item><description><c>probe.module.nupkg</c> — the AI-shaped bundle: it DECLARES
+    /// <see cref="Module"/> and RIDES <paramref name="riding"/> as <see cref="Sibling"/>.</description></item>
+    /// <item><description><c>probe.sibling.nupkg</c> — the Essentials-shaped bundle: it DECLARES
+    /// <see cref="Sibling"/> as <paramref name="declared"/>. Omitted entirely when
+    /// <paramref name="declared"/> is null, which is the ride-only case.</description></item>
+    /// </list>
+    ///
+    /// The index lists the riding bundle FIRST, so the ride is the copy seen first and the declared
+    /// module the second — both roles are exercised in one conflict line.
+    /// </summary>
+    private static string PublishedRootWithRide(
+        string recorded, byte[]? declared, byte[] riding,
+        (string Name, byte[] Bytes)? thirdParty = null)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-sealed-ride-" + Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, Identity, "plugins");
+        var modules = Path.Combine(source, PublishedBundleCatalogue.ModulesDirectoryName);
+        Directory.CreateDirectory(Path.Combine(root, PublishedBundleCatalogue.ReleaseMarkerDirectoryName));
+        Directory.CreateDirectory(modules);
+        File.WriteAllText(
+            Path.Combine(root, PublishedBundleCatalogue.ReleaseMarkerDirectoryName, Version), Identity);
+
+        var ridingEntries = new List<(string Entry, byte[] Bytes)>
+        {
+            (NuGetPackageWriter.ManifestEntry,
+                Encoding.UTF8.GetBytes($$$"""{"plugin":"Probe","module":{"assemblyName":"{{{Module}}}"}}""")),
+            ($"{NuGetPackageWriter.ModuleFolder}/{Module}.dll", File.ReadAllBytes(ModuleBytesOf.Location)),
+            ($"{NuGetPackageWriter.ModuleFolder}/{Sibling}.dll", riding),
+        };
+        if (thirdParty is { } third)
+            ridingEntries.Add(($"{NuGetPackageWriter.ModuleFolder}/{third.Name}.dll", third.Bytes));
+        WriteZip(Path.Combine(modules, "probe.module.nupkg"), [.. ridingEntries]);
+
+        var index = new List<string> { "probe.module.nupkg" };
+        if (declared is not null)
+        {
+            var declaredEntries = new List<(string Entry, byte[] Bytes)>
+            {
+                (NuGetPackageWriter.ManifestEntry,
+                    Encoding.UTF8.GetBytes($$$"""{"plugin":"Sibling","module":{"assemblyName":"{{{Sibling}}}"}}""")),
+                ($"{NuGetPackageWriter.ModuleFolder}/{Sibling}.dll", declared),
+            };
+            if (thirdParty is { } alsoThird)
+                // The SAME third-party name at the SAME bytes as the entry's other copy would be no
+                // test at all — give this one the module's bytes so the two copies genuinely differ.
+                declaredEntries.Add((
+                    $"{NuGetPackageWriter.ModuleFolder}/{alsoThird.Name}.dll",
+                    File.ReadAllBytes(ModuleBytesOf.Location)));
+            WriteZip(Path.Combine(modules, "probe.sibling.nupkg"), [.. declaredEntries]);
+            index.Add("probe.sibling.nupkg");
+        }
+        File.WriteAllLines(
+            Path.Combine(modules, PublishedBundleCatalogue.ModulesIndexFileName), index);
+
+        var manifest = new BundleReader.Manifest(
+            Bundle, "1.0", Identity,
+            [
+                new BundleReader.AssemblyRef("Widget/Thing", "Widget_Thing.dll",
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        [Sibling] = recorded,
                         [CompiledDependencies.ToolchainKey] = CompiledDependencies.MvidScheme + "toolchain",
                     }),
             ]);

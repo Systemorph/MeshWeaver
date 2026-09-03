@@ -36,7 +36,26 @@ public static class ModulePublish
     /// <param name="Module">Entry-assembly name without extension — the <c>modules/&lt;name&gt;/</c> folder.</param>
     /// <param name="Version">The package version these bytes were packed at, recorded on the activation entry.</param>
     /// <param name="MinMeshVersion">The module's declared platform floor, re-checked at placement.</param>
-    /// <param name="FrameworkMvid">The framework build the producer compiled against — diagnostic only.</param>
+    /// <param name="FrameworkMvid">
+    /// The framework build the producer compiled against.
+    ///
+    /// <para>🚨 <b>NOT diagnostic</b> — that word was left here when #3154 merged and it is exactly
+    /// how an optional field stays optional. <c>ModuleUpdateDecision.Decide</c> reads this value
+    /// back (shelf → <c>ShelveModule</c> → the index's per-bundle <c>frameworkMvid</c>) and compares
+    /// <b>(version, framework identity)</b> on every installation's every reconcile: a module's
+    /// version encodes CONTENT only, so a rebuild of unchanged source against a new platform
+    /// republishes under the same version and the identity is the only thing that tells that
+    /// rebuild from a no-op.</para>
+    ///
+    /// <para>Null here is therefore a permanent skip-and-say-so for every consumer of the bundle —
+    /// an unknown on the SERVED side cannot be healed by landing, only an unknown on the landed
+    /// side can. #3211 closes that where it is created: the packer refuses to write a bundle that
+    /// states no identity (<c>module-pack</c> exit 2) and the module-pack lane refuses to POST one.
+    /// Arming the same refusal HERE — a named 400 out of <see cref="Validate"/> — is the last step,
+    /// and it waits on the fleet: measured 2026-09-03 on MeshWeaver.Plugins run 33773265959, all 34
+    /// bundles packed <c>built-against MVID (unrecorded)</c>, so a refusal armed before every
+    /// producer's pin has moved would take the fleet's publishes down rather than the null.</para>
+    /// </param>
     /// <param name="Files">The module's closure: file name + bytes, entry DLL included.</param>
     public sealed record Accepted(
         string Module,

@@ -66,6 +66,29 @@ internal sealed class PodHubGrain(
     /// </summary>
     private volatile bool deactivated;
 
+    /// <summary>
+    /// Set by <see cref="Detach"/>: the owner released this address. From then until the activation
+    /// is collected, <see cref="Deliver"/> answers with the TERMINAL shape
+    /// (<see cref="PodHubNotHereException.Released"/>) rather than the transient "no local route",
+    /// and a successful <see cref="Attach"/> clears it — a hub that re-registers under the same
+    /// address (a process-level hub coming back on the same silo) claims it afresh.
+    /// </summary>
+    private volatile bool released;
+
+    /// <summary>
+    /// How long a released address stays behind as a tombstone that answers terminally.
+    ///
+    /// <para>The tombstone has to outlive the owner-side fan-out that is still aimed at the dead
+    /// address: the owner learns the subscriber is gone from the NACK to its NEXT push, and for a
+    /// quiet stream that push can be minutes away. Ten minutes is at or past the sync stream's own
+    /// idle release, so any stream that would otherwise have stormed until that release meets its
+    /// terminal verdict first. The cost is one idle activation per released address for that long
+    /// — nothing runs in it. After collection a later delivery re-creates the activation on the
+    /// caller (prefer-local) and gets the transient shape again, exactly as before this existed;
+    /// the tombstone narrows the window, the eviction it triggers is what closes the loop.</para>
+    /// </summary>
+    internal static readonly TimeSpan ReleasedTombstoneLifetime = TimeSpan.FromMinutes(10);
+
     private string AddressPath => this.GetPrimaryKeyString();
 
     /// <summary>
@@ -96,6 +119,7 @@ internal sealed class PodHubGrain(
         // be re-created on whichever router called next — and every delivery to a live hub would
         // then land on the wrong process, permanently. The activation's lifetime is deliberately
         // tied to the registration, not to traffic.
+        released = false;
         TryDelayDeactivation(TimeSpan.MaxValue);
         logger.LogDebug("[POD-HUB] {Address} attached and pinned on this silo", AddressPath);
         return Task.FromResult(true);
@@ -104,8 +128,20 @@ internal sealed class PodHubGrain(
     /// <inheritdoc />
     public Task Detach()
     {
-        logger.LogDebug("[POD-HUB] {Address} detached", AddressPath);
-        TryDeactivateOnIdle();
+        // 🚨 A RELEASE IS A FACT THE CLUSTER MUST KEEP, briefly. Deactivating on idle here (the
+        // previous behaviour) threw that fact away: the next delivery to the address re-created the
+        // activation on the CALLER's silo (prefer-local), which has no local route either, and the
+        // router could only answer "no silo serves this hub right now" — transient by construction,
+        // which the owner-side eviction (#2426/#2546) rightly ignores (#2756). Net effect: a closed
+        // circuit's owner fanned every change out to the corpse until the stream's idle release.
+        // Keeping the activation as a tombstone lets Deliver answer with the one thing the caller
+        // cannot otherwise learn — that the owner said goodbye — so the eviction fires on the very
+        // next push. See PodHubNotHereException.Released.
+        released = true;
+        logger.LogDebug(
+            "[POD-HUB] {Address} released by its owner — tombstone answers terminally for {Lifetime}",
+            AddressPath, ReleasedTombstoneLifetime);
+        TryDelayDeactivation(ReleasedTombstoneLifetime);
         return Task.CompletedTask;
     }
 
@@ -113,6 +149,18 @@ internal sealed class PodHubGrain(
     public Task<IMessageDelivery> Deliver(IMessageDelivery delivery)
     {
         Address address = AddressPath;
+        if (released)
+        {
+            // The owner released this address (Detach) and nothing has re-claimed it (a re-claim
+            // goes through Attach, which clears the flag). Terminal: the router stamps NotFound +
+            // TargetUnserved and the owner drops its server-side stream instead of pushing again.
+            logger.LogDebug(
+                "[POD-HUB] {Address} was released by its owner — answering the TERMINAL refusal so the "
+                + "sender's owner-side eviction can act on it ({MessageType} {Id})",
+                AddressPath, delivery.Message?.GetType().Name, delivery.Id);
+            throw new PodHubNotHereException(AddressPath, SiloIdentity, released: true);
+        }
+
         var route = localRoutes?.TryGetLocalRoute(address);
         if (route is null)
         {

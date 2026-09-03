@@ -319,6 +319,34 @@ public record PackageManifest
     public bool AutoUpdate { get; init; }
 
     /// <summary>
+    /// The candidate <see cref="ModuleVersion"/> this installation has ALREADY told the user
+    /// about — the reminder path's own silence gate, and the second half of
+    /// Systemorph/MeshWeaver#3213.
+    ///
+    /// <para><b>Why <see cref="ModuleVersion"/> alone cannot do this job.</b> The content-identity
+    /// gate in <c>PackageUpdateReconciler.Decide</c> asks <em>is the candidate INSTALLED?</em>.
+    /// On the <see cref="AutoUpdate"/> path that is self-silencing: the apply advances
+    /// <see cref="ModuleVersion"/>, so the next poll compares equal. On the reminder path nothing
+    /// is installed — by design, the user has not acted — so the same comparison is
+    /// <b>unsatisfiable</b> and evaluated false on every subsequent poll, forever. The notify path
+    /// needs the other question, <em>have I already told them about this candidate?</em>, and this
+    /// is where its answer lives.</para>
+    ///
+    /// <para>It is deliberately a fact on the DURABLE record rather than an in-memory de-dup
+    /// cache: a cache loses its memory on every pod start and re-notifies, which is the symptom
+    /// itself, and process-wide static state is forbidden here anyway.</para>
+    ///
+    /// <para>Written by the reconciler AFTER the reminder is raised (so a failed write costs a
+    /// harmless repeat, which the notification's deterministic identity then absorbs, rather than
+    /// a lost reminder). Null on every record that has never been reminded, which is every record
+    /// written before this field existed — so the first poll after an upgrade reminds once and
+    /// then goes quiet. A record whose <see cref="ModuleVersion"/> catches up (the user clicked
+    /// Update) is silenced by the content-identity gate before this one is ever consulted, so a
+    /// re-stamp that drops this field cannot resurrect the storm.</para>
+    /// </summary>
+    public string? NotifiedModuleVersion { get; init; }
+
+    /// <summary>
     /// The module manifest's per-file hash map as it stands AT THE CATALOG'S REF
     /// (<see cref="ModuleManifest.Files"/>) — the candidate side of the diff, where
     /// <see cref="InstalledFiles"/> is the installed side. Set by the source while listing; never

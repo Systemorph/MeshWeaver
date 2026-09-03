@@ -1,5 +1,7 @@
 using MeshWeaver.PluginCatalog;
 
+using MeshWeaver.Hosting.SelfUpdate;
+
 namespace Memex.Portal.Shared.SelfUpdate;
 
 /// <summary>What woke a self-update check. Named, because "why did this run" is half of what makes
@@ -68,6 +70,14 @@ public enum SelfUpdateOutcome
     /// <para>🚨 Appended, never inserted: the members before it keep their ordinals.</para>
     /// </summary>
     ComboBlocked,
+
+    /// <summary>
+    /// 🚨 A newer release exists, every gate passed, and the roll was REFUSED because the database
+    /// migration for it failed or did not complete: the schema demonstrably did not move, so the
+    /// image must not (<c>DbVersionGate</c> would only refuse the new pods anyway, behind a portal
+    /// that still answers 200). Appended, never inserted.
+    /// </summary>
+    MigrationFailed,
 }
 
 /// <summary>
@@ -107,7 +117,7 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     /// </summary>
     public bool FoundNewerRelease => Outcome is SelfUpdateOutcome.Held or SelfUpdateOutcome.Deferred
         or SelfUpdateOutcome.DetectOnly or SelfUpdateOutcome.Applied
-        or SelfUpdateOutcome.ComboBlocked;
+        or SelfUpdateOutcome.ComboBlocked or SelfUpdateOutcome.MigrationFailed;
 
     /// <summary>The policy says never update.</summary>
     public static SelfUpdateVerdict UpdatesDisabled() => new(
@@ -163,6 +173,19 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     /// </summary>
     public SelfUpdateVerdict Unverified(string reason) =>
         this with { Message = $"{Message} UNVERIFIED — {reason}" };
+
+    /// <summary>
+    /// 🚨 The roll was refused: the migration Job for <paramref name="tag"/> ended
+    /// <paramref name="outcome"/>, so the schema did not move and the image stays where it is.
+    /// Names the Job so an operator can read its log.
+    /// </summary>
+    public static SelfUpdateVerdict MigrationFailed(string tag, MigrationRunOutcome outcome) => new(
+        SelfUpdateOutcome.MigrationFailed,
+        $"roll to {tag} REFUSED: the database migration Job for it ended {outcome} — the schema did "
+        + "not move, so the portal image was not patched (rolling anyway would only make the new pods "
+        + "refuse to start on DbVersionGate behind a portal that still answers 200). Read the Job's "
+        + "log (kubectl logs job/memex-migration-su-<tag>) and Doc/Architecture/DatabaseMigrationProcedure.",
+        tag);
 
     /// <summary>The check faulted.</summary>
     public static SelfUpdateVerdict CheckFailed(Exception ex) => new(

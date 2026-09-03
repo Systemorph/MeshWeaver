@@ -179,9 +179,12 @@ public static class MemexConfiguration
             // minMeshVersion FLOOR the running platform no longer satisfies (a rollback below the
             // module's requirement) or a missing DLL SKIPS the entry with a loud stderr line —
             // never a crash, the deployment must boot; the entry stays for when the platform
-            // moves forward again. A landed module's built-against MVID is diagnostic only:
-            // modules bind by simple name across platform builds (the strict MVID gate is the
-            // NodeType bake lane's). Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship
+            // moves forward again. A landed module's built-against framework identity is not a
+            // LOAD gate HERE — modules bind by simple name across platform builds, and the strict
+            // identity gate is the NodeType bake lane's. (It is not merely diagnostic either, since
+            // #3154: ModuleUpdateDecision compares it to tell a rebuild from a no-op, and #3211
+            // makes a bundle that states none unpublishable. That is the UPDATE question, not this
+            // one.) Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship
             // to Loki regardless).
             var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
             // 🚨 The SAME root ModuleLandingService writes (ModuleRoot) — never
@@ -355,7 +358,19 @@ public static class MemexConfiguration
             // today is appsettings-configured and has no manifest, and this path must leave all of
             // them byte-identical — an additive mechanism that changed a configured instance's
             // storage would be a data-loss bug, not a feature.
-            var graphStorageConfig = configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
+            // 🚨 The section is bound ONLY when the raw Graph:Storage:Type key actually names a
+            // backend. `GraphStorageConfig.Type` carries the initializer "FileSystem", so binding a
+            // section that exists but states no type hands back a working-looking file-system
+            // configuration — and the section legitimately exists for other reasons: the deployed
+            // image states Graph:Storage:UnanchoredQueryPolicy there so no chart or environment can
+            // forget it (the ci.7658 503 incident). Without this test, that one query-policy line
+            // would silently mean "storage is configured": MarkAwaitingSetup is never reached, the
+            // first-run wizard becomes unreachable, and a real instance is pointed at
+            // container-ephemeral disk — issue #435's shape, arriving from a file nobody edited.
+            var graphStorageConfig =
+                string.IsNullOrWhiteSpace(configuration["Graph:Storage:Type"])
+                    ? null
+                    : configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
             // 🚨 COMPLETE, and with a real backend named (Copilot review). A manifest that exists
             // is not a manifest that ANSWERS: the wizard's own starting point is
             // State=AwaitingStorage with a pre-filled type, and an Unreadable one answers nothing

@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using Memex.Portal.Shared.SelfUpdate;
+using MeshWeaver.Hosting.SelfUpdate;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -27,6 +28,9 @@ public class SelfUpdateVerdictTest
     // A combo refusal is a release that WAS waiting — the dead-event-channel report must fire for
     // it exactly as it does for an availability hold: something published and nothing told us.
     [InlineData(SelfUpdateOutcome.ComboBlocked, true)]
+    // A migration refusal is a release that WAS waiting and could not be taken — the report must
+    // fire for it exactly as for a hold; a schema that did not move is not "nothing newer".
+    [InlineData(SelfUpdateOutcome.MigrationFailed, true)]
     [InlineData(SelfUpdateOutcome.NoNewerRelease, false)]
     [InlineData(SelfUpdateOutcome.UpdatesDisabled, false)]
     [InlineData(SelfUpdateOutcome.CheckFailed, false)]
@@ -53,6 +57,7 @@ public class SelfUpdateVerdictTest
             SelfUpdateVerdict.CheckFailed(new InvalidOperationException("boom")),
             SelfUpdateVerdict.NoOutcome(),
             SelfUpdateVerdict.ComboBlocked("3.0.1", "'Widget' does not compile against it"),
+            SelfUpdateVerdict.MigrationFailed("3.0.1", MigrationRunOutcome.TimedOut),
         ];
 
         Assert.Equal(
