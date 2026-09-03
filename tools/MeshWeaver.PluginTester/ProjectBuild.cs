@@ -185,10 +185,14 @@ public static class ProjectBuild
         /// compiler already answers that with <c>CS0246</c>/<c>CS0234</c> naming the missing type,
         /// which is a positive, specific signal. Do not add a redundant one.</para>
         ///
-        /// <para>⏳ A dropped entry goes STALE once a rebuilt image no longer defines the conflicting
-        /// types — the assembly still exists, so nothing detects it. The durable check is a
-        /// type-name overlap assertion — MeshWeaver#3223, and
-        /// <c>Doc/Architecture/ModuleBuildArchitecture</c>.</para>
+        /// <para><b>An entry cannot outlive its reason.</b> Once the pin moves onto an image built
+        /// AFTER the move, that image's copy no longer defines the conflicting types — but the
+        /// assembly still exists, so the "not carried by the image" refusal above never fires.
+        /// <see cref="SupersededEntryStaleness"/> closes that (#3223): the entry is refused, by name,
+        /// when the image's copy defines none of the type names this REPOSITORY's source declares.
+        /// The comparison is deliberately against the whole source tree rather than this run's
+        /// selection — a narrowed lane compiles a subset, and the module owning the moved type is
+        /// usually not in it.</para>
         /// </summary>
         public IReadOnlyList<string> SupersededImageAssemblies { get; init; } = [];
 
@@ -567,6 +571,15 @@ public static class ProjectBuild
             ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// The ONE source root of the workspace — a <c>ProjectReference</c> inside it is built,
+        /// outside it comes from the container. Carried on the graph because it is also the tree the
+        /// superseded-entry staleness check reads: the answer to "is this entry still needed" is a
+        /// property of the REPOSITORY, never of a narrowed selection. (An <c>init</c> property, not
+        /// a positional parameter — the record signature rule.)
+        /// </summary>
+        public string SourceRoot { get; init; } = string.Empty;
+
+        /// <summary>
         /// One Roslyn reference universe for the whole run — "one workspace": every project in the
         /// graph shares the SAME <see cref="PortableExecutableReference"/> instance per path, so a
         /// reference assembly is opened and its metadata decoded from the filesystem ONCE, and
@@ -677,6 +690,7 @@ public static class ProjectBuild
                 models.ToImmutable(), edges.ToImmutable(), shadowed)
             {
                 PrebuiltReferences = prebuiltReferences.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase),
+                SourceRoot = sourceRoot,
             };
         }
     }
@@ -685,6 +699,15 @@ public static class ProjectBuild
     /// Adds <see cref="Options.SupersededImageAssemblies"/> to the graph's shadow set, so the
     /// container's copy of each is left OUT of every compile's reference set in this run.
     /// Fails closed — an input that silently does nothing is the trapdoor a gate must never have.
+    ///
+    /// <para><b>Four refusals, three about the input's shape and one about its LIFETIME.</b> An
+    /// empty name, a name the image does not carry, and a name the run already builds from source
+    /// are answered from the option and the graph alone. The fourth —
+    /// <see cref="SupersededEntryStaleness"/>, #3223 — answers the question the other three
+    /// structurally cannot: the entry was correct when it was written and has since outlived the
+    /// image rebuild that retired it. It is checked HERE, before a single project compiles, so the
+    /// run that first has a stale entry names the entry instead of dying <c>CS0246</c> somewhere in
+    /// the consuming code with the declaration that caused it nowhere in the message.</para>
     /// </summary>
     private static Graph DropSupersededImageAssemblies(
         Graph graph, ContainerReferenceSet container, Options options, Sink sink)
@@ -718,6 +741,48 @@ public static class ProjectBuild
         }
 
         var names = dropped.ToImmutable();
+
+        // ── the fourth refusal: IS THE ENTRY STILL NEEDED? (#3223) ─────────────────────────────
+        // The three checks above all fire on the input's shape; none of them can see an entry that
+        // was right when it was written and has since been retired by an image rebuild. That entry
+        // is not inert — it keeps a real image assembly out of the reference set, and the day
+        // something needs a different type from it the build dies CS0246 in the consuming code.
+        //
+        // 🚨 The source side is the REPOSITORY, never this run's selection. The pack lane narrows
+        // what it compiles (a PR-scoped diff; a ledger that hands back reused bundles), so on most
+        // runs the module that owns the moved type is not in the graph — reading the run's
+        // compilations as the source side would red ordinary narrowed PRs during exactly the wave
+        // the entry exists to serve.
+        var indexClock = Stopwatch.StartNew();
+        var source = SupersededEntryStaleness.ForSourceRoot(graph.SourceRoot);
+        sink.Info(
+            $"superseded: indexed {source.FilesScanned} source file(s) under {source.SourceRoot} — "
+            + $"{source.DeclaredTypeCount} top-level C# type name(s) in {indexClock.ElapsedMilliseconds} ms "
+            + "(the staleness check's source side is the repository, not this run's selection)");
+
+        foreach (var name in names.OrderBy(n => n, StringComparer.Ordinal))
+        {
+            var path = container.AssembliesByName[name];
+            var overlap = source.Measure(name, path);
+            if (overlap.IsStale)
+                throw new InvalidOperationException(
+                    $"--superseded-image-assembly '{name}': STALE — the image's copy at {path} carries "
+                    + $"{overlap.ImageTypeCount} top-level type(s) and this repository's source under "
+                    + $"{source.SourceRoot} declares NONE of them, so there is nothing left for the "
+                    + "entry to supersede. The pinned image was rebuilt after the move that made the "
+                    + $"entry necessary. DELETE '{name}' from the caller's superseded-image-assemblies "
+                    + "input (and from any --superseded-image-assembly argument). Left in place it "
+                    + "keeps a real image assembly out of the reference set, and the first compile "
+                    + "that needs a different type from it fails CS0246 naming the consuming code "
+                    + "rather than this declaration.");
+            sink.Info(
+                $"superseded: '{name}' is still needed — the image's copy carries {overlap.ImageTypeCount} "
+                + $"top-level type(s), {overlap.StillDefinedInSource.Length} of which this repository also "
+                + "declares (e.g. "
+                + string.Join(", ", overlap.StillDefinedInSource.Take(3))
+                + (overlap.StillDefinedInSource.Length > 3 ? ", …" : "") + ")");
+        }
+
         sink.Info(
             $"superseded: {names.Count} image assembl(y|ies) dropped from the reference set — "
             + string.Join(", ", names.OrderBy(n => n, StringComparer.Ordinal))

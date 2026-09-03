@@ -500,18 +500,56 @@ Three properties are load-bearing:
 - **Declared, never inferred.** Resolving such a collision automatically in favour of the source
   would mask a genuine two-producers-of-one-assembly defect — the thing
   `BakeHost.ShippedByHostProblem` exists to make RED. The caller names the assembly.
-- **Fails closed.** An empty name, a name the image does not carry (wrong — or the entry is STALE
-  now the image dropped it), or a name the run already builds from source, each refuse the build and
-  say which entry. An input that quietly does nothing reads exactly like an input that worked.
+- **Fails closed.** An empty name, a name the image does not carry, a name the run already builds
+  from source, and an entry with **nothing left to supersede** each refuse the build and say which
+  entry. An input that quietly does nothing reads exactly like an input that worked.
 - **No "is anything else still needed from it?" check.** The compiler already answers that with
   `CS0246`/`CS0234` naming the missing type, which is a positive, specific signal. A second check
   would only be able to agree.
 
-⏳ **Known gap:** an entry goes stale once a rebuilt image no longer defines the conflicting types —
-the assembly still exists, so nothing detects it. The durable form is a type-name overlap assertion
-(refuse when the image's copy defines none of the names this run's source defines) — tracked in
-[#3223](https://github.com/Systemorph/MeshWeaver/issues/3223). Until it lands, remove the entry in the same change that moves the pin onto an image
-built after the move.
+#### The entry cannot outlive its reason (#3223)
+
+A superseded entry is correct for exactly **one wave**. The moment the pin moves onto an image built
+AFTER the move, that image's copy no longer defines the moved types — but *the assembly still
+exists*, so "the container carries no such assembly" never fires. Nothing in the first three
+refusals can see this, because all three read the input's SHAPE and this one is about its LIFETIME.
+
+A stale entry is not untidy, it is live: it keeps a real image assembly out of the reference set, so
+the day something legitimately needs a *different* type from it the build dies `CS0246` pointing at
+the consuming code with the declaration that caused it nowhere in the message. An allow-shaped entry
+that outlives its reason with nothing to retire it is a recurring defect class here.
+
+So `SupersededEntryStaleness` refuses the build, **before a single project compiles**, when the
+image's copy of the named assembly defines *none* of the type names this repository's source
+declares — the precise statement of "there is nothing left to supersede", since a collision needs one
+name on both sides. The error names the entry to delete.
+
+Two choices in it are load-bearing, and both were made against a failure that would otherwise be
+routine:
+
+- 🚨 **The source side is the REPOSITORY, never the run's selection.** The pack lane narrows what it
+  compiles — a PR-scoped diff, plus a build ledger that hands back reused bundles — so on most runs
+  the module that owns the moved type is not in the graph at all. Reading "this run's compilations"
+  as the source side would therefore turn the entry RED on ordinary narrowed PRs during exactly the
+  one wave the entry exists to serve. The source side is the whole tree under the workspace's source
+  root, which the lane mounts and which no selection can shrink.
+- 🚨 **A `.razor` component counts as a definition.** The move that motivated the option
+  (MeshWeaver.Plugins#1268) was three Razor views, whose types exist in no `.cs` file — a check that
+  indexed only C# would call the entry stale in precisely the case it was built for. A component
+  matches on its file name plus the directory path it sits under; the namespace PREFIX is the Razor
+  SDK's to compute, and a re-derivation that got the root namespace wrong would produce the false red
+  this check must never produce.
+
+Every other ambiguity is resolved the same way — towards quiet. Type FORWARDERS in the image's copy
+count as definitions (a forwarded type is as visible to the compiler as a defined one), and an
+image copy whose metadata cannot be READ is a refusal of its own rather than a staleness verdict:
+naming the wrong entry to delete is worse than saying nothing.
+
+The index is a syntax parse — no compilation, no semantic model — and it is paid **only on the runs
+that pass the option at all**, which is the rare wave after a move. Measured over core's `src/`:
+1249 files, 2028 top-level type names, **1.76 s**, with `bin`/`obj`/`.git` never descended into. The
+build narrates the file count, the name count and the elapsed time, so a tree that makes it
+expensive says so rather than merely being slow.
 
 ## Adoption contract (every repo)
 

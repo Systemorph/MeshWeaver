@@ -279,13 +279,15 @@ on:
           `BakeHost.ShippedByHostProblem` (MeshWeaver#3175) exists to make RED.
 
 
-          Fails closed — an empty name, a name the image does not carry (wrong, or the input is
-          STALE now the image dropped it), or a name the run already builds from source, each
-          refuse the build naming the entry. Omitted, nothing is dropped and the lane behaves
-          exactly as before.
+          Fails closed on four inputs, each refusing the build and NAMING the entry: an empty name,
+          a name the image does not carry, a name the run already builds from source, and — once a
+          rebuilt image has retired it (MeshWeaver#3223) — an entry with nothing left to supersede,
+          i.e. the image's copy defines none of the type names this repository's source declares.
+          That last one is measured against the whole repository, never against a narrowed
+          selection, so an ordinary PR run never mistakes "not compiled here" for "no longer
+          needed". Omitted, nothing is dropped and the lane behaves exactly as before.
         type: string
         required: false
-        default: ''
         default: ''
       platform-image:
         description: >
