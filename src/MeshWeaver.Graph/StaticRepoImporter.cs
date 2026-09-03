@@ -105,7 +105,38 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     /// (Systemorph/MeshWeaver.Plugins#1013).</para>
     /// </summary>
     public int WriteRequests { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>Issue #3101 — the owning nodes whose CONTENT SYNC was refused, each with the reason.</b>
+    /// Non-empty means those Spaces' assets are NOT in the mesh and the <see cref="Outcome"/> is
+    /// <c>ImportedWithRefusedContent</c>.
+    ///
+    /// <para>#3149 made the refusal escalate the outcome, which stops a green marker freezing the
+    /// Space out of the mesh for ever. What it could not answer is <b>why</b>: the set was a list of
+    /// bare paths, the response's <c>Error</c> was discarded at both call sites, and the activity
+    /// summary was left guessing ("most often a delivery over the transport's size budget"). A
+    /// caller — and the per-node ledger this import writes — now gets the transport's own verdict
+    /// plus the producer's measurement: which file, how many packaged bytes, against which
+    /// limit.</para>
+    /// </summary>
+    public ImmutableList<RefusedContentSync> RefusedContent { get; init; } =
+        ImmutableList<RefusedContentSync>.Empty;
 }
+
+/// <summary>
+/// 🚨 <b>Issue #3101.</b> One owning node whose content sync did not succeed, and the reason — the
+/// transport's own refusal text (which names the on-wire size and the limit it exceeded) with the
+/// producer's budget measurement folded in by
+/// <c>ContentImportExtensions.SyncContentFiles(...).Post()</c> when a single file is over budget.
+///
+/// <para>The reason is the half that was missing. "Refused" alone is indistinguishable between a
+/// 141 MB asset tree the transport cannot carry, a content collection that is not configured on the
+/// node, and a path that tried to escape the collection root — three problems with three different
+/// fixes, reported identically.</para>
+/// </summary>
+/// <param name="NodePath">The owning node whose content collection the sync targeted.</param>
+/// <param name="Reason">Why it did not succeed, with sizes and limits named where they apply.</param>
+public sealed record RefusedContentSync(string NodePath, string Reason);
 
 /// <summary>
 /// Conflict policy for an import that reconciles against a LIVE partition — the GitHub
@@ -1561,14 +1592,19 @@ public static class StaticRepoImporter
                         // while user uploads the source never tracked are preserved (issue #435).
                         SyncInlineContent(hub, source, previousContentPaths, logger).SelectMany(inlineContent =>
                         {
-                        var contentCount = embedContent.Written + inlineContent.Written;
-                        // 🚨 #3101 — the owning nodes whose content sync did NOT succeed. Folded into
-                        // the terminal status below so a refused Space cannot stamp Succeeded.
-                        var refusedContent = embedContent.Refused.AddRange(inlineContent.Refused);
+                        var content = embedContent.Add(inlineContent);
+                        var contentCount = content.Written;
+                        // 🚨 #3101 — the owning nodes whose content sync did NOT succeed, each with
+                        // the REASON. Folded into the terminal status below so a refused Space cannot
+                        // stamp Succeeded, AND written as a per-node ledger so the person who
+                        // committed the assets can see it on their own Space rather than having to
+                        // read the partition's import bookkeeping.
+                        var refusedContent = content.Refused;
                         // Persist the per-node manifest LAST (after upserts + prune) so the NEXT import's
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
-                        return WriteManifest(hub, source.Partition, nodes, manifest, changedNodePaths,
-                            hub.JsonSerializerOptions, logger).Select(_ =>
+                        return WriteContentSyncLedgers(hub, source.Partition, content, logger)
+                            .SelectMany(_ => WriteManifest(hub, source.Partition, nodes, manifest, changedNodePaths,
+                            hub.JsonSerializerOptions, logger)).Select(_ =>
                         {
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
                             // Warning (the ⚠ lines above pinpoint which files), all-clear →
@@ -1634,16 +1670,23 @@ public static class StaticRepoImporter
                                 : "";
                             // NAMED, not counted — "synced 0 content file(s)" is exactly what a Space
                             // with no content says, which is the ambiguity #3101 is about.
+                            // 🚨 #3101 — the REASON rides with the path. "most often a delivery over
+                            // the transport's size budget" was a GUESS standing in for a fact the
+                            // response had already handed us and both call sites discarded. Three
+                            // very different problems — an asset tree the transport cannot carry, a
+                            // content collection that is not configured, a path escaping the root —
+                            // read identically without it, and only one of them is about size.
                             var refusedNote = refusedContent.Count > 0
                                 ? $" 📦 {refusedContent.Count} node(s) whose CONTENT SYNC WAS REFUSED — their "
-                                  + "assets are NOT in the mesh (most often a delivery over the transport's "
-                                  + "size budget): "
-                                  + string.Join(", ", refusedContent.Take(BlockedPathsNamed))
+                                  + "assets are NOT in the mesh: "
+                                  + string.Join("; ", refusedContent.Take(BlockedPathsNamed)
+                                      .Select(r => $"{r.NodePath} ({r.Reason})"))
                                   + (refusedContent.Count > BlockedPathsNamed
                                       ? $", … (+{refusedContent.Count - BlockedPathsNamed} more)"
                                       : "")
                                   + ". Recorded as Warning so the next boot re-attempts instead of "
-                                  + "short-circuiting on a green marker."
+                                  + "short-circuiting on a green marker, and stamped on each node's "
+                                  + "own _Activity/content-sync ledger."
                                 : "";
                             // The summary NAMES the pruned nodes (issue #604) — the count alone left
                             // a destructive import unauditable ("pruned 7" — which seven? unknown).
@@ -1714,6 +1757,11 @@ public static class StaticRepoImporter
                                 Failed = failed,
                                 BlockedCreatePaths = blockedCreates,
                                 WriteRequests = tally.Requests,
+                                // 🚨 #3101 — carried to the CALLER with the reason, not just to the
+                                // activity's text. A caller (a webhook, a sync command, a test) that
+                                // has to string-match a log line to learn that a Space's assets are
+                                // stale is one re-wording away from not learning it at all.
+                                RefusedContent = refusedContent,
                             };
                         });
                         }));
@@ -1907,13 +1955,33 @@ public static class StaticRepoImporter
     /// invisibly."</i> A transport that refuses a Space's assets is that shape verbatim.</para>
     /// </summary>
     /// <param name="Written">Files actually written by the pass.</param>
-    /// <param name="Refused">Owning node paths whose sync did not succeed.</param>
-    private sealed record ContentSyncCount(int Written, ImmutableList<string> Refused)
+    /// <param name="Refused">Owning nodes whose sync did not succeed, each with the REASON.</param>
+    /// <param name="Synced">Owning nodes whose sync DID succeed, with the files each received — the
+    /// set whose ledger entries clear, so a Space that was refused and is now fixed stops claiming to
+    /// be stale.</param>
+    private sealed record ContentSyncCount(
+        int Written,
+        ImmutableList<RefusedContentSync> Refused,
+        ImmutableList<(string NodePath, int Written)> Synced)
     {
-        public static readonly ContentSyncCount None = new(0, ImmutableList<string>.Empty);
+        public static readonly ContentSyncCount None =
+            new(0, ImmutableList<RefusedContentSync>.Empty,
+                ImmutableList<(string, int)>.Empty);
+
+        /// <summary>A pass that wrote <paramref name="written"/> files to <paramref name="nodePath"/>.</summary>
+        public static ContentSyncCount Ok(string nodePath, int written) =>
+            new(written, ImmutableList<RefusedContentSync>.Empty,
+                ImmutableList.Create((nodePath, written)));
+
+        /// <summary>A pass whose sync for <paramref name="nodePath"/> did not succeed, and why.</summary>
+        public static ContentSyncCount Refusal(string nodePath, string reason) =>
+            new(0, ImmutableList.Create(new RefusedContentSync(nodePath, reason)),
+                ImmutableList<(string, int)>.Empty);
 
         public ContentSyncCount Add(ContentSyncCount other) =>
-            new(Written + other.Written, Refused.AddRange(other.Refused));
+            new(Written + other.Written,
+                Refused.AddRange(other.Refused),
+                Synced.AddRange(other.Synced));
     }
 
     private static IObservable<ContentSyncCount> SyncContentImports(IMessageHub hub, IStaticRepoSource source, ILogger? logger)
@@ -1933,20 +2001,25 @@ public static class StaticRepoImporter
                 .Select(r =>
                 {
                     if (r.Success)
-                        return new ContentSyncCount(r.FilesImported, ImmutableList<string>.Empty);
+                        return ContentSyncCount.Ok(import.NodePath, r.FilesImported);
+                    // 🚨 #3101 — the REASON, not just the fact. r.Error was discarded outright here;
+                    // it is the only thing that can tell an over-budget delivery from a missing
+                    // collection, and the activity was left GUESSING at the cause in its place.
+                    var reason = ReasonOf(r.Error);
                     logger?.LogWarning(
                         "[StaticRepoImport] {Partition}: content import for {Node} was REFUSED — "
-                        + "its assets are NOT in the mesh. Recorded on the import activity so this "
-                        + "fingerprint does not stamp Succeeded and skip the Space next boot.",
-                        source.Partition, import.NodePath);
-                    return new ContentSyncCount(0, ImmutableList.Create(import.NodePath));
+                        + "its assets are NOT in the mesh: {Reason} Recorded on the import activity "
+                        + "and on the node's own content-sync ledger so this fingerprint does not "
+                        + "stamp Succeeded and skip the Space next boot.",
+                        source.Partition, import.NodePath, reason);
+                    return ContentSyncCount.Refusal(import.NodePath, reason);
                 })
                 .Catch<ContentSyncCount, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
-                        "[StaticRepoImport] {Partition}: content import for {Node} failed (continuing).",
-                        source.Partition, import.NodePath);
-                    return Observable.Return(new ContentSyncCount(0, ImmutableList.Create(import.NodePath)));
+                        "[StaticRepoImport] {Partition}: content import for {Node} failed (continuing): {Reason}.",
+                        source.Partition, import.NodePath, ex.Message);
+                    return Observable.Return(ContentSyncCount.Refusal(import.NodePath, ReasonOf(ex.Message)));
                 }))
             .ToObservable()
             .Merge(BatchSize)
@@ -2001,22 +2074,27 @@ public static class StaticRepoImporter
                 .Select(r =>
                 {
                     if (r.Success)
-                        return new ContentSyncCount(r.FilesImported, ImmutableList<string>.Empty);
+                        return ContentSyncCount.Ok(sync.NodePath, r.FilesImported);
+                    // 🚨 #3101 — the REASON. SyncContentFilesBuilder.Post now folds its own budget
+                    // measurement into this Error when a file is individually over budget, so the
+                    // sentence recorded here names the file, its packaged size and the limit
+                    // instead of leaving the activity to guess.
+                    var reason = ReasonOf(r.Error);
                     logger?.LogWarning(
                         "[StaticRepoImport] {Partition}: inline content sync for {Node} was REFUSED — "
-                        + "its assets are NOT in the mesh. A transport refusal is correct behaviour at "
-                        + "the transport and a DELIVERY FAILURE at the content layer; recorded on the "
-                        + "import activity so this fingerprint does not stamp Succeeded and skip the "
-                        + "Space next boot.",
-                        source.Partition, sync.NodePath);
-                    return new ContentSyncCount(0, ImmutableList.Create(sync.NodePath));
+                        + "its assets are NOT in the mesh: {Reason} A transport refusal is correct "
+                        + "behaviour at the transport and a DELIVERY FAILURE at the content layer; "
+                        + "recorded on the import activity AND on the node's own content-sync ledger, "
+                        + "so this fingerprint does not stamp Succeeded and skip the Space next boot.",
+                        source.Partition, sync.NodePath, reason);
+                    return ContentSyncCount.Refusal(sync.NodePath, reason);
                 })
                 .Catch<ContentSyncCount, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
-                        "[StaticRepoImport] {Partition}: inline content sync for {Node} failed (continuing).",
-                        source.Partition, sync.NodePath);
-                    return Observable.Return(new ContentSyncCount(0, ImmutableList.Create(sync.NodePath)));
+                        "[StaticRepoImport] {Partition}: inline content sync for {Node} failed (continuing): {Reason}.",
+                        source.Partition, sync.NodePath, ex.Message);
+                    return Observable.Return(ContentSyncCount.Refusal(sync.NodePath, ReasonOf(ex.Message)));
                 }))
             .ToObservable()
             .Merge(BatchSize)
@@ -2320,6 +2398,140 @@ public static class StaticRepoImporter
                 return Observable.Return(0);
             });
     }
+
+    /// <summary>
+    /// The deterministic id of a node's CONTENT-SYNC LEDGER — one <c>_Activity</c> node per owning
+    /// node, upserted in place rather than minted per attempt (issue #3101).
+    ///
+    /// <para>🚨 Deterministic ON PURPOSE, and it is the opposite choice from the import ATTEMPT
+    /// node. An attempt is history and gets a fresh id per run; a ledger is a STATE — "are this
+    /// node's assets in the mesh right now?" — and a state that accumulates one row per boot is a
+    /// state nobody reads. One row, updated, is also what makes the warning self-clearing: the pass
+    /// that finally delivers the assets overwrites Warning with Succeeded, so the entry can never
+    /// outlive the problem it reports.</para>
+    /// </summary>
+    private const string ContentSyncLedgerId = "content-sync";
+
+    /// <summary>
+    /// Normalises a refusal reason for recording: never null/empty (an empty reason is the silence
+    /// this issue is about, one layer in), and bounded so a pathological transport message cannot
+    /// write an unbounded activity line.
+    /// </summary>
+    private static string ReasonOf(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            return "The sync did not succeed and reported no reason.";
+        var trimmed = reason.Trim();
+        if (trimmed.Length > RefusalReasonMaxChars)
+            return trimmed[..RefusalReasonMaxChars] + "…";
+        // Self-terminating, so every place that concatenates a reason onto a sentence reads as
+        // prose rather than as "…not found. Recorded on…" / "…budget.. A transport refusal…".
+        return trimmed[^1] is '.' or '!' or '?' or '…' ? trimmed : trimmed + ".";
+    }
+
+    /// <summary>How much of a refusal reason is recorded. Long enough for the budget sentence
+    /// (which names a file path, a byte count and a limit), short enough that a hostile or
+    /// pathological message cannot bloat an activity node.</summary>
+    private const int RefusalReasonMaxChars = 1_000;
+
+    /// <summary>
+    /// 🚨 <b>Issue #3101 — THE AUTHOR-VISIBLE LEDGER.</b> Writes one <c>_Activity/content-sync</c>
+    /// node per owning node whose content this pass tried to sync: <see cref="ActivityStatus.Warning"/>
+    /// with the reason when the sync was refused, <see cref="ActivityStatus.Succeeded"/> with the file
+    /// count when it landed.
+    ///
+    /// <para><b>Why the import activity was not enough.</b> #3149 put the refusal on
+    /// <c>{Partition}/_Activity/import-…</c> — an operator record, one per import, in the partition's
+    /// bookkeeping. The person this issue is about is the one who committed the video: they open the
+    /// SPACE, and the Space said nothing. Reading a partition-wide import attempt to discover that
+    /// your own page's assets are missing is the same distance from the problem as the learner who
+    /// finds out by clicking play. A satellite on the node itself is where a node's own state
+    /// belongs, and it is what the node's activity views already render.</para>
+    ///
+    /// <para><b>Why success is written too.</b> A warning that cannot clear is a worse signal than
+    /// none: once the transport problem is fixed the Space would keep claiming its assets are stale
+    /// for ever, and the next reader would learn to ignore the ledger. Writing the green state is
+    /// what makes the red one worth believing — and "assets in sync at T, N file(s)" is the record
+    /// an author wants anyway.</para>
+    ///
+    /// <para>🚨 <b>Scoped to this source's own partition.</b> A sync aimed at a node in ANOTHER
+    /// partition is the pathological case (a mis-declared source), and a ledger write there would
+    /// route through the create pipeline's partition bootstrap — provisioning a schema for a
+    /// partition nobody asked for, as a side effect of reporting an error. Those refusals are still
+    /// carried in the outcome, the summary and the log; only the satellite is withheld.</para>
+    ///
+    /// <para>Best-effort throughout: observability must never break the import it observes, so a
+    /// failed ledger write logs and the import continues.</para>
+    /// </summary>
+    private static IObservable<int> WriteContentSyncLedgers(
+        IMessageHub hub, string partition, ContentSyncCount content, ILogger? logger)
+    {
+        var refused = content.Refused
+            .Where(r => IsInPartition(r.NodePath, partition))
+            .GroupBy(r => r.NodePath, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (NodePath: g.Key, Reason: string.Join(" · ", g.Select(r => r.Reason).Distinct())))
+            .ToArray();
+        var refusedPaths = refused.Select(r => r.NodePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // A node with BOTH a refused and a successful pass is stale — the refused half never landed —
+        // so the refusal wins and the green entry is not written over it.
+        var synced = content.Synced
+            .Where(p => IsInPartition(p.NodePath, partition) && !refusedPaths.Contains(p.NodePath))
+            .GroupBy(p => p.NodePath, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (NodePath: g.Key, Written: g.Sum(p => p.Written)))
+            .ToArray();
+
+        if (refused.Length == 0 && synced.Length == 0)
+            return Observable.Return(0);
+
+        var writes = refused
+            .Select(r => LedgerNode(r.NodePath, ActivityStatus.Warning,
+                $"📦 CONTENT SYNC REFUSED — this node's assets are NOT in the mesh. {r.Reason}"))
+            .Concat(synced.Select(p => LedgerNode(p.NodePath, ActivityStatus.Succeeded,
+                $"✔ Content assets in sync — {p.Written} file(s) delivered.")))
+            .Select(node => Upsert(hub, node)
+                .Catch<int, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[StaticRepoImport] {Partition}: content-sync ledger write for {Node} failed "
+                        + "(best-effort; the refusal is still on the import activity and in the outcome).",
+                        partition, node.MainNode);
+                    return Observable.Return(0);
+                }))
+            .ToObservable()
+            .Merge(BatchSize)
+            .Sum();
+
+        return writes;
+
+        MeshNode LedgerNode(string nodePath, ActivityStatus status, string message) =>
+            new(ContentSyncLedgerId, $"{nodePath}/_Activity")
+            {
+                Name = $"Content sync ({nodePath})",
+                NodeType = ActivityNodeType.NodeType,
+                MainNode = nodePath,
+                State = MeshNodeState.Active,
+                Content = new ActivityLog(ActivityCategory.Import)
+                {
+                    Id = ContentSyncLedgerId,
+                    HubPath = nodePath,
+                    Status = status,
+                    End = DateTime.UtcNow,
+                    Messages = ImmutableList.Create(new LogMessage(message,
+                        status == ActivityStatus.Warning
+                            ? Microsoft.Extensions.Logging.LogLevel.Warning
+                            : Microsoft.Extensions.Logging.LogLevel.Information)),
+                },
+            };
+    }
+
+    /// <summary>
+    /// True when <paramref name="nodePath"/> lives in <paramref name="partition"/> — it IS the
+    /// partition root, or it is under it. Path comparison only; no read.
+    /// </summary>
+    private static bool IsInPartition(string? nodePath, string partition)
+        => !string.IsNullOrWhiteSpace(nodePath)
+           && (string.Equals(nodePath, partition, StringComparison.OrdinalIgnoreCase)
+               || nodePath.StartsWith(partition + "/", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Parses the <c>{path → source-token}</c> map a prior import stored in the manifest node's
