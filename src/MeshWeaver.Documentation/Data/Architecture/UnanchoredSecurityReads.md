@@ -265,3 +265,6 @@ Eliminating the fan-outs removes both. Anchoring the ones on this page removes a
   that may not exist is a defect rather than a slow path.
 - [Postgres Schema Architecture](/Doc/Architecture/PostgresSchemaArchitecture) — one schema per
   partition, and what a satellite segment routes to.
+- [Image Pair Skew](/Doc/Architecture/ImagePairSkew) — the 2026-09-03 outage: an image whose core
+  half predated the anchored sign-in read met a planner that refused it, and every signed-in
+  request answered 503.
