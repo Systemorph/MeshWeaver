@@ -89,6 +89,15 @@ public class PlatformNeverDependsOnPluginsGuard
             new KeyValuePair<string, string>("shared-rules.yml",
                 "the scheduled half of the same shared-rule sweep, so a drift is caught in a week "
                 + "when nobody opens a pull request anywhere"),
+            new KeyValuePair<string, string>("dependent-suites.yml",
+                "the DISPATCHER of #3103: a pull request that changes the public declaration set "
+                + "asks MeshWeaver.Plugins (repository_dispatch, App token scoped to that repo) to "
+                + "build and run its suites against this pull request's MERGE commit, then reads the "
+                + "verdict the dependent recorded in ITS OWN repository (a marker ref) and finishes "
+                + "with it. It reads a fact and sends an event; it checks nothing out and writes "
+                + "nothing into core — the dependent's suite runs THERE, against a candidate commit, "
+                + "which is the CI-time integration Doc/Architecture/CrossRepoPairGate names as the "
+                + "structural answer, never a build-time reference"),
         ]);
 
     /// <summary>The repos this guard treats as "not the platform".</summary>

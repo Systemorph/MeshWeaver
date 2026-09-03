@@ -232,6 +232,223 @@ def parse_declarations(path: str, text: str) -> list[Decl]:
     return out
 
 
+# ─────────────── public MEMBERS of a kept public type — the sixth shape (#3103) ───────────────
+#
+# 🚨 MeshWeaver#3137 removed two `public static readonly TimeSpan` FIELDS from a type that stayed.
+# `MeshWeaver.Plugins/src/MeshWeaver.Auth.Test/InstanceKeyUnavailableNotUnknownTest.cs` read both,
+# so `Portal hosts (shard 0)` went red on EVERY Plugins pull request for three hours with
+# `CS0117: 'InstanceRegistryAuthenticator' does not contain a definition for 'CacheDuration'` — and
+# "the moved suites did not build — nothing was tested". The type-level detector above was working
+# exactly as specified; the specification stopped one level too high. Members are keyed by NAME
+# under their declaring type (`Assembly:Namespace.Type::Member`), so a rename is a removal plus an
+# addition, and removing ONE overload of several is deliberately below this granularity (the name
+# still binds). Nested public types count as members of their outer type.
+
+MEMBER_MODIFIERS = frozenset({
+    "public", "static", "readonly", "const", "virtual", "override", "abstract", "sealed", "new",
+    "extern", "unsafe", "volatile", "async", "partial", "required", "event", "ref", "implicit",
+    "explicit", "in", "out",
+})
+TYPE_KIND_RE = re.compile(r"\b(class|record|struct|interface|enum|delegate)\b")
+NESTED_TYPE_RE = re.compile(
+    r"^(?:(?:class|record|struct|interface|enum|delegate)\s+)+(?:(?:class|struct)\s+)?([A-Za-z_]\w*)"
+)
+NON_PUBLIC_RE = re.compile(r"^(?:private|internal|protected|file)\b")
+OPERATOR_RE = re.compile(r"\boperator\s*([^\s(]+)")
+
+
+def _skip_balanced(s: str, open_ch: str, close_ch: str) -> str | None:
+    """`s` starts with `open_ch`; return what follows the matching `close_ch`, or None if unbalanced."""
+    depth = 0
+    for i, ch in enumerate(s):
+        if ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return s[i + 1 :]
+    return None
+
+
+def _strip_leading_attributes(s: str) -> str | None:
+    """`[Obsolete] public void X()` → `public void X()`. None when an attribute never closes on
+    this line (a multi-line attribute is a line of its own, never a declaration)."""
+    s = s.lstrip()
+    while s.startswith("["):
+        rest = _skip_balanced(s, "[", "]")
+        if rest is None:
+            return None
+        s = rest.lstrip()
+    return s
+
+
+def member_name(declaration: str) -> str | None:
+    """The NAME a member declaration line declares, or None when the line is not one.
+
+    Approximate by design — a regex over C#, like every other check in this file — and tested
+    against the shapes this repository actually writes: fields, consts, auto/expression-bodied
+    properties, methods (generic too), events, indexers, operators, constructors and nested types.
+    """
+    text = declaration.strip()
+    if not text or text.startswith(("//", "/*", "*", "#", "{", "}")):
+        return None
+    tokens = text.split()
+    while tokens and tokens[0] in MEMBER_MODIFIERS:
+        tokens.pop(0)
+    if not tokens:
+        return None
+    rest = " ".join(tokens)
+    nested = NESTED_TYPE_RE.match(rest)
+    if nested:
+        return nested.group(1)
+    op = OPERATOR_RE.search(rest)
+    if op:
+        return f"operator {op.group(1)}"
+    if re.search(r"\bthis\s*\[", rest):
+        return "this[]"
+    if rest.startswith("("):  # a tuple-typed member: `(int A, int B) Pair { get; }`
+        after = _skip_balanced(rest, "(", ")")
+        if after is None:
+            return None
+        rest = after.lstrip()
+    cut = len(rest)
+    for terminator in ("(", "{", "=>", "=", ";"):
+        at = rest.find(terminator)
+        if at != -1 and at < cut:
+            cut = at
+    prefix = rest[:cut].rstrip()
+    if prefix.endswith(">"):  # generic arity on a method: `Get<T>`
+        depth = 0
+        for i in range(len(prefix) - 1, -1, -1):
+            if prefix[i] == ">":
+                depth += 1
+            elif prefix[i] == "<":
+                depth -= 1
+                if depth == 0:
+                    prefix = prefix[:i]
+                    break
+    m = re.search(r"([A-Za-z_]\w*)\s*$", prefix)
+    return m.group(1) if m else None
+
+
+def _positional_parameters(statement: str) -> list[str]:
+    """`record Foo(int X, [Attr] string Y = "a")` → ["X", "Y"] — positional record parameters
+    ARE public properties, and renaming one breaks every `with { X = … }` in a consumer."""
+    at = statement.find("(")
+    if at == -1:
+        return []
+    inner = _skip_balanced(statement[at:], "(", ")")
+    if inner is None:
+        return []
+    params_text = statement[at + 1 : len(statement) - len(inner) - 1]
+    names: list[str] = []
+    depth, current, parts = 0, [], []
+    for ch in params_text:
+        if ch in "<([":
+            depth += 1
+        elif ch in ">)]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    for part in parts:
+        part = _strip_leading_attributes(part) or ""
+        part = part.split("=", 1)[0].rstrip()
+        m = re.search(r"([A-Za-z_]\w*)\s*$", part)
+        if m:
+            names.append(m.group(1))
+    return names
+
+
+def parse_members(path: str, text: str) -> dict[str, set[str]]:
+    """Public members per public TOP-LEVEL type in one file, keyed by the type's `Decl.key`.
+
+    Body members sit exactly one indent level (4 columns) inside the type; a class/record/struct
+    member must say `public`, an interface member is public unless it says otherwise, and every
+    enum constant is public. The body ends at the closing brace on the type's own column.
+    """
+    assembly = _assembly_of(path)
+    namespaces = [
+        (m.start(), m.group("ns"), TOP_LEVEL_INDENT[m.group("form") or ""])
+        for m in NAMESPACE_RE.finditer(text)
+    ]
+    lines = text.splitlines()
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line) + 1
+    out: dict[str, set[str]] = {}
+    for m in TYPE_RE.finditer(text):
+        ns, expected = "", 0
+        for start, candidate, indent in namespaces:
+            if start < m.start():
+                ns, expected = candidate, indent
+            else:
+                break
+        type_indent = _indent_width(m.group("indent"))
+        if type_indent != expected:
+            continue
+        key = Decl(assembly, ns, m.group("name")).key
+        members = out.setdefault(key, set())
+        kind_match = TYPE_KIND_RE.search(text[m.start() : m.end()])
+        kind = kind_match.group(1) if kind_match else "class"
+        # `import bisect` is not worth it for ~1500 files: locate the declaration's line linearly.
+        line_no = next(i for i in range(len(lines) - 1, -1, -1) if line_starts[i] <= m.start())
+        # The declaration STATEMENT runs to the body's `{` or to a `;` (positional record, delegate).
+        statement_lines: list[str] = []
+        body_open: int | None = None
+        for i in range(line_no, min(line_no + 60, len(lines))):
+            statement_lines.append(lines[i])
+            stripped = lines[i].strip()
+            if stripped.endswith("{") or stripped == "{":
+                body_open = i
+                break
+            if stripped.endswith(";"):
+                break
+        statement = " ".join(s.strip() for s in statement_lines)
+        if kind == "record":
+            members.update(_positional_parameters(statement))
+        if body_open is None:
+            continue
+        member_indent = type_indent + 4
+        for i in range(body_open + 1, len(lines)):
+            raw = lines[i]
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            leading = raw[: len(raw) - len(raw.lstrip())]
+            if _indent_width(leading) == type_indent and stripped.startswith("}"):
+                break  # the type's closing brace
+            if _indent_width(leading) != member_indent:
+                continue
+            declaration = _strip_leading_attributes(stripped)
+            if declaration is None or not declaration:
+                continue
+            if kind == "enum":
+                if declaration.startswith(("//", "/*", "*", "#", "}", "{")):
+                    continue
+                constant = re.match(r"([A-Za-z_]\w*)", declaration)
+                if constant:
+                    members.add(constant.group(1))
+                continue
+            if kind == "interface":
+                if NON_PUBLIC_RE.match(declaration):
+                    continue
+            elif not re.match(r"public\b", declaration):
+                continue
+            name = member_name(declaration)
+            if name is None:
+                continue
+            if name == m.group("name"):
+                name = ".ctor"  # a constructor is spelled like its type; keep it distinct from a nested type
+            members.add(name)
+    return out
+
+
 def parse_forwards(text: str) -> set[str]:
     # 🚨 A COMMENTED-OUT forwarder must not count. FORWARD_RE is a plain regex over the file text,
     # so before this line `// [assembly: TypeForwardedTo(typeof(X))]` satisfied the gate — the exact
@@ -265,7 +482,15 @@ def _run(args: list[str]) -> str:
     return subprocess.run(args, check=True, capture_output=True, text=True).stdout
 
 
-def read_base_tree(base: str) -> tuple[dict[str, Decl], set[str], set[str]]:
+Members = dict[str, set[str]]
+
+
+def _merge_members(into: Members, more: Members) -> None:
+    for key, names in more.items():
+        into.setdefault(key, set()).update(names)
+
+
+def read_base_tree(base: str) -> tuple[dict[str, Decl], set[str], set[str], Members]:
     # ONE `git cat-file --batch` for the whole base tree rather than a `git show` per file: the
     # scanned set is ~1500 files, and a subprocess each turns a 2-second gate into a 25-second one.
     wanted: list[tuple[str, str]] = []
@@ -277,9 +502,10 @@ def read_base_tree(base: str) -> tuple[dict[str, Decl], set[str], set[str]]:
 
     decls: dict[str, Decl] = {}
     forwards: set[str] = set()
+    members: Members = {}
     assemblies = {_assembly_of(path) for _, path in wanted}
     if not wanted:
-        return decls, forwards, assemblies
+        return decls, forwards, assemblies, members
 
     proc = subprocess.run(
         ["git", "cat-file", "--batch"],
@@ -297,14 +523,16 @@ def read_base_tree(base: str) -> tuple[dict[str, Decl], set[str], set[str]]:
         text = body.decode("utf-8", errors="replace")
         for d in parse_declarations(path, text):
             decls[d.key] = d
+        _merge_members(members, parse_members(path, text))
         forwards |= {f"{_assembly_of(path)}:{t}" for t in parse_forwards(text)}
-    return decls, forwards, assemblies
+    return decls, forwards, assemblies, members
 
 
-def read_work_tree(root: Path) -> tuple[dict[str, Decl], set[str], set[str]]:
+def read_work_tree(root: Path) -> tuple[dict[str, Decl], set[str], set[str], Members]:
     decls: dict[str, Decl] = {}
     forwards: set[str] = set()
     assemblies: set[str] = set()
+    members: Members = {}
     for file in sorted((root / "src").rglob("*.cs")):
         path = file.relative_to(root).as_posix()
         if not _is_scanned(path):
@@ -313,8 +541,9 @@ def read_work_tree(root: Path) -> tuple[dict[str, Decl], set[str], set[str]]:
         assemblies.add(_assembly_of(path))
         for d in parse_declarations(path, text):
             decls[d.key] = d
+        _merge_members(members, parse_members(path, text))
         forwards |= {f"{_assembly_of(path)}:{t}" for t in parse_forwards(text)}
-    return decls, forwards, assemblies
+    return decls, forwards, assemblies, members
 
 
 def read_sibling_tree(path: Path) -> dict[str, list[Decl]]:
@@ -471,9 +700,14 @@ def find_moves(
 
 
 def surface_removals(
-    before: dict[str, Decl], after: dict[str, Decl], head_assemblies: set[str]
+    before: dict[str, Decl],
+    after: dict[str, Decl],
+    head_assemblies: set[str],
+    members_before: Members | None = None,
+    members_after: Members | None = None,
 ) -> list[dict]:
-    """Every public TOP-LEVEL type declared under `src/` at BASE and no longer declared at HEAD.
+    """Every public TOP-LEVEL type declared under `src/` at BASE and no longer declared at HEAD,
+    plus (`member-removed`) every public MEMBER a kept type declared at BASE and no longer does.
 
     This is the REPORT half of this script (`--surface-json`), and it is deliberately a WIDER set
     than the verdict `find_moves` returns. `find_moves` answers ONE question — "will a module
@@ -521,7 +755,52 @@ def surface_removals(
             "category": category,
             "landedIn": sorted(f"{d.assembly} ({d.full_name})" for d in landed),
         })
+
+    # The SIXTH shape (#3103, fired by #3137): a public member leaving a type that STAYS. Only kept
+    # types are examined — a removed type's members went with it and are covered by its own entry.
+    members_before = members_before or {}
+    members_after = members_after or {}
+    for key in sorted(members_before):
+        if key not in before or key not in after:
+            continue
+        for name in sorted(members_before[key] - members_after.get(key, set())):
+            removed.append({
+                "key": f"{key}::{name}",
+                "assembly": before[key].assembly,
+                "fullName": f"{before[key].full_name}.{name}",
+                "category": "member-removed",
+                "landedIn": [],
+            })
     return removed
+
+
+def surface_additions(
+    before: dict[str, Decl],
+    after: dict[str, Decl],
+    members_before: Members | None = None,
+    members_after: Members | None = None,
+) -> list[dict]:
+    """Public types and members declared at HEAD and not at BASE.
+
+    Not a pair trigger — nothing downstream stops compiling because core grew — but it IS the
+    signal `dependent-suites.yml` dispatches on: an ADDED overload made a dependent's `<see cref>`
+    ambiguous (`CS0419`, an error under -warnaserror) in the very incident that opened #2689, and
+    only running the dependent's build can see that.
+    """
+    members_before = members_before or {}
+    members_after = members_after or {}
+    added: list[dict] = []
+    for key, new in sorted(after.items()):
+        if key not in before:
+            added.append({"key": key, "assembly": new.assembly, "fullName": new.full_name,
+                          "category": "type-added"})
+    for key in sorted(members_after):
+        if key not in before or key not in after:
+            continue
+        for name in sorted(members_after[key] - members_before.get(key, set())):
+            added.append({"key": f"{key}::{name}", "assembly": after[key].assembly,
+                          "fullName": f"{after[key].full_name}.{name}", "category": "member-added"})
+    return added
 
 
 def check(
@@ -531,8 +810,8 @@ def check(
     sibling_paths: list[str] | None = None,
     surface_json: str | None = None,
 ) -> int:
-    before, _, _ = read_base_tree(base)
-    after, forwards, head_assemblies = (
+    before, _, _, members_before = read_base_tree(base)
+    after, forwards, head_assemblies, members_after = (
         read_base_tree(head) if head else read_work_tree(root)
     )
 
@@ -551,18 +830,26 @@ def check(
             "head": head or "<working tree>",
             "publicTypesAtBase": len(before),
             "publicTypesAtHead": len(after),
-            "removed": surface_removals(before, after, head_assemblies),
+            "publicMembersAtBase": sum(len(v) for v in members_before.values()),
+            "publicMembersAtHead": sum(len(v) for v in members_after.values()),
+            "removed": surface_removals(before, after, head_assemblies, members_before, members_after),
+            "added": surface_additions(before, after, members_before, members_after),
         }
         Path(surface_json).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         print(
             f"Surface report written to {surface_json}: {payload['publicTypesAtBase']} public "
-            f"top-level type(s) under src/ at {base}, {payload['publicTypesAtHead']} at "
-            f"{payload['head']}, {len(payload['removed'])} removed."
+            f"top-level type(s) / {payload['publicMembersAtBase']} public member(s) under src/ at "
+            f"{base}, {payload['publicTypesAtHead']} / {payload['publicMembersAtHead']} at "
+            f"{payload['head']}; {len(payload['removed'])} removed, {len(payload['added'])} added."
         )
         for entry in payload["removed"][:40]:
             print(f"  [{entry['category']}] {entry['assembly']} :: {entry['fullName']}")
         if len(payload["removed"]) > 40:
             print(f"  … and {len(payload['removed']) - 40} more (all of them are in the JSON).")
+        for entry in payload["added"][:40]:
+            print(f"  [{entry['category']}] {entry['assembly']} :: {entry['fullName']}")
+        if len(payload["added"]) > 40:
+            print(f"  … and {len(payload['added']) - 40} more (all of them are in the JSON).")
         return 0
 
     allow = read_allow(root)
@@ -965,7 +1252,127 @@ SELF_TESTS: list[tuple] = [
 # because a reporter that fires on everything makes the pair gate a tax rather than a gate.
 #
 # (label, base files, head files, expected category per removed key)
-SURFACE_TESTS: list[tuple[str, dict[str, str], dict[str, str], dict[str, str]]] = [
+# MeshWeaver#3137 (e4ab72222), trimmed to the lines that matter and otherwise VERBATIM: a class with
+# a primary constructor (its parameters are NOT public members), XML doc comments, two public static
+# readonly fields that the diff deletes, a public const and two public methods that stay, and an
+# `internal` init-only property the diff adds (not public surface either).
+IRA_BEFORE = '''using System.Reactive.Linq;
+using MeshWeaver.Graph.Configuration;
+
+namespace MeshWeaver.PluginCatalog;
+
+/// <summary>
+/// Resolves an <c>Authorization: Instance &lt;key&gt;</c> header to a registered instance.
+/// </summary>
+public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<InstanceRegistryAuthenticator> logger)
+{
+    /// <summary>How long a resolved instance + grant is reused before re-reading the mesh.</summary>
+    public static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// How long a DEFINITIVE "this key is unknown" is reused — far shorter than a positive.
+    /// </summary>
+    public static readonly TimeSpan NegativeCacheDuration = TimeSpan.FromSeconds(5);
+
+    /// <summary>Retry-After (seconds) an endpoint advertises when resolution was UNAVAILABLE.</summary>
+    public const int RetryAfterSeconds = 5;
+
+    private readonly ConcurrentDictionary<string, (DateTimeOffset At, AuthenticatedInstance? Result)> cache = new();
+
+    private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
+
+    public void Invalidate(string keyHash)
+    {
+        if (!string.IsNullOrWhiteSpace(keyHash))
+            cache.TryRemove(keyHash, out _);
+    }
+
+    internal Func<string, IObservable<NodeReadOutcome>>? ReadOverride { get; init; }
+
+    public IObservable<InstanceAuthResult> AuthenticateOutcome(string? authorizationHeader)
+    {
+        return Observable.Return(InstanceAuthResult.Unavailable);
+    }
+}
+'''
+IRA_AFTER = '''using System.Reactive.Linq;
+using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
+
+namespace MeshWeaver.PluginCatalog;
+
+/// <summary>
+/// Resolves an <c>Authorization: Instance &lt;key&gt;</c> header to a registered instance.
+///
+/// <para>Registered as a mesh-scoped singleton; it holds no state of its own.</para>
+/// </summary>
+public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<InstanceRegistryAuthenticator> logger)
+{
+    /// <summary>Retry-After (seconds) an endpoint advertises when resolution was UNAVAILABLE.</summary>
+    public const int RetryAfterSeconds = 5;
+
+    /// <summary>
+    /// How long one leg may wait for the FIRST frame of its live listing or mirror.
+    /// </summary>
+    internal TimeSpan ReadBudget { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <param name="keyHash">Ignored.</param>
+    public void Invalidate(string keyHash)
+    {
+        // Intentionally empty — see the summary. There is no cache behind this class any more.
+    }
+
+    internal Func<string, IObservable<NodeReadOutcome>>? ReadOverride { get; init; }
+
+    public IObservable<InstanceAuthResult> AuthenticateOutcome(string? authorizationHeader)
+    {
+        return Observable.Return(InstanceAuthResult.Unavailable);
+    }
+}
+'''
+IRA_KEY = "MeshWeaver.PluginCatalog:MeshWeaver.PluginCatalog.InstanceRegistryAuthenticator"
+IRA_PATH = "src/MeshWeaver.PluginCatalog/InstanceRegistryAuthenticator.cs"
+
+# The other member shapes, each the smallest text that exercises the parser on it.
+MEMBERS_A = (
+    "namespace N;\n"
+    "public class Svc\n"
+    "{\n"
+    "    [Obsolete(\"use Run\")] public void Start() { }\n"
+    "    public static IObservable<T> Run<T>(\n"
+    "        Func<T> body) => Observable.Return(body());\n"
+    "    public Dictionary<string, int> Counts { get; } = new();\n"
+    "    public event EventHandler? Changed;\n"
+    "    public string this[int i] => \"\";\n"
+    "    public static implicit operator string(Svc s) => \"\";\n"
+    "    public Svc() { }\n"
+    "    public Svc(int seed) { }\n"
+    "    public enum Kind { A, B }\n"
+    "    internal void Hidden() { }\n"
+    "    private int state;\n"
+    "    public void Body()\n"
+    "    {\n"
+    "        public_looking_local_text();\n"
+    "    }\n"
+    "}\n"
+)
+MEMBERS_A_RENAMED = MEMBERS_A.replace("Start()", "Begin()")
+MEMBERS_A_NARROWED = MEMBERS_A.replace("public event EventHandler? Changed;", "internal event EventHandler? Changed;")
+MEMBERS_A_OVERLOAD_GONE = MEMBERS_A.replace("    public Svc(int seed) { }\n", "")
+MEMBERS_A_BODY_CHANGED = MEMBERS_A.replace("public_looking_local_text();", "other();")
+MEMBERS_A_GROWN = MEMBERS_A.replace("    internal void Hidden() { }\n", "    internal void Hidden() { }\n    public int Extra => 1;\n")
+RECORD_XY = "namespace N;\npublic sealed record Point(int X,\n    [property: JsonPropertyName(\"y\")] int Y = 0) : Base(X);\n"
+RECORD_XZ = "namespace N;\npublic sealed record Point(int X,\n    [property: JsonPropertyName(\"z\")] int Z = 0) : Base(X);\n"
+RECORD_WITH_BODY = "namespace N;\npublic record Envelope(string Id)\n{\n    public string Kind { get; init; } = \"\";\n}\n"
+RECORD_WITH_BODY_LESS = "namespace N;\npublic record Envelope(string Id)\n{\n}\n"
+ENUM_ABC = "namespace N;\npublic enum Status\n{\n    /// <summary>a</summary>\n    Active,\n    [Obsolete] Paused = 2,\n    Done,\n}\n"
+ENUM_AB = "namespace N;\npublic enum Status\n{\n    /// <summary>a</summary>\n    Active,\n    [Obsolete] Paused = 2,\n}\n"
+IFACE_2 = "namespace N;\npublic interface IStore\n{\n    IObservable<int> Read(string path);\n    void Write(string path);\n    internal void Plumbing();\n}\n"
+IFACE_1 = "namespace N;\npublic interface IStore\n{\n    IObservable<int> Read(string path);\n    internal void Plumbing();\n}\n"
+BLOCK_NS_MEMBERS = "namespace N\n{\n    public class Old\n    {\n        public int Value { get; }\n        public void Go() { }\n    }\n}\n"
+BLOCK_NS_MEMBERS_LESS = "namespace N\n{\n    public class Old\n    {\n        public int Value { get; }\n    }\n}\n"
+
+SURFACE_TESTS: list[tuple] = [
     (
         # MeshWeaver#2678, in miniature: the nine Graph view classes left for a plugin module.
         "a DEPARTURE (the #2678 shape) is reported — the trigger the pair gate exists for",
@@ -1026,33 +1433,143 @@ SURFACE_TESTS: list[tuple[str, dict[str, str], dict[str, str], dict[str, str]]] 
         {"src/A/Keep.cs": KEEP_A},
         {"src/A/Keep.cs": KEEP_A, "src/A/Foo.cs": FOO_N},
         {},
+        {"A:N.Foo"},  # a NEW type is one addition; its members do not pile on
+    ),
+    # ── the SIXTH shape: a public MEMBER leaving a type that stays (#3103, fired by #3137) ──
+    (
+        "#3137 in its own words: two public static readonly fields deleted from a kept class are "
+        "reported, the kept const/methods, the primary-constructor parameters and the new "
+        "internal property are not",
+        {IRA_PATH: IRA_BEFORE},
+        {IRA_PATH: IRA_AFTER},
+        {f"{IRA_KEY}::CacheDuration": "member-removed",
+         f"{IRA_KEY}::NegativeCacheDuration": "member-removed"},
+        set(),
+    ),
+    (
+        "a RENAMED public method is a removal (plus an addition) — the old name no longer binds",
+        {"src/A/Svc.cs": MEMBERS_A},
+        {"src/A/Svc.cs": MEMBERS_A_RENAMED},
+        {"A:N.Svc::Start": "member-removed"},
+        {"A:N.Svc::Begin"},
+    ),
+    (
+        "a public member made internal is a removal",
+        {"src/A/Svc.cs": MEMBERS_A},
+        {"src/A/Svc.cs": MEMBERS_A_NARROWED},
+        {"A:N.Svc::Changed": "member-removed"},
+        set(),
+    ),
+    (
+        "every member shape is indexed: generic method, property, event, indexer, operator, "
+        "constructor, nested type — and none of them is removed by a body edit",
+        {"src/A/Svc.cs": MEMBERS_A},
+        {"src/A/Svc.cs": MEMBERS_A_BODY_CHANGED},
+        {},
+        set(),
+    ),
+    (
+        "removing ONE overload while the name still binds is below member granularity",
+        {"src/A/Svc.cs": MEMBERS_A},
+        {"src/A/Svc.cs": MEMBERS_A_OVERLOAD_GONE},
+        {},
+        set(),
+    ),
+    (
+        "adding a public member is reported as an addition, never as a removal",
+        {"src/A/Svc.cs": MEMBERS_A},
+        {"src/A/Svc.cs": MEMBERS_A_GROWN},
+        {},
+        {"A:N.Svc::Extra"},
+    ),
+    (
+        "a RENAMED positional record parameter is a removed public property",
+        {"src/A/Point.cs": RECORD_XY},
+        {"src/A/Point.cs": RECORD_XZ},
+        {"A:N.Point::Y": "member-removed"},
+        {"A:N.Point::Z"},
+    ),
+    (
+        "a record's positional parameters and its body members are both its surface",
+        {"src/A/Env.cs": RECORD_WITH_BODY},
+        {"src/A/Env.cs": RECORD_WITH_BODY_LESS},
+        {"A:N.Envelope::Kind": "member-removed"},
+        set(),
+    ),
+    (
+        "a removed ENUM constant is a removal — CS0117 exactly",
+        {"src/A/Status.cs": ENUM_ABC},
+        {"src/A/Status.cs": ENUM_AB},
+        {"A:N.Status::Done": "member-removed"},
+        set(),
+    ),
+    (
+        "an interface member is public without saying so; an `internal` one is not surface",
+        {"src/A/IStore.cs": IFACE_2},
+        {"src/A/IStore.cs": IFACE_1},
+        {"A:N.IStore::Write": "member-removed"},
+        set(),
+    ),
+    (
+        "block-scoped namespaces index members one level deeper",
+        {"src/A/Old.cs": BLOCK_NS_MEMBERS},
+        {"src/A/Old.cs": BLOCK_NS_MEMBERS_LESS},
+        {"A:N.Old::Go": "member-removed"},
+        set(),
+    ),
+    (
+        "a removed TYPE is reported once — its members do not pile on as member-removed",
+        {"src/A/Svc.cs": MEMBERS_A, "src/A/Keep.cs": KEEP_A},
+        {"src/A/Keep.cs": KEEP_A},
+        {"A:N.Svc": "departed"},
+        set(),
+    ),
+    (
+        "a member of an in-mesh doc sample is content, never surface",
+        {"src/MeshWeaver.Documentation/Data/X/Source/Svc.cs": MEMBERS_A,
+         "src/MeshWeaver.Documentation/Doc.cs": DOC_KEEP},
+        {"src/MeshWeaver.Documentation/Data/X/Source/Svc.cs": MEMBERS_A_RENAMED,
+         "src/MeshWeaver.Documentation/Doc.cs": DOC_KEEP},
+        {},
+        set(),
     ),
 ]
 
 
-def _index(files: dict[str, str]) -> tuple[dict[str, Decl], set[str]]:
+def _index(files: dict[str, str]) -> tuple[dict[str, Decl], set[str], Members]:
     decls: dict[str, Decl] = {}
     assemblies: set[str] = set()
+    members: Members = {}
     for path, text in files.items():
         if not _is_scanned(path):
             continue
         assemblies.add(_assembly_of(path))
         for d in parse_declarations(path, text):
             decls[d.key] = d
-    return decls, assemblies
+        _merge_members(members, parse_members(path, text))
+    return decls, assemblies, members
 
 
 def surface_self_test() -> int:
     failed = 0
-    for label, base_files, head_files, expected in SURFACE_TESTS:
-        before, _ = _index(base_files)
-        after, head_assemblies = _index(head_files)
-        got = {e["key"]: e["category"] for e in surface_removals(before, after, head_assemblies)}
-        if got != expected:
+    for entry in SURFACE_TESTS:
+        label, base_files, head_files, expected = entry[:4]
+        expected_added: set[str] | None = entry[4] if len(entry) > 4 else None
+        before, _, members_before = _index(base_files)
+        after, head_assemblies, members_after = _index(head_files)
+        got = {
+            e["key"]: e["category"]
+            for e in surface_removals(before, after, head_assemblies, members_before, members_after)
+        }
+        got_added = {e["key"] for e in surface_additions(before, after, members_before, members_after)}
+        if got != expected or (expected_added is not None and got_added != expected_added):
             failed += 1
             print(f"SURFACE SELF-TEST FAILED: {label}")
             print(f"  expected {expected}")
             print(f"  got      {got}")
+            if expected_added is not None:
+                print(f"  expected added {sorted(expected_added)}")
+                print(f"  got      added {sorted(got_added)}")
         else:
             print(f"ok: {label}")
     return failed
