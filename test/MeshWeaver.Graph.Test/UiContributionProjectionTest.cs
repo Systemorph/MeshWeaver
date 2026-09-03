@@ -486,4 +486,65 @@ public class UiContributionProjectionTest
         Assert.Equal("Alert", icon.Id);
         Assert.IsType<Domain.Icon>(tab.GroupIcon);
     }
+
+    /// <summary>
+    /// 🚨 The one field the closed vocabulary must NEVER grow: a projected entry always carries a
+    /// null <see cref="NodeMenuItemDefinition.Action"/>.
+    ///
+    /// <para><b>Why this is a security ratchet and not a style rule.</b> <c>Action</c> is a command
+    /// id a renderer runs IN PLACE instead of navigating, and its own contract says applicability
+    /// stays with the provider that emitted the entry — nothing downstream re-checks
+    /// <see cref="NodeMenuItemDefinition.RequiredPermission"/>. So a contribution able to declare
+    /// <c>action: "recycle"</c> beside <c>requiredPermission: Read</c> would hand every reader of a
+    /// node a button that tears its hub down. That is a WIDENING, and the whole point of the closed
+    /// vocabulary is that a contribution can only ever narrow. Behaviour stays compiled — which is
+    /// why Recycle is one of the four node-menu defaults that never migrate
+    /// (<c>Doc/Architecture/MenuContributionBoundary</c>).</para>
+    ///
+    /// <para>The control arm is the second assertion: the same projection DOES carry the fields it
+    /// is supposed to, so a green here cannot mean "the projection produced nothing".</para>
+    /// </summary>
+    [Fact]
+    public void ProjectedEntry_NeverCarriesAnAction_BehaviourStaysCompiled()
+    {
+        var item = Assert.Single(Project(new UiContribution
+        {
+            Area = "MyArea",
+            Label = "Mine",
+            LabelKey = "menu.mine",
+            Icon = "🧩",
+            Tooltip = "t",
+            Order = 42,
+        }));
+
+        Assert.Null(item.Action);
+        Assert.False(item.IsAction);
+
+        // Control arm: the projection really did project.
+        Assert.Equal("MyArea", item.Area);
+        Assert.Equal(42, item.Order);
+        Assert.Equal("menu.mine", item.LabelKey);
+    }
+
+    /// <summary>
+    /// The same ratchet at the DECLARATION: <see cref="UiContribution"/> carries no property that
+    /// could name a command. The projection test above pins today's behaviour; this one fails the
+    /// moment someone adds the field, which is where the decision actually gets made.
+    /// </summary>
+    [Fact]
+    public void UiContribution_DeclaresNoCommandField()
+    {
+        var offending = typeof(UiContribution).GetProperties()
+            .Select(p => p.Name)
+            .Where(n => n is "Action" or "Command" or "ClickAction" or "OnClick")
+            .ToArray();
+
+        Assert.True(offending.Length == 0,
+            $"UiContribution must not be able to name a command: {string.Join(", ", offending)}. "
+            + "Nothing downstream re-checks RequiredPermission for an action entry, so a data-declared "
+            + "one widens rather than narrows. See Doc/Architecture/MenuContributionBoundary.");
+
+        // Control arm: the reflection is looking at a type that really has properties.
+        Assert.Contains("Area", typeof(UiContribution).GetProperties().Select(p => p.Name));
+    }
 }

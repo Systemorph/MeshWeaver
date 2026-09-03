@@ -185,11 +185,17 @@ The full field surface:
 | `Gates.NodeTypes` | Suffix-aware node-type filter (`"Slide"` matches `Publish/Slide`) |
 | `Gates.ExcludePartitionRoot` | Never on ANY user's home — the built-in suppression's own predicate |
 | `Gates.ExcludeViewerHome` | Never on the VIEWER'S OWN home (the anchoring path is the viewer's partition key). Strictly narrower than `ExcludePartitionRoot`, not a replacement: declare both when both apply |
-| `Gates.SyncedOnly` | Only while the node still participates in sync (`SyncBehavior.Include`) — the shape the "Stop synchronization" action needs. The inverse is deliberately absent; the vocabulary stays closed |
+| `Gates.SyncedOnly` | Only while the node still participates in sync (`SyncBehavior.Include`) — for an entry that is meaningless on a node the viewer has already claimed. The inverse is deliberately absent; the vocabulary stays closed |
 | `Gates.AdminOnly` | Platform admins only (`hub.IsGlobalAdmin()`, reactive) |
 
 Every gate SUBTRACTS, and they are evaluated in ONE compiled place (`UiContributionProjection.PassesNodeGates`)
 so the node menu and the per-node settings page can never drift on what a gate word means.
+
+🚨 **Gates subtract; they never SELECT.** A contribution declares a FIXED entry — one label, one
+icon, one area, one destination — and the gates decide only whether it appears. An entry whose
+label, icon, area, href or action is a function of state stays compiled, and the vocabulary does not
+grow to express it. That is the settled boundary, with the measured list of what falls on each side:
+[The Menu Contribution Boundary](/Doc/Architecture/MenuContributionBoundary).
 
 **Settings tabs — TWO surfaces, TWO keys.** The portal has two settings pages, and each answers
 its own context key:
@@ -269,6 +275,13 @@ Honesty section — these are the known walls, so nobody burns a day rediscoveri
   `MeshEndpointProviderAttribute` (`MeshWeaver.Hosting.AspNetCore`) — authenticated by default,
   loud startup refusal on route collisions; see [Modules](/Doc/Architecture/Modules). Mesh DATA
   (plugins' nodes) still cannot contribute endpoints — trusted compiled code only.
+- **Behaviour, and state-dependent presentation.** A contribution is a fixed entry the gates may
+  hide. It cannot carry a command id (`NodeMenuItemDefinition.Action` — nothing downstream re-checks
+  `RequiredPermission`, so a data-declared action would WIDEN), and it cannot flip its own label,
+  icon, area or href on the node's or the viewer's state. Four node-menu defaults sit on that side of
+  the line permanently — Presentation, StopSync, Recycle and Create — and so do the node/mesh menu's
+  other built-ins, for a separate reason:
+  [The Menu Contribution Boundary](/Doc/Architecture/MenuContributionBoundary).
 - **Runtime `.razor` from mesh content.** The in-mesh compile pipeline is C#-only — there is no
   Razor engine at runtime, and collectible recompiles would fight the Blazor renderer's
   type-identity caching. Precompiled packs are the answer, not runtime Razor.
