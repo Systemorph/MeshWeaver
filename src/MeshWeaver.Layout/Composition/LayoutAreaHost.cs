@@ -1582,13 +1582,40 @@ public record LayoutAreaHost : IDisposable
     public void NavigateToSidePanel(string uri)
         => PostNavigation(new NavigationRequest(uri) { Target = "SidePanel" });
 
+    /// <summary>
+    /// <b>The viewer this render is FOR</b> — the area subscription's subscriber, normalized to its
+    /// hosting address. For a browser tab that is the portal hub, <c>portal/{circuitId}</c>:
+    /// <see cref="MeshWeaver.Messaging.AddressExtensions.CreatePortalAddress"/> is keyed on the
+    /// circuit id, so there is exactly ONE of these per tab. Null when the area renders with no
+    /// subscriber.
+    ///
+    /// <para>🚨 <b>This is the addressee for anything that means "this viewer, right now, in this
+    /// window".</b> Everything above a mesh node is already per-tab — circuit, portal hub, and this
+    /// subscription, which is keyed <c>(Subscriber, StreamId)</c> — and then a value is written into
+    /// a node, where the isolation ends: a node is shared by every reader, including the same
+    /// person's other tab. State whose honest answer to "what would this mean to my other tab?" is
+    /// "not that" must therefore carry an addressee, and a consumer must act only on a signal
+    /// addressed to IT. See <c>Doc/Architecture/PerTabSessionState</c>.</para>
+    ///
+    /// <para>Prefer <see cref="NavigateTo"/> / <see cref="NavigateToSidePanel"/> where a COMMAND is
+    /// what you need: those already post to this address, so the addressing is the transport's and
+    /// there is no shared field to clear or race. This property is for the cases that genuinely
+    /// have to persist per-viewer state somewhere shared.</para>
+    /// </summary>
+    public Address? Viewer
+    {
+        get
+        {
+            var subscriber = Stream.Get<Address>(nameof(SubscribeRequest.Subscriber));
+            return subscriber is null ? null : subscriber.Host ?? subscriber;
+        }
+    }
+
     private void PostNavigation(NavigationRequest request)
     {
-        var subscriber = Stream.Get<Address>(nameof(SubscribeRequest.Subscriber));
+        var subscriber = Viewer;
         if (subscriber != null)
         {
-            if (subscriber.Host is { })
-                subscriber = subscriber.Host;
             Stream.Hub.Post(request, o => o.WithTarget(subscriber));
         }
         else
