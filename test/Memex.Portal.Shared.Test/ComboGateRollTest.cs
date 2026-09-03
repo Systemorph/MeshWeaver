@@ -192,6 +192,76 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
             "an absence nobody can act on is how a gate stays unwired for months");
     }
 
+    /// <summary>
+    /// 🚨 <b>A verdict that lands AFTER this pod started has to be honoured — and that is the only
+    /// shape production ever has.</b>
+    ///
+    /// <para>Every other test here records the verdict BEFORE the poller starts, so all of them pass
+    /// against a service that reads the policy node exactly once and then decides off that frozen
+    /// snapshot forever. Production is the other way round: a portal pod runs for days, and
+    /// <c>mw-combo-verify</c> lands its verdict on <c>Admin/UpdatePolicy</c> whenever a candidate is
+    /// published — always after startup, never before it. A gate that cannot see such a verdict is
+    /// not a gate; it is #2274's original "built, documented, tested, and called by nothing" with
+    /// one extra step.</para>
+    ///
+    /// <para>It WAS frozen: <c>CreatePolicySource</c> ended in
+    /// <c>DistinctUntilChanged(c =&gt; (c.Policy, c.RequireCiGreen))</c>, a leftover from the
+    /// <c>Switch</c>-based shape it outlived. With the watch moved out of the policy stream that
+    /// operator no longer prevented a resubscribe — it filtered the CONTENT, and the same stream is
+    /// what the poller reads at decision time. Recording a verdict changes neither of those two
+    /// fields, so the emission carrying it was dropped and every check kept deciding on the content
+    /// as it stood at startup.</para>
+    ///
+    /// <para>The check that must honour it is driven by the SAFETY NET, deliberately: a policy
+    /// change would refresh the content even with the defect present (it changes the very field the
+    /// filter keyed on), so a test that triggered one would pass either way.</para>
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AVerdictRecordedAfterTheFirstCheck_RefusesTheNextRoll()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Seed();
+        var updater = new RecordingUpdater();
+        var service = new GatedSelfUpdateService(
+            Mesh, new FakeAcrTagLister(), updater, FastPollWithSafetyNet(),
+            Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>(),
+            new AlwaysAvailable(Mesh, new ConfigurationBuilder().Build()), ComboGate());
+
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            // Wait for the service to have EVALUATED, never for a state to appear inside a bound —
+            // the same rule RunOneCheck follows and for the same reason.
+            await service.Evaluations.FirstAsync().Timeout(Budget).Await(ct);
+            updater.Tags.Should().Contain(CandidateTag,
+                "nothing is recorded yet, so the first check rolls UNVERIFIED — which is what makes "
+                + "the verdict arriving next the thing under test");
+
+            // The mw-combo-verify moment: the verdict lands while the poller is already running.
+            await Record(Red());
+
+            // The check's own verdict stamp is the LAST write of a check, so a content carrying it
+            // carries every earlier write of that check — the hold included. Waiting on IsHeld
+            // alone returns the content BETWEEN the two writes and reads a previous check's stamp.
+            var held = await WaitForContent(
+                c => c.LastCheckVerdict?.Contains("BLOCKED by the combo gate") == true);
+
+            held.IsHeld(CandidateTag).Should().BeTrue(
+                "the verdict arrived while the poller was running, and a refusal that leaves no "
+                + "trace is the silent freeze this gate must never become");
+            held.HeldReason.Should().Contain("Widget",
+                "the refusal must name the module that breaks, exactly as it does when the verdict "
+                + "was there from the start");
+            held.HeldIndeterminate.Should().BeFalse(
+                "the gate LOOKED and found an incompatibility — that is a candidate to re-verify, "
+                + "not an availability incident");
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     //  The wiring pin: InstanceComboVerifier is actually RUN
     // ══════════════════════════════════════════════════════════════════════════
@@ -297,6 +367,14 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
             await service.StopAsync(CancellationToken.None);
         }
     }
+
+    /// <summary>The same poller, plus a fast SAFETY NET so a SECOND check runs without an admin
+    /// touching the policy. The safety net is the only trigger that re-decides on unchanged policy
+    /// — which is exactly the shape a verdict landing mid-life has to be honoured through.</summary>
+    private static SelfUpdateOptions FastPollWithSafetyNet() => FastPoll() with
+    {
+        SafetyNetCheckInterval = TimeSpan.FromMilliseconds(250),
+    };
 
     private static SelfUpdateOptions FastPoll() => new()
     {
