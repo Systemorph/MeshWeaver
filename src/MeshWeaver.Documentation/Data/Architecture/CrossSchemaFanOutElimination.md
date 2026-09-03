@@ -154,6 +154,19 @@ subscription's change feed narrows with it. Open questions the implementation mu
 recipients of an entity-scoped notification are (watchers? grant-holders?), migration of existing
 rows, and the panel's grouping (it already groups by source path, which survives).
 
+🚨 **This plan is now worked out in full, with the write-side measurement it was missing:
+[Addressed Notifications](../AddressedNotifications) (#3156).** What it adds — the live distribution
+(of the newest 200 notifications on memex-cloud, 124 are plugin-update notices under
+`Plugins/{pkg}`, 60 are startup-import failures under a space, 12 are thread completions under a
+thread's *context* partition, and **six** are in a user's own partition), the fact that
+`Notification` has **no** `SatelliteAccessRule` so visibility is path-based and not MainNode-derived,
+the two-namespace anchor (`{viewer}` + `Admin`) the alternation resolver can narrow, the four product
+rulings the change needs, and the derivable migration. It also records that the shape is no longer
+merely expensive: Plugins #1231 refuses an unanchored query at runtime, and Plugins #1263
+grandfathers this one as the FIRST line of the shrink-only
+`src/MeshWeaver.Hosting.PostgreSql/unanchored-queries.allow` — deleting that line is the acceptance
+test.
+
 ### 2. The security fold: one materialized global set, invalidated by the change feed
 
 `SecurityQueries`' own doc explains why its globals are path-less (a `GroupMembership` lives under
