@@ -77,7 +77,7 @@ gate on the IMAGE rather than a stricter pin.
 | 13:32 | memex's self-updater patches the deployment to `ci.7658`. `DbVersionGate` refuses — `db_version=54 < expected 55` — and the new pods crash-loop while the old `ci.7632` pods keep serving. Invisible from the front door: the URL answers 200 the whole time (see [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall)). |
 | 13:32–17:00 | Every refused boot dies as an unhandled `OperationCanceledException` → SIGABRT → a 666 MB `createdump`; 45 of them exceed the 30 Gi `memex-dumps` emptyDir and evict a pod (Plugins #1290 turns that into a clean exit 1). |
 | 17:00 | Another session runs the migration by hand (`memex-migration-v55-manual`, the helm Job template with the new tag). `Database migration completed. Version: 55` at 17:06. |
-| 17:02 | The 7658 pods pass the gate; the rollout scales the 7632 ReplicaSet to zero. From this second every signed-in request faults in `LoadUserRoles` with `UnanchoredQueryException` and the middleware answers 503 "This is a temporary problem on our side" (issue #637's designed answer for an *infrastructure* fault). The Store dies on `nodeType:PluginCatalog`; GitHub sync, instance sync, notifications, outbound mail, model-credit and free-text search fault the same way. Loki: 138 refusals and 19 identity 503s on the two pods. |
+| 17:02 | The 7658 pods pass the gate; the rollout scales the 7632 ReplicaSet to zero. From this second every signed-in request faults in `LoadUserRoles` with `UnanchoredQueryException` and the middleware answers 503 "This is a temporary problem on our side" (issue #637's designed answer for an *infrastructure* fault). The Store dies on `nodeType:PluginCatalog`; GitHub sync, instance sync, notifications, outbound mail, model-credit and free-text search fault the same way. Loki, over the six hours ending 18:34Z: **156 refusals** on the two pods that served (100 + 56), plus 32 more on the pod evicted earlier — and **18 identity 503s attributable to this cause** (4 + 14). |
 | 17:05 | Reported: "memex.systemorph.com is completely down". Anonymous `curl` of `/`, `/Doc`, `/healthz` all answer 200 — the shell renders; only the signed-in read fails. |
 | 17:20 | `kubectl set image` to `ci.7693` (core `e36f04c`, which contains #3206, with Plugins `2d32a175`). The surge pod stays `Pending`: every silos node is CPU-full, the pool is at its maximum, and the old 7632 pod is holding a node in `Terminating` — deadlocked in dispose, 3.5 cores, 30-minute grace. It is force-deleted (it was already out of the Service and would have been SIGKILLed at 17:32 anyway); the surge pod schedules within seconds. |
 | 17:22:56 | Rollout complete. Zero refusals, zero 503s on the new pods. |
@@ -156,8 +156,11 @@ az acr manifest list-metadata -r meshweaver -n memex-portal-ai --orderby time_de
 git merge-base --is-ancestor <fix sha> <core half>                                                     # is the fix in this image's half?
 ```
 
-- `UNAVAILABLE for` with `UnanchoredQueryException` is this class. `UNAVAILABLE for` with
-  `DeliveryFailureException` is a transient hub fault and is not.
+- 🚨 **Filter the 503 count BY CAUSE or you will over-attribute it.** `UNAVAILABLE for` with
+  `UnanchoredQueryException` is this class. `UNAVAILABLE for` with `DeliveryFailureException` is an
+  unrelated transient transport fault — and the *older* pods, running before this outage began,
+  logged 23 of those. An unfiltered `grep "UNAVAILABLE for"` therefore hands you pre-incident noise
+  as incident evidence; the cause-filtered query is the one quoted above.
 - A pending surge pod on `Insufficient cpu` with the pool at its maximum: look for a `Terminating`
   pod holding a node — the dispose deadlock in `ci.7632` is still open (the pod ran 3.5 cores for
   18 minutes after its containers were told to stop).
