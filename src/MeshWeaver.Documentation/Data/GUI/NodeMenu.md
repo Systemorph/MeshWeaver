@@ -66,6 +66,7 @@ The portal's node context menu — the cube icon on every node — is fully data
 |------|------|------------|------:|:---:|-------|
 | Edit | `Edit` | `Update` | 10 | ✏️ | |
 | Pin | `Pin` | — | 12 | 🔖 | Viewer-scoped, not permission-gated; hidden on the viewer's own home |
+| Hide / Show in presentation mode | `HideInPresentation` / `ShowInPresentation` | — | 13 | 🕶️ / 👓 | Viewer-scoped; label AND area flip on the viewer's own marks; hidden on their own home |
 | Move | `Move` | `Delete` | 14 | ➡️ | Requires Delete on the source |
 | Copy | `Copy` | `Create` | 16 | 📋 | Duplicates the subtree |
 | Delete | `Delete` | `Delete` | 18 | 🗑️ | |
@@ -75,7 +76,7 @@ The portal's node context menu — the cube icon on every node — is fully data
 | Stop sync | `StopSync` | `Update` or `Sync` | 34 | 🔌 | Only on a synced node |
 | Recycle | `Recycle` | `Update` | 50 | ♻️ | |
 
-`_separator` entries are inserted at Order 20 and 40 — but **only where both adjacent sections actually carry items**, so a viewer who sees no editable actions never gets a leading divider.
+`_separator` entries are **derived, never emitted by a provider**: the aggregator inserts one wherever two adjacent entries in the FINISHED menu fall in different `Order` bands (20 and 40). Since the derivation runs after every provider is merged and after the `MenuPresentation` overlay, a divider can never lead, trail or double, an empty middle band produces one rule rather than two, and hiding a section's last entry through the catalog does not strand the rule behind it. See [The Menu Contribution Boundary](/Doc/Architecture/MenuContributionBoundary).
 
 Edit, Move, Copy and Delete are **suppressed on a protected partition root** (a user's home). Deleting that node would wipe the whole partition; `PartitionRootDeletionGuard` blocks it server-side, and the menu keeps it out of reach in the first place. Pin stays.
 
@@ -198,11 +199,11 @@ The web clients get the conventional nested flyout, with the component library s
 
 Nesting depth is unbounded — every renderer recurses. Nothing ships deeper than two levels today.
 
-The built-in node menu does **not** use this pattern. `DefaultNodeMenuProvider` (in `NodeMenuItemsExtensions`, registered alongside `DefaultMeshMenuProvider`) emits Edit, Pin, Move, Copy, Delete and the rest as one **flat** list — no `Children`, no "Actions" parent — grouped by `Order` band and rendered with `_separator` dividers rather than by nesting:
+The built-in node menu does **not** use this pattern. `DefaultNodeMenuProvider` (in `NodeMenuItemsExtensions`, registered alongside `DefaultMeshMenuProvider`) emits Edit, Pin, Move, Copy, Delete and the rest as one **flat** list — no `Children`, no "Actions" parent — grouped by `Order` band, with the dividers derived from the merged result rather than by nesting:
 
 | Order band | Section | Icons |
 |---|---|---|
-| 10–18 | edit / organize | ✏️ 🔖 ➡️ 📋 🗑️ |
+| 10–18 | edit / organize | ✏️ 🔖 🕶️ ➡️ 📋 🗑️ |
 | 27–30 | export / share / approval (contributed by other packages) — **PDF 📄, Email 📤, DOCX 📝** grouped under 📦 Export, Request Approval ✅ | 📦 (→ 📄 📤 📝) ✅ |
 | 30–38 | content / history / sync | 📁 🧾 🕘 🔌 🔄 |
 | 50 | lifecycle | ♻️ |
@@ -357,3 +358,5 @@ new DataGridControl(items)
 - [DataBinding](../DataBinding) — How data flows through controls
 - [Editor](../Editor) — The editor control for form rendering
 - [Access Control](../../Architecture/AccessControl) — Permission system
+- [The Menu Contribution Boundary](/Doc/Architecture/MenuContributionBoundary) — which entries may be
+  contributed as data, which stay compiled, and why the dividers are derived

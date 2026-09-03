@@ -188,6 +188,13 @@ public record UiContribution
 /// <summary>
 /// The CLOSED node-shape gate vocabulary for <see cref="UiContribution"/> — every gate can only
 /// NARROW visibility. Rules beyond this vocabulary belong in code.
+///
+/// <para>🚨 <b>Gates SUBTRACT; they never SELECT.</b> A contribution declares a FIXED entry — one
+/// label, one icon, one area, one destination — and these gates decide only whether it appears. A
+/// gate word that chose BETWEEN two presentations would have no safe default when the evidence is
+/// missing (a gate has one: do not show), so an entry whose label, icon, area, href or action is a
+/// function of state stays compiled, and this record does not grow to express it. The measured list
+/// of what falls on each side is <c>Doc/Architecture/MenuContributionBoundary</c>.</para>
 /// </summary>
 public record UiContributionGates
 {
@@ -207,14 +214,16 @@ public record UiContributionGates
 
     /// <summary>
     /// Only on nodes still PARTICIPATING in static-repo synchronization — <see
-    /// cref="MeshNode.SyncBehavior"/> is <see cref="SyncBehavior.Include"/>. The gate the
-    /// "Stop synchronization" entry needs (design #1645): once a viewer has claimed a node
-    /// (<see cref="SyncBehavior.ExcludeThisOnly"/> / <see cref="SyncBehavior.ExcludeThisAndChildren"/>)
-    /// there is nothing left to stop.
+    /// cref="MeshNode.SyncBehavior"/> is <see cref="SyncBehavior.Include"/>. For an entry that is
+    /// meaningless once a viewer has claimed a node (<see cref="SyncBehavior.ExcludeThisOnly"/> /
+    /// <see cref="SyncBehavior.ExcludeThisAndChildren"/>) — there is nothing left to stop.
     ///
-    /// <para>Narrowing only, like every gate here. The INVERSE ("only on claimed nodes", which the
-    /// compiled "Resume synchronization" branch renders) is deliberately NOT in the vocabulary —
-    /// a second gate word is a separate decision, and the vocabulary stays closed.</para>
+    /// <para>Narrowing only, like every gate here. The INVERSE ("only on claimed nodes") is
+    /// deliberately NOT in the vocabulary, and the built-in "Stop / Resume synchronization" toggle
+    /// this gate was first sketched for does NOT migrate onto the lane: its label and icon FLIP on
+    /// the node's state, and its permission gate is <c>Update</c> OR <c>Sync</c>, which one
+    /// <see cref="Permission"/> value checked with <c>HasFlag</c> cannot express. See
+    /// <c>Doc/Architecture/MenuContributionBoundary</c>.</para>
     /// </summary>
     public bool SyncedOnly { get; init; }
 
@@ -222,7 +231,9 @@ public record UiContributionGates
     /// Never on the VIEWER'S OWN home — the node whose path is the viewer's own partition key.
     /// The same predicate <c>PinLayoutArea</c> and <c>PresentationLayoutArea</c> already apply
     /// ("you do not pin yourself to yourself"; "hiding your own home empties the page you are
-    /// reading"), and the gate the Edit/Move/Copy/Delete defaults need when they migrate.
+    /// reading") — for a contributed entry that has no business on the viewer's own home. The
+    /// compiled defaults that share the predicate stay compiled
+    /// (<c>Doc/Architecture/MenuContributionBoundary</c>).
     ///
     /// <para>Strictly narrower than <see cref="ExcludePartitionRoot"/>, and NOT a replacement for
     /// it: <c>ExcludePartitionRoot</c> suppresses on ANY user's home (so an admin browsing someone

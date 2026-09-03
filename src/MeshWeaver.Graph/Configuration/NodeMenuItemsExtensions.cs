@@ -136,7 +136,9 @@ public static class NodeMenuItemsExtensions
                 items
                     .DistinctUntilChanged(MenuItemsSequenceComparer.Instance)
                     .CombineLatest(catalogStream, (slice, catalog) => (slice, catalog))
-                    .Select(t => (IReadOnlyList<NodeMenuItemDefinition>)
+                    // 🚨 Dividers are derived LAST, from the finished list — see
+                    // WithSectionDividers for why no provider may decide its own.
+                    .Select(t => WithSectionDividers(
                     [
                         // 🚨 Normalize runs AFTER the overlay, never before. The overlay is itself a
                         // source of nesting — a catalog entry's `parent` moves an item under another
@@ -150,7 +152,7 @@ public static class NodeMenuItemsExtensions
                                     reason => logger?.LogWarning(
                                         "Menu catalog for context '{Context}': {Reason}", context, reason)))
                             .Select(i => i.Localized(access))
-                    ])
+                    ], context))
                     // The catalog is a SECOND emission source, so the pre-overlay dedup above no
                     // longer covers the whole pipeline: a catalog re-publish carrying identical
                     // content would push an equal-but-not-identical MenuControl and re-render every
@@ -192,10 +194,11 @@ public static class NodeMenuItemsExtensions
             var (menuPath, _, menuNode, perms) = menuCtx;
             var items = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
 
-            // The node menu is grouped into sections (rendered with "_separator" dividers), each
-            // item carrying an emoji so it reads at a glance. The Order encodes the grouping — the
-            // aggregator re-sorts every provider's items by Order, so InstanceSync's
-            // "Synchronizations" item (Order 36) slots into the middle section on its own.
+            // The node menu is grouped into sections, each item carrying an emoji so it reads at a
+            // glance. The Order encodes the grouping — the aggregator re-sorts every provider's
+            // items by Order and derives the dividers from the merged result (SectionBoundaries),
+            // so InstanceSync's "Synchronizations" item (Order 36) slots into the middle section on
+            // its own without either side knowing about the other.
             //   10-18  edit / organize            ✏️ 🔖 🕶️ ➡️ 📋 🗑️
             //   30-38  content / history / sync    📁 🕘 🔌 (🔄)
             //   50     lifecycle                   ♻️
@@ -236,10 +239,8 @@ public static class NodeMenuItemsExtensions
                 var delete = DeleteLayoutArea.GetMenuItem(menuPath, perms);
                 if (delete != null) items.Add(delete with { Order = 18, Icon = "🗑️" });
             }
-            var hasGroup1 = items.Count > 0;
 
             // ── Group 2: content / history / sync ── (InstanceSync adds "Synchronizations" at 36)
-            var beforeGroup2 = items.Count;
             var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
             if (files != null) items.Add(files with { Order = 30, Icon = "📁" });
 
@@ -253,21 +254,18 @@ public static class NodeMenuItemsExtensions
 
             var stopSync = StopSyncLayoutArea.GetMenuItem(menuNode, menuPath, perms);
             if (stopSync != null) items.Add(stopSync with { Order = 34, Icon = "🔌" });
-            var hasGroup2 = items.Count > beforeGroup2;
 
             // ── Group 3: lifecycle ──
             var recycle = RecycleLayoutArea.GetMenuItem(menuPath, perms);
             if (recycle != null) items.Add(recycle with { Order = 50, Icon = "♻️" });
-            var hasGroup3 = recycle != null;
 
             // Threads moved to the dedicated top-bar AI menu (AiMenuContext).
 
-            // Section dividers at the seams — only where both adjacent sections carry items.
-            if (hasGroup1 && (hasGroup2 || hasGroup3))
-                items.Add(new NodeMenuItemDefinition("", "_separator", Order: 20));
-            if ((hasGroup1 || hasGroup2) && hasGroup3)
-                items.Add(new NodeMenuItemDefinition("", "_separator", Order: 40));
-
+            // 🚨 No dividers here. This provider can only see its OWN slice — not the other
+            // providers merged with it, and not the MenuPresentation overlay that runs afterwards
+            // and can HIDE any of these. A divider decided from a partial view is wrong in both
+            // directions, so the aggregator derives them from the final list instead
+            // (WithSectionDividers).
             return (IReadOnlyCollection<NodeMenuItemDefinition>)items.ToImmutable();
         });
 
@@ -632,6 +630,116 @@ public static class NodeMenuItemsExtensions
             result.Add(item with { Children = [.. children] });
         }
         return result.ToImmutable();
+    }
+
+    /// <summary>
+    /// The <see cref="NodeMenuItemDefinition.Order"/> boundaries at which a menu context draws a
+    /// section divider. The Node menu's three sections — edit/organize (10–18), content/history/sync
+    /// (30–38), lifecycle (50) — are the bands every contributor already sorts into, which is how
+    /// InstanceSync's "Synchronizations" (Order 36) lands in the middle section without knowing this
+    /// table exists. Every other context is flat and declares nothing.
+    ///
+    /// <para><c>static readonly</c> here is the sanctioned shape: an immutable constant lookup
+    /// initialised once and never written at runtime (AGENTS.md → "No static collections").</para>
+    /// </summary>
+    private static readonly ImmutableDictionary<string, ImmutableArray<int>> SectionBoundaries =
+        ImmutableDictionary<string, ImmutableArray<int>>.Empty
+            .Add(NodeMenuContext, [20, 40]);
+
+    /// <summary>
+    /// Inserts the section dividers into the FINISHED menu — after every provider has been merged,
+    /// after the <see cref="MenuPresentationOverlay"/> has had its say, after
+    /// <see cref="Normalize"/>.
+    ///
+    /// <para>🚨 <b>Why no provider may decide its own.</b> A provider sees only the items it emits
+    /// itself, and it runs BEFORE two things that change the answer: the merge with every other
+    /// provider (the DI-registered ones, the in-mesh per-NodeType delegates, and the data-contributed
+    /// <c>UiContribution</c> slice), and the catalog overlay, which can HIDE any entry. So a
+    /// provider-decided divider is wrong in both directions, and both are live:</para>
+    /// <list type="bullet">
+    /// <item><description>An admin hiding the last entry of a section through
+    /// <c>Admin/Menu/Node</c> left the divider behind it — a rule with nothing on one side. Hiding
+    /// entries is the whole point of the catalog, so this was reachable by design.</description></item>
+    /// <item><description>On a viewer's OWN home every compiled section-1 entry is suppressed
+    /// (Edit/Move/Copy/Delete by the protected-root rule, Pin and Presentation because you are not
+    /// your own bookmark), so the old code emitted no divider at 20 — and a contributed or
+    /// DI-provided entry in that band then ran straight into Files with no rule between
+    /// them.</description></item>
+    /// </list>
+    ///
+    /// <para>Derivation, once, on the final list: two adjacent entries in DIFFERENT sections get one
+    /// divider between them. That is correct for an empty middle band (one divider, never two), it
+    /// can never produce a leading or trailing rule (a divider only ever goes BETWEEN two surviving
+    /// entries), and it needs no bookkeeping from anyone who contributes an item.</para>
+    ///
+    /// <para>In a banded context an INCOMING <c>_separator</c> is dropped rather than kept: the
+    /// derivation is the single source of truth there, and a provider that still emits one (an
+    /// in-mesh delegate this build cannot recompile) must not be able to reintroduce the defect.
+    /// A flat context keeps the dividers its providers declare, minus the dangling shapes — never
+    /// leading, never doubled, never trailing.</para>
+    /// </summary>
+    // internal for unit testing (InternalsVisibleTo MeshWeaver.Graph.Test).
+    internal static IReadOnlyList<NodeMenuItemDefinition> WithSectionDividers(
+        IReadOnlyList<NodeMenuItemDefinition> items, string context)
+    {
+        var boundaries = SectionBoundaries.TryGetValue(context, out var declared)
+            ? declared
+            : ImmutableArray<int>.Empty;
+
+        var result = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
+        NodeMenuItemDefinition? previous = null;
+        foreach (var item in items)
+        {
+            if (item.Area == NodeMenuItemDefinition.SeparatorArea)
+            {
+                if (!boundaries.IsEmpty
+                    || previous is null
+                    || previous.Area == NodeMenuItemDefinition.SeparatorArea)
+                    continue;
+                result.Add(item);
+                previous = item;
+                continue;
+            }
+
+            if (previous is not null
+                && SectionOf(previous.Order, boundaries) != SectionOf(item.Order, boundaries))
+                result.Add(new NodeMenuItemDefinition(
+                    "", NodeMenuItemDefinition.SeparatorArea,
+                    Order: FirstBoundaryCrossed(previous.Order, item.Order, boundaries)));
+
+            result.Add(item);
+            previous = item;
+        }
+
+        // A flat context's last declared divider has nothing under it once the entries below it
+        // were filtered away.
+        if (result.Count > 0 && result[^1].Area == NodeMenuItemDefinition.SeparatorArea)
+            result.RemoveAt(result.Count - 1);
+
+        return result.ToImmutable();
+    }
+
+    /// <summary>Which section an <see cref="NodeMenuItemDefinition.Order"/> falls in — the count of
+    /// boundaries at or below it. Zero for every item in a context that declares none, which is what
+    /// makes the derivation a no-op there.</summary>
+    private static int SectionOf(int order, ImmutableArray<int> boundaries)
+    {
+        var section = 0;
+        foreach (var boundary in boundaries)
+            if (order >= boundary)
+                section++;
+        return section;
+    }
+
+    /// <summary>The first boundary strictly between two orders — the divider's own
+    /// <see cref="NodeMenuItemDefinition.Order"/>, so it reads the way the bands are documented even
+    /// when a whole section in between is empty.</summary>
+    private static int FirstBoundaryCrossed(int previousOrder, int order, ImmutableArray<int> boundaries)
+    {
+        foreach (var boundary in boundaries)
+            if (previousOrder < boundary && order >= boundary)
+                return boundary;
+        return order;
     }
 
     /// <summary>
