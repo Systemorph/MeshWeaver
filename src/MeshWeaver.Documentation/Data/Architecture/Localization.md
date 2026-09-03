@@ -11,6 +11,13 @@ User.TimeZoneId → AccessContext.TimeZoneId → AccessService.ToDisplayTime
 User.Locale     → AccessContext.Locale     → AccessService.Localize
 ```
 
+> 🚧 **Open question — chrome rendered INSIDE authored content.** "Chrome follows the viewer" is
+> unambiguous for the node menu and settings. It is what puts **Ausführen** on the Run button of an
+> English lesson, and #3203 asks whether that is right. A proposal — the ownership rule, why the
+> content-language alternative was measured and reverted, and what a per-node language field would
+> cost — is at [Chrome and content language](../ChromeAndContentLanguage). **It is not in force.** Until
+> it is decided, this page describes what the platform does.
+
 ## The one rule: resolve explicitly, never from ambient culture
 
 `CultureInfo.CurrentUICulture` is **not** used and must not be introduced. A layout-area render hops
@@ -159,8 +166,13 @@ would reach most visitors and silently miss the rest. SignalR keeps an `IHttpCon
 connection and refreshes it per request, so `HubCallerContext.GetHttpContext()` answers for every
 transport; the filter reads it in the hub invocation that *creates* the circuit handlers. The
 accessor remains only as a fallback for a host that runs the Blazor hub without the filter.
-`AnonymousCircuitLocaleSeedTest` runs its cases over **both** transports — the long-polling rows are
-what caught this, and are what stop it regressing.
+🚨 **The guard that pinned this is GONE.** `AnonymousCircuitLocaleSeedTest` ran its cases over **both**
+transports, and the long-polling rows are what caught the defect above. It lived in core at
+`test/MeshWeaver.Hosting.Blazor.Test/`; when `MeshWeaver.Hosting.Blazor` moved to MeshWeaver.Plugins
+its sibling tests went with it and **this file did not**. It exists on neither repo's `main` today, so
+the anonymous seed currently has **zero** coverage — `Locales.Negotiate` is still tested, but nothing
+tests whether the negotiated value reaches a circuit. Tracked as
+[MeshWeaver.Plugins#1273](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1273).
 
 `Locales.Negotiate` does the parsing: the full RFC 9110 list with `q=` weights, tried in descending
 weight, each matched by `Locales.TryMatch` so region variants fold onto the primary subtag exactly as
