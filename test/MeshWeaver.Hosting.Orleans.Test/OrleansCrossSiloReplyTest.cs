@@ -263,7 +263,7 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
         var circuit = new Address(OrleansTestMeshExtensions.SiloHostedStreamRoutedType, $"circuit-{Guid.NewGuid():N}");
         var registration = routingB.RegisterStream(circuit, (d, _) => Observable.Return(d.Processed()));
         await (routingB.PodHubClaimSettled(circuit) ?? Observable.Return(Unit.Default))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(ct);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 
         IMessageDelivery Probe() => new MessageDelivery<PingRequest>(
             new PingRequest(), new PostOptions(hubA.Address).WithTarget(circuit),
@@ -271,7 +271,7 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
 
         // Claimed ⇒ a cross-silo directed delivery lands.
         var delivered = await grainsA.GetGrain<IPodHubGrain>(circuit.ToString())
-            .Deliver(Probe()).WaitAsync(TimeSpan.FromSeconds(30), ct);
+            .Deliver(Probe()).WaitAsync(TestTimeouts.Convergence, ct);
         delivered.State.Should().Be(MessageDeliveryState.Forwarded, "the claim landed, so the address is served");
 
         // The circuit closes: the registration is disposed, which announces the release (Detach).
@@ -294,7 +294,7 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
             }))
             .Where(ex => ex is not null && RoutingGrain.WasReleased(ex))
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(30))
+            .Timeout(TestTimeouts.Convergence)
             .Await(ct);
         RoutingGrain.WasReleased(refusal).Should().BeTrue(
             "Detach must leave a tombstone that remembers the owner said goodbye — an activation that "
