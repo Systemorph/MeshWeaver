@@ -136,6 +136,12 @@ public class ModulePublishShelfTest : IDisposable
         Assert.Equal("MeshWeaver.Speech", entry.Name);
         Assert.True(entry.Enabled);
         Assert.Equal("999.0.0", entry.MinMeshVersion);
+        // 🚨 The PRODUCER's framework identity survives the publish, verbatim (Plugins#931). The
+        // index projects exactly this per bundle, and a consumer compares it against what it has
+        // landed to tell a rebuild of unchanged source from a no-op — a rebuild republishes under
+        // the SAME version, so if the shelf drops the identity here the whole comparison downstream
+        // silently reads "unknown" and the defect is back.
+        Assert.Equal("test-build", entry.FrameworkMvid);
         Assert.False(list.PendingRestart);
         Assert.True(File.Exists(Path.Combine(
             ModuleLandingService.ModuleDirectoryFor(root, "MeshWeaver.Speech", entry),

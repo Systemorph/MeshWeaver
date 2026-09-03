@@ -714,11 +714,22 @@ public static class PluginBundleEndpoints
                         // instance can actually serve its bytes, so a consumer never downloads for
                         // a module section that will not be there. Additive: an older client's
                         // BundleRef simply ignores it.
-                        module = modules.TryGetValue(p.PluginId, out var moduleName) ? moduleName : null,
+                        module = modules.TryGetValue(p.PluginId, out var servable)
+                            ? servable.Name : null,
                         // The module's declared platform FLOOR — the consumer's gate (a semver
                         // floor, never MVID equality; the index-level frameworkMvid above stays
-                        // the NodeType lane's strict gate and, for modules, diagnostics).
-                        minMeshVersion = modules.ContainsKey(p.PluginId) ? p.MinMeshVersion : null,
+                        // the NodeType lane's strict gate).
+                        minMeshVersion = servable is null ? null : p.MinMeshVersion,
+                        // 🚨 The framework identity of THIS bundle's MODULE bytes, as their
+                        // producer recorded it at publish (Plugins#931). Not the index-level
+                        // identity above: that is this portal's own bake, and a module is not
+                        // baked here. A consumer compares it against what it has landed, so a
+                        // rebuild of unchanged source against a new platform — which republishes
+                        // under the SAME version — is visible without downloading a byte
+                        // (Plugins#723: without it the updater goes quiet and the fleet cannot
+                        // converge). Additive: a pre-#931 client ignores it, and a pre-#931
+                        // registry simply omits it, which reads as unknown rather than as a match.
+                        frameworkMvid = servable?.FrameworkMvid,
                     }).ToArray(),
                 })))
             .FirstAsync()
@@ -981,23 +992,45 @@ public static class PluginBundleEndpoints
     /// is listed too, deliberately: the index surfaces its <c>minMeshVersion</c> and each
     /// consumer's own gate decides loadability THERE, before a byte travels. One
     /// activation-sidecar read for the whole index.
+    ///
+    /// <para>🚨 Each entry also carries the framework identity the SHELF recorded for those module
+    /// bytes (Plugins#931). It is the producer's value, written when the owning repo's CI published
+    /// them (<c>ModulePublish.Accepted.FrameworkMvid</c> → <c>ShelveModule</c>) — never this
+    /// portal's own bake identity, which the index states separately and which says nothing about a
+    /// module the registry did not build. Without it a consumer cannot tell a REBUILD of the same
+    /// source against a new platform from a no-op, because such a rebuild republishes under the
+    /// same version; that is the whole defect. Null when the producer recorded none, or for a
+    /// module that rides the image and has no sidecar entry — read downstream as "unknown", never
+    /// as "matches", and never inferred from anything.</para>
     /// </summary>
-    private static IObservable<IReadOnlyDictionary<string, string>> ServableModules(
+    private static IObservable<IReadOnlyDictionary<string, ServableModule>> ServableModules(
         IMessageHub rootHub, IReadOnlyList<BundleEntry> packages)
     {
         var landing = rootHub.ServiceProvider.GetService<ModuleLandingService>();
         var declaring = packages.Where(p => !string.IsNullOrWhiteSpace(p.Module)).ToArray();
         if (landing is null || declaring.Length == 0)
-            return Observable.Return<IReadOnlyDictionary<string, string>>(
-                new Dictionary<string, string>());
+            return Observable.Return<IReadOnlyDictionary<string, ServableModule>>(
+                new Dictionary<string, ServableModule>());
 
         return landing.GetActivation().Take(1)
-            .Select(activation => (IReadOnlyDictionary<string, string>)declaring
+            .Select(activation => (IReadOnlyDictionary<string, ServableModule>)declaring
                 .Where(p => ModuleBundleSource.Collect(
                         landing.BaseDirectory, p.Module!, activation)
                     .DeclineReason is null)
-                .ToDictionary(p => p.PluginId, p => p.Module!, StringComparer.OrdinalIgnoreCase));
+                .ToDictionary(
+                    p => p.PluginId,
+                    p => new ServableModule(
+                        p.Module!,
+                        activation.Entries
+                            .FirstOrDefault(e => string.Equals(
+                                e.Name, p.Module, StringComparison.OrdinalIgnoreCase))
+                            ?.FrameworkMvid),
+                    StringComparer.OrdinalIgnoreCase));
     }
+
+    /// <summary>One servable module on the index: its assembly name and the framework identity the
+    /// shelf recorded for its bytes (null = the producer stated none).</summary>
+    private sealed record ServableModule(string Name, string? FrameworkMvid);
 
     /// <summary>
     /// One plugin's bundle: each of its NodeTypes' compiled assemblies, plus the manifest saying

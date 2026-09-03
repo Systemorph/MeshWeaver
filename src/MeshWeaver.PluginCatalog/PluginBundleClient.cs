@@ -110,7 +110,30 @@ public sealed class PluginBundleClient
     /// so a consumer can skip an uninstallable bundle without downloading it. Null = none.</param>
     public sealed record BundleRef(
         string Plugin, string Version, string Url, string? Module = null,
-        string? MinMeshVersion = null);
+        string? MinMeshVersion = null)
+    {
+        /// <summary>
+        /// 🚨 The framework identity the registry states THIS bundle's MODULE bytes were built
+        /// against — the producer's value, recorded when the bytes were shelved
+        /// (<c>ModulePublish.Accepted.FrameworkMvid</c> → <c>ModuleLandingService.ShelveModule</c>)
+        /// and surfaced here so a consumer can tell a REBUILD from a no-op without downloading a
+        /// byte (Plugins#931).
+        ///
+        /// <para>Distinct from <see cref="BundleIndex.FrameworkMvid"/>, which is the registry's own
+        /// bake identity and governs the NodeType lane. A module is not baked by the registry: it
+        /// arrives from the CI of the repo that owns it, so its identity is per BUNDLE and the
+        /// index-level one says nothing about it. <see cref="ModuleUpdateDecision"/> compares this
+        /// against <see cref="ModuleActivationEntry.FrameworkMvid"/>.</para>
+        ///
+        /// <para>Null from a registry that predates this field, or for a module whose producer
+        /// recorded no identity — read as "unknown", never as "matches".</para>
+        ///
+        /// <para>An INIT property, not a sixth primary-constructor parameter: adding one replaces a
+        /// public record's constructor signature and is a binary break across the fleet (the same
+        /// rule <c>BundleReader.AssemblyRef.SourceFingerprint</c> follows).</para>
+        /// </summary>
+        public string? FrameworkMvid { get; init; }
+    }
 
     /// <summary>
     /// Reads the registry's bundle index. Emits an empty index rather than throwing when the
@@ -310,7 +333,14 @@ public sealed class PluginBundleClient
                         var verdict = ModuleUpdateDecision.Decide(
                             bundle?.Version, bundle?.MinMeshVersion,
                             ModulePlatformFloor.DeclineReason, entry, declined,
-                            e => ModuleActivationBoot.LandedModuleDllExists(landing.BaseDirectory, e));
+                            e => ModuleActivationBoot.LandedModuleDllExists(landing.BaseDirectory, e),
+                            // 🚨 Plugins#931: the version alone answered "already landed" for an
+                            // artifact this deployment does not hold — a module rebuilt against a
+                            // new platform republishes under the SAME version. The identity the
+                            // registry advertises for these module bytes is the other half of
+                            // "already landed", and it is the value LandFromBundle records below,
+                            // so the two sides converge after one landing.
+                            bundle?.FrameworkMvid);
 
                         if (verdict.Action != ModuleUpdateAction.Land)
                         {
@@ -327,7 +357,8 @@ public sealed class PluginBundleClient
                             .SelectMany(result => result.Bytes is null
                                 ? Miss(pluginId, result.Kind, result.Reason)
                                 : LandFromBundle(
-                                    pluginId, moduleName, packagePath, bundle.Version, result.Bytes));
+                                    pluginId, moduleName, packagePath, bundle.Version, result.Bytes,
+                                    bundle.FrameworkMvid));
                     })))
             .Catch((Exception ex) =>
             {
@@ -353,9 +384,27 @@ public sealed class PluginBundleClient
     /// declining twice is cheaper than debugging a MissingMethodException once). The MVID the
     /// bundle records is logged as DIAGNOSTIC metadata, never refused.
     /// </summary>
+    /// <param name="advertisedFrameworkMvid">
+    /// 🚨 The framework identity the registry advertised for THESE module bytes
+    /// (<see cref="BundleRef.FrameworkMvid"/>) — recorded on the activation entry in preference to
+    /// the archive's manifest-level value, and the reason the update decision converges
+    /// (Plugins#931).
+    ///
+    /// <para>The manifest-level <c>frameworkMvid</c> is the identity the CONSUMER REQUESTED on the
+    /// download URL — the registry stamps the served bundle with the lane it resolved NodeType
+    /// assemblies for. For a module that is the wrong claim: the bytes come off the registry's
+    /// shelf exactly as their producer's CI packed them, whatever lane asked. Recording the
+    /// requested identity is what made the comparison in <see cref="ModuleUpdateDecision"/>
+    /// impossible to converge — every reconcile would re-land, because the entry could never come
+    /// to agree with what the index advertises.</para>
+    ///
+    /// <para>Null falls back to the manifest's value, which is the pre-#931 behaviour and what an
+    /// older registry's index leaves us with.</para>
+    /// </param>
     // Internal for the ModuleFunnelTest pin (InternalsVisibleTo): the land half without HTTP.
     internal IObservable<int> LandFromBundle(
-        string pluginId, string moduleName, string? packagePath, string version, byte[] bundleBytes) =>
+        string pluginId, string moduleName, string? packagePath, string version, byte[] bundleBytes,
+        string? advertisedFrameworkMvid = null) =>
         _httpPool.InvokeBlocking(_ => BundleReader.ReadModule(bundleBytes))
             .SelectMany(payload =>
             {
@@ -393,12 +442,15 @@ public sealed class PluginBundleClient
                     .LandModule(
                         moduleName,
                         files.Select(f => (f.FileName, f.Bytes)).ToArray(),
-                        // Diagnostic metadata (which exact platform build produced these bytes),
-                        // recorded on the activation entry and logged at landing — never a gate.
-                        manifest!.FrameworkMvid,
+                        // Which exact platform build produced these bytes — the registry's
+                        // per-bundle claim first, the archive's requested-lane stamp only as the
+                        // legacy fallback. Still never a LANDING gate (the floor is), but no
+                        // longer merely diagnostic: ModuleUpdateDecision reads it back to tell a
+                        // rebuild from a no-op (Plugins#931).
+                        advertisedFrameworkMvid ?? manifest!.FrameworkMvid,
                         packagePath,
                         version,
-                        manifest.Module?.MinMeshVersion,
+                        manifest!.Module?.MinMeshVersion,
                         // A view pack's wwwroot rides the bundle (#1724's provider serves it from
                         // the module folder); without this the pack lands unstyled and its
                         // collocated JS 404s.
