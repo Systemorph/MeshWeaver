@@ -92,16 +92,49 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      pull-requests: read
     steps:
+      # 🚨 `refs/pull/<n>/merge` is MATERIALIZED LAZILY. GitHub computes a pull request's merge
+      # commit in the background, on demand, and drops it whenever the base moves; between those
+      # two moments the ref is simply absent — `git fetch` answers "couldn't find remote ref". The
+      # first manual run of this workflow (33730055183, against #3170 minutes after two merges to
+      # main) died in checkout on exactly that. So a manual run resolves the pull request through
+      # the API, whose GET is what triggers the recomputation, polls until `mergeable` is known,
+      # and checks out the MERGE COMMIT BY SHA — a real object in the repository whether or not a
+      # ref advertises it, which is how actions/checkout fetches `github.sha` on pull_request too.
+      - name: Resolve the merge commit of the pull request named on a manual run
+        id: manual
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ inputs.core_pr }}
+        run: |
+          set -euo pipefail
+          [[ "$NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::'$NUMBER' is not a pull request number."; exit 1; }
+          merge_sha=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" > "$RUNNER_TEMP/pr.json"
+            mergeable=$(jq -r '.mergeable' "$RUNNER_TEMP/pr.json")
+            state=$(jq -r '.state' "$RUNNER_TEMP/pr.json")
+            [ "$state" = "open" ] || { echo "::error::pull request #$NUMBER is $state — only an open pull request has a merge commit to test."; exit 1; }
+            case "$mergeable" in
+              true)  merge_sha=$(jq -r '.merge_commit_sha // empty' "$RUNNER_TEMP/pr.json"); break ;;
+              false) echo "::error::pull request #$NUMBER conflicts with its base (mergeable=false) — there is no merge commit to build the dependent against."; exit 1 ;;
+              *)     echo "attempt $attempt: GitHub is still computing #$NUMBER's merge commit (mergeable=$mergeable) — waiting 5 s"; sleep 5 ;;
+            esac
+          done
+          [[ "$merge_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::pull request #$NUMBER's merge commit did not resolve within a minute (merge_commit_sha='$merge_sha'). Re-run once GitHub reports it mergeable; refusing to guess."; exit 1; }
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+          echo "pull request #$NUMBER: merge commit $merge_sha (head $(jq -r '.head.sha' "$RUNNER_TEMP/pr.json"))"
+
       - uses: actions/checkout@v7
         with:
           # The detector compares the pull request's head against its merge base, so history is
           # needed. On pull_request `github.sha` IS the merge commit of refs/pull/<n>/merge — the very
-          # commit dotnet-test.yml builds — so it is named explicitly rather than left to the
-          # action's default; a manual run names the merge ref of the number it was given. Both
-          # branches are non-empty, so the ref can never be blank.
+          # commit dotnet-test.yml builds; a manual run checks out the merge commit resolved above,
+          # by SHA (see the step's comment for why not the ref). Both branches are non-empty.
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.core_pr) || github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && steps.manual.outputs.merge_sha || github.sha }}
 
       - name: Assert the dispatch credential, or fail naming what to provision
         env:
