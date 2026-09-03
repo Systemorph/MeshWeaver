@@ -306,7 +306,8 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
         var installed = Query(
             $"path:{PackageInstaller.InstalledPartition} scope:children "
             + $"nodeType:{PackageInstaller.PackageNodeType}");
-        var syncConfigs = Query($"nodeType:{GitHubSyncService.ConfigNodeType}");
+        // Every space's _GitSync — mesh-wide by nature (#3202 — fan-out is opt-in).
+        var syncConfigs = Query(MeshWideQuery.OfType(GitHubSyncService.ConfigNodeType));
 
         return Observable.Zip(installed, syncConfigs, (records, configs) => new InstanceState(
             records.Select(n => n.Id).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),

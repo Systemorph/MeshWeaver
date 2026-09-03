@@ -57,7 +57,10 @@ public sealed class OutboundEmailSender(
     /// </summary>
     public const string WatchQuery =
         $"nodeType:{EmailNodeType.NodeType} content.direction:Outbound "
-        + "-content.status:Sending -content.status:Sent -content.status:Failed";
+        + "-content.status:Sending -content.status:Sent -content.status:Failed "
+        // A process-wide watch: an outbound mail is filed under whoever sent it, in any partition,
+        // so the ONE live subscription spans them all and says so (#3202 — fan-out is opt-in).
+        + ParsedQuery.CrossPartitionQualifier;
 
     private readonly CompositeDisposable subscriptions = new();
     private IServiceScope? scope;

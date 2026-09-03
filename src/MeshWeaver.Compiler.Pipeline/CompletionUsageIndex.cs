@@ -93,7 +93,9 @@ internal sealed class CompletionUsageIndex(IMessageHub hub, ILogger logger)
 
         // Accumulate the chunked query, settle after a quiet second, take one snapshot — the
         // standard bounded read. Timeout + Catch make every failure mode "no prior".
-        mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Code limit:{MaxNodes}"))
+        // Every Code node in the mesh — the usage prior is built over everyone's cells, so
+        // mesh-wide by nature (#3202 — fan-out is opt-in).
+        mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.Declare($"nodeType:Code limit:{MaxNodes}")))
             .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)

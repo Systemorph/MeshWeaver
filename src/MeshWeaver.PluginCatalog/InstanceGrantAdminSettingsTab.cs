@@ -388,7 +388,9 @@ public static class InstanceGrantAdminSettingsTab
             .WithView(meshService
                 .Query(new MeshQueryRequest
                 {
-                    Query = $"nodeType:{MeshWeaverInstanceNodeType.RegistrationKeyNodeType}",
+                    // Keys live under their owners; the admin view lists them all (#3202 — fan-out
+                    // is opt-in, so the mesh-wide read says so).
+                    Query = MeshWideQuery.OfType(MeshWeaverInstanceNodeType.RegistrationKeyNodeType),
                 })
                 .Select(results => results
                     // The node type covers keys AND their routing-index rows; the index rows live
@@ -598,7 +600,8 @@ public static class InstanceGrantAdminSettingsTab
             .WithView(meshService
                 .Query(new MeshQueryRequest
                 {
-                    Query = $"nodeType:{MeshWeaverInstanceNodeType.NodeType}",
+                    // Instances live under whichever user registered them (#3202 — see above).
+                    Query = MeshWideQuery.OfType(MeshWeaverInstanceNodeType.NodeType),
                 })
                 .Select(results => results
                     .Select(r => new GrantRow(r.Id ?? r.Path.Split('/').Last(), r.Name ?? "", r.Path))

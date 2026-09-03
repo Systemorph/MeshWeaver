@@ -105,7 +105,9 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
                 () => accessService.ImpersonateAsSystem(),
                 _ => meshService
                     .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                        $"nodeType:{PluginCatalogConfigurationExtensions.CatalogNodeType}"))
+                        // A catalog node is authored wherever its registry lives — mesh-wide by
+                        // nature (#3202 — fan-out is opt-in).
+                        MeshWideQuery.OfType(PluginCatalogConfigurationExtensions.CatalogNodeType)))
                     .Take(1))
             .Subscribe(
                 change =>

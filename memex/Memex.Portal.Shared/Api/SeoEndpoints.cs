@@ -296,7 +296,10 @@ public static class SeoEndpoints
         var candidates = CandidateNodeTypes
             .Select(type => Observable.Using(
                 () => accessService?.ImpersonateAsSystem() ?? System.Reactive.Disposables.Disposable.Empty,
-                _ => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{type} is:main limit:500"))
+                // Mesh-wide by nature: the sitemap enumerates the partition ROOTS of every
+                // partition, so there is no partition to anchor to (#3202 — fan-out is opt-in).
+                _ => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    MeshWideQuery.Declare($"nodeType:{type} is:main limit:500")))
                     .Take(1)
                     .Select(change => change.Items
                         .Where(n => !n.Path.Contains('/'))     // top-level roots only

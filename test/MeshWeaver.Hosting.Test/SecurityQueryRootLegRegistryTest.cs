@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -12,7 +13,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
-/// Pins <see cref="SecurityQueryShapesTest.RegisteredGlobalSatellites"/> — the mirror the pure
+/// Pins <see cref="QueryRouteClassifier.RegisteredGlobalSatellites"/> — the mirror the pure
 /// shapes test classifies <c>_</c>-prefixed first segments with — against the REAL registry of a
 /// running mesh: the <c>Partition</c> nodes the static providers ship, which is what the Postgres
 /// router's <c>TryGetRegisteredPartition</c> is seeded from at boot. A mirror that nothing compares
@@ -47,7 +48,7 @@ public class SecurityQueryRootLegRegistryTest(ITestOutputHelper output) : Monoli
     {
         var real = RegisteredGlobalSatellites();
         real.Should().NotBeEmpty("DefaultPartitionProvider registers at least _Access");
-        var mirror = SecurityQueryShapesTest.RegisteredGlobalSatellites;
+        var mirror = QueryRouteClassifier.RegisteredGlobalSatellites;
         real.Keys.OrderBy(k => k, StringComparer.Ordinal).Should().Equal(
             mirror.Keys.OrderBy(k => k, StringComparer.Ordinal),
             "the shapes test classifies `_`-prefixed first segments with this mirror; when a global "

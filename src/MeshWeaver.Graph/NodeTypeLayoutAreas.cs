@@ -152,7 +152,8 @@ public static class NodeTypeLayoutAreas
         // the fault logged — the type's own progress keeps rendering.
         var sweepStream = host.Workspace
             .GetQuery("nodetypes-compile-sweep",
-                "nodeType:NodeType select:path,id,name,nodeType,content")
+                // Every NodeType definition — a catalog, mesh-wide by nature (#3202).
+                MeshWideQuery.Declare("nodeType:NodeType select:path,id,name,nodeType,content"))
             .Catch((Exception ex) =>
             {
                 host.Hub.ServiceProvider.GetService<ILoggerFactory>()

@@ -128,7 +128,9 @@ public static class NodeTypeInstanceProbe
         return types
             .Select(type => meshService
                 .Query<MeshNode>(MeshQueryRequest
-                    .FromQuery($"nodeType:{type}")
+                    // A stranded instance may sit in any partition — the probe is mesh-wide by
+                    // nature and says so (#3202 — fan-out is opt-in).
+                    .FromQuery(MeshWideQuery.OfType(type))
                     .AsSystem() with { Limit = ProbeLimit })
                 .Take(1)
                 .Select(change =>

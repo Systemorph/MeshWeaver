@@ -105,6 +105,64 @@ The test to apply is not "is it anchored" but **"can the subject live outside th
 can, anchoring loses a permission. Where it provably cannot, per-scope reads were only ever paying
 for the same rows N times.
 
+## The sign-in path is anchored — and fan-out is opt-in now (#3202)
+
+On 2026-09-03 every signed-in user of a portal built from MeshWeaver.Plugins `main` ≥ `fe20fe2a`
+got a 503 on every page. Plugins #1231 had made fan-out **opt-in**: the Postgres planner refuses a
+query that names no partition and did not ask to span them (`UnanchoredQueryException`), because a
+silent 199-schema UNION locks 500+ relations and queues every other query behind it (the 2026-09-02
+census above). The sign-in role read — `OnboardingMiddleware.LoadUserRoles`,
+`nodeType:AccessAssignment content.accessObject:"{user}" scope:subtree` — was exactly that shape,
+and the middleware did what #637 requires with an infrastructure fault: 503, never "you have no
+account". Both production portals were frozen on older images until the fix landed.
+
+**The refusal's rule, which every core query now satisfies.** A query is served iff
+`IsSufficientlySpecified(parsed) || ResolvesByRoutingHint(parsed)`: a concrete `path:`/`namespace:`
+first segment, a multi-path, a wildcard namespace pattern, the explicit `partitions:all` — or a
+registered `QueryRoutingRule` that pins the node type (`nodeType:User` → `Auth`,
+`nodeType:Invitation` → `Admin`; the "inert hint" note that used to stand on this page is out of
+date — the planner consults the rules before refusing, and `SignInReadsAreAnchoredTest` pins that
+`UserNodeType`'s rule resolves the account lookup's exact text). `QueryRouteClassifier`
+(`test/MeshWeaver.Fixture`) is the one test-side mirror of that decision, and
+`UnanchoredQueryCensusTest` (`test/Memex.Portal.Shared.Test`) feeds it every runtime query core
+issues — the refused set is printed on every run and asserted empty.
+
+**Why the sign-in fold is ANCHORED and not declared.** `LoadUserRoles` folds a user's *platform*
+roles, and `AccessContext.Roles` is read by no permission decision — `PermissionEvaluator` ignores
+claim roles on purpose (a claim role used to be a global, undeniable grant: the 2026-08-05 paywall
+bypass), and its only consumer in core or MeshWeaver.Plugins is the per-viewer access-cache key. A
+platform role is granted in exactly three places by contract ([Access Control](../AccessControl) →
+"Where to look"), so the complete read is three single-schema legs, via `SecurityQueries`:
+
+| Leg | Query | Schema |
+|---|---|---|
+| Root scope | `RootAssignmentsFor(user)` — `namespace:_Access … content.accessObject:"{user}"` | `system_access` (the registered global satellite) |
+| Platform admin | `PartitionAssignmentsFor("Admin", user)` — `path:Admin scope:descendants …` | `admin` — excluded from cross-schema search, so reachable ONLY anchored |
+| Own home | `PartitionAssignmentsFor(user, user)` — `path:{user} scope:descendants …` | `{user}` |
+
+`partitions:all` would have restored the per-request 199-schema UNION, not removed it. The #2011
+deny hazard does not apply: `FoldRoles` honours no deny at all (it collects non-denied role names
+and subtracts nothing), so no scope's deny can be lost by not reading that scope. A grant in an
+arbitrary space is a *data* permission the fold evaluates from that space's own `_Access` at check
+time; folding it into the platform roles was incidental to the mesh-wide query.
+
+**What is DECLARED instead, and why.** `MeshWideQuery.Declare` / `.OfType` (`MeshWeaver.Mesh.Contract`)
+appends `partitions:all` for the reads whose answer genuinely lives in every partition, each with
+its reason at the call site: the `NodeType` catalog (pre-warm, compile sweep, recompile, prebuilt
+adoption, cell surfaces, the create menu, the MCP catalog), `UiContribution`, every `Space` root
+(the home page's root leg, the namespace picker, the sitemap), every `{Space}/_GitSync` config,
+the outbound-mail watch, the event-subscription runner, the stranded-instance probe, the root
+subject picker, the plugin-catalog watcher, the What's New type lane, and the home's "shared with
+me" leg (a share grant lives in the granting partition — see below). The instance registry's
+id lookups (`MeshWeaverInstance id:…`) are declared too, with the durable fix named at the site: an
+id → owner index in a pinned partition, the way `RegistrationKeyIndex` already indexes keys.
+
+**Fan-out grace in the storage layer.** Because a cross-repo caller sweep cannot land atomically
+and a refusal on a live request path must never be the first signal, the planner carries an
+explicit allow-file of offender shapes (`unanchored-queries.allow`, MeshWeaver.Plugins) for which it
+fans out with a warning instead of throwing; the file may only shrink, a listed shape no longer
+issued is a stale entry that fails the build, and an empty file is the refuse-everything default.
+
 ## What IS tractable, and what needs a decision
 
 Measured on `origin/main`, core only. The provider (`MeshWeaver.Hosting.PostgreSql`) left this
@@ -145,15 +203,16 @@ materialization of the fold's global sets on the `partition_access` precedent �
   routing and the Admin-partition routing rule. Collapsing therefore silently changes which TABLE a
   query reads for any gated type that is also a satellite type. The prerequisite is an
   alternation-aware `ExtractNodeTypes` whose consumers route only when every value agrees.
-- **Making `QueryRoutingHints` live.** `MeshConfiguration.ResolveRoutingHints` registers rules that
-  would pin `nodeType:Role`, `nodeType:Partition`, `nodeType:GlobalSettings` to `Admin`, and the
-  in-repo comment on `InvitationNodeType` states plainly that *"the PostgreSQL query router routes
-  purely by the path's first segment and does NOT consume these QueryRoutingHints yet, so this rule
-  is currently inert"*. Several docstrings in this repo describe their query as pinned on the
-  strength of a rule that does not run. Honouring the hints would remove real fan-outs — and would
-  ALSO silently truncate any `Role` authored outside `Admin`, which is the failure this whole page
-  is about. It is a deliberate scope decision, and it belongs with the fold materialization
-  (plan 2 of the elimination page), not ahead of it.
+- **`QueryRoutingHints` ARE live — mind what that pins.** `MeshConfiguration.ResolveRoutingHints`
+  registers rules that pin `nodeType:User` to `Auth` and `nodeType:Role`, `nodeType:Partition`,
+  `nodeType:GlobalSettings`, `nodeType:Invitation`, `nodeType:EventSubscription` to `Admin`, and
+  since Plugins #1231 the planner consumes them — both to pin a path-less query's enumeration and
+  to accept it instead of refusing it (the `InvitationNodeType` comment calling the rule "inert" is
+  out of date). The `Role` pin therefore silently truncates any `Role` authored outside `Admin`
+  for a path-less `nodeType:Role` read — which is exactly why the fold reads roles through
+  `SecurityQueries.Roles` with `partitions:all` (an explicit fan-out is enumerated in full; the
+  pin applies only to the path-less, undeclared shape). Any new rule must be weighed against this
+  page before it is registered.
 
 ## The other half: what an area SHOWS when the store cannot be reached
 

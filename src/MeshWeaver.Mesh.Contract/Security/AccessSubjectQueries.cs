@@ -38,7 +38,9 @@ public static class AccessSubjectQueries
     {
         var partition = Partition(scopePath);
         return string.IsNullOrEmpty(partition)
-            ? "nodeType:Group"
+            // The root scope's subject picker offers every group in the mesh — mesh-wide by
+            // nature, and it says so (#3202 — fan-out is opt-in).
+            ? MeshWideQuery.OfType("Group")
             : $"nodeType:Group namespace:{partition} scope:subtree";
     }
 

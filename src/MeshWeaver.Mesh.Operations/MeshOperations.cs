@@ -1370,7 +1370,8 @@ public class MeshOperations
     /// </summary>
     public IObservable<string> Catalog()
     {
-        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:NodeType", Limit = 1000 })
+        // Every NodeType definition — the catalog is mesh-wide by nature (#3202 — fan-out is opt-in).
+        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = MeshWideQuery.OfType("NodeType"), Limit = 1000 })
             .Take(1)
             .Select(change =>
             {

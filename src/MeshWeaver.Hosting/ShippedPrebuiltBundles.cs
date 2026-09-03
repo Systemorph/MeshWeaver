@@ -355,7 +355,8 @@ public static class ShippedPrebuiltBundles
                     typePathFilter, ImmutableDictionary<string, MeshNode>.Empty))
                 : meshService!
                     .Query<MeshNode>(MeshQueryRequest
-                        .FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
+                        // Every NodeType definition — a catalog, mesh-wide by nature (#3202).
+                        .FromQuery(MeshWideQuery.OfType(MeshNode.NodeTypePath)))
                     .Take(1)
                     .Timeout(EnumerationBudget)
                     .Select(change =>
