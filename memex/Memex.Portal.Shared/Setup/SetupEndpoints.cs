@@ -68,10 +68,14 @@ public static class SetupEndpoints
             return false;
 
         var token = app.Services.GetRequiredService<SetupAccessToken>();
-        var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(SetupEndpoints));
-        // The banner is the ONLY way an operator learns the token, so it goes out at Information
-        // and unconditionally — this is the state where the instance can do nothing else.
-        logger.LogInformation("{Banner}", token.ConsoleBanner(app.Urls.FirstOrDefault()));
+        // 🚨 Console.WriteLine, NOT a logger, and that is the whole point. The token is the ONLY
+        // way into this surface, and it was written with LogInformation under the category
+        // `Memex.Portal.Shared.Setup.SetupEndpoints` — which every deployment filters to Warning.
+        // So on a real cluster the banner never appeared: the wizard was serving, the token existed,
+        // and nobody could learn it. A credential whose delivery a log level can suppress is not
+        // delivered. stdout is what `kubectl logs` and `docker logs` show regardless of
+        // configuration, and it is already how the hand-over banner reaches the operator.
+        Console.WriteLine(token.ConsoleBanner(app.Urls.FirstOrDefault()));
 
         app.Use((ctx, next) =>
         {

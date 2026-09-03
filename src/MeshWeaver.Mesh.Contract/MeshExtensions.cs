@@ -359,6 +359,109 @@ public static class MeshExtensions
             : hub;
 
     /// <summary>
+    /// Address-id prefix of the mesh's dedicated READ-issuing hub. A <c>portal/</c> address for the
+    /// same reason <see cref="NodeOperationHubPrefix"/> is one: <c>portal</c> is already a
+    /// stream-routed address type, so a reply addressed here is dispatched cross-silo by the
+    /// existing routing rules — no new address type, no new routing rule.
+    /// </summary>
+    private const string ReadIssuingHubPrefix = "reads-";
+
+    /// <summary>
+    /// The address of <paramref name="mesh"/>'s dedicated read-issuing hub. Pure address
+    /// arithmetic — it does NOT materialise the hub.
+    /// </summary>
+    private static Address ReadIssuingHubAddress(IMessageHub mesh) =>
+        AddressExtensions.CreatePortalAddress($"{ReadIssuingHubPrefix}{mesh.Address.Id}");
+
+    /// <summary>
+    /// The mesh's ONE dedicated read-issuing hub — <c>portal/reads-{meshId}</c>, hosted by the mesh
+    /// hub, created on first use and shared thereafter.
+    ///
+    /// <para>🚨 <b>It deliberately registers NO handlers.</b> That is the whole point: the only
+    /// thing its single-threaded action block ever dispatches is the REPLY to a read a caller is
+    /// waiting on, so a bounded read cannot be starved by unrelated work. Contrast
+    /// <see cref="NodeOperationExecutionHub"/>, which is the mesh's node-CRUD EXECUTION hub — every
+    /// <c>CreateNodeRequest</c>/<c>CreateOrUpdateNodeRequest</c> in the mesh runs on its block, one
+    /// at a time, and the turn loop does not advance until the current turn's observable completes
+    /// (<c>MessageService.DrainOne</c>).</para>
+    ///
+    /// <para>Everything else is wired exactly as the execution hub is, so the two differ in
+    /// precisely one respect: it shares the mesh hub's TYPE REGISTRY (a hub with a private registry
+    /// never learns a dynamically-registered content type, and the payload degrades to an untyped
+    /// <c>JsonElement</c>), it inherits the mesh hub's PERMISSION EVALUATOR (a hub's configuration
+    /// starts empty and <c>ResolveEvaluator</c> does not walk the parent chain, so an uncopied
+    /// evaluator silently grants <see cref="Permission.All"/>), and it registers itself with the
+    /// ROUTING SERVICE so replies land on it cross-silo.</para>
+    ///
+    /// <para>Returns <c>null</c> only when the hub cannot be materialised (the mesh is already
+    /// tearing down); callers then fall back to their own hub.</para>
+    /// </summary>
+    /// <param name="hub">Any hub in the mesh; the read hub is resolved from its mesh root.</param>
+    /// <returns>The shared read-issuing hub, or <c>null</c> while the mesh is disposing.</returns>
+    public static IMessageHub? MeshReadHub(this IMessageHub hub)
+    {
+        var mesh = hub.GetMeshHub();
+        // Teardown: never materialise a hub during disposal (HostedHubsCollection refuses it and
+        // logs a warning). The caller falls back to its own hub, at which point the read is being
+        // abandoned anyway.
+        if (mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+            return null;
+
+        var routingService = mesh.ServiceProvider.GetService<IRoutingService>();
+        var permissionEvaluator = mesh.Configuration.Get<EffectivePermissionsDelegate>();
+        return mesh.GetHostedHub(
+            ReadIssuingHubAddress(mesh),
+            config =>
+            {
+                config = config
+                    .WithTypeRegistry(mesh.TypeRegistry)
+                    .WithInitialization(h =>
+                    {
+                        if (routingService is not null)
+                            h.RegisterForDisposal(routingService.RegisterStream(h));
+                    });
+                return permissionEvaluator is null
+                    ? config
+                    : config.WithPermissionEvaluator(permissionEvaluator);
+            },
+            HostedHubCreation.Always);
+    }
+
+    /// <summary>
+    /// The hub a bounded, request/response READ must be ISSUED ON — the caller's own hub, except
+    /// when that hub is the ROOT MESH HUB (the router), where the read hops onto
+    /// <see cref="MeshReadHub"/>.
+    ///
+    /// <para>🚨 <b>Why this is not <see cref="NodeOperationIssuingHub"/>.</b> Both exist to keep the
+    /// router from being an end of a delivery, and for a WRITE the node-operation seam is right: a
+    /// target-less <c>CreateOrUpdateNodeRequest</c> posted there EXECUTES on the mesh's node-CRUD
+    /// hub, and a write ack arriving after the writes queued ahead of it is the ordering that hub
+    /// exists to impose. A READ is the opposite case. It is bounded (<see cref="ReadBudget"/>), a
+    /// person is usually waiting on it, and it shares nothing with node CRUD but the action block —
+    /// so issuing it on the execution hub means its reply, once delivered, waits in that block's
+    /// buffer behind every write in flight. The turn loop advances only when the current turn's
+    /// observable completes, so a bulk node-CRUD burst (a content upload's per-file indexing, a
+    /// package install, a bake) holds the reply for as long as the burst lasts and the read's
+    /// budget expires on an answer that already arrived. On <c>/api/content</c> that is the
+    /// ~10.3 s-then-503 of <see href="https://github.com/Systemorph/MeshWeaver/issues/2901">#2901</see>
+    /// — see <c>Doc/Architecture/ContentRoute503</c>.</para>
+    ///
+    /// <para>For any hub that is NOT the router this returns the hub unchanged, so a per-node,
+    /// portal, session or import-hub caller keeps its identity byte-for-byte — those are real
+    /// actors whose own block is the right place for their own replies.</para>
+    ///
+    /// <para>Identity is unaffected: the ambient <c>AccessService</c> is the mesh-wide singleton
+    /// every hosted hub's provider chains to, so an <c>ImpersonateAsSystem</c> (or any ambient
+    /// context) active at Subscribe time is read identically by this hub's post pipeline.</para>
+    /// </summary>
+    /// <param name="hub">The hub the caller holds — returned unchanged unless it is the root mesh hub.</param>
+    /// <returns>The off-router read-issuing hub.</returns>
+    public static IMessageHub ReadIssuingHub(this IMessageHub hub) =>
+        string.Equals(hub.Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal)
+            ? hub.MeshReadHub() ?? hub
+            : hub;
+
+    /// <summary>
     /// Registers handlers for mesh node operations. Idempotent — calling twice on the
     /// same configuration is a no-op on the second call. Without this guard, every
     /// extra call would add a duplicate set of handlers; each delivery would invoke

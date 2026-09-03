@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.PluginCatalog;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -368,6 +369,29 @@ public class SetupSurfaceTest : IDisposable
                     TakesEndpoint: true),
             ],
         });
+        return app;
+    }
+
+    /// <summary>
+    /// A setup-mode pipeline with the probe paths mapped exactly as <c>SetupOnlyHost</c> maps them —
+    /// shared with <c>SetupProbeEndpointsTest</c> so the redirect exemption is asserted against the
+    /// real middleware rather than against a restatement of it.
+    /// </summary>
+    internal static WebApplication BuildProbeApp()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Logging.ClearProviders();
+        builder.Services.AddSingleton(new InstanceSetupStatusAccessor(static () => true));
+        builder.Services.AddSingleton<SetupAccessToken>();
+        builder.Services.AddSingleton(new StorageBackendCatalog(["Sqlite"]));
+        builder.Services.AddSingleton<ISetupCatalogProvider>(new StubCatalog(Catalog));
+
+        var app = builder.Build();
+        foreach (var probe in SetupOnlyHost.ProbePaths)
+            app.MapGet(probe, () => Results.Text("ok"));
+        app.MapInstanceSetup();
+        app.Start();
         return app;
     }
 

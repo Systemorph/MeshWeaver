@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -21,6 +22,17 @@ namespace MeshWeaver.PluginCatalog;
 /// end — after an install the registry stream re-emits and the affected card flips to "Installed"
 /// with no manual refresh.
 ///
+/// <para><b>Categories first, packages per category.</b> The page a visitor lands on lists the
+/// source's CATEGORIES — one tile per <see cref="PackageManifest.Category"/> with its package count,
+/// plus an "all packages" entry — and reads nothing but the source's manifest listing to do so: no
+/// install record, no admin probe, no activation state. Picking a tile (<c>?category=…</c>) renders
+/// that category's cards and joins ONLY its members against the install registry (one exact-path
+/// read per member); the whole flat list stays reachable behind <c>?all=true</c>, which is also the
+/// one page that can show the install records the source no longer offers. "The store must not load
+/// the full thing — only categories first" is the rule this shape implements; the pure seams
+/// (<see cref="Plan"/>, <see cref="Categories"/>, <see cref="InstalledRecordQueries"/>) are what a
+/// test pins it with.</para>
+///
 /// <para>The rendering is source-agnostic (<see cref="RenderFromSource"/>): the <c>PluginCatalog</c>
 /// node Overview builds its source from the node's <see cref="PluginCatalogContent"/> and renders +
 /// installs through the helpers here. (The old platform-admin "Plugin Catalog" settings tab that
@@ -32,6 +44,46 @@ public static class CatalogLayoutAreas
 {
     /// <summary>Area name for the catalog browse view.</summary>
     public const string CatalogArea = "Catalog";
+
+    /// <summary>
+    /// The area parameter that selects ONE category to browse (<c>?category=Education</c>); absent
+    /// = the landing, which lists the categories and renders no package card at all.
+    /// </summary>
+    public const string CategoryParam = "category";
+
+    /// <summary>
+    /// The area parameter that asks for EVERY package on one page (<c>?all=true</c>) — the flat
+    /// list the catalog used to open with, kept reachable behind an explicit click because it is
+    /// the only page that can show the install records the source no longer offers
+    /// (<see cref="Orphaned"/>). Anything but a true-ish value is not a request for it.
+    /// </summary>
+    public const string AllParam = "all";
+
+    /// <summary>
+    /// The bucket KEY for packages that declare no <see cref="PackageManifest.Category"/> — a key,
+    /// never a label: the tile and the heading render it through <c>ui.catalogUncategorized</c>, in
+    /// the viewer's language. A source category literally spelled this way joins the bucket, which
+    /// means the same thing.
+    /// </summary>
+    public const string Uncategorized = "Uncategorized";
+
+    /// <summary>
+    /// The install-registry listing the ALL page joins against — every record, content included,
+    /// because that page renders every card and the orphan section needs the records the source no
+    /// longer offers.
+    /// </summary>
+    public const string AllInstalledQuery =
+        $"path:{PackageInstaller.InstalledPartition} scope:children nodeType:{PackageInstaller.PackageNodeType}";
+
+    /// <summary>
+    /// The SHELL-only install-registry listing a category page reads for the click's dependency
+    /// closure (<see cref="PackageDependencyGraph.InstallClosure"/> skips what is already installed):
+    /// record paths, no <c>content</c>. An install record carries the package's whole installed-file
+    /// baseline, which is exactly the payload a page rendering one category must not load for every
+    /// package on the instance — <c>select:</c> is what keeps the column out of the read.
+    /// </summary>
+    public const string InstalledIdsQuery =
+        $"{AllInstalledQuery} select:path,id,namespace,nodeType";
 
     /// <summary>
     /// Registers the <c>PluginCatalog</c> node views: the catalog browse as the default Overview,
@@ -74,20 +126,175 @@ public static class CatalogLayoutAreas
             .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingCatalog")));
     }
 
+    // ————————————————————————————————————————————— the page plan (pure)
+
+    /// <summary>Which of the catalog's three pages a render is.</summary>
+    public enum CatalogPage
+    {
+        /// <summary>The category tiles — reads the manifest listing and nothing else.</summary>
+        Landing,
+
+        /// <summary>One category's cards, joined against ITS members' install records.</summary>
+        Category,
+
+        /// <summary>Every card plus the orphaned-record section — the whole install registry.</summary>
+        All,
+    }
+
+    /// <summary>One category tile: the bucket key and how many packages it holds.</summary>
+    /// <param name="Key">The category as the source spells it, or <see cref="Uncategorized"/>.</param>
+    /// <param name="Count">How many available packages fall into it.</param>
+    public sealed record CatalogCategory(string Key, int Count);
+
     /// <summary>
-    /// Renders the catalog from an arbitrary <paramref name="source"/>: the source's packages (live)
-    /// joined with the install registry (live) into package cards with Install / Update / Installed
-    /// status. Shared by the node Overview and the platform-admin settings tab.
+    /// What ONE render of the catalog shows, decided from the area reference and the source's
+    /// listing alone — before any install record is read. <see cref="Packages"/> is the set of
+    /// cards the page renders (empty on the landing), <see cref="Available"/> the whole listing,
+    /// which every card's click still needs as the dependency-resolution universe.
+    /// </summary>
+    /// <param name="Kind">Which page.</param>
+    /// <param name="Category">The selected category's key on a <see cref="CatalogPage.Category"/> page; else null.</param>
+    /// <param name="Categories">The tiles, in display order.</param>
+    /// <param name="Packages">The cards this page renders.</param>
+    /// <param name="Available">Everything the source offers.</param>
+    public sealed record CatalogPlan(
+        CatalogPage Kind, string? Category, IReadOnlyList<CatalogCategory> Categories,
+        IReadOnlyList<PackageManifest> Packages, IReadOnlyList<PackageManifest> Available)
+    {
+        /// <summary>How many packages the source offers in total.</summary>
+        public int Total => Available.Count;
+    }
+
+    /// <summary>The category bucket a package falls into: its trimmed category, or
+    /// <see cref="Uncategorized"/> when it declares none. Pure.</summary>
+    public static string EffectiveCategory(PackageManifest package) =>
+        string.IsNullOrWhiteSpace(package.Category) ? Uncategorized : package.Category!.Trim();
+
+    /// <summary>Whether a bucket key is the <see cref="Uncategorized"/> bucket. Pure.</summary>
+    public static bool IsUncategorized(string key) =>
+        string.Equals(key, Uncategorized, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The category tiles for a listing: one per distinct category (matched case-insensitively,
+    /// spelled as first seen), alphabetical, the uncategorized bucket last. Counted off the
+    /// manifests alone — no package node is read to produce a count. Pure.
+    /// </summary>
+    public static IReadOnlyList<CatalogCategory> Categories(IEnumerable<PackageManifest> available) =>
+        [.. (available ?? [])
+            .GroupBy(EffectiveCategory, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new CatalogCategory(g.Key, g.Count()))
+            .OrderBy(c => IsUncategorized(c.Key) ? 1 : 0)
+            .ThenBy(c => c.Key, StringComparer.OrdinalIgnoreCase)];
+
+    /// <summary>
+    /// The requested category matched case-insensitively to an ACTUAL category, or null (the
+    /// landing) when the request is blank or names no category the source has — a stale or
+    /// mistyped <c>?category=</c> falls back to the tiles rather than a blank page. Pure.
+    /// </summary>
+    public static string? SelectedCategory(string? requested, IEnumerable<CatalogCategory> categories)
+    {
+        if (string.IsNullOrWhiteSpace(requested))
+            return null;
+        var want = requested.Trim();
+        return categories.FirstOrDefault(c => string.Equals(c.Key, want, StringComparison.OrdinalIgnoreCase))?.Key;
+    }
+
+    /// <summary>Whether the request asks for the whole flat list (<c>?all=true</c>). Pure.</summary>
+    public static bool IsAll(string? requested) =>
+        string.Equals(requested?.Trim(), "true", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(requested?.Trim(), "1", StringComparison.Ordinal);
+
+    /// <summary>The packages of one category, by display name. Pure.</summary>
+    public static IReadOnlyList<PackageManifest> InCategory(IEnumerable<PackageManifest> available, string category) =>
+        [.. (available ?? [])
+            .Where(p => string.Equals(EffectiveCategory(p), category, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(p => p.Name ?? p.Id, StringComparer.OrdinalIgnoreCase)];
+
+    /// <summary>
+    /// The page plan for a render: the ALL page when asked for, one category when the request
+    /// names one the source has, otherwise the landing. The landing's <see cref="CatalogPlan.Packages"/>
+    /// is EMPTY by construction — that is the statement "read no install record for this page".
+    /// Pure.
+    /// </summary>
+    public static CatalogPlan Plan(
+        string? requestedCategory, string? requestedAll, IReadOnlyList<PackageManifest> available)
+    {
+        available ??= [];
+        var categories = Categories(available);
+        if (IsAll(requestedAll))
+            return new(CatalogPage.All, null, categories, available, available);
+        if (SelectedCategory(requestedCategory, categories) is { } category)
+            return new(CatalogPage.Category, category, categories, InCategory(available, category), available);
+        return new(CatalogPage.Landing, null, categories, [], available);
+    }
+
+    /// <summary>
+    /// The install-record reads a category page issues: one exact-path query per member, as one
+    /// batched request — never the registry's whole children listing. Blanks dropped, duplicates
+    /// collapsed, ordinally sorted so the same page always asks the same question. Each query is
+    /// its own change-feed scope, so an install landing while the page is open still flips its
+    /// card. Pure.
+    /// </summary>
+    public static IReadOnlyList<string> InstalledRecordQueries(IEnumerable<string> packageIds) =>
+        [.. (packageIds ?? [])
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .Select(id => $"path:{PackageInstaller.InstalledPartition}/{id} nodeType:{PackageInstaller.PackageNodeType}")];
+
+    /// <summary>The href a category tile navigates to — the catalog area of the node at
+    /// <paramref name="address"/>, carrying the URL-encoded category. Pure.</summary>
+    public static string CategoryHref(object address, string category) =>
+        new LayoutAreaReference(CatalogArea)
+        {
+            Id = $"{CatalogArea}?{CategoryParam}={Uri.EscapeDataString(category)}",
+        }.ToHref(address);
+
+    /// <summary>The href of the whole flat list. Pure.</summary>
+    public static string AllHref(object address) =>
+        new LayoutAreaReference(CatalogArea) { Id = $"{CatalogArea}?{AllParam}=true" }.ToHref(address);
+
+    /// <summary>The href of the landing — the tiles. Pure.</summary>
+    public static string LandingHref(object address) =>
+        new LayoutAreaReference(CatalogArea).ToHref(address);
+
+    // ————————————————————————————————————————————— the render
+
+    /// <summary>
+    /// Renders the catalog from an arbitrary <paramref name="source"/>. The source's listing
+    /// decides the page (<see cref="Plan"/>): the landing renders straight off it; a card page joins
+    /// its cards against the install registry (live), the viewer's admin flag (live) and the
+    /// restart-as-activation state (live). Shared by the node Overview and every test of it.
     /// </summary>
     internal static IObservable<UiControl?> RenderFromSource(
         LayoutAreaHost host, IPackageSource? source, string sourceRef, string? description, string? sourceLabel)
     {
-        var installed = ObserveInstalled(host);
+        // Which page THIS render is — known synchronously off the area reference, which is what
+        // lets the landing skip every per-package read below.
+        var requestedCategory = host.Reference?.GetParameterValue(CategoryParam);
+        var requestedAll = host.Reference?.GetParameterValue(AllParam);
         return ObserveAvailable(host, source, sourceRef)
-            .CombineLatest(installed, ObserveViewerIsGlobalAdmin(host), ObserveActivation(host),
-                (available, inst, isAdmin, activation) => (UiControl?)BuildCatalog(
-                    host, source, sourceRef, description, sourceLabel, available, inst, isAdmin, activation))
-            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingCatalog")));
+            .Select(feed =>
+            {
+                if (!feed.Answered)
+                    return Observable.Return((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingCatalog")));
+                var plan = Plan(requestedCategory, requestedAll, feed.Packages);
+                if (plan.Kind == CatalogPage.Landing)
+                    // The landing composes NOTHING beyond the listing it was built from: no install
+                    // record, no permission evaluation, no activation-state read. That is the whole
+                    // point of opening on categories.
+                    return Observable.Return((UiControl?)BuildLanding(host, source, description, sourceLabel, plan));
+                return ObserveInstalledFor(host, plan)
+                    .CombineLatest(ObserveInstalledIds(host, plan), ObserveViewerIsGlobalAdmin(host),
+                        ObserveActivation(host),
+                        (installed, installedIds, isAdmin, activation) => (UiControl?)BuildPackages(
+                            host, source, sourceRef, description, sourceLabel, plan, installed, installedIds,
+                            isAdmin, activation));
+            })
+            // Switch, never SelectMany: a re-listing of the source supersedes the page built from
+            // the previous listing instead of leaving two compositions pushing into one view.
+            .Switch();
     }
 
     /// <summary>
@@ -177,19 +384,23 @@ public static class CatalogLayoutAreas
         return accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
     }
 
-    // Live list of installable packages from the given source at its ref.
-    private static IObservable<IReadOnlyList<PackageManifest>> ObserveAvailable(
+    // Live list of installable packages from the given source at its ref, carrying whether the
+    // snapshot is the seed or a real ANSWER — the page frame paints on the seed, the empty message
+    // waits for an answer (a listing failure IS one: the empty answer, logged, never a page that
+    // loads forever).
+    private static IObservable<(IReadOnlyList<PackageManifest> Packages, bool Answered)> ObserveAvailable(
         LayoutAreaHost host, IPackageSource? source, string sourceRef)
     {
         if (source is null)
-            return Observable.Return<IReadOnlyList<PackageManifest>>([]);
+            return Observable.Return((Packages: (IReadOnlyList<PackageManifest>)[], Answered: true));
         return source.ListPackages(sourceRef)
-            .Catch<IReadOnlyList<PackageManifest>, Exception>(ex =>
+            .Select(packages => (Packages: packages, Answered: true))
+            .Catch<(IReadOnlyList<PackageManifest> Packages, bool Answered), Exception>(ex =>
             {
                 Logger(host)?.LogWarning(ex, "Catalog: failed to list packages @ {Ref}", sourceRef);
-                return Observable.Return<IReadOnlyList<PackageManifest>>([]);
+                return Observable.Return((Packages: (IReadOnlyList<PackageManifest>)[], Answered: true));
             })
-            .StartWith((IReadOnlyList<PackageManifest>)[]);
+            .StartWith((Packages: (IReadOnlyList<PackageManifest>)[], Answered: false));
     }
 
     // Selects the git-based package source for a repo path/subdir (delegates to the shared factory so
@@ -201,7 +412,7 @@ public static class CatalogLayoutAreas
     /// The live installed-plugin inventory: every <c>Package</c> record in the install registry,
     /// deserialized to its <see cref="PackageManifest"/> and sorted by display name. This is the
     /// read-only "what is running on this instance" view the About tab shows every user — the
-    /// catalog cards above join the SAME records against a package source for install status.
+    /// catalog's ALL page joins the SAME records against a package source for install status.
     /// </summary>
     public static IObservable<IReadOnlyList<PackageManifest>> ObserveInstalledManifests(LayoutAreaHost host)
         => ObserveInstalled(host).Select(nodes => (IReadOnlyList<PackageManifest>)nodes
@@ -211,15 +422,49 @@ public static class CatalogLayoutAreas
             .OrderBy(m => m.Name ?? m.Id, StringComparer.OrdinalIgnoreCase)
             .ToList());
 
-    // Live map of installed packages (the Plugins registry children), as a list.
+    // The install records a card page joins against: the whole registry for the ALL page (its
+    // orphan section needs every record), and for a category page ONLY its members — one exact-path
+    // read each, batched into one request, so rendering one category never loads the installed-file
+    // baseline of every package on the instance.
+    private static IObservable<IReadOnlyList<MeshNode>> ObserveInstalledFor(LayoutAreaHost host, CatalogPlan plan)
+    {
+        if (plan.Kind == CatalogPage.All)
+            return ObserveInstalled(host);
+        var queries = InstalledRecordQueries(plan.Packages.Select(p => p.Id));
+        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (queries.Count == 0 || mesh is null)
+            return Observable.Return<IReadOnlyList<MeshNode>>([]);
+        return FoldInstalled(mesh.Query<MeshNode>(new MeshQueryRequest { Queries = queries }));
+    }
+
+    // Live map of installed packages (the Plugins registry children), as a list — content and all.
     private static IObservable<IReadOnlyList<MeshNode>> ObserveInstalled(LayoutAreaHost host)
     {
         var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (mesh is null)
             return Observable.Return<IReadOnlyList<MeshNode>>([]);
-        return mesh
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{PackageInstaller.InstalledPartition} scope:children nodeType:{PackageInstaller.PackageNodeType}"))
+        return FoldInstalled(mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(AllInstalledQuery)));
+    }
+
+    // The ids of every installed package, off the SHELL-only listing — what a category page's
+    // Install click needs to skip already-installed dependencies from other categories, without the
+    // records' content. The ALL page has every record in hand, so it reads nothing extra here.
+    private static IObservable<ImmutableHashSet<string>> ObserveInstalledIds(LayoutAreaHost host, CatalogPlan plan)
+    {
+        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (plan.Kind == CatalogPage.All || mesh is null)
+            return Observable.Return(ImmutableHashSet<string>.Empty);
+        return FoldInstalled(mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(InstalledIdsQuery)))
+            .Select(nodes => nodes
+                .Select(n => n.Id)
+                .Where(id => !string.IsNullOrEmpty(id))
+                .ToImmutableHashSet(StringComparer.Ordinal));
+    }
+
+    // Folds a query's change stream into the current path-keyed set, seeded empty so the page never
+    // waits on the registry's first frame.
+    private static IObservable<IReadOnlyList<MeshNode>> FoldInstalled(IObservable<QueryResultChange<MeshNode>> changes) =>
+        changes
             .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
@@ -235,12 +480,83 @@ public static class CatalogLayoutAreas
             })
             .Select(m => (IReadOnlyList<MeshNode>)m.Values.ToList())
             .StartWith((IReadOnlyList<MeshNode>)[]);
+
+    // The page frame every catalog page opens with: title, the authored intro, the source line.
+    private static StackControl Frame(
+        LayoutAreaHost host, IPackageSource? source, string? description, string? sourceLabel, int total)
+    {
+        var container = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("width: 100%; max-width: 900px; margin: 0 auto; padding: 16px;");
+
+        container = container.WithView(
+            Controls.H1(host.Localize("ui.pluginCatalog")).WithStyle("margin: 0 0 4px 0;"), "title");
+
+        if (!string.IsNullOrWhiteSpace(description))
+            container = container.WithView(
+                Controls.Markdown(description!).WithStyle("margin-bottom: 8px;"), "description");
+
+        var sourceLine = source is null
+            ? host.Localize("ui.catalogNoSource")
+            : host.Localize("ui.catalogSourceSummary",
+                sourceLabel ?? host.Localize("ui.catalogRegistry"),
+                host.LocalizePlural("plural.package", total));
+        return container.WithView(Controls.Body(sourceLine)
+            .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px; display: block;"), "source");
     }
 
-    private static UiControl BuildCatalog(
+    // The label a category key renders as: the source's own spelling, or the localized bucket name.
+    private static string CategoryLabel(LayoutAreaHost host, string key) =>
+        IsUncategorized(key) ? host.Localize("ui.catalogUncategorized") : key;
+
+    // THE LANDING: one tile per category plus the all-packages entry — a way in, not a wall. Built
+    // from the manifest listing alone.
+    private static UiControl BuildLanding(
+        LayoutAreaHost host, IPackageSource? source, string? description, string? sourceLabel, CatalogPlan plan)
+    {
+        var container = Frame(host, source, description, sourceLabel, plan.Total);
+        if (plan.Total == 0)
+            return container.WithView(Controls.Markdown(host.Localize("ui.mdNoPackages")), "empty");
+
+        var grid = Controls.Stack
+            .WithStyle("display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); "
+                       + "gap: 14px; margin: 12px 0; width: 100%;");
+        var n = 0;
+        foreach (var category in plan.Categories)
+        {
+            n++;
+            grid = grid.WithView(
+                Tile(host, CategoryLabel(host, category.Key), category.Count,
+                    CategoryHref(host.Hub.Address, category.Key)),
+                $"cat-{n}");
+        }
+        grid = grid.WithView(
+            Tile(host, host.Localize("ui.catalogAllPackages"), plan.Total, AllHref(host.Hub.Address)), "all");
+        return container.WithView(grid, "categories");
+    }
+
+    // One clickable tile: the name and a package count; the click is a plain in-app navigation, so
+    // the browser's back button returns to the tiles.
+    private static UiControl Tile(LayoutAreaHost host, string label, int count, string href) =>
+        Controls.Stack
+            .WithStyle("cursor: pointer; border: 1px solid var(--neutral-stroke-rest); border-radius: 12px; "
+                       + "padding: 16px; min-height: 92px; background: var(--neutral-layer-1); "
+                       + "display: flex; flex-direction: column; justify-content: space-between; gap: 6px;")
+            .WithView(Controls.Body(label)
+                .WithStyle("font-weight: 700; font-size: 1.05rem; display: block;"), "name")
+            .WithView(Controls.Body(host.LocalizePlural("plural.package", count))
+                .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.85rem; display: block;"), "count")
+            .WithClickAction(ctx =>
+            {
+                ctx.NavigateTo(href);
+                return Task.CompletedTask;
+            });
+
+    // A CARD page: one category's cards, or every card plus the orphan section on the ALL page.
+    private static UiControl BuildPackages(
         LayoutAreaHost host, IPackageSource? source, string sourceRef, string? description, string? sourceLabel,
-        IReadOnlyList<PackageManifest> available, IReadOnlyList<MeshNode> installed, bool viewerIsGlobalAdmin,
-        ModuleActivationReport activation)
+        CatalogPlan plan, IReadOnlyList<MeshNode> installed, ImmutableHashSet<string> installedIds,
+        bool viewerIsGlobalAdmin, ModuleActivationReport activation)
     {
         var installedById = installed
             .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
@@ -248,41 +564,44 @@ public static class CatalogLayoutAreas
             .GroupBy(m => m!.Id, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.First()!, StringComparer.Ordinal);
 
-        var container = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("width: 100%; max-width: 900px; margin: 0 auto; padding: 16px;");
+        var container = Frame(host, source, description, sourceLabel, plan.Total);
 
-        container = container.WithView(Controls.H1(host.Localize("ui.pluginCatalog")).WithStyle("margin: 0 0 4px 0;"));
+        container = container.WithView(Controls.Button(host.Localize("ui.catalogBackToCategories"))
+            .WithClickAction(ctx =>
+            {
+                ctx.NavigateTo(LandingHref(host.Hub.Address));
+                return Task.CompletedTask;
+            })
+            .WithStyle("align-self: flex-start; margin: 0 0 8px 0;"), "back");
 
-        if (!string.IsNullOrWhiteSpace(description))
-            container = container.WithView(Controls.Markdown(description!).WithStyle("margin-bottom: 8px;"));
+        container = container.WithView(Controls.H2(plan.Kind == CatalogPage.All
+                ? host.Localize("ui.catalogAllPackages")
+                : CategoryLabel(host, plan.Category!))
+            .WithStyle("margin: 8px 0 4px 0;"), "heading");
 
-        container = container.WithView(Controls.Body(
-                source is null
-                    ? "No source configured."
-                    : $"Source: {sourceLabel ?? "registry"} — {available.Count} package(s) available.")
-            .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px; display: block;"));
+        if (plan.Packages.Count == 0)
+            container = container.WithView(Controls.Markdown(host.Localize("ui.mdNoPackages")), "empty");
 
-        if (available.Count == 0)
-            container = container.WithView(Controls.Markdown(host.Localize("ui.mdNoPackages")));
-
-        // The whole catalog + what is already installed are what a click needs to resolve the
-        // package's dependency closure (PackageDependencyGraph.InstallClosure) — both are already
-        // in hand here, so the card carries them down rather than re-listing the source on click.
-        var installedIds = installedById.Keys.ToImmutableHashSet(StringComparer.Ordinal);
+        // The whole listing + what is already installed are what a click needs to resolve the
+        // package's dependency closure (PackageDependencyGraph.InstallClosure) — the listing is in
+        // hand; the installed set is the shell listing plus the records this page read.
+        var knownInstalled = installedIds.Union(installedById.Keys);
 
         var n = 0;
-        foreach (var pkg in available)
+        foreach (var pkg in plan.Packages)
         {
             n++;
             installedById.TryGetValue(pkg.Id, out var inst);
             container = container.WithView(
-                BuildCard(host, source, sourceRef, pkg, inst, viewerIsGlobalAdmin, available, installedIds,
+                BuildCard(host, source, sourceRef, pkg, inst, viewerIsGlobalAdmin, plan.Available, knownInstalled,
                     activation),
                 $"pkg-{n}");
         }
 
-        var orphans = Orphaned(available, installed, host.Hub.JsonSerializerOptions);
+        if (plan.Kind != CatalogPage.All)
+            return container;
+
+        var orphans = Orphaned(plan.Available, installed, host.Hub.JsonSerializerOptions);
         if (orphans.Count > 0)
         {
             container = container.WithView(Controls.H2(host.Localize("ui.orphanedInstallRecords"))
@@ -404,7 +723,7 @@ public static class CatalogLayoutAreas
 
         if (upToDate)
         {
-            card = card.WithView(Controls.Body($"✓ Installed v{installed!.Version}")
+            card = card.WithView(Controls.Body(host.Localize("ui.catalogInstalledVersion", installed!.Version))
                 .WithStyle("color: var(--success-foreground, #107c10); font-weight: 600;"));
         }
         else if (pkg.IsCommercial() && !viewerIsGlobalAdmin)
@@ -417,7 +736,9 @@ public static class CatalogLayoutAreas
         }
         else if (source is not null)
         {
-            var label = installed is null ? "Install" : $"Update to v{pkg.Version}";
+            var label = installed is null
+                ? host.Localize("ui.catalogInstall")
+                : host.Localize("ui.catalogUpdateTo", pkg.Version);
             card = card.WithView(Controls.Button(label)
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>

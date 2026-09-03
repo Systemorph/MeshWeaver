@@ -172,7 +172,7 @@ internal static class PackageUpdateReconciler
             ? Apply(hub, meshService, accessService, source, sourceRef, pkg, record, recordPath,
                 provenance, detail, logger)
             : Notify(
-                meshService, accessService, recordPath, pkg,
+                hub, meshService, accessService, recordPath, pkg, record, UpdateAvailableKind,
                 $"Update available: {pkg.Name ?? pkg.Id}",
                 $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}). {provenance}.",
                 logger);
@@ -242,7 +242,8 @@ internal static class PackageUpdateReconciler
                     logger?.LogWarning(
                         "Package update: auto-update of {Id} REFUSED — {Reason}", pkg.Id, ex.Message);
                     return Notify(
-                        meshService, accessService, recordPath, pkg,
+                        hub, meshService, accessService, recordPath, pkg, record,
+                        AuthorizationRequiredKind,
                         $"Update needs a Global Admin: {pkg.Name ?? pkg.Id}",
                         $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}), but it is a "
                         + "commercial package and was not applied automatically. " + ex.Message,
@@ -256,31 +257,94 @@ internal static class PackageUpdateReconciler
             });
     }
 
-    /// <summary>Raises a system notification on the install record — the user-visible surface of an
-    /// update reminder, and of a refusal, which must never be a silent skip.
+    /// <summary>The reminder that a changed module is waiting for the user to act.</summary>
+    private const string UpdateAvailableKind = "update-available";
+
+    /// <summary>The refusal that an unattended apply needs a global admin to re-authorize it.</summary>
+    private const string AuthorizationRequiredKind = "authorization-required";
+
+    /// <summary>
+    /// Raises a system notification on the install record — the user-visible surface of an update
+    /// reminder, and of a refusal, which must never be a silent skip.
     ///
-    /// <para>🚨 Addressed to the PLATFORM (<see cref="NotificationService.PlatformAddressee"/>),
+    /// <para>🚨 <b>A reminder is a STATE, not an event, and this method is what makes it behave
+    /// like one</b> (Systemorph/MeshWeaver#3213). The reconciler re-decides on every poll, so
+    /// without the two guards below one package with a pending update mints a new bell row per
+    /// poll, forever — measured on memex-cloud as 124 of the newest 200 notifications, two
+    /// packages accounting for over half of everything the mesh had written in four days. Both
+    /// guards are needed, and each one alone still duplicates:</para>
+    ///
+    /// <para>🚨 <b>Addressed to the PLATFORM</b> (<see cref="NotificationService.PlatformAddressee"/>),
     /// not to the install record's partition. Only a platform admin can apply a plugin update — the
-    /// refusal this same method raises says so in as many words ("Update needs a Global Admin") —
-    /// so an ordinary reader of the catalog can do nothing with it. Before the addressed model it
-    /// landed at <c>Plugins/{package}/_Notification/{id}</c>, visible to everyone who could read
-    /// the plugin record: 124 of the newest 200 rows on memex-cloud were this one class, in every
-    /// catalog reader's bell (Systemorph/MeshWeaver#3156 §2). The install record stays the click
-    /// target.</para></summary>
+    /// refusal this same method raises says so in as many words ("Update needs a Global Admin") — so
+    /// an ordinary reader of the catalog can do nothing with it. Before the addressed model it landed
+    /// at <c>Plugins/{package}/_Notification/{id}</c>, visible to everyone who could read the plugin
+    /// record (Systemorph/MeshWeaver#3156 §2). The install record stays the CLICK TARGET, which is
+    /// what <c>targetNodePath</c> carries.</para>
+    /// <list type="number">
+    ///   <item><b>A satisfiable silence gate.</b> The content-identity gate in
+    ///     <see cref="Decide"/> asks "is the candidate installed?" — self-silencing on the
+    ///     <c>AutoUpdate</c> path (the apply advances the record) and UNSATISFIABLE here, because
+    ///     the reminder installs nothing by design. So the notify path carries its own marker,
+    ///     <see cref="PackageManifest.NotifiedModuleVersion"/>, which answers the question it
+    ///     actually needs: "have I already told them about THIS candidate?". Writing it is what
+    ///     makes the gate become true — which is precisely what the version comparison could
+    ///     never do here.</item>
+    ///   <item><b>A deterministic identity to be idempotent on.</b> Marker or no marker, the
+    ///     reconcile runs from several entry points (boot, a feed read draining a deferral, a
+    ///     build webhook) that can overlap, and the marker write can fail. Keying the notification
+    ///     on (record, kind, candidate version) makes any such repeat land on the SAME node as an
+    ///     idempotent upsert instead of a new row, so the worst case is a refreshed bell rather
+    ///     than an unbounded one.</item>
+    /// </list>
+    ///
+    /// <para>The gate sits HERE and not before <see cref="Apply"/>: an unattended apply must keep
+    /// retrying every poll so a restored admin grant heals itself. It is only the TELLING that is
+    /// once per candidate.</para>
+    /// </summary>
     private static IObservable<Unit> Notify(
+        IMessageHub hub,
         IMeshService meshService,
         AccessService accessService,
         string recordPath,
         PackageManifest pkg,
+        PackageManifest record,
+        string kind,
         string title,
         string body,
         ILogger? logger)
-        => Observable.Using(
-                accessService.ImpersonateAsSystem,
-                _ => NotificationService.CreateNotification(
+    {
+        // Decide() has already refused an empty candidate hash, so this is a real content identity.
+        var candidate = pkg.ModuleVersion!;
+
+        // ── Guard 1: already told them about this exact candidate ⇒ stay silent, write nothing ──
+        if (string.Equals(record.NotifiedModuleVersion, candidate, StringComparison.Ordinal))
+            return Observable.Return(Unit.Default);
+
+        // RunAsSystem, never Observable.Using (#1790): the install-records partition is
+        // System-owned, and Rx would otherwise leave the subscribing thread latched as System.
+        return accessService
+            .RunAsSystem(() => NotificationService
+                // ── Guard 2: one node per (record, kind, candidate) ──────────────────────────
+                .CreateNotification(
                     meshService, recordPath, title, body,
                     NotificationType.System, targetNodePath: recordPath,
-                    recipient: NotificationService.PlatformAddressee))
+                    // Addressed to the PLATFORM: only a platform admin can apply a plugin
+                    // update, so an ordinary catalog reader can do nothing with this. The
+                    // install record stays the click target (targetNodePath above).
+                    recipient: NotificationService.PlatformAddressee,
+                    identity: $"package-update|{kind}|{candidate}")
+                // Mark AFTER the bell, never before: a marker written first and a notification
+                // that then failed would silence the reminder permanently, whereas a bell written
+                // first and a marker that then failed costs one repeat — which guard 2 absorbs
+                // into the same node.
+                //
+                // The TYPED overload, and the lambda reads the CURRENT record rather than the
+                // snapshot this pass started from: the write is an RFC 7396 merge patch the owning
+                // hub applies to its own state, so only `notifiedModuleVersion` travels and a
+                // concurrent install's fields are not clobbered.
+                .SelectMany(_ => hub.GetMeshNodeStream(recordPath)
+                    .Update<PackageManifest>(current => current with { NotifiedModuleVersion = candidate })))
             .Select(_ => Unit.Default)
             .Catch((Exception ex) =>
             {
@@ -288,4 +352,5 @@ internal static class PackageUpdateReconciler
                     "Package update: raising the notification for {Id} failed.", pkg.Id);
                 return Observable.Return(Unit.Default);
             });
+    }
 }

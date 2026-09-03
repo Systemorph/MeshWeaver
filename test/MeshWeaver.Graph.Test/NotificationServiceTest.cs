@@ -34,12 +34,13 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
     private async Task<MeshNode> CreateNotification(
         string mainNodePath, string title, string message, NotificationType type,
         string? targetNodePath = null, string? createdBy = null, string? icon = null,
-        string? recipient = null)
+        string? recipient = null,
+        string? identity = null)
     {
         using (Access.ImpersonateAsSystem())
             return await NotificationService.CreateNotification(
                     MeshService, mainNodePath, title, message, type, targetNodePath, createdBy, icon,
-                    recipient)
+                    recipient, identity)
                 .Should().Emit();
     }
 
@@ -152,4 +153,64 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
 
         first.Id.Should().NotBe(second.Id);
     }
+
+    /// <summary>
+    /// 🚨 The INTERACTION neither half of the addressed-notification work covered on its own, and the
+    /// one a careless rebase silently reverts: a notification that is BOTH addressed
+    /// (Systemorph/MeshWeaver#3156/#3216 — delivered to the recipient, not the entity's partition)
+    /// AND deterministic (Systemorph/MeshWeaver#3213 — a repeat for the same condition upserts the
+    /// SAME node instead of minting a row).
+    ///
+    /// <para>The load-bearing detail is that the deterministic id is derived from the
+    /// <b>addressee</b>, not from <c>mainNodePath</c>. The node lives at
+    /// <c>{addressee}/_Notification/{id}</c>, so keying on the entity would let two different
+    /// addressees told about the SAME entity+condition derive the SAME id in different partitions.
+    /// This pins both halves at once: same addressee + same identity ⇒ one node; different addressee
+    /// + same identity ⇒ two distinct nodes, each in its own bell.</para>
+    /// </summary>
+    [Fact]
+    public async Task AnAddressedNotification_IsIdempotentPerAddressee_NotPerEntity()
+    {
+        const string entity = $"{TestPartition}/SharedThing";
+        const string identity = "condition|v2";
+        const string addresseeA = "alice";
+        const string addresseeB = "bob";
+
+        var first = await CreateNotification(
+            mainNodePath: entity, title: "Update available", message: "v2 is out",
+            type: NotificationType.System, targetNodePath: entity,
+            recipient: addresseeA, identity: identity);
+
+        // Same addressee, same condition, a second pass: the SAME node, refreshed — not a new row.
+        var repeat = await CreateNotification(
+            mainNodePath: entity, title: "Update available", message: "v2 is out (again)",
+            type: NotificationType.System, targetNodePath: entity,
+            recipient: addresseeA, identity: identity);
+
+        repeat.Path.Should().Be(first.Path,
+            "a repeat for the same (addressee, condition) must upsert the same node — the #3213 guard");
+        ((Notification)repeat.Content!).Recipient.Should().Be(addresseeA,
+            "the addressed delivery must survive the deterministic id — the #3156 half");
+        repeat.Namespace.Should().Be($"{addresseeA}/{NotificationService.SatelliteSegment}");
+
+        // Same entity, same condition, DIFFERENT addressee: a distinct node in the other bell.
+        var other = await CreateNotification(
+            mainNodePath: entity, title: "Update available", message: "v2 is out",
+            type: NotificationType.System, targetNodePath: entity,
+            recipient: addresseeB, identity: identity);
+
+        // 🚨 Assert the ID, not the PATH. The path is `{addressee}/_Notification/{id}`, so two
+        // addressees always differ in the path segment even when the derived id is identical —
+        // a path assertion here passes under BOTH keyings and pins nothing. (Measured: mutating
+        // the key back to mainNodePath left a path-based assertion green.) The id is the part
+        // the keying actually decides.
+        other.Id.Should().NotBe(first.Id,
+            "the id is keyed on the ADDRESSEE, so telling two people about one entity must not "
+            + "derive one shared id — that is a cross-partition collision waiting for the first "
+            + "per-user reminder about a shared entity");
+        other.Namespace.Should().Be($"{addresseeB}/{NotificationService.SatelliteSegment}");
+        ((Notification)other.Content!).TargetNodePath.Should().Be(entity,
+            "both bells still click through to the one entity");
+    }
+
 }

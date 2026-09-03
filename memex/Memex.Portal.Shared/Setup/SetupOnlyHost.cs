@@ -39,20 +39,29 @@ public static class SetupOnlyHost
     /// <summary>
     /// Whether this instance has no storage and must therefore be set up.
     ///
-    /// <para>🚨 <b>An ABSENT <c>Graph:Storage</c> section, not an empty one</b> —
-    /// <c>GraphStorageConfig.Type</c> defaults to <c>FileSystem</c>, so a section that EXISTS but
-    /// says nothing binds to a working-looking file-system configuration and would boot straight
-    /// past setup onto container-ephemeral disk. A blank <c>Type</c> is treated as absent for the
-    /// same reason: an environment variable cannot be null, only empty.</para>
+    /// <para>🚨 <b>Decided on the RAW <c>Graph:Storage:Type</c> key, never on the bound record.</b>
+    /// <c>GraphStorageConfig.Type</c> carries the initializer <c>FileSystem</c>, so binding a
+    /// section that EXISTS but names no type yields a working-looking file-system configuration —
+    /// and that section legitimately exists for other reasons (the deployed image states
+    /// <c>UnanchoredQueryPolicy</c> there deliberately). Binding would read "configured" off a
+    /// query policy, put the instance on container-ephemeral disk, and make this wizard
+    /// unreachable. Blank counts as absent too: an environment variable cannot be null, only
+    /// empty.</para>
     /// </summary>
     /// <param name="configuration">The host's configuration, with the instance manifest already
     /// layered in (see <see cref="InstanceManifestConfigurationExtensions.AddInstanceManifest"/>).</param>
     public static bool IsAwaitingSetup(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        var storage = configuration.GetSection(InstanceManifestProjection.StorageSection)
-            .Get<GraphStorageConfig>();
-        return storage is null || string.IsNullOrWhiteSpace(storage.Type);
+        // 🚨 The RAW key, never the bound record. `GraphStorageConfig.Type` carries the initializer
+        // "FileSystem", so BINDING a section that exists but names no Type yields a working-looking
+        // file-system store — and the section legitimately exists for other reasons: the deployed
+        // image states Graph:Storage:UnanchoredQueryPolicy there so no chart or environment can
+        // forget it. Binding would therefore read "configured" off a section whose only content is
+        // a query policy, make the wizard unreachable again, and point a real instance at
+        // container-ephemeral disk. Absent and blank are both "no storage stated".
+        return string.IsNullOrWhiteSpace(
+            configuration[$"{InstanceManifestProjection.StorageSection}:Type"]);
     }
 
     /// <summary>
@@ -95,13 +104,32 @@ public static class SetupOnlyHost
         builder.Services.TryAddSingleton(new InstanceSetupStatusAccessor(static () => true));
 
         var app = builder.Build();
-        // The probe FIRST, so an orchestrator does not kill the very pod being configured. An
+        // The probes FIRST, so an orchestrator does not kill the very pod being configured. An
         // instance awaiting setup is not failing; it is waiting for a person.
-        app.MapGet("/healthz", () => Results.Text("ok"));
+        //
+        // 🚨 ALL of them, and this is not defensive breadth — it is the chart's actual contract.
+        // The deployment probes /health (startup) and /alive (readiness + liveness); only /healthz
+        // was mapped here, so every probe 404-ed, the pod never went READY, the previous replica
+        // kept the traffic, and the wizard was unreachable through the ingress. The portal was
+        // serving it perfectly the whole time and no one could get to it. Measured on a real
+        // cluster, 2026-09-03 — SetupProbeEndpointsTest pins the set against the chart.
+        foreach (var probe in ProbePaths)
+            app.MapGet(probe, () => Results.Text("ok"));
         app.MapInstanceSetup();
         app.Run();
         return true;
     }
+
+    /// <summary>
+    /// Every path the deployment may probe while this instance waits to be set up.
+    ///
+    /// <para>🚨 These are the CHART's paths, not a guess: <c>deploy/helm</c> gives the portal a
+    /// startup probe on <c>/health</c> and readiness + liveness probes on <c>/alive</c>, and the
+    /// ASP.NET service defaults add <c>/healthz</c>. A path missing here is a probe that 404s, a pod
+    /// that never reports READY, and a wizard nobody can reach — the failure is total and it is
+    /// silent, because the portal itself is working.</para>
+    /// </summary>
+    public static IReadOnlyList<string> ProbePaths { get; } = ["/healthz", "/health", "/alive"];
 
     /// <summary>
     /// The message a host logs when it hands over to the wizard, so the reason appears in the log

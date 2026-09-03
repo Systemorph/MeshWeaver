@@ -322,10 +322,16 @@ Both are filed: MeshWeaver.Plugins#1275 and #3213.
   `CreatedBy` — which also makes the migration in §6 derivable.
   `NotificationTriageService.cs:104` derives its recipient the same way and escalates into
   `{space}/_Triage`, with the same defect. **MeshWeaver.Plugins#1275.**
-- **Plugin-update notifications are unbounded.** `PackageUpdateReconciler.Notify` raises a fresh
-  `Notification` node on every reconcile that still sees an update — measured at four rows for the
-  same package in one day, 124 of the newest 200 rows overall. There is no "already told you"
-  suppression. This is the bell's row count, independent of where the rows live. **#3213.**
+- ~~**Plugin-update notifications are unbounded.**~~ **FIXED (#3213).** `PackageUpdateReconciler.Notify`
+  used to raise a fresh `Notification` node on every reconcile that still saw an update — measured
+  at four rows for the same package in one day, 124 of the newest 200 rows overall. It had no
+  "already told you" suppression, and it could not have had one: the content-identity gate asks
+  *is the candidate installed?*, which the reminder path can never satisfy because it installs
+  nothing. The reminder path now carries its own marker
+  (`PackageManifest.NotifiedModuleVersion`), and `NotificationService.CreateNotification` accepts a
+  caller-supplied `identity` that derives a deterministic node id, so a repeat upserts the SAME row
+  instead of adding one. This was the bell's row count, and it was independent of where the rows
+  live — the **addressing** half of this emitter (§7 step 1: re-address to `Admin`) is still open.
 
 ## 6. The migration: **neither move nor delete — the legacy rows age out**
 

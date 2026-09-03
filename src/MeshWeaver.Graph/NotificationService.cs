@@ -131,6 +131,21 @@ public static class NotificationService
     /// <param name="icon">Optional icon URL override.</param>
     /// <param name="recipient">The addressee — a user id, or <see cref="PlatformAddressee"/>.</param>
     /// <returns>A cold observable emitting the created node.</returns>
+    /// <param name="identity">
+    /// A caller-supplied identity for the CONDITION this notification reports (e.g.
+    /// <c>"package-update|update-available|{moduleVersion}"</c>). When given, the node id is
+    /// derived deterministically from it plus <paramref name="mainNodePath"/>, and the write is an
+    /// atomic upsert — so a repeat for the same condition lands on the SAME node and refreshes it
+    /// instead of adding a row. Change what the condition IS (a newer version) and the id changes
+    /// with it, so the new state gets its own unread bell. Null = the historic
+    /// fresh-GUID-per-call behaviour.
+    /// <para>🚨 The identity must capture everything that makes two reminders genuinely different.
+    /// Too coarse and a real change is swallowed into an existing row; the emitter, not this
+    /// method, owns that judgement. A repeat also refreshes <see cref="Notification.CreatedAt"/>
+    /// and clears <see cref="Notification.IsRead"/> — correct for "this is still true", which is
+    /// why the emitter should ALSO carry a marker that stops re-raising an unchanged condition
+    /// rather than relying on the upsert alone.</para>
+    /// </param>
     public static IObservable<MeshNode> CreateNotification(
         IMeshService nodeFactory,
         string mainNodePath,
@@ -140,11 +155,26 @@ public static class NotificationService
         string? targetNodePath = null,
         string? createdBy = null,
         string? icon = null,
-        string? recipient = null)
+        string? recipient = null,
+        string? identity = null)
     {
+        // The two concepts compose: `recipient` decides WHERE the notification is delivered, and
+        // `identity` decides WHETHER a repeat is a new row or the same one refreshed.
         var addressee = ResolveAddressee(
             string.IsNullOrWhiteSpace(recipient) ? mainNodePath : recipient);
-        var notificationId = Guid.NewGuid().AsString();
+        var deterministic = !string.IsNullOrEmpty(identity);
+        // 🚨 The id is keyed on the ADDRESSEE, not on mainNodePath. The node lives at
+        // `{addressee}/_Notification/{id}`, so keying on the entity would let two addressees who
+        // are told about the SAME entity+condition derive the same id in different partitions —
+        // harmless today (only the platform is addressed for a package update) and a silent
+        // cross-partition collision the moment a per-user reminder about a shared entity exists.
+        // Reuses the platform's ONE content-addressing helper rather than growing a second hash:
+        // the same (path, token) → stable-id shape the content-addressed import marker uses, and
+        // its output is 16 lower hex chars — always a legal node-id segment, whatever characters
+        // the caller's identity string happens to contain.
+        var notificationId = deterministic
+            ? PartitionSourceFingerprint.Compute([(addressee, identity!)])
+            : Guid.NewGuid().AsString();
         var parentPath = $"{addressee}/{SatelliteSegment}";
 
         var notification = new Notification
@@ -170,7 +200,14 @@ public static class NotificationService
             Content = notification
         };
 
-        return nodeFactory.CreateNode(node);
+        // 🚨 The upsert is the OWNER's single verb, not a client-side
+        // CreateNode().Catch(exists → UpdateNode()): two reconcile passes racing on the same
+        // deterministic path are exactly what this id makes possible, and the hand-rolled split
+        // races (the create's exists-check lags the concurrent create → the update patches a
+        // not-yet-materialised node → "NotFound … for patch apply").
+        return deterministic
+            ? nodeFactory.CreateOrUpdateNode(node)
+            : nodeFactory.CreateNode(node);
     }
 
     private static readonly TimeSpan LookupTimeout = TimeSpan.FromSeconds(10);

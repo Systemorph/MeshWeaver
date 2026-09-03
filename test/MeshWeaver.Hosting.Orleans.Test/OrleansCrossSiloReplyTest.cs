@@ -1,11 +1,13 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -13,6 +15,7 @@ using Orleans;
 using Orleans.TestingHost;
 using Xunit;
 using MeshWeaver.Fixture;
+using MeshWeaver.Hosting.Orleans.Test;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -32,9 +35,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// <para>🚨 <b>READ THIS BEFORE TRUSTING THIS CLASS AS THE /api/content GUARD — it is not, any
 /// more.</b> The paragraph above still describes the ORIGINAL intent, but <c>2c796d297</c>
-/// (2026-08-10) moved <c>GetMeshNode</c>/<c>GetMeshNodeOutcome</c> onto
-/// <c>MeshExtensions.NodeOperationIssuingHub</c>, so the fact below now exercises the
-/// <c>portal/nodeops-…</c> reply path and no longer posts from <c>mesh/{id}</c> at all. That is
+/// (2026-08-10) moved <c>GetMeshNode</c>/<c>GetMeshNodeOutcome</c> off <c>mesh/{id}</c> onto a
+/// dedicated off-router hub — <c>portal/nodeops-…</c> then, and <c>portal/reads-…</c> since #2901
+/// split the READ seam out of the node-operation one
+/// (<c>MeshExtensions.ReadIssuingHub</c>) — so the fact below exercises THAT hub's reply path and
+/// no longer posts from <c>mesh/{id}</c> at all. That is
 /// worth keeping — but it silently stopped covering the static-content endpoint it names, and
 /// issue #1729 is what that cost: <c>ContentFileResolver.Resolve</c> was left posting from the
 /// router and hung ~half of all <c>/api/content</c> requests on the 2-replica memex-cloud portal.
@@ -103,8 +108,8 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
 
     /// <summary>
     /// 🚨 <b>THE INPUT THIS CLASS LOST — issue #1742.</b> The fact above no longer posts from
-    /// <c>mesh/{id}</c> at all (<c>2c796d297</c> moved <c>GetMeshNode</c> onto
-    /// <c>portal/nodeops-…</c>), so the class named for the root-mesh-hub reply leg stopped
+    /// <c>mesh/{id}</c> at all (<c>2c796d297</c> moved <c>GetMeshNode</c> onto a dedicated
+    /// off-router hub, <c>portal/reads-…</c> today), so the class named for the root-mesh-hub reply leg stopped
     /// exercising it — the gate silently stopped testing its own input, and #1729 is what that cost.
     /// This restores it in the smallest possible shape.
     ///
@@ -211,6 +216,118 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
             + "non-durable memory stream that succeeds whether or not anybody is listening. A "
             + "PodHubNotHereException here means the claim never landed and this hub is back on the "
             + "transport issue #1742 reports — silently");
+    }
+
+    /// <summary>
+    /// 🚨 <b>A released address answers TERMINALLY, across the wire, all the way to the sender.</b>
+    ///
+    /// <para>The production shape (memex, 2026-09-03): a Blazor circuit closes, its per-circuit
+    /// portal hub is disposed, the registration's dispose runs <c>IPodHubGrain.Detach</c> — and 1.5 s
+    /// later the owner of every node that circuit was watching starts fanning changes out to the
+    /// dead address. Each delivery was refused with the TRANSIENT verdict (ShuttingDown), which the
+    /// owner-side eviction rightly ignores (#2756), so the loop ran at 300–1,169 refusals a minute
+    /// for 46 minutes with zero evictions. Detach used to deactivate the activation on idle, so the
+    /// next delivery re-created one on the CALLER's silo with no local route and no memory that the
+    /// owner had said goodbye.</para>
+    ///
+    /// <para>Three facts, one test, in order: (1) after Detach the activation answers with
+    /// <see cref="PodHubNotHereException.Released"/> — a cross-silo call, so the field crossed the
+    /// Orleans serializer; (2) the router turns that into <see cref="ErrorType.NotFound"/> +
+    /// <see cref="DeliveryFailure.TargetUnserved"/>, which reaches the sender's <c>Observe</c> as the
+    /// terminal <see cref="DeliveryFailureException"/>; (3) the control arm — an address nobody ever
+    /// claimed keeps the transient ShuttingDown shape, so the #2756 ride-out is untouched.</para>
+    ///
+    /// <para><b>Fails on unfixed code</b> at (1): Detach deactivates on idle, the re-created
+    /// activation answers <c>Released == false</c>, and the sender reads ShuttingDown.</para>
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task AReleasedPodHubAddress_AnswersTerminally_SoTheOwnerCanEvict()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        var ct = deadline.Token;
+        var cluster = _fixture.Cluster;
+        cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2,
+            "the release must be observed from a silo that is NOT the owner, or the wire is not exercised");
+
+        var hubA = SiloMeshHub(cluster, 0);
+        var servicesB = ((InProcessSiloHandle)cluster.Silos[1]).SiloHost.Services;
+        var routingB = servicesB.GetRequiredService<IRoutingService>()
+            .Should().BeOfType<OrleansRoutingService>().Subject;
+        var grainsA = ((InProcessSiloHandle)cluster.Silos[0]).SiloHost.Services
+            .GetRequiredService<IGrainFactory>();
+
+        // A per-circuit address, registered on silo B exactly the way a hosted portal hub is. Of the
+        // rig's SILO-hosted stream-routed type: `portal` is declared client-hosted here (the test
+        // client hosts it), which sends every refusal down the stream fallback and could never
+        // produce the router's pod-hub verdicts this test is about — see OrleansTestMeshExtensions.
+        var circuit = new Address(OrleansTestMeshExtensions.SiloHostedStreamRoutedType, $"circuit-{Guid.NewGuid():N}");
+        var registration = routingB.RegisterStream(circuit, (d, _) => Observable.Return(d.Processed()));
+        await (routingB.PodHubClaimSettled(circuit) ?? Observable.Return(Unit.Default))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        IMessageDelivery Probe() => new MessageDelivery<PingRequest>(
+            new PingRequest(), new PostOptions(hubA.Address).WithTarget(circuit),
+            System.Text.Json.JsonSerializerOptions.Default);
+
+        // Claimed ⇒ a cross-silo directed delivery lands.
+        var delivered = await grainsA.GetGrain<IPodHubGrain>(circuit.ToString())
+            .Deliver(Probe()).WaitAsync(TestTimeouts.Convergence, ct);
+        delivered.State.Should().Be(MessageDeliveryState.Forwarded, "the claim landed, so the address is served");
+
+        // The circuit closes: the registration is disposed, which announces the release (Detach).
+        registration.Dispose();
+
+        // (1) The tombstone answers RELEASED. The announcement is fire-and-forget on dispose, so the
+        // wait is on the condition itself — re-probe until the released shape comes back.
+        var refusal = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(async () =>
+            {
+                try
+                {
+                    await grainsA.GetGrain<IPodHubGrain>(circuit.ToString()).Deliver(Probe());
+                    return null;
+                }
+                catch (Exception ex) when (RoutingGrain.IsPodHubNotHere(ex))
+                {
+                    return ex;
+                }
+            }))
+            .Where(ex => ex is not null && RoutingGrain.WasReleased(ex))
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        RoutingGrain.WasReleased(refusal).Should().BeTrue(
+            "Detach must leave a tombstone that remembers the owner said goodbye — an activation that "
+            + "deactivates on idle is re-created on the caller with no local route and no memory, and "
+            + "then the only verdict the cluster can give is the transient one that never evicts");
+
+        // (2) Through the router, to the sender: the TERMINAL verdict, not the ride-out one.
+        var verdict = await hubA.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(circuit))
+            .Materialize()
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(60))
+            .Await(ct);
+        verdict.Kind.Should().Be(NotificationKind.OnError, "a released address cannot answer a request");
+        var failure = verdict.Exception.Should().BeOfType<DeliveryFailureException>().Subject.Failure;
+        failure.TargetUnserved.Should().BeTrue("the router's authoritative 'nobody serves that address' stamp");
+        failure.ErrorType.Should().Be(ErrorType.NotFound,
+            "the owner released the address, so this is the shape HandleTargetUnservedFailure evicts on "
+            + "— ShuttingDown here is the exact fault: #2756 guards eviction against it, and the owner "
+            + "fans out to the corpse until idle release");
+
+        // (3) Control arm: an address nobody claimed keeps the transient verdict.
+        var never = new Address(OrleansTestMeshExtensions.SiloHostedStreamRoutedType, $"never-{Guid.NewGuid():N}");
+        var transient = await hubA.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(never))
+            .Materialize()
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(60))
+            .Await(ct);
+        transient.Kind.Should().Be(NotificationKind.OnError);
+        var transientFailure = transient.Exception.Should().BeOfType<DeliveryFailureException>().Subject.Failure;
+        transientFailure.TargetUnserved.Should().BeTrue();
+        transientFailure.ErrorType.Should().Be(ErrorType.ShuttingDown,
+            "a claim that has not landed is a roll window — the subscriber rides it out and re-arms, "
+            + "and evicting on it would destroy a subscription whose other half is deliberately waiting (#2756)");
     }
 
 }

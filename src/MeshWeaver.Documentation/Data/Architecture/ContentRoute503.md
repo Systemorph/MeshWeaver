@@ -17,10 +17,17 @@ content file 503s for minutes"*.
 ## 🚨 The one sentence
 
 > **The 10 s is `ReadBudget.Default` expiring on ONE request — the collection-config
-> `GetDataRequest` — and it expires only when no notification reached
-> `portal/nodeops-{meshId}`'s callback in time. Either the reply could not be DELIVERED there
-> (a lost pod-hub claim), or it was delivered and not DISPATCHED (that hub's action block was
-> saturated). Nothing else on the route produces 10.3 s.**
+> `GetDataRequest` — and it expires only when no notification reached the ISSUING hub's callback
+> in time. Either the reply could not be DELIVERED there (a lost pod-hub claim), or it was
+> delivered and not DISPATCHED (that hub's action block was saturated). Nothing else on the route
+> produces 10.3 s.**
+
+🚨 **The issuing hub used to be `portal/nodeops-{meshId}` — the mesh's node-CRUD EXECUTION hub —
+which is what made the second case reachable from an ordinary upload. It is now
+`portal/reads-{meshId}`, a hub that registers no handlers — see *"Cause B's cure"* below. The
+elimination
+below is written against the pre-fix code, because that is what the production occurrences ran, and
+because it is still the map of the route.**
 
 ## The read path, and where the 10 s lives
 
@@ -39,14 +46,16 @@ is an `Observable.Amb` of the request and a 10 s timer; when the timer wins it t
 `BlazorHostingExtensions.ContentFailure` maps to **503** (Plugins, `:746-748`). So a measurement of
 *~10.2–10.8 s then 503* is `ResolvePath` (a few hundred ms) plus the budget, exactly.
 
-**Step 3 is issued from, and answered onto, `portal/nodeops-{meshId}`** — not the caller's own hub.
-`ContentFileResolver.cs:183` calls `hub.NodeOperationIssuingHub()`
-(`MeshExtensions.cs:356-359`), which hops a **root-hub** caller — and the `/api/content` endpoint
-holds the DI-injected `IMessageHub`, which in the mesh's root container *is* the router — onto the
-mesh's one node-operation hub (`MeshExtensions.cs:268-323`). That hop exists so the reply can land
-cross-silo; it also means the reply must be dispatched by *that hub's* single-threaded action block
-before `hub.Observe` emits (`MessageHub.cs:451` registers `HandleCallbacks` as a delivery rule, and
-every delivery — responses included — goes through `EnqueueTurn`, `MessageService.cs:906`).
+**Step 3 is issued from, and answered onto, a hub that is not the caller's own.** The
+`/api/content` endpoint holds the DI-injected `IMessageHub`, which in the mesh's root container *is*
+the router, and the router must be neither end of a delivery — so `ContentFileResolver` hops onto a
+dedicated off-router hub. **Until this page's fix that hop landed on `portal/nodeops-{meshId}`,
+the mesh's one node-operation hub** (`hub.NodeOperationIssuingHub()`); it now lands on
+`portal/reads-{meshId}` (`hub.ReadIssuingHub()`). Either way the reply must be dispatched by *that
+hub's* single-threaded action block before `hub.Observe` emits (`MessageHub.cs:451` registers
+`HandleCallbacks` as a delivery rule, and every delivery — responses included — goes through
+`EnqueueTurn`, `MessageService.cs:906`). Which hub it is decides what else can be in that block's
+way.
 
 ## What is provably NOT the cause
 
@@ -154,6 +163,64 @@ Grep the portal for `Reading content collection config from` and read the `Queue
 changes nothing, and a single-replica or restarted portal removes the *exposure* to Cause A without
 touching Cause B — which is why a 12/12 green probe proves neither.
 
+## 🚨 Cause B's cure — the read does not belong on that block at all
+
+The fix is not to make the node-CRUD hub drain faster. It is that **a bounded read with a person
+waiting on it must never be issued on the hub that EXECUTES the mesh's node CRUD**, whatever that
+CRUD costs. A serial execution hub occupied by a bulk write burst is that hub working as designed;
+a ten-second interactive read queued behind it is not.
+
+`MeshExtensions.ReadIssuingHub()` is the seam. It hops a **router**-held caller onto
+`portal/reads-{meshId}` — a hub wired exactly as `portal/nodeops-{meshId}` is (the mesh's own type
+registry, the mesh hub's permission evaluator, registered with the routing service so replies land
+on it cross-silo) with **one deliberate difference: it registers no handlers.** Nothing executes
+there, so the only thing its action block ever dispatches is the reply to a read issued on it. Two
+call sites moved:
+
+| Read | Was | Now |
+|---|---|---|
+| `ContentFileResolver.Resolve` — the collection-config `GetDataRequest` (step 3 above) | `NodeOperationIssuingHub()` ⇒ `portal/nodeops-{meshId}` | `ReadIssuingHub()` ⇒ `portal/reads-{meshId}` |
+| `MeshNodeStreamExtensions.GetMeshNodeOutcome` — the one-shot node read | same | same |
+
+`NodeOperationIssuingHub()` is unchanged and still correct for a **write**: a target-less
+`CreateOrUpdateNodeRequest` posted there executes on the node-CRUD hub, and a write ack that waits
+behind the writes queued ahead of it is the ordering that hub exists to impose. The two seams differ
+because reads and writes want opposite things from the same block.
+
+### The repro
+
+`ContentReadIsNotQueuedBehindNodeCrudTest` (`test/MeshWeaver.Graph.Test`) — a monolith mesh, no
+sleeps, no cluster. An `INodeValidator` parks the create of ONE node (matched by path, so nothing
+else in the mesh is slowed), which holds the node-CRUD execution hub's turn exactly as a real write
+does; with the block held, `ContentFileResolver.Resolve` must still answer. Reverting the two call
+sites to `NodeOperationIssuingHub()` reproduces this page's Cause B **verbatim**, including the
+discriminator:
+
+```text
+Reading content collection config from 'TestData/ContentProbe' gave up after 10s — the owning hub
+never answered. … Reader: Hub portal/nodeops-GMUrd3FU90aD8lxUt_XUlw RunLevel=Started
+Queue(buffer=1,deferred=0,exec=0) Executing(CreateNodeResponse, 10004ms)
+PendingCallbacks=1[…=GetDataRequest@TestData/ContentProbe(10002ms)]
+```
+
+`Queue(buffer=1)` and an `Executing(…, 10004ms)` line — Cause B by the discriminator above, on a
+run where the owning hub answered promptly. Note *what* is executing: the create's continuation is
+running inside the turn that delivered an intermediate `CreateNodeResponse` to that hub, so the
+chain's remaining legs are charged to a node-CRUD delivery turn. That is the mechanism by which a
+single create can occupy the block far longer than any one of its own steps.
+
+### What it does NOT fix
+
+**Nothing about how long a node-CRUD turn takes.** [#2543](https://github.com/Systemorph/MeshWeaver/issues/2543)
+— the same hub seen from the write side, where a `CreateNodeRequest` turn was captured at 24 888 ms
+and queue latency is bimodal at ≤ 3.2 s / 33–49 s — is untouched and stays open. What this change
+does take off that block is the **router-issued reads**: the `PendingCallbacks=26[GetDataRequest@Store/Core,
+@Store/Install, …]` in #2543's own capture are `GetMeshNode` reads issued from mesh-singleton
+services that hold the DI root hub, and every one of them now registers on `portal/reads-{meshId}`
+instead. That removes a contributor and, more usefully, removes a confound: pending callbacks left on
+`portal/nodeops` after this change were issued by something running **on that hub**, not by a
+router-held caller.
+
 ## Recorded, not fixed
 
 Two unbounded seams on this exact path. Neither causes the 503; both make an occurrence harder to
@@ -164,10 +231,10 @@ read.
    emits — a documented shape, pinned by `PathResolutionCachePoisonTest.HungFirstQuery_DoesNotPoisonCache` —
    never even subscribes step 3's budget timer, so the request hangs until the client aborts with
    **no 503 and no log line**. Strictly worse than the failure this page is about.
-2. **`NodeOperationIssuingHub()` is re-resolved per request** (`ContentFileResolver.cs:183`) rather
-   than cached as `MeshService.cs:93` does. During mesh teardown it returns **the router**
-   (`MeshExtensions.cs:274-275, 358`), reinstating the router-as-both-ends hang the 45-line comment
-   above that call exists to prevent.
+2. **The issuing hub is re-resolved per request** (`ContentFileResolver.cs`, now `ReadIssuingHub()`)
+   rather than cached as `MeshService.cs:93` does. During mesh teardown it returns **the router**
+   (`MeshExtensions.MeshReadHub` returns null past `DisposeHostedHubs`), reinstating the
+   router-as-both-ends hang the long comment above that call exists to prevent.
 
 And one in the plugins repo: the per-file indexing fan-out has **no concurrency bound**, while its
 own sibling walk does.

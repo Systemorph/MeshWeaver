@@ -18,6 +18,15 @@ name: Node repo gate (reusable)
 #     needs: [validate, preflight]
 #     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@<40-char platform commit sha>
 #
+# 🚨 THE REQUIRED CONTEXT IS THE AGGREGATE, and the caller's job name is half of it. This lane is a
+# FAN-OUT since #2543's tax was measured: `plan` decides the shard matrix, `gate` runs one job per
+# shard, and `verify` — named `Compile + render node repos (MeshWeaver from ACR)`, unchanged — folds
+# the shards' evidence and is the ONE stable context. A repo requires
+# `<caller job> / Compile + render node repos (MeshWeaver from ACR)` and nothing else from this
+# lane: the per-shard contexts (`<caller job> / Gate shard i/n`) appear and disappear with the
+# `shards` input, so requiring one would wait forever the day the number changed. Same invariant as
+# `All selected bundles built` in node-repo-module-pack.yml, for the same reason.
+#
 # 🔒 PIN THE REF — `@main` is wrong here. The image is pinned by digest so CI is reproducible;
 # the CI logic is pinned for the same reason and with a wider blast radius, since one edit here
 # would otherwise change EVERY satellite's gates at once and make "did my change break this, or
@@ -32,6 +41,7 @@ name: Node repo gate (reusable)
 #       platform-image-digest: ${{ vars.MW_PORTAL_IMAGE_DIGEST }}    # same CD wave as image-digest
 #       stage-repo: Systemorph/MeshWeaver.Plugins
 #       stage-modules: Store
+#       shards: 4        # opt-in fan-out; 1 (the default) is the unsharded lane, unchanged
 #
 # 🚨 TWO IMAGES, TWO ROLES (MeshWeaver#3022, the module lane's shape since #2907): the TESTER image
 # EXECUTES the compile and the gate; the PLATFORM image (the portal) SUPPLIES the reference set,
@@ -56,7 +66,15 @@ on:
           ran nothing (a PR whose diff reaches no module content). A caller's own ratchet keys on
           this: present ⇒ download and read it, and fail on a missing or truncated log; empty ⇒
           there was no gate run to ratchet, which the gate's own log states.
-        value: ${{ jobs.test-repos.outputs.gate-log-artifact }}
+
+          🚨 UNCHANGED BY SHARDING, deliberately. With `shards: N` the tester's stdout arrives as N
+          per-shard logs; the aggregate job FOLDS them into one `gate.log` carrying a single
+          `=== mw-plugin-test summary ===` block and one terminal verdict, and uploads it under
+          this same name. A caller's ratchet keeps reading one log. (Concatenating the shard logs
+          instead would be a FALSE PASS: MeshWeaver.Plugins' `check-test-suites.py` reads the LAST
+          summary in the file, so a concatenation would ratchet 1/N of the NodeTypes and report a
+          clean sweep.)
+        value: ${{ jobs.verify.outputs.gate-log-artifact }}
     inputs:
       test-image:
         description: The mw-plugin-test image reference (the caller's vars.MW_TEST_IMAGE).
@@ -196,6 +214,47 @@ on:
         required: false
         type: string
         default: main
+      shards:
+        description: >-
+          How many runners to fan the gate out across. 1 (the default) is exactly the pre-fan-out
+          behaviour: one job, one container, every discovered package gated in it.
+
+          🚨 WHY THE FAN-OUT EXISTS — and why raising the cap was refused. The single job performs
+          ~60 SERIAL package installs, each paying the `portal/nodeops` tax of MeshWeaver#2543.
+          Measured on MeshWeaver.Plugins across 28 consecutive gate jobs (2026-09-03, 12:32-16:29Z),
+          classified by reading each job's duration AND its verdict rather than its colour: 20 of
+          them gated the full set, and their durations were 17.9-30.4 minutes against a
+          `timeout-minutes: 30`. FOUR were CUT AT THE CAP (30.3-30.4 min, the gate the only
+          cancelled job in an otherwise complete run) and three more returned real content verdicts
+          at 28.1 / 29.4 / 29.7 — i.e. 35% of full-set runs came within two minutes of the cap.
+
+          A cap cut reports as `cancelled`, indistinguishable from a real cancellation, so the
+          gate's verdict was unreadable exactly when it took longest — and a caller's own ratchet
+          skips on `cancelled` too, so the Tests-area evidence went with it. Raising the cap does
+          not fix that: the fleet-wide ceiling is 45 minutes, so it buys 15 against a moving tail
+          and a 45-minute cut still reports `cancelled`.
+
+          🚨 A `failure` on this gate is NOT evidence of a cap cut. Three of the four longest reds
+          in that sample were content verdicts (`GATE FAILED — install: Hosting`), and attributing
+          them to the cap would inflate the "before" and overstate what sharding buys. Read the
+          duration and the verdict text.
+
+          Each shard is its own `docker run --rm`, so shards share no mesh, no nodeops hub and no
+          runner — the `portal/nodeops` saturation behind the long tail (MeshWeaver#2543) does not
+          follow them. A shard gates its slice and INSTALLS that slice's dependency closure
+          (GateShardPlan); every package is gated exactly once across the fan-out.
+
+          🚨 IT COSTS RUNNER MINUTES, so it is opt-in per caller rather than a default. Modelled on
+          the same measurements for MeshWeaver.Plugins' 59 packages: 1 shard 21.9 min wall / 21.9
+          runner-min; 3 shards 11.1 / 31.6; 4 shards 10.8 / 35.5. Past 4 the per-shard fixed cost
+          (image pull, /app extract, the compile pass) dominates and the curve flattens.
+
+          🚨 THE PINNED IMAGE MUST UNDERSTAND `--shard`. A tester image that predates it exits 2 on
+          the unknown argument; the shard job asserts the flag by name BEFORE it gates, so the
+          failure names the pin rather than the content.
+        required: false
+        type: number
+        default: 1
       capture-coredumps:
         description: >-
           Run the tester with minidump-on-crash enabled and upload any dumps as a run artifact
@@ -238,15 +297,21 @@ on:
         required: false
 
 jobs:
-  test-repos:
-    name: Compile + render node repos (MeshWeaver from ACR)
-    outputs:
-      gate-log-artifact: ${{ steps.gate.outputs.artifact }}
+  # ─────────────────────────── 1. WHAT THIS RUN GATES, computed ONCE ───────────────────────────
+  # The affected closure used to be recomputed inside the one gate job. With a fan-out it has to be
+  # decided in ONE place: N shards that each ran the diff could disagree about the mount, and a
+  # fan-out whose parts disagree about the whole is the same defect as a skipped job rendering a
+  # green tick. This job is also the only one that needs the base commits (`fetch-depth: 0`).
+  plan:
+    name: Plan the gate's shards
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      id-token: write     # azure/login OIDC for upstream-seed — granted BY the caller, as for publish-bake
+    timeout-minutes: 10
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      mount: ${{ steps.affected.outputs.mount }}
+      run_all: ${{ steps.affected.outputs.run_all }}
+      nothing-to-gate: ${{ steps.plan.outputs.nothing_to_gate }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -277,6 +342,64 @@ jobs:
             echo "mount=$(jq -r '.mount | join(" ")' affected.json)"
             echo "run_all=$(jq -r '.runAll' affected.json)"
           } >> "$GITHUB_OUTPUT"
+      # 🚨 The matrix is `[]` for exactly ONE reason — a pull_request whose diff reaches no module
+      # content — and that reason is recorded as its own output so the aggregate job can ASSERT the
+      # pairing instead of reading a skipped `gate` job as "fine". GitHub refuses a matrix with no
+      # vectors, so an empty selection has to express itself as "this job does not run"; what makes
+      # that safe is `verify` running unconditionally and refusing a skipped gate that the plan did
+      # not predict. Same shape, same reason, as node-repo-module-pack.yml's `pack`/`verify` pair.
+      - name: Decide the shard matrix
+        id: plan
+        env:
+          SHARDS: ${{ inputs.shards }}
+          MOUNT: ${{ steps.affected.outputs.mount }}
+          RUN_ALL: ${{ steps.affected.outputs.run_all }}
+        run: |
+          set -euo pipefail
+          case "$SHARDS" in
+            ''|*[!0-9]*) echo "::error::shards must be a positive integer, got '$SHARDS'"; exit 1 ;;
+          esac
+          [ "$SHARDS" -ge 1 ] || { echo "::error::shards must be at least 1, got '$SHARDS'"; exit 1; }
+          # 45 is the fleet-wide job ceiling in MINUTES, not a shard bound — but a caller asking for
+          # more shards than any repo has packages is a typo, and an empty shard that looks like a
+          # shard doing its share is the failure this lane exists to remove.
+          [ "$SHARDS" -le 12 ] || { echo "::error::shards is $SHARDS — past ~4 the per-shard fixed cost dominates and the wall-clock curve flattens (see the input's own measurements), so this is a typo, not a plan."; exit 1; }
+          if [ "$RUN_ALL" != "true" ] && [ -z "$MOUNT" ]; then
+            echo "nothing_to_gate=true" >> "$GITHUB_OUTPUT"
+            echo "matrix=[]" >> "$GITHUB_OUTPUT"
+            echo "shards=0" >> "$GITHUB_OUTPUT"
+            echo "no module content affected (see the affected computation above) — nothing for the gate to test"
+            exit 0
+          fi
+          echo "nothing_to_gate=false" >> "$GITHUB_OUTPUT"
+          echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(seq 1 "$SHARDS" | jq -R . | jq -sc 'map(tonumber)')" >> "$GITHUB_OUTPUT"
+          echo "fanning the gate out across $SHARDS shard(s)"
+
+  # ─────────────────────────── 2. THE GATE, one job per shard ───────────────────────────
+  gate:
+    name: Gate shard ${{ matrix.shard }}/${{ needs.plan.outputs.shards }}
+    needs: plan
+    # 🚨 A MODE SWITCH on the plan's own output, never a skip-trapdoor: an empty matrix cannot be
+    # expressed any other way, and `verify` below runs unconditionally and refuses a skipped gate
+    # the plan did not predict. `plan.result` is asserted by name too — a FAILED plan emits no
+    # matrix at all, and `fromJson('')` would fail the matrix evaluation instead of letting
+    # `verify` name the real cause.
+    if: needs.plan.result == 'success' && needs.plan.outputs.nothing-to-gate != 'true'
+    strategy:
+      # 🚨 NEVER fail-fast. A cancelled sibling reports `cancelled`, which is the exact unreadable
+      # verdict this whole fan-out exists to remove — and a sweep wants every shard's verdict in
+      # one run, not the first one to break.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write     # azure/login OIDC for upstream-seed — granted BY the caller, as for publish-bake
+    steps:
+      - uses: actions/checkout@v7
       - name: Log in to the image registry
         env:
           TEST_IMAGE: ${{ inputs.test-image }}
@@ -738,8 +861,10 @@ jobs:
           TARGET_IDENTITY: ${{ steps.identity.outputs.identity }}
           STAGE_MODULES: ${{ inputs.stage-modules }}
           ALLOW_FILE: ${{ inputs.allow-file }}
-          AFFECTED_MOUNT: ${{ steps.affected.outputs.mount }}
-          AFFECTED_RUN_ALL: ${{ steps.affected.outputs.run_all }}
+          AFFECTED_MOUNT: ${{ needs.plan.outputs.mount }}
+          AFFECTED_RUN_ALL: ${{ needs.plan.outputs.run_all }}
+          # `<index>/<total>`, or empty for the unsharded lane — see the `shards` input.
+          SHARD: ${{ needs.plan.outputs.shards != '1' && format('{0}/{1}', matrix.shard, needs.plan.outputs.shards) || '' }}
           # Empty unless upstream-seed fetched a publication — then the tester consumes it.
           SEED_DIR: ${{ steps.seed.outputs.dir }}
         # Allow entries whose module is not mounted on a narrowed run are "unverifiable" —
@@ -753,8 +878,13 @@ jobs:
             ALLOW_PATH="${ALLOW_FILE:+/repo/$ALLOW_FILE}"
             echo "full run: gating every module"
           elif [ -z "$AFFECTED_MOUNT" ]; then
-            echo "no module content affected (see the affected computation above) — nothing for the gate to test"
-            exit 0
+            # 🚨 Unreachable by construction: `plan` turns an empty narrowed mount into an EMPTY
+            # MATRIX, so this job does not exist on such a run. Getting here means the plan and the
+            # gate disagree about what this run gates — which is exactly the fan-out failure the
+            # aggregate job exists to catch, so it is RED here rather than a quiet `exit 0` that
+            # would render as a shard doing its share.
+            echo "::error::this shard was scheduled with an EMPTY affected mount. The plan job decides that case (nothing-to-gate ⇒ empty matrix), so a shard reaching it means the two disagree — refusing to report a gate that gated nothing."
+            exit 1
           else
             REPO_MOUNT="${RUNNER_TEMP:-/tmp}/gate-stage"
             mkdir "$REPO_MOUNT"
@@ -851,7 +981,21 @@ jobs:
           # missing exactly when a caller's ratchet needs the `GATE FAILED` line. The tester's exit
           # code is carried past `tee` explicitly and re-raised after, so a red gate is still red.
           echo "GATE_LOG=$GATE_LOG" >> "$GITHUB_ENV"
-          echo "artifact=gate-log-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          # 🚨 THE SLICE. Empty for `shards: 1`, which is byte-for-byte the pre-fan-out command line —
+          # so a caller that does not opt in cannot be affected by this at all, and an image that
+          # predates the flag keeps working for them. When it IS set, the flag is asserted BY NAME
+          # against the pinned image FIRST: without this the run dies on `Unknown argument '--shard'`
+          # (exit 2) with a message that names the tester's argv rather than the pin that is behind.
+          SHARD_ARGS=()
+          if [ -n "${SHARD:-}" ]; then
+            if ! docker run --rm --init -v "$HOST_DIR:/host:ro" \
+                 --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll --help 2>&1 | grep -q -- '--shard'; then
+              echo "::error::this lane was called with shards>1 but the PINNED tester image does not accept --shard, so it cannot gate a slice. Bump image-digest/platform-image-digest to a CD wave carrying it (both pins move together, from one wave), or set shards: 1."
+              exit 1
+            fi
+            SHARD_ARGS=(--shard "$SHARD")
+            echo "this job gates shard $SHARD"
+          fi
           # `--app /app`: the gate must RUN AS the portal host (it resolves the portal's identity),
           # refused before a mesh boots otherwise — a gate running as another host would decline
           # every bundle and compile the tree itself, passing without judging the bytes that ship.
@@ -859,11 +1003,11 @@ jobs:
           docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp "${EXT_V[@]}" \
             -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" -v "$OWN_BAKE:/seed:ro" "${DUMP_ARGS[@]}" \
             --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll /repo --app /app \
-            "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} --seed /seed | tee "$GATE_LOG"
+            "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} "${SHARD_ARGS[@]}" --seed /seed | tee "$GATE_LOG"
           rc=${PIPESTATUS[0]}
           set -e
           if [ "$rc" -ne 0 ]; then
-            echo "::error::the gate exited $rc — the verdict is above and in the gate-log-${GITHUB_SHA} artifact"
+            echo "::error::the gate exited $rc — the verdict is above and in this shard's gate-log artifact"
             exit "$rc"
           fi
           echo "OWN_BAKE=$OWN_BAKE" >> "$GITHUB_ENV"
@@ -888,19 +1032,23 @@ jobs:
       # artifact must fail on "no log", never pass on "nothing to check" — the same rule the gate
       # itself applies to a truncated log. Named per commit so a merge-group ref cannot pick up a
       # sibling run's log.
-      - name: Upload the gate log (the tester's stdout) for the caller's own ratchets
+      # 🚨 PER SHARD. Two artifacts of one name cannot coexist in a run, and the CANONICAL names —
+      # `gate-log-<sha>` and `bake-<sha>`, which is what a caller's ratchet and publish-bake know —
+      # are re-emitted by the aggregate job below from the folded evidence. With `shards: 1` there is
+      # exactly one of each here and the fold is a copy, so the contract is identical either way.
+      - name: Upload this shard's gate log (the tester's stdout)
         if: always() && env.GATE_LOG != ''
         uses: actions/upload-artifact@v7
         with:
-          name: gate-log-${{ github.sha }}
+          name: gate-log-${{ github.sha }}-shard-${{ matrix.shard }}
           path: ${{ env.GATE_LOG }}
           retention-days: 3
           if-no-files-found: error
-      - name: Upload this run's bake for publish-bake to reuse
+      - name: Upload this shard's bake for publish-bake to reuse
         if: always() && env.OWN_BAKE != ''
         uses: actions/upload-artifact@v7
         with:
-          name: bake-${{ github.sha }}
+          name: bake-${{ github.sha }}-shard-${{ matrix.shard }}
           path: ${{ env.OWN_BAKE }}
           retention-days: 3
           if-no-files-found: error
@@ -920,7 +1068,164 @@ jobs:
         if: always() && inputs.capture-coredumps
         uses: actions/upload-artifact@v7
         with:
-          name: gate-coredumps
+          name: gate-coredumps-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/coredumps
           if-no-files-found: ignore
           retention-days: 15
+
+  # ─────────────── 3. THE ONE STABLE CONTEXT — this is what a repo's protection requires ───────────────
+  # 🚨 THE NAME IS THE CONTRACT. `test-repos / Compile + render node repos (MeshWeaver from ACR)` is
+  # required on three satellites today; it must keep meaning "the whole gate ran and was green",
+  # whatever the shard count. So the aggregate carries the name, and the per-shard contexts
+  # (`Gate shard i/n`) deliberately do NOT — they appear and disappear with the `shards` input, and
+  # a repo that required one would wait forever the day the number changed. Same invariant, same
+  # reason, as `All selected bundles built` in node-repo-module-pack.yml.
+  #
+  # 🚨 IT FOLDS RECEIPTS, it does not re-derive a verdict. Every shard prints, before it installs
+  # anything, which slice of which discovered total it gates; the fold refuses a run whose slices are
+  # not a DISJOINT COVER of that total. That is what makes a fan-out safe to require: "shard 3 never
+  # ran" and "shard 3 passed" are otherwise the same green wall, and GitHub paints a skipped matrix
+  # leg exactly like a passed one.
+  verify:
+    name: Compile + render node repos (MeshWeaver from ACR)
+    needs: [plan, gate]
+    # always(): a red or CANCELLED shard must still be folded and NAMED here, never leave this
+    # context skipped — a skipped required check reads as satisfied (ReadingCiSignals).
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      gate-log-artifact: ${{ steps.fold.outputs.artifact }}
+    steps:
+      - name: Check out Systemorph/MeshWeaver at the pinned ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: meshweaver
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # 🚨 The plan is the ONLY thing that may say "there was nothing to gate", and it says so as a
+      # named output rather than by producing no evidence. Anything else — a failed plan, a skipped
+      # gate the plan did not predict, a gate that did not succeed — is RED here, with the cause
+      # named. A `uses:` job cannot carry steps, so this is where the caller's "a failed need must
+      # not SILENCE this gate" guard lives for the lane's own internals.
+      - name: The fan-out must have happened, or the plan must have said why not
+        id: expect
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          NOTHING_TO_GATE: ${{ needs.plan.outputs.nothing-to-gate }}
+          SHARDS: ${{ needs.plan.outputs.shards }}
+        run: |
+          set -euo pipefail
+          if [ "$PLAN_RESULT" != "success" ]; then
+            echo "::error::the gate's plan job reported '$PLAN_RESULT', so nothing decided what this run gates and no shard can be trusted. Read that job."
+            exit 1
+          fi
+          if [ "$NOTHING_TO_GATE" = "true" ]; then
+            if [ "$GATE_RESULT" != "skipped" ]; then
+              echo "::error::the plan said there was no module content to gate, but the gate job reported '$GATE_RESULT'. The two disagree; refusing to answer."
+              exit 1
+            fi
+            echo "fold=false" >> "$GITHUB_OUTPUT"
+            echo "this run's diff reaches no module content — the plan said so, and the gate correctly did not run. No gate log to hand back."
+            exit 0
+          fi
+          if [ "$GATE_RESULT" != "success" ]; then
+            echo "::error::the gate fan-out reported '$GATE_RESULT' across its $SHARDS shard(s) — at least one shard failed, was cancelled, or never ran. Its verdict is in that shard's own job log and its gate-log artifact."
+            # Not an early exit: the fold below still runs and NAMES which shard, which is the
+            # difference between "the gate is red" and a red nobody can attribute.
+          fi
+          echo "fold=true" >> "$GITHUB_OUTPUT"
+      # A pattern that matches nothing must REACH the folder as zero evidence — it is the folder's
+      # job to say which shard is missing — so this download does not fail the job. (The legitimate
+      # `continue-on-error`: losing it would replace a NAMED missing-shard verdict with an unnamed
+      # download error. The gate's INPUTS are asserted by the caller's preflight and by the plan.)
+      - name: Collect every shard's gate log
+        if: steps.expect.outputs.fold == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: gate-log-${{ github.sha }}-shard-*
+          path: ${{ runner.temp }}/shard-logs
+      # 🚨 The fold's own verdict is DEFERRED, not swallowed: the merged log is uploaded first, then
+      # re-raised by the explicit fail step at the bottom. Same reason the shard job exports
+      # GATE_LOG before running the tester — the evidence a caller's ratchet needs must survive the
+      # failure it describes. `rc` is carried in an output, so a fold that refused cannot reach the
+      # end of this job green.
+      - name: Fold the shards into ONE gate log
+        id: fold
+        if: steps.expect.outputs.fold == 'true'
+        env:
+          SHARDS: ${{ needs.plan.outputs.shards }}
+          GATE_RESULT: ${{ needs.gate.result }}
+        run: |
+          set -uo pipefail
+          python3 meshweaver/.github/scripts/gate-shard-merge.py \
+            --logs "$RUNNER_TEMP/shard-logs" \
+            --shards "$SHARDS" \
+            --gate-result "$GATE_RESULT" \
+            --out "$RUNNER_TEMP/gate.log"
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          # The artifact name is published only when there IS a folded log to download — an empty
+          # `gate-log-artifact` is a caller's signal that no gate ran, and it must never point at a
+          # file that does not exist.
+          if [ -s "$RUNNER_TEMP/gate.log" ]; then
+            echo "artifact=gate-log-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::the fold produced no gate.log at all — the merge script died before writing one."
+            exit 1
+          fi
+      # The canonical name a caller's ratchet downloads. One log, one summary, one verdict —
+      # whatever the shard count.
+      - name: Upload the folded gate log for the caller's own ratchets
+        if: always() && steps.fold.outputs.artifact != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-log-${{ github.sha }}
+          path: ${{ runner.temp }}/gate.log
+          retention-days: 3
+          if-no-files-found: error
+      # The bake, likewise re-emitted under its canonical name. Every shard bakes the whole mount
+      # (`compile` takes no --shard — it is 70 s and its output is what the gate then consumes), so
+      # merge-multiple overwrites identical bundles and the union is the complete bake either way.
+      - name: Collect every shard's bake
+        if: steps.expect.outputs.fold == 'true' && needs.gate.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: bake-${{ github.sha }}-shard-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/bake
+      - name: Upload the merged bake for publish-bake to reuse
+        if: steps.expect.outputs.fold == 'true' && needs.gate.result == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: bake-${{ github.sha }}
+          path: ${{ runner.temp }}/bake
+          retention-days: 3
+          if-no-files-found: error
+      # 🚨 LAST, and unconditional on the fan-out's result: the fold above NAMES which shard broke,
+      # and this is what makes that naming a RED rather than a note. Placed after the uploads so a
+      # red gate still hands its evidence to the caller's ratchet — the same reason the shard job
+      # exports GATE_LOG before running the tester.
+      # 🚨 THE EXPLICIT FAIL STEP. `always()` on this job means a red need does not fail it on its
+      # own, so the two ways this context must go red are asserted BY NAME, after the evidence has
+      # been handed over: a shard that did not succeed, and a fold that refused the cover.
+      - name: A shard that did not succeed, or a fold that refused, fails this context
+        if: always() && needs.plan.outputs.nothing-to-gate != 'true'
+        run: |
+          set -euo pipefail
+          failed=0
+          if [ "${{ needs.gate.result }}" != "success" ]; then
+            echo "::error::the gate fan-out reported '${{ needs.gate.result }}'. See the fold above for which shard and why."
+            failed=1
+          fi
+          if [ "${{ steps.fold.outputs.rc }}" != "0" ]; then
+            echo "::error::the shard fold refused this run (exit '${{ steps.fold.outputs.rc }}') — the shards' slices did not add up to the discovered package set. The annotations above name which. A fan-out whose parts disagree about the whole must never report green."
+            failed=1
+          fi
+          [ "$failed" -eq 0 ] || exit 1
+          echo "every shard succeeded and the fold accounted for every discovered package."

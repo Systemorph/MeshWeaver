@@ -613,6 +613,70 @@ managed assemblies** it loads, none comes from a project that sets `AllowUnsafeB
 in the repo is `memex/Memex.Client`, which this process never loads. So `unsafe` is not merely absent
 from the sources on the stack — it could not have compiled into anything in the process.
 
+### 2026-09-03: sighting #9 — a FOURTH frame (`background_mark_simple1`), and the CI gate named the wrong cause
+
+`MeshWeaver.Futu-49849.dmp` (MeshWeaver.Plugins run
+[`33778900486`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/33778900486/job/100727640185),
+`Portal hosts (shard 1)`, runtime `10.0.11`, libcoreclr build-id `989b56df…` — **the same binary as
+sighting #8**). The register allocation differs and nothing else does:
+
+```
+si_signo=11  si_code=1 (SEGV_MAPERR)  si_addr=0x0   TRAPNO=14  ERR=0x4  CR2=0x0
+RIP = libcoreclr + 0x5d89e7 = WKS::gc_heap::background_mark_simple1(unsigned char*) + 0x827
+bytes@RIP: 49 8b 08  mov rcx,[r8] / 48 83 e1 f8  and rcx,~7 / 44 8b 09  mov r9d,[rcx]   ← RCX = 0
+```
+
+Sightings #4–#8 read `8b 08` = `mov ecx,[rax]` with `RAX=0`; this one is the same three-instruction
+sequence — load the MethodTable, strip the GC bits, read `MT->m_dwFlags` — through `r8`/`rcx`
+instead. **The instruction plus register state is the portable fingerprint, exactly as the 2026-08-12
+note says; the frame is not.** Four disjoint `gc_heap` functions are now on record against the *same*
+`10.0.11` symbols:
+
+| RVA | function | first seen |
+|---|---|---|
+| `0x5cb171` | `background_sweep()+0xa61` | 2026-08-18 (and `10.0.10`'s `0x5cb1e1`, 2026-08-06/09) |
+| `0x5cf24c` | `plan_phase(int)+0x24fc` | 2026-08-12 ×3 |
+| `0x5d5ab2` | `find_first_object(…)+0x132` | 2026-08-17 |
+| **`0x5d89e7`** | **`background_mark_simple1(…)+0x827`** | **2026-09-03** |
+
+`background_mark_simple1` is the background-GC **mark** phase, so the family now spans mark, plan and
+sweep plus a heap walk — which is what "the GC finds a zeroed object header wherever it next looks"
+predicts, and which no single-phase teardown hypothesis does.
+
+**Disposal was clean, and the record is provably complete.** In `_meshweaver-test-trace.log` both
+`FAULT-BUDGET` suppression lines belong to a *different* pid (2722), so the crashing process's
+(`pid=49849`) record has no gaps — the precondition the section above insists on. Every
+`DISPOSE_DONE` in it reads `teardown clean — all pooled I/O joined, async dispose queue drained`,
+with `leakedIoLeaves=0`, **zero** `DISPOSE_QUIESCE_LEAK` and **zero** `DISPOSE_DIRTY_TEARDOWN`. The
+last record is `DISPOSE_INVOKED` for test 43 of 43, `alc=1`, `gc2=33` in ~62 s.
+
+#### 🚨 The CI gate asserted a cause it could not know, and a fix was written against it
+
+This sighting is recorded as much for what the *reporting* did as for the dump. xUnit v3 reports a
+child process killed by a signal through the **same** `Catastrophic failure:` banner it uses for an
+exception that escaped onto a non-test thread, and `dotnet test` flattens both to exit 1 — so the
+child's real code (`139`) survives only in the banner's text. MeshWeaver.Plugins'
+`classify-test-run.py` was not reading it, and printed its static `HOST_NONZERO_NO_FAILING_TEST`
+remedy: *"an exception escaped on a non-test thread … typically a DI resolve inside a single-argument
+`Subscribe(onNext)` body … the stack is in the teardown-straggler capture below … fix it by GATING
+the callback on the hub's teardown state."* All four clauses are false here, and the shard's very
+next line was `(no teardown-straggler capture file found for this project)`.
+
+A core PR was then authored against that invented cause, quoting the gate's own remedy as its
+evidence, before anyone opened the dump sitting in the same job's artifact. **Read the dump before
+believing a gate's prose** — and see MeshWeaver.Plugins#1289, which makes a signal death its own
+classification, points it at this page, and stops the Rx/DI remedy from printing on a crash.
+
+#### Base rate, measured
+
+`Plugin Catalog CI`, **1,197 runs** over 2026-08-29 → 2026-09-03, every failed job's annotations read
+(7,362 rows) plus all 92 cancelled `main` runs: **5** occurrences, all `MeshWeaver.FutuRe.Test`,
+**one of them on `main`** (run `33575831719`). That is **0.74 %** of non-cancelled runs overall and
+**2.5 %** since onset; no other suite shows the signature. Two of the five ran against core commits
+containing #3072 (87 and 156 ahead of `17ee6d9fa`), so the #3026 fix reduced the rate without closing
+it — consistent with this page's standing verdict that MeshWeaver supplies the *workload*, not the
+defect.
+
 ## Reading the result honestly
 
 The trap in this class of bug is confirmation: the stack shows *a* plausible culprit and it is

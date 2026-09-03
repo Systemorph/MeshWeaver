@@ -592,6 +592,33 @@ internal static class NodeTypeCompilationHelpers
                     .Select(_ => node))
             .Subscribe(node =>
             {
+                // 🚨 GATED ON TEARDOWN, and it is not defensive padding.
+                //
+                // This emission can arrive on a TIMER thread — the adoption wait above is
+                // `.Timeout(ReservationWaitBudget)`, so a slow or leaked reservation delivers here
+                // seconds later, by which time the hub may be tearing down. `GetService` then
+                // throws ObjectDisposedException out of a closed Autofac scope, on a NON-TEST
+                // thread, inside a single-argument Subscribe — which Rx RETHROWS rather than
+                // routing to onError. It reaches AppDomain.UnhandledException and takes the
+                // process down: xUnit v3 reports an anonymous "Catastrophic failure … exit code
+                // 139" carrying no stack (Plugins#1279, MeshWeaver.FutuRe.Test).
+                //
+                // The second, quieter cost is the one that was reported first: when this callback
+                // dies, CompilationStatus is never flipped to Pending, so the watcher below never
+                // dispatches — the NodeType compiles FOREVER behind the in-progress overlay with
+                // no status transition and no compile error to find. That is exactly the observed
+                // trace: 48 s of "Slow-path typeStream emission for FutuRe/LocalAnalysis" with
+                // Status stuck and nothing logged.
+                //
+                // Gating, not catching, per the shape the CI gate itself prescribes: a hub that is
+                // going away has nothing to kick off, so there is no work being skipped here.
+                if (hub.IsShuttingDown)
+                {
+                    logger?.LogDebug(
+                        "First-build kickoff: {HubPath} is shutting down — skipping", hubPath);
+                    return;
+                }
+
                 // Flip CompilationStatus directly to Pending. The watcher (above)
                 // observes the Pending transition and drives the actual compile.
                 // Crucially: do NOT touch RequestedReleaseAt. RequestedReleaseAt
@@ -663,6 +690,15 @@ internal static class NodeTypeCompilationHelpers
                 && !IsStaticOnlyNodeType(node, def))
             .Subscribe(node =>
             {
+                // Same gate, same reason as the first-build kickoff above: a DI resolve inside a
+                // single-argument Subscribe is rethrown by Rx and kills the process if the scope
+                // has closed under it. A hub that is shutting down has no compile to recover.
+                if (hub.IsShuttingDown)
+                {
+                    logger?.LogDebug(
+                        "Compile recovery: {HubPath} is shutting down — skipping", hubPath);
+                    return;
+                }
                 logger?.LogWarning(
                     "Compile recovery: {HubPath} came up persisted as Compiling — re-triggering compile (flip Compiling→Pending)",
                     hubPath);
