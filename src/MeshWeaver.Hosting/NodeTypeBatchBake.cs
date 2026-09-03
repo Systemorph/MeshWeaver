@@ -139,7 +139,13 @@ internal static class NodeTypeBatchBake
     private static IReadOnlyList<string> GlobalCodeQueries =>
     [
         // mesh_nodes across every schema, plus every non-Postgres provider (the static catalog).
-        $"nodeType:{CodeNodeType.NodeType}",
+        // 🚨 `partitions:all` — this fetch IS mesh-wide by design (it collects every Code node the
+        // batch may need, for types in any partition) and it must SAY so. Fan-out is opt-in: a
+        // storage provider refuses a query that names no partition and did not ask to span them,
+        // because a silent cross-schema UNION locks every relation it touches and stalls unrelated
+        // pinned reads. The two sibling queries below carry a wildcard `namespace:`, which is the
+        // other way of asking; this one has no anchor at all, so it declares the flag.
+        $"nodeType:{CodeNodeType.NodeType} {ParsedQuery.CrossPartitionQualifier}",
         // The `code` satellite table across every schema — where a Source/ or Test/ segment puts a
         // Code node, and therefore where nearly all of them are. These match on NAMESPACE, so they
         // cover every Code node BELOW such a folder but not one whose own last segment IS the word

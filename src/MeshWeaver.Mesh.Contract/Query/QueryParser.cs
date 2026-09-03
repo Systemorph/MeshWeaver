@@ -9,7 +9,8 @@ public partial class QueryParser
     // Reserved qualifier names (case-insensitive)
     private static readonly HashSet<string> ReservedQualifiers = new(StringComparer.OrdinalIgnoreCase)
     {
-        "path", "namespace", "scope", "sort", "limit", "source", "select", "context", "is"
+        "path", "namespace", "scope", "sort", "limit", "source", "select", "context", "is",
+        "partitions"
     };
 
     /// <summary>
@@ -33,7 +34,7 @@ public partial class QueryParser
             return ParsedQuery.Empty with { Paths = listPaths, Path = listPaths[0] };
 
         var tokens = Tokenize(query);
-        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent) = ExtractReservedQualifiers(tokens);
+        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent, crossPartition) = ExtractReservedQualifiers(tokens);
 
         // Parse the filter expression from remaining tokens
         QueryNode? filter = null;
@@ -49,7 +50,10 @@ public partial class QueryParser
         // working unchanged, instead of these surfaces continuing to claim `context:search`.
         // An explicit context: always wins.
         context ??= isContent == true ? MeshContexts.Content : null;
-        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent);
+        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent)
+        {
+            CrossPartition = crossPartition,
+        };
     }
 
     /// <summary>
@@ -446,7 +450,7 @@ public partial class QueryParser
     /// Extracts reserved qualifiers (path, namespace, scope, sort, limit, source) from tokens.
     /// Returns remaining filter tokens and extracted values.
     /// </summary>
-    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context, bool? IsMain, IReadOnlyList<string>? Paths, bool? IsContent)
+    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context, bool? IsMain, IReadOnlyList<string>? Paths, bool? IsContent, bool CrossPartition)
         ExtractReservedQualifiers(List<Token> tokens)
     {
         var filterTokens = new List<Token>();
@@ -474,6 +478,7 @@ public partial class QueryParser
         string? context = null;
         bool? isMain = null;
         bool? isContent = null;
+        var crossPartition = false;
 
         foreach (var token in tokens)
         {
@@ -639,6 +644,20 @@ public partial class QueryParser
                     continue;
                 }
 
+                // 🚨 `partitions:all` — the EXPLICIT cross-partition request, and the only thing
+                // that makes an otherwise unanchored query legal. It is a FLAG rather than a path
+                // value on purpose: `path:*` reads like the same statement and is a trap, because
+                // partition resolvers take a path's first segment as a schema NAME — `path:*` pins
+                // to a partition literally called `*`, the statement dies on
+                // `relation "*.threads" does not exist`, and the query returns EMPTY instead of
+                // failing. A flag cannot be mistaken for a partition.
+                if (field.Equals("partitions", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (value.Equals("all", StringComparison.OrdinalIgnoreCase))
+                        crossPartition = true;
+                    continue;
+                }
+
                 if (field.Equals("is", StringComparison.OrdinalIgnoreCase))
                 {
                     if (value.Equals("main", StringComparison.OrdinalIgnoreCase))
@@ -705,7 +724,7 @@ public partial class QueryParser
         }
 
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;
-        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent);
+        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent, crossPartition);
     }
 
     /// <summary>

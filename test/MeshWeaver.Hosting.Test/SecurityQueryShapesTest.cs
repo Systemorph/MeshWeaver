@@ -206,21 +206,58 @@ public class SecurityQueryShapesTest
             + "Doc/Architecture/CrossSchemaFanOutElimination");
 
     /// <summary>
-    /// The census in the vocabulary of the log line: every <c>path:-</c> shape the fold issues is
-    /// one of the declared globals — so a reader of the Loki census can tell, from the shape alone,
-    /// whether a line came from a DECLARED fold read or from a new caller.
+    /// 🚨 <b>NO shape the fold issues is path-LESS any more.</b> Fan-out is opt-in: a storage
+    /// provider refuses a query that names no partition and did not ask to span them, so a fold read
+    /// is now either anchored to a partition or carries <see cref="SecurityQueries.ExplicitFanOut"/>
+    /// and has said "every partition" out loud. A shape that logs as <c>path:-</c> would be REFUSED
+    /// at runtime, which for the fold means a permission that cannot be evaluated.
+    ///
+    /// <para>This replaces the older, weaker form of this census ("every path-less shape is one of
+    /// the declared globals"). That version became VACUOUS the moment the globals started declaring
+    /// themselves: its loop body only ran for <c>path:-</c> shapes, so with none left it asserted
+    /// nothing at all while still passing green. The invariant below has the opposite shape — it
+    /// fails when a path-less one appears — so it cannot pass by finding nothing.</para>
     /// </summary>
     [Fact]
-    public void EveryPathLessShapeTheFoldIssuesIsADeclaredGlobal()
+    public void EveryShapeTheFoldIssuesSaysWhereToLook()
     {
-        var declared = DeliberatelyGlobal.Select(x => Describe(x.Shape)).ToHashSet(StringComparer.Ordinal);
-        declared.Should().NotBeEmpty();
-        foreach (var shape in SecurityQueries.AllShapes)
+        SecurityQueries.AllShapes.Should().NotBeEmpty("a census over nothing proves nothing");
+
+        var parser = new QueryParser();
+        var mute = SecurityQueries.AllShapes
+            .Select(shape => (Shape: shape, Parsed: parser.Parse(shape)))
+            // 🚨 The same three ways the storage provider accepts, in the same order — a concrete
+            // anchor, an explicit `partitions:all`, or a wildcard namespace pattern. Testing only
+            // for a Path would MISS the declared globals: `partitions:all` sets a FLAG and leaves
+            // Path null, so a path-based census reports a correctly-declared read as unanchored.
+            .Where(x => string.IsNullOrEmpty(x.Parsed.Path)
+                        && !x.Parsed.CrossPartition
+                        && x.Parsed.ExtractNamespacePatterns().Count == 0)
+            .Select(x => x.Shape)
+            .ToArray();
+
+        mute.Should().BeEmpty(
+            "a query that names no partition and does not ask to span them is refused by the "
+            + "storage provider as insufficiently specified — anchor it, or declare the fan-out "
+            + "with SecurityQueries.ExplicitFanOut. See Doc/Architecture/CrossSchemaFanOutElimination");
+    }
+
+    /// <summary>
+    /// The other half: the deliberately mesh-wide reads still ARE mesh-wide. Making them explicit
+    /// must not have quietly anchored them — anchoring the fold is truncation, and a truncated
+    /// membership set makes a group-scoped deny fail open (#2011). So each declared global must
+    /// still route as a fan-out, and must carry the marker that makes that legal.
+    /// </summary>
+    [Fact]
+    public void EveryDeliberateGlobalDeclaresItsFanOutAndStillFansOut()
+    {
+        DeliberatelyGlobal.Should().NotBeEmpty();
+        foreach (var (shape, reason) in DeliberatelyGlobal)
         {
-            var described = Describe(shape);
-            if (described.Contains(" path:- ", StringComparison.Ordinal))
-                declared.Should().Contain(described,
-                    $"'{shape}' carries no first segment, so its log shape must be a declared global");
+            new QueryParser().Parse(shape).CrossPartition.Should().BeTrue(
+                $"a mesh-wide fold read must declare it — {reason}");
+            RouteOf(shape).Kind.Should().Be(Route.FanOut,
+                $"declaring the fan-out must not have anchored it — {reason}");
         }
     }
 
