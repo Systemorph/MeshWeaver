@@ -160,8 +160,16 @@ included. The overlay is layered LAST, so:
 - for a key it does **not** carry, the "chart" column is the chart *default*, and a deploy may
   render something else entirely.
 
-That confines the doubt rather than removing it, and the confinement is checkable per finding: look
-the key up in the overlay before acting on a `DIFFERS`. The durable fix is that the capture carries
+**`COLLIDES` and `SHADOWS` are immune to this**, which matters because they are the two classes
+ranked first. Their agree/disagree verdict is computed against the **live** ConfigMap — the one the
+pod actually mounts — and falls back to the render only for a key that is rendered but not yet live.
+So the finding "the pod runs one value and the ConfigMap holds another" is a statement about two
+live objects, and no values-layer question can touch it. On the 2026-09-03 run that is 38 of the 76
+findings, of which the 8 disagreeing ones are the whole of the live-wrong list.
+
+For the rest, the doubt is checkable per finding: look the key up in the overlay before acting on a
+`CLUSTER-ONLY` or a `DIFFERS`. A key with **no chart key at all** is also immune — nothing can render
+it whatever the capture says. The durable fix is that the capture carries
 **no `config:` section at all** — the overlay is already generated from the `Hosting/Deployment`
 record (`HelmValues.Render`), so the vault half only needs to hold the secret sections it was
 created for. Asserting that belongs beside the capture, in `Systemorph/Memex`'s `helm-release.yml`;
