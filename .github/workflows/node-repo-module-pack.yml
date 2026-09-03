@@ -1013,7 +1013,12 @@ jobs:
           # Empty ⇒ no flags ⇒ byte-identical invocation to before this input existed.
           superseded=()
           for asm in ${SUPERSEDED//,/ }; do superseded+=(--superseded-image-assembly "$asm"); done
-          [ "${#superseded[@]}" -eq 0 ] || echo "superseding ${#superseded[@]} image assembl(y|ies) from the reference set: ${SUPERSEDED}"
+          # ${#superseded[@]} counts ARRAY ELEMENTS, and each assembly contributes TWO (the flag
+          # and its value) — reporting it as a count of assemblies said "2" for one name. Count the
+          # names instead, so the line states what was actually dropped.
+          superseded_n=0
+          for asm in ${SUPERSEDED//,/ }; do superseded_n=$((superseded_n+1)); done
+          [ "$superseded_n" -eq 0 ] || echo "superseding $superseded_n image assembl(y|ies) from the reference set: ${SUPERSEDED}"
           args=()
           for prj in "${projects[@]}"; do args+=("/repo/$prj"); done
           echo "global build: ${#projects[@]} container entr(y|ies) in ONE workspace — ${projects[*]}"
