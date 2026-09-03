@@ -13,12 +13,25 @@ using Unit = System.Reactive.Unit;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Static helper for creating notification MeshNodes as <b>satellites</b> of the
-/// main entity they're about (thread, approval, doc, …). The notification's
-/// <see cref="MeshNode.MainNode"/> is the entity's path; its own path is
-/// <c>{mainNodePath}/_Notification/{id}</c>. Storage routes through the
-/// dedicated <c>notifications</c> table via
-/// <see cref="SatelliteTableMapping"/>.
+/// Creates notification MeshNodes, ADDRESSED: every notification is delivered into the partition
+/// of the one addressee it is for — <c>{addressee}/_Notification/{id}</c>, with
+/// <see cref="MeshNode.MainNode"/> = the addressee — and the entity it is ABOUT stays a reference
+/// in <see cref="Notification.TargetNodePath"/>. Storage routes through that partition's
+/// <c>notifications</c> table via <see cref="SatelliteTableMapping"/>.
+///
+/// <para>🚨 <b>Why the addressee and not the entity</b> (Systemorph/MeshWeaver#3156, #3216). Until
+/// 2026-09-03 a notification was a satellite of the ENTITY, so it landed in whatever partition the
+/// entity lived in and the bell had no first segment to name. On Postgres that made the bell a
+/// <c>UNION ALL</c> over every row of <c>public.searchable_schemas</c> — measured as the platform's
+/// largest cross-schema fan-out (444 199-schema unions per five minutes across eight pods on
+/// memex-cloud, 4.0 s each while Postgres sat at 94–98 % CPU) — and, because <c>Admin</c> is
+/// deliberately EXCLUDED from <c>searchable_schemas</c>, it could not read
+/// <c>admin.notifications</c> at all: every platform-admin notification was written, versioned and
+/// shown to nobody. Addressing the write is what lets the read be anchored, and an anchored read
+/// is the only kind that reaches <c>Admin</c> — the same move <c>PermissionEvaluator</c> made for
+/// platform-admin grants, which dissolved the Admin special case rather than adding one.</para>
+///
+/// <para>See Doc/Architecture/AddressedNotifications.</para>
 /// </summary>
 public static class NotificationService
 {
@@ -26,12 +39,98 @@ public static class NotificationService
     public const string SatelliteSegment = "_Notification";
 
     /// <summary>
-    /// Creates a notification as a satellite of <paramref name="mainNodePath"/>.
-    /// Path = <c>{mainNodePath}/_Notification/{newId}</c>; MainNode = mainNodePath.
-    /// Returns an IObservable that emits the created node and completes —
-    /// subscribe to drive the write. Safe to compose inside hub handlers /
-    /// click actions via Subscribe.
+    /// The addressee of a notification that is for the platform OPERATORS collectively rather than
+    /// for one person — startup errors, a feed that could not be reconciled, an instance stuck on a
+    /// fallback page. It is the <c>Admin</c> partition, whose read scope is exactly
+    /// <c>hub.IsGlobalAdmin()</c>: an <c>AccessAssignment</c> granting <see cref="Permission.All"/>
+    /// in <c>Admin/_Access</c>.
+    ///
+    /// <para>🚨 <b>One row, not one per admin.</b> A platform notification is a single collective
+    /// event; fanning it out per admin would enumerate the admin set at WRITE time — so a newly
+    /// promoted admin would see no history, a demoted one would keep their copies (a standing
+    /// disclosure), and every boot error would multiply by the size of the admin set. The cost of
+    /// the single row is that "read" is shared: one operator marking a platform notice read marks
+    /// it read for all, which is the right semantics for a shared operations inbox and the wrong
+    /// one for personal mail — which is why personal notifications are never addressed here.</para>
     /// </summary>
+    public const string PlatformAddressee = "Admin";
+
+    /// <summary>
+    /// The partition a notification for <paramref name="recipient"/> is DELIVERED into: the
+    /// recipient's own partition (its first path segment, so a full path resolves to its
+    /// partition), or <see cref="PlatformAddressee"/> when there is no individual recipient.
+    ///
+    /// <para>🚨 A <c>null</c>/blank recipient means "the platform operators", NOT "everybody" —
+    /// the fail-CLOSED direction. The alternative reading (deliver it where the entity happens to
+    /// live) is what put operator notices about a plugin update into every catalog reader's
+    /// bell.</para>
+    /// </summary>
+    /// <param name="recipient">A user id, a path inside a user's partition, or null.</param>
+    /// <returns>The addressee partition.</returns>
+    public static string ResolveAddressee(string? recipient)
+    {
+        if (string.IsNullOrWhiteSpace(recipient))
+            return PlatformAddressee;
+        var first = recipient.Trim().TrimStart('/').Split('/', 2)[0];
+        return string.IsNullOrEmpty(first) ? PlatformAddressee : first;
+    }
+
+    /// <summary>
+    /// The namespace every notification addressed to <paramref name="addressee"/> lives in —
+    /// <c>{addressee}/_Notification</c>. One namespace per addressee, which is what makes
+    /// <see cref="BellQuery"/> pin to one schema.
+    /// </summary>
+    /// <param name="addressee">A user id, a path inside a user's partition, or null for the platform bell.</param>
+    /// <returns>The delivery namespace.</returns>
+    public static string DeliveryNamespace(string? addressee)
+        => $"{ResolveAddressee(addressee)}/{SatelliteSegment}";
+
+    /// <summary>
+    /// The ANCHORED read of one addressee's bell — the shape every notification reader must use.
+    ///
+    /// <para>🚨 <b>One addressee per query, and never an alternation.</b> A single concrete
+    /// <c>namespace:</c> is folded into <c>ParsedQuery.Path</c> by the parser, so
+    /// <c>PostgreSqlPartitionedMeshQuery.ResolvePinnedPartition</c> pins the read to that ONE
+    /// schema and the fan-out machinery — and therefore <c>public.searchable_schemas</c> — is never
+    /// consulted. That is the whole reason this reaches <c>Admin</c>: a
+    /// <c>namespace:{viewer}/_Notification|Admin/_Notification</c> alternation classifies as
+    /// "anchored" too, but it takes the fan-out path, where the namespace narrowing INTERSECTS with
+    /// <c>searchable_schemas</c> — deliberately, so a namespace anchor cannot make an excluded
+    /// schema newly visible — and <c>admin</c> is dropped again. A reader that wants two bells
+    /// issues two of these and merges them, exactly as <c>PermissionEvaluator</c> combines its
+    /// partition leg with its root leg.</para>
+    /// </summary>
+    /// <param name="addressee">The addressee whose bell to read — a user id, or <see cref="PlatformAddressee"/>.</param>
+    /// <returns>The query text.</returns>
+    public static string BellQuery(string? addressee)
+        => $"namespace:{DeliveryNamespace(addressee)} "
+            + $"nodeType:{NotificationNodeType.NodeType} sort:CreatedAt-desc";
+
+    /// <summary>
+    /// Creates a notification ADDRESSED to <paramref name="recipient"/>: path =
+    /// <c>{addressee}/_Notification/{newId}</c>, <c>MainNode</c> = the addressee, and
+    /// <paramref name="mainNodePath"/> becomes the ENTITY reference the reader clicks through to
+    /// (<see cref="Notification.TargetNodePath"/>, unless <paramref name="targetNodePath"/> names a
+    /// more specific one). Returns a cold IObservable that emits the created node and completes —
+    /// subscribe to drive the write. Safe to compose inside hub handlers / click actions.
+    ///
+    /// <para><paramref name="recipient"/> is <b>optional for compatibility</b>: omitted, the
+    /// addressee is derived from <paramref name="mainNodePath"/>'s partition, which is what the
+    /// in-mesh callers that already pass the recipient AS the main node path (the Approvals source
+    /// node) rely on. Every caller in this repository passes it explicitly — a caller that cannot
+    /// name an addressee is addressing the platform, and says so with
+    /// <see cref="PlatformAddressee"/>.</para>
+    /// </summary>
+    /// <param name="nodeFactory">The mesh service performing the write.</param>
+    /// <param name="mainNodePath">The ENTITY the notification is about (the click target's default).</param>
+    /// <param name="title">Notification title.</param>
+    /// <param name="message">Notification body.</param>
+    /// <param name="type">Notification type, which drives the preference category and the icon.</param>
+    /// <param name="targetNodePath">Explicit click target; defaults to <paramref name="mainNodePath"/>.</param>
+    /// <param name="createdBy">User ObjectId of whoever caused the notification.</param>
+    /// <param name="icon">Optional icon URL override.</param>
+    /// <param name="recipient">The addressee — a user id, or <see cref="PlatformAddressee"/>.</param>
+    /// <returns>A cold observable emitting the created node.</returns>
     public static IObservable<MeshNode> CreateNotification(
         IMeshService nodeFactory,
         string mainNodePath,
@@ -40,10 +139,13 @@ public static class NotificationService
         NotificationType type,
         string? targetNodePath = null,
         string? createdBy = null,
-        string? icon = null)
+        string? icon = null,
+        string? recipient = null)
     {
+        var addressee = ResolveAddressee(
+            string.IsNullOrWhiteSpace(recipient) ? mainNodePath : recipient);
         var notificationId = Guid.NewGuid().AsString();
-        var parentPath = $"{mainNodePath}/{SatelliteSegment}";
+        var parentPath = $"{addressee}/{SatelliteSegment}";
 
         var notification = new Notification
         {
@@ -51,6 +153,7 @@ public static class NotificationService
             Title = title,
             Message = message,
             Icon = icon,
+            Recipient = addressee,
             TargetNodePath = targetNodePath ?? mainNodePath,
             IsRead = false,
             CreatedAt = DateTimeOffset.UtcNow,
@@ -63,7 +166,7 @@ public static class NotificationService
             Name = title,
             NodeType = NotificationNodeType.NodeType,
             State = MeshNodeState.Active,
-            MainNode = mainNodePath,
+            MainNode = addressee,
             Content = notification
         };
 
@@ -86,8 +189,15 @@ public static class NotificationService
     /// </list>
     /// Runs the whole flow under the system identity (it reads arbitrary users' settings and writes
     /// to arbitrary partitions — a legitimate infrastructure write). Returns a cold observable;
-    /// subscribe to drive. A <c>null</c>/empty <paramref name="recipient"/> (e.g. an "Admin" broadcast)
-    /// falls back to defaults and never emails.
+    /// subscribe to drive. A <c>null</c>/empty <paramref name="recipient"/> falls back to defaults
+    /// and never emails.
+    ///
+    /// <para>🚨 <b><paramref name="recipient"/> decides WHERE the notification lands</b>, not just
+    /// whether it is emailed: the bell node is written at
+    /// <c>{ResolveAddressee(recipient)}/_Notification/{id}</c>, so a <c>null</c> recipient delivers
+    /// to <see cref="PlatformAddressee"/> — the platform operators' bell, read-scoped by RLS to
+    /// <c>hub.IsGlobalAdmin()</c>. <paramref name="mainNodePath"/> is the ENTITY the notification is
+    /// about and no longer chooses the partition.</para>
     /// </summary>
     public static IObservable<Unit> Dispatch(
         IMessageHub hub,
@@ -120,8 +230,12 @@ public static class NotificationService
                 // fault can't suppress the bell write (or vice versa).
                 var ops = new List<IObservable<Unit>>(2);
                 if (settings.InApp(category))
+                    // 🚨 The addressee is resolved HERE, once: a null recipient is the PLATFORM
+                    // bell (Admin), never "wherever the entity lives". Passed explicitly so the
+                    // compatibility fallback in CreateNotification is never the thing that decides.
                     ops.Add(CreateNotification(
-                            meshService, mainNodePath, title, message, type, targetNodePath, createdBy, icon)
+                            meshService, mainNodePath, title, message, type, targetNodePath, createdBy, icon,
+                            recipient: ResolveAddressee(recipient))
                         .Select(_ => Unit.Default)
                         .Catch(Observable.Return(Unit.Default)));
                 if (!string.IsNullOrEmpty(recipient) && settings.Email(category))

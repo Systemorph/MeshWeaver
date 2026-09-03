@@ -1,20 +1,32 @@
 ---
 Name: Addressed Notifications
 Category: Architecture
-Description: Why the notification bell UNIONs every partition schema, the 2026-09-03 measurement of where notifications actually live (97% of them nowhere near their reader), and the design that fixes it — a notification is ADDRESSED, delivered to its addressee's partition, so the bell reads two schemas instead of 199.
+Description: Why the notification bell UNIONed every partition schema, the 2026-09-03 measurements of where notifications actually lived (97% of them nowhere near their reader) and of what that cost, and the design that fixed it — a notification is ADDRESSED, delivered to its addressee's partition, so the bell reads one pinned schema per bell instead of 201.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H5.5L4 18.5z"/><path d="M8 9h8"/><path d="M8 12.5h5"/></svg>
 ---
 
 # Addressed Notifications
 
-**The bell is the single largest cross-schema fan-out on the platform** — 444 `[CrossSchema] SLOW`
-199-schema unions per five minutes across eight pods on memex-cloud, averaging 4.0 s each while
-Postgres sat at 94–98 % CPU ([Cross-Schema Fan-Out Elimination](/Doc/Architecture/CrossSchemaFanOutElimination),
-the 2026-09-02 census). This page is plan 1 of that census, worked out: the measurement of where
-notifications actually live today, the design that lets the bell name its partition, the rulings the
-change needs before it can land, and the migration it implies.
+**The bell was the single largest cross-schema fan-out on the platform.** Measured twice, a day
+apart, on memex-cloud:
 
-Issue: Systemorph/MeshWeaver#3156.
+| When | What was measured | Result |
+|---|---|---|
+| 2026-09-02, 8 pods | `[CrossSchema] SLOW` unions per 5 min | **444**, avg **4.0 s** each, Postgres 94–98 % CPU |
+| 2026-09-03 16:47–16:58, ONE **idle** replica (0.13 cores, 2 GB) | one bell render | **4 476 rows across 201 of 201** schemas, **9–10 s**, filtered to **0 rows** in memory; ~60 such lines/min, on each of 7 serving replicas; `memexaks-pg` 87–91 % avg / 96–98 % max CPU |
+
+The two agree on mechanism and differ only in magnitude and in what they rule out: the second was
+taken on an idle pod, so it is not a GC artefact, and time-to-first-row ≈ total, so the cost is the
+SCAN and not the caller's consumption. Issues: Systemorph/MeshWeaver#3156 (the write side),
+[#3216](https://github.com/Systemorph/MeshWeaver/issues/3216) (the platform bell nobody could read),
+[#3238](https://github.com/Systemorph/MeshWeaver/issues/3238) (the fan-out re-measured), and the
+census in [Cross-Schema Fan-Out Elimination](/Doc/Architecture/CrossSchemaFanOutElimination), whose
+plan 1 this is.
+
+> **Status: SHIPPED.** §§1–3 describe what was wrong and what replaced it; §4 records the rulings
+> taken and by what argument; §6 records the migration ruling, which was *not* to migrate.
+> 🚨 **§3 corrects this page's original anchor**: the `namespace:A|B` alternation it proposed is
+> measurably NOT the shape that reaches `Admin`. Two separately pinned reads are.
 
 ## 1. What the bell issues today, and why it cannot be anchored
 
@@ -55,10 +67,14 @@ Between #1231 and #1263 that made the bell a **hard failure**, not a slow query.
 nodeType:Notification scope:Exact
 ```
 
-So **today the bell works and still fans out**, served with a `[FanOut] GRACE` warning naming the
-offender. The list may only shrink — `scripts/check-unanchored-queries.py --base-ref` fails a PR that
-adds a line, and `UnanchoredQueryAllowFileTest` fails when a listed shape has no caller left. That
-gives this work its acceptance test for free: **delete that line and stay green.**
+So between #1263 and this change the bell worked and still fanned out, served with a
+`[FanOut] GRACE` warning naming the offender. The list may only shrink —
+`scripts/check-unanchored-queries.py --base-ref` fails a PR that adds a line, and
+`UnanchoredQueryAllowFileTest` fails when a listed shape has no caller left. That gave this work its
+acceptance test for free: **delete that line and stay green.** ✅ **The line is gone.** Both callers
+it named are now served: the bell because it is anchored, the triage watch because it DECLARES its
+fan-out (`MeshWideQuery`) rather than being grandfathered — the allow list is for debt, and a
+declared read is not debt.
 
 ### Access-narrowing does not rescue it
 
@@ -170,26 +186,39 @@ target and the badge's distinct-source count all survive the move unchanged.
 
 Three properties follow, and they are the point:
 
-- **The bell can name its partitions.** `namespace:{viewer}/_Notification|Admin/_Notification
-  nodeType:Notification sort:CreatedAt-desc` — a namespace alternation, which the parser keeps as an
-  exact-membership filter and `PostgreSqlPartitionedMeshQuery.ResolveNamespaceAnchoredPartitions`
-  narrows to **two schemas**. It passes the planner's `IsSufficientlySpecified` through
-  `ExtractNamespacePatterns()`, so it needs no `partitions:all` and earns no allow-file line.
+- **The bell names its partitions — as TWO separately pinned reads, one per bell.**
 
-  🚨 **Measured, not reasoned** — fed to `QueryRouteClassifier` (the test-side reproduction of the
-  planner's own `IsSufficientlySpecified || ResolvesByRoutingHint` gate) on 2026-09-03:
+  ```text
+  namespace:{viewer}/_Notification nodeType:Notification sort:CreatedAt-desc
+  namespace:Admin/_Notification    nodeType:Notification sort:CreatedAt-desc   ← only for a global admin
+  ```
 
-  | Query | Verdict | `sufficient` |
-  |---|---|---|
-  | `nodeType:Notification sort:CreatedAt-desc` (today's bell) | **Refused** | `False` |
-  | `namespace:{viewer}/_Notification\|Admin/_Notification nodeType:Notification sort:CreatedAt-desc` | **Anchored** | `True` (via `ExtractNamespacePatterns`) |
-  | `namespace:{viewer}/_Notification nodeType:Notification sort:CreatedAt-desc` | **Anchored** | `True` (the parser folds a single namespace into `Path`) |
-  | `path:{viewer}\|Admin scope:subtree nodeType:Notification sort:CreatedAt-desc` | **Anchored** | `True` (via `Paths`) |
+  Both are built by `NotificationService.BellQuery(addressee)` in core, so the Blazor bell, the
+  Blazor panel and the shape censuses all read one definition. `NotificationQueries.For(viewer,
+  viewerIsGlobalAdmin)` decides which legs a viewer gets; `NotificationFeed.ForViewer` merges them.
 
-  The last row is the fallback if the flat `{addressee}/_Notification/{id}` shape cannot be reached
-  for some class — a two-partition subtree read, still two schemas, but it re-admits anything written
-  anywhere under the viewer's partition. The alternation is the tighter of the two and is what the
-  invariant makes possible.
+  🚨 **This page originally proposed a single alternation,
+  `namespace:{viewer}/_Notification|Admin/_Notification`, and that was wrong — measurably.** The
+  alternation does classify as *anchored* (`QueryRouteClassifier` says so, via
+  `ExtractNamespacePatterns`), which is what the first measurement checked. But classification is
+  not routing. The parser folds a SINGLE concrete `namespace:` into `ParsedQuery.Path`, and only
+  then does `PostgreSqlPartitionedMeshQuery.ResolvePinnedPartition` pin the query to one schema and
+  skip the fan-out machinery entirely. An alternation leaves `Path` null, so it takes the FAN-OUT
+  route, where namespace narrowing is applied as an **intersection** with the schema list from
+  `public.searchable_schemas` — deliberately, and the code says why:
+
+  > *"Resolving the derived names on their own would be one round-trip cheaper and is deliberately
+  > not done: it bypasses `searchable_schemas`, whose ExcludedSchemas (auth, admin, …) would then
+  > become newly visible to a namespace-anchored query."*
+  > — `PostgreSqlPartitionedMeshQuery`, the namespace-anchored narrowing
+
+  `Admin` is one of those excluded schemas. **So the alternation would have dropped `admin` again,
+  silently, and #3216 would have read as fixed while changing nothing.** Pinned by
+  `NotificationBellLegsTest`: `ResolvePinnedPartition` returns `rbuergi` and `admin` for the two
+  legs and **null** for the alternation. This is exactly why `SecurityQueries.PartitionAssignments`
+  is spelled with a single `path:` and why `PermissionEvaluator` combines a partition leg with a
+  root leg instead of asking for both at once.
+
 - **Visibility becomes correct by path.** With the addressee as the first segment, the ordinary
   path-based fold answers exactly "the addressee, plus whoever can read their partition" — no
   `SatelliteAccessRule` required, and no more plugin-update notifications leaking into every
@@ -218,25 +247,66 @@ today. `CreateNotification` keeps its signature for the in-mesh callers that use
 (`Approvals/Approval/Source/ApprovalActions.cs` is compiled in the mesh, invisible to `dotnet build`),
 and gains an optional addressee so core's own direct callers can be moved without a breaking change.
 
-## 4. The rulings this needs before it can land
+## 4. The rulings, and how each was decided
 
-These are product decisions, not implementation details, and each one changes **who sees what**:
+These were product decisions, not implementation details — each one changes **who sees what**.
 
-1. **Who is the addressee of an operator notification?** "Update available: Store" and "Startup
-   import failed: Agent" address nobody today; they are visible to whoever can read the plugin
-   record or the space. Under the invariant they go to `Admin` — visible to platform operators only.
-   That is almost certainly right (only an operator can act on either), but it *removes* them from
-   ordinary users' bells, and 184 of the sampled 200 rows are in this class.
-2. ~~Is `Admin/_Notification` readable by a platform admin from another partition?~~
-   **Measured — yes, and the Admin leg is a REPAIR, not a risk.** See §2b: an anchored
-   `namespace:Admin scope:descendants nodeType:Notification` returns the rows; the bell's *fan-out*
-   is what cannot see them. What is still unestablished is the other half of the claim — that a
-   NON-admin cannot read them — which needs an identity this session did not have.
-3. **Do the legacy rows get migrated, or dropped?** See §6.
-4. **Does a space-scoped broadcast survive as a concept?** The invariant says no: a notification has
-   one addressee. Anything wanting "everyone who can see X" must address the users explicitly or go
-   to `Admin`. Nothing in either repository emits such a broadcast today, so this is a ruling about
-   the *future* surface, not a migration of an existing one.
+### 1. An operator notification is addressed to `Admin`, collectively — one row, not one per admin
+
+"Update available: Store", "Startup import failed: Agent", "Type X is serving a fallback page", a
+package feed that could not be reconciled: these address nobody in particular and, before the
+change, were visible to whoever could read the plugin record or the space. They are now addressed to
+`Admin`, whose read scope is exactly `hub.IsGlobalAdmin()` — an `AccessAssignment` granting
+`Permission.All` in the `Admin/_Access` namespace.
+
+**Why `Admin` and not a fan-out to each admin.** The alternative — write one copy per platform admin,
+into each of their partitions — was rejected on three grounds, and the third is a security one:
+
+| | `Admin`, one row | Per-admin fan-out |
+|---|---|---|
+| Write cost | one row per event | one row per event **per admin** |
+| A newly promoted admin | sees the history | sees nothing before their promotion |
+| A **demoted** admin | loses the bell immediately (the leg disappears, and the fold refuses the rows) | **keeps every copy already written into their own partition** — a standing disclosure with no revocation path |
+| Enumeration | none | the admin set must be resolved at WRITE time, on the boot-error path |
+
+**The cost of the choice, stated:** *read* is shared. One operator marking a platform notice read
+marks it read for everyone. That is the right semantics for a shared operations inbox and the wrong
+one for personal mail — which is why a personal notification is never addressed to `Admin`, and why
+`AccessGrantNotifier`, the approvals and the thread-completion notice all keep naming a person.
+
+The visible consequence: operator notices **leave ordinary users' bells** (184 of the sampled 200
+rows were in this class). That is the intended behaviour change, not a truncation — nobody could act
+on them, and they are the reason a catalog reader's bell filled with plugin-update noise.
+
+### 2. A non-admin cannot read the platform bell — now established by test, not by assertion
+
+The earlier open item was the half of the claim that needed a second identity: a platform admin can
+read `Admin/_Notification`, but can anyone else? `NotificationAddressingTest` answers it with two
+identities on one mesh — a platform admin (`Admin` role at scope `Admin`) and a user who owns their
+own partition and nothing else:
+
+- the admin's anchored read returns the row;
+- the same query under the other identity returns a snapshot **without** it;
+- and the permission fold is asserted directly, so a regression reports a *verdict* rather than an
+  absence: `GetEffectivePermissions(notificationPath, plainUser)` has no `Read`.
+
+🚨 **The negative was proven non-vacuous.** Granting that user `Viewer` on the `Admin` partition was
+staged deliberately and the test FAILED — *"Expected the observable to emit a value matching the
+predicate … leaking it to every user is a WORSE outcome than the admin seeing nothing"*. An
+assertion that cannot fail is not an assertion, and this one can.
+
+Belt and braces, because the asymmetry deserves both: the platform leg is also **not issued at all**
+unless `hub.IsGlobalAdmin()` answers positively, and that gate fails CLOSED (seeded `false`, an
+error or a never-answering fold leaves it `false`). RLS is the boundary; the gate decides what is
+even asked for, and keeps a non-admin's bell down to a single schema.
+
+### 3. The legacy rows are neither migrated nor deleted — they age out. See §6.
+
+### 4. A space-scoped broadcast does not survive as a concept
+
+The invariant says a notification has one addressee. Anything wanting "everyone who can see X" must
+address the users explicitly or go to `Admin`. Nothing in either repository emitted such a broadcast,
+so this is a ruling about the *future* surface.
 
 ## 5. Two defects the measurement exposed (not #3156, but caused by the same gap)
 
@@ -257,70 +327,126 @@ Both are filed: MeshWeaver.Plugins#1275 and #3213.
   same package in one day, 124 of the newest 200 rows overall. There is no "already told you"
   suppression. This is the bell's row count, independent of where the rows live. **#3213.**
 
-## 6. The migration
+## 6. The migration: **neither move nor delete — the legacy rows age out**
 
-Delivery is a *write-path* change; the ~10⁵ existing rows do not move on their own, and the bell
-cannot be anchored while they matter. The addressee is **derivable** for every class in the census,
-which is what makes a one-pass Repair migration possible rather than a guess:
+This was the ruling asked for, and the answer is the third option. Legacy `_Notification` rows stay
+exactly where they are; nothing moves them and nothing deletes them; the anchored bell simply stops
+reading the partitions they sit in.
 
-| Legacy shape | Derived addressee |
+**Why not MOVE them.** The addressee is derivable for every class in the census, so a Repair vN
+migration was possible on paper:
+
+| Legacy shape | Derivable addressee |
 |---|---|
 | `…/_Thread/{t}/…/_Notification/{id}` | the thread node's `CreatedBy` |
 | `Plugins/{pkg}/_Notification/{id}` | `Admin` |
 | `{space}/_Notification/{id}` (startup import) | `Admin` |
 | `Hosting/Instance*/_Notification/{id}` | `Admin` |
-| `{user}/_Notification/{id}` where `{user}` is a user partition | unchanged — already addressed |
+| `{user}/_Notification/{id}` where `{user}` is a user partition | already addressed |
 
-🚨 **Never a raw `psql UPDATE`** — it bypasses the workspace cache. This is a Repair vN migration in
-`src/Memex.Database.Migration/Migrations/` (MeshWeaver.Plugins), or a `MoveNodeRequest` pass; see
+But look at what it would buy. Rows 2–4 are operator noise, and **ruling 1 deliberately removes that
+class from ordinary users' bells** — migrating it would faithfully preserve a visibility we just
+decided was wrong. Row 1, the thread-completion notice, is the only genuinely user-facing legacy
+class, it was **6 % of the sampled population**, and it is the single most perishable kind of
+notification there is ("your response is ready", for a thread the person was watching). So a
+migration of ~10⁵ rows across 201 schemas, run as a startup `Job` whose failure stops **every**
+portal from serving (`DbVersionGate`), would buy back a few days of already-read notices. That trade
+is not close.
+
+**Why not DELETE them either.** It is cheaper, but it is irreversible, it destroys the versioned
+history of every notification ever raised, and it buys nothing the bell can see anyway: the anchored
+bell ignores those partitions whether the rows are there or not. Deleting data to make a query
+faster, when the query has already stopped reading it, is cost with no benefit.
+
+**What it costs to leave them.** Dead rows in per-partition `notifications` tables that nothing
+reads. They are small, they are already paid for, and a general retention pass — which notifications
+want on their own merits, addressed or not — reclaims them later without a schema migration.
+
+🚨 **This is not the #2011 truncation.** That shape is a read that silently returns FEWER rows than
+the caller's question implies. Going forward, no notification is dropped: every notification is
+delivered INTO its addressee's partition, so a notification *about* an entity anywhere in the mesh
+still reaches the reader's own bell — which is precisely what the addressing change buys and why the
+write side had to land with the read side. What changes for pre-existing rows is a stated,
+one-time, announced consequence of ruling 1, not a silent short read.
+
+🚨 And if a future pass does move or remove them: **never a raw `psql UPDATE`** — it bypasses the
+workspace cache. It is a Repair vN migration in `src/Memex.Database.Migration/Migrations/`
+(MeshWeaver.Plugins) or a `MoveNodeRequest` pass; see
 [Postgres Schema Architecture](/Doc/Architecture/PostgresSchemaArchitecture).
 
-**The cheaper alternative deserves a hearing.** Notifications are ephemeral by construction, 97 % of
-the population is operator noise re-emitted hourly, and the bell shows the newest first. Deleting
-every `_Notification` row that is not in an addressee partition — a Repair that *removes* rather than
-moves — is a smaller, faster, fully reversible-by-time operation, and it is what ruling 3 should
-decide between. Moving ~10⁵ rows across 199 schemas on a live portal is the more expensive option and
-buys back a few days of already-read operator notices.
+## 7. What shipped
 
-## 7. Order of work
+The write side and the read side landed as **one change set**, because each alone leaves the other
+broken or dangerous: anchoring first would truncate the bell, and addressing first would leave the
+platform bell unreadable and the fan-out in place.
 
-1. **Core** — `Notification.Recipient`; `Dispatch` computes the delivery path; core's own
-   mis-addressed emitters (`PackageUpdateReconciler`, `StaticRepoImporter`, `CompileFailureNotifier`'s
-   System-driven leg) re-addressed to `Admin`; a census test that pins each core emitter's delivery
-   partition the way `SecurityQueryShapesTest` pins query shapes.
-2. **Plugins** — `ThreadExecution`'s addressee becomes the thread's `CreatedBy` (§5);
-   `NotificationTriageService` declares itself mesh-wide (`MeshWideQuery`) rather than being
-   grandfathered, which removes half of the allow-file entry on its own.
-3. **The migration** (§6), once ruling 3 is made.
-4. **Anchor the bell** — `NotificationQueries.Bell` becomes the two-namespace alternation, the
-   `portal-next` React copy follows, and the `nodeType:Notification scope:Exact` line leaves
-   `unanchored-queries.allow`. `ShellQueryShapesTest`'s `KnownFanOuts` loses its Bell entry in the
-   same change (it fails on a stale entry, by design).
-5. **Suppress repeat plugin-update notifications** (§5) — independent of the rest, and it is what
-   actually shrinks the row count.
+**Core (`Systemorph/MeshWeaver`)**
 
-**Anchoring before 1–3 is the truncation this design exists to avoid** for the *viewer* leg: the
-bell would go quiet for every notification still sitting in an entity's partition.
+1. `Notification.Recipient` — the addressee, on the content, so the invariant is checkable without
+   parsing a path.
+2. `NotificationService` gains `PlatformAddressee`, `ResolveAddressee`, `DeliveryNamespace` and
+   `BellQuery` — one definition of where a notification goes and one of how it is read back.
+   `CreateNotification` takes the addressee and writes at `{addressee}/_Notification/{id}` with
+   `MainNode = {addressee}`; `Dispatch` resolves it once, and `recipient: null` means the PLATFORM.
+   The addressee stays OPTIONAL on `CreateNotification` (falling back to the main node's partition),
+   because that method is public surface which in-mesh source compiles against at RUNTIME — making
+   it mandatory would break callers no compiler in this repository can see.
+3. Core's mis-addressed emitters re-addressed to `Admin`: `PackageUpdateReconciler` (an update only
+   an admin can apply — 124 of the newest 200 rows), `StaticRepoImporter.NotifyStartupFailure`, and
+   `NodeTypeCompileParkRegistry`'s System-driven leg, which used to file a compile failure nobody
+   asked for under the failing TYPE "so it is still visible — in every per-user bell that can read
+   the type". `ModuleDiscoveryService` now says `Admin` explicitly instead of inheriting it.
+4. 🚨 **A bug found on the way:** `NodeTypeEnrichmentHelpers.ReportStuckOverlayToAdmins` composed
+   `NotificationService.Dispatch(...)` and **never subscribed it**. `Dispatch` is a cold observable,
+   so the "instance stuck on a fallback page" notification was never written — while the log line
+   beside it said "platform admins notified". Two independent silences over one signal: the row was
+   never created, and #3216 meant the bell could not have read it if it had been.
+5. `NotificationAddressingTest` — the addressing rule, the pinning property, and the access boundary
+   (§4 ruling 2), with its negative control.
 
-🚨 **The `Admin` leg is the exception, and it can go first.** Those rows are already in `Admin`, so
-no migration gates them — and today the fan-out cannot read that schema at all (§2b), so adding the
-leg strictly ADDS notifications. #3216 is that half on its own: a bell spelled
-`namespace:{viewer}/_Notification|Admin/_Notification` still needs step 4's line removal to be
-worth its while, but a bell that merely *also* reads `Admin` is a pure repair with no ruling
-attached to it.
+**Plugins (`Systemorph/MeshWeaver.Plugins`)**
 
-## 8. What is not established here
+6. `NotificationQueries` becomes `Bell(viewer)` / `Platform` / `For(viewer, isGlobalAdmin)` over
+   core's `BellQuery`; `NotificationFeed.ForViewer` is the single live feed the bell badge and the
+   panel both bind to, so they cannot drift on which partitions get read.
+7. The `portal-next` React client anchors to the viewer. It deliberately does **not** read the
+   platform bell: it has the viewer's id but no admin verdict on the wire, so the leg is omitted
+   rather than issued unconditionally — the fail-closed choice, and it loses nothing, because the
+   old fan-out could not reach the `admin` schema either.
+8. `NotificationTriageService` DECLARES its mesh-wide watch (`MeshWideQuery`) instead of being
+   grandfathered — a genuine process-wide watch, one live subscription per process — and reads
+   `Notification.Recipient` instead of re-deriving the addressee with a per-notification query.
+9. The `nodeType:Notification scope:Exact` line **leaves `unanchored-queries.allow`**, which was
+   this work's acceptance test; `UnanchoredQueryAllowFileTest`'s census moves both readers from
+   REFUSED to SERVED, and `ShellQueryShapesTest`'s `KnownFanOuts` loses its Bell entry.
+10. `NotificationBellLegsTest` pins both legs to one partition each — and pins that the ALTERNATION
+    does not pin, which is why the legs are separate (§3).
 
-- **The other half of the Admin claim.** §2b measures that a platform admin CAN read
-  `Admin/_Notification` through an anchored query. It does NOT establish that a non-admin cannot —
-  that needs a second identity, which this session did not have. If the Admin partition turns out
-  to be broadly readable, the `Admin` leg of the bell would show operator notices to everyone, and
-  the addressee for ruling 1 needs to be something narrower.
-- **The total population size.** The measurement is the newest 200 rows (the API caps a listing at
-  200); the class *proportions* are measured, the absolute count is not, and it is what decides
-  between moving and deleting in §6.
+**Not in this change set, and why**
+
+- The migration (§6): ruled out, with the argument recorded.
+- **Narrowing the triage watch** to only the users who authored a `NotificationRule` — each leg
+  anchored to that user's own partition — would remove the last mesh-wide notification read. It is a
+  real improvement and a separable one: it changes what that service WATCHES, not where the bell
+  reads, and the watch is one subscription per process against the bell's one per circuit per write.
+- Surfacing `isGlobalAdmin` to the React client so it can carry the platform leg too (item 7).
+
+## 8. What is still not established
+
+- ~~The other half of the Admin claim — that a NON-admin cannot read `Admin/_Notification`.~~
+  **Established** (§4 ruling 2), by a two-identity test whose negative was proven able to fail.
+- **The production effect is not measured yet, and will not move on its own.** memex-cloud's
+  self-update is PAUSED (`Admin/UpdatePolicy` policy=None since 2026-09-02) and its serving image
+  predates the change, so the 60 SLOW-lines/min figure stands until that deployment is unpaused.
+  What is established is the mechanism and the shape: the bell's 201-of-201 union is replaced by one
+  pinned schema per bell, and `ResolvePinnedPartition` is asserted to return a single partition for
+  each leg. The residual per-write cost is the triage service's declared watch — one subscription
+  per process, not one per circuit.
 - **Whether any deployment outside memex-cloud has a materially different distribution** — one mesh
-  was sampled.
+  was sampled, on 2026-09-03.
+- **The total legacy population size.** The listing API caps at 200 rows, so the class *proportions*
+  are measured and the absolute count (~10⁵, estimated) is not. It no longer gates a decision: §6
+  leaves the rows in place either way.
 
 ## Cross-references
 

@@ -335,16 +335,23 @@ public sealed class NodeTypeCompileParkRegistry
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         // Recipient resolution: prefer the user who requested the release (RequestedReleaseBy);
-        // fall back to the ambient user; finally, when neither is a real user (System-driven
-        // first-build / seed compile), make the notification a satellite of the failing TYPE so
-        // it is still visible — in every per-user bell that can read the type (RLS-filtered).
+        // fall back to the ambient user; finally, when neither is a real user (a System-driven
+        // first-build / seed compile), leave it NULL — which the notification service reads as the
+        // PLATFORM addressee, so the failure lands in the operators' bell.
+        //
+        // 🚨 It used to make the notification a satellite of the failing TYPE instead, "so it is
+        // still visible — in every per-user bell that can read the type". That is the mis-addressing
+        // #3156 is about: a compile failure nobody asked for is operator material, and putting it in
+        // the bell of everyone who can read the type is both noise for them and invisible to the one
+        // person who can fix it. The type stays the click target (targetNodePath below).
         var recipient = !string.IsNullOrEmpty(recipientUserId) && recipientUserId != WellKnownUsers.System
             ? recipientUserId
             : null;
         recipient ??= NonSystem(accessService?.Context?.ObjectId)
                       ?? NonSystem(accessService?.CircuitContext?.ObjectId);
 
-        var mainNodePath = recipient ?? nodeTypePath;
+        // The ENTITY the notification is about — no longer the thing that chooses the partition.
+        var mainNodePath = nodeTypePath;
 
         var typeName = nodeTypePath.Contains('/')
             ? nodeTypePath[(nodeTypePath.LastIndexOf('/') + 1)..]
@@ -355,9 +362,9 @@ public sealed class NodeTypeCompileParkRegistry
             $"retried until its source is fixed. {SummarizeError(error)}";
 
         // Dispatch runs the whole flow as System itself (the compile runs as System; the recipient's
-        // bell partition — or the failing type's read-only partition, e.g. Doc — admits no ambient
-        // user write). Infrastructure observability under the System notification category. When
-        // recipient is null (System-driven build), it falls to the failing type (in-app only).
+        // bell partition admits no ambient user write). Infrastructure observability under the
+        // System notification category. When recipient is null (a System-driven build), Dispatch
+        // addresses the platform operators (in-app only — there is no collective mailbox).
         // Inverted through ICompileFailureNotifier (the graph/compiler split): delivery is
         // NotificationService in MeshWeaver.Graph, which reads the Notification* node types this
         // assembly must not depend on. OPTIONAL by design — a hub composed without AddGraph has no
@@ -381,7 +388,7 @@ public sealed class NodeTypeCompileParkRegistry
             .Subscribe(
                 _ => logger?.LogInformation(
                     "Emitted compile-failure notification for {NodeTypePath} (recipient {Recipient})",
-                    nodeTypePath, mainNodePath),
+                    nodeTypePath, recipient ?? "platform admins"),
                 ex => logger?.LogWarning(ex,
                     "Failed to emit compile-failure notification for {NodeTypePath}", nodeTypePath));
     }

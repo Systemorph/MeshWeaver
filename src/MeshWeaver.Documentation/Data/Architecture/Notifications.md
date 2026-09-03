@@ -23,39 +23,51 @@ flowchart LR
 When a thread round reaches a terminal state, `ThreadExecution.EmitCompletionNotification` creates a `Notification` node under the thread (the same surface is open to any feature):
 
 ```csharp
-NotificationService.CreateNotification(
-        meshService,
-        mainNodePath: threadPath,                    // satellite of the thread
+NotificationService.Dispatch(
+        hub,
+        recipient: addressee,                        // WHO it is for — null means the platform operators
+        mainNodePath: threadPath,                    // WHAT it is about
         title: $"\"{threadName}\" is ready",
         message: preview,                            // first 120 chars of the response
-        type: NotificationType.General,
+        type: NotificationType.ChatReady,
         targetNodePath: threadPath,                  // where clicking navigates
         createdBy: agentName,
         icon: "/static/NodeTypeIcons/chat.svg")
     .Subscribe(_ => { }, ex => logger.LogWarning(ex, "notification failed"));
 ```
 
-The node lands at **`{mainNodePath}/_Notification/{id}`** with `MainNode = mainNodePath`, and the `_Notification` path segment routes persistence to the dedicated **`notifications`** satellite table. Creation is fire-and-forget: a failed notification never fails the round.
+🚨 **The node lands at `{addressee}/_Notification/{id}`** with `MainNode = the addressee`, and the `_Notification` path segment routes persistence to that partition's dedicated **`notifications`** satellite table. The entity the notification is ABOUT is a reference on the content (`TargetNodePath`). `recipient: null` means the PLATFORM — the `Admin` partition, read-scoped to `hub.IsGlobalAdmin()`. Creation is fire-and-forget in the sense that a failed notification never fails the round — but the observable is COLD, so it must still be subscribed: a discarded `Dispatch` writes nothing at all.
 
-🚨 **Who can see it is decided by the PATH, not by `MainNode`.** No `SatelliteAccessRule` is registered for `Notification`, so `RlsNodeValidator` falls through to the ordinary path-based permission fold on the notification's own path — a notification is visible to whoever can read the node it was written under. That is why an "Update available" notification written under a plugin record reaches every viewer who can read the plugin catalog. The fix is not another rule but the data model: see [Addressed Notifications](/Doc/Architecture/AddressedNotifications).
+🚨 **Who can see it is decided by the PATH.** No `SatelliteAccessRule` is registered for `Notification`, so `RlsNodeValidator` falls through to the ordinary path-based permission fold on the notification's own path. Under the addressed model that is the *correct* answer — the addressee, plus whoever can read their partition — which is why no rule is needed. Before addressing it was the wrong one: an "Update available" notification written under a plugin record reached every viewer who could read the plugin catalog. See [Addressed Notifications](/Doc/Architecture/AddressedNotifications).
 
 ## 2. The bell — a reactive query
 
 The portal's notification center subscribes once and re-renders on every change — new notifications appear without polling, and the unread badge is just a count over the same emission:
 
 ```csharp
-MeshQuery.Query<MeshNode>(
-        MeshQueryRequest.FromQuery("nodeType:Notification sort:CreatedAt-desc"))
-    .Subscribe(change =>
+// One live feed, two ANCHORED legs — the shell's NotificationFeed.ForViewer.
+NotificationFeed.ForViewer(Hub, MeshQuery, Access)
+    .Subscribe(items =>
     {
-        notifications = change.Items?.ToList() ?? [];
+        notifications = items;
         InvokeAsync(StateHasChanged);
     });
 ```
 
-This is the **set** side of CQRS — a query is right here because the bell wants *all* notifications the user can see, live. (For one specific thread's notifications: `path:{threadPath}/_Notification scope:children nodeType:Notification` — filtering by `nodeType` keeps the result robust when other satellite types live under the same thread.)
+Behind it, `NotificationQueries.For(viewer, viewerIsGlobalAdmin)` yields the legs, each built by core's `NotificationService.BellQuery`:
 
-🚨 **That shape names no partition, so on Postgres it UNIONs every partition schema** — the single largest cross-schema fan-out measured on memex-cloud (444 unions per five minutes), grandfathered today by the storage layer's shrink-only `unanchored-queries.allow` rather than refused. It cannot simply be pinned to the viewer's partition: notifications are not written there. [Addressed Notifications](/Doc/Architecture/AddressedNotifications) is the design that makes the anchor possible, and [Cross-Schema Fan-Out Elimination](/Doc/Architecture/CrossSchemaFanOutElimination) is the wider census.
+```text
+namespace:{viewer}/_Notification nodeType:Notification sort:CreatedAt-desc
+namespace:Admin/_Notification    nodeType:Notification sort:CreatedAt-desc   ← global admins only
+```
+
+This is the **set** side of CQRS — a query is right here because the bell wants *all* notifications addressed to the viewer, live. (For one specific thread's notifications: `path:{threadPath}/_Notification scope:children nodeType:Notification`.)
+
+🚨 **Each leg names ONE partition, and that is not merely an optimisation.** The previous spelling — a bare `nodeType:Notification sort:CreatedAt-desc` — named no partition and UNIONed every partition schema on the server, per circuit, on every notification write anywhere: measured on memex-cloud at **4 476 rows across 201 of 201 schemas, 9–10 s per render, filtered to 0 rows in memory**, on an idle replica. And because `Admin` is excluded from `public.searchable_schemas`, that fan-out could never read `admin.notifications` at all, so **every platform-admin notification was written and shown to nobody**.
+
+🚨 **Two queries, never one `namespace:A|B` alternation.** A single concrete `namespace:` folds into `ParsedQuery.Path` and pins to one schema without consulting `searchable_schemas`; an alternation leaves `Path` null, takes the fan-out route, and is narrowed by INTERSECTION with that registry — which excludes `Admin`, so it would drop the platform bell again, silently. Pinned by `NotificationBellLegsTest`.
+
+🚨 **The platform leg is issued only for a viewer `hub.IsGlobalAdmin()` confirms POSITIVELY** — the one canonical platform-admin predicate, never an ad-hoc role-name or root-scope check — and the gate fails CLOSED. RLS refuses those rows to a non-admin independently; the gate decides what is even asked for. See [Addressed Notifications](/Doc/Architecture/AddressedNotifications) and [Cross-Schema Fan-Out Elimination](/Doc/Architecture/CrossSchemaFanOutElimination).
 
 ## 3. Mark-as-read — `stream.Update`, like everything else
 

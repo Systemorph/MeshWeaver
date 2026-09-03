@@ -2192,10 +2192,16 @@ public static class StaticRepoImporter
     /// (<c>MarkFailed</c>); this additionally raises a bell <see cref="NotificationService"/>
     /// Notification whose <c>TargetNodePath</c> LINKS to that activity log — so a failed boot
     /// import is something the operator SEES (a notification → click → activity log) instead of a
-    /// silent wedge they must dig pod logs for. Created under System (the boot-import identity) as a
-    /// satellite of the failing partition (the same owner the activity lives under — routed to that
-    /// per-node hub, never the mesh hub). Fire-and-forget: a notification hiccup must never fail the
-    /// import, so the error arm only logs.
+    /// silent wedge they must dig pod logs for. Created under System (the boot-import identity).
+    /// Fire-and-forget: a notification hiccup must never fail the import, so the error arm only logs.
+    ///
+    /// <para>🚨 Addressed to the PLATFORM (<see cref="NotificationService.PlatformAddressee"/>): a
+    /// failed startup import is something only an operator can act on, and nobody is individually
+    /// responsible for it. Before the addressed model it was written as a satellite of the FAILING
+    /// PARTITION — <c>{space}/_Notification/{id}</c> — which put it in the bell of everyone who
+    /// could read that space and in no operator's bell in particular (60 of the newest 200 rows on
+    /// memex-cloud; Systemorph/MeshWeaver#3156 §2). The activity log stays the click target, so the
+    /// notification → activity-log path an operator follows is unchanged.</para>
     /// </summary>
     private static void NotifyStartupFailure(
         IMessageHub hub, string partition, string activityPath, string error, ILogger? logger)
@@ -2205,6 +2211,7 @@ public static class StaticRepoImporter
             return;
         AsSystem(hub, () => NotificationService.CreateNotification(
                 meshService,
+                recipient: NotificationService.PlatformAddressee,
                 mainNodePath: partition,
                 title: $"Startup import failed: {partition}",
                 message: string.IsNullOrWhiteSpace(error) ? "Import failed during startup." : error,

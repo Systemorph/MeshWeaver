@@ -11,9 +11,11 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Tests for <see cref="NotificationService.CreateNotification"/>: verifies the satellite shape
+/// Tests for <see cref="NotificationService.CreateNotification"/>: verifies the ADDRESSED shape
 /// (path, MainNode, content) it constructs. The PG-table-routing concern is covered separately by
-/// SatelliteNodeTests; this is the "did NotificationService construct the right thing" check.
+/// SatelliteNodeTests; this is the "did NotificationService construct the right thing" check. The
+/// addressing rule itself, and the access boundary it draws, are pinned by
+/// <see cref="NotificationAddressingTest"/>.
 ///
 /// <para>🚨 Drives <see cref="NotificationService.CreateNotification"/> against a REAL
 /// <see cref="IMeshService"/> (<see cref="MonolithMeshTestBase"/>) — never a mocked one
@@ -31,18 +33,28 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
 
     private async Task<MeshNode> CreateNotification(
         string mainNodePath, string title, string message, NotificationType type,
-        string? targetNodePath = null, string? createdBy = null, string? icon = null)
+        string? targetNodePath = null, string? createdBy = null, string? icon = null,
+        string? recipient = null)
     {
         using (Access.ImpersonateAsSystem())
             return await NotificationService.CreateNotification(
-                    MeshService, mainNodePath, title, message, type, targetNodePath, createdBy, icon)
+                    MeshService, mainNodePath, title, message, type, targetNodePath, createdBy, icon,
+                    recipient)
                 .Should().Emit();
     }
 
+    /// <summary>
+    /// 🚨 The node is a satellite of its ADDRESSEE, not of the entity it is about
+    /// (Systemorph/MeshWeaver#3156): <c>{addressee}/_Notification/{id}</c> with
+    /// <c>MainNode = {addressee}</c>. The thread the notification is about is 'chat-abc' in a space,
+    /// and the notification is still delivered to the person — which is the entire point, because a
+    /// path whose first segment is the READER is what lets the bell name one partition.
+    /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task CreateNotification_BuildsSatelliteShape_WithMainNodeAndPath()
+    public async Task CreateNotification_BuildsAddressedShape_WithMainNodeAndPath()
     {
         const string main = $"{TestPartition}/_Thread/chat-abc";
+        const string addressee = "chat-abc-owner";
 
         var node = await CreateNotification(
             mainNodePath: main,
@@ -51,15 +63,40 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
             type: NotificationType.General,
             targetNodePath: main,
             createdBy: "agent",
-            icon: "/static/NodeTypeIcons/chat.svg");
+            icon: "/static/NodeTypeIcons/chat.svg",
+            recipient: addressee);
 
-        // Satellite shape — Path is rooted at the main entity under _Notification.
-        node.MainNode.Should().Be(main);
-        node.Namespace.Should().Be($"{main}/{NotificationService.SatelliteSegment}");
-        node.Path.Should().StartWith($"{main}/{NotificationService.SatelliteSegment}/");
+        node.MainNode.Should().Be(addressee);
+        node.Namespace.Should().Be($"{addressee}/{NotificationService.SatelliteSegment}");
+        node.Path.Should().StartWith($"{addressee}/{NotificationService.SatelliteSegment}/");
         node.NodeType.Should().Be(NotificationNodeType.NodeType);
         node.State.Should().Be(MeshNodeState.Active);
         node.Name.Should().Be("Chat ready");
+        ((Notification)node.Content!).Recipient.Should().Be(addressee);
+        ((Notification)node.Content!).TargetNodePath.Should().Be(main,
+            "the entity survives as a reference, so grouping and the click-through are unchanged");
+    }
+
+    /// <summary>
+    /// The compatibility path: a caller that names no addressee — the in-mesh callers that already
+    /// pass the recipient AS the main node path — delivers to the main node's PARTITION. Kept
+    /// because <c>CreateNotification</c> is public surface that in-mesh source compiles against at
+    /// RUNTIME, so making the addressee mandatory would break code no compiler here can see.
+    /// </summary>
+    // 🚨 No literal timeout: the suite's xunit methodTimeout bounds it, and a hand-written 30 s is
+    // wrong twice over (CI is slower, and 30 s IS the framework's own write bound — #2819).
+    [Fact]
+    public async Task CreateNotification_WithNoRecipient_AddressesTheMainNodesPartition()
+    {
+        var node = await CreateNotification(
+            mainNodePath: $"{TestPartition}/Docs/spec",
+            title: "Legacy caller",
+            message: "",
+            type: NotificationType.General);
+
+        node.MainNode.Should().Be(TestPartition);
+        node.Namespace.Should().Be($"{TestPartition}/{NotificationService.SatelliteSegment}");
+        ((Notification)node.Content!).Recipient.Should().Be(TestPartition);
     }
 
     [Fact(Timeout = 30000)]

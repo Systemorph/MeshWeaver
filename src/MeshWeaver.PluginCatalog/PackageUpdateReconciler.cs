@@ -257,7 +257,16 @@ internal static class PackageUpdateReconciler
     }
 
     /// <summary>Raises a system notification on the install record — the user-visible surface of an
-    /// update reminder, and of a refusal, which must never be a silent skip.</summary>
+    /// update reminder, and of a refusal, which must never be a silent skip.
+    ///
+    /// <para>🚨 Addressed to the PLATFORM (<see cref="NotificationService.PlatformAddressee"/>),
+    /// not to the install record's partition. Only a platform admin can apply a plugin update — the
+    /// refusal this same method raises says so in as many words ("Update needs a Global Admin") —
+    /// so an ordinary reader of the catalog can do nothing with it. Before the addressed model it
+    /// landed at <c>Plugins/{package}/_Notification/{id}</c>, visible to everyone who could read
+    /// the plugin record: 124 of the newest 200 rows on memex-cloud were this one class, in every
+    /// catalog reader's bell (Systemorph/MeshWeaver#3156 §2). The install record stays the click
+    /// target.</para></summary>
     private static IObservable<Unit> Notify(
         IMeshService meshService,
         AccessService accessService,
@@ -270,7 +279,8 @@ internal static class PackageUpdateReconciler
                 accessService.ImpersonateAsSystem,
                 _ => NotificationService.CreateNotification(
                     meshService, recordPath, title, body,
-                    NotificationType.System, targetNodePath: recordPath))
+                    NotificationType.System, targetNodePath: recordPath,
+                    recipient: NotificationService.PlatformAddressee))
             .Select(_ => Unit.Default)
             .Catch((Exception ex) =>
             {
