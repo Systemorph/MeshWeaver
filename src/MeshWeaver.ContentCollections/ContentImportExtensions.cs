@@ -534,15 +534,24 @@ public sealed class SyncContentFilesBuilder
     /// stops being a function of how much content the Space holds. A single file larger than the
     /// budget still travels whole — that is a different axis (a file that large belongs behind a
     /// content-store handle, not inline) and it is not the defect this closes.</para>
+    ///
+    /// <para>🚨 #3101 made that residual OBSERVABLE without closing it: when the sync then fails,
+    /// <see cref="Post"/> folds <see cref="ContentDeliveryBudget.DescribeOverBudget"/> into the
+    /// reason, so the file that cannot fit any delivery is named with its packaged size and this
+    /// budget instead of the failure reading as "the Space has no content".</para>
     /// </summary>
-    internal const int PayloadBudgetBytes = DeliveryPayloadBounds.MemoryStreamBlockBytes;
+    internal const int PayloadBudgetBytes = ContentDeliveryBudget.BudgetBytes;
 
     /// <summary>
     /// What one file costs the packaged payload: its bytes as base64, plus its path. Exact enough
     /// to partition against, and it never touches the bytes.
+    ///
+    /// <para>🚨 #3101 — the partitioner and the refusal REPORT must measure identically, or the
+    /// numbers an operator reads describe a delivery nobody built. So both go through
+    /// <see cref="ContentDeliveryBudget"/>; there is no second cost function.</para>
     /// </summary>
     private static long PackagedCost(InlineContentFile file)
-        => 4L * ((file.Content.Length + 2) / 3) + file.Path.Length;
+        => ContentDeliveryBudget.PackagedCost(file);
 
     /// <summary>
     /// Splits the accumulated files into deliveries none of which exceeds
@@ -649,7 +658,31 @@ public sealed class SyncContentFilesBuilder
             .TakeUntil(answer => !answer.Success)
             .LastAsync();
 
-        return ContentImportExtensions.CarryPostIdentity(posted, _hub, _identity);
+        // 🚨 #3101 — THE PRODUCER SAYS WHAT IT WEIGHED. Everything needed to explain an oversized
+        // refusal is in hand right here and was being discarded: the transport answers with a bare
+        // "no" (an ImportContentResponse.Fail, or a DeliveryFailureException whose text names the
+        // ON-WIRE size but nothing about WHICH file caused it), and the importer folded that to a
+        // node path. Attaching the measurement turns "the sync for AgenticEngineering was refused"
+        // into "12 of 25 files are individually over the 1,048,576-byte budget; the largest is
+        // content/videos/module1-intro.mp4 at 13,188,820 packaged bytes" — the difference between a
+        // fact an author can act on and a shrug.
+        //
+        // Computed once, outside the pipeline: O(files), never touches the bytes. Null when every
+        // file fits, so a refusal that had nothing to do with size is NOT reported as if it did.
+        var overBudget = ContentDeliveryBudget.DescribeOverBudget(_files);
+        var described = overBudget is null
+            ? posted
+            : posted
+                .Select(answer => answer.Success
+                    ? answer
+                    : ImportContentResponse.Fail($"{answer.Error} — {overBudget}"))
+                // A refusal that arrives as a FAULT (the router's typed NACK surfaces as
+                // DeliveryFailureException) carries the same missing half, so it is decorated the
+                // same way — and it stays a fault, because callers classify on that.
+                .Catch<ImportContentResponse, Exception>(ex => Observable.Throw<ImportContentResponse>(
+                    new ContentDeliveryRefusedException($"{ex.Message} — {overBudget}", ex)));
+
+        return ContentImportExtensions.CarryPostIdentity(described, _hub, _identity);
     }
 
     /// <summary>

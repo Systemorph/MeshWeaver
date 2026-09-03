@@ -468,6 +468,10 @@ measured against its own `Files`.
   a 9.9 MB video → ~13 MB base64 → ~40 MB rent, which is survivable but is not *bounded* by
   anything. A file that large belongs behind a content-store handle rather than inline. That is a
   different defect from "the producer built the tree whole" and is deliberately not conflated with it.
+  🚨 Measured 2026-09-03: **every** Space in that repo has at least one such file — 25 in total,
+  the largest packaging to 12.6 MB — so this residual is the whole of what is left for that
+  catalogue, not an edge case. Since #3101 it is at least *observable*: see
+  [Content Sync Visibility](/Doc/Architecture/ContentSyncVisibility).
 - **`DeliveryFailure`'s strip does not fire on a typed payload.** `DeliveryPayloadBounds.IsOversized`
   returns false for anything that is not `RawJson` — by design, since guessing at the size of a CLR
   object would mean serialising it on the hot path. But a NACK is very often built on the
@@ -537,3 +541,6 @@ measured against its own `Files`.
 - [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow) — finding the exact broken edge.
 - [Orleans Stream Pub-Sub Durability](/Doc/Architecture/OrleansStreamPubSubDurability) — the neighbouring case where a
   publish with no subscriber succeeds.
+- [Content Sync Visibility](/Doc/Architecture/ContentSyncVisibility) — what a refused content sync now
+  says, and to whom. A correct refusal here is still a delivery failure at the content layer, and it
+  reported as silence.
