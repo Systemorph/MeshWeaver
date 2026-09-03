@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
 using MeshWeaver.Mesh;
@@ -27,9 +28,18 @@ namespace MeshWeaver.Graph.Configuration;
 /// ordered as before. A global <c>nodeType:</c> query is exactly the shape that has wedged this
 /// mesh before, so it is never awaited on the request path and every failure resolves to "no
 /// prior" rather than an error.</para>
+///
+/// <para><b>Owned, not fire-and-forget.</b> The scan is a mesh-wide query with its own 30 s
+/// <c>Timeout</c> — a second, unowned 30 s budget that used to run past the request that started
+/// it and into mesh teardown, where its <c>Throttle(1 s)</c> timer met the pool drain
+/// (<c>IoPoolDrainCancelJoinTest</c>). The in-flight subscription is held here and released by
+/// <see cref="Dispose"/>, which <c>MeshNodeLanguageService</c> couples to its hub's lifetime.</para>
 /// </summary>
-internal sealed class CompletionUsageIndex(IMessageHub hub, ILogger logger)
+internal sealed class CompletionUsageIndex(IMessageHub hub, ILogger logger) : IDisposable
 {
+    /// <summary>The in-flight (or last) corpus scan — one at a time, disposed with the owner.</summary>
+    private readonly SerialDisposable build = new();
+
     /// <summary>How many Code nodes the corpus scan reads at most.</summary>
     private const int MaxNodes = 400;
 
@@ -95,7 +105,10 @@ internal sealed class CompletionUsageIndex(IMessageHub hub, ILogger logger)
         // standard bounded read. Timeout + Catch make every failure mode "no prior".
         // Every Code node in the mesh — the usage prior is built over everyone's cells, so
         // mesh-wide by nature (#3202 — fan-out is opt-in).
-        mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.Declare($"nodeType:Code limit:{MaxNodes}")))
+        // Held in `build` so the scan dies with its owner instead of outliving the request into
+        // teardown; the CAS on `building` guarantees the previous scan has terminated before the
+        // next one is assigned here.
+        build.Disposable = mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.Declare($"nodeType:Code limit:{MaxNodes}")))
             .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
@@ -137,6 +150,13 @@ internal sealed class CompletionUsageIndex(IMessageHub hub, ILogger logger)
                     Interlocked.Exchange(ref building, 0);
                 });
     }
+
+    /// <summary>
+    /// Releases the in-flight corpus scan. Called from the owning hub's disposal — which runs in
+    /// <c>DisposeImpl</c>, strictly before <c>DisposalCompleted</c> and therefore before the pool
+    /// drain — so no scan of this index is live when <c>IoPoolRegistry.DrainAll()</c> cancels.
+    /// </summary>
+    public void Dispose() => build.Dispose();
 
     /// <summary>The node's script text, in whatever shape the content arrived in.</summary>
     private string NodeCode(MeshNode node)

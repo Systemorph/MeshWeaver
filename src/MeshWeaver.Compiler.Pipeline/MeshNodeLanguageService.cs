@@ -31,13 +31,13 @@ namespace MeshWeaver.Graph.Configuration;
 /// code-authoring agents can hover / complete / diagnose without a full <c>Compile</c> round-trip.
 /// </para>
 /// </summary>
-internal sealed class MeshNodeLanguageService(
-    MeshNodeCompilationService compilationService,
-    SpeculativeCompilation speculativeCompilation,
-    IMessageHub hub,
-    ILogger<MeshNodeLanguageService> logger)
-    : IMeshLanguageService
+internal sealed class MeshNodeLanguageService : IMeshLanguageService
 {
+    private readonly MeshNodeCompilationService compilationService;
+    private readonly SpeculativeCompilation speculativeCompilation;
+    private readonly IMessageHub hub;
+    private readonly ILogger<MeshNodeLanguageService> logger;
+
     // Path used as the SyntaxTree.FilePath for the generated skeleton tree.
     // Distinct from any user MeshNode path so callers can never address it accidentally.
     // Aliases the toolchain's sentinel — the failure-diagnostics filter keys on the SAME value.
@@ -65,9 +65,7 @@ internal sealed class MeshNodeLanguageService(
     // Task.WaitAsync (see GetScriptCompletionsAsync/GetScriptDiagnosticsAsync) — the FIRST
     // caller's own token never cancels the build (it is shared by every request against this
     // mesh instance), it only governs how long THAT caller waits.
-    private readonly Lazy<Task<ScriptWorkspace>> _scriptWorkspace = new(
-        () => BuildScriptWorkspaceAsync(hub.ServiceProvider),
-        LazyThreadSafetyMode.ExecutionAndPublication);
+    private readonly Lazy<Task<ScriptWorkspace>> _scriptWorkspace;
 
     // Path used as the script document's FilePath — never a real MeshNode path.
     private const string ScriptDocumentPath = "__script__.csx";
@@ -75,11 +73,11 @@ internal sealed class MeshNodeLanguageService(
     // The likely-usage prior (how often each identifier occurs in the Code nodes this mesh
     // already runs). Built lazily in the BACKGROUND and never awaited on a request — see
     // CompletionUsageIndex; until it is ready, ranking simply proceeds without it.
-    private readonly CompletionUsageIndex usageIndex = new(hub, logger);
+    private readonly CompletionUsageIndex usageIndex;
 
     // This user's acceptance history — the per-user half of "likely usage" (VS Code's suggest
     // memory). Used ONLY to preselect; it never reorders what the matcher decided.
-    private readonly CompletionMemoryStore memoryStore = new(hub, logger);
+    private readonly CompletionMemoryStore memoryStore;
 
     // Compile pool: Roslyn LSP work is CPU-bound, so it routes through the bounded
     // Compile pool which caps concurrency so it can't starve other schedulers.
@@ -87,9 +85,38 @@ internal sealed class MeshNodeLanguageService(
     // only moves the subscribe, not the await continuation); the pool runs the leaf
     // with ConfigureAwait(false) behind a gate. Falls back to the unbounded pool
     // when no registry is wired (e.g. tests constructing the service outside DI).
-    private readonly IIoPool _ioPool =
-        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
-        ?? IoPool.Unbounded;
+    private readonly IIoPool _ioPool;
+
+    public MeshNodeLanguageService(
+        MeshNodeCompilationService compilationService,
+        SpeculativeCompilation speculativeCompilation,
+        IMessageHub hub,
+        ILogger<MeshNodeLanguageService> logger)
+    {
+        this.compilationService = compilationService;
+        this.speculativeCompilation = speculativeCompilation;
+        this.hub = hub;
+        this.logger = logger;
+        _scriptWorkspace = new Lazy<Task<ScriptWorkspace>>(
+            () => BuildScriptWorkspaceAsync(hub.ServiceProvider),
+            LazyThreadSafetyMode.ExecutionAndPublication);
+        usageIndex = new CompletionUsageIndex(hub, logger);
+        memoryStore = new CompletionMemoryStore(hub, logger);
+        _ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
+            ?? IoPool.Unbounded;
+
+        // 🚨 The two helpers own subscriptions that outlive the request that started them — the
+        // usage index's mesh-wide corpus scan (its own 30 s Timeout, a 1 s Throttle) and the memory
+        // store's debounced save. Unowned, the scan ran into mesh teardown, where its Throttle timer
+        // met the pool drain and deadlocked the drain's cancel (IoPoolDrainCancelJoinTest —
+        // `pools=[Query=1]` on MeshNodeLanguageServiceTest, 2026-08-28 → 09-03). This service is a
+        // mesh singleton with no IDisposable of its own, and the service provider disposes AFTER the
+        // drain anyway — so the owner lifetime is the hub's: RegisterForDisposal runs in DisposeImpl,
+        // strictly before DisposalCompleted and therefore before IoPoolRegistry.DrainAll(). A hub
+        // already disposing disposes the registrant immediately.
+        hub.RegisterForDisposal(usageIndex);
+        hub.RegisterForDisposal(memoryStore);
+    }
 
     /// <inheritdoc />
     /// <remarks>
