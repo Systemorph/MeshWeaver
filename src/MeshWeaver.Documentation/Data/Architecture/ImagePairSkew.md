@@ -22,7 +22,7 @@ guard missed it, and the two fixes.
 
 `Promote` and `Verify every image shipped` green means the images EXIST; it says nothing about
 whether the pair inside them can serve a signed-in request. Only booting the pair proves that, and
-until the `signin-smoke` job below lands, nothing in CD does.
+until the `signin-smoke` job below lands (core #3254), nothing in CD does.
 
 ## The property
 
@@ -114,7 +114,7 @@ first sealable set is the first CD run after Plugins #1268 lands.
 
 ## The two fixes
 
-**Runtime — a refusal is a CI invariant, never a production answer** (Plugins, the planner).
+**Runtime — a refusal is a CI invariant, never a production answer** (MeshWeaver.Plugins #1300).
 `PostgreSqlPartitionedMeshQuery` gains an `UnanchoredQueryPolicy`. The default is `Refuse`
 (fail-closed: a host that never heard of the property keeps the CI invariant). The production
 hosts — `Memex.Portal.Distributed` and `Memex.Portal.Monolith` — opt into `ServeAndReport` in their
@@ -126,7 +126,7 @@ manager) into a total *availability* outage on the request path. After the chang
 governs two different things: in CI the Grace-versus-Refuse verdict, unchanged; in production the
 log level (listed → Warning, unlisted → Error). It may still only shrink.
 
-**CD — boot the pair and sign in before promoting it** (core, `main-cd.yml`). A
+**CD — boot the pair and sign in before promoting it** (core #3254, `main-cd.yml`). A
 `signin-smoke` job that `promote` depends on: a Postgres service, the run's staging migration
 image (asserting `Database migration completed. Version: N`), the run's staging portal image with
 `Authentication__EnableDevLogin=true`, then a DevLogin sign-in and a **cookie-carrying** `GET /` and
