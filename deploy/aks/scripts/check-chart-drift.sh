@@ -119,7 +119,11 @@ SELF_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CHART_DEFAULT="$SELF_DIR/../../helm"
 
 usage() {
-  sed -n '2,96p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  # The WHOLE leading comment block, never a fixed line range. It used to be `sed -n '2,60p'`,
+  # and the moment the header grew the help stopped mid-sentence — silently, because nothing
+  # reads --help in CI. Ending at the first non-comment line cannot drift: the help is exactly
+  # the documentation above, however long that becomes.
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"
   exit 2
 }
 
