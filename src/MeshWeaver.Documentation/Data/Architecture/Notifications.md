@@ -35,7 +35,9 @@ NotificationService.CreateNotification(
     .Subscribe(_ => { }, ex => logger.LogWarning(ex, "notification failed"));
 ```
 
-The node lands at **`{mainNodePath}/_Notification/{id}`** with `MainNode = mainNodePath` — so access control resolves from the main node ("who can read the thread can see its notifications"), and the `_Notification` path segment routes persistence to the dedicated **`notifications`** satellite table. Creation is fire-and-forget: a failed notification never fails the round.
+The node lands at **`{mainNodePath}/_Notification/{id}`** with `MainNode = mainNodePath`, and the `_Notification` path segment routes persistence to the dedicated **`notifications`** satellite table. Creation is fire-and-forget: a failed notification never fails the round.
+
+🚨 **Who can see it is decided by the PATH, not by `MainNode`.** No `SatelliteAccessRule` is registered for `Notification`, so `RlsNodeValidator` falls through to the ordinary path-based permission fold on the notification's own path — a notification is visible to whoever can read the node it was written under. That is why an "Update available" notification written under a plugin record reaches every viewer who can read the plugin catalog. The fix is not another rule but the data model: see [Addressed Notifications](/Doc/Architecture/AddressedNotifications).
 
 ## 2. The bell — a reactive query
 
@@ -52,6 +54,8 @@ MeshQuery.Query<MeshNode>(
 ```
 
 This is the **set** side of CQRS — a query is right here because the bell wants *all* notifications the user can see, live. (For one specific thread's notifications: `path:{threadPath}/_Notification scope:children nodeType:Notification` — filtering by `nodeType` keeps the result robust when other satellite types live under the same thread.)
+
+🚨 **That shape names no partition, so on Postgres it UNIONs every partition schema** — the single largest cross-schema fan-out measured on memex-cloud (444 unions per five minutes), grandfathered today by the storage layer's shrink-only `unanchored-queries.allow` rather than refused. It cannot simply be pinned to the viewer's partition: notifications are not written there. [Addressed Notifications](/Doc/Architecture/AddressedNotifications) is the design that makes the anchor possible, and [Cross-Schema Fan-Out Elimination](/Doc/Architecture/CrossSchemaFanOutElimination) is the wider census.
 
 ## 3. Mark-as-read — `stream.Update`, like everything else
 
@@ -83,4 +87,5 @@ This whole lane — the two node types plus the `NotificationTriageService` watc
 - [Satellite Entity Patterns](/Doc/Architecture/SatelliteEntityPatterns) — the satellite shape notifications follow.
 - [Thread Operations](/Doc/Architecture/ThreadOperations) — where completion emission sits in the round lifecycle.
 - [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — why the bell queries but mark-as-read streams.
-- Implementation: `src/MeshWeaver.Graph/NotificationService.cs` · `src/MeshWeaver.Blazor.Portal/Components/NotificationCenter.razor` / `NotificationCenterPanel.razor`.
+- [Addressed Notifications](/Doc/Architecture/AddressedNotifications) — where notifications actually live today, and the design that lets the bell name its partition.
+- Implementation: `src/MeshWeaver.Graph/NotificationService.cs` (core) · `src/MeshWeaver.Blazor.Portal/Components/NotificationCenter.razor` / `NotificationCenterPanel.razor` and `NotificationQueries.cs` (**MeshWeaver.Plugins** — the Blazor portal shell lives there).
