@@ -155,13 +155,23 @@ when that client wants it.
 
 ### Verification
 
-The platform half is testable here (`PromptFenceComposerTest` in `MeshWeaver.Graph.Test`): the fence
-produces the expected marker, the draft round-trips through the area id, the marker wraps the
-read-only fence, and the layout area produces a compact `ThreadChatControl` carrying the authored
-text. The half that a learner can actually see is not — there is no Blazor in this repository — so
-the acceptance check is a **rendered page**: open a course lesson that ships a ```` ```prompt ````
+Each half is asserted where its subject lives, which for a fence means **two repositories**:
+
+| Suite | Repo | What it asserts |
+|---|---|---|
+| `MeshWeaver.Markdown.Test/PromptFenceComposerTest` | `MeshWeaver.Plugins` | the fence produces the expected marker, the draft round-trips through the area id, the marker wraps the read-only fence, no owner ⇒ a plain block, and the fence never reaches the kernel |
+| `MeshWeaver.Graph.Test/PromptComposerAreaTest` | this repo | the `Prompt` area produces a compact `ThreadChatControl` carrying the authored text |
+
+🚨 **`MeshWeaver.Markdown` is compiled here but TESTED in `MeshWeaver.Plugins`** — that repo owns
+`MeshWeaver.Markdown.Test` (it project-references this one through `$(MeshWeaverRoot)`), and this
+repo has no test project referencing `MeshWeaver.Markdown` at all. A rendering assertion written
+here has no home; it goes in the markdown suite, over there. The corollary is that a green platform
+build proves nothing at all about a fence's HTML — the run that does is the other repo's.
+
+And the half that a learner can actually see is in neither — there is no Blazor in this repository —
+so the acceptance check is a **rendered page**: open a course lesson that ships a ```` ```prompt ````
 fence, confirm the composer shows the authored text, edit it, submit, and land on the full-page
-thread. A green platform build says nothing about that.
+thread.
 
 ## Related
 
