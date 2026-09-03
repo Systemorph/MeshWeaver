@@ -299,8 +299,15 @@ buys back a few days of already-read operator notices.
 5. **Suppress repeat plugin-update notifications** (§5) — independent of the rest, and it is what
    actually shrinks the row count.
 
-Anchoring before 1–3 is the truncation this design exists to avoid: the bell would go quiet for
-every notification still sitting in an entity's partition.
+**Anchoring before 1–3 is the truncation this design exists to avoid** for the *viewer* leg: the
+bell would go quiet for every notification still sitting in an entity's partition.
+
+🚨 **The `Admin` leg is the exception, and it can go first.** Those rows are already in `Admin`, so
+no migration gates them — and today the fan-out cannot read that schema at all (§2b), so adding the
+leg strictly ADDS notifications. #3216 is that half on its own: a bell spelled
+`namespace:{viewer}/_Notification|Admin/_Notification` still needs step 4's line removal to be
+worth its while, but a bell that merely *also* reads `Admin` is a pure repair with no ruling
+attached to it.
 
 ## 8. What is not established here
 
