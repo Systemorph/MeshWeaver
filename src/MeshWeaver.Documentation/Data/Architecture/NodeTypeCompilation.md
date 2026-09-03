@@ -1287,6 +1287,15 @@ live prompt cell in the AgenticEngineering course failed with `CS0103: The name
 a prompt box and a ✨ button and rendered neither. Fixing the course repaired the central pages and
 every future install and **nothing already installed** (Plugins#1258).
 
+**And the copies cannot be enumerated, by design.** A learner's copy lives in *their* partition, so
+no sweep any agent can run may read it — row-level security is doing exactly its job. Measured on
+memex: `rbuergi/AgenticEngineering/Introduction/Exercise/AskForATable` is a **2026-08-13** snapshot
+that still carries the cell INLINE (a ```` ```csharp --render Chat ```` block in the markdown body
+plus a `codeSubmissions` entry) — a shape the central course stopped using on 2026-08-21, when the
+cell became a separate `Source/Chat` node. That copy calls `TrainingSimResponder.Live`, and it is
+merely the one copy the sweeper happened to own. So "how many callers are left" is not a hard
+question here; it is an **unanswerable** one.
+
 **So the last step is a forwarder, not a delete.** Keep the old name on the same cell surface as a
 shim that delegates to the successor, `[Obsolete]` as a *warning* — never `error: true`, which would
 break the very copies it exists to keep compiling, and warnings never reach a cell anyway, since the
@@ -1294,6 +1303,14 @@ kernel only surfaces `CompilationErrorException`. Pin its surface with a test in
 `Test/` area so the shim cannot be narrowed by accident; a parameter quietly dropped from a
 forwarder is the same invisible break one layer down. The shim may go when the installed copies are
 gone — which is a fact about a running mesh, not about a repository.
+
+**Store Repair is not a substitute for the shim.** A learner *can* pull a page back from the central
+course — the per-item repair dialog (`Store/Installer`, with `ContentFingerprint` telling *missing*
+from *unmodified* from *edited*) exists precisely so one broken exercise does not mean reinstalling
+a course. But it is the wrong remedy for a break the platform caused: it asks every affected learner
+to notice a dead page, go looking for the dialog, and confirm an overwrite that **discards their own
+work** on any page they have edited. Repair is for a copy the learner damaged. A forwarder is for a
+copy *we* damaged.
 
 **ADDING a symbol has the same hazard, in reverse.** In-mesh source that references a brand-new
 framework helper compiles only once the image carrying it has actually shipped — and node content
