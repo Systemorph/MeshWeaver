@@ -81,7 +81,7 @@ that answer yes are already behind the wall whether or not they have noticed.
 
 ## The control instance stands on it too
 
-Since [#3185](https://github.com/Systemorph/MeshWeaver/issues/3185) the release wave belongs to
+Since [#3185](https://github.com/Systemorph/MeshWeaver/pull/3185) the release wave belongs to
 memex: every publishing pipeline ends with one call to the control instance, which **registers** the
 release as a durable node and **publishes** `meshweaver-framework-released` /
 `meshweaver-upstream-published` to the subscribed repositories. The whole shape is in
