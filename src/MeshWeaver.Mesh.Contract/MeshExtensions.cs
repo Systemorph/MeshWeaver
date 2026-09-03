@@ -926,6 +926,8 @@ public static class MeshExtensions
                                 logger.LogDebug("[CreateNode] step=post-handlers-done path={Path} — posting Ok", resultNode.Path);
                                 hub.NoteRequestStage(request.Id, "CREATE_POST_HANDLERS_DONE");
                                 Respond(CreateNodeResponse.Ok(resultNode));
+                                // 🚨 STRICTLY AFTER the response (#3153) — see the method's remarks.
+                                ActivatePendingControlPlane(hub, resultNode, logger);
                             });
                 },
                 ex =>
@@ -3713,6 +3715,114 @@ public static class MeshExtensions
             })
             .Take(1)
             .DefaultIfEmpty(null);
+    }
+
+    /// <summary>
+    /// 🚨 <b>#3153 — a control-plane request filed by a CREATE must actually run.</b>
+    ///
+    /// <para>A <c>RequestedXxx</c> field is a request addressed to a watcher the owning per-node
+    /// hub installs in its <c>WithInitialization</c> (see
+    /// <c>Doc/Architecture/RequestViaStreamUpdate</c>), and that watcher runs <b>on activation</b>.
+    /// A create only writes the row: nothing activates the owner, so the watcher never sees the
+    /// request. It sits at <c>Requested</c> with no error, no log line and no failed state — until
+    /// something unrelated happens to open the node (a page view, a stream subscription, an MCP
+    /// <c>get</c>), at which point it runs within seconds. Measured on memex.meshweaver.cloud: a
+    /// <c>Store/Subscription</c> created via MCP sat untouched for 4.5 h and completed 20 s after
+    /// the first read. The same node created from the admin UI activated in 31 s, because the open
+    /// page kept the hub alive — which is why this never showed up from the UI.</para>
+    ///
+    /// <para>Every non-UI writer hits it: MCP and agents, scripts, and the billing webhook the
+    /// control plane explicitly anticipates as "one more authorized writer of this same node".
+    /// <c>Problem()</c> validators exist so a bad request cannot sit silently forever; this
+    /// reintroduced exactly that failure for a <b>well-formed</b> one.</para>
+    ///
+    /// <para>🚨 <b>Why it is gated on the content and not done for every create.</b> Opening the
+    /// stream is what activates the owner, and a cold per-node activation can take 5–45 s in CI
+    /// (NodeType compile, dependency load, JIT) — the same cost the delete path documents avoiding.
+    /// A bulk install fans <c>CreateOrUpdateNodeRequest</c> out into an inner <c>CreateNodeRequest</c>
+    /// per node, so activating unconditionally would wake a hub per imported file — 141 for
+    /// <c>Hosting</c>, 425 for the core samples. Inert data needs no watcher; only a node that
+    /// actually carries a pending request does.</para>
+    ///
+    /// <para>🚨 <b>Fire-and-forget, strictly after the response.</b> The caller is already answered,
+    /// so activation can never delay, fail or gate a create — a control plane that could not be
+    /// woken is a warning naming the path, and the node is still exactly as created. Subscribed
+    /// (never left cold), bounded, and errors are surfaced rather than swallowed.</para>
+    /// </summary>
+    private static void ActivatePendingControlPlane(IMessageHub hub, MeshNode node, ILogger logger)
+    {
+        if (!CarriesPendingRequest(node.Content, hub.JsonSerializerOptions, node.Path, logger))
+            return;
+
+        logger.LogDebug(
+            "[CreateNode] {Path} carries a pending control-plane request — activating its owner so "
+            + "the WithInitialization watcher observes it.", node.Path);
+
+        // The read IS the activation (SubscribeRequest to the owner). One emission is enough: the
+        // watcher is installed during activation and keeps running on the now-live hub, so nothing
+        // here has to stay subscribed for it to finish its work.
+        hub.GetMeshNodeStream(node.Path)
+            .Where(n => n is not null)
+            .Take(1)
+            .Timeout(ControlPlaneActivationBudget)
+            .Subscribe(
+                _ => logger.LogDebug("[CreateNode] {Path}: owner activated for its control plane.", node.Path),
+                ex => logger.LogWarning(ex,
+                    "[CreateNode] {Path} was created with a pending control-plane request, but its "
+                    + "owner could not be activated within {Budget}s — the request will not run until "
+                    + "something next opens this node. The node itself is created and unchanged.",
+                    node.Path, ControlPlaneActivationBudget.TotalSeconds));
+    }
+
+    /// <summary>
+    /// How long the activation above may take before it is abandoned. Generous, because it bounds a
+    /// COLD per-node activation (NodeType compile, dependency load, JIT — 5–45 s in CI), not a
+    /// healthy one. Abandoning costs only the warning: nothing downstream waits on it.
+    /// </summary>
+    private static readonly TimeSpan ControlPlaneActivationBudget = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// TRUE when <paramref name="content"/> carries a pending <c>RequestedXxx</c> — the ONE
+    /// convention <c>Doc/Architecture/RequestViaStreamUpdate</c> defines for addressing the owning
+    /// hub's watcher ("Add a <c>RequestedXxx</c> field to the node's content and watch it from the
+    /// owning hub"). Read off the SERIALIZED shape so it works for a typed CLR content and for the
+    /// JSON a cross-hub create arrives as, without this assembly knowing any domain type.
+    ///
+    /// <para>Null, absent and empty-string values are not requests — <c>RequestedStatus = null</c>
+    /// is precisely "nothing is being asked for". Never throws: a content that cannot be
+    /// serialized here is answered "no pending request", which costs at most the pre-#3153
+    /// behaviour for that node rather than failing a create that has already succeeded.</para>
+    /// </summary>
+    private static bool CarriesPendingRequest(
+        object? content, JsonSerializerOptions options, string path, ILogger logger)
+    {
+        if (content is null)
+            return false;
+        try
+        {
+            var element = content as JsonElement? ?? JsonSerializer.SerializeToElement(content, options);
+            if (element.ValueKind != JsonValueKind.Object)
+                return false;
+            foreach (var property in element.EnumerateObject())
+            {
+                if (!property.Name.StartsWith("requested", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (property.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+                    continue;
+                if (property.Value.ValueKind == JsonValueKind.String
+                    && string.IsNullOrEmpty(property.Value.GetString()))
+                    continue;
+                return true;
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "[CreateNode] could not inspect the content of {Path} for a pending control-plane "
+                + "request; treating it as carrying none.", path);
+            return false;
+        }
     }
 
     /// <summary>
