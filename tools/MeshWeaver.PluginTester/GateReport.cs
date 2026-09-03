@@ -188,6 +188,15 @@ public sealed record PackageResult(string Id)
     public bool Upstream { get; init; }
 
     /// <summary>
+    /// True when this run is one SHARD of a fanned-out gate and the package is here only so the
+    /// shard's own slice can install (<see cref="GateShardPlan"/>): installed — a failed install
+    /// still fails the shard — but not gated, because the shard that OWNS it holds its verdict.
+    /// Every package is gated exactly once across the fan-out, which is what lets the aggregate
+    /// job fold the shards' summaries into one without double-counting a type.
+    /// </summary>
+    public bool Support { get; init; }
+
+    /// <summary>
     /// Whether <see cref="NodeCount"/> / <see cref="NodeTypes"/> are a MEASUREMENT. False when the
     /// package pipeline threw before the install reported, in which case both are defaults and
     /// printing them asserts a count nobody took.
@@ -299,7 +308,8 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
                              (package.CountsMeasured
                                  ? $"({package.NodeCount} node(s), {package.NodeTypes.Count} type(s))"
                                  : "(counts unavailable — the pipeline threw before the install reported)") +
-                             (package.Upstream ? " [upstream: installed, not gated here]" : ""));
+                             (package.Upstream ? " [upstream: installed, not gated here]" : "") +
+                             (package.Support ? " [support: installed, gated on another shard]" : ""));
             if (package.InstallError is not null)
                 output.WriteLine($"    install{Debt(verdict, package.Id, "install")}: {package.InstallError}");
             if (package.IdempotenceError is not null)
