@@ -123,7 +123,15 @@ public class StaticRepoImportBulkWriteTest(ITestOutputHelper output) : MonolithM
         result.Failed.Should().Be(1,
             "exactly ONE node was rejected — a batched write must not turn one validator refusal into "
             + "three failures, nor swallow it into a green import");
-        result.Outcome.Should().Be("ImportedWithErrors");
+        // 🚨 #3146 made this outcome MORE SPECIFIC, and the isolation contract above is untouched.
+        // The injected rejection is a validator refusing these bytes — a verdict about the content,
+        // not about the moment — so the pass now reports ImportedWithContentErrors and the marker
+        // records it as final for this fingerprint. That is the intended semantics and it is exactly
+        // this scenario at scale: the bad node is refused identically on every later pass, the good
+        // ones already landed, and re-running imports nothing new. Fixing the source moves the
+        // fingerprint, which re-imports. A pass with any RETRYABLE failure still reports
+        // ImportedWithErrors and still re-imports.
+        result.Outcome.Should().Be("ImportedWithContentErrors");
         result.Count.Should().Be(2, "the other two nodes of the refused batch must still land");
         result.WrittenPaths.Should().HaveCount(2);
         result.WrittenPaths.Should().Contain($"{_partition}/Before");

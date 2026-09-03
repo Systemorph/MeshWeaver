@@ -253,6 +253,61 @@ The SQL migration (`Memex.Database.Migration`) is a standalone process with **no
 
 In the **distributed (Orleans/PG) portal, routing does not consult the in-memory `EmbeddedResourceStorageAdapter`** — so a partition that is only served from the embedded overlay 404s / hangs. The static-repo import is what makes built-in partitions (Doc/Agent/Model) **served from the DB** there. The monolith (in-process embedded routing) works either way, so the cutover is gated by `Features:StaticRepoSync:Partitions` (default `["Doc","Agent","Model"]` for the distributed portal; monolith leaves it empty and keeps in-memory serving).
 
+## 🚨 A CONTENT verdict is final for its fingerprint; a transient failure is not
+
+The marker at `{Partition}/_Activity/import-{fingerprint}` is content-addressed, so the fingerprint
+**is** the idempotence key. Re-running at the same fingerprint re-reads the same nodes and re-derives
+the same answer — which means re-running is only ever meaningful when something *outside* the content
+could have changed.
+
+The skip arm used to recognise `Succeeded` and nothing else, so every non-green verdict re-imported
+in full on every trigger. Measured on memex.meshweaver.cloud (2026-09-02, #3146): **19 complete
+passes in 3 h**, each ≈425 identical `InvalidOperationException`s — *"A 'Space' owns its partition,
+so it must be top-level"*, *"NodeType 'Northwind/Article' is not registered"* — plus a NodeType
+compile of the same sample tree each time, on a portal already at 8/8 replicas. The trigger was a
+webhook per green core CI run.
+
+So the outcome now distinguishes **why** a pass failed:
+
+| outcome | lock status | next trigger at the SAME fingerprint |
+|---|---|---|
+| `Imported` | `Succeeded` | skips |
+| `ImportedWithContentErrors` | `Failed` | **skips**, logging the recorded verdict |
+| `ImportedWithErrors` | `Warning` | re-imports |
+| `ImportedWithRefusedContent` / `ImportedWithBlockedCreates` | `Warning` | re-imports |
+
+`ImportedWithContentErrors` is reached only when **every** failure in the pass was a content verdict
+(`StaticRepoImporter.IsContentVerdict`), and that is decided on the owner's **structured**
+`NodeUpsertRejectionReason`, never on the exception type:
+
+| reason | deterministic? |
+|---|---|
+| `InvalidPath`, `InvalidNodeType`, `ValidationFailed`, `Unauthorized` | **yes** |
+| `Unknown`, `PatchFailed` | no — retryable |
+
+🚨 The type cannot be used for this. `Upsert` wraps **every** failed `CreateOrUpdateNodeResponse` in
+one `InvalidOperationException`, and `Unknown` is where *"Persistence read failed: …"* and *"Inner
+CreateNode faulted: …"* land — a store that was briefly unreachable, wearing the same exception as a
+rule refusal. A first draft of this classifier keyed on the type and would have marked those final;
+that is #3101's freeze, re-introduced by the fix for #3146. `Upsert` therefore throws a typed
+`UpsertRefusedException` carrying the reason. **One** retryable failure among the pass's failures
+keeps the whole pass on the ordinary `Warning` arm.
+
+**Known residual:** a validator that *throws* — including one whose own dependency is briefly
+unavailable — is mapped to `ValidationFailed` before the response is built, so it records as final.
+The importer cannot separate that from a rule refusal; the place to fix it is the validator contract
+(an unavailable dependency should surface as unavailable, not as a refusal). Pinned, so it is not
+rediscovered as a surprise, by `FailedImportIsNotRetriedAtTheSameFingerprintTest`.
+
+🚨 Getting that backwards is the more expensive mistake, and it has a number: #3101, a Space frozen
+out of the mesh by a green marker nobody re-examined. That is why this is an allow-list of
+verdict-shaped faults rather than "anything that is not obviously transient".
+
+The verdict is carried in `ActivityLog.ReturnValue` as `{"outcome": "…"}` — **structured, not parsed
+out of the summary line**. A skip decision that read a log message would start silently re-importing
+forever the first time somebody re-worded it. `Force` still re-runs regardless; a changed
+fingerprint re-runs by construction, because the fingerprint is the marker's id.
+
 ## Import / export symmetry
 
 **There is no static-repo exporter in `src/`, and nothing gates the two directions against each
