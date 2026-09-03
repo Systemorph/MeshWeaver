@@ -402,6 +402,76 @@ public sealed class GitHubWebhookProcessor
     // ── workflow_run → build-completion record ───────────────────────────────
 
     /// <summary>
+    /// 🚨 <b>The <c>workflow_run</c> triggers that mean "a completed build of THE DEFAULT BRANCH'S
+    /// OWN TREE" — an ALLOW-LIST, so an event name nobody has considered is REFUSED rather than
+    /// admitted.</b> A deny-list here fails open: the next trigger GitHub invents would publish.
+    ///
+    /// <para><b>Why each one is admitted.</b>
+    /// <list type="bullet">
+    /// <item><c>push</c> — the branch moved and its CI ran. The original case.</item>
+    /// <item><c>repository_dispatch</c> — GitHub only ever runs a dispatched workflow from the
+    /// DEFAULT branch, and the run's <c>head_sha</c> is that branch's tip. This is how a platform
+    /// release re-verifies every satellite repo: no commit to push, the same tree, a genuine green
+    /// verdict on it.</item>
+    /// <item><c>schedule</c> — same reason: a cron run only ever exists on the default branch.</item>
+    /// <item><c>workflow_dispatch</c> — may target ANY ref, so it is admitted here and
+    /// DISCRIMINATED by the head_branch check. Aimed at the default branch it is a manual
+    /// re-verification of that tree — and the only recovery lever when a merge burst cancelled the
+    /// push-triggered run.</item>
+    /// </list></para>
+    ///
+    /// <para><b>Deliberately NOT admitted.</b> <c>pull_request</c> / <c>pull_request_target</c> are
+    /// green UNMERGED code; <c>dynamic</c> is GitHub's Copilot reviewer, which completes green on the
+    /// default branch and is not a build at all; anything unknown fails closed. <c>merge_group</c> is
+    /// absent ON PURPOSE — a queue run's <c>head_branch</c> is the temporary
+    /// <c>gh-readonly-queue/{base}/pr-{n}-{sha}</c> ref (measured on this repository's own queue,
+    /// 2026-09-02), so the head_branch guard already rejects it and an entry here would be a line no
+    /// test could reach.</para>
+    ///
+    /// <para>🚨 <b>The measurement that widened this (2026-09-02,
+    /// <c>Systemorph/MeshWeaver.Plugins#1194</c>).</b> The test was <c>event == "push"</c> alone, and
+    /// it DISCARDED REAL PUBLISH SIGNALS. <c>Systemorph/MeshWeaver.Reinsurance</c>'s <c>main</c> built
+    /// green three times at <c>636ebd5</c> — 11:17, 12:27 and 12:55Z — every one of them
+    /// <c>event=repository_dispatch</c> (the release-follow lane, which rebuilds every module against
+    /// a new platform pin without a commit to push). All three were dropped here, and
+    /// <c>Underwriting/_GitSync</c> on <c>memex.systemorph.com</c> sat <b>38 h</b> behind a merged
+    /// main while the webhook was armed and healthy and every delivery answered 200 OK — no error, no
+    /// warning, nothing to grep. (The other half of that incident was a genuinely red push lane,
+    /// where this gate behaved correctly and is meant to.)</para>
+    ///
+    /// <para><b>Widening this cannot cause churn.</b> A sync source already sitting on the built sha
+    /// is skipped by <see cref="SkipReason"/> ("already at this commit"), so a scheduled or dispatched
+    /// re-verification of an unchanged default branch triggers no import at all.</para>
+    /// </summary>
+    private static readonly ImmutableHashSet<string> PublishSignalTriggers =
+        ImmutableHashSet.Create(
+            StringComparer.OrdinalIgnoreCase,
+            "push", "repository_dispatch", "schedule", "workflow_dispatch");
+
+    /// <summary>The admitted triggers as log copy — ordered so the line is stable, built once so the
+    /// rejection log cannot drift from the set it is reporting.</summary>
+    private static readonly string PublishSignalTriggerList =
+        string.Join(", ", PublishSignalTriggers.OrderBy(t => t, StringComparer.Ordinal));
+
+    /// <summary>
+    /// Whether a <c>workflow_run</c> trigger means "a build of the default branch's own tree".
+    /// Fail-closed: an empty, missing or unrecognised event name is NOT a publish signal.
+    /// </summary>
+    /// <remarks>See <see cref="PublishSignalTriggers"/> for why each admitted trigger is admitted,
+    /// and for the 2026-09-02 measurement that replaced the single-value <c>== "push"</c> test.</remarks>
+    internal static bool IsPublishSignalTrigger(string? runEvent)
+        => runEvent is { Length: > 0 } && PublishSignalTriggers.Contains(runEvent);
+
+    /// <summary>
+    /// Whether a run's <c>head_branch</c> IS the repository's default branch — the second, independent
+    /// guard, and the one that discriminates the admitted triggers that can target any ref. Fail-closed:
+    /// a payload whose branch or default branch cannot be read is not publishable.
+    /// </summary>
+    internal static bool IsDefaultBranchBuild(string? headBranch, string? defaultBranch)
+        => headBranch is { Length: > 0 } && defaultBranch is { Length: > 0 }
+           && string.Equals(headBranch, defaultBranch, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// A verified <c>workflow_run</c> → the repository's <see cref="BuildCompletion"/> node.
     ///
     /// <para>GitSync records a FACT and stops there: "repo X built green at sha Y". It does not know
@@ -416,6 +486,12 @@ public sealed class GitHubWebhookProcessor
     /// re-runs of an unchanged tree — because deciding "did anything change" needs content identity,
     /// which is the consumer's business, not the webhook's.</para>
     ///
+    /// <para><b>Two independent guards decide "is this a publish signal".</b> The run's TRIGGER must
+    /// be one of <see cref="PublishSignalTriggers"/> (an allow-list — unknown events fail closed),
+    /// AND its <c>head_branch</c> must be the repository's default branch
+    /// (<see cref="IsDefaultBranchBuild"/>). Neither subsumes the other: the trigger check states the
+    /// requirement, the branch check discriminates the triggers that can target any ref.</para>
+    ///
     /// <para>Written under the SYSTEM identity: the webhook request is anonymous (its authorization
     /// is the verified HMAC signature), so an ambient-identity write would be refused on an
     /// access-gated portal. Same identity model as the issue upsert and the push auto-update.</para>
@@ -429,37 +505,42 @@ public sealed class GitHubWebhookProcessor
         if (!string.Equals(GetString(run, "conclusion"), "success", StringComparison.OrdinalIgnoreCase))
             return Observable.Return(0);
 
-        // 🚨 The run must have been triggered BY A PUSH. `workflow_run` fires for far more than the
-        // repo's content CI: measured on the education hook, GitHub's own Copilot reviewer arrives as
-        // action=completed / conclusion=success with event="dynamic", and every `pull_request` run of
-        // the content workflow arrives green too. Those are green builds of code the default branch
-        // has not accepted; importing on one would publish a feature branch. The branch check below
-        // catches most of them, but only because a PR's head_branch is its source branch — filtering
-        // on the trigger states the actual requirement instead of relying on that coincidence.
+        // 🚨 The run must be a build of THE DEFAULT BRANCH'S OWN TREE, expressed as an ALLOW-LIST of
+        // triggers (see PublishSignalTriggers) — never a deny-list. `workflow_run` fires for far more
+        // than the repo's content CI: measured on the education hook, GitHub's own Copilot reviewer
+        // arrives as action=completed / conclusion=success with event="dynamic", and every
+        // `pull_request` run of the content workflow arrives green too. Those are green builds of code
+        // the default branch has not accepted; importing on one would publish a feature branch. The
+        // branch check below catches most of them, but only because a PR's head_branch is its source
+        // branch — filtering on the trigger states the actual requirement instead of relying on that
+        // coincidence.
         var runEvent = GetString(run, "event") ?? "";
-        if (!string.Equals(runEvent, "push", StringComparison.OrdinalIgnoreCase))
+        if (!IsPublishSignalTrigger(runEvent))
         {
             logger?.LogDebug(
-                "workflow_run webhook: green '{Workflow}' run was triggered by '{Event}', not a push — "
-                + "not a publish signal.", GetString(run, "name"), runEvent);
+                "workflow_run webhook: green '{Workflow}' run was triggered by '{Event}', which is not a "
+                + "build of the default branch's own tree (admitted: {Admitted}) — not a publish signal.",
+                GetString(run, "name"), runEvent, PublishSignalTriggerList);
             return Observable.Return(0);
         }
 
         if (!TryGetRepoUrl(payload, out var repoUrl))
             return Observable.Return(0);
 
-        // 🚨 Only the DEFAULT branch's green builds are publishable. A PR-branch run is green
-        // UNMERGED code — recording it would make the plugin-update watcher offer (or, for an
-        // opted-in record, unattended-install) content the default branch never accepted, at that
-        // branch's sha (Copilot catch). Fail closed: no branch match, no record — a payload whose
-        // branch we cannot read must not become an update either.
+        // 🚨 Only the DEFAULT branch's green builds are publishable — the SECOND, INDEPENDENT guard,
+        // deliberately not folded into the trigger check above. A PR-branch run is green UNMERGED
+        // code — recording it would make the plugin-update watcher offer (or, for an opted-in record,
+        // unattended-install) content the default branch never accepted, at that branch's sha
+        // (Copilot catch). Fail closed: no branch match, no record — a payload whose branch we cannot
+        // read must not become an update either. This is also what discriminates the one admitted
+        // trigger that can target any ref (`workflow_dispatch`), and what already rejects a
+        // merge-queue run, whose head_branch is the temporary `gh-readonly-queue/…` ref.
         var headBranch = GetString(run, "head_branch") ?? "";
         var defaultBranch = payload.TryGetProperty("repository", out var repoElement)
                             && repoElement.ValueKind == JsonValueKind.Object
             ? GetString(repoElement, "default_branch") ?? ""
             : "";
-        if (headBranch.Length == 0 || defaultBranch.Length == 0
-            || !string.Equals(headBranch, defaultBranch, StringComparison.OrdinalIgnoreCase))
+        if (!IsDefaultBranchBuild(headBranch, defaultBranch))
         {
             logger?.LogDebug(
                 "workflow_run webhook for {Repo}: green build on '{Branch}' is not the default branch "
