@@ -325,6 +325,22 @@ spec:
             # values.observability.yaml watches for it, and the fix is convergence
             # (Modules:AutoRecycleOnStaleBuild, on fleet-wide) plus prebuilt-only modules
             # (Modules:RequirePrebuilt).
+            #
+            # 🚨 NO initialDelaySeconds HERE, AND NONE ON readinessProbe ABOVE — DELIBERATE, and it
+            # keeps being "corrected" by people reading Chart Drift. Kubernetes SUSPENDS liveness and
+            # readiness entirely until the startupProbe succeeds, and that probe owns the whole boot
+            # window (periodSeconds x failureThreshold — 300 s on the shipped values, hours on an
+            # environment running a gated bake). A delay measured from container start can therefore
+            # never be what protects a slow boot: the startup probe already did.
+            #
+            # MeshWeaver#2355 reported `DIFFERS livenessProbe/readinessProbe` against memex for a
+            # week — live carried initialDelaySeconds 60/20, this chart carries none — and concluded
+            # three times that "live is authoritative, add them to the chart". Adding them would
+            # enshrine dead config and make this chart the more dangerous side of the comparison.
+            # Two measurements settle it (2026-09-03): memex-cloud runs this exact probe block with
+            # NO initialDelaySeconds and is healthy, and a `helm upgrade` does not remove a live
+            # delay anyway (three-way merge preserves it — see check-chart-drift.sh's header). So
+            # the drift is real but inert, and the chart is the authoritative side.
             httpGet: { path: /alive, port: 8080 }
             periodSeconds: 15
             timeoutSeconds: 10
