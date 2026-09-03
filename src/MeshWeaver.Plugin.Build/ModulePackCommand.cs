@@ -550,7 +550,12 @@ public static class ModulePackCommand
             + $"{closure.Count} file(s), {contentFiles.Count} node file(s) "
             + $"({(includeSource ? "with" : "WITHOUT")} source), "
             + $"floor {minMeshVersion ?? "(none)"}, "
-            + $"built-against MVID {frameworkMvid}");
+            // "framework", not "MVID": an MVID is only ONE of the three shapes FrameworkBuildIdentity
+            // resolves — a manifest-bearing host answers a surface identity `s<hash>`, a CI build
+            // answers its stamped commit identity `g<sha>`, and the anchor's raw MVID is the last
+            // fallback. A CI-packed bundle therefore almost never carries an MVID, and a log line
+            // calling it one sends the next reader looking for the wrong string.
+            + $"built against framework {frameworkMvid}");
         return 0;
     }
 }

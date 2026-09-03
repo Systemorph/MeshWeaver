@@ -179,9 +179,12 @@ public static class MemexConfiguration
             // minMeshVersion FLOOR the running platform no longer satisfies (a rollback below the
             // module's requirement) or a missing DLL SKIPS the entry with a loud stderr line —
             // never a crash, the deployment must boot; the entry stays for when the platform
-            // moves forward again. A landed module's built-against MVID is diagnostic only:
-            // modules bind by simple name across platform builds (the strict MVID gate is the
-            // NodeType bake lane's). Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship
+            // moves forward again. A landed module's built-against framework identity is not a
+            // LOAD gate HERE — modules bind by simple name across platform builds, and the strict
+            // identity gate is the NodeType bake lane's. (It is not merely diagnostic either, since
+            // #3154: ModuleUpdateDecision compares it to tell a rebuild from a no-op, and #3211
+            // makes a bundle that states none unpublishable. That is the UPDATE question, not this
+            // one.) Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship
             // to Loki regardless).
             var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
             // 🚨 The SAME root ModuleLandingService writes (ModuleRoot) — never

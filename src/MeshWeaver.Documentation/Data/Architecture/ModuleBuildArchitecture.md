@@ -181,6 +181,18 @@ heals: a registry that states no identity will state none next time either.
 | pack step | names the anchor explicitly (`--graph-dll`), picking the location from the table above — and **both** arms are RED when the anchor is not there. The branch decides *where to look*, never *whether to check*. The manifest is then read back and the field asserted on the bytes |
 | **publish step** | RED before the POST when the bundle's manifest states none — on the bytes about to be handed over, so the **reuse** leg (an artifact an earlier run packed) is covered too |
 
+**Which identity string lands in the manifest — and why it need not be the portal's.** The packer
+reads the anchor with `FrameworkIdentity.ReadIdentity`, which sees only what is IN the assembly: the
+stamped `MeshWeaverFrameworkIdentity` (`g<sha>` on every CI build) or, failing that, its MVID. It
+cannot see a **surface manifest**, so it never answers the `s<hash>` a portal resolves for itself.
+That is fine, because nothing compares a module bundle's value to a live process: `LandFromBundle`
+only *records* it, and `ModuleUpdateDecision` compares **served against landed** — both the
+producer's own string, so they converge after one landing whatever the flavour. It is also the
+finer discriminator of the two: `s<hash>` is breaking-change-keyed and holds still across many
+platform commits, while `g<sha>` moves with every one — and "the platform this module was compiled
+against moved" is exactly the question being asked. (The `DeclineReason` identity gate lives on the
+*bake* bundle path, `BundleReader.Read`/`SeedAll`, and never sees this value.)
+
 The publish-step refusal is the load-bearing one: the inspection runs on the build leg only, and a
 guard bound to it alone would pass while pre-#3211 bytes went to the registry. `RECIPE_VERSION`
 moved `1` → `2` in `module-build-key.py` for the same reason — the lane now packs different bytes
