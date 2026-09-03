@@ -159,12 +159,25 @@ public static class ContentFileResolver
             //   target: mesh/IJ1R4…)
             // i.e. the reply WAS produced and had nowhere to go.
             //
-            // NodeOperationIssuingHub is the one shared seam for this: it hops a root-hub caller onto
-            // portal/nodeops-{meshId} — routing-registered so responses land on it cross-silo, and
+            // ReadIssuingHub is the shared seam for this: it hops a root-hub caller onto
+            // portal/reads-{meshId} — routing-registered so responses land on it cross-silo, and
             // sharing the mesh's type registry and permission evaluator — and returns any NON-router
             // hub unchanged, so in-mesh callers (the deck export's SlideAssetInliner, a portal hub,
-            // a test client) keep their identity byte-for-byte. GetMeshNode/GetMeshNodeOutcome and
-            // every node-CRUD path already went this way (2c796d297); this read was the straggler.
+            // a test client) keep their identity byte-for-byte.
+            //
+            // 🚨 …and NOT portal/nodeops-{meshId}, which is where this read used to be issued
+            // (2c796d297, following GetMeshNode and every node-CRUD path). That hub is the mesh's
+            // ONE node-CRUD EXECUTION hub: every CreateNodeRequest / CreateOrUpdateNodeRequest in
+            // the mesh runs on its single action block, one turn at a time, and the turn loop does
+            // not advance until the current turn's observable completes. A reply DELIVERED there
+            // therefore sits in the buffer until the block drains — so this bounded read burned its
+            // whole budget on an answer that had already arrived, for as long as a bulk node-CRUD
+            // burst lasted. A content UPLOAD is exactly such a burst (one indexing activity per
+            // file, each a CreateNode plus a CreateOrUpdateNodeRequest on that block), which is why
+            // a freshly uploaded file 503'd for minutes and then healed untouched — issue #2901,
+            // Cause B in Doc/Architecture/ContentRoute503. The read hub registers NO handlers, so
+            // the only thing its block ever dispatches is the reply we are waiting for.
+            //
             // 🚨 …and BOUND IT. Without a budget of its own this read's only terminal is the hub's
             // 60 s RequestTimeout, which is the framework's last-resort ceiling — the number that
             // has to cover a cold NodeType compile — not a budget an HTTP request ever chose. When
@@ -180,7 +193,7 @@ public static class ContentFileResolver
             // it is idempotent, it cancels nothing, and abandoning it costs only the answer (which
             // is why the "never put a client-side ceiling on a mesh operation" rule in
             // MeshService's remarks — about WRITES that keep running — does not apply here).
-            var issuingHub = hub.NodeOperationIssuingHub();
+            var issuingHub = hub.ReadIssuingHub();
             return issuingHub.Observe(
                     new GetDataRequest(new ContentCollectionReference(candidates)),
                     o =>
