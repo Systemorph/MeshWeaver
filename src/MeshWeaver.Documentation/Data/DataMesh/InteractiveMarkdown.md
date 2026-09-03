@@ -76,6 +76,27 @@ sequenceDiagram
 
 Refer to the [Mermaid documentation](https://mermaid.js.org/) for the full range of supported diagram types (flowcharts, class diagrams, Gantt charts, and more).
 
+## Prompt Fences
+
+Not every live block is code. A ```` ```prompt ```` fence carries a **suggested prompt for an agent**,
+and it renders as a composer the reader can edit in place:
+
+````
+```prompt
+Show two versions of the same movement report: one with a single "unexplained"
+balancing line, one with the movement broken out.
+```
+````
+
+The fence body becomes the composer's initial draft. The reader changes whatever they like, presses
+**Submit**, and a real agent thread starts seeded with what they actually typed — opening **full
+page**, with the page the prompt was authored on carried along as the thread's context.
+
+There are no flags. A prompt fence never reaches the kernel: it is prose for an agent, not source.
+
+Wherever the composer cannot be put on the page — an exported document, or a page with no owning node
+behind it — the fence renders as an ordinary read-only block, so the prompt is never lost.
+
 ## Live Example
 
 The cell below runs on page load and renders a small layout control into the document — a minimal demonstration of the `--render` + `--show-code` combination in action:
