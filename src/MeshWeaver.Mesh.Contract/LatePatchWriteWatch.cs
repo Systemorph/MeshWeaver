@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh;
 
@@ -54,12 +55,31 @@ namespace MeshWeaver.Mesh;
 public sealed class LatePatchResponseRegistry : ILatePatchVerdictSink
 {
     /// <summary>
-    /// 🚨 How long after the patch post a late owner response is still acted upon. This is
-    /// PROTOCOL, not tuning: it must dominate every owner-side terminal path — the disposal
-    /// NACK after the owner's phased teardown (hosted-hub drain capped at 5 s), the
-    /// cold-store-defer NotFound (up to ~10 s after reactivation), and the owner ack watcher's
-    /// own 20 s bound. A response beyond this window is indistinguishable from a re-delivered
-    /// stale verdict and is ignored.
+    /// 🚨 How long after the patch post a late owner response is still acted upon. A response
+    /// beyond this window is indistinguishable from a re-delivered stale verdict and is ignored.
+    ///
+    /// <para>🚨 <b>What this window actually dominates, and what it does not (#3197).</b> It was
+    /// justified as PROTOCOL — a bound chosen to exceed every owner-side terminal path, enumerated
+    /// as the disposal NACK after a teardown whose hosted-hub drain was "capped at 5 s", the
+    /// cold-store-defer (~10 s), and the ack watcher's 20 s. <b>That cap no longer exists</b>:
+    /// <c>HostedHubsCollection.DisposeHubsReactive</c> deliberately dropped its flat
+    /// <c>Timeout(5s)</c> in #1317, and the only backstop left over that phase is the disposal
+    /// WATCHDOG — a STALL detector, re-armed on every <c>RunLevel</c> transition anywhere in the
+    /// subtree, so a large subtree that keeps making progress never trips it. The drain therefore
+    /// has no duration bound, and this window cannot be said to dominate it.</para>
+    ///
+    /// <para>Two further corrections to the old claim. The owner-side paths were enumerated as
+    /// ALTERNATIVES, taking their maximum (20 s); in <c>ApplyMeshNodePatchInTurn</c> they compose
+    /// ADDITIVELY — cold-store defer (10 s) → identity-gated echo (20 s) → durable flush (10 s).
+    /// And the two clocks differ: the owner's starts at HANDLER ENTRY, the caller's at POST, with
+    /// unbounded routing/queue latency between them (measured at 33–49 s during a bake, #2543).</para>
+    ///
+    /// <para>So the honest statement is the operational one: this is the window in which a verdict
+    /// is still useful to a caller, not a number proven to exceed every path that can produce one.
+    /// What the code now guarantees instead is that the gap is VISIBLE — the ack watcher stands
+    /// aside for the disposal NACK only while <see cref="IsAdmissible"/> says a route is armed, and
+    /// a verdict that arrives past this window is REPORTED rather than dropped in silence, so
+    /// "nothing was ever produced" and "something arrived too late" stop looking identical.</para>
     ///
     /// <para>🚨 Since #2661 this is ALSO the caller's outer verdict bound: <c>UpdateRemote</c> no
     /// longer completes a write on the bounded-wait expiry, so this window is how long a caller
@@ -108,6 +128,29 @@ public sealed class LatePatchResponseRegistry : ILatePatchVerdictSink
     // RequestId property).
     private readonly ConcurrentDictionary<string, Entry> entries = new();
 
+    private readonly ILogger<LatePatchResponseRegistry>? logger;
+
+    /// <summary>
+    /// The clock every expiry decision reads. Injectable so the window can be crossed in a test
+    /// WITHOUT waiting it out — a 30 s sleep is not a test, and a test-only "expire everything"
+    /// method on production code is a backdoor. <see cref="TimeProvider.System"/> in every real
+    /// mesh.
+    /// </summary>
+    private readonly TimeProvider clock;
+
+    /// <summary>
+    /// Creates the registry. Both dependencies are OPTIONAL so a bare fixture — one with no logging
+    /// registered — can still construct it; the logger carries only the VERDICT_EXPIRED report,
+    /// which must never be the reason a mesh fails to start.
+    /// </summary>
+    public LatePatchResponseRegistry(
+        ILogger<LatePatchResponseRegistry>? logger = null,
+        TimeProvider? clock = null)
+    {
+        this.logger = logger;
+        this.clock = clock ?? TimeProvider.System;
+    }
+
     /// <summary>
     /// Arms the late watch for the patch posted as <paramref name="requestId"/>. Registered
     /// BEFORE the post so no response can slip between the caller's bounded wait dying and the
@@ -128,7 +171,7 @@ public sealed class LatePatchResponseRegistry : ILatePatchVerdictSink
         Action<PatchDataResponse> onLateResponse,
         Action<DeliveryFailure> onLateFailure)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = clock.GetUtcNow();
         foreach (var kv in entries)
         {
             if (kv.Value.ExpiresAt < now)
@@ -171,7 +214,7 @@ public sealed class LatePatchResponseRegistry : ILatePatchVerdictSink
     {
         if (!entries.TryRemove(requestId, out var entry))
             return false;
-        if (entry.ExpiresAt < DateTimeOffset.UtcNow)
+        if (ReportIfExpired(requestId, entry, "PatchDataResponse"))
             return false;
         entry.OnLateResponse(response);
         return true;
@@ -191,11 +234,55 @@ public sealed class LatePatchResponseRegistry : ILatePatchVerdictSink
     {
         if (!entries.TryRemove(requestId, out var entry))
             return false;
-        if (entry.ExpiresAt < DateTimeOffset.UtcNow)
+        if (ReportIfExpired(requestId, entry, nameof(DeliveryFailure)))
             return false;
         entry.OnLateFailure(failure);
         return true;
     }
+
+    /// <summary>
+    /// 🚨 An EXPIRED verdict is a fact, not silence (#3197). The registry used to remove the entry,
+    /// see it was past <see cref="LateResponseWatchBound"/> and return <c>false</c> — the same
+    /// answer it gives for a request nobody ever armed. So a failing run showed
+    /// <c>VERDICT_TIMEOUT</c> with ZERO late-terminal records, and there was no way to tell "the
+    /// owner never produced a verdict" from "the owner produced one and it arrived too late" —
+    /// two different investigations, one indistinguishable symptom (measured, #2543).
+    ///
+    /// <para>The verdict is still NOT delivered: past the window it is indistinguishable from a
+    /// re-delivered stale one, and acting on it is the bug this bound exists to prevent. It is
+    /// reported, and counted, so the next reader can see which case they are in.</para>
+    /// </summary>
+    /// <returns>True when the entry had expired — the caller must not deliver it.</returns>
+    private bool ReportIfExpired(string requestId, Entry entry, string verdictKind)
+    {
+        var now = clock.GetUtcNow();
+        if (entry.ExpiresAt >= now)
+            return false;
+
+        System.Threading.Interlocked.Increment(ref expiredVerdicts);
+        logger?.LogWarning(
+            "[LateWatch] VERDICT_EXPIRED path={Path} request={RequestId} kind={VerdictKind} "
+            + "late_by={LateBy}ms window={Window}s — the owner DID answer; it arrived past the late "
+            + "watch window and was not delivered. This is not 'no verdict was produced': the "
+            + "caller's OwnerUnreachable for this write is a reporting artefact of the delay, not "
+            + "evidence that the owner stayed silent.",
+            entry.Path, requestId, verdictKind,
+            (long)(now - entry.ExpiresAt).TotalMilliseconds,
+            (long)LateResponseWatchBound.TotalSeconds);
+        return true;
+    }
+
+    /// <summary>Number of verdicts that arrived past the window and were therefore not delivered —
+    /// the counterpart of the log line, for tests and for a health surface that wants the rate
+    /// rather than the individual lines.</summary>
+    public int ExpiredVerdicts => System.Threading.Volatile.Read(ref expiredVerdicts);
+
+    private int expiredVerdicts;
+
+    /// <inheritdoc />
+    public bool IsAdmissible(string requestId)
+        => entries.TryGetValue(requestId, out var entry)
+           && entry.ExpiresAt >= clock.GetUtcNow();
 
     /// <summary>Number of armed watches — test seam.</summary>
     public int ArmedCount => entries.Count;
