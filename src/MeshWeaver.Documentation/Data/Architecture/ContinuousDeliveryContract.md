@@ -1,7 +1,7 @@
 ---
 Name: The Continuous Delivery Contract
 Category: Architecture
-Description: What main-cd.yml guarantees about a published image set — all-or-nothing publication via unselectable staging tags, a promote job whose ordering makes rollback unnecessary, and an hourly reconciler that heals main's HEAD. Plus the standing rule: verify the IMAGE, never the green tick.
+Description: What main-cd.yml guarantees about a published image set — all-or-nothing publication via unselectable staging tags, a sign-in smoke that boots the pair and serves a signed-in request before promote may tag it, a promote job whose ordering makes rollback unnecessary, and an hourly reconciler that heals main's HEAD. Plus the standing rule: verify the IMAGE, never the green tick.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4"/><path d="M12 11v10"/><path d="M8.5 15.5l3.5 1.6 3.5-1.6"/></svg>
 ---
 
@@ -90,9 +90,10 @@ by any self-updater on any install, whatever the update policy. That regex is no
 exists because an all-digit git-sha tag once parsed as version `6943991.0.0`, sorted above every real
 `3.x` release, and froze every portal on `ci.122`.
 
-Only after **all five legs succeed** does the `promote` job apply real tags, and promotion is a
-manifest-only operation (`docker buildx imagetools create`) — the layers are already in the registry,
-so it costs seconds.
+Only after **all five legs succeed** — and after `signin-smoke` has booted the portal + migration
+pair and served a signed-in request from it ([Property 3](#property-3--a-pair-that-cannot-sign-in-is-never-tagged))
+— does the `promote` job apply real tags, and promotion is a manifest-only operation
+(`docker buildx imagetools create`) — the layers are already in the registry, so it costs seconds.
 
 **Why staging-then-promote rather than build-to-archive:** the bytes have to reach the registry for a
 push to happen at all, so pushing them to a staging tag costs exactly what pushing them to the real
@@ -414,6 +415,100 @@ OBSERVED publication — the same reason `delivery-verdict` must not pass on an 
 and `FrameworkReleaseBroadcaster` fires on a real release rather than from a CI step that runs
 regardless.
 
+## Property 3 — a pair that cannot sign in is never tagged
+
+**A complete image set is necessary, not sufficient.** Properties 1 and 2 guarantee that every
+image for a commit *exists*; neither says anything about whether the portal and migration images,
+booted together, can serve a user. They are built from **two** commits — core's and
+MeshWeaver.Plugins' (see [Property 1a](#property-1a--how-the-set-already-spans-repos-and-what-the-gui-move-actually-breaks))
+— and those two can be **hours** apart, because a run's jobs queue for hours and `gate` resolves the
+Plugins head when it *starts*.
+
+### The 2026-09-03 incident this closes
+
+CD run #7658 built `memex-portal-ai:3.0.0-rc9.ci.7658` from core `e7f1d699` (08:05Z — **before**
+core #3206 anchored the sign-in reads) paired with the Plugins head at resolve time, `12500c9`
+(13:31Z — **after** Plugins #1263 made the Postgres planner *refuse* an unanchored query instead of
+fanning it out). Every leg was green. `promote` tagged the set; "Verify every image shipped" found
+every tag. Once the pair reached production, `OnboardingMiddleware.LoadUserRoles` faulted with
+`UnanchoredQueryException` on the very first signed-in request, and the portal answered **503 to
+every signed-in request for 20 minutes**; the Store page died the same way. No job in CD had ever
+booted the pair, let alone signed in.
+
+Two details decide what the gate must look like:
+
+- **Anonymous requests were fine.** `ci.7658` answered 200 to an anonymous `GET /` and to
+  `/_blazor/negotiate`; only requests carrying a signed-in cookie 503'd. An unauthenticated probe
+  is the `/api/og` trap — it proves the process is up and nothing more.
+- **The status code was the second symptom.** The first was the log line
+  `Identity resolution UNAVAILABLE for / (LoadUserRoles(…) faulted: UnanchoredQueryException) — answering 503`.
+  A gate that reads only status codes would pass a pair whose reads fault but whose page happens
+  to render.
+
+### What `signin-smoke` does
+
+The job (`main-cd.yml` → `signin-smoke`, "Smoke: boot the image pair and sign in") runs
+unconditionally whenever `gate` decides to publish, needs `portal-image` and `migration-image`, and
+is itself a **need of `promote`** — so a pair that fails it never receives a consumer-selectable
+tag. The set stays incomplete, the reconciler ([Property 2](#property-2--self-healing-and-what-it-heals-to))
+re-drives HEAD on its next tick, and the next Plugins pin or core fix is what heals it. Nothing
+rolls in between. The gate **is** the script `.github/scripts/cd-signin-smoke.sh`, so the same
+proof runs locally against any pair; on the run's own `staging-<sha>-<run_id>` images it:
+
+1. starts a fresh Postgres (pgvector, the family the chart ships) on a private docker network;
+2. runs the **migration image** with the env names the Helm chart and `deploy/compose` give it
+   (`ConnectionStrings__memex`, `MEMEX_*`) and asserts exit 0 **and** the literal
+   `Database migration completed. Version: N` — the version DbVersionGate will compare against;
+3. runs the **portal image** on a writable `/data`, `Deployment__Backend=Filesystem`,
+   `Deployment__Orleans__Clustering=Localhost`, `Graph__Storage__Type=PostgreSql`,
+   `Authentication__EnableDevLogin=true` (the host forces DevLogin off unless the env is
+   literally `true`), and waits for `/health` to answer 200 within a bounded deadline;
+4. signs in through DevLogin (`POST /dev/signin`, a brand-new `personId` is provisioned on first
+   sign-in) and keeps the `MemexAuth` cookie;
+5. asserts the **signed-in** `GET /` and `GET /Store` answer exactly 200 (no redirect is
+   followed — a 302 to `/login` or `/onboarding` is a failure, not a page to land on), that the
+   body carries neither language's identity-unavailable text, and that it is the portal shell;
+   then `POST /_blazor/negotiate?negotiateVersion=1` → 200 with a `connectionId`;
+6. greps the portal **and** migration logs for the incident's signatures —
+   `UnanchoredQueryException`, `UNAVAILABLE for … answering 503`, `Refusing to start` — and fails
+   on any hit. The middle one is qualified with `answering 503` on purpose: `UserContextMiddleware`
+   logs `mesh user index UNAVAILABLE for … falling back` on the first request after every fresh
+   boot, a documented cold-start fallback that drives nothing, and a bare `UNAVAILABLE for` fails
+   the pair that shipped **fixed**. A gate that fails its own positive control is not a gate.
+
+On failure the two container logs go into the job log, warning/error lines first. Whatever the
+outcome, the **pairing** goes into the step summary — core sha and Plugins sha (both `gate`'s
+once-resolved outputs, never re-resolved), the staging tag, both image refs, the platform, and the
+migration version reached — so a future skew is diagnosable from the run summary instead of from a
+dump.
+
+### Verified against both controls before it was wired in
+
+The script was run locally against the real registry on the day it was written:
+
+| pair | migration | `/health` | anonymous `GET /` | signed-in `GET /` | verdict |
+|---|---|---|---|---|---|
+| `ci.7693` (shipped fixed) | v55, exit 0 | 200 in 6 s | 200 | **200**, rendered | PASS |
+| `ci.7658` (the outage) | v55, exit 0 | 200 in 5 s | 200 | **503**, identity-unavailable body | FAIL on step 5; log carries `LoadUserRoles(cd-smoke) faulted: UnanchoredQueryException` |
+
+Every column but the last two is identical between the pair that worked and the pair that did
+not — which is the whole point: nothing CD measured before this gate could tell them apart.
+
+### What it proves, and what it cannot
+
+It proves the pair **boots on a fresh schema**, that the schema the migration wrote is the one the
+portal accepts (DbVersionGate), and that the sign-in → identity → roles → render path serves a
+real user on both the home and the Store page — the path the incident broke and the path every
+user takes first. It runs one architecture (`linux/amd64`) because the fault class is managed code,
+identical on both legs, and one boot is what the 20-minute cap buys.
+
+It does **not** prove anything behind a language model, a registry bundle (the required
+store-delivered modules are absent on a bare pair — `required_modules` reports Degraded, which
+`/health` still answers 200 to), Entra sign-in, multi-replica AdoNet clustering, or an upgrade
+from a populated database — the schema is always fresh, so a versioned repair that faults only
+on existing rows is invisible here. It is a smoke, not the e2e suite; what it removes is the
+class of failure where the two halves of the pair disagree about a read every request performs.
+
 ## Changing the pipeline
 
 Adding a sixth image touches **three** places, and missing any one of them recreates the exact hole
@@ -422,6 +517,11 @@ this contract closes:
 1. its own build job, pushing **only** the staging tag;
 2. the `promote` job — identity tags in phase A, pointers in phase B (never after phase C);
 3. `check-image-set.sh` — otherwise nothing ever asserts it shipped.
+
+Adding a **gate** in front of `promote` (the shape `signin-smoke` has) touches **four**: the job
+itself, `promote`'s `needs`, the `LEGS` list in `delivery-verdict` (a publishing run must have RUN
+every leg — a skipped gate ticks like a passed one), and `alert-on-failure`'s `needs` (a red
+nobody is paged for is still invisible).
 
 One known, deliberate wart: `memex-portal-next` hand-writes `3.0.0-ci.<n>` while every .NET leg
 computes `3.0.0-rc1.ci.<n>`, so its version tag has never matched its siblings'. Nothing selects it
