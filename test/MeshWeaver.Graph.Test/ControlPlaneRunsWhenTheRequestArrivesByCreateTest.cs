@@ -9,6 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -70,7 +71,12 @@ public class ControlPlaneRunsWhenTheRequestArrivesByCreateTest(ITestOutputHelper
             .AddMeshDataSource(s => s.WithContentType<ControlPlaneContent>())
             .WithInitialization(hub =>
             {
-                var path = hub.Address.ToString();
+                // 🚨 Address.Path, never ToString(): a hosted address renders as `path~host`, and
+                // Address's own docs say to use Path "when you need the node path for persistence".
+                // ToString() here would build a node path that does not exist, so the watcher would
+                // silently never see the request — and the test would then be measuring the wrong
+                // absence.
+                var path = hub.Address.Path;
                 hub.GetMeshNodeStream(path)
                     .Where(node => node?.ContentAs<ControlPlaneContent>(hub.JsonSerializerOptions)
                         is { RequestedAction: Activate, Status: null })
@@ -84,8 +90,14 @@ public class ControlPlaneRunsWhenTheRequestArrivesByCreateTest(ITestOutputHelper
                             Content = content with { RequestedAction = null, Status = Done },
                         };
                     }))
-                    // Cold — subscribe or the write never happens — with an explicit error arm.
-                    .Subscribe(_ => { }, _ => { });
+                    // Cold — subscribe or the write never happens. The error arm REPORTS: a fault
+                    // in this pipeline and "the watcher never ran" are the two outcomes this test
+                    // has to tell apart, and a swallowed OnError makes them identical.
+                    .Subscribe(
+                        _ => { },
+                        ex => hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger("Test.ControlPlaneProbe")
+                            .LogError(ex, "control-plane probe failed for {Path}", path));
             }),
     };
 
