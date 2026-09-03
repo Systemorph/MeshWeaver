@@ -639,7 +639,6 @@ jobs:
           COUNT: ${{ steps.scope.outputs.count }}
           PUBLISH: ${{ inputs.publish }}
           TESTER_DIGEST: ${{ inputs.tester-image-digest }}
-          SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
           PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
           PLATFORM_REF: ${{ inputs.platform-ref }}
         run: |
@@ -949,6 +948,7 @@ jobs:
           DIGEST: ${{ inputs.platform-image-digest }}
           TESTER_IMAGE: ${{ inputs.tester-image }}
           TESTER_DIGEST: ${{ inputs.tester-image-digest }}
+          SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
         run: |
