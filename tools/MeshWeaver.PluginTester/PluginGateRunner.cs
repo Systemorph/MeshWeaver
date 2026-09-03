@@ -100,6 +100,13 @@ public sealed record GateOptions
     /// substitute a different copy.</para>
     /// </summary>
     public IReadOnlyList<string> ExternalModules { get; init; } = [];
+
+    /// <summary>
+    /// Which slice of the discovered packages this run gates (<c>--shard i/n</c>), or null for the
+    /// whole set. See <see cref="GateShardPlan"/> for what a shard installs versus gates, and
+    /// Doc/Architecture/NodeRepoGateSharding for why the lane fans out at all.
+    /// </summary>
+    public GateShard? Shard { get; init; }
 }
 
 /// <summary>
@@ -207,18 +214,33 @@ public static class PluginGateRunner
             $"Discovered {ordered.Count} package(s), install order: " +
             string.Join(" → ", ordered.Select(p => p.Id)));
 
+        // 🚨 The shard's plan is printed BEFORE anything installs, and it names the discovered
+        // total as well as this shard's slice. That line is the receipt the aggregate job folds:
+        // one shard cannot know whether its siblings covered the rest, so the check that the
+        // slices are a disjoint COVER happens where all of them are visible.
+        var support = ImmutableHashSet<string>.Empty;
+        if (options.Shard is { } shard)
+        {
+            var assignment = GateShardPlan.Assign(
+                ordered, LocalNodeRepo.DependencyMap(packages, snapshot), shard);
+            options.Output.WriteLine(GateShardPlan.Describe(shard, ordered.Count, assignment));
+            support = assignment.Support.Select(p => p.Id).ToImmutableHashSet(StringComparer.Ordinal);
+            ordered = assignment.Installed;
+        }
+
         // Sequential (Concat): installs respect the dependency order; compiles keep running in
         // the background while later packages install.
         return ordered
             .Select(package => TestPackage(
-                harness, options, snapshot, package, upstreamIds.Contains(package.Id)))
+                harness, options, snapshot, package,
+                upstreamIds.Contains(package.Id), support.Contains(package.Id)))
             .ToObservable().Concat().ToList()
             .Select(results => new GateReport(results.ToImmutableList()));
     }
 
     private static IObservable<PackageResult> TestPackage(
         GateMesh harness, GateOptions options, RepoSnapshot snapshot, PackageManifest package,
-        bool upstream)
+        bool upstream, bool support)
     {
         var source = new NodeRepoPackageSource(
             (_, _, _, _) => Observable.Return(snapshot), repoUrl: "local");
@@ -248,7 +270,9 @@ public static class PluginGateRunner
                 // assemblies adopt from the seed, but compile/render/Tests verdicts belong to
                 // the repo that owns it - running them here would double-judge every upstream
                 // on every satellite and let an upstream flake red a repo that changed nothing.
-                var types = upstream
+                // A SUPPORT package is the same shape one level in: it is mounted so this shard's
+                // slice can install, and the shard that owns it holds its verdict (GateShardPlan).
+                var types = upstream || support
                     ? (IReadOnlyList<NodeTypeUnderTest>)[]
                     : DiscoverNodeTypes(package, files);
                 // The authorizing principal is EXPLICIT — see GateMesh.AuthorizingUserId. Passing
@@ -282,6 +306,7 @@ public static class PluginGateRunner
                                 .Select(second => new PackageResult(package.Id)
                                 {
                                     Upstream = upstream,
+                                    Support = support,
                                     NodeCount = install.Total,
                                     IdempotenceError = second.Written == 0
                                         ? null
@@ -296,6 +321,7 @@ public static class PluginGateRunner
                                 .Catch((Exception ex) => Observable.Return(new PackageResult(package.Id)
                                 {
                                     Upstream = upstream,
+                                    Support = support,
                                     NodeCount = install.Total,
                                     IdempotenceError = $"re-install failed: {ex.GetType().Name}: {ex.Message}",
                                     NodeTypes = typeResults.ToImmutableList(),
@@ -305,6 +331,7 @@ public static class PluginGateRunner
             .Catch((Exception ex) => Observable.Return(new PackageResult(package.Id)
             {
                 Upstream = upstream,
+                                    Support = support,
                 // Named for the stage that actually threw, and marked as NOT a measurement so
                 // WriteSummary prints "counts unavailable" instead of a fabricated "0 node(s)".
                 CountsMeasured = false,
