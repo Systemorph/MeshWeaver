@@ -105,7 +105,8 @@ first sealable set is the first CD run after Plugins #1268 lands.
   diagnostic signature this class has**, and it appears in a check long before it appears as a 503.
   Read as "our tests are wrong" it produces a literal-chasing fix; read as "the pin moves both
   ways" it names the boundary. The shape a test must take to survive a pin that moves both
-  ways is its own subject, and is being written up separately.
+  ways is its own subject — see
+  [Pin-Boundary Contracts](/Doc/Architecture/PinBoundaryContracts).
 - **Core CI was green** — `UnanchoredQueryCensusTest` and `SignInReadsAreAnchoredTest` (#3206) judge
   core's *current* callers with the *current* planner rules. They cannot see an older core paired
   with a newer planner, because that pair exists only in ACR.
@@ -237,3 +238,9 @@ git merge-base --is-ancestor <fix sha> <core half>                              
 - [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall) — why the roll to `ci.7658`
   wedged silently for three and a half hours before it could fail loudly.
 - [Reading CI Signals](/Doc/Architecture/ReadingCiSignals) — which greens mean what.
+- [Pin-Boundary Contracts](/Doc/Architecture/PinBoundaryContracts) — the same boundary seen from
+  the TEST side: what shape a test must take to survive a pin that moves both ways.
+- [Dead-Circuit Fan-Out Storm](/Doc/Architecture/DeadCircuitFanOutStorm) — the refusal verdict that
+  made the #2426 eviction unreachable; the storm this outage's roll also cleared.
+- [Database Migration Procedure](/Doc/Architecture/DatabaseMigrationProcedure) — the schema moves
+  before the image, which is the wall this incident's rollout spent three hours behind.
