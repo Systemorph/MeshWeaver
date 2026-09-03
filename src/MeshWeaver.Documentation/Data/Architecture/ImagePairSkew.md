@@ -156,9 +156,24 @@ git merge-base --is-ancestor <fix sha> <core half>                              
 
 ## Recorded, not fixed
 
-- The dispose deadlock in the `ci.7632` portal host (a `Terminating` pod at full CPU for the whole
-  grace period). Its evidence went with the force-delete; the next occurrence needs a dump before
-  the delete.
+- **A portal host that spins instead of stopping.** The `ci.7632` pod above sat `Terminating` at
+  3.5 cores for 18 minutes; its evidence went with the force-delete. A second specimen was measured
+  on the sister portal at 18:15Z the same day — `ci.7652`, **20 minutes past SIGTERM, 5,705
+  millicores and 13,040 Mi, still `ready=true`**, while its own sibling wound down at 238 m. So it
+  is one pod on a hot loop, not a uniformly slow shutdown.
+
+  🚨 **The grace period hides it completely.** `terminationGracePeriodSeconds` is 1800, so a host
+  that spins for twenty-nine minutes and a host that stops in two look identical from outside: the
+  pod disappears, the rollout succeeds, nothing is logged. The only tell is CPU on a pod whose
+  `deletionTimestamp` is set, and nothing watches that. The cost is real — the spinning pod held the
+  last schedulable node during this incident's own rollout, which is why the surge pod stayed
+  `Pending` and the recovery needed a force-delete.
+
+  Core `71a41b231` ("IoPool: a subscriber disposing inside its operator gate deadlocked the drain's
+  cancel — unregister, never dispose, the drain registration") is in `ci.7693`'s core half and in
+  neither `ci.7632` nor `ci.7652`, which makes it the leading candidate. That is a hypothesis with a
+  cheap test and not yet a finding: capture `dotnet-stack report` on a spinning pod BEFORE the grace
+  expires, rather than force-deleting it as this incident did.
 - The silos node pool has no headroom for one surge pod when both portals are at full replica count.
   A rollout that must surge waits for a termination, and a wedged termination waits for the grace
   period.
