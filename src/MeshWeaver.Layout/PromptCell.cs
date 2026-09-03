@@ -24,11 +24,23 @@ public record PromptCellResponse(string Code, UiControl Output);
 ///   <c>prompt → (code, output)</c> function; no AI infrastructure involved.</item>
 ///   <item><b>Live</b> — a responder that submits the prompt to a real agent thread
 ///   (<c>hub.StartThread</c>, the <c>TrainingSim</c> agent node) and projects the
-///   reply. Today that responder is still the compiled adapter
-///   (<c>MeshWeaver.AI.TrainingSimResponder.Live</c>) — retiring it in favour of a
-///   mesh-node-only implementation is tracked in #1610 and is NOT done; do not
-///   delete the compiled class on the strength of this comment.</item>
+///   reply. That responder is <b>not compiled here and not in this repository</b>: it
+///   is <c>EduPromptResponder.Live(hub, namespacePath)</c>, in-mesh source on the Edu
+///   pack's <c>Edu/PromptCell</c> NodeType (<c>MeshWeaver.Plugins</c>), published to the
+///   kernel cell surface so a course page's <c>--render</c> cell reaches it by bare
+///   name. The compiled adapter it replaced, <c>MeshWeaver.AI.TrainingSimResponder</c>,
+///   left this repository with the AI engine and is now a forwarding shim beside its
+///   successor — see that file before assuming either name is free to remove.</item>
 /// </list>
+///
+/// <para>🚨 <b>Neither responder name may be deleted on a repository sweep.</b> Every
+/// caller is a cell that compiles at RUNTIME, most of them in
+/// <c>Systemorph/MeshWeaver.Education</c> and some inside JSON string fields, and the rest
+/// are copies installed in learners' own spaces that nobody can edit. Deleting the old
+/// name on a "no callers left" reading broke the whole AgenticEngineering course
+/// (Plugins#1258); the procedure that would have caught it is
+/// <c>Doc/Architecture/NodeTypeCompilation</c> → <i>The obligation on framework
+/// changes</i>.</para>
 /// </summary>
 public record PromptCellConfig
 {
