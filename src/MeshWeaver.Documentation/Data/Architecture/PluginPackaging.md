@@ -200,17 +200,27 @@ so only the identical build is known-good. A module is an ordinary assembly bind
 name**; its contract is API compatibility, which the semver floor expresses. So the consumer lands
 any bundle whose floor its platform satisfies — one bundle serves every compatible platform build
 (nothing is rebundled per CI build), and a module can be installed **ex post** onto a platform
-newer than the one it was built with. The bundle still records its built-against `frameworkMvid`
-as **diagnostic metadata** — logged at landing, surfaced in the index — never a refusal. The one
-gate is `ModulePlatformFloor.DeclineReason`, applied at the index, at the manifest, at placement,
-and again at boot.
+newer than the one it was built with.
 
-Producing a module bundle in CI — from any node repo:
+🚨 The bundle's built-against `frameworkMvid` is **not** diagnostic and is **not optional** — it
+stopped being either when the update decision started reading it (#3154) and #3211 made a bundle
+that cannot state one unpublishable. It is still never a LANDING refusal: the one landing gate is
+`ModulePlatformFloor.DeclineReason`, applied at the index, at the manifest, at placement and again
+at boot. What it decides is whether there is anything new to land — see
+[Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) → "A bundle states what it was
+built against".
+
+Producing a module bundle in CI — from any node repo. **One of `--graph-dll` (the identity anchor
+assembly of the platform these bytes were compiled against — `MeshWeaver.Compiler.dll`, which on the
+image path lives in the extracted `/app`, not beside the module) or `--framework-mvid` (that
+identity, stated directly) is required; without one the packer exits 2 rather than writing a bundle
+whose consumers can never tell a rebuild from a no-op:**
 
 ```
 dotnet run --project src/MeshWeaver.Plugin.Build -- module-pack ./bin/Release/net10.0 \
     --module-name MeshWeaver.Social --plugin SocialMedia --package-version 1.2.0 \
-    --min-mesh-version 3.0.0 --out ./artifacts/bundles
+    --min-mesh-version 3.0.0 --graph-dll /app/MeshWeaver.Compiler.dll \
+    --out ./artifacts/bundles
 ```
 
 The closure is an explicit statement: `<name>.dll` (+ `.pdb`), plus only the files named with
