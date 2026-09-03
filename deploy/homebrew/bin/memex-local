@@ -938,6 +938,40 @@ probe_default_install_done() {
 
 # The HTTP half. Echoes the STATUS CODE (000 when no request completed), because judging curl's own
 # exit code instead of the code it fetched is the bug this whole function replaces.
+# Is this instance serving the FIRST-RUN SETUP wizard (i.e. it has no database yet)?
+#
+# 🚨 TWO signals, and the second one is load-bearing. "/setup answers 200" ALONE is not evidence:
+# a configured portal maps no /setup route, so the request falls through to the Blazor SPA
+# fallback — which answers 200 for practically any path. A one-signal probe therefore reports
+# "awaiting setup" for a perfectly healthy portal, and (as the behaviour suite proved on the first
+# draft of this function) turns every RED state in verify_usable into a false green.
+#
+# The discriminator is the redirect: an unconfigured instance sends EVERY other path to /setup,
+# so `/` answers 3xx with a Location naming it. A configured portal serves `/` with 200.
+awaiting_setup() {
+  local caroot ca=() root_code root_location
+  if command -v mkcert >/dev/null 2>&1; then
+    caroot="$(mkcert -CAROOT 2>/dev/null || true)"
+    if [ -n "$caroot" ] && [ -f "$caroot/rootCA.pem" ]; then ca=(--cacert "$caroot/rootCA.pem"); fi
+  fi
+  # One request: the status AND the redirect target of the ROOT. Never --location; following the
+  # redirect would land on /setup and answer 200 either way, which is the very confusion above.
+  root_code="$(curl ${ca[@]+"${ca[@]}"} -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+    "https://${HOSTNAME_LOCAL}:${HOST_PORT}/" 2>/dev/null || true)"
+  case "$root_code" in
+    3??) ;;
+    *)   return 1 ;;
+  esac
+  root_location="$(curl ${ca[@]+"${ca[@]}"} -sS -o /dev/null -w '%{redirect_url}' --max-time 15 \
+    "https://${HOSTNAME_LOCAL}:${HOST_PORT}/" 2>/dev/null || true)"
+  case "$root_location" in
+    */setup) ;;
+    *)       return 1 ;;
+  esac
+  # …and the wizard itself actually serves.
+  [ "$(probe_http /setup)" = "200" ]
+}
+
 probe_http() {
   local path="$1" caroot code ca=()
   if command -v mkcert >/dev/null 2>&1; then
@@ -978,6 +1012,26 @@ verify_usable() {
 
   step "Verifying the portal is USABLE, not merely answering (§14)"
   local failed=0 url="https://${HOSTNAME_LOCAL}:${HOST_PORT}" code
+
+  # ── 0. is this instance AWAITING FIRST-RUN SETUP? ────────────────────────
+  # 🚨 An instance with no database is not a BROKEN portal — it is one waiting for a person, and
+  # the checks below would all condemn it: it has no mesh, therefore no view packs, so check 3
+  # fails and `up` dies with "NOT USABLE" on an install that is working exactly as designed. That
+  # is a false RED, and it lands on the one path a new user takes first.
+  #
+  # Asked over the WIRE, not from the pod log: the surface's own contract is that an unconfigured
+  # instance serves /setup and redirects everything else to it, so that is what is probed. A log
+  # grep would be a second source of truth for the same fact, and it goes stale the moment the log
+  # rotates or the pod restarts.
+  if awaiting_setup; then
+    echo
+    ok "This instance is AWAITING FIRST-RUN SETUP — it has no database yet."
+    info "That is not a failure: the portal is serving the setup wizard and nothing else,"
+    info "which is why it has no sign-in page and no view packs to verify."
+    info "Answer it, and this instance restarts configured:"
+    info "  memex-local setup"
+    return 0
+  fi
 
   # ── 1. the portal serves ─────────────────────────────────────────────────
   code="$(probe_http /)"
@@ -1892,9 +1946,9 @@ each line names its own remedy."
   echo
   # A fresh install is NOT finished at this point, and saying "open the portal" would be
   # the same lie `verify_usable` exists to prevent: the portal is serving a setup wizard
-  # nobody has answered. Which state it is in is a fact about the pod, so read it.
-  if kubectl logs deploy/memex-portal-deployment -n "$NAMESPACE" --tail=-1 2>/dev/null \
-       | grep -q "SETUP wizard only"; then
+  # nobody has answered. Probed over the wire, for the same reason verify_usable probes it —
+  # one source of truth for one fact, and one that a rotated log cannot invalidate.
+  if awaiting_setup; then
     ok "memex is up and waiting to be SET UP — it has no database yet."
     cmd_setup
   else
