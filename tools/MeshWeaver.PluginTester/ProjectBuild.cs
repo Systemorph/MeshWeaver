@@ -165,6 +165,34 @@ public static class ProjectBuild
         public IReadOnlyList<string> PrebuiltDirectories { get; init; } = [];
 
         /// <summary>
+        /// Image assemblies whose copy in the container is SUPERSEDED for this run: this
+        /// repository's source now defines types they still contain, so referencing them would
+        /// import a second definition of a type being compiled here (CS0436).
+        ///
+        /// <para>🚨 <b>An exclusion, not a preference.</b> The shadow set
+        /// (<see cref="Graph.ShadowedAssemblyNames"/>) subtracts only what this run builds FROM
+        /// SOURCE, and membership is reachability-driven through <c>ProjectReference</c> edges. So
+        /// when a type MOVES OUT of an image-shipped assembly into a module in the same repository,
+        /// the very edge that would have shadowed the stale copy is the edge the move deletes — the
+        /// shadow set structurally cannot see it, in the one case that needs it. This input is how a
+        /// caller says so explicitly.</para>
+        ///
+        /// <para><b>Declared, never inferred.</b> Resolving such a collision automatically in favour
+        /// of the source would mask a genuine two-producers-of-one-assembly defect, which is exactly
+        /// what <c>BakeHost.ShippedByHostProblem</c> (#3175) exists to make RED.</para>
+        ///
+        /// <para>No check asserts that the compile needs nothing else from a dropped assembly: the
+        /// compiler already answers that with <c>CS0246</c>/<c>CS0234</c> naming the missing type,
+        /// which is a positive, specific signal. Do not add a redundant one.</para>
+        ///
+        /// <para>⏳ A dropped entry goes STALE once a rebuilt image no longer defines the conflicting
+        /// types — the assembly still exists, so nothing detects it. The durable check is a
+        /// type-name overlap assertion — MeshWeaver#3223, and
+        /// <c>Doc/Architecture/ModuleBuildArchitecture</c>.</para>
+        /// </summary>
+        public IReadOnlyList<string> SupersededImageAssemblies { get; init; } = [];
+
+        /// <summary>
         /// The PLATFORM image's <c>shared/</c> frameworks root — required whenever
         /// <see cref="AppDirectory"/> comes from a different image than the one running this
         /// builder (see <see cref="ContainerReferenceSet.Read"/>). Null = the running runtime's.
@@ -317,6 +345,15 @@ public static class ProjectBuild
         if (graph.Order.IsEmpty)
             return Observable.Return(Fatal(options, sink, wall, container.PlatformAssemblyVersion,
                 "nothing to build. A run that compiles nothing is a failure, never a silent success."));
+
+        try
+        {
+            graph = DropSupersededImageAssemblies(graph, container, options, sink);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Observable.Return(Fatal(options, sink, wall, container.PlatformAssemblyVersion, ex.Message));
+        }
 
         var workRoot = options.OutputDirectory is { Length: > 0 } outDir
             ? Path.GetFullPath(outDir)
@@ -642,6 +679,50 @@ public static class ProjectBuild
                 PrebuiltReferences = prebuiltReferences.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase),
             };
         }
+    }
+
+    /// <summary>
+    /// Adds <see cref="Options.SupersededImageAssemblies"/> to the graph's shadow set, so the
+    /// container's copy of each is left OUT of every compile's reference set in this run.
+    /// Fails closed — an input that silently does nothing is the trapdoor a gate must never have.
+    /// </summary>
+    private static Graph DropSupersededImageAssemblies(
+        Graph graph, ContainerReferenceSet container, Options options, Sink sink)
+    {
+        if (options.SupersededImageAssemblies.Count == 0)
+            return graph;
+
+        var dropped = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in options.SupersededImageAssemblies)
+        {
+            var name = raw?.Trim() ?? string.Empty;
+            if (name.Length == 0)
+                throw new InvalidOperationException(
+                    "--superseded-image-assembly was given an empty name. Name the assembly whose "
+                    + "image copy this run supersedes, or omit the option.");
+
+            if (!container.AssembliesByName.ContainsKey(name))
+                throw new InvalidOperationException(
+                    $"--superseded-image-assembly '{name}': the container at {container.AppDirectory} "
+                    + "carries no such assembly. Either the name is wrong, or the image already stopped "
+                    + "shipping it and this input is STALE — remove it. (Refusing rather than ignoring: "
+                    + "an input that does nothing reads exactly like an input that worked.)");
+
+            if (graph.ShadowedAssemblyNames.Contains(name))
+                throw new InvalidOperationException(
+                    $"--superseded-image-assembly '{name}': this run already builds it from source, so "
+                    + "its image copy is shadowed anyway and the option is redundant. Remove it — the "
+                    + "option exists for the assembly a move made UNREACHABLE, not for one in the graph.");
+
+            dropped.Add(name);
+        }
+
+        var names = dropped.ToImmutable();
+        sink.Info(
+            $"superseded: {names.Count} image assembl(y|ies) dropped from the reference set — "
+            + string.Join(", ", names.OrderBy(n => n, StringComparer.Ordinal))
+            + " (this repository's source now defines types they still contain)");
+        return graph with { ShadowedAssemblyNames = graph.ShadowedAssemblyNames.Union(names) };
     }
 
     // ── the compile ────────────────────────────────────────────────────────────────────────────

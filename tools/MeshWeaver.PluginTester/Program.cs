@@ -209,6 +209,7 @@ static async Task<int> RunBuildProject(string[] args)
     var generatorPaths = new List<string>();
     string? razorGenerators = null;
     var accept = new List<string>();
+    var superseded = new List<string>();
     var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     var allowWarnings = false;
     var maxParallel = Math.Max(1, Environment.ProcessorCount);
@@ -255,6 +256,14 @@ static async Task<int> RunBuildProject(string[] args)
                 break;
             case "--accept" when i + 1 < args.Length:
                 accept.Add(args[++i]);
+                break;
+            // The image's copy of this assembly is SUPERSEDED for this run — dropped from the
+            // reference set because this repository's source now defines types it still contains.
+            // Declared, never inferred: an automatic collision-resolver would mask a real
+            // two-producers defect (#3175). Fails closed in ProjectBuild on an empty name, a name
+            // the container lacks (wrong or STALE), or one the graph already builds.
+            case "--superseded-image-assembly" when i + 1 < args.Length:
+                superseded.Add(args[++i]);
                 break;
             case "--verbose":
                 verbose = true;
@@ -304,6 +313,7 @@ static async Task<int> RunBuildProject(string[] args)
         GeneratorPaths = generatorPaths,
         RazorGeneratorDirectory = razorGenerators,
         Accept = accept,
+        SupersededImageAssemblies = superseded,
         Properties = properties,
         AllowWarnings = allowWarnings,
         Verbose = verbose,
@@ -331,7 +341,8 @@ static string BuildProjectUsage() =>
     "usage: mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] "
     + "[--shared-frameworks <dir>] [--prebuilt <dir>]... "
     + "[--extra-refs <dir>]... [--generators <dir|dll>]... [--razor-generators <dir>] "
-    + "[--accept <construct>]... [-p:Name=Value]... [--allow-warnings] [--max-parallel <n>]\n"
+    + "[--accept <construct>]... [--superseded-image-assembly <name>]... "
+    + "[-p:Name=Value]... [--allow-warnings] [--max-parallel <n>]\n"
     + "  Compiles a .NET project with NO dotnet SDK and NO NuGet restore: the .csproj is evaluated "
     + "without MSBuild, every reference is resolved from this container's /app (and its .deps.json), "
     + "ProjectReferences inside the source root are built first in dependency order, and Roslyn runs "
