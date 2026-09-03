@@ -99,14 +99,16 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
         var readAt = DateTimeOffset.UtcNow;
         return Observable.Zip(
             // Every {Space}/_GitSync and {Space}/_GitSync/{sourceId} on the instance.
-            QuerySet($"nodeType:{GitHubSyncService.ConfigNodeType}", "sync entries ({Space}/_GitSync)"),
+            // Every space's _GitSync — mesh-wide by nature (#3202 — fan-out is opt-in).
+            QuerySet(MeshWideQuery.OfType(GitHubSyncService.ConfigNodeType), "sync entries ({Space}/_GitSync)"),
             // Every install record the package installer wrote.
             QuerySet(
                 $"path:{PackageInstaller.InstalledPartition} scope:children "
                 + $"nodeType:{PackageInstaller.PackageNodeType}",
                 $"install records ({PackageInstaller.InstalledPartition}/*)"),
             // Enrichment only — see the type remarks.
-            QuerySet($"nodeType:{ModuleDiscovery.NodeType}", "module-discovery records"),
+            // Discovery records are written next to the space they describe — mesh-wide (#3202).
+            QuerySet(MeshWideQuery.OfType(ModuleDiscovery.NodeType), "module-discovery records"),
             (sync, installs, discovery) => Fold(readAt, sync, installs, discovery));
     }
 

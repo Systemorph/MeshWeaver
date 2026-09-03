@@ -54,7 +54,9 @@ internal sealed class CellSurfaceAssemblyProvider(
             return Observable.Using(
                 () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
                 _ => meshService
-                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
+                    // Every NodeType definition in the mesh — a catalog whose members live wherever
+                    // their owner does, so mesh-wide by nature (#3202 — fan-out is opt-in).
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(MeshNode.NodeTypePath)))
                     .Take(1)
                     .Timeout(DiscoveryBudget)
                     .SelectMany(change => ResolveAll(

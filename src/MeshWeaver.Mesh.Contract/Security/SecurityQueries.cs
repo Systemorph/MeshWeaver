@@ -227,6 +227,46 @@ public static class SecurityQueries
             + $"nodeType:{SecurityCollections.PartitionAccessPolicyNodeType} {ContentProjection}");
 
     /// <summary>
+    /// The root-scope <c>AccessAssignment</c>s naming ONE subject — <see cref="RootAssignments"/>
+    /// narrowed to <paramref name="accessObject"/>, served by the same single registered schema.
+    ///
+    /// <para>One of the three legs of the SIGN-IN role fold (#3202): a user's platform roles are the
+    /// grants on the ROOT scope, on the <c>Admin</c> partition, and on their OWN partition — three
+    /// pinned homes, read with <see cref="PartitionAssignmentsFor"/> for the latter two. The read
+    /// used to be <c>nodeType:AccessAssignment content.accessObject:"{user}" scope:subtree</c>, no
+    /// partition named: a 199-schema UNION on every request, and — once the storage layer stopped
+    /// serving unanchored queries — a refusal that answered 503 to every signed-in user.</para>
+    /// </summary>
+    /// <param name="accessObject">The subject (user id) whose root grants to read.</param>
+    /// <returns>The query string.</returns>
+    public static string RootAssignmentsFor(string accessObject)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accessObject);
+        return Scoped($"namespace:{RootAccessNamespace} "
+            + $"nodeType:{SecurityCollections.AccessAssignmentNodeType} "
+            + $"content.accessObject:\"{accessObject}\" {ContentProjection}");
+    }
+
+    /// <summary>
+    /// The <c>AccessAssignment</c>s in ONE partition naming ONE subject —
+    /// <see cref="PartitionAssignments"/> narrowed to <paramref name="accessObject"/>. Anchored by
+    /// <c>path:</c> for the reason given there: the partition IS where every scope of a path keeps
+    /// its grants, and <c>Admin</c> is excluded from cross-schema search, so a platform-admin grant
+    /// is reachable ONLY through a path-anchored read.
+    /// </summary>
+    /// <param name="partition">The partition (first path segment) to read.</param>
+    /// <param name="accessObject">The subject (user id) whose grants to read.</param>
+    /// <returns>The query string.</returns>
+    public static string PartitionAssignmentsFor(string partition, string accessObject)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(partition);
+        ArgumentException.ThrowIfNullOrWhiteSpace(accessObject);
+        return Enumeration($"path:{partition} scope:descendants "
+            + $"nodeType:{SecurityCollections.AccessAssignmentNodeType} "
+            + $"content.accessObject:\"{accessObject}\" {ContentProjection}");
+    }
+
+    /// <summary>
     /// Every query shape this class produces, for the completeness test that pins them. A member
     /// added without an entry here is not covered — which is why the test also asserts the fold's
     /// own builders against <see cref="Enumeration"/>.
@@ -240,5 +280,8 @@ public static class SecurityQueries
         RootPolicy,
         PartitionAssignments("acme"),
         PartitionPolicies("acme"),
+        RootAssignmentsFor("rbuergi"),
+        PartitionAssignmentsFor("Admin", "rbuergi"),
+        PartitionAssignmentsFor("rbuergi", "rbuergi"),
     ];
 }

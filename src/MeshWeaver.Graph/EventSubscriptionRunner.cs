@@ -209,7 +209,11 @@ public sealed class EventSubscriptionRunner(
 
     private void Reconcile(EventSubscription subscription)
     {
-        var query = $"nodeType:{subscription.TriggerNodeType}";
+        // A trigger type's instances live wherever they were written, so the reconcile is
+        // mesh-wide by nature and says so (#3202 — fan-out is opt-in). A type with a registered
+        // routing pin (User → Auth) is still served from its one schema: the planner narrows a
+        // declared fan-out by the pin before it enumerates.
+        var query = MeshWideQuery.Declare($"nodeType:{subscription.TriggerNodeType}");
         if (subscription is { MatchField.Length: > 0, MatchValue.Length: > 0 })
             query += $" content.{subscription.MatchField}:{subscription.MatchValue}";
 
@@ -253,7 +257,8 @@ public sealed class EventSubscriptionRunner(
         if (!nodeChangeSubs.TryAdd(nodeType, slot))
             return;   // lost the race — another emission just established this node type
         slot.Disposable = AsSystem(() => meshService.Query<MeshNode>(
-                MeshQueryRequest.FromQuery($"nodeType:{nodeType}")))
+                // Same mesh-wide shape as Reconcile, for the same reason (#3202).
+                MeshQueryRequest.FromQuery(MeshWideQuery.OfType(nodeType))))
             // Every ChangeType EXCEPT Removed means "a matching node exists now" and is a valid
             // existence-based reconcile trigger: Initial/Reset carry the full snapshot, Added a just-
             // created invitee (the deferred-grant case), Updated an existing one re-emitted. EXCLUDE

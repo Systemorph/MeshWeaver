@@ -349,7 +349,8 @@ public static class DynamicTypePreWarmer
         // the way out of that same Subscribe.
         return accessService.RunAsSystem(
             () => meshService
-                .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
+                // Every NodeType definition — a catalog, mesh-wide by nature (#3202 — fan-out is opt-in).
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(MeshNode.NodeTypePath)))
                 .Take(1)
                 .Timeout(EnumerationBudget)
                 .SelectMany(change =>
@@ -458,7 +459,8 @@ public static class DynamicTypePreWarmer
         // `Observable.Using(AccessContextScope.AsSystem, …)` — see WarmDynamicTypes (#1444/#1790).
         return accessService.RunAsSystem(
             () => meshService
-                .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
+                // Every NodeType definition — a catalog, mesh-wide by nature (#3202 — fan-out is opt-in).
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(MeshNode.NodeTypePath)))
                 .Take(1)
                 .Timeout(EnumerationBudget)
                 .SelectMany(change => NodeTypeBakeStatus.Probe(

@@ -389,14 +389,16 @@ public sealed class GitHubWebhookProcessor
     private IObservable<QueryResultChange<MeshNode>> QueryConfigNodesAsSystem()
     {
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        return Observable.Using(
-            () => accessService.ImpersonateAsSystem(),
-            _ => meshService
-                .Query<MeshNode>(MeshQueryRequest
-                    .FromQuery($"nodeType:{GitHubSyncService.ConfigNodeType}")
-                    .Complete())
-                .Where(c => c.ChangeType == QueryChangeType.Initial)
-                .Take(1));
+        // RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)` — store and restore
+        // of the identity must land on the same thread (AGENTS.md; #1790).
+        return accessService.RunAsSystem(() => meshService
+            .Query<MeshNode>(MeshQueryRequest
+                // Every {Space}/_GitSync config — the webhook cannot know which space a push
+                // belongs to until it has read them all, so mesh-wide by nature (#3202).
+                .FromQuery(MeshWideQuery.OfType(GitHubSyncService.ConfigNodeType))
+                .Complete())
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Take(1));
     }
 
     // ── workflow_run → build-completion record ───────────────────────────────
