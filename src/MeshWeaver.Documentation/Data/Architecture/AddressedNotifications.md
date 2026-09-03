@@ -141,6 +141,21 @@ Three properties follow, and they are the point:
   exact-membership filter and `PostgreSqlPartitionedMeshQuery.ResolveNamespaceAnchoredPartitions`
   narrows to **two schemas**. It passes the planner's `IsSufficientlySpecified` through
   `ExtractNamespacePatterns()`, so it needs no `partitions:all` and earns no allow-file line.
+
+  🚨 **Measured, not reasoned** — fed to `QueryRouteClassifier` (the test-side reproduction of the
+  planner's own `IsSufficientlySpecified || ResolvesByRoutingHint` gate) on 2026-09-03:
+
+  | Query | Verdict | `sufficient` |
+  |---|---|---|
+  | `nodeType:Notification sort:CreatedAt-desc` (today's bell) | **Refused** | `False` |
+  | `namespace:{viewer}/_Notification\|Admin/_Notification nodeType:Notification sort:CreatedAt-desc` | **Anchored** | `True` (via `ExtractNamespacePatterns`) |
+  | `namespace:{viewer}/_Notification nodeType:Notification sort:CreatedAt-desc` | **Anchored** | `True` (the parser folds a single namespace into `Path`) |
+  | `path:{viewer}\|Admin scope:subtree nodeType:Notification sort:CreatedAt-desc` | **Anchored** | `True` (via `Paths`) |
+
+  The last row is the fallback if the flat `{addressee}/_Notification/{id}` shape cannot be reached
+  for some class — a two-partition subtree read, still two schemas, but it re-admits anything written
+  anywhere under the viewer's partition. The alternation is the tighter of the two and is what the
+  invariant makes possible.
 - **Visibility becomes correct by path.** With the addressee as the first segment, the ordinary
   path-based fold answers exactly "the addressee, plus whoever can read their partition" — no
   `SatelliteAccessRule` required, and no more plugin-update notifications leaking into every
