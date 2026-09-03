@@ -93,7 +93,7 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
 
         var first = await Reminders()
             .Where(ns => ns.Count == 1)
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         var reminderPath = first[0].Path;
         var reminder = first[0].ContentAs<Notification>(Json);
         Assert.NotNull(reminder);
@@ -120,7 +120,7 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
         // bound: the notification write, if there were one, sits inside the awaited chain.
         await Reconcile(source, CandidateModuleVersion, "Served by registry 'second pass'", logger);
 
-        var afterSecond = await Reminders().FirstAsync().Timeout(TestTimeouts.Convergence);
+        var afterSecond = await Reminders().FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         Assert.Single(afterSecond);
         Assert.Equal(reminderPath, afterSecond[0].Path);
         var stillDismissed = afterSecond[0].ContentAs<Notification>(Json);
@@ -142,7 +142,7 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
         // skipped, which would make the assertion below vacuous.
         await AwaitMarker(CandidateModuleVersion);
 
-        var afterThird = await Reminders().FirstAsync().Timeout(TestTimeouts.Convergence);
+        var afterThird = await Reminders().FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         Assert.Single(afterThird);
         Assert.Equal(reminderPath, afterThird[0].Path);
 
@@ -159,7 +159,7 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
 
         var afterNew = await Reminders()
             .Where(ns => ns.Any(n => n.Path != reminderPath))
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         Assert.Equal(2, afterNew.Count);
         var newReminder = afterNew.Single(n => n.Path != reminderPath).ContentAs<Notification>(Json);
         Assert.NotNull(newReminder);
@@ -169,7 +169,7 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
 
         // The listing now contains the newest write, so every earlier one is committed too: two
         // candidates, two reminders — not one row per pass.
-        Assert.Equal(2, (await Reminders().FirstAsync().Timeout(TestTimeouts.Convergence)).Count);
+        Assert.Equal(2, (await Reminders().FirstAsync().Timeout(TestTimeouts.Convergence).Await()).Count);
 
         // …and the reminder path fetched nothing. Four reconciles, zero registry round-trips.
         Assert.Equal(0, registry.Attempts);
@@ -182,7 +182,7 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
         IPackageSource source, string candidate, string provenance, ILogger logger)
         => await PackageUpdateReconciler
             .ReconcileInstalled(Mesh, source, "HEAD", [Candidate(candidate)], provenance, logger)
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence).Await();
 
     private static PackageManifest Candidate(string moduleVersion) => new()
     {
@@ -214,7 +214,7 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
         };
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         await access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(record))
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence).Await();
     }
 
     private async Task SetMarker(string value)
@@ -223,7 +223,7 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
         await access
             .RunAsSystem(() => Mesh.GetMeshNodeStream(RecordPath)
                 .Update<PackageManifest>(current => current with { NotifiedModuleVersion = value }))
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence).Await();
     }
 
     /// <summary>The user dismissing the bell — the same field the bell list flips on click.</summary>
@@ -233,20 +233,20 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
         await access
             .RunAsSystem(() => Mesh.GetMeshNodeStream(notificationPath)
                 .Update<Notification>(current => current with { IsRead = true }))
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence).Await();
     }
 
     private async Task AwaitRead(string notificationPath, bool expected) =>
         await Mesh.GetMeshNodeStream(notificationPath)
             .Select(n => n.ContentAs<Notification>(Json)?.IsRead)
             .Where(v => v == expected)
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
 
     private async Task AwaitMarker(string expected) =>
         await Mesh.GetMeshNodeStream(RecordPath)
             .Select(n => n.ContentAs<PackageManifest>(Json)?.NotifiedModuleVersion)
             .Where(v => string.Equals(v, expected, StringComparison.Ordinal))
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
 
     /// <summary>The reminder satellites of the install record, read LIVE through a children query
     /// (a query never storms on a parent that does not exist yet, and it re-emits on every write).</summary>
