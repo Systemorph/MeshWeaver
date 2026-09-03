@@ -52,13 +52,34 @@ EOF
 # therefore APPENDED a second '000', and the resulting '000000' matched no arm of the caller's
 # case statement. That is how "nothing is listening on :8443" got reported as a serving-portal
 # fault with the INGRESS as its remedy. The old stub is why this suite never saw it.
+# 🚨 The stub must honour the -w FORMAT, not just the URL. awaiting_setup asks for
+# %{redirect_url} as well as %{http_code}, and a stub that answered a status code to both made the
+# setup branch unreachable — the suite would have gone green over a function it never ran.
 cat > "$STUBS/curl" <<'EOF'
 #!/usr/bin/env bash
 url="${!#}"
+fmt=""
+prev=""
+for a in "$@"; do
+  [ "$prev" = "-w" ] && fmt="$a"
+  prev="$a"
+done
 if [ -n "${FAKE_CURL_FAILS:-}" ]; then printf '000'; exit 7; fi
-case "$url" in
-  */login) printf '%s' "${FAKE_HTTP_LOGIN:-200}" ;;
-  *)       printf '%s' "${FAKE_HTTP_ROOT:-200}" ;;
+case "$fmt" in
+  *redirect_url*)
+    # Only an instance awaiting setup redirects the ROOT to the wizard.
+    case "$url" in
+      *//*/) printf '%s' "${FAKE_REDIRECT_ROOT:-}" ;;
+      *)     printf '' ;;
+    esac
+    ;;
+  *)
+    case "$url" in
+      */login) printf '%s' "${FAKE_HTTP_LOGIN:-200}" ;;
+      */setup) printf '%s' "${FAKE_HTTP_SETUP:-200}" ;;
+      *)       printf '%s' "${FAKE_HTTP_ROOT:-200}" ;;
+    esac
+    ;;
 esac
 EOF
 
@@ -151,6 +172,39 @@ case "$OUT" in
        "check 2 judged the sign-in route through a transport that never connected: $OUT" ;;
   *) ok "a connection failure does not also indict /login" ;;
 esac
+
+# ── an instance AWAITING FIRST-RUN SETUP ────────────────────────────────────────
+# 🚨 It has no mesh, therefore no view packs, so every check below would condemn a portal that is
+# working exactly as designed — a false RED on the first path a new user takes. verify_usable must
+# recognise the state and say what to do about it.
+# `reports` is for RED states — it demands a non-zero exit. Awaiting setup is a green state with
+# an instruction, so it is asserted directly.
+run_verify FAKE_HTTP_ROOT=302 FAKE_REDIRECT_ROOT="https://memex.localhost:8443/setup" \
+  FAKE_HTTP_SETUP=200 FAKE_MODULES=""
+if [ "$RC" -eq 0 ]; then ok "awaiting setup exits 0 — it is a state, not a failure"
+else bad "awaiting setup exits 0 — it is a state, not a failure" "exited $RC: $OUT"; fi
+case "$OUT" in
+  *"AWAITING FIRST-RUN SETUP"*) ok "awaiting setup is reported, not condemned" ;;
+  *) bad "awaiting setup is reported, not condemned" "said nothing about setup: $OUT" ;;
+esac
+case "$OUT" in
+  *"memex-local setup"*) ok "awaiting setup points at the command that answers it" ;;
+  *) bad "awaiting setup points at the command that answers it" "named no next step: $OUT" ;;
+esac
+
+# 🚨 THE NEGATIVE CONTROL, and it is not hypothetical: the first draft of this probe asked only
+# "does /setup answer 200", and a CONFIGURED portal answers 200 there too — its Blazor SPA fallback
+# serves almost any path. Every red state below then short-circuited into "awaiting setup" and the
+# whole verification passed on a broken portal. The root REDIRECT is what discriminates.
+run_verify FAKE_HTTP_ROOT=200 FAKE_HTTP_SETUP=200 FAKE_MODULES=""
+case "$OUT" in
+  *"AWAITING FIRST-RUN SETUP"*)
+    bad "a configured portal is NOT mistaken for one awaiting setup" \
+        "/setup answering 200 through the SPA fallback was read as setup mode: $OUT" ;;
+  *) ok "a configured portal is NOT mistaken for one awaiting setup" ;;
+esac
+if [ "$RC" -ne 0 ]; then ok "…and its missing view packs are still caught"
+else bad "…and its missing view packs are still caught" "exited 0 on a portal with no view packs: $OUT"; fi
 
 reports "a missing view pack is caught" "MeshWeaver.Blazor.Views" \
   FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=200 \
