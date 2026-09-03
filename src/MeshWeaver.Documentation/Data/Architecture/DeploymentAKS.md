@@ -287,22 +287,52 @@ Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/Rele
 
 ## Migration under self-update
 
-When an install rolls itself to a new tag (per `Admin/UpdatePolicy`), the in-pod updater patches **two
-Deployments** in one pass — `memex-portal-deployment` (container `memex-portal`) and
-`memex-migration-deployment` (container `memex-migration`), the names in `SelfUpdateOptions`.
+When an install rolls itself to a new tag (per `Admin/UpdatePolicy`), the in-pod updater patches
+**exactly one** workload: `memex-portal-deployment` (container `memex-portal`). It does **not**
+touch the migration, and it says so in its own success line:
 
-**🚨 That second patch does not currently run a migration, and this is a known gap, not a working
-mechanism.** The chart's migration is a **Job**; the updater and its RBAC target
-`memex-migration-deployment`, which the chart does not render at all (`helm template deploy/helm` produces
-`kind: Job` named `memex-migration-<revision>`, and the only occurrence of `memex-migration-deployment` in
-the whole rendered output is the RBAC `resourceNames` grant). On a namespace that still carries the legacy
-Deployment the PATCH lands on a pod spec; on a chart-only environment it **404s, and
-`KubernetesDeploymentUpdater.PatchDeploymentImageAsync` THROWS on any non-success status** — it does not
-"log and skip". The portal is patched FIRST, so the roll itself still happens and the fault surfaces
-afterwards, on the migration leg only. **Either way a self-update rolls the portal image while the schema
-stays where it was.** A release that carries a migration needs the Job to
-run (`helm upgrade`) — do not assume self-update covers it. Verify `admin.mesh_nodes.db_version` after any
-roll that included a schema change.
+> `[SelfUpdate] patched memex-portal-deployment to <tag>. The database migration is a helm-run Job
+> (memex-migration-<revision>) and is NOT rolled from here; DbVersionGate refuses to serve if this
+> image is ahead of the schema.`
+
+> **This section used to say the updater patched two Deployments** — the portal and
+> `memex-migration-deployment` — and that the second 404'd and threw, poisoning the verdict of the
+> portal roll that had already succeeded. **That was true until #2797 and is not true now.** The
+> second PATCH is gone, and a guard fails the build if anyone re-adds one —
+> `SelfUpdatePatchesOnlyPatchableWorkloadsGuard`, in **MeshWeaver.Plugins**
+> (`src/Memex.Hosts.Test/`), which is also where the updater itself lives
+> (`src/MeshWeaver.SelfUpdate.Aks/KubernetesDeploymentUpdater.cs`). Neither is in THIS repo, so
+> `git grep` here finds only this page. Left recorded because the stale text sent at least one investigation looking
+> for a 404 that no longer happens.
+
+**🚨 The gap is not that the migration leg is broken — it is that there is no migration leg at all.**
+A self-update moves the image and nothing else, so a release that bumps the schema is, by
+construction, un-takeable by self-update. CD does build and push a correctly-tagged
+`memex-migration` image on every run (tag-for-tag with `memex-portal-ai`); nothing in the continuous
+path ever runs it. `main-cd.yml` says as much: *"a migration that can never run surfaces only at the
+deploy that needs it."* Only `helm upgrade` mints the Job.
+
+**What that looks like when it fires** (memex, 2026-09-03 — MeshWeaver#3207): self-update rolled the
+portal to three successive builds needing `db_version` 55 against a database at 54. Each new pod hit
+`DbVersionGate`, logged `Critical`, and exited; the ReplicaSet never went Ready and the rollout
+recorded `ProgressDeadlineExceeded`. The cost was a pod crash-looping on a 5-minute back-off, each
+attempt writing a ~685 MB core dump.
+
+🚨 **Read the exit code carefully if you meet this.** The container reports `exitCode 139`, which
+reads as SIGSEGV — but the dump records `NT_SIGINFO … signo 6`, i.e. **SIGABRT**. It is a managed
+fail-closed shutdown, not a native crash, and the `OrleansProvisioningGate` cancellation and
+`Hosting failed to start` that follow are the shutdown's own noise rather than the fault.
+
+**The service stayed up, and that is not luck.** `maxUnavailable: 0` with `maxSurge: 1` kept the
+previous pods serving while the new ReplicaSet failed to become Ready, so a fail-closed boot became
+a stalled rollout instead of an outage. Verify that setting before any roll — it is the only reason
+this class of failure is recoverable rather than an incident.
+
+**So a portal stuck behind its schema is a SAFE state, and the fix is not a hand roll.** Rolls go
+through CD; a hand-pinned tag is what the roll-via-CD directive exists to prevent. Where the gate
+must hold a roll, the decision belongs BEFORE the portal is patched — that is the shape
+that guard prescribes, and re-attempting a migration PATCH after the portal has already rolled is
+the defect #2797 removed.
 
 **Startup ordering — what actually happens if the portal outruns the schema.** Two mechanisms exist, and
 only the first is a wait:
@@ -314,9 +344,17 @@ only the first is a wait:
   the build, logs `Critical` and calls `lifetime.StopApplication()`.
 
 So a portal that starts against an un-migrated database **fails closed and exits** — it does not hold and
-then go live. Kubernetes restarts it, and it recovers only once something else has bumped `db_version`; until
-then the namespace has no serving portal. The gate protects the database from a half-migrated portal; it does
-**not** make the ordering safe on its own. Treat "the migration ran" as a precondition you verify, not one
+then go live. Kubernetes restarts it, and that pod recovers only once something else has bumped
+`db_version`.
+
+**Whether the NAMESPACE still serves depends entirely on the rollout strategy**, and this page used to
+say flatly that it does not. On a rolling update with `maxUnavailable: 0` and `maxSurge: 1` — what the
+chart ships and what memex ran on 2026-09-03 — the previous ReplicaSet keeps serving because the new pod
+never becomes Ready, so the failure is a stalled rollout (`ProgressDeadlineExceeded`) and not an outage.
+Lose that setting, or hit this on a fresh install / a full restart where there is no healthy ReplicaSet
+to fall back on, and the namespace genuinely has no serving portal. The gate protects the database from
+a half-migrated portal; it does **not** make the ordering safe on its own, and the rollout strategy is
+what decides whether "unsafe ordering" costs you a stalled rollout or an outage. Treat "the migration ran" as a precondition you verify, not one
 the roll guarantees.
 
 ## Key Vault secrets are DECLARED in values — `keyVaultSecrets`
