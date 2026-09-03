@@ -323,6 +323,14 @@ construction, un-takeable by self-update. CD does build and push a correctly-tag
 path ever runs it. `main-cd.yml` says as much: *"a migration that can never run surfaces only at the
 deploy that needs it."* Only `helm upgrade` mints the Job.
 
+> **This is a property of the fleet, not of one namespace, and the remedy is an OPEN decision.** An
+> install rolls itself forward until it meets its first schema-bumping release and stops there; an
+> install that has not stopped has not arrived yet, not been configured differently (`memex-cloud`
+> served `ci.7621` healthily the same day for exactly that reason). Clearing one instance at one tag
+> clears today and re-arms for the next bump. Why that matters for the control instance, what the
+> three candidate remedies trade, and how to pick a target when an operator does carry an install
+> across, are on [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall).
+
 **What that looks like when it fires** (memex, 2026-09-03 — MeshWeaver#3207): self-update rolled the
 portal to three successive builds needing `db_version` 55 against a database at 54. Each new pod hit
 `DbVersionGate`, logged `Critical`, and exited; the ReplicaSet never went Ready and the rollout
@@ -344,6 +352,15 @@ through CD; a hand-pinned tag is what the roll-via-CD directive exists to preven
 must hold a roll, the decision belongs BEFORE the portal is patched — that is the shape
 that guard prescribes, and re-attempting a migration PATCH after the portal has already rolled is
 the defect #2797 removed.
+
+🚨 **And where a `helm upgrade` genuinely is the sanctioned path, choosing its target is a separate
+problem with its own trap.** A tag whose three platform images are all promoted and all pullable can
+still have no plugin modules for its framework identity — `Promote: tag the full set` and `Verify
+every image shipped` both go green in that state, and the job that discriminates is `Plugins: bake +
+seal the publication for this identity`. Check the seal, the ancestry of the fix you need, and a
+`memex-migration` image at the SAME tag, before naming any build a target:
+[The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall) → "What makes a tag a safe
+target".
 
 **Startup ordering — what actually happens if the portal outruns the schema.** Two mechanisms exist, and
 only the first is a wait:

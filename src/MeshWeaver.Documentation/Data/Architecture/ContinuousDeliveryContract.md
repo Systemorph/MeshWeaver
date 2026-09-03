@@ -112,10 +112,16 @@ moving pointer like `latest`, untagging *destroys* it rather than reverting it. 
 | **C** | **`memex-portal-ai:<version>`** — one manifest PUT, the last thing the pipeline does | a single PUT either happened or did not; there is no half-armed state |
 
 Phase C is the **arming write** and nothing else is, because `SelfUpdateHostedService` lists tags for
-`memex-portal-ai` **only**, picks the newest `^\d+\.\d+\.\d+` one, and patches the portal *and*
-migration Deployments to it. Everything the roll will need — the matching
+`memex-portal-ai` **only**, picks the newest `^\d+\.\d+\.\d+` one, and patches the portal Deployment
+to it. Everything the roll will need — the matching
 `memex-migration:<version>`, the bake image that certified these node types — is already tagged by
 phase A. **Do not move that step, and do not add anything after it.**
+
+🚨 **The roll patches the portal and NOTHING else** — since #2797 there is no second PATCH, and a
+guard in MeshWeaver.Plugins fails the build if one comes back. The matching `memex-migration` image
+that phase A tagged is therefore *available* to the roll but never *run* by it: only `helm upgrade`
+mints the migration Job. That is why a release which bumps the schema is un-takeable by self-update
+at all — [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall).
 
 One deliberate coupling: the GHCR mirror sits in **phase B**, so a GHCR outage *blocks* the release
 rather than silently leaving the plugins repo's `latest` stale. `check-image-set.sh` only observes
@@ -309,6 +315,38 @@ what sets that tail.
 🚨 The same change makes **publication frequency equal to portal-restart frequency**: nothing paces
 the rolls, so each published set restarts every install that selects it. That is the reason the tick
 is hourly and not faster, and it is tracked as #1778 rather than papered over with a slower CD.
+
+### A promoted tag is not a deployable tag — the seal is the discriminator
+
+The rule above stops at the image. **A tag whose images all exist, and are all pullable, can still be
+unusable**, and the two checks that sound like they say otherwise are green in exactly that state:
+
+- **`Promote: tag the full set (all-or-nothing)`** green means the three platform images
+  (`memex-portal-ai`, `memex-migration`, `mw-plugin-test`) carry the tag.
+- **`Verify every image shipped`** green means they are pullable.
+- **Neither says anything about the plugin modules.** The binding job is
+  **`Plugins: bake + seal the publication for this identity`**, which seals the module set *for that
+  platform identity*. It runs after the promote — see "After the promote" below — and, as recorded
+  there, the reconciler does not heal it.
+
+Measured on two consecutive runs, 2026-09-03 — `33746020109` (`ci.7669`) and `33749847612`
+(`ci.7674`), both seals FATALing on the one-producer guard (#3175):
+
+```text
+Promote: tag the full set (all-or-nothing)                 success
+Verify every image shipped                                 success
+Plugins: bake + seal the publication for this identity     FAILURE
+  └─ Register the publication with memex                   skipped
+```
+
+Both tags are **platform-present, plugin-modules-absent** for their framework identity. Rolling to
+one produces the half-broken state the standing availability rule forbids — *all plugins available
+for the correct platform version, else nothing goes*
+([Release Availability Gates](/Doc/Architecture/ReleaseGates)). And note the skipped step: a failed
+seal never registers the publication with memex, so the availability predicate has no record to
+read. **The number of images promoted was never the question.** The operator-facing checklist for
+choosing a target is [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall) →
+"What makes a tag a safe target".
 
 ## Property 1a — how the set already spans repos, and what the GUI move actually breaks
 
@@ -604,3 +642,4 @@ green lane red.
 - [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) — where the version number comes from.
 - [Deployment](/Doc/Architecture/Deployment) — the route router (AKS vs Container Apps).
 - [Deploying Plugin Changes](/Doc/Architecture/DeployingPluginChanges) — what the `mw-plugin-test` leg is for.
+- [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall) — which releases an install can take by itself, and the three conditions a tag must clear before it is a safe helm target.
