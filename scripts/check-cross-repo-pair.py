@@ -122,6 +122,14 @@ PAIR_REF_RE = re.compile(
 NONE_RE = re.compile(r"^none\b[ \t]*[-—–:,]?[ \t]*(?P<reason>.*)$", re.IGNORECASE)
 MIN_REASON_CHARS = 12
 
+# A `none` waiver that rests on a live-mesh sweep (AGENTS.md: search the live mesh with
+# `search_chunks` before deleting public surface) must rest on a sweep that RAN. The envelope says
+# so itself: `"searched": true`. `searched: false` is the #2741 no-embedding-provider shape, and a
+# reason that speaks of a sweep without quoting the field is that shape read as clean (#3137).
+SWEEP_DID_NOT_RUN_RE = re.compile(r"searched\W{0,3}false", re.IGNORECASE)
+SWEEP_RAN_RE = re.compile(r"searched\W{0,3}true", re.IGNORECASE)
+SWEEP_CLAIM_RE = re.compile(r"\b(?:sweep|swept|search_chunks)\b", re.IGNORECASE)
+
 FENCE_RE = re.compile(r"^[ \t]*(```|~~~)")
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
@@ -208,6 +216,24 @@ def parse_declarations(body: str) -> list[Declaration]:
                     line.strip(),
                     f"`none` needs a REASON of at least {MIN_REASON_CHARS} characters — an "
                     "unexplained `none` is an unattributable waiver",
+                ))
+            elif SWEEP_DID_NOT_RUN_RE.search(reason):
+                # 🚨 #3137's pull request cited a `search_chunks` sweep that answered
+                # `"searched": false` and read it as "no callers". It means the deployment has NO
+                # embedding provider and nothing was searched (#2741) — the envelope deliberately
+                # carries no `count` so an absent field cannot be read as zero. A waiver resting on
+                # it rests on nothing, so it is refused here rather than trusted.
+                found.append(Unparseable(
+                    line.strip(),
+                    "the cited sweep did not run — `searched: false` means no embedding provider "
+                    "and NOTHING was searched (#2741). Sweep on a deployment whose index is live "
+                    "and quote its `searched: true`, or give a reason that does not rest on the sweep",
+                ))
+            elif SWEEP_CLAIM_RE.search(reason) and not SWEEP_RAN_RE.search(reason):
+                found.append(Unparseable(
+                    line.strip(),
+                    "a reason that cites a live-mesh sweep must quote the envelope's "
+                    "`searched: true` — a sweep answer without it is the #2741 shape read as clean",
                 ))
             else:
                 found.append(NoPair(reason, line.strip()))
@@ -311,10 +337,10 @@ def evaluate(surface: dict, body: str, fleet: set[str], resolve) -> tuple[int, l
 
     out.append(
         f"Base tree declares {at_base} public top-level type(s) under src/; "
-        f"this diff removes {len(removed)}."
+        f"this diff removes {len(removed)} public type(s) or member(s)."
     )
     if not removed:
-        out.append("No public top-level type left src/ in this diff — no cross-repo pair to gate.")
+        out.append("No public type or member left src/ in this diff — no cross-repo pair to gate.")
         return 0, out
 
     for entry in removed[:40]:
@@ -336,7 +362,7 @@ def evaluate(surface: dict, body: str, fleet: set[str], resolve) -> tuple[int, l
 
     if not declarations:
         out.append(
-            f"::error::This pull request removes {len(removed)} public top-level type(s) from "
+            f"::error::This pull request removes {len(removed)} public type(s) or member(s) from "
             "src/ and declares no counterpart. Public surface leaving this repo can red a plugin "
             "repo's trunk hours later, on pull requests that did not make the change "
             "(MeshWeaver#2689). Add ONE line to the pull-request body:"
@@ -429,6 +455,23 @@ _REMOVED = [{
     "category": "departed",
     "landedIn": [],
 }]
+# MeshWeaver#3137 as the detector now reports it (check-type-forwards.py `member-removed`).
+_REMOVED_MEMBERS = [
+    {
+        "key": "MeshWeaver.PluginCatalog:MeshWeaver.PluginCatalog.InstanceRegistryAuthenticator::CacheDuration",
+        "assembly": "MeshWeaver.PluginCatalog",
+        "fullName": "MeshWeaver.PluginCatalog.InstanceRegistryAuthenticator.CacheDuration",
+        "category": "member-removed",
+        "landedIn": [],
+    },
+    {
+        "key": "MeshWeaver.PluginCatalog:MeshWeaver.PluginCatalog.InstanceRegistryAuthenticator::NegativeCacheDuration",
+        "assembly": "MeshWeaver.PluginCatalog",
+        "fullName": "MeshWeaver.PluginCatalog.InstanceRegistryAuthenticator.NegativeCacheDuration",
+        "category": "member-removed",
+        "landedIn": [],
+    },
+]
 _FLEET = {"Systemorph/MeshWeaver.Plugins", "Systemorph/MeshWeaver.Education", "Systemorph/Memex"}
 
 
@@ -634,6 +677,48 @@ SELF_TESTS: list[tuple] = [
         _resolver(_pr()),
         False,
         ("declares no counterpart",),
+    ),
+    # ── the sixth shape (#3103): a removed MEMBER is a removal, and a sweep that did not run is
+    #    not a reason (#3137's pull request read `searched:false` as "no callers") ──
+    (
+        "a removed public MEMBER of a kept type meets the gate exactly like a removed type",
+        {"publicTypesAtBase": _HEALTHY, "removed": _REMOVED_MEMBERS},
+        "Instance-key resolution reads live mirrors (#3119).",
+        _resolver(_pr()),
+        False,
+        ("declares no counterpart", "InstanceRegistryAuthenticator.CacheDuration", "member-removed"),
+    ),
+    (
+        "`none` resting on a sweep that answered searched:false is REFUSED — nothing was searched",
+        {"publicTypesAtBase": _HEALTHY, "removed": _REMOVED_MEMBERS},
+        "Pairs-with: none — search_chunks sweep on memex: {\"searched\": false}, no callers found\n",
+        _resolver(_pr()),
+        False,
+        ("did not run", "searched: false", "#2741"),
+    ),
+    (
+        "`none` that CLAIMS a sweep without quoting `searched: true` is refused too",
+        {"publicTypesAtBase": _HEALTHY, "removed": _REMOVED_MEMBERS},
+        "Pairs-with: none — swept the live mesh, zero callers\n",
+        _resolver(_pr()),
+        False,
+        ("must quote the envelope's `searched: true`",),
+    ),
+    (
+        "`none` resting on a sweep that RAN (`searched: true`) passes",
+        {"publicTypesAtBase": _HEALTHY, "removed": _REMOVED_MEMBERS},
+        "Pairs-with: none — swept memex.meshweaver.cloud with search_chunks (searched:true), 0 callers; Plugins fixed in #1209\n",
+        _resolver(_pr()),
+        True,
+        ("No counterpart to resolve",),
+    ),
+    (
+        "`none` with a reason that never mentions a sweep is judged on its length alone, as before",
+        {"publicTypesAtBase": _HEALTHY, "removed": _REMOVED_MEMBERS},
+        "Pairs-with: none — the two constants were only read by the test this PR rewrites\n",
+        _resolver(_pr()),
+        True,
+        ("No counterpart to resolve",),
     ),
 ]
 

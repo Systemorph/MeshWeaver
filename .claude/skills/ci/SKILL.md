@@ -192,8 +192,27 @@ is open, draft, closed-unmerged, or **merged into anything but its repo's defaul
 (Plugins#904 merged into `feat/collaboration-module` — "merged" alone is not landed). It is a
 `needs:` of `Consolidate test results`, so it can actually block.
 
-- **Ordinary PRs never meet it.** Measured 2026-09-02: `main~25 → main` removes ZERO public types;
-  `main~100 → main` removes 116, all of them the Maps/Indexing carve-out.
+- **It fires on MEMBERS too (#3103, the sixth shape).** Core #3137 deleted two `public static
+  readonly` fields of a type that stayed; Plugins' `MeshWeaver.Auth.Test` failed `CS0117` and
+  `Portal hosts (shard 0)` was red on every Plugins PR for three hours — *"nothing was tested"*.
+  The detector now keys public members (methods, properties, fields, consts, events, indexers,
+  operators, constructors, nested types, positional record parameters, enum and interface
+  members) by NAME under their type; a rename is a removal. Removing one overload of several is
+  below that granularity by design.
+- **Ordinary PRs never meet it.** Measured 2026-09-02/03: `main~25 → main` removes ZERO public
+  types and exactly TWO public members (both #3137); `main~100 → main` removes 116 types, all of
+  them the Maps/Indexing carve-out.
+- **`Pairs-with: none` resting on a live-mesh sweep must quote `searched: true`.** A reason that
+  contains `searched: false` is refused (#2741: no embedding provider, nothing was searched —
+  #3137's PR read exactly that as "no callers"), and a reason that mentions a sweep without the
+  positive marker is refused too.
+- **The structural answer runs beside it: `Dependent suites (MeshWeaver.Plugins)`**
+  (`dependent-suites.yml`). A PR that changes the public declaration set (type or member, added
+  or removed — 11 of the last 25 merges) dispatches `core-pr-suites` to MeshWeaver.Plugins, which
+  resolves its `platform-ref` to the PR's MERGE commit, runs `portal-hosts`, and records the
+  verdict as a marker ref `refs/dependent-suites/<run>` in ITS repo; core polls that ref and
+  finishes with the dependent's conclusion. It never passes on silence (no receiver → red before
+  dispatch; no verdict in 40 min → red). Not required yet; docs say how to require it.
 - **It reads, it never checks out.** A checkout puts plugin SOURCE into core's build; an API read
   puts only a FACT into a verdict. That is the line `PlatformNeverDependsOnPluginsGuard` draws, and
   its `ApiReadLedger` now enumerates both workflows on that side of it.
@@ -206,8 +225,12 @@ Full reference:
 
 ## Checklist
 
-- [ ] Removing public surface? `Pairs-with:` is in the PR body and the counterpart is MERGED into
-      its repo's default branch.
+- [ ] Removing public surface — a TYPE or a MEMBER of a kept type? `Pairs-with:` is in the PR body
+      and the counterpart is MERGED into its repo's default branch; a `none` that cites a sweep
+      quotes `searched: true`.
+- [ ] Changing public surface at all? Read `Dependent suites (MeshWeaver.Plugins)` on the PR — green
+      only when Plugins built and ran against THIS merge commit; "not dispatched" means the diff
+      changed no public declaration.
 - [ ] Every job I added or touched carries a literal `timeout-minutes` ≤ 45 (`python3 .github/scripts/check-workflow-timeouts.py --root .` is green).
 - [ ] No `continue-on-error` on a gate's input step; no `if:` asking whether a secret/variable is
       set. Fork-PR exemption expressed once, on the event.
