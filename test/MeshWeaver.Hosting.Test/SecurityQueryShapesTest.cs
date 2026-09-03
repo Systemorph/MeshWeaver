@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -129,7 +129,7 @@ public class SecurityQueryShapesTest
         var declared = DeliberatelyGlobal.Select(x => x.Shape).ToHashSet(StringComparer.Ordinal);
 
         var undeclared = SecurityQueries.AllShapes
-            .Where(shape => RouteOf(shape).Kind == Route.FanOut && !declared.Contains(shape))
+            .Where(shape => RouteOf(shape).Kind == QueryRoute.FanOut && !declared.Contains(shape))
             .ToArray();
 
         undeclared.Should().BeEmpty(
@@ -141,7 +141,7 @@ public class SecurityQueryShapesTest
         // …and the reverse: a declared entry that has since stopped fanning out must be struck, or
         // the list becomes a fiction that outlives its subject.
         foreach (var (shape, reason) in DeliberatelyGlobal)
-            RouteOf(shape).Kind.Should().Be(Route.FanOut,
+            RouteOf(shape).Kind.Should().Be(QueryRoute.FanOut,
                 $"'{shape}' is declared global because {reason} — if it no longer fans out, "
                 + "remove it from the list rather than leaving a stale justification behind");
     }
@@ -156,7 +156,7 @@ public class SecurityQueryShapesTest
     public void TheRootAccessLegPinsTheRegisteredGlobalSchema()
     {
         var route = RouteOf(SecurityQueries.RootAssignments);
-        route.Kind.Should().Be(Route.Pinned,
+        route.Kind.Should().Be(QueryRoute.Pinned,
             "a root-scope AccessAssignment lives at _Access/{id}, and _Access resolves through the "
             + "registered global-satellite definitions to ONE schema");
         route.Target.Should().Be("system_access");
@@ -167,20 +167,20 @@ public class SecurityQueryShapesTest
     /// UNIONs every partition schema for it; the path-less spelling it replaced is kept here as the
     /// control that DID fan out. Today the segment is unregistered, so the read is unroutable (and
     /// answered empty — exactly what the fan-out returned, 179 times per five minutes); registering
-    /// <c>_Policy</c> as a global satellite flips this to <see cref="Route.Pinned"/> with no change
+    /// <c>_Policy</c> as a global satellite flips this to <see cref="QueryRoute.Pinned"/> with no change
     /// to the query, at which point this assertion is the one to update.
     /// </summary>
     [Fact]
     public void TheRootPolicyLegNeverFansOut()
     {
-        RouteOf(SecurityQueries.RootPolicy).Kind.Should().Be(Route.Unroutable,
+        RouteOf(SecurityQueries.RootPolicy).Kind.Should().Be(QueryRoute.Unroutable,
             "path:_Policy names the same node as `namespace: id:_Policy` but gives the router a first "
             + "segment; no global satellite is registered for _Policy, so it routes to no schema "
             + "rather than to all of them");
 
         // The control: the spelling #2194 replaced fanned out, and would again.
         RouteOf("namespace: id:_Policy nodeType:PartitionAccessPolicy limit:all").Kind
-            .Should().Be(Route.FanOut, "the path-less spelling has no first segment to route on");
+            .Should().Be(QueryRoute.FanOut, "the path-less spelling has no first segment to route on");
     }
 
     /// <summary>
@@ -256,7 +256,7 @@ public class SecurityQueryShapesTest
         {
             new QueryParser().Parse(shape).CrossPartition.Should().BeTrue(
                 $"a mesh-wide fold read must declare it — {reason}");
-            RouteOf(shape).Kind.Should().Be(Route.FanOut,
+            RouteOf(shape).Kind.Should().Be(QueryRoute.FanOut,
                 $"declaring the fan-out must not have anchored it — {reason}");
         }
     }
@@ -276,7 +276,7 @@ public class SecurityQueryShapesTest
     public void AnAnchoredScopeLegPinsItsPartition(string query, string expected)
     {
         var route = RouteOf(query);
-        route.Kind.Should().Be(Route.Pinned);
+        route.Kind.Should().Be(QueryRoute.Pinned);
         route.Target.Should().Be(expected);
     }
 
@@ -296,10 +296,10 @@ public class SecurityQueryShapesTest
     [Fact]
     public void ThePerPartitionLegsPinTheirPartition()
     {
-        RouteOf(SecurityQueries.PartitionAssignments("acme")).Should().Be((Route.Pinned, "acme"));
-        RouteOf(SecurityQueries.PartitionPolicies("acme")).Should().Be((Route.Pinned, "acme"));
+        RouteOf(SecurityQueries.PartitionAssignments("acme")).Should().Be((QueryRoute.Pinned, "acme"));
+        RouteOf(SecurityQueries.PartitionPolicies("acme")).Should().Be((QueryRoute.Pinned, "acme"));
         // "Admin" is PermissionEvaluator.AdminScope, which is internal to Mesh.Contract.
-        RouteOf(SecurityQueries.PartitionAssignments("Admin")).Should().Be((Route.Pinned, "admin"),
+        RouteOf(SecurityQueries.PartitionAssignments("Admin")).Should().Be((QueryRoute.Pinned, "admin"),
                 "the Admin partition is excluded from searchable_schemas, so its grants are only "
                 + "reachable through a path-anchored read — that is why the fold used to carry an "
                 + "Admin special case, and why every partition now takes that route");
@@ -310,81 +310,29 @@ public class SecurityQueryShapesTest
     [InlineData("namespace: id:_Policy limit:all")]
     [InlineData("path:*/Source scope:subtree nodeType:Code")]
     public void AnUnanchoredShapeFansOut(string query)
-        => RouteOf(query).Kind.Should().Be(Route.FanOut);
-
-    // ————————————————————————— the classifier
-
-    /// <summary>How the Postgres router answers a query — the three outcomes it actually has.</summary>
-    private enum Route
-    {
-        /// <summary>One concrete schema: the lowercased first segment, or a registered global satellite's schema.</summary>
-        Pinned,
-        /// <summary>A first segment the router refuses to route (an unregistered <c>_</c>-prefixed segment): no schema, no fan-out, no write can ever land there.</summary>
-        Unroutable,
-        /// <summary>No first segment, or a wildcard one: a <c>UNION ALL</c> over every partition schema.</summary>
-        FanOut,
-    }
+        => RouteOf(query).Kind.Should().Be(QueryRoute.FanOut);
 
     /// <summary>
-    /// The global satellite namespaces the platform registers with an explicit schema
-    /// (<c>DefaultPartitionProvider.CreateGlobalSatellitePartition</c>) — the registry the router's
-    /// <c>ResolveGlobalSchema</c> consults for a <c>_</c>-prefixed first segment. Mirrored here so
-    /// the shapes test stays a pure parser test; <see cref="SecurityQueryRootLegRegistryTest"/>
-    /// asserts this mirror against the REAL registry of a running mesh, so it cannot drift silently.
+    /// The SIGN-IN role fold's three legs (#3202) — the identity-side reads that replaced
+    /// <c>nodeType:AccessAssignment content.accessObject:"{user}" scope:subtree</c>, the query that
+    /// UNION-ed every partition schema on every request and, once the storage layer stopped serving
+    /// unanchored queries, answered 503 to every signed-in user. Each pins ONE schema: the root leg
+    /// the registered <c>system_access</c>, the other two the partition they name.
     /// </summary>
-    internal static readonly ImmutableDictionary<string, string> RegisteredGlobalSatellites =
-        ImmutableDictionary<string, string>.Empty.Add(SecurityQueries.RootAccessNamespace, "system_access");
-
-    /// <summary>
-    /// The route a query takes, reproduced on the shared <see cref="QueryParser"/> from the rules
-    /// <c>PostgreSqlPartitionedMeshQuery</c> / <c>PostgreSqlPathRoutingAdapter</c> apply — first
-    /// segment of <c>path:</c> (which a single <c>namespace:</c> also sets), lowercased, unless it
-    /// is a wildcard (fan-out), empty (fan-out), or <c>_</c>-prefixed (registered → its schema,
-    /// otherwise unroutable) — so the census is measured rather than asserted.
-    /// </summary>
-    private static (Route Kind, string? Target) RouteOf(string query)
+    [Fact]
+    public void TheSignInLegsPinTheirSchemas()
     {
-        var parsed = new QueryParser().Parse(query);
-        var fromPath = RouteOfSegment(parsed.Path);
-        if (fromPath.Kind != Route.FanOut)
-            return fromPath;
-        foreach (var ns in parsed.ExtractNamespaces())
-        {
-            var fromNamespace = RouteOfSegment(ns);
-            if (fromNamespace.Kind != Route.FanOut)
-                return fromNamespace;
-        }
-        return (Route.FanOut, null);
+        RouteOf(SecurityQueries.RootAssignmentsFor("rbuergi")).Should().Be((QueryRoute.Pinned, "system_access"));
+        RouteOf(SecurityQueries.PartitionAssignmentsFor("Admin", "rbuergi")).Should().Be((QueryRoute.Pinned, "admin"),
+            "a platform-admin grant lives in Admin/_Access and nowhere else (AGENTS.md → Global admin)");
+        RouteOf(SecurityQueries.PartitionAssignmentsFor("rbuergi", "rbuergi")).Should().Be((QueryRoute.Pinned, "rbuergi"));
+
+        // The control: the shape these replaced is the fan-out.
+        RouteOf("nodeType:AccessAssignment content.accessObject:\"rbuergi\" scope:subtree limit:all").Kind
+            .Should().Be(QueryRoute.FanOut, "the pre-#3202 sign-in read named no partition");
     }
 
-    private static (Route Kind, string? Target) RouteOfSegment(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-            return (Route.FanOut, null);
-        var trimmed = path.Trim().Trim('/');
-        if (trimmed.Length == 0)
-            return (Route.FanOut, null);
-        var slash = trimmed.IndexOf('/');
-        var first = slash > 0 ? trimmed[..slash] : trimmed;
-        if (first.Length == 0 || first == "*" || first.Contains('*'))
-            return (Route.FanOut, null);
-        if (first.StartsWith('_'))
-            return RegisteredGlobalSatellites.TryGetValue(first, out var schema)
-                ? (Route.Pinned, schema)
-                : (Route.Unroutable, null);
-        return (Route.Pinned, first.ToLowerInvariant());
-    }
+    private static (QueryRoute Kind, string? Target) RouteOf(string query) => QueryRouteClassifier.RouteOf(query);
 
-    /// <summary>
-    /// The shape <c>PostgreSqlCrossSchemaQueryProvider.DescribeQueryShape</c> puts on the
-    /// <c>[CrossSchema] SLOW</c> line — <c>nodeType:{type|*} path:{path|-} scope:{Scope}</c> — so
-    /// the census here and the Loki census speak the same vocabulary.
-    /// </summary>
-    private static string Describe(string query)
-    {
-        var parsed = new QueryParser().Parse(query);
-        return $"nodeType:{parsed.ExtractNodeType() ?? "*"}"
-            + $" path:{(string.IsNullOrEmpty(parsed.Path) ? "-" : parsed.Path)}"
-            + $" scope:{parsed.Scope}";
-    }
+    private static string Describe(string query) => QueryRouteClassifier.Describe(query);
 }

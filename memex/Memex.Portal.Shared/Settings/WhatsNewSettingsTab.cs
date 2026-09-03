@@ -67,7 +67,9 @@ public static class WhatsNewSettingsTab
     public static readonly string[] ListingQueries =
     [
         $"path:{WhatsNewNamespace} scope:children",
-        $"nodeType:{EntryNodeType}",
+        // The type lane is mesh-wide BY DESIGN — a satellite files its entries in its own tree —
+        // and says so (#3202 — fan-out is opt-in).
+        MeshWideQuery.OfType(EntryNodeType),
     ];
 
     /// <summary>

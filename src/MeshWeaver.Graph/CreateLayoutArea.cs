@@ -659,7 +659,9 @@ public static class CreateLayoutArea
             Label = "Namespace",
             Placeholder = "Search a space to nest under...",
             DataContext = dataContext
-        }.WithQueries("nodeType:Space")
+        // Every Space root in the mesh — the picker offers every partition, so mesh-wide by
+        // nature (#3202 — fan-out is opt-in).
+        }.WithQueries(MeshWideQuery.OfType("Space"))
          .WithMaxResults(15)
          .WithStyle("width: 100%; margin-bottom: 16px;");
     }

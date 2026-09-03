@@ -393,7 +393,9 @@ public sealed class GitHubWebhookProcessor
             () => accessService.ImpersonateAsSystem(),
             _ => meshService
                 .Query<MeshNode>(MeshQueryRequest
-                    .FromQuery($"nodeType:{GitHubSyncService.ConfigNodeType}")
+                    // Every {Space}/_GitSync config — the webhook cannot know which space a push
+                    // belongs to until it has read them all, so mesh-wide by nature (#3202).
+                    .FromQuery(MeshWideQuery.OfType(GitHubSyncService.ConfigNodeType))
                     .Complete())
                 .Where(c => c.ChangeType == QueryChangeType.Initial)
                 .Take(1));

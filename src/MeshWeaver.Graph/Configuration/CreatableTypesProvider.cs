@@ -153,8 +153,9 @@ internal sealed class CreatableTypesProvider(
         if (string.IsNullOrEmpty(nodePath))
         {
             // Root listing: no namespace bound. Surface every NodeType
-            // definition so the create UI can offer the full menu.
-            return ["nodeType:NodeType"];
+            // definition so the create UI can offer the full menu — a catalog, mesh-wide by
+            // nature, and it says so (#3202 — fan-out is opt-in).
+            return [MeshWideQuery.OfType("NodeType")];
         }
 
         // Q1: NodeTypes along the ancestor chain of <myself> — picks up

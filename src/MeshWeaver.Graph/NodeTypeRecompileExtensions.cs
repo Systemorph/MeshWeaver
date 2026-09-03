@@ -103,7 +103,8 @@ public static class NodeTypeRecompileExtensions
         // this scope leaking past the query.
         return accessService.RunAsSystem(
                 () => meshService
-                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
+                    // Every NodeType definition — a catalog, mesh-wide by nature (#3202).
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(MeshNode.NodeTypePath)))
                     .Take(1)
                     .Timeout(TypeEnumerationBudget))
             .Select(change =>
