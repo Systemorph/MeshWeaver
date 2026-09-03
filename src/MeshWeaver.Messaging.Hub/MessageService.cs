@@ -400,6 +400,47 @@ public class MessageService : IMessageService
     /// <see cref="NotifyStartupFailure"/> and <see cref="Dispose"/> apply, reached here from a
     /// KNOWN-terminal gate rather than from a timeout.
     /// </summary>
+    /// <summary>
+    /// 🚨 ANSWERS EVERY GATE THAT IS STILL SHUT, because teardown is the outcome after which none
+    /// of them can ever open. Called once as disposal begins.
+    ///
+    /// <para>An initialization gate is a promise that the delivery parked behind it will be
+    /// released when the gate opens. Shutdown breaks that promise for every gate its owner did not
+    /// answer, and the deferred caller then hears nothing until an unrelated deadline expires —
+    /// its own request timeout, or whenever teardown reaches <c>messageService.Dispose()</c>.
+    /// <c>DataContext</c> learned this for its own gate (#1270) and fails it explicitly on
+    /// shutdown; that fix did not generalise, and could not: it lives in the gate's OWNER. The
+    /// <c>MeshNodeInit</c> gate — armed in <c>MeshDataSource</c>, opened in five places — has no
+    /// such hook at all, so a delivery deferred behind <c>[DataContextInit,MeshNodeInit]</c> had
+    /// ONE of its two gates answered and stayed parked on the other.</para>
+    ///
+    /// <para>Measured 2026-09-03 (MeshWeaver.Plugins Monolith suite, 801 tests): 14 of 38 leaked
+    /// callbacks ended at exactly that stage, each costing its hub the full Quiescing budget. Doing
+    /// this in the FRAMEWORK rather than in each gate's owner is the difference between fixing two
+    /// gates and making a third one impossible to get wrong.</para>
+    /// </summary>
+    public void FailAllGatesOnShutdown()
+    {
+        string[] stillShut;
+        lock (gateStateLock)
+        {
+            stillShut = gates.Keys.ToArray();
+            if (stillShut.Length == 0)
+                return;
+            foreach (var name in stillShut)
+                failedGates[name] = ShutdownNack.RetryForTheAuthoritativeAnswer(
+                    Address, null,
+                    $"the hub began tearing down while '{name}' was still shut, so it can never open");
+        }
+        logger.LogDebug(
+            "Hub {Address} is tearing down with {Count} gate(s) still shut ([{Gates}]) — answering "
+            + "every delivery parked behind them instead of leaving them to their own timeouts",
+            Address, stillShut.Length, string.Join(",", stillShut));
+        FailDeferredBacklog(ShutdownNack.RetryForTheAuthoritativeAnswer(
+            Address, null,
+            $"the hub began tearing down while [{string.Join(",", stillShut)}] were still shut"));
+    }
+
     private void FailDeferredBacklog(string reason)
     {
         DrainDeferredDeliveries(delivery => AnswerUnreleasableDelivery(delivery, reason));

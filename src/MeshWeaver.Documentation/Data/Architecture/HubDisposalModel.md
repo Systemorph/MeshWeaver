@@ -247,6 +247,41 @@ Pinned by `HostedHubQuiesceLeakVisibilityTest`: a self-addressed request the chi
 the case that settles), the owner disposed, and the owner's report naming the child and the
 request after the child has departed.
 
+### 🚨 Teardown answers every gate that is still shut
+
+An initialization gate is a promise: the delivery parked behind it is released when the gate opens.
+**Shutdown is the outcome after which no gate can ever open**, so every gate its owner did not
+answer breaks that promise, and the deferred caller hears nothing until an unrelated deadline
+expires — its own request timeout, or whenever teardown reaches `messageService.Dispose()`.
+
+`DataContext` learned this for its own gate (#1270) and fails `DataContextInit` explicitly on
+shutdown. That fix could not generalise, because it lives in the gate's **owner**: the
+`MeshNodeInit` gate — armed in `MeshDataSource`, opened in five places across `MeshDataSource` and
+`MeshNodeTypeSource` — had no such hook at all. The whole `src/` tree contained exactly **one**
+`FailGate` call. A delivery deferred behind `gates=[DataContextInit,MeshNodeInit]` therefore had one
+of its two gates answered and stayed parked on the other, for ever.
+
+`MessageHub.Dispose()` now calls `messageService.FailAllGatesOnShutdown()` immediately after
+`SignalShuttingDown()` — before the Quiescing poll starts counting, because a delivery parked behind
+an unanswered gate is a pending callback that poll can only wait out, at the full budget per hub.
+Doing it in the FRAMEWORK rather than in each owner is the difference between fixing two gates and
+making a third one impossible to get wrong.
+
+Measured on the MeshWeaver.Plugins Monolith suite (801 tests), with the leak report made reachable
+by the section above:
+
+| leaked-callback last stage | before | after |
+|---|---|---|
+| `DEFERRED gates=[DataContextInit,MeshNodeInit]` | 12 | **0** |
+| `DEFERRED gates=[DataContextInit]` | 3 | **0** |
+| `DROPPED_SHUTTING_DOWN runLevel=Dead` | 8 | 3 |
+| total leaked callbacks | 69 | 63 |
+
+The remaining leaks are three other mechanisms — a handler that exits `Processed` without its async
+reply ever following, a handler fault whose error arm never answers the requester, and a reply
+posted to a hub that had already stopped listening. They are real, they are now NAMED, and they are
+not this section's subject.
+
 ### ShutDown — tear down and signal
 
 Runs on the action block, fully synchronous: `CancelCallbacks()` (push

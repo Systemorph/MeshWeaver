@@ -1839,6 +1839,10 @@ public sealed class MessageHub : IMessageHub
         // Quiescing phase starts waiting for the callbacks those watchers would otherwise keep
         // issuing (#3026). Descendants were signalled by the cascade above.
         SignalShuttingDown();
+        // 🚨 Answer every gate that is still shut BEFORE the Quiescing poll starts counting. A
+        // delivery parked behind an init gate whose owner never answered it is a pending callback
+        // the poll can only wait out — the full budget, per hub. See FailAllGatesOnShutdown.
+        messageService.FailAllGatesOnShutdown();
 
         // Log all hosted hubs that will be disposed
         var hostedHubAddresses = hostedHubs.Hubs.Select(h => h.Address.ToString()).ToArray();
