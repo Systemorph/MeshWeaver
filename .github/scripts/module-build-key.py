@@ -68,7 +68,12 @@ from pathlib import Path
 # 🚨 Bump this when the LANE changes in a way that alters the bytes it packs or the verdict it
 # records for the SAME source (a packer flag, a new closure rule, a different test invocation).
 # Never for a cosmetic lane edit — that would throw away every recorded build for nothing.
-RECIPE_VERSION = "1"
+# "1" → "2" (MeshWeaver#3211): the pack step now passes `--graph-dll <platform /app anchor>`, so a
+# bundle's manifest carries `frameworkMvid` where it used to omit it. The bytes for the SAME source
+# genuinely differ — and a REUSED pre-#3211 bundle would be refused at the publish step, which is the
+# right verdict for those bytes and the wrong thing to spend a run discovering. One rebuild wave, and
+# every recorded key afterwards attests bytes that state what they were built against.
+RECIPE_VERSION = "2"
 
 # Repo-level files that change what EVERY project compiles or tests. Presence and content both
 # count; a file the repo does not have hashes as null so adding it later changes the key.
@@ -360,7 +365,11 @@ def self_test() -> int:
         for label, kwargs in (("the tester digest", dict(tester_digest="sha256:t2")),
                               ("the platform digest", dict(platform_digest="sha256:p2")),
                               ("the platform ref", dict(platform_ref="def456")),
-                              ("the recipe version", dict(recipe="2"))):
+                              # 🚨 DERIVED from the live default, never a literal: this case read
+                              # `recipe="2"` and silently became a no-op assertion the moment the
+                              # lane bumped RECIPE_VERSION to "2" (MeshWeaver#3211) — a guard whose
+                              # subject moved and whose root did not passes having checked nothing.
+                              ("the recipe version", dict(recipe=RECIPE_VERSION + "-other"))):
             args = dict(tester_digest="sha256:t", platform_digest="sha256:p", platform_ref="abc123")
             args.update(kwargs)
             check(f"{label} changes the key", compute(root, _ENTRY, **args)["key"] != k0)

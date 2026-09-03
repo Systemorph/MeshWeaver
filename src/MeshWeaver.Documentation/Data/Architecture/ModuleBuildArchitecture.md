@@ -139,6 +139,61 @@ selected modules beside them, so "emitted but not selected" is normal and is not
 opens, and assert them where they are produced. One accurate failure upstream is worth N accurate
 failures downstream, and a downstream failure can only ever describe its own shard.
 
+## A bundle states what it was built against — or it is not published (#3211)
+
+A module's published version encodes its **content only**. Rebuild unchanged source against a new
+platform and the hash is the same, the version is the same, and the bundle overwrites its own
+registry slot with different bytes. So "already landed" can only mean *this content against this
+framework*, which is why `ModuleUpdateDecision.Decide` compares **(version, framework identity)**
+before answering `SkipUpToDate` (#3154, `Doc/Architecture/Modules`).
+
+That comparison needs something to compare, and the producing end was not supplying it.
+
+**Measured, MeshWeaver.Plugins run 33773265959 (2026-09-03):** every one of the 34 bundles packed
+
+```
+warning: MeshWeaver.Compiler.dll not found at …/MeshWeaver.AI.OpenAI/MeshWeaver.Compiler.dll
+packed MeshWeaver.Plugin.OpenAI.1.1.11.module.nupkg — … built-against MVID (unrecorded)
+```
+
+on **both** compilers. The packer probes for the identity anchor *beside the module*, and where the
+anchor is **moves with the platform**:
+
+| how the platform arrives | where `MeshWeaver.Compiler.dll` is |
+|---|---|
+| pinned **image** (every satellite call) — `platform-refs`, the `docker cp` of its `/app`, passed to the sdk build as `MeshWeaverRefs` and compiled inside by the container build | in `platform-refs`; deliberately **not** in the module's output, which carries no platform assembly |
+| built from **source** (core's own `main-cd` call, no image pinned) | beside the module — the platform ProjectReferences are real, so `dotnet publish` copies it |
+
+Only the second case ever matched the default probe, which is why core CD records an identity
+(measured: `built-against MVID ce81fd4e…`, run 33779812466) and every satellite records none. The
+field was optional, so nothing was red; #3154 shipped into a fleet where every consumer of every
+module was permanently in the "up to date — the identity could not be checked" branch.
+
+The asymmetry is why this had to be fixed at the producer. An unknown on the **landed** side heals
+after one fetch, because landing writes the identity back. An unknown on the **served** side never
+heals: a registry that states no identity will state none next time either.
+
+**Three refusals, all naming what is missing:**
+
+| where | what it refuses |
+|---|---|
+| `module-pack` (`ModulePackCommand`) | exit 2 when neither `--framework-mvid` nor `--graph-dll` yields an identity — the bundle is not written at all |
+| pack step | names the anchor explicitly (`--graph-dll`), picking the location from the table above — and **both** arms are RED when the anchor is not there. The branch decides *where to look*, never *whether to check*. The manifest is then read back and the field asserted on the bytes |
+| **publish step** | RED before the POST when the bundle's manifest states none — on the bytes about to be handed over, so the **reuse** leg (an artifact an earlier run packed) is covered too |
+
+The publish-step refusal is the load-bearing one: the inspection runs on the build leg only, and a
+guard bound to it alone would pass while pre-#3211 bytes went to the registry. `RECIPE_VERSION`
+moved `1` → `2` in `module-build-key.py` for the same reason — the lane now packs different bytes
+for the same source, so every recorded key is invalidated and no run reuses a bundle whose publish
+would be refused.
+
+**Still to arm: the registry's own 400.** `ModulePublish.Validate` accepts a manifest stating no
+identity, and `ShelveModule` shelves the null the index then advertises. Arming that refusal before
+every producer's `node-repo-module-pack.yml` pin has moved would take the fleet's publishes down
+rather than the nulls — the pin is bumped deliberately, per repo, in its own PR. Until then the
+publish endpoint logs a warning naming the package, the module and the version, which is the
+measurement the arming step reads.
+
 ## Content-addressed outputs = the module build ledger (as built, 2026-09-02)
 
 *"For Plugins, merge as quickly as possible, as tolerant as possible; only hard conflicts flagged. We
@@ -586,9 +641,12 @@ producer of the same publication and is removed — a follow-up, not part of thi
 * **The one-workspace lane** — landed: one `build-workspace` job compiles the ledger's build subset
   as one graph; pack/tests fan out from it. The consumer half of #931 landed too —
   `ModuleUpdateDecision` compares the served bundle's framework identity, not the version alone.
-  Still open: making a bundle that cannot state what it was built against UNPUBLISHABLE (a served
-  identity is optional today, so a consumer can only skip-and-say-so when it is missing), and
-  pinning satellites' `MW_PLATFORM_REF` to the promoted set so keys survive core commits.
+  The producer half landed with #3211 — a bundle that cannot state what it was built against is
+  refused at the packer, at the pack step and at the hand-over (see *A bundle states what it was
+  built against — or it is not published*, above). Still open:
+  arming the registry's own 400 in `ModulePublish.Validate`, which waits on every producer's lane
+  pin having moved; and pinning satellites' `MW_PLATFORM_REF` to the promoted set so keys survive
+  core commits.
 * **`pack-module`, `compile-check` and test verbs inside the tester** — the last runner-side
   `dotnet`/python uses move into the image the fleet already ships.
 * **Self-hosted runners with a mounted git mirror + warm image store** (MeshWeaver#2926): bare

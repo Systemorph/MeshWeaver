@@ -18,6 +18,12 @@ public class ModulePackCommandTest : IDisposable
     private readonly string root =
         Path.Combine(Path.GetTempPath(), "mw-module-pack-" + Guid.NewGuid().ToString("N"));
 
+    /// <summary>
+    /// The built-against framework identity every pack must state (#3211) — shaped like the real
+    /// thing (<c>s&lt;hash&gt;</c> from a surface manifest, <c>g&lt;sha&gt;</c> from a CI stamp).
+    /// </summary>
+    private const string Identity = "s0f1e2d3c4b5a697";
+
     public ModulePackCommandTest()
     {
         Directory.CreateDirectory(Path.Combine(root, "closure"));
@@ -55,6 +61,7 @@ public class ModulePackCommandTest : IDisposable
             "--module-name", "Widget",
             "--plugin", "WidgetPkg",
             "--package-version", "1.0.0",
+            "--framework-mvid", Identity,
             "--out", Path.Combine(root, "out"),
         };
         args[args.IndexOf(option) + 1] = value;
@@ -64,6 +71,89 @@ public class ModulePackCommandTest : IDisposable
         Assert.Equal(2, exit);
         Assert.False(Directory.Exists(Path.Combine(root, "out")),
             "a refused invocation must not have written anything");
+    }
+
+    /// <summary>
+    /// 🚨 THE NEGATIVE CONTROL for #3211 — a bundle that cannot state what it was built against is
+    /// not written at all.
+    ///
+    /// <para>This is the exact invocation that packed all 34 of MeshWeaver.Plugins' bundles on
+    /// 2026-09-03 (run 33773265959): no <c>--framework-mvid</c>, and no
+    /// <c>MeshWeaver.Compiler.dll</c> beside the module — because on both the sdk and the container
+    /// path the platform is the IMAGE, so the anchor is in the extracted <c>/app</c>, never in the
+    /// module's output. It used to print a warning and omit the field, which shipped #3154's
+    /// (version, identity) comparison with nothing to compare on every installation in the
+    /// fleet.</para>
+    /// </summary>
+    [Fact]
+    public void NoStatedIdentity_AndNoAnchorBesideTheModule_IsRefused_AndWritesNothing()
+    {
+        var outDir = Path.Combine(root, "out-no-identity");
+        var exit = ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.2.0",
+            "--min-mesh-version", "3.0.0",
+            "--out", outDir,
+        ]);
+
+        Assert.Equal(2, exit);
+        Assert.False(Directory.Exists(outDir),
+            "a bundle that states no framework identity must not exist at all — it is refused "
+            + "where it is created, not shelved and skipped forever downstream");
+    }
+
+    /// <summary>A stated identity that is only whitespace reads as UNSTATED downstream
+    /// (<c>ModuleUpdateDecision</c> treats blank as unknown on both sides), so it is refused here
+    /// rather than written as a value that means nothing.</summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ABlankStatedIdentity_IsRefused(string blank)
+    {
+        var outDir = Path.Combine(root, "out-blank-identity");
+        var exit = ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.2.0",
+            "--framework-mvid", blank,
+            "--out", outDir,
+        ]);
+
+        Assert.Equal(2, exit);
+        Assert.False(Directory.Exists(outDir));
+    }
+
+    /// <summary>The other half of the pair: with the anchor assembly NAMED, the packer reads its
+    /// identity itself — the shape the lane uses (<c>--graph-dll &lt;platform /app&gt;</c>).</summary>
+    [Fact]
+    public void TheAnchorAssembly_WhenNamed_StatesTheIdentityWithoutTheFlag()
+    {
+        // Any real PE works: FrameworkIdentity.ReadIdentity resolves the stamped identity when the
+        // assembly carries one and the MVID otherwise — the same resolution the runtime compares.
+        var anchor = typeof(ModulePackCommand).Assembly.Location;
+        var expected = FrameworkIdentity.ReadIdentity(anchor);
+
+        var outDir = Path.Combine(root, "out-anchor");
+        var exit = ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.7.0",
+            "--graph-dll", anchor,
+            "--out", outDir,
+        ]);
+
+        Assert.Equal(0, exit);
+        var (manifest, _) = BundleReader.ReadModule(File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.7.0.module.nupkg")));
+        Assert.False(string.IsNullOrWhiteSpace(expected));
+        Assert.Equal(expected, manifest!.FrameworkMvid);
     }
 
     [Fact]
@@ -76,6 +166,7 @@ public class ModulePackCommandTest : IDisposable
             "--module-name", "Widget",
             "--plugin", "WidgetPkg",
             "--package-version", "1.2.0",
+            "--framework-mvid", Identity,
             "--min-mesh-version", "3.0.0",
             "--out", outDir,
         ]);
@@ -90,9 +181,10 @@ public class ModulePackCommandTest : IDisposable
         Assert.Equal("1.2.0", manifest.Version);
         Assert.Equal("Widget", manifest.Module!.AssemblyName);
         Assert.Equal("3.0.0", manifest.Module.MinMeshVersion);
-        // No MeshWeaver.Graph.dll in the closure folder: the diagnostic MVID is simply
-        // unrecorded — warned, never an error, never a gate.
-        Assert.Null(manifest.FrameworkMvid);
+        // 🚨 #3211: the bundle states what it was built against, always. Every consumer's update
+        // decision compares this against what it has landed (#3154), so an omitted value is not a
+        // missing nicety — it is a permanent "up to date, identity could not be checked".
+        Assert.Equal(Identity, manifest.FrameworkMvid);
         var only = Assert.Single(files);
         Assert.Equal("Widget.dll", only.FileName);
         Assert.Equal("WIDGET", Encoding.UTF8.GetString(only.Bytes));
@@ -133,6 +225,7 @@ public class ModulePackCommandTest : IDisposable
             "--module-name", "Widget",
             "--plugin", "WidgetPkg",
             "--package-version", "1.3.0",
+            "--framework-mvid", Identity,
             "--out", outDir,
         ]);
 
@@ -186,6 +279,7 @@ public class ModulePackCommandTest : IDisposable
             "--module-name", "Widget",
             "--plugin", "WidgetPkg",
             "--package-version", "1.5.0",
+            "--framework-mvid", Identity,
             "--out", outDir,
         ]);
 
@@ -239,6 +333,7 @@ public class ModulePackCommandTest : IDisposable
             "--module-name", "Widget",
             "--plugin", "WidgetPkg",
             "--package-version", "1.6.0",
+            "--framework-mvid", Identity,
             "--out", outDir,
         ]);
 
@@ -284,6 +379,7 @@ public class ModulePackCommandTest : IDisposable
             "--module-name", "Widget",
             "--plugin", "WidgetPkg",
             "--package-version", "1.4.0",
+            "--framework-mvid", Identity,
             "--out", Path.Combine(root, "out-missing"),
         ]);
 

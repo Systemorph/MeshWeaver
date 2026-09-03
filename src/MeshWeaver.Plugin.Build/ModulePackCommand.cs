@@ -25,14 +25,22 @@ namespace MeshWeaver.Plugin.Build;
 /// <c>.pdb</c> when present) plus ONLY the files the caller names with <c>--with</c> — mirroring
 /// the modules/&lt;Name&gt;/ layout rule that for most modules the DLL alone is the closure.</para>
 ///
-/// <para><b>The consumer's gate is the <c>minMeshVersion</c> FLOOR, not an MVID.</b> A module is a
-/// plain assembly binding by simple name; its contract is API compatibility, so the bundle records
-/// the platform floor the module requires (absent = no constraint) and the consumer lands anything
-/// whose floor it satisfies — one bundle serves every compatible platform build, and nothing needs
-/// rebundling per CI build. The MVID of the identity anchor
-/// (<c>MeshWeaver.Compiler.dll</c>, #1707) in the build output is still recorded when found, as
-/// DIAGNOSTIC metadata naming the exact build behind the bytes; MVID equality remains the
-/// NodeType (bake) lane's gate only.</para>
+/// <para><b>The consumer's LANDING gate is the <c>minMeshVersion</c> FLOOR, not an MVID.</b> A
+/// module is a plain assembly binding by simple name; its contract is API compatibility, so the
+/// bundle records the platform floor the module requires (absent = no constraint) and the consumer
+/// lands anything whose floor it satisfies — one bundle serves every compatible platform build, and
+/// nothing needs rebundling per CI build. MVID equality is still never a landing gate here.</para>
+///
+/// <para>🚨 <b>But the framework identity is REQUIRED, and a bundle that cannot state one is not
+/// written at all</b> (#3211). It stopped being diagnostic the moment #3154 merged: a module's
+/// version encodes its CONTENT only, so a rebuild of unchanged source against a new platform
+/// republishes under the SAME version, and <c>ModuleUpdateDecision.Decide</c> now compares
+/// <b>(version, framework identity)</b> to tell that rebuild from a no-op. A bundle stating no
+/// identity puts every consumer of it permanently in the skip-and-say-so branch — the comparison
+/// exists with nothing to compare, which is Plugins#931 arriving from the producing end. So the
+/// identity of the anchor assembly (<c>MeshWeaver.Compiler.dll</c>, #1707) is resolved from
+/// <c>--framework-mvid</c> or <c>--graph-dll</c>, and its absence is an exit-2 naming both, where
+/// it used to be a warning and an omitted field.</para>
 /// </summary>
 public static class ModulePackCommand
 {
@@ -131,10 +139,21 @@ public static class ModulePackCommand
                   --graph-dll <path>          the identity-anchor assembly the module was built
                                               against — MeshWeaver.Compiler.dll since #1707
                                               (default: <moduleOutputDir>/MeshWeaver.Compiler.dll;
-                                              the flag name predates the anchor move). Its MVID is
-                                              recorded as DIAGNOSTIC metadata — the exact build
-                                              behind the bytes — never a gate; a missing DLL warns
-                                              and records none
+                                              the flag name predates the anchor move). Its stamped
+                                              identity (else MVID) becomes the bundle's
+                                              frameworkMvid
+                  --framework-mvid <id>       state the built-against framework identity DIRECTLY,
+                                              for a build whose anchor assembly is not in the
+                                              output folder (the container/MeshWeaverRefs lanes:
+                                              the platform is the IMAGE, so the anchor is in the
+                                              extracted /app, not beside the module). Wins over
+                                              --graph-dll when both are given.
+                                              🚨 ONE of these two must yield an identity: a bundle
+                                              that cannot state what it was built against is
+                                              REFUSED (exit 2), never written with the field
+                                              omitted — #3154 compares it on every consumer's
+                                              update decision, and an unstated one can never be
+                                              healed from the serving side (#3211)
                   --with <fileName>           an additional closure file from <moduleOutputDir>
                                               (repeatable). <name>.dll is always included, and its
                                               .pdb rides along when present.
@@ -169,6 +188,7 @@ public static class ModulePackCommand
         string? packageVersion = null;
         string? minMeshVersion = null;
         string? graphDll = null;
+        string? statedFrameworkMvid = null;
         var extras = new List<string>();
         var ownPlatform = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var depsClosure = false;
@@ -195,6 +215,9 @@ public static class ModulePackCommand
                     break;
                 case "--graph-dll" when i + 1 < args.Length:
                     graphDll = Path.GetFullPath(args[++i]);
+                    break;
+                case "--framework-mvid" when i + 1 < args.Length:
+                    statedFrameworkMvid = args[++i].Trim();
                     break;
                 case "--with" when i + 1 < args.Length:
                     extras.Add(args[++i]);
@@ -268,22 +291,49 @@ public static class ModulePackCommand
             return 2;
         }
 
-        // The framework identity is DIAGNOSTIC metadata (which exact platform build produced these
-        // bytes) — recorded when the restored identity-anchor DLL (MeshWeaver.Compiler.dll, #1707)
-        // is at hand, warned-and-omitted when not. It is deliberately not required and never a
-        // gate: the consumer lands on the minMeshVersion floor (API compatibility), and identity
-        // equality stays with the NodeType bake lane. ReadIdentity (not ReadMvid) so a CI-built
-        // anchor records its stamped commit identity — the value the runtime actually compares
-        // (#1660 WS3).
+        // ───────── THE BUILT-AGAINST FRAMEWORK IDENTITY — REQUIRED, and refused when absent ─────────
+        // 🚨 #3211. This used to be diagnostic-and-optional: a missing anchor warned and the field
+        // was omitted. #3154 made it an INPUT TO A DECISION on every installation — a module's
+        // version encodes content only, so a rebuild of unchanged source against a new platform
+        // republishes under the same version, and `ModuleUpdateDecision.Decide` now compares
+        // (version, framework identity) to tell that rebuild from a no-op. A bundle that states no
+        // identity parks every consumer of it in the skip-and-say-so branch FOREVER: unlike an
+        // unknown on the landed side, which one fetch heals, an unstated SERVED identity can never
+        // be healed downstream. So the blind spot is closed where it is created — a bundle that
+        // cannot say what it was built against is not written at all.
+        //
+        // Two ways to state it, because the anchor is not always beside the module: on the
+        // container / MeshWeaverRefs lanes the platform IS the image, so MeshWeaver.Compiler.dll
+        // lives in the extracted /app rather than in the module's output (measured on every one of
+        // MeshWeaver.Plugins' 34 bundles, 2026-09-03: "built-against MVID (unrecorded)", both the
+        // sdk and the container path). ReadIdentity (not ReadMvid) so a CI-built anchor records its
+        // stamped commit identity — the value the runtime actually compares (#1660 WS3).
         graphDll ??= Path.Combine(moduleDirectory, FrameworkIdentity.IdentityAssembly + ".dll");
-        string? frameworkMvid = null;
-        if (File.Exists(graphDll))
+        var frameworkMvid = statedFrameworkMvid;
+        if (string.IsNullOrWhiteSpace(frameworkMvid) && File.Exists(graphDll))
             frameworkMvid = FrameworkIdentity.ReadIdentity(graphDll);
-        else
+        if (string.IsNullOrWhiteSpace(frameworkMvid))
+        {
             Console.Error.WriteLine(
-                $"warning: {FrameworkIdentity.IdentityAssembly}.dll not found at {graphDll} — the "
-                + "bundle records no built-against framework MVID (diagnostic metadata only; the "
-                + "landing gate is --min-mesh-version).");
+                "error: the bundle would state no built-against framework identity, and a bundle "
+                + "that cannot say which platform build produced its bytes is not publishable "
+                + "(#3211). Every consumer compares it against what it has landed "
+                + "(ModuleUpdateDecision, #3154), and an unstated one can never be healed from the "
+                + "serving side — it makes every reconcile answer 'up to date, identity could not "
+                + "be checked'. Provide ONE of: --framework-mvid <identity> (the platform's own "
+                + "reading — use it when the platform is an IMAGE), or --graph-dll <path to "
+                + $"{FrameworkIdentity.IdentityAssembly}.dll> for the platform this module was "
+                + $"compiled against. Probed and not found: {graphDll}");
+            return 2;
+        }
+        if (frameworkMvid.Any(char.IsWhiteSpace))
+        {
+            Console.Error.WriteLine(
+                $"error: --framework-mvid '{frameworkMvid}' contains whitespace — the identity is a "
+                + "single token (s<hash>, g<sha> or a 32-hex MVID), and a value that has to be "
+                + "trimmed downstream is a value two readers can disagree about.");
+            return 2;
+        }
 
         // The closure: entry DLL (+ symbols when present) + the derived private dependency
         // closure when asked for + exactly the files the caller named.
@@ -442,8 +492,9 @@ public static class ModulePackCommand
             {
                 plugin,
                 version = packageVersion,
-                // Diagnostic: the exact platform build behind these bytes. The consumer's GATE is
-                // the module section's minMeshVersion floor below.
+                // The exact platform build behind these bytes — never null by the time we get here
+                // (#3211 refuses above). The consumer's LANDING gate is still the module section's
+                // minMeshVersion floor below; this is what its UPDATE decision compares (#3154).
                 frameworkMvid,
                 module = new { assemblyName = moduleName, assemblies = closure, minMeshVersion,
                     staticAssets = staticAssets.Count > 0 ? staticAssets : null,
@@ -499,7 +550,7 @@ public static class ModulePackCommand
             + $"{closure.Count} file(s), {contentFiles.Count} node file(s) "
             + $"({(includeSource ? "with" : "WITHOUT")} source), "
             + $"floor {minMeshVersion ?? "(none)"}, "
-            + $"built-against MVID {frameworkMvid ?? "(unrecorded)"}");
+            + $"built-against MVID {frameworkMvid}");
         return 0;
     }
 }
