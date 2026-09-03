@@ -277,10 +277,27 @@ So the outcome now distinguishes **why** a pass failed:
 | `ImportedWithRefusedContent` / `ImportedWithBlockedCreates` | `Warning` | re-imports |
 
 `ImportedWithContentErrors` is reached only when **every** failure in the pass was a content verdict
-(`StaticRepoImporter.IsContentVerdict`): a validator refusal, an unknown NodeType, an RLS denial. A
-store blip, an owner that did not answer, a hub going down mid-import, a timeout — all stay
-retryable, and **one** of them among the failures keeps the whole pass on the ordinary `Warning`
-arm. Unknown means retryable.
+(`StaticRepoImporter.IsContentVerdict`), and that is decided on the owner's **structured**
+`NodeUpsertRejectionReason`, never on the exception type:
+
+| reason | deterministic? |
+|---|---|
+| `InvalidPath`, `InvalidNodeType`, `ValidationFailed`, `Unauthorized` | **yes** |
+| `Unknown`, `PatchFailed` | no — retryable |
+
+🚨 The type cannot be used for this. `Upsert` wraps **every** failed `CreateOrUpdateNodeResponse` in
+one `InvalidOperationException`, and `Unknown` is where *"Persistence read failed: …"* and *"Inner
+CreateNode faulted: …"* land — a store that was briefly unreachable, wearing the same exception as a
+rule refusal. A first draft of this classifier keyed on the type and would have marked those final;
+that is #3101's freeze, re-introduced by the fix for #3146. `Upsert` therefore throws a typed
+`UpsertRefusedException` carrying the reason. **One** retryable failure among the pass's failures
+keeps the whole pass on the ordinary `Warning` arm.
+
+**Known residual:** a validator that *throws* — including one whose own dependency is briefly
+unavailable — is mapped to `ValidationFailed` before the response is built, so it records as final.
+The importer cannot separate that from a rule refusal; the place to fix it is the validator contract
+(an unavailable dependency should surface as unavailable, not as a refusal). Pinned, so it is not
+rediscovered as a surprise, by `FailedImportIsNotRetriedAtTheSameFingerprintTest`.
 
 🚨 Getting that backwards is the more expensive mistake, and it has a number: #3101, a Space frozen
 out of the mesh by a green marker nobody re-examined. That is why this is an allow-list of

@@ -4,6 +4,9 @@ using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Mesh;
 using MeshWeaver.Utils;
 using Xunit;
@@ -36,6 +39,30 @@ namespace MeshWeaver.Graph.Test;
 public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
+    /// <summary>
+    /// The one path whose validation THROWS, standing in for an infrastructure fault inside the
+    /// write path — a store read that failed, an inner create that faulted. Those come back as
+    /// <c>NodeUpsertRejectionReason.Unknown</c>, wrapped in the very same
+    /// <c>InvalidOperationException</c> a validator refusal produces.
+    /// </summary>
+    private string? _throwPath;
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services => services.AddSingleton<INodeValidator>(
+                new ThrowOnOnePathValidator(() => _throwPath)));
+
+    private sealed class ThrowOnOnePathValidator(Func<string?> path) : INodeValidator
+    {
+        public IReadOnlyCollection<NodeOperation> SupportedOperations { get; } = [NodeOperation.Create];
+
+        public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
+            => string.Equals(context.Node.Path, path(), StringComparison.Ordinal)
+                ? Observable.Throw<NodeValidationResult>(
+                    new InvalidOperationException("Persistence read failed: the store was unreachable"))
+                : Observable.Return(NodeValidationResult.Valid());
+    }
+
     private sealed class RepoSource(string partition) : IStaticRepoSource
     {
         public string Partition => partition;
@@ -126,5 +153,55 @@ public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper 
         Output.WriteLine($"second = {second.Outcome}");
         second.Outcome.Should().Be("Skipped",
             "the green short-circuit is unchanged — this is the behaviour the marker exists for");
+    }
+
+    /// <summary>
+    /// 🚨 <b>A validator that THROWS is still a content verdict — measured, not assumed.</b>
+    ///
+    /// <para>This test was written to prove the opposite. The intent was to stand in for an
+    /// infrastructure fault inside the write path ("Persistence read failed: …"), which comes back as
+    /// <c>NodeUpsertRejectionReason.Unknown</c> and must stay retryable. It does not: a validator
+    /// that throws is mapped to <c>ValidationFailed</c> before the upsert response is built, so the
+    /// pass is final for this fingerprint.</para>
+    ///
+    /// <para>Kept, with its expectation corrected, because that is worth pinning: the mapping is not
+    /// obvious from either side, and someone reading <c>IsContentVerdict</c> would reasonably guess
+    /// the other way.</para>
+    ///
+    /// <para>🚨 <b>The residual this leaves, named rather than hidden:</b> a validator whose OWN
+    /// dependency is briefly unavailable throws, is recorded as <c>ValidationFailed</c>, and its
+    /// partition is then skipped until the content changes. The classifier cannot separate that from
+    /// a rule refusal, because by the time it sees the fault the distinction is gone. The place to
+    /// fix it is the validator contract — an unavailable dependency should surface as
+    /// <c>Unavailable</c>/<c>Unknown</c> rather than as a refusal — which is a separate change from
+    /// this one. <c>Unknown</c> and <c>PatchFailed</c> ARE excluded from the deterministic set, so
+    /// every fault that reaches the upsert response unclassified stays retryable.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AThrowingValidator_IsRecordedAsAContentVerdict()
+    {
+        var partition = "Cv" + Guid.NewGuid().ToString("N")[..8];
+        _throwPath = $"{partition}/Flaky";
+        var source = new RepoSource(partition)
+        {
+            Root = Space(partition),
+            Nodes = [Page(partition, "Lesson"), Page(partition, "Flaky")],
+        };
+
+        var first = await StaticRepoImporter.ImportSource(Mesh, source)
+            .FirstAsync().Timeout(240.Seconds());
+        Output.WriteLine($"first  = {first.Outcome}");
+
+        first.Outcome.Should().Be("ImportedWithContentErrors",
+            "a validator that throws is mapped to ValidationFailed before the upsert response is "
+            + "built — so the importer cannot tell it from a rule refusal, and records it as final. "
+            + "This test exists because the opposite is the natural guess");
+
+        var second = await StaticRepoImporter.ImportSource(Mesh, source)
+            .FirstAsync().Timeout(240.Seconds());
+        Output.WriteLine($"second = {second.Outcome}");
+
+        second.Outcome.Should().Be("Skipped",
+            "and it follows through: the marker is final, so the next trigger skips");
     }
 }

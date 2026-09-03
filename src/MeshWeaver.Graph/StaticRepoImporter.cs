@@ -2518,20 +2518,33 @@ public static class StaticRepoImporter
     /// <returns><c>true</c> only when re-running at the same fingerprint provably cannot help.</returns>
     private static bool IsContentVerdict(Exception? exception)
     {
-        // Transient wins outright: these say "not evaluated / ask again", never "these bytes are wrong".
-        if (StoreReachability.IsStoreUnreachable(exception)
-            || HubDisposingException.IsHubDisposal(exception)
-            || HubDisposingException.IsDisposedContainer(exception)
-            || HubDisposedBeforeResponseException.IsHubDisposedBeforeResponse(exception)
-            || ExceptionChain.Contains<TimeoutException>(exception)
-            || ExceptionChain.Contains<OperationCanceledException>(exception))
-            return false;
-
-        // A validator refused these bytes, or the mesh has no such type: the same content re-read at
-        // the same fingerprint produces the same refusal.
-        return ExceptionChain.Contains<ArgumentException>(exception)
-               || ExceptionChain.Contains<UnauthorizedAccessException>(exception)
-               || ExceptionChain.Contains<InvalidOperationException>(exception);
+        // 🚨 The verdict is the owner's STRUCTURED reason, never the exception type. `Upsert` wraps
+        // every failed CreateOrUpdateNodeResponse in one InvalidOperationException, and what sits
+        // behind it is not alike: ValidationFailed is a rule these bytes break, while Unknown covers
+        // "Persistence read failed: …" and "Inner CreateNode faulted: …" — a store briefly
+        // unreachable. An earlier draft of this classifier keyed on the exception TYPE and therefore
+        // called both deterministic, which would have marked a transient store fault final and
+        // skipped that partition until its content changed: #3101's freeze, reintroduced by the fix
+        // for #3146. Caught in review before it merged.
+        // A rule about these bytes: the same content re-read at the same fingerprint breaks it
+        // again. InvalidNodeType is the sample tree's "NodeType 'Northwind/Article' is not
+        // registered"; InvalidPath is "A 'Space' owns its partition, so it must be top-level";
+        // ValidationFailed is a registered INodeValidator refusing; Unauthorized is RLS, which a
+        // re-import cannot talk its way past either.
+        //
+        // 🚨 Unknown is deliberately absent — it is where every unclassified infrastructure fault
+        // lands ("Persistence read failed: …", "Inner CreateNode faulted: …"), and it MUST stay
+        // retryable. PatchFailed is absent too: it can be a genuine content conflict, but equally a
+        // lost race with a concurrent writer, and the safe direction for an ambiguous reason is to
+        // re-import.
+        return ExceptionChain.Contains(exception, static e =>
+            e is UpsertRefusedException
+            {
+                Reason: NodeUpsertRejectionReason.InvalidPath
+                    or NodeUpsertRejectionReason.InvalidNodeType
+                    or NodeUpsertRejectionReason.ValidationFailed
+                    or NodeUpsertRejectionReason.Unauthorized
+            });
     }
 
     /// <summary>
@@ -2696,6 +2709,31 @@ public static class StaticRepoImporter
             .SelectMany(resp => resp.Success
                     || (resp.Error?.Contains("already exists", StringComparison.OrdinalIgnoreCase) ?? false)
                 ? Observable.Return(1)
-                : Observable.Throw<int>(new InvalidOperationException(
-                    $"Upsert of '{node.Path}' failed: {resp.Error}")));
+                : Observable.Throw<int>(new UpsertRefusedException(
+                    $"Upsert of '{node.Path}' failed: {resp.Error}",
+                    resp.RejectionReason ?? NodeUpsertRejectionReason.Unknown)));
+
+    /// <summary>
+    /// An upsert the owner REFUSED, carrying the structured
+    /// <see cref="NodeUpsertRejectionReason"/> the response gave — so a caller can tell a verdict
+    /// about the bytes from a verdict about the moment (#3146).
+    ///
+    /// <para>🚨 Without the reason there is nothing to classify on. <c>Upsert</c> wraps EVERY failed
+    /// <c>CreateOrUpdateNodeResponse</c> in one exception type, and the reasons behind it are not
+    /// alike at all: <c>ValidationFailed</c> is a rule these bytes break, while <c>Unknown</c> covers
+    /// "Persistence read failed: …" and "Inner CreateNode faulted: …" — a store that was briefly
+    /// unreachable. Reading the exception TYPE cannot separate them, and treating the pair as one is
+    /// how "unknown means retryable" stops being true.</para>
+    ///
+    /// <para>Derives from <see cref="InvalidOperationException"/>, which is what this already was, so
+    /// existing handling is unchanged.</para>
+    /// </summary>
+    /// <param name="message">The refusal message, unchanged from before.</param>
+    /// <param name="reason">The owner's structured rejection reason.</param>
+    private sealed class UpsertRefusedException(string message, NodeUpsertRejectionReason reason)
+        : InvalidOperationException(message)
+    {
+        /// <summary>Why the owner refused.</summary>
+        public NodeUpsertRejectionReason Reason { get; } = reason;
+    }
 }
