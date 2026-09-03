@@ -60,13 +60,15 @@ public class AppArrangementRoundTripTest(ITestOutputHelper output) : MonolithMes
                 Content = (current.ContentAs<App>(options) ?? new App()) with { Group = "Games", Order = 2 },
             })
             .FirstAsync()
-            .Timeout(Bound);
+            .Timeout(Bound)
+            .Await();
 
         var arranged = await workspace.GetMeshNodeStream(path)
             .Select(node => node.ContentAs<App>(options))
             .Where(app => app is { Group: "Games" })
             .FirstAsync()
-            .Timeout(Bound);
+            .Timeout(Bound)
+            .Await();
 
         arranged!.Order.Should().Be(2);
         arranged.Plugin.Should().Be(AppId, "the arrangement write must not clobber the tile's identity");
@@ -96,13 +98,15 @@ public class AppArrangementRoundTripTest(ITestOutputHelper output) : MonolithMes
                 Content = (current.ContentAs<App>(options) ?? new App()) with { Group = "" },
             })
             .FirstAsync()
-            .Timeout(Bound);
+            .Timeout(Bound)
+            .Await();
 
         var ungrouped = await workspace.GetMeshNodeStream(path)
             .Select(node => node.ContentAs<App>(options))
             .Where(app => app is { Group: "" })
             .FirstAsync()
-            .Timeout(Bound);
+            .Timeout(Bound)
+            .Await();
 
         ungrouped!.Order.Should().Be(1, "leaving a group keeps the tile's position among the ungrouped");
     }

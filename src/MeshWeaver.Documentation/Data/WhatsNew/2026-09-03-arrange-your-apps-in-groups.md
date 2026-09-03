@@ -22,6 +22,7 @@ sections. It now works the way a phone's home screen does.
 The arrangement is yours alone — it is stored on your own installed-app records, so nothing you do
 here changes anyone else's home, and it follows you to every device you sign in on.
 
-The **Apps** dropdown that briefly appeared in the top bar is gone: the packages it listed —
-Providers & Models, Approvals, Feedback, Courses and Tours — are ordinary apps on your grid now,
-installed and arranged like every other one.
+This is the platform half of a change that completes in the packages themselves (MeshWeaver.Plugins):
+the **Apps** dropdown that briefly appeared in the top bar is retired there, and the packages it
+listed — Providers & Models, Approvals, Feedback, Courses and Tours — become ordinary apps on your
+grid, installed and arranged like every other one.
