@@ -181,7 +181,7 @@ public static class PublishedBundleCatalogue
             var source = Path.GetFileName(sourceDirectory)!;
             bundles.AddRange(complete);
             foreach (var bundle in complete)
-                records.AddRange(DependencyRecordsOf(Path.Combine(sourceDirectory, bundle), bundle));
+                records.AddRange(DependencyRecordsOf(Path.Combine(sourceDirectory, bundle), bundle, logger));
 
             var modules = SealedModulesOf(sourceDirectory, logger);
             if (modules.Modules is null)
@@ -268,20 +268,48 @@ public static class PublishedBundleCatalogue
         return (name, CompiledDependencies.MvidScheme + mvid.ToString("N"));
     }
 
-    private static IEnumerable<BundleDependencyRecord> DependencyRecordsOf(string bundlePath, string bundleFileName)
+    /// <summary>
+    /// The per-NodeType dependency records one sealed bundle carries — or NONE, logged, when the
+    /// bundle is not a readable archive or its manifest does not parse.
+    ///
+    /// <para>🚨 Per-bundle, never per-identity. The first cut let a bundle that was not a zip throw
+    /// out of <see cref="Read"/>'s outer catch, so ONE unreadable file made the whole identity
+    /// <see cref="ReleaseArtifacts.Unreadable"/> AND lost the resolved framework identity — which is
+    /// how core #3187 reddened MeshWeaver.Plugins main within the hour: its catalogue tests publish
+    /// bundles as literal bytes and pin the contract this observation had before records existed
+    /// (presence counts, the identity resolves, names match case-insensitively). Those rules still
+    /// hold. A bundle without readable records simply has nothing for the consistency check to
+    /// judge, exactly as a legacy bundle recorded before #1707 slice 2 has none.</para>
+    /// </summary>
+    private static IReadOnlyList<BundleDependencyRecord> DependencyRecordsOf(
+        string bundlePath, string bundleFileName, ILogger? logger)
     {
         var id = bundleFileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
             ? bundleFileName[..^4]
             : bundleFileName;
-        var manifest = BundleReader.ReadManifest(bundlePath);
+        BundleReader.Manifest? manifest;
+        try
+        {
+            manifest = BundleReader.ReadManifest(bundlePath);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or NotSupportedException or System.Text.Json.JsonException)
+        {
+            logger?.LogWarning(ex,
+                "ReleaseAvailability: sealed bundle {Bundle} carries no readable manifest — it counts "
+                + "for presence, and its dependency records cannot be checked for consistency",
+                bundlePath);
+            return [];
+        }
+        var records = new List<BundleDependencyRecord>();
         foreach (var assembly in manifest?.Assemblies ?? [])
         {
             if (assembly.Dependencies is null || string.IsNullOrEmpty(assembly.NodePath))
                 continue;
-            yield return new BundleDependencyRecord(
+            records.Add(new BundleDependencyRecord(
                 id, assembly.NodePath,
-                assembly.Dependencies.ToImmutableDictionary(StringComparer.Ordinal));
+                assembly.Dependencies.ToImmutableDictionary(StringComparer.Ordinal)));
         }
+        return records;
     }
 
     private static IEnumerable<string> SealedBundleNames(string identityDirectory, ILogger? logger)

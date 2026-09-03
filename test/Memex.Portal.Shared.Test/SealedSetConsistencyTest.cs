@@ -128,6 +128,45 @@ public class SealedSetConsistencyTest
         }
     }
 
+    /// <summary>
+    /// 🚨 The contract that predates records still holds: a sealed bundle that is NOT a readable
+    /// archive counts for presence, the identity resolves, and the verdict is available — with
+    /// nothing for the consistency check to judge. The first cut let that bundle throw out of
+    /// <c>Read</c>'s outer catch, turning the WHOLE identity unreadable and losing its resolved
+    /// identity; MeshWeaver.Plugins' catalogue tests (which publish bundles as literal bytes) went
+    /// red on main within the hour of #3187 merging.
+    /// </summary>
+    [Fact]
+    public void ABundleThatIsNotAReadableArchive_StillCountsForPresence_AndTheIdentityResolves()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-sealed-set-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var source = Path.Combine(root, Identity, "plugins");
+            Directory.CreateDirectory(Path.Combine(root, PublishedBundleCatalogue.ReleaseMarkerDirectoryName));
+            Directory.CreateDirectory(source);
+            File.WriteAllText(
+                Path.Combine(root, PublishedBundleCatalogue.ReleaseMarkerDirectoryName, Version), Identity);
+            File.WriteAllText(Path.Combine(source, "Doc.zip"), "bytes");
+            File.WriteAllText(
+                Path.Combine(source, ShippedPrebuiltBundles.CompletionSentinelFileName), "Doc.zip\n");
+
+            var observation = PublishedBundleCatalogue.Read(root, Version);
+
+            Assert.Equal(Identity, observation.Target.FrameworkIdentity);
+            Assert.Null(observation.Artifacts.ReadFailure);
+            Assert.Contains("Doc", observation.Artifacts.SealedBundles);
+            Assert.Empty(observation.Artifacts.DependencyRecords);
+            var verdict = ReleaseAvailability.IsUpdatable(
+                observation.Target, [new RequiredPackage("Doc", "doc")], observation.Artifacts);
+            Assert.True(verdict.IsUpdatable, verdict.HoldReason);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     // ── the rule, on hand-built observations ────────────────────────────────────────────────────
 
     [Fact]
