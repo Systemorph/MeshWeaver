@@ -44,6 +44,27 @@ runtime).
 The class is: **a promoted set whose two halves encode different contracts.** Sign-in is where it
 surfaced, because sign-in is the first read every request makes.
 
+### 🚨 The sharper form: what is TESTED and what is SHIPPED read different refs
+
+Measured in MeshWeaver.Plugins on 2026-09-03, and this is the durable defect rather than the queue
+delay:
+
+| lane | how it picks its core half | what it was on 2026-09-03 |
+|---|---|---|
+| `ci.yml` — the **test** lane | `vars.MW_PLATFORM_REF \|\| env.MW_PLATFORM_REF`, and the env default is a **literal pinned sha** | `e7f1d699…` — frozen |
+| `portal-ai-image.yml`, `portal-next-image.yml`, `log-watcher-image.yml` — the **image** lane | `vars.MW_PLATFORM_REF \|\| 'main'`, and the variable is **unset** | core's moving tip |
+
+So the Plugins repo tests against a frozen core and ships against a moving one. The two agree only
+while the pin happens to equal the tip. Every hour the pin lags, the tested pair and the shipped
+pair are different pairs — and no run anywhere reports the difference, because each lane is
+internally consistent and green. Core's own CD adds the mirror-image gap: it pins its core half at
+run creation and resolves the Plugins half when `gate` runs.
+
+A pin is the right tool for a test lane: it makes a suite reproducible. The defect is that nothing
+compares the pin to what the image lane actually used, and nothing executes the pair the image lane
+produced. That is precisely the hole the `signin-smoke` job below fills, and it is why the fix is a
+gate on the IMAGE rather than a stricter pin.
+
 ## The timeline (UTC, 2026-09-03)
 
 | time | event |
@@ -60,6 +81,11 @@ surfaced, because sign-in is the first read every request makes.
 | 17:05 | Reported: "memex.systemorph.com is completely down". Anonymous `curl` of `/`, `/Doc`, `/healthz` all answer 200 — the shell renders; only the signed-in read fails. |
 | 17:20 | `kubectl set image` to `ci.7693` (core `e36f04c`, which contains #3206, with Plugins `2d32a175`). The surge pod stays `Pending`: every silos node is CPU-full, the pool is at its maximum, and the old 7632 pod is holding a node in `Terminating` — deadlocked in dispose, 3.5 cores, 30-minute grace. It is force-deleted (it was already out of the Service and would have been SIGKILLed at 17:32 anyway); the surge pod schedules within seconds. |
 | 17:22:56 | Rollout complete. Zero refusals, zero 503s on the new pods. |
+
+The roll cleared more than sign-in. On the sister portal, measured across the same change, the
+cross-schema fan-out storm went from **1,917 slow 201-schema unions per pod per 30 minutes** to
+**0–1 per pod per 10 minutes** — the anchored reads of #3206 removing the unions themselves, not
+merely the refusals of them.
 
 `ci.7693` is **up but unsealed**: its `Plugins: bake + seal` job failed on the #3175 one-producer
 guard (`MeshWeaver.Markdown.Collaboration` composed as a module and still shipped in `/app`), as did
