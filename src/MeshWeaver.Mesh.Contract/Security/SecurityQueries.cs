@@ -83,7 +83,7 @@ public static class SecurityQueries
     /// Mesh-wide on purpose — the subject and the grant that names it may live in different
     /// partitions — and therefore always an enumeration.
     ///
-    /// <para>🚨 <b><c>path:*</c> is what makes the fan-out DECLARED, and it is load-bearing.</b>
+    /// <para>🚨 <b><c>partitions:all</c> is what makes the fan-out DECLARED, and it is load-bearing.</b>
     /// Fan-out is opt-in: a storage provider refuses a query that names no partition and did not ask
     /// to span them, because a silent cross-schema UNION locks every relation it touches and stalls
     /// unrelated pinned reads (measured memex-cloud 2026-09-02: 7 786 fan-outs in 30 min, 4 328 over
@@ -108,7 +108,7 @@ public static class SecurityQueries
     /// carrying it has said "every partition" out loud; a query without any anchor at all has said
     /// nothing, and is refused rather than silently served the most expensive plan the mesh has.
     /// </summary>
-    public const string ExplicitFanOut = "path:*";
+    public const string ExplicitFanOut = ParsedQuery.CrossPartitionQualifier;
 
     /// <summary>Every custom <c>Role</c> definition in the mesh (<c>$security-roles</c>).</summary>
     public static string Roles => Global(RoleNodeType);

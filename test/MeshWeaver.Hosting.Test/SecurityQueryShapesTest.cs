@@ -219,18 +219,27 @@ public class SecurityQueryShapesTest
     /// fails when a path-less one appears — so it cannot pass by finding nothing.</para>
     /// </summary>
     [Fact]
-    public void NoShapeTheFoldIssuesIsPathLess()
+    public void EveryShapeTheFoldIssuesSaysWhereToLook()
     {
         SecurityQueries.AllShapes.Should().NotBeEmpty("a census over nothing proves nothing");
 
-        var pathLess = SecurityQueries.AllShapes
-            .Where(shape => Describe(shape).Contains(" path:- ", StringComparison.Ordinal))
+        var parser = new QueryParser();
+        var mute = SecurityQueries.AllShapes
+            .Select(shape => (Shape: shape, Parsed: parser.Parse(shape)))
+            // 🚨 The same three ways the storage provider accepts, in the same order — a concrete
+            // anchor, an explicit `partitions:all`, or a wildcard namespace pattern. Testing only
+            // for a Path would MISS the declared globals: `partitions:all` sets a FLAG and leaves
+            // Path null, so a path-based census reports a correctly-declared read as unanchored.
+            .Where(x => string.IsNullOrEmpty(x.Parsed.Path)
+                        && !x.Parsed.CrossPartition
+                        && x.Parsed.ExtractNamespacePatterns().Count == 0)
+            .Select(x => x.Shape)
             .ToArray();
 
-        pathLess.Should().BeEmpty(
-            "a query with no first segment is refused by the storage provider as insufficiently "
-            + "specified — anchor it, or declare the fan-out with SecurityQueries.ExplicitFanOut. "
-            + "See Doc/Architecture/CrossSchemaFanOutElimination");
+        mute.Should().BeEmpty(
+            "a query that names no partition and does not ask to span them is refused by the "
+            + "storage provider as insufficiently specified — anchor it, or declare the fan-out "
+            + "with SecurityQueries.ExplicitFanOut. See Doc/Architecture/CrossSchemaFanOutElimination");
     }
 
     /// <summary>
@@ -245,7 +254,7 @@ public class SecurityQueryShapesTest
         DeliberatelyGlobal.Should().NotBeEmpty();
         foreach (var (shape, reason) in DeliberatelyGlobal)
         {
-            shape.Should().Contain(SecurityQueries.ExplicitFanOut,
+            new QueryParser().Parse(shape).CrossPartition.Should().BeTrue(
                 $"a mesh-wide fold read must declare it — {reason}");
             RouteOf(shape).Kind.Should().Be(Route.FanOut,
                 $"declaring the fan-out must not have anchored it — {reason}");
