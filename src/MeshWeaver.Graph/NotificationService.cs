@@ -31,7 +31,30 @@ public static class NotificationService
     /// Returns an IObservable that emits the created node and completes —
     /// subscribe to drive the write. Safe to compose inside hub handlers /
     /// click actions via Subscribe.
+    ///
+    /// <para><b>An EVENT gets a fresh id; a STATE gets an <paramref name="identity"/>.</b> Left
+    /// null, every call mints a new GUID, which is right for a notification that reports something
+    /// that happened once ("your response is ready"). It is WRONG for one that reports a standing
+    /// condition an emitter re-evaluates on a schedule — "package X has version Y available" — and
+    /// that difference is the whole of Systemorph/MeshWeaver#3213: a reminder with no identity has
+    /// nothing for a repeat to collide with, so the reconciler minted a new bell row per poll,
+    /// forever (124 of the newest 200 rows on memex-cloud).</para>
     /// </summary>
+    /// <param name="identity">
+    /// A caller-supplied identity for the CONDITION this notification reports (e.g.
+    /// <c>"package-update|update-available|{moduleVersion}"</c>). When given, the node id is
+    /// derived deterministically from it plus <paramref name="mainNodePath"/>, and the write is an
+    /// atomic upsert — so a repeat for the same condition lands on the SAME node and refreshes it
+    /// instead of adding a row. Change what the condition IS (a newer version) and the id changes
+    /// with it, so the new state gets its own unread bell. Null = the historic
+    /// fresh-GUID-per-call behaviour.
+    /// <para>🚨 The identity must capture everything that makes two reminders genuinely different.
+    /// Too coarse and a real change is swallowed into an existing row; the emitter, not this
+    /// method, owns that judgement. A repeat also refreshes <see cref="Notification.CreatedAt"/>
+    /// and clears <see cref="Notification.IsRead"/> — correct for "this is still true", which is
+    /// why the emitter should ALSO carry a marker that stops re-raising an unchanged condition
+    /// rather than relying on the upsert alone.</para>
+    /// </param>
     public static IObservable<MeshNode> CreateNotification(
         IMeshService nodeFactory,
         string mainNodePath,
@@ -40,9 +63,18 @@ public static class NotificationService
         NotificationType type,
         string? targetNodePath = null,
         string? createdBy = null,
-        string? icon = null)
+        string? icon = null,
+        string? identity = null)
     {
-        var notificationId = Guid.NewGuid().AsString();
+        var deterministic = !string.IsNullOrEmpty(identity);
+        // Reuses the platform's ONE content-addressing helper rather than growing a second hash:
+        // it is exactly the (path, token) → stable-id shape the content-addressed import marker
+        // (`{Partition}/_Activity/import-{fingerprint}`) already uses, and its output is 16 lower
+        // hex chars — always a legal node-id segment, whatever characters the caller's identity
+        // string happens to contain.
+        var notificationId = deterministic
+            ? PartitionSourceFingerprint.Compute([(mainNodePath, identity!)])
+            : Guid.NewGuid().AsString();
         var parentPath = $"{mainNodePath}/{SatelliteSegment}";
 
         var notification = new Notification
@@ -67,7 +99,14 @@ public static class NotificationService
             Content = notification
         };
 
-        return nodeFactory.CreateNode(node);
+        // 🚨 The upsert is the OWNER's single verb, not a client-side
+        // CreateNode().Catch(exists → UpdateNode()): two reconcile passes racing on the same
+        // deterministic path are exactly what this id makes possible, and the hand-rolled split
+        // races (the create's exists-check lags the concurrent create → the update patches a
+        // not-yet-materialised node → "NotFound … for patch apply").
+        return deterministic
+            ? nodeFactory.CreateOrUpdateNode(node)
+            : nodeFactory.CreateNode(node);
     }
 
     private static readonly TimeSpan LookupTimeout = TimeSpan.FromSeconds(10);
