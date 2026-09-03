@@ -133,9 +133,14 @@ does not identify the affected set.
 
 The durable cure is **out-of-band asset transfer**: a file that size belongs behind a content-store
 handle (upload the bytes once, ship a reference), not inline on a message. That is a design change
-with its own delivery, and it is tracked separately. What this page describes is the change that
-makes the gap **observable in the meantime** — the difference between a learner reporting a missing
-video and the sync reporting its own state.
+with its own delivery, tracked as issue **#3233** — which carries the table above, the reproduction,
+and the read-back that says when it is fixed. What this page describes is the change that makes the
+gap **observable in the meantime** — the difference between a learner reporting a missing video and
+the sync reporting its own state.
+
+🚨 **Measure it on a repo-backed install.** `memex.meshweaver.cloud` serves the Education assets from
+its own store — they were uploaded there by hand on 2026-07-17/18 — so that portal cannot answer
+whether a sync would deliver them.
 
 ## Related
 
