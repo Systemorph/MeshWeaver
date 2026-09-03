@@ -107,6 +107,9 @@ The portal container is `memex-portal` in Deployment `memex-portal-deployment`.
 > **🚨 The migration is a run-once Job in the chart, NOT a Deployment — `set image` cannot roll it.** Older
 > copies of this runbook also passed `deployment/memex-migration-deployment` to `set image` and
 > `rollout restart`; that step is removed above because it does not run a migration.
+> Since 2026-09-03 the SELF-UPDATER also mints one (`memex-migration-su-<tag>`) before every automatic
+> roll — see [Database Migration Procedure](/Doc/Architecture/DatabaseMigrationProcedure) for the routine,
+> the one-time RBAC grant it needs, and the recovery when a pod refuses on `db_version`.
 > `deploy/helm/templates/memex-migration/job.yaml` renders a `batch/v1` Job named
 > `memex-migration-<Release.Revision>` with `restartPolicy: Never`; a fresh one is created by **`helm
 > upgrade`**, and `ttlSecondsAfterFinished` cleans it up. `memex-migration-deployment` is a **legacy**
