@@ -6,8 +6,10 @@
 # LocalColimaMac.md §4. `memex-local up` copies this template to
 #   ~/.memex-local/values.local.yaml
 # on first run, substituting freshly generated secrets for the __TOKENS__ below.
-# Edit ~/.memex-local/values.local.yaml (NOT this template) to fill in your
-# Entra OAuth values; re-run `memex-local up` to apply.
+# It answers NEITHER the database question NOR the sign-in question — the portal's
+# first-run setup wizard asks those (`memex-local setup`). Edit
+# ~/.memex-local/values.local.yaml (NOT this template) only to PIN an answer and
+# skip the wizard; re-run `memex-local up` to apply.
 #
 # Helm invocation (see `memex-local up`, maps to LocalColimaMac.md §4):
 #   helm upgrade --install memex deploy/helm \
@@ -38,38 +40,54 @@ secrets:
     ConnectionStrings__memex: "Host=memex-postgres-service;Port=5432;Database=memex;Username=postgres;Password=__PG_PASSWORD__"
     # AI key-protection master key (encrypts stored provider keys). Generated once.
     Ai__KeyProtection__MasterKey: "__AI_MASTER_KEY__"
-    # Microsoft Entra client secret — ONLY needed if you opt into the Entra flow
-    # below (LocalColimaMac.md §9). Left commented so a local portal never asks a
-    # developer to put a real tenant secret on their disk to log into their own machine.
+    # Microsoft Entra client secret — NOT set here any more. The setup wizard
+    # collects it and stores it enc:v1:-encrypted in the instance manifest on the
+    # /data PVC, under the master key below. Uncomment only to PIN it from the
+    # deployment (an unattended install), in which case it outranks the manifest.
     # Authentication__Microsoft__ClientSecret: "<entra-client-secret>"
     # OpenAI-compatible (Ollama) API key — any non-empty token; "ollama" per doc §10.
     OpenAICompatible__ApiKey: "ollama"
 
 config:
   memex_portal:
-    # ---- Auth: the built-in developer login (the local default) ---------------
-    # A local portal signs you in WITHOUT a cloud identity provider. DevLogin
-    # self-provisions on first sign-in (DevAuthController -> UserOnboardingService),
-    # so a fresh machine needs no tenant, no app registration, no redirect URI and
-    # no client secret on disk.
+    # ---- Auth and database: ASKED, not baked --------------------------------
+    # 🚨 These keys are deliberately EMPTY, and that is what makes `memex-local up`
+    # land on the first-run SETUP WIZARD instead of a portal someone else's choices
+    # already configured. This file used to answer both questions for you: dev login
+    # on, a placeholder admin username you had to remember to edit, and a commented
+    # block of Entra lines to uncomment if you wanted the OAuth flow. That is a
+    # deployment making an identity decision on the operator's behalf — and getting
+    # it wrong in both directions, since a laptop that wants Entra had to hand-edit
+    # YAML while a laptop that wanted dev login shipped with `<your-username>` as its
+    # only administrator.
     #
-    # 🚨 These two are a PAIR. EnableDevLogin turns the login on; DevAdminUsers is
-    # the comma-separated list of ids granted platform admin when they sign in that
-    # way. One without the other is a portal you can log into and then administer
-    # nothing on — set both, or neither.
-    Authentication__EnableDevLogin: "true"
-    Authentication__DevAdminUsers: "<your-username>"
-    # ---- Opt-in: Microsoft Entra OAuth (LocalColimaMac.md §9) -----------------
-    # Only needed to exercise the ENTRA FLOW ITSELF locally — signing in for
-    # ordinary local work does not require it. Uncomment these plus the
-    # ClientSecret above, fill them from a dedicated local-dev app registration,
-    # and register the redirect URIs:
+    # Now the portal asks: which database, which logins, which model keys, which
+    # modules. Run `memex-local setup` after `up` for the URL and the one-time token.
+    #
+    # Empty means UNSET here, not "off": the chart emits these keys only when they
+    # carry a value, so the instance manifest the wizard writes is what answers them.
+    # Setting one back to a real value makes THIS FILE the answer again — deployment
+    # configuration always outranks the manifest — which is exactly how you pin an
+    # unattended install (see `memex-local up --unattended`).
+    Authentication__EnableDevLogin: ""
+    Authentication__DevAdminUsers: ""
+    Authentication__Provider: ""
+    Authentication__Microsoft__ClientId: ""
+    Authentication__Microsoft__TenantId: ""
+    # Using Entra locally? The wizard asks for the client id, tenant and secret — but
+    # Entra still needs to know where to send you back, so register BOTH redirect URIs
+    # on the app registration before you answer:
     #   https://memex.localhost:8443/signin-microsoft
     #   https://memex.localhost/signin-microsoft
-    # Note this also moves the sign-out path from /dev/logout to /auth/logout.
-    # Authentication__Provider: "Microsoft"
-    # Authentication__Microsoft__ClientId: "<entra-client-id>"
-    # Authentication__Microsoft__TenantId: "<entra-tenant-id>"
+    # Choosing it also moves the sign-out path from /dev/logout to /auth/logout.
+    # ---- Database: the wizard's question, not this file's answer -------------
+    # Blank ⇒ the chart omits Graph__Storage__* ⇒ the portal has no storage ⇒ it
+    # serves the setup wizard. The chart still deploys its Postgres StatefulSet, so
+    # BOTH answers work: pick SQLite (a single file on the /data PVC, nothing else
+    # running) or PostgreSQL and paste the connection string `memex-local setup`
+    # prints for you.
+    Graph__Storage__Type: ""
+    Graph__Storage__BasePath: ""
 
     # ---- Instance identity (tab title + favicon badge — LocalColimaMac.md §12)
     Portal__InstanceName: "Local"

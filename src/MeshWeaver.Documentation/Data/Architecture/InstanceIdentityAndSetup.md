@@ -254,13 +254,25 @@ retire into the action's verbs (the self-updater's direct Deployment PATCH retir
 pods roll because the record changed (#2801), not because someone ran a workflow — and therefore
 what brings the maintainer's local instance back as a registry consumer (#2417's last mile).
 
-### Slice 3 — the setup surface
+### Slice 3 — the setup surface ✅ DELIVERED
 
-Core. The host serves the wizard when `IsAwaitingSetup`; the five steps above; storage-backend
-discovery from the keyed adapter registrations; the Docker Postgres provisioning for the
-*set one up for me* default; writes `InstanceManifest`, registers, installs, restarts into
-`Complete`. `memex-local up` stops writing values by hand and drives the same wizard headlessly
-with its answers.
+Core. **Shipped — see [First-Run Setup](../FirstRunSetup) for what was built and why.** The host
+serves the wizard when `IsAwaitingSetup`; storage-backend discovery from the keyed adapter
+registrations; writes `InstanceManifest`, restarts into `Complete`. `memex-local up` stops writing
+auth and storage values by hand and hands over to the wizard (`memex-local setup`).
+
+Three things landed differently from this design, each for a measured reason:
+
+- **The default backend is SQLite, not "set up a Postgres for me".** A laptop install should need
+  nothing else running, and SQLite is a full backend here — partitions, durable event log, local
+  vector search. It needed a keyed `IStorageAdapterFactory`, without which
+  `Graph:Storage:Type=Sqlite` answered `Unknown storage type` and the wizard could not offer it.
+- **It is a SEPARATE host, not a branch in the portal's pipeline.** Two attempts to serve the wizard
+  from inside ordinary startup died before reaching it (a permission-evaluator assertion, then a
+  module-registered `IHostedService` with no `IMeshService`). See the delivered page.
+- **The manifest gained `SignIn` and `Ai` sections** — the platform change `SignInSetupTab` named as
+  missing — plus a projection into configuration, inserted at index 0 so deployment configuration
+  still wins.
 
 ### Slice 4 — the app and the proof
 
