@@ -214,6 +214,8 @@ git merge-base --is-ancestor <fix sha> <core half>                              
   incident's own rollout such a pod held the last schedulable node, which is why the surge pod
   stayed `Pending` and the recovery needed a force-delete.
 
+- **Nothing executes the image pair before it is promoted** — the largest open item, and a
+  deliberate decision rather than an oversight. See *What is still open* above.
 - The silos node pool has no headroom for one surge pod when both portals are at full replica count.
   A rollout that must surge waits for a termination, and a wedged termination waits for the grace
   period.
