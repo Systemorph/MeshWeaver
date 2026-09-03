@@ -344,32 +344,37 @@ Permissions are evaluated by **`PermissionEvaluator`** — an `internal static` 
 
 **No storage walk on the read path. No TTL cache to invalidate. Live updates ride the cached queries' own change feeds.**
 
-## Scope hierarchy as a recursive query fold
+## Two reads per path: the partition, and the root
 
-For a target path `ACME/Project/Task1`, `ObserveScopeAssignments` recurses **from the target path up to the root**, and each level `CombineLatest`-unions its own `_Access` grants with everything the parent scope resolved:
-
-```
-scope ""                → cache.GetQuery("$security-access:")            ∪ static baselines
-   ▲ parent fold
-scope "ACME"            → cache.GetQuery("$security-access:ACME")        ∪ (above)
-   ▲ parent fold
-scope "ACME/Project"    → cache.GetQuery("$security-access:ACME/Project")∪ (above)
-   ▲ parent fold
-scope "ACME/Project/Task1" → cache.GetQuery("$security-access:…/Task1")  ∪ (above)
-                              └─ UnionByPath + DistinctUntilChanged
-```
-
-Each level's query is cached **process-wide** under its key, so every hub in the process shares ONE upstream subscription per scope, and a scope that appears on many paths is subscribed once. `_Policy` nodes fold the same way under `$security-policy:{scope}`.
-
-The per-scope filter is normally namespace-shaped:
+For a target path `ACME/Project/Task1`, `ObserveEffectiveAssignments` issues exactly **two** anchored reads and unions them with the static baselines:
 
 ```
-namespace:{scope}/_Access nodeType:AccessAssignment select:path,id,namespace,name,nodeType,content
+partition "ACME"  → cache.GetQuery("$security-access:ACME")   path:ACME scope:descendants nodeType:AccessAssignment
+root scope ""     → cache.GetQuery("$security-access:")       namespace:_Access nodeType:AccessAssignment
+static baselines  → IStaticNodeProvider
+                     └─ UnionByPath + DistinctUntilChanged
 ```
 
-with **one deliberate exception**: scopes rooted at `Admin` use a **path** query (`path:{scope}/_Access scope:children …`). The `admin` schema is excluded from cross-schema global search (`searchable_schemas`), so a namespace-only query never reaches `admin.access` — platform-admin grants would silently never load and every platform admin would read as unrecognised on Postgres. Routing by path resolves the schema from the first segment instead.
+`_Policy` nodes fold the same way under `$security-policy:{partition}` / `$security-policy:`. Both keys are cached **process-wide**, so every hub in the process shares ONE upstream subscription per partition however many paths, hubs or viewers consult it.
 
-The other shared query keys, all on the same cache: `$security-roles` (the custom `Role` catalogue), `$security-memberships` (**every** `GroupMembership` node — group access is resolved globally, because a group defined in one partition can be granted in another), and `$security-gated:{type}` (one per `NodeTypeGate`).
+**Why the partition and not the scope.** A grant lives at `{scope}/_Access/{id}`, and every scope on a path's chain except the root is a **prefix** of that path — so all of them live in the path's own partition, which is exactly where `_Access` is stored (one schema per partition; the `_Access` segment routes to that schema's `access` table). One partition-wide read therefore answers the whole chain.
+
+Reading per SCOPE instead multiplied that one read by the depth of the path **and** by how many paths were checked, because a node's own path is always the LEAF of its own chain — so every node ever permission-checked minted its own live `$security-access:{path}` + `$security-policy:{path}` pair. Measured (issue #3093, `SecurityQueryScaleTest`): RLS-filtering a 4-node listing opened **13** security queries, a 32-node listing **69** — exactly +2 per node, and the population never fell below the stream cache's idle window. After: **5** either way.
+
+**Why the verdict cannot change.** The fold never depended on which scopes were READ, only on which are CONSULTED. `ComputeScopeRoles` buckets whatever nodes it is handed by each node's OWN namespace, and `ComputeRoleState` then walks `GetScopeHierarchy(nodePath)` and reads only the buckets on the target path's chain. A partition-wide read is a strict **superset** of the per-scope walk, so no grant — and, more importantly, no group-scoped DENY — can go missing. That direction is the one that matters: a short read in this fold is indistinguishable from "denied", and a missing deny fails OPEN (see [Unanchored Security Reads](/Doc/Architecture/UnanchoredSecurityReads)).
+
+**Which provider serves which leg** — worth knowing before changing either shape again, because the two legs are served by different code and only one of them is exercisable without Postgres:
+
+| Leg | Query | Classified | Served by |
+|---|---|---|---|
+| grants | `path:{partition} scope:descendants nodeType:AccessAssignment` | **satellite-targeted** — `PartitionDefinition.IsSatelliteNodeType("AccessAssignment")` is true (`_Access`→`access`) | the in-repo `StorageAdapterMeshQueryProvider` on every backend (`DefersToNativeProvider` returns **false** for a scoped satellite read) |
+| policies | `path:{partition} scope:descendants id:_Policy nodeType:PartitionAccessPolicy` | **content** — `_Policy` is not a configured satellite segment, so these live in `mesh_nodes` | deferred to the native per-schema delegate on Postgres |
+
+That classification is what makes the grant read correct rather than lucky: a query that did NOT target satellites has satellite-path rows filtered out of its result (`RunQueryNodes`, mirroring PG's separate-table routing), so an anchored `scope:descendants` read of `{partition}` would silently return no `_Access` rows at all. It is the `nodeType:` filter — configuration, not the `_` character — that keeps them in.
+
+**The Admin exception is gone**, absorbed rather than deleted. `Admin` is excluded from cross-schema global search (`searchable_schemas`), so a namespace-only query never reached `admin.access` and platform-admin grants silently never loaded; the fold used to special-case Admin-rooted scopes onto a `path:` query for exactly that reason. Every partition now takes that route, so there is no branch left to get wrong.
+
+The other shared query keys, all on the same cache, are still global by necessity: `$security-roles` (the custom `Role` catalogue), `$security-memberships` (**every** `GroupMembership` node — group access is resolved globally, because a group defined in one partition can be granted in another), and `$security-gated:{type}` (one per `NodeTypeGate`). Anchoring **those** to a partition is the truncation [Unanchored Security Reads](/Doc/Architecture/UnanchoredSecurityReads) forbids; anchoring the per-partition legs above is not, because their subject is in that partition by construction.
 
 ## Evaluation flow
 
@@ -644,7 +649,7 @@ Access control uses these shipped node types:
 
 > There is no `SecurityService` class any more, and **no write surface on the evaluator**. `AddUserRole`, `RemoveUserRole`, `SetPolicy`, `RemovePolicy`, `SaveRole` do not exist. Grants are ordinary MeshNodes: create/update them with `meshService.CreateNode(...)` / `workspace.GetMeshNodeStream(path).Update(...)` like any other node, and the shared `$security-*` queries pick the change up.
 
-Roles and baseline AccessAssignments follow the [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (including the read-only `_Policy` at the root namespace) and mesh-level extensions live as user-created MeshNodes. `CollectStaticAccessAssignments` / `CollectStaticPolicies` fold the static layer in **synchronously** at the root of the scope recursion, so a statically declared grant resolves on the first emission without waiting for storage.
+Roles and baseline AccessAssignments follow the [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (including the read-only `_Policy` at the root namespace) and mesh-level extensions live as user-created MeshNodes. `CollectStaticAccessAssignments` / `CollectStaticPolicies` fold the static layer in **synchronously**, unioned with the two anchored reads, so a statically declared grant resolves on the first emission without waiting for storage.
 
 ## The read surface
 
@@ -675,7 +680,7 @@ The evaluator holds **no per-process mutable state**: no `_permissionCache`, no 
 
 ## Writes are ordinary node writes
 
-Creating or editing a grant is `workspace.GetMeshNodeStream(path).Update(...)` (or `CreateNodeRequest` / `DeleteNodeRequest` for lifecycle) — exactly like every other MeshNode; see [`GetMeshNodeStream().Update()` is the only mutation API](/Doc/Architecture/RequestViaStreamUpdate). The write goes through the usual validator chain (`RlsNodeValidator`, `AccessAssignmentGuard`) and the usual persistence path; the shared `$security-access:{scope}` query then re-emits and subsequent checks reflect it.
+Creating or editing a grant is `workspace.GetMeshNodeStream(path).Update(...)` (or `CreateNodeRequest` / `DeleteNodeRequest` for lifecycle) — exactly like every other MeshNode; see [`GetMeshNodeStream().Update()` is the only mutation API](/Doc/Architecture/RequestViaStreamUpdate). The write goes through the usual validator chain (`RlsNodeValidator`, `AccessAssignmentGuard`) and the usual persistence path; the shared `$security-access:{partition}` query then re-emits and subsequent checks reflect it.
 
 ---
 
@@ -1499,15 +1504,67 @@ code, and its exception text can carry an internal path, a connection string or 
 identifier — while the type is all a caller can act on ("retry, or ask an operator"). The full
 exception, message and stack, goes to the log where only an operator sees it.
 
-**What is still NOT routed through the rule, on purpose.** `DeleteNodeRequest` and
-`ValidateDeleteRequest` carry `[RequiresPermission(Permission.Delete)]`, so on a route that passes
-through a hub with the `AccessControlPipeline` (a per-node hub) the delivery gate still demands
-`Permission.Delete` on the *receiving hub's own path* before the handler runs. The off-router
-node-operation execution hub — where `IMeshService.DeleteNode` lands — carries no such pipeline, and
-that is the route the pre-flight governs. Widening the message-level gate is a separate decision with
-a much larger blast radius; it has not been made.
+### 🚨 …and the DELIVERY GATE is the third seam — it was left out, and that is #3061
 
-Pinned by `DeleteHonoursNodeTypeAccessRuleTest` (`test/MeshWeaver.Security.Test`), whose four cases
+The paragraph that used to stand here said the message-level gate was deliberately *not* routed
+through the rule: `DeleteNodeRequest` and `ValidateDeleteRequest` carry
+`[RequiresPermission(Permission.Delete)]`, so on a route that passes through a per-node hub the
+`AccessControlPipeline` demanded `Permission.Delete` on the receiving hub's own path before the
+handler ran, and widening that was "a separate decision with a much larger blast radius". **That
+decision has now been made, because the un-widened gate is a live defect** — and it is the SAME
+defect #2913 fixed one seam earlier, which is precisely the shape a rule stated as "every path that
+decides this node type's access consults it" exists to prevent.
+
+**Measured, memex 2026-09-02 (#3061).** A recursive delete of the orphan NodeType `Edu/Course` was
+refused with
+
+```
+Access denied: user 'rbuergi' lacks Delete permission on 'Edu/Course/_Activity/compile-…'
+```
+
+for all 72 of its `_Activity` satellites. Their registered `SatelliteAccessRule` says a satellite's
+Delete is `Permission.Update` on its `MainNode` — the very reasoning #2913 wrote down — but
+`RequiresPermissionAttribute.GetPermissionChecks` yields a RAW `(hubPath, Permission)` pair, the gate
+folded it with no rule in sight, and the gate runs **first**. So the one repair for a dangling
+NodeType was unavailable through any API.
+
+The gate now consults the same authority, resolved through the same index
+(`NodeTypeAccessRuleGate`, `src/MeshWeaver.Mesh.Contract/Services/NodeTypeAccessRuleGate.cs`), which
+also owns the evaluation both seams share — its three terminals and the "detail names the exception
+TYPE, never its message" rule. Reading it is what tells you the two cannot drift again.
+
+**Where the reconsideration sits, and why there.** It is reached ONLY from a definitive denial:
+
+| Fold outcome for `(hubPath, Permission)` | What happens |
+|---|---|
+| Granted | delivered — the rule is never consulted, so a hot `SubscribeRequest` reads no node |
+| **Denied** | **re-decided through the node type's rule** — the rule's answer is the gate's answer |
+| Undetermined | refused as `Unavailable` — "we could not check" is not a rule question |
+
+and four conditions each leave the denial exactly as it was: the check is not on this hub's own path;
+the permission names no operation a rule can decide about that node; nothing is served at that path;
+or no rule governs `(node type, operation)`.
+
+**`Permission.Create` deliberately maps to no operation.** A create names a node that does not exist
+yet and the gate evaluates on the PARENT's hub path, so the node type a lookup here would find is the
+parent's — and the parent's rule has no standing to decide a child's creation. `RlsNodeValidator`
+keys the Create rule off the node BEING CREATED, which only the handler can supply. Everything
+outside the CRUD four (Comment, Thread, Execute, Export, Compile, Api…) maps to nothing for the
+matching reason: `INodeTypeAccessRule.SupportedOperations` is expressed in `NodeOperation`s, so a
+rule cannot have an opinion about them.
+
+**A node read that FAULTS answers `Undetermined`, never the original denial.** Falling back to the
+denial would make a transient storage fault silently restore the pre-fix behaviour — the gate's own
+input deciding whether the gate ran, the shape AGENTS.md bans and `MissingEvaluatorFailsClosedTests`
+pins one level up. `Undetermined` is still fail-closed; it just stops claiming a verdict nobody
+reached.
+
+Pinned by `SatelliteDeliveryGateTest` (`test/MeshWeaver.Graph.Test`), whose three cases are the three
+verdicts on one mesh: an Editor's satellite pre-flight is served, a Viewer's is refused
+`Unauthorized` (the rule DENIES — consulting a rule never means granting), and the same Editor at a
+plain `Markdown` child of the same node is still refused (no rule, nothing widened).
+
+Pinned by `DeleteHonoursNodeTypeAccessRuleTest` (`MeshWeaver.Plugins`, `src/MeshWeaver.Security.Test`), whose four cases
 are the four rows of the table above — including the one that matters most, that an Editor still
 cannot delete a node whose type has no rule.
 
@@ -1662,7 +1719,7 @@ var builder = new MeshBuilder()
 2. **Use deny sparingly** — deny overrides only the specific role, not all permissions.
 3. **Anonymous for unauthenticated access** — configure the Anonymous user with Viewer role on namespaces that should be visible without login.
 4. **Public for authenticated baseline** — configure the Public user with Viewer role on namespaces that all logged-in users should access.
-5. **No manual caching** — `PermissionEvaluator` is a static algorithm whose per-scope state lives in the process-wide `IMeshNodeStreamCache` under `$security-access:{scope}` / `$security-policy:{scope}` / `$security-roles` / `$security-memberships`. Those queries are kept live by their own change feeds; there is no separate TTL cache to invalidate.
+5. **No manual caching** — `PermissionEvaluator` is a static algorithm whose state lives in the process-wide `IMeshNodeStreamCache` under `$security-access:{partition}` / `$security-policy:{partition}` (plus their root-scope twins) / `$security-roles` / `$security-memberships`. Those queries are kept live by their own change feeds; there is no separate TTL cache to invalidate.
 6. **Fail closed** — no roles assigned means no permissions (`Permission.None`).
 7. **Audit via MeshNodes** — AccessAssignment nodes provide a clear audit trail of who has access to what.
 8. **Use `ImpersonateAsHub()` for hub operations** — when a hub needs to perform operations as itself, use `PostOptions.ImpersonateAsHub()` instead of setting identity on `AccessService` directly.

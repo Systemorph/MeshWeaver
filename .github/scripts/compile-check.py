@@ -333,6 +333,27 @@ def _report_framework_provenance(refs: dict, ref_roots) -> None:
         line += f"  image={digest}"
     print(line)
 
+# Assemblies that are COMPILER-TIME TOOLING, never a reference: Roslyn source generators and analyzers
+# ship beside the real assemblies (the tester image lays the SDK's generators out under
+# `sdk-generators/`, MeshWeaver#2905) and they carry INTERNAL copies of the public types they
+# generate code for — `System.Text.Json.SourceGeneration.dll` declares its own
+# `JsonSerializerDefaults`/`JsonIgnoreCondition`. Handed to the compiler as a reference beside
+# `System.Text.Json.dll`, every NodeType naming those types fails CS0433 "exists in both"
+# (Reinsurance #145: Ifrs17/Engine, UWDeepfield/TreatyRenewalTracking; Manufacturing run 212:
+# 12 of 15 types). A generator is consumed through the analyzer channel, never as a reference.
+_TOOLING_DIR_PARTS = {"sdk-generators", "analyzers"}
+_TOOLING_NAME_SUFFIXES = (".SourceGeneration.dll", ".Generators.dll", ".Generator.dll",
+                          ".Analyzers.dll", ".Analyzer.dll", ".CodeFixes.dll")
+
+
+def is_reference_assembly(path: str) -> bool:
+    """False for a Roslyn generator/analyzer assembly — by its directory or by its name."""
+    parts = set(Path(path).parts)
+    if parts & _TOOLING_DIR_PARTS:
+        return False
+    return not os.path.basename(path).endswith(_TOOLING_NAME_SUFFIXES)
+
+
 def discover_refs(refs_arg):
     """Return ({name.dll: path}, search_roots). If --refs is a dir, glob its *.dll. Else
        auto-discover the sibling core build (Debug preferred, else Release), deduped preferring the
@@ -378,6 +399,11 @@ def discover_refs(refs_arg):
         if core_used is not None:
             _refuse_if_sibling_stale(core_used)
         search_roots = [core_used] if core_used else list(candidates)
+    excluded = [d for d in dlls if not is_reference_assembly(d)]
+    if excluded:
+        print(f"refs: excluded {len(excluded)} compiler-tooling assembl(ies) (generators/analyzers are not references): "
+              + ", ".join(sorted({os.path.basename(d) for d in excluded})))
+    dlls = [d for d in dlls if is_reference_assembly(d)]
     seen = {}
     for dll in dlls:
         n = os.path.basename(dll)
@@ -710,6 +736,24 @@ def _self_test() -> int:
     emitted = [f"global using {u};" for u in union]
     if any(u.startswith("global using static ") for u in emitted):
         failures.append("  IMPLICIT_USINGS unexpectedly contains a static import")
+
+    # The reference set must never carry a Roslyn generator/analyzer beside the assembly it generates
+    # for (CS0433 "exists in both" on every NodeType naming a System.Text.Json type — Reinsurance #145).
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        flat = os.path.join(tmp, "app")
+        os.makedirs(os.path.join(flat, "sdk-generators"))
+        for name in ("System.Text.Json.dll", "System.Text.Json.SourceGeneration.dll", "MeshWeaver.Data.dll",
+                     "Some.Analyzers.dll"):
+            open(os.path.join(flat, name), "wb").close()
+        open(os.path.join(flat, "sdk-generators", "Microsoft.Extensions.Logging.Generators.dll"), "wb").close()
+        open(os.path.join(flat, "sdk-generators", "Innocent.Name.dll"), "wb").close()  # by DIRECTORY, not name
+        refs, _ = discover_refs(flat)
+        kept = set(refs)
+        if kept != {"System.Text.Json.dll", "MeshWeaver.Data.dll"}:
+            failures.append(f"  reference-set filter kept {sorted(kept)!r}; expected only System.Text.Json.dll + MeshWeaver.Data.dll")
+        if not is_reference_assembly(os.path.join(flat, "System.Text.Json.dll")):
+            failures.append("  is_reference_assembly refused the real System.Text.Json.dll")
 
     if failures:
         print("✗ using-directive parser self-test FAILED:")

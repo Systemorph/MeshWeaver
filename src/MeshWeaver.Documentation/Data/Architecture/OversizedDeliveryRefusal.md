@@ -135,6 +135,67 @@ their surrounding comments carry the incident history.
 > incident history and its public surface. This is the same move #2885 made one assembly earlier, for
 > the same reason, and the alternative is the same one it rejected: a copy-paste of the check.
 
+### The invariant was blind to half the traffic (#3104)
+
+Making the strip a construction invariant fixed *which sites* it reaches. It did not fix *which
+payloads* it can see, and the two are easy to conflate. `IsOversized` opens:
+
+```csharp
+if (delivery?.Message is not RawJson { Content: { } content })
+    return false;
+```
+
+A payload that is not `RawJson` is never measured and never stripped. That test is **right on the
+router hot path**, and its own doc says why: by the time a delivery reaches a transport `MeshBuilder`
+has packaged it, so `RawJson` is the routed shape, and guessing at anything else's size would mean
+serialising twice to answer a question that is almost always "no".
+
+🚨 **That reasoning does not transfer to the strip.** The strip runs only while a failure report is
+being made ready to travel — a rare path, where an exact measurement is the correct thing to pay for.
+Inheriting the hot path's excuse there left the entire **pre-packaging** half of the mesh unmeasured,
+and the construction invariant inherited the blind spot with it: it covers all ~25 sites, but only for
+a payload that is already `RawJson`.
+
+`AccessControlPipeline` is the case that bites, and it is not a corner. `[RequiresPermission]` is an
+attribute on the message **type**, so the gate cannot evaluate a `RawJson` at all — its deliveries are
+typed by construction. A permission denial therefore echoed a multi-megabyte body back verbatim, and
+serialising it at the packaging seam is the same
+`Utf8JsonWriter.TranscodeAndWriteRawValue` → `SharedArrayPool.Rent` → `GC.AllocateNewArray`
+allocation that threw in #3049. Every in-process NACK is in the same position:
+`MessageService.ReportFailure`, `MessageHub`'s unhandled and failed-state answers,
+`HierarchicalRouting`'s NotFound.
+
+**The measurement now takes options, and the strip is applied at the packaging seam.**
+`DeliveryPayloadBounds.IsOversized(delivery, options, limit, out bytes)` keeps the `RawJson` branch
+byte-for-byte as it was and serialises a typed payload only when options are supplied — into a
+counting `IBufferWriter` that keeps nothing, because rendering the document to read its `Length` is
+the very allocation this exists to prevent. A null `options` reproduces the old behaviour exactly, so
+no caller is worse off. `MessageDelivery.Package` applies it to a `DeliveryFailure`'s echo before it
+serialises.
+
+Three things about that placement are deliberate:
+
+- **The seam, not the call sites.** `Package` is the one place a delivery becomes its wire form and
+  the one place a hub's `JsonSerializerOptions` are in hand. Applying the rule there covers the sites
+  nobody has enumerated yet — which is the whole lesson of the section above, applied once more
+  rather than re-learned.
+- **Packaging, not construction.** A report that never crosses a boundary keeps its full echo. It
+  costs nothing to carry in-process and is the better diagnostic; the strip exists to keep a report
+  *deliverable*, never to redact it.
+- **Unmeasurable is not "too big".** A payload the serializer refuses has an *unknown* size, and the
+  honest answer to unknown is to echo it. Treating a failed measurement as oversized would be a
+  fail-closed default that silently destroys the content of every NACK whose payload happens to be
+  awkward to serialise — and it would buy nothing, since a payload that cannot be serialised cannot
+  be packaged either and so never reaches this bound's wall.
+
+Both seams are pinned by `DeliveryFailureEchoStripGuard`, which asserts the *seams* rather than the
+call sites — a per-site scan would enforce exactly the convention this page records the failure of,
+and could not see a site that reaches a report through a helper. It checks that the construction
+invariant still runs the strip, that `Package` strips **before** it serialises (the order is the
+assertion: stripping afterwards compiles, passes every functional test, and does nothing), that
+`MeshBuilder` still routes through `Package`, and that the seam has exactly one implementation. Each
+arm fails when its subject is missing rather than merely non-compliant.
+
 ## The fourth leg: the router's OWN grain call (#2885)
 
 The three sites above all live **inside** `RoutingGrain`. But a delivery has to *reach* that grain,
@@ -349,11 +410,77 @@ placement of any bound changes that. Note that bounding *concurrency* (as the st
 already does, `BatchSize = 5`) is **not** that axis and does not help: it limits how many deliveries
 are in flight, never how big one of them is.
 
-> **This is why #3046 stays open** while #3047, #3048, #3049 and the rest of that burst do not. Its
-> leg — `BuildPodHubRoute`'s `IPodHubGrain.Deliver` to a bulk-import hub — has been guarded since
-> #2897 and the delivery went through anyway, which means the payload was *under* the bound and the
-> allocation multiple is what killed the pod. Everything above narrows that band; only the producer
-> closes it.
+## The producer that was building it whole (#2885)
+
+The producer axis stayed open for a day because none of the stacks names a message type, only a
+target: `import/{meshHubId}`, the dedicated bulk-import hub. Four incidents converged on it —
+#2885 (twice: 2026-08-31 05:52Z and 2026-09-02 03:08Z) and #3046/#3047/#3048 (2026-09-02
+02:59–03:00Z) — and the identification is arithmetic, not inference.
+
+**The trigger.** `AgenticBusiness/_GitSync` was written at 2026-09-02 02:49:58Z; the burst begins
+five minutes later. That is a forced GitSync re-import, which is exactly the event the first
+measurement on #2885 said a six-hour quiet window could not rule out.
+
+**The message.** A GitSync import mirrors a Space's git-committed `content/**` binaries into its
+content collection with `SyncContentFilesRequest`, whose `Files` carry the raw bytes **inline** —
+deliberately, so binary assets are never round-tripped through a text API.
+`ContentAssetMapper.ToContentSyncs` emits **one** `StaticContentSync` per Space (also deliberately:
+the mirror is meant to be one authoritative pass over the whole collection), and
+`SyncContentFilesBuilder.Post` turned that one group into **one message**. So the delivery's size
+was the size of the Space's entire asset tree.
+
+**The arithmetic.** `Systemorph/MeshWeaver.Education`, the repo `AgenticBusiness` syncs from:
+
+| Space | `content/**` bytes | as base64 | as a UTF-16 `RawJson` string | transcode rent (≤3 B/char) |
+|---|---|---|---|---|
+| `AgenticBusiness` | 28,484,421 (10 files) | ~38 MB | ~76 MB | **~114 MB** |
+| `AgenticEngineering` | 106,070,300 (12 videos) | **~141 MB** | ~283 MB | ~424 MB |
+
+The `AgenticBusiness` payload is comfortably **under** `MaxMessageBodySize`, which is why every
+bound on this page let it through and #3046 could correctly observe that "the leg is guarded and the
+delivery went through anyway". The rent is what failed. `AgenticEngineering` is the other end of the
+same defect and is not an OOM at all: its base64 form exceeds the 100 MiB frame limit outright, so
+once the producer-side refusals landed that Space's assets **could not sync at all** — a silent,
+total failure of a user-visible feature, produced by the same "one delivery per Space" shape.
+
+**The fix — chunk the writes, keep the prune one pass.** `SyncContentFilesBuilder.Post` now
+partitions the files into deliveries against a budget of
+`DeliveryPayloadBounds.MemoryStreamBlockBytes` — the *tighter* of the two transport ceilings this
+page already names, measured on the base64 form because that is what the message weighs — and posts
+them with `Concat`, so the pod holds one at a time. A file is never split: it is the atom the
+receiving handler writes, so the guarantee is `delivery ≤ budget + largest single file`, i.e. the
+delivery's size stops being a function of *how much* content the Space holds.
+
+The prune is the part that does not chunk. It asks "what is under this folder that the source no
+longer carries", and a chunk answering that from its own slice would delete the other chunks' files.
+So `SyncContentFilesRequest` gains `MirrorKeepPaths`: the full keep set as **paths**, which is all
+the prune ever needed and which costs nothing. Exactly one delivery mirrors — **the first**, not the
+last. That ordering is the safety property: were the keep set ever not honoured by the receiver, the
+files it would wrongly prune are precisely the ones the *following* deliveries are about to write,
+so the operation still converges on the correct folder. Last-position pruning has no such property.
+
+An unsplit sync is byte-for-byte what it was: one request, `MirrorKeepPaths` null, the mirror
+measured against its own `Files`.
+
+### What this still does not cover
+
+- **A single file larger than the budget travels whole.** The largest asset in the Education repo is
+  a 9.9 MB video → ~13 MB base64 → ~40 MB rent, which is survivable but is not *bounded* by
+  anything. A file that large belongs behind a content-store handle rather than inline. That is a
+  different defect from "the producer built the tree whole" and is deliberately not conflated with it.
+- **`DeliveryFailure`'s strip does not fire on a typed payload.** `DeliveryPayloadBounds.IsOversized`
+  returns false for anything that is not `RawJson` — by design, since guessing at the size of a CLR
+  object would mean serialising it on the hot path. But a NACK is very often built on the
+  **receiving** hub, where the message has already been deserialised into its CLR type, so the
+  construction invariant introduced in #3044 silently does not apply there and the body is echoed
+  back to the sender verbatim. On the content-sync path the producer fix makes that echo at most one
+  chunk; as a general property of the invariant it remains, and it is worth knowing before relying on
+  the strip.
+- **Other unbounded inbound bodies at `import/{id}`** are smaller but real: `CreateNodesResponse`
+  echoes up to 25 full `MeshNode`s the caller reads only `Path` off; `CreateOrUpdateNodeResponse`
+  echoes the node; `DeleteNodeResponse` carries every deleted path; the import/content manifests are
+  one entry per node and per content file. All are text and grow with the partition rather than with
+  its binaries.
 
 ## Rules
 
@@ -374,12 +501,32 @@ are in flight, never how big one of them is.
 - **A rule enforced by remembering is not enforced.** If a payload rule can be violated by
   constructing a type, it belongs in that type's construction, not in the call sites. Two hand-applied
   call sites and a third that had never been told is how #1890 became #3044 two weeks later.
+- **Ask what a guard can SEE, not only where it runs.** Moving the strip to every site fixed *which
+  sites*; it said nothing about *which payloads*, and the `is not RawJson` test at the bottom of it
+  left every pre-packaging NACK unmeasured for as long again (#3104). A hot-path optimisation
+  inherited by a rare path is an optimisation nobody chose.
+- **A measurement on the error path must cost less than the thing it is deciding.** Count into a
+  discarding buffer; never render the document to read its `Length`. The error path is where the
+  process can least afford the allocation, which is precisely why the check was skipped there in the
+  first place.
 - **Never build a log argument eagerly.** `logger.LogDebug("…", Serialize(x), …)` renders `x`
   whether or not anyone is listening. Guard with `IsEnabled`, and on any per-message path render a
   summary rather than a payload.
 - **A `[PreventLogging]`-style attribute cannot reach a type with its own converter.** The resolver
   strips *properties*; a custom-converted type has none. Check that a redaction attribute is actually
   read before trusting it.
+- **A stack that names only a target address is still identifiable — by arithmetic.** Ask what the
+  producer at that address builds, measure the SOURCE (the git tree, the collection, the partition),
+  and multiply through base64 → UTF-16 → transcode rent. #2885 sat open across four incidents for
+  want of a payload size that no stack carried and that a `du` of the source repository supplied in
+  one command.
+- **When a write is split, the PRUNE is not.** Chunking an operation that also deletes means the
+  delete must be handed the whole set — as identifiers, never as content — and must run as one pass.
+  Put that pass FIRST: any over-prune is then repaired by the writes queued behind it.
+- **A refusal that lands on an unfixed producer converts an OOM into a silent total failure.** Once
+  `AgenticEngineering`'s 141 MB sync exceeded the frame limit, the bound did its job and the assets
+  simply never synced. A bound is a diagnosis, not a remedy: check what the refused producer does
+  next.
 
 ## See also
 

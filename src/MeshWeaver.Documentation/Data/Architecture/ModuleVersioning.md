@@ -176,9 +176,14 @@ So the two lanes differ deliberately:
 
 The `push` row is the only one where the two lanes differ, and the difference is a **missing
 marker, not a policy**: `bake-scope.sh` reads a `source-commit.txt` sealed beside the bundles, so it
-knows the commit its own last publication covered. The module lane has no equivalent, so
-`node-repo-scope.py` answers FULL and says why in the log and the job summary. Closing that gap is
-Plugins#889 — and the baseline it needs is a **commit**, not a version.
+knows the commit its own last publication covered. The module lane's scope still answers FULL on a
+push — but since 2026-09-02 the **module build ledger** sits below the scope
+([ModuleBuildArchitecture](/Doc/Architecture/ModuleBuildArchitecture) → "Content-addressed outputs"):
+every selected module is keyed by its whole compiled+tested closure plus both image digests and the
+platform ref, and a key the ledger already holds as Published is reused, not rebuilt. So a push
+compiles *every module whose key has no usable Published record* — the Plugins#889 baseline, derived
+from content rather than from a version or a commit, which is what makes it immune to the riding
+blind spot above. Callers opt in with `ledger: required`.
 
 ## Before you open the PR
 

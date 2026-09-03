@@ -773,7 +773,8 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     internal static bool IsDirectoryUnstable(Exception ex) =>
         (ex is global::Orleans.Runtime.OrleansException
          && (ex.Message.Contains(DirectoryRetryLaterMarker, StringComparison.OrdinalIgnoreCase)
-             || ex.Message.Contains(DirectoryHopLimitMarker, StringComparison.OrdinalIgnoreCase)))
+             || ex.Message.Contains(DirectoryHopLimitMarker, StringComparison.OrdinalIgnoreCase)
+             || ex.Message.Contains(DirectoryInvalidSiloMarker, StringComparison.OrdinalIgnoreCase)))
         // Walks its own inner chain rather than relying on a caller's: this is consulted BOTH from
         // IsTransientFailure (which walks) and from RoutingGrain.ClassifyDeliveryException (which
         // does not, and which is handed an AggregateException by PostFailure's two-transport arm).
@@ -793,6 +794,31 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// two rolling deploys (issue #2357).
     /// </summary>
     internal const string DirectoryHopLimitMarker = "hop limit is reached";
+
+    /// <summary>
+    /// The REGISTRATION-side variant, from <c>"Trying to register {grainId} on invalid silo:
+    /// {siloAddress}. Known status: Dead"</c> — thrown by
+    /// <c>LocalGrainDirectoryPartition.AddSingleActivation</c> when the directory resolves an owner
+    /// that membership has already buried (issue #3139).
+    ///
+    /// <para>🚨 <b>The other two markers are LOOKUP-side, and that is why this one was needed.</b>
+    /// Both existing phrases come from <c>LocalGrainDirectory.LookupAsync</c> — reading an entry.
+    /// Attaching a stream subscription <i>writes</i> one: <c>SubscribeAsync</c> registers the
+    /// stream's <c>PubSubRendezvousGrain</c>, and when the directory hands that registration to a
+    /// silo the membership oracle has since marked <c>Dead</c>, Orleans throws a bare
+    /// <see cref="global::Orleans.Runtime.OrleansException"/> carrying THIS text and neither of the
+    /// other two. So <see cref="IsTransientFailure"/> returned false on attempt 0, the bounded
+    /// attach retry added by #2633 was never entered, and the hub latched into "cross-process
+    /// routing DISABLED" for the rest of its life — 13 occurrences on memex-cloud across three
+    /// ReplicaSet generations, 2026-08-23 → 2026-09-02, every one of them a membership-churn window
+    /// that was over in seconds.</para>
+    ///
+    /// <para>It is the same inert-classifier shape as #1742/#2357/#2451 and needs no new machinery:
+    /// the attach retry already re-invokes <c>AttachSubscriptionAsync</c> from scratch, so Orleans
+    /// re-resolves the rendezvous grain against settled membership. Recognising the condition is
+    /// what makes the existing cure reachable.</para>
+    /// </summary>
+    internal const string DirectoryInvalidSiloMarker = "on invalid silo";
 
     /// <summary>
     /// How the SENDER should read a delivery the grain returned <see cref="MessageDeliveryState.Failed"/>:
@@ -889,6 +915,12 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // stream provider's Init stage — so the first touch of the provider is valid by construction.
         var cts = new CancellationTokenSource();
         var subscriptionTask = SubscribeWhenStreamingReadyAsync(address, callback, cts.Token);
+        // 🚨 #3139 — the attach's give-up is no longer the hub's lifetime. The slot holds whatever
+        // attach is CURRENT (a re-attach replaces it), and the re-attach fires only on a cluster
+        // membership change and only when nothing is attached — see ShouldReattach for why both
+        // halves of that condition are load-bearing.
+        var attachSlot = new StreamAttachSlot(subscriptionTask);
+        var reattach = ReattachOnMembershipChange(address, callback, attachSlot, cts);
         // Gate for OUTBOUND grain dispatches from this address (issue #1081 — see DeliverMessage):
         // completes when the inbound subscription is attached, and ALWAYS completes — a given-up
         // (null) or cancelled attach must degrade to today's behavior, never hold outbound
@@ -919,6 +951,9 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // reconnecting is the everyday case) must not leave a pinned activation behind on the
             // pod it left, or the new owner's Attach lands on the old one and has to bounce off it.
             podHub.Dispose();
+            // Stop re-attaching BEFORE cancelling: a change arriving between the two would otherwise
+            // start an attach whose token is already cancelled.
+            reattach.Dispose();
             cts.Cancel();
             // 🚨 ENQUEUED, not fire-and-forget. This used to be `ioPool.Invoke(...).Subscribe(_ => {})`
             // — the handle dropped on the floor — so Dispose() reported "torn down" while the Orleans
@@ -934,8 +969,107 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // reactive disposal has completed and BEFORE the DI scope is torn down. Enqueuing is what
             // makes the drain WAIT for this work instead of racing it — the await stays inside the
             // queued lambda, off this turn, which is why no hub scheduler is parked.
-            EnqueueStreamTeardown(address, subscriptionTask, cts);
+            // The slot's CURRENT attach, not the first one: after a re-attach the live handle is
+            // the newer task's, and unsubscribing the original would leave the real subscription
+            // running past teardown.
+            EnqueueStreamTeardown(address, attachSlot.Current, cts);
         });
+    }
+
+    /// <summary>
+    /// The CURRENT attach for one registered address. Mutable by design: a re-attach replaces it, and
+    /// teardown must unsubscribe whatever is live NOW rather than the first attempt's result.
+    /// Instance state owned by one <see cref="RegisterStream"/> registration — never static.
+    /// </summary>
+    private sealed class StreamAttachSlot(Task<StreamSubscriptionHandle<IMessageDelivery>?> initial)
+    {
+        private Task<StreamSubscriptionHandle<IMessageDelivery>?> current = initial;
+
+        public Task<StreamSubscriptionHandle<IMessageDelivery>?> Current => Volatile.Read(ref current);
+
+        public void Set(Task<StreamSubscriptionHandle<IMessageDelivery>?> next) =>
+            Volatile.Write(ref current, next);
+    }
+
+    /// <summary>
+    /// Whether a membership change should RE-ATTACH this address's stream subscription.
+    ///
+    /// <para>🚨 <b>Issue #3139, the half the classifier fix left standing.</b> Recognising the
+    /// dead-silo registration made the bounded attach retry reachable, which covers a churn window
+    /// that is over in seconds. It does not cover one that outlasts the budget: past it the attach
+    /// gives up, and the give-up is permanent for the hub's LIFETIME — the hub keeps in-process
+    /// routing and silently stops receiving anything from another pod.</para>
+    ///
+    /// <para><b>Why a membership change is the right trigger and not a poll.</b> The subscription
+    /// registers the stream's <c>PubSubRendezvousGrain</c> in Orleans' grain directory, and that
+    /// directory is re-partitioned on every membership change — the same fact that makes
+    /// <see cref="AttachPodHub"/> re-assert its claim there (#2938). This is that argument applied
+    /// to the sibling registration: the event that can invalidate it is the event that should
+    /// repair it.</para>
+    ///
+    /// <para>🚨 <b>The condition is the whole safety argument.</b> A re-attach of a subscription
+    /// that is still LIVE would add a SECOND subscription to the same stream, and every inbound
+    /// delivery would be handled twice — a silent duplication far worse than the outage being
+    /// fixed. So this re-attaches ONLY when the attach has finished and produced no handle:</para>
+    /// <list type="bullet">
+    ///   <item>still running (the gate has not opened, or a retry is in flight) — leave it alone,
+    ///     it may yet succeed and a second attempt would race it;</item>
+    ///   <item>completed WITH a handle — the subscription is live; touching it is the duplication
+    ///     above;</item>
+    ///   <item>completed with <c>null</c>, faulted, or cancelled — nothing is attached, so there is
+    ///     nothing to duplicate and everything to regain.</item>
+    /// </list>
+    ///
+    /// <para>Pure, so the rule is an assertion rather than a cluster observation.</para>
+    /// </summary>
+    /// <param name="current">The address's current attach, or null when none was ever started.</param>
+    /// <returns><c>true</c> when a fresh attach should be made.</returns>
+    internal static bool ShouldReattach(Task<StreamSubscriptionHandle<IMessageDelivery>?>? current) =>
+        current is { IsCompleted: true }
+        && (current.Status != TaskStatus.RanToCompletion || current.Result is null);
+
+    /// <summary>
+    /// Re-attaches <paramref name="address"/>'s stream subscription on every cluster membership
+    /// change for which <see cref="ShouldReattach"/> holds. A no-op where membership cannot change
+    /// under this process (client, monolith, bare mesh) — there the give-up stays terminal, which is
+    /// exactly the behaviour that existed before.
+    /// </summary>
+    private IDisposable ReattachOnMembershipChange(
+        Address address, AsyncDelivery callback, StreamAttachSlot slot, CancellationTokenSource cts)
+    {
+        if (membershipFeed is null)
+            return Disposable.Empty;
+
+        // Concat, never Merge: one re-attach at a time per address, so two changes in quick
+        // succession cannot have two attaches in flight for the same stream.
+        return membershipFeed.Changes
+            .Select(seq => Observable.Defer(() =>
+            {
+                if (disposed || cts.IsCancellationRequested || !ShouldReattach(slot.Current))
+                    return Observable.Empty<Unit>();
+
+                OrleansRouteTrace.Write(
+                    $"OrleansRoutingService.SubscribeAsync REATTACH addr={address} membershipChange={seq}");
+                logger.LogInformation(
+                    "Orleans '{Provider}' stream subscription for {Address} is re-attached after a "
+                    + "cluster membership change — its previous attach gave up, which left this hub's "
+                    + "cross-process routing disabled (in-process routing was unaffected throughout).",
+                    StreamProviders.Memory, address);
+
+                var next = SubscribeWhenStreamingReadyAsync(address, callback, cts.Token);
+                slot.Set(next);
+                // The attach never faults (it returns null on give-up); the arm is here because a
+                // cancelled teardown surfaces as OperationCanceledException and must not tear the
+                // trigger sequence down with it.
+                return next.ToObservable()
+                    .Select(_ => Unit.Default)
+                    .Catch<Unit, Exception>(_ => Observable.Empty<Unit>());
+            }))
+            .Concat()
+            .Subscribe(
+                _ => { },
+                ex => logger.LogDebug(ex,
+                    "Orleans stream re-attach sequence for {Address} ended", address));
     }
 
     /// <summary>

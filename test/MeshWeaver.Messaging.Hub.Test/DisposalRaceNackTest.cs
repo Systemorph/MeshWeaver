@@ -148,6 +148,17 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
                 "the transient classifiers (MeshNodeStreamCache.IsTransientOwnerFailure, "
                 + "AreaErrorClassifier.IsTransientHubFailure) match this phrase when the typed "
                 + "failure has been flattened into a DeliveryFailureException message");
+
+            // 🚨 #3017 — and it must be recognisable as THIS OWNER's answer, not merely as some
+            // transient failure. A caller discriminating "the owner refused me" from "the routing
+            // layer could not reach it" reads ShutdownNack.IsAnsweredByOwner; the two live seams
+            // that mint this NACK (the late turn, and the handler that threw
+            // HubDisposingException) are pinned here against the REAL message rather than against
+            // a copy of its wording, because enumerating the sentences is exactly what failed.
+            ShutdownNack.IsAnsweredByOwner(failure.Failure.Message, victimAddress).Should().BeTrue(
+                "the owner at " + victimAddress + " refused this delivery, so its own banner must "
+                + "be in the message — a caller that cannot tell this from a routing failure "
+                + "cannot tell 'ask again at the fresh activation' from 'there is nothing there'");
         }
         finally
         {

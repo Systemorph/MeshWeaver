@@ -1510,8 +1510,17 @@ public static class PackageInstaller
                 // Impersonated for the same reason as the pings below: the recycle runs from the
                 // installer's chain, where no ambient AccessContext exists on a fresh boot.
                 var accessService = hub.ServiceProvider.GetService<AccessService>();
+                // 🚨 Off-router issuing, exactly as the CreateOrUpdateNodeRequest below already does.
+                // The installer's boot path runs ON the mesh hub, and the mesh hub is the ROUTER: a
+                // DisposeRequest posted there reaches the root stamped `Sender = mesh/{id}`, which is
+                // what the ROUTER_TRAFFIC detector reports. Measured on the Manufacturing gate run
+                // 33623113056: `RawJson has the mesh hub as sender (sender: mesh/…, target: Store)`
+                // and the same for `Analysis` — this post, arriving packed as RawJson at a root whose
+                // hub has no DisposeRequest in its TypeRegistry. NodeOperationIssuingHub is a NO-OP
+                // for every other caller, so nothing else changes.
                 using (accessService?.ImpersonateAsSystem())
-                    hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(rootPath!)));
+                    hub.NodeOperationIssuingHub()
+                        .Post(new DisposeRequest(), o => o.WithTarget(new Address(rootPath!)));
                 return WaitForRootReady(hub, rootPath!, logger);
             });
     }
@@ -1531,6 +1540,15 @@ public static class PackageInstaller
     {
         var address = new Address(rootPath);
         var accessService = hub.ServiceProvider.GetService<AccessService>();
+        // 🚨 Off-router issuing, same rule as the DisposeRequest that precedes this wait. A ping
+        // issued ON the mesh hub makes the router BOTH an end of the request and the target of the
+        // reply — measured on the Manufacturing gate run 33623113056 as
+        // `PingResponse has the mesh hub as target (sender: Store, target: mesh/…)`. That is the
+        // role RouterTrafficRule reports deliberately, because "a response ADDRESSED AT the router
+        // proves the router issued a request, which is the violation the issuing seam exists to
+        // remove". Issuing off-router puts BOTH ends on the same non-router hub, so the exchange is
+        // local and never routed at all. A NO-OP for every non-mesh caller.
+        var issuingHub = hub.NodeOperationIssuingHub();
         return Observable.Defer(Probe)
             .Repeat()
             .Where(alive => alive)
@@ -1555,7 +1573,7 @@ public static class PackageInstaller
         // #1790); an infrastructure probe posts under SYSTEM at its call site, never off ambient.
         IObservable<bool> Probe() =>
             accessService.RunAsSystem(() =>
-                    hub.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(address)))
+                    issuingHub.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(address)))
                 .Take(1)
                 .Timeout(RootPingTimeout)
                 .Select(_ => true)

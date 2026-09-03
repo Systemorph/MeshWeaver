@@ -908,6 +908,24 @@ public static class DataExtensions
         string hubPath,
         Func<bool> tryClaimAck)
     {
+        // 🚨 BOTH dependencies are resolved HERE, on the handler's turn, and closed over — never
+        // from inside the disposal action below. MessageHub's own ShutDown phase states the rule
+        // ("Never call DI from a disposal path") because a hub's lifetime scope, or an ancestor of
+        // it, can already be closed by the time disposal actions run: HostedHubsCollection closes a
+        // hosted hub's scope on DisposalCompleted, and the watchdog's out-of-band
+        // ForceTeardownAfterWatchdog runs hostedHubs.Dispose() BEFORE DisposeImpl(). A resolve then
+        // throws ObjectDisposedException ("Instances cannot be resolved … from this LifetimeScope"),
+        // and the verdict is then never dispatched — so the writer burns the full 31 s
+        // WriteVerdictBound and reports OwnerUnreachable, the exact acked-write-loss this
+        // registration exists to prevent. Observed on main shard 4, 2026-09-02
+        // (LateNackReenqueueTest, run 33630685580).
+        //
+        // MessageHub.GuardRegistrant now stops such a throw from also cancelling the cleanups
+        // registered BEHIND this one — that was the second half of the same incident — but it
+        // cannot mint a verdict this registrant failed to produce. The isolation makes the blast
+        // radius one registrant; capturing eagerly is what keeps this registrant out of it.
+        var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
+        var parent = hub.Configuration.ParentHub;
         hub.RegisterForDisposal(_ =>
         {
             if (!tryClaimAck())
@@ -947,7 +965,6 @@ public static class DataExtensions
             // teardown is still waiting, and it is the one guaranteed to get silence instead of its
             // NACK, then to burn the full 31 s WriteVerdictBound (#2778). Dispatch RETURNS whether
             // a caller was armed, so the question is now answered rather than assumed.
-            var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
             if (lateVerdicts is not null && lateVerdicts.Dispatch(request.Id, resp))
                 return;
 
@@ -956,7 +973,9 @@ public static class DataExtensions
             // cannot see. The existing post remains that case's only route, with its run-level
             // guard unchanged: removing it is the ~10x regression above, and a cross-process
             // caller during owner teardown is not the case #2778 reproduced.
-            var parent = hub.Configuration.ParentHub;
+            // (`parent` was captured at registration — Configuration.ParentHub re-resolves from
+            // ParentServiceProvider, the DI touch this path must not make. Its RunLevel is read
+            // here, live, because that is the guard's whole subject.)
             if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
                 parent.Post(resp, o => o.ResponseFor(request));
         });
@@ -1024,22 +1043,45 @@ public static class DataExtensions
     ///   <item><b>Echo arrives</b> → flush durably → ack <c>true</c> on the flush's emission. Nothing is
     ///     posted between the echo and the flush landing: the echo's own <c>Take(1)</c> completion is NOT
     ///     a verdict (see <see cref="WhenCompletesEmpty{T}"/>).</item>
-    ///   <item><b>Echo stream ENDS without the echo</b> — a <c>SynchronizationStream</c> disposed by mirror
-    ///     eviction while the hub lives completes its store — → NACK
-    ///     <see cref="MeshNodeErrorCode.OwnerDisposing"/>, naming the condition. That code, not
+    ///   <item><b>Echo stream ENDS without the echo while the owner LIVES</b> — a
+    ///     <c>SynchronizationStream</c> disposed by mirror eviction while the hub lives completes its store
+    ///     — → NACK <see cref="MeshNodeErrorCode.OwnerDisposing"/>, naming the condition. That code, not
     ///     <see cref="MeshNodeErrorCode.OwnerUnreachable"/> and not a new one: a stream ending under a live
     ///     patch IS the owner's stream going away, which is what the code means, and it is the writer's
     ///     auto-retried code — a re-enqueue re-runs the update lambda against the FRESH state and re-diffs,
     ///     so a merge that DID commit before the stream ended becomes a no-op. "Fate unknown, safe to retry"
     ///     is the honest verdict; the timeout verdict stays <c>Unknown</c> + <c>TimeoutException</c>, so the
     ///     two are separable by <c>Code</c> (Doc/Architecture/ReadingAWriteVerdict).</item>
+    ///   <item>🚨 <b>Echo stream ENDS without the echo while the owner is SHUTTING DOWN</b>
+    ///     (<paramref name="ownerIsShuttingDown"/>) → post NOTHING here. The stream completes in the owner's
+    ///     <c>DisposeHostedHubs</c> phase (its sync hub disposes and <c>Store.OnCompleted()</c>s), and the
+    ///     verdict for a patch in flight at owner teardown belongs to the ShutDown-phase disposal NACK
+    ///     (<c>RegisterOwnerDisposingNack</c>, on the same once-only gate). Claiming the gate here was the
+    ///     regression that turned <c>LateNackReenqueueTest</c> and <c>NackReachesTheWaiterDuringTeardownTest</c>
+    ///     red on 2026-09-02, for two reasons: (1) <b>one phase too early</b> — the dying activation still holds
+    ///     the address until its ShutDown phase removes it from the parent's registry, so an
+    ///     <c>OwnerDisposing</c> ("safe to retry against the fresh activation") minted at DisposeHostedHubs sends
+    ///     the writer's immediate re-enqueue into the SAME activation, which rejects it <c>ShuttingDown</c>, and
+    ///     the write fails <c>Unknown</c>; (2) <b>the wrong transport</b> — <c>hub.Post</c> from a hub past
+    ///     Quiescing is dropped under a whole-mesh teardown, and with the gate already claimed the registrant's
+    ///     direct <c>ILatePatchVerdictSink.Dispatch</c> — the one route that still reaches the armed waiter —
+    ///     is skipped, so the caller burns its whole verdict budget in silence (#2778 again). The registrant
+    ///     is total for a disposing hub (a registration racing disposal is disposed at once), so deferring
+    ///     to it loses no verdict.</item>
     ///   <item><b>Flush ENDS without emitting</b> → ack <c>true</c>. <see cref="IPostCommitFlush.Flush"/> is
     ///     contracted to "complete immediately for entity types this hook does not persist": nothing to
     ///     make durable means the in-memory commit IS the durable state — the same verdict as when no hook
     ///     is registered. (<c>StoragePostCommitFlush</c> itself ends in <c>DefaultIfEmpty(true)</c>, so this
     ///     arm is the contract made explicit, not a behaviour change for it.) A NACK here would fail every
     ///     successful write on a hook honouring the contract.</item>
-    ///   <item><b>Either stream faults</b> → NACK with the classified code.</item>
+    ///   <item>🚨 <b>Flush OUTLIVES <paramref name="flushTimeout"/></b> → ack <c>true</c> on the bound and
+    ///     let the flush run on (#3112). The echo already proved the merge COMMITTED; the bound is a wait
+    ///     bound on the ack, never a fate. Expiry used to NACK <c>Unknown</c> + <c>TimeoutException</c> —
+    ///     "the write did NOT apply" for a write that had — and dispose the flush, re-queueing the row
+    ///     through the sampler under the very congestion that made it slow. Logged as
+    ///     <c>FLUSH_OUTLIVED_BOUND</c>; a fault the flush raises after that ack is logged as
+    ///     <c>FLUSH_FAULTED_AFTER_ACK</c> (the sampler is then the writer of record).</item>
+    ///   <item><b>Either stream faults</b> (the flush inside its bound) → NACK with the classified code.</item>
     /// </list>
     /// </summary>
     internal static IDisposable ArmPatchAckWatcher<TEcho>(
@@ -1048,13 +1090,24 @@ public static class DataExtensions
         TimeSpan flushTimeout,
         Action<bool, MeshNodeError?> ackOnce,
         Action<IDisposable> registerForDisposal,
-        string hubPath)
+        string hubPath,
+        Func<bool> ownerIsShuttingDown,
+        ILogger? logger = null,
+        System.Reactive.Concurrency.IScheduler? flushBoundScheduler = null)
         => commitEcho
-            .WhenCompletesEmpty(() => ackOnce(false, new MeshNodeError(
-                MeshNodeErrorCode.OwnerDisposing, hubPath,
-                "the owner's stream ended before this patch's commit echo arrived — the owner reported no "
-                + "verdict, so the write's fate is UNKNOWN; safe to retry: a re-enqueue re-diffs against the "
-                + "fresh state, so a merge that did commit is a no-op")))
+            .WhenCompletesEmpty(() =>
+            {
+                // The stream ended because the OWNER is going down: the ShutDown-phase disposal NACK
+                // owns this verdict (see remarks) — claiming the gate here mints it one phase too early
+                // and on a transport that does not reach the waiter under a whole-mesh teardown.
+                if (ownerIsShuttingDown())
+                    return;
+                ackOnce(false, new MeshNodeError(
+                    MeshNodeErrorCode.OwnerDisposing, hubPath,
+                    "the owner's stream ended before this patch's commit echo arrived — the owner reported no "
+                    + "verdict, so the write's fate is UNKNOWN; safe to retry: a re-enqueue re-diffs against the "
+                    + "fresh state, so a merge that did commit is a no-op"));
+            })
             .Subscribe(
                 committed =>
                 {
@@ -1064,14 +1117,80 @@ public static class DataExtensions
                         ackOnce(true, null);
                         return;
                     }
+                    // 🚨 The COMMIT is the verdict; the flush is durability (#3112). Reaching this arm
+                    // means the owner's reduced stream emitted the echo that CONTAINS this write: the
+                    // merge landed, the Version advanced, every mirror is already receiving the new
+                    // state. What follows only decides WHEN the ack is posted, never WHETHER the write
+                    // applied — so the flush bound below is a wait bound on the ack, not a fate.
+                    //
+                    // This used to be `durable.Take(1).Timeout(flushTimeout)` feeding the fault arm,
+                    // which on expiry NACKed `Unknown` + "TimeoutException" — read by the writer as
+                    // "the write did NOT apply and is not auto-retryable" (LATE_NACK_TERMINAL) and
+                    // by its caller as a failed write. Measured on the node-repo gate (Manufacturing
+                    // run 33623113056): the bake seed's adoption stamp for Radzen/Gallery committed at
+                    // the owner (echo at +ε), the storage flush sat behind the mass install's queue
+                    // past 10 s, the owner answered NACK, the seed concluded "not adopted", the sweep
+                    // compiled the type OVER the adoption that had landed, and the gate DECLINED a
+                    // bundle a sibling repo adopted fine on the same seal. A slow flush was reported
+                    // as a lost write — a false verdict, the write-side twin of DurableButUnreadable.
+                    //
+                    // Now: the flush keeps running — `.Timeout` also DISPOSED it, cancelling a
+                    // storage write that had been queued for the whole bound and handing the row to
+                    // the persistence sampler, which re-queued it: under exactly the congestion that
+                    // made it slow, every slow flush became two writes. On the bound the owner acks
+                    // SUCCESS — truthful, the commit is what "saved" means (#2661) — and logs that
+                    // durability is still in flight. The flush's own terminal then finds the gate
+                    // latched: an emission is a no-op, a fault is logged (the sampler is the writer
+                    // of record — StoragePostCommitFlush releases its claim in Finally). A flush that
+                    // FAULTS inside the bound still NACKs with its classified code: a storage refusal
+                    // is a fact the caller should hear; slowness is not a verdict.
+                    //
+                    // The watcher itself posts at most ONE verdict for the flush leg — the bound and
+                    // the flush's terminal race only inside the millisecond the bound expires, and the
+                    // claim below decides it, so the caller's latch is never what keeps the count at one.
+                    var verdictClaimed = 0;
+                    bool ClaimVerdict() => System.Threading.Interlocked.Exchange(ref verdictClaimed, 1) == 0;
+                    var bound = new SingleAssignmentDisposable();
                     var flushSub = durable
                         .Take(1)
-                        .Timeout(flushTimeout)
-                        .WhenCompletesEmpty(() => ackOnce(true, null))
+                        .Finally(bound.Dispose)
+                        .WhenCompletesEmpty(() =>
+                        {
+                            if (ClaimVerdict()) ackOnce(true, null);
+                        })
                         .Subscribe(
-                            _ => ackOnce(true, null),
-                            ex => ackOnce(false, ClassifyPatchException(ex, hubPath)));
-                    registerForDisposal(flushSub);
+                            _ =>
+                            {
+                                if (ClaimVerdict()) ackOnce(true, null);
+                            },
+                            ex =>
+                            {
+                                if (!ClaimVerdict())
+                                {
+                                    logger?.LogWarning(ex,
+                                        "[PatchAck] FLUSH_FAULTED_AFTER_ACK path={Path} — the commit was "
+                                        + "acked on the flush bound and the durable flush has now faulted; "
+                                        + "the persistence sampler is the writer of record for this version",
+                                        hubPath);
+                                    return;
+                                }
+                                ackOnce(false, ClassifyPatchException(ex, hubPath));
+                            });
+                    bound.Disposable = Observable
+                        .Timer(flushTimeout, flushBoundScheduler ?? System.Reactive.Concurrency.Scheduler.Default)
+                        .Subscribe(_ =>
+                        {
+                            if (!ClaimVerdict()) return;
+                            logger?.LogWarning(
+                                "[PatchAck] FLUSH_OUTLIVED_BOUND path={Path} bound={BoundMs}ms — the merge "
+                                + "committed and is acked as such; the durable flush is still in flight "
+                                + "(storage behind), and keeps running",
+                                hubPath, flushTimeout.TotalMilliseconds);
+                            ackOnce(true, null);
+                        });
+                    // ONE registration for the leg, as before: the flush subscription and the bound
+                    // timer live and die together with the owner hub.
+                    registerForDisposal(new CompositeDisposable(flushSub, bound));
                 },
                 ex => ackOnce(false, ClassifyPatchException(ex, hubPath)));
 
@@ -1480,11 +1599,19 @@ public static class DataExtensions
             // stream that faults or ENDS before delivering the state to merge against left the
             // request accepted and silently unanswered — the writer then burned its full
             // confirmation window and reported OwnerUnreachable. Here the merge provably never
-            // ran, so OwnerDisposing ("the patch was NOT applied; safe to retry") is exact.
-            .WhenCompletesEmpty(() => AckOnce(false, new MeshNodeError(
-                MeshNodeErrorCode.OwnerDisposing, hubPath,
-                "the owner's stream ended before it delivered the current state to merge against — "
-                + "the patch was NOT applied; safe to retry against the fresh activation")))
+            // ran, so OwnerDisposing ("the patch was NOT applied; safe to retry") is exact — unless
+            // the stream ended because the OWNER is shutting down, in which case the ShutDown-phase
+            // disposal NACK (RegisterOwnerDisposingNack, above) owns the verdict: minted here it
+            // would be one phase too early and on the wrong transport (see ArmPatchAckWatcher).
+            .WhenCompletesEmpty(() =>
+            {
+                if (hub.IsShuttingDown)
+                    return;
+                AckOnce(false, new MeshNodeError(
+                    MeshNodeErrorCode.OwnerDisposing, hubPath,
+                    "the owner's stream ended before it delivered the current state to merge against — "
+                    + "the patch was NOT applied; safe to retry against the fresh activation"));
+            })
             .Subscribe(change =>
             {
                 try
@@ -1632,7 +1759,9 @@ public static class DataExtensions
                         TimeSpan.FromSeconds(10),
                         AckOnce,
                         d => hub.RegisterForDisposal(d),
-                        hubPath);
+                        hubPath,
+                        () => hub.IsShuttingDown,
+                        hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"));
                     hub.RegisterForDisposal(postSub);
 
                     // Route via the hub's DataChangeRequest pipeline — the workspace
@@ -1737,10 +1866,15 @@ public static class DataExtensions
             TimeSpan.FromSeconds(10),
             AckOnce,
             d => hub.RegisterForDisposal(d),
-            hubPath);
+            hubPath,
+            () => hub.IsShuttingDown,
+            hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"));
         hub.RegisterForDisposal(postSub);
         // Registered AFTER postSub so the composite disposes the watcher FIRST, then this NACK
         // claims the gate — an unacked in-flight patch always gets a terminal, never silence.
+        // The watcher's own completion arm stands aside for a shutting-down owner precisely so
+        // that this registrant — the ShutDown-phase seam, whose Dispatch reaches the waiter and
+        // whose timing lets the re-enqueue land on a FRESH activation — is the one that claims it.
         RegisterOwnerDisposingNack(hub, request, hubPath,
             () => System.Threading.Interlocked.Exchange(ref ackPosted, 1) == 0);
 
@@ -2360,6 +2494,12 @@ public static class DataExtensions
         var state = 0;
         bool TryClaimSilentTerminal() => Interlocked.CompareExchange(ref state, 2, 0) == 0;
 
+        // 🚨 Captured on the handler's turn, while the scope is provably alive — the disposal arm
+        // below runs where Configuration.ParentHub's re-resolve out of ParentServiceProvider can
+        // throw ObjectDisposedException, and the parent post is the ONLY route left for the answer
+        // at that point. Same rule (and same reason) as RegisterOwnerDisposingNack.
+        var parentHub = hub.Configuration.ParentHub;
+
         var subscription = RunReadValidators(hub, request.Message.Reference)
             .SelectMany(validationResult =>
             {
@@ -2436,7 +2576,7 @@ public static class DataExtensions
                     // away" and the rate run came back 10/100 with every remaining failure being
                     // that missing marker — a product regression, not merely a red assertion.
                     // Both causes are named, but the marker stays.
-                    NackSilentRead(hub, request,
+                    NackSilentRead(hub, parentHub, request,
                         "the read faulted because the owning hub is shutting down — its hosted-hub "
                         + "creation is frozen or its service scope has been closed, so the data "
                         + $"stream for this reference could not be created ({cause.GetType().Name}: "
@@ -2454,7 +2594,7 @@ public static class DataExtensions
                     // otherwise stay silent here and let the disposal arm below be the one that
                     // speaks, since it cannot run except during teardown.
                     if (IsWindingDown(hub) && TryClaimSilentTerminal())
-                        NackSilentRead(hub, request,
+                        NackSilentRead(hub, parentHub, request,
                             "the data stream for this reference completed without ever producing a value "
                             + "while the owner is shutting down (the stream was disposed before the initial "
                             + "state landed). Retry against the fresh activation.");
@@ -2470,7 +2610,7 @@ public static class DataExtensions
         {
             subscription.Dispose();
             if (TryClaimSilentTerminal())
-                NackSilentRead(hub, request,
+                NackSilentRead(hub, parentHub, request,
                     "the owning hub was disposed while this read was still outstanding — it is "
                     + "shutting down and never produced a value. Retry against the fresh activation.");
         }));
@@ -2562,7 +2702,7 @@ public static class DataExtensions
     /// teardown the parent is past that mark too, the post is skipped, and nobody is waiting.</para>
     /// </summary>
     private static void NackSilentRead(
-        IMessageHub hub, IMessageDelivery<GetDataRequest> request, string reason)
+        IMessageHub hub, IMessageHub? parent, IMessageDelivery<GetDataRequest> request, string reason)
     {
         var message =
             $"GetDataRequest({request.Message.Reference}) at '{hub.Address}': {reason}";
@@ -2588,7 +2728,6 @@ public static class DataExtensions
                 hub.Post(failure, o => o.ResponseFor(request));
                 return;
             }
-            var parent = hub.Configuration.ParentHub;
             if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
                 parent.Post(failure, o => o.ResponseFor(request));
         }
@@ -3569,94 +3708,139 @@ public static class DataExtensions
     private const int AutocompleteAggregateTopN = 200;
 
     /// <summary>
-    /// How long the merged snapshot must stay unchanged before it counts as settled. Short enough
-    /// to feel instant in a composer, long enough for a second provider's first real snapshot to
-    /// land after the seeded empty one.
-    /// </summary>
-    private static readonly TimeSpan AutocompleteSettleWindow = TimeSpan.FromMilliseconds(150);
-
-    /// <summary>
-    /// The answer deadline. A provider that keeps emitting (a live catalog under load) never goes
-    /// quiet, so at this point the best snapshot so far is the answer.
-    /// </summary>
-    private static readonly TimeSpan AutocompleteAnswerDeadline = TimeSpan.FromSeconds(2);
-
-    /// <summary>
-    /// The floor: if the combined stream never produced ANYTHING — a provider that emits neither a
-    /// snapshot nor an error, against the contract in <see cref="AutocompleteSnapshots.Empty"/> —
-    /// an empty response still goes out. Deliberately later than
-    /// <see cref="AutocompleteAnswerDeadline"/> so a real snapshot always wins the race.
-    /// </summary>
-    private static readonly TimeSpan AutocompleteSilenceFloor = TimeSpan.FromMilliseconds(2500);
-
-    /// <summary>
     /// Handles the one-shot <see cref="AutocompleteRequest"/> by aggregating the SNAPSHOT streams of
     /// every registered <see cref="IAutocompleteProvider"/>. CombineLatest + merge (see
     /// <see cref="AutocompleteSnapshots.Combine"/>), then ONE <see cref="AutocompleteResponse"/> is
-    /// posted. Progressive consumers use the <see cref="AutocompleteReference"/> workspace stream
-    /// instead. Each provider's <c>OnError</c> is swallowed to an empty snapshot so one bad provider
+    /// posted. Each provider's <c>OnError</c> is swallowed to an empty snapshot so one bad provider
     /// doesn't stall the CombineLatest.
     ///
-    /// <para>🚨 <b>"Settled" is a QUIET PERIOD, never completion.</b> This used to take
-    /// <c>LastAsync()</c>, which emits only when the combined stream COMPLETES — and a provider
-    /// backed by mesh data never completes: it is a live subscription, which is the whole point of
-    /// the snapshot model (<c>SkillAutocompleteProvider</c> composes ObserveSkillQueries →
-    /// ObserveSnapshot → Switch; every one of those is endless by design). So on any hub with such a
-    /// provider registered the handler ran, returned <c>Processed</c> in ~27 ms, and posted NOTHING
-    /// — the caller waited out its timeout with no error anywhere. Verified from the message trace:
-    /// <c>HUB_HANDLE_END … Result: Processed</c> followed by silence, and no response post from that
-    /// hub (issue #2276).</para>
+    /// <para>🚨 <b>The answer settles on CONVERGENCE, never on silence (#3094).</b> This used to
+    /// answer when the merged snapshot had been quiet for 150 ms. A quiet period is not a settled
+    /// answer: <see cref="AutocompleteSnapshots.Combine"/> seeds every provider with an empty
+    /// snapshot so it can emit progressively, so the merge is ALWAYS emitting a partial first — and
+    /// whenever the fast in-memory providers landed and a cross-partition provider's rows arrived
+    /// more than a beat later, the timer fired and the response went out WITHOUT them, still
+    /// labelled <see cref="AutocompleteResponse.IsComplete"/> = <c>true</c>. Under load the caller
+    /// could not tell a settled snapshot from a truncated one, and
+    /// <c>ChatCompletionOrchestrator</c> treated the truncated batch as final.</para>
     ///
-    /// <para>The three ways this now always answers, first one wins: the snapshot goes quiet for
-    /// <see cref="AutocompleteSettleWindow"/>; the deadline arrives and we answer with the best
-    /// snapshot so far; or no provider ever produced anything, in which case an empty response goes
-    /// out rather than nothing at all. A one-shot request must produce exactly one answer — never
-    /// a hang, which is indistinguishable from "still thinking".</para>
+    /// <para>The authoritative signal is the providers' own lifecycle, and the
+    /// <see cref="IAutocompleteProvider.GetItems"/> contract already names it: <i>the stream
+    /// completes when the provider has settled</i>. CombineLatest completes when every source has,
+    /// so the LAST value of the merged stream is the fully-merged, every-provider-in answer. No
+    /// clock is involved and nothing is tuned: under load the answer simply arrives later, and it
+    /// arrives COMPLETE.</para>
+    ///
+    /// <para>What remains is a HANG bound, which a one-shot request genuinely needs:
+    /// <see cref="AutocompleteBounds.AnswerDeadline"/>. Reaching it means some provider violated
+    /// the completion contract, so the response is marked <c>IsComplete = false</c> AND a warning
+    /// names the offending provider — a truncated answer is never passed off as settled again.
+    /// (The previous <c>LastAsync()</c> shape hung forever on such a provider and posted NOTHING,
+    /// which is #2276; a deadline that always answers is what fixes that, not a settle window.)</para>
     /// </summary>
     private static IMessageDelivery HandleAutocompleteRequest(
         IMessageHub hub,
         IMessageDelivery<AutocompleteRequest> request)
     {
-        var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>();
+        var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>().ToArray();
         var query = request.Message.Query;
         var contextPath = request.Message.Context;
 
-        // ONE upstream subscription shared by the three racers below — RefCount, so the providers'
-        // queries are not issued twice.
-        var combined = AutocompleteSnapshots.Combine(
-                providers.Select(p => p.GetItems(query, contextPath)
-                    .Catch<IReadOnlyCollection<AutocompleteItem>, Exception>(
-                        _ => Observable.Return(AutocompleteSnapshots.Empty))),
-                AutocompleteAggregateTopN)
-            .Publish()
-            .RefCount();
+        // Which providers have not yet honoured the completion contract. Concurrent because the
+        // provider streams complete on whatever thread their I/O landed on; per-REQUEST and local,
+        // so there is no shared/static state — it exists only to NAME the offender if the deadline
+        // has to fire.
+        var pending = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>();
+        var sources = providers.Select(p =>
+        {
+            var providerName = p.GetType().FullName ?? p.GetType().Name;
+            pending.TryAdd(providerName, 0);
+            return p.GetItems(query, contextPath)
+                // A provider that FAILS has still said all it is going to say — Catch substitutes a
+                // completing empty snapshot, so it counts as settled (below) rather than holding
+                // the answer to the deadline.
+                .Catch<IReadOnlyCollection<AutocompleteItem>, Exception>(
+                    _ => Observable.Return(AutocompleteSnapshots.Empty))
+                .Do(_ => { }, () => pending.TryRemove(providerName, out _));
+        });
 
-        Observable.Amb(
-                combined.Throttle(AutocompleteSettleWindow).Take(1),
-                combined.Sample(AutocompleteAnswerDeadline).Take(1),
-                Observable.Timer(AutocompleteSilenceFloor).Select(_ => AutocompleteSnapshots.Empty))
-            .Subscribe(
-                snapshot =>
+        AutocompleteSnapshots.Combine(sources, AutocompleteAggregateTopN)
+            // Materialize so the terminal notification is data: the fold below can tell "every
+            // provider settled" (OnCompleted seen) from "the deadline cut us off" (TakeUntil), and
+            // the answer carries that distinction to the caller.
+            .Materialize()
+            .TakeUntil(Observable.Timer(AutocompleteBounds.AnswerDeadline))
+            .Aggregate(
+                (Snapshot: AutocompleteSnapshots.Empty, Settled: false, Fault: (Exception?)null),
+                (acc, notification) => notification.Kind switch
                 {
-                    // Apply relevance filtering: boost items that match the query text,
-                    // suppress zero-priority items that don't match.
-                    var searchText = ExtractAutocompleteSearchText(query);
-                    IEnumerable<AutocompleteItem> result = snapshot;
-                    if (!string.IsNullOrEmpty(searchText))
-                    {
-                        result = snapshot
-                            .Select(item => item.Priority > 0
-                                ? item // Provider already scored this item
-                                : item with { Priority = ScoreAutocompleteItem(item, searchText) })
-                            .Where(item => item.Priority > 0)
-                            .OrderByDescending(item => item.Priority);
-                    }
+                    NotificationKind.OnNext => (notification.Value, acc.Settled, acc.Fault),
+                    NotificationKind.OnCompleted => (acc.Snapshot, true, acc.Fault),
+                    _ => (acc.Snapshot, acc.Settled, notification.Exception),
+                })
+            .Subscribe(
+                answer =>
+                {
+                    var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Data.Autocomplete");
+                    if (answer.Fault is not null)
+                        logger?.LogWarning(answer.Fault,
+                            "Autocomplete aggregation faulted for query {Query} on {Address}",
+                            query, hub.Address);
+                    if (!answer.Settled)
+                        // 🚨 Not a tuning signal. IAutocompleteProvider.GetItems must COMPLETE when
+                        // the provider has settled; a provider that never does costs every caller
+                        // the full deadline and truncates the answer. Name it so the defect is
+                        // greppable instead of showing up as "autocomplete feels slow".
+                        logger?.LogWarning(
+                            "Autocomplete answered query {Query} on {Address} at the {Deadline} "
+                            + "deadline with an UNSETTLED snapshot — provider(s) {Providers} never "
+                            + "completed their snapshot stream, against the "
+                            + "IAutocompleteProvider.GetItems contract. The response is marked "
+                            + "IsComplete=false.",
+                            query, hub.Address, AutocompleteBounds.AnswerDeadline,
+                            string.Join(", ", pending.Keys));
 
-                    hub.Post(new AutocompleteResponse(result.ToList()), o => o.ResponseFor(request));
+                    PostAutocompleteResponse(hub, request, answer.Snapshot, answer.Settled);
                 },
-                _ => hub.Post(new AutocompleteResponse([]), o => o.ResponseFor(request)));
+                ex =>
+                {
+                    hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Data.Autocomplete")
+                        .LogWarning(ex, "Autocomplete failed for query {Query} on {Address}",
+                            query, hub.Address);
+                    PostAutocompleteResponse(
+                        hub, request, AutocompleteSnapshots.Empty, isComplete: false);
+                });
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Applies relevance filtering to the settled snapshot and posts the single
+    /// <see cref="AutocompleteResponse"/>. <paramref name="isComplete"/> is the honest answer to
+    /// "did every provider settle" — see <see cref="AutocompleteBounds"/>.
+    /// </summary>
+    private static void PostAutocompleteResponse(
+        IMessageHub hub,
+        IMessageDelivery<AutocompleteRequest> request,
+        IReadOnlyCollection<AutocompleteItem> snapshot,
+        bool isComplete)
+    {
+        // Boost items that match the query text, suppress zero-priority items that don't.
+        var searchText = ExtractAutocompleteSearchText(request.Message.Query);
+        IEnumerable<AutocompleteItem> result = snapshot;
+        if (!string.IsNullOrEmpty(searchText))
+        {
+            result = snapshot
+                .Select(item => item.Priority > 0
+                    ? item // Provider already scored this item
+                    : item with { Priority = ScoreAutocompleteItem(item, searchText) })
+                .Where(item => item.Priority > 0)
+                .OrderByDescending(item => item.Priority);
+        }
+
+        hub.Post(new AutocompleteResponse(result.ToList(), isComplete), o => o.ResponseFor(request));
     }
 
     /// <summary>

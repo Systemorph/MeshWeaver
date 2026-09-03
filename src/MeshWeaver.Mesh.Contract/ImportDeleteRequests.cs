@@ -148,6 +148,27 @@ public record SyncContentFilesRequest(
     /// <see cref="TargetPath"/>.</para>
     /// </summary>
     public IReadOnlyList<string>? SourceOwnedPaths { get; init; }
+
+    /// <summary>
+    /// The FULL set of collection-relative paths this mirror must keep, when the write it belongs to
+    /// was SPLIT across several deliveries. When null (the ordinary, unsplit case) the mirror is
+    /// measured against <see cref="Files"/>, exactly as it always was.
+    ///
+    /// <para>🚨 <b>Issue #2885 — a write is split, a mirror is not.</b> A Space's
+    /// <c>content/**</c> binaries travel INLINE, so one request per Space made the delivery as large
+    /// as the Space's asset tree: 28,484,421 bytes of course video for <c>AgenticBusiness</c> —
+    /// ×4/3 as base64, held as a UTF-16 string, then transcoded through a rent of up to 3 bytes per
+    /// char — which is the allocation that threw <c>OutOfMemoryException</c> in production, on a
+    /// payload comfortably UNDER every transport bound. The producer therefore chunks the WRITES.
+    /// But the prune is not chunkable: it asks "what is under this folder that the source no longer
+    /// carries", and a chunk that answered it from its own slice would delete the other chunks'
+    /// files. So the prune stays ONE authoritative pass and is handed the whole set — as PATHS,
+    /// which is all it ever needed and which costs nothing.</para>
+    ///
+    /// <para>Paths are collection-relative — the same <c>{TargetPath}/{file}</c> form
+    /// <see cref="SourceOwnedPaths"/> uses and the mirror compares against.</para>
+    /// </summary>
+    public IReadOnlyList<string>? MirrorKeepPaths { get; init; }
 }
 
 /// <summary>

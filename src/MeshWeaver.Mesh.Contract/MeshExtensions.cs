@@ -3425,8 +3425,10 @@ public static class MeshExtensions
         if (userId == WellKnownUsers.System)
             return Observable.Return((DeletePreflight.Allowed, (string?)null));
 
-        var accessRule = hub.ServiceProvider.GetService<NodeTypeAccessRuleSet>()
-            ?.Find(node.NodeType, NodeOperation.Delete);
+        // 🚨 NodeTypeAccessRuleGate.Find, not a direct NodeTypeAccessRuleSet lookup — the delivery
+        // gate resolves through the same call (#3061), so "which rule governs this?" has exactly
+        // one implementation on both seams.
+        var accessRule = NodeTypeAccessRuleGate.Find(hub, node.NodeType, NodeOperation.Delete);
 
         return accessRule is null
             ? CheckDeletePermissionByPath(hub, userId, node, logger)
@@ -3438,6 +3440,11 @@ public static class MeshExtensions
     /// exactly as <see cref="RunDeletionValidatorsWithWarningsObs"/> builds it, so the rule sees the
     /// same inputs on both paths — including the DELIVERY's AccessContext, which is the only copy
     /// that survives the scheduler hops between handler entry and here.
+    ///
+    /// <para>🚨 The evaluation itself lives in <see cref="NodeTypeAccessRuleGate.Evaluate"/>, shared
+    /// with the <c>[RequiresPermission]</c> DELIVERY gate (issue #3061). When it was written out
+    /// here, the gate — which runs FIRST — never consulted a rule at all, and refused every
+    /// satellite delete the rule permits.</para>
     /// </summary>
     private static IObservable<(DeletePreflight Verdict, string? Detail)> CheckDeletePermissionByRule(
         IMessageHub hub,
@@ -3458,48 +3465,28 @@ public static class MeshExtensions
             DeleteCascadeRootPath = request.CascadeRootPath ?? request.Path
         };
 
-        return accessRule.HasAccess(context, userId)
-            // TakeDecisionOutsideGate for the reason spelled out in CheckDeletePermissionByPath:
-            // the rules reach the very same permission fold (SatelliteAccessRule calls
-            // hub.CheckPermission), and the caller chains the entire delete pipeline onto this.
-            .TakeDecisionOutsideGate()
-            .Select(allowed =>
+        // 🚨 THROUGH NodeTypeAccessRuleGate, never a local copy of the evaluation — issue #3061.
+        // The three terminals (verdict / fault / completed-without-emitting), the
+        // TakeDecisionOutsideGate hop and the "detail names the exception TYPE, never its message"
+        // rule used to be written out HERE, which is exactly how this seam and the DELIVERY gate
+        // came to answer the same question two ways. Both now call the same evaluation; the only
+        // thing that stays local is the projection onto this method's own vocabulary.
+        return NodeTypeAccessRuleGate.Evaluate(accessRule, context, userId, logger)
+            .Do(outcome =>
             {
-                if (!allowed)
+                if (!outcome.IsGranted && !outcome.IsUndetermined)
                     logger.LogDebug(
                         "[DeleteNode] rule-denied for {User} on {Path} (the {NodeType} access rule refused)",
                         userId, node.Path, node.NodeType);
-                return ((DeletePreflight Verdict, string? Detail)?)
-                    (allowed ? DeletePreflight.Allowed : DeletePreflight.Denied, null);
             })
-            // 🚨 FAIL CLOSED, and say WHICH failure it was. A rule reaches the same starve-able
-            // permission fold every other check does, so it can fault — and a fault is not a
-            // refusal. Answering Unestablished refuses the delete (the caller posts a failure) while
-            // reporting an availability problem rather than a decision about the caller's rights.
-            .Catch((Exception ex) =>
-            {
-                logger.LogWarning(ex,
-                    "[DeleteNode] the {NodeType} access rule for {Path} could not reach a verdict for "
-                    + "{User} — refusing the delete and reporting an availability failure, not a denial",
-                    node.NodeType, node.Path, userId);
-                // 🚨 The TYPE, never the exception's MESSAGE. This detail is echoed to the CALLER
-                // in the DeleteNodeResponse, and an arbitrary rule's exception text can carry
-                // internal paths, connection strings or another tenant's identifiers. The type
-                // names the condition, which is all a caller can act on ("retry, or ask an
-                // operator"); the full exception — message and stack — is on the LogWarning above,
-                // where only an operator sees it. (Copilot review, #2945.)
-                return Observable.Return<(DeletePreflight Verdict, string? Detail)?>(
-                    (DeletePreflight.Unestablished,
-                        $"the '{node.NodeType}' access rule failed ({ex.GetType().Name})"));
-            })
-            // 🚨 THE THIRD TERMINAL — a chain can also COMPLETE WITHOUT EMITTING (the shape that
-            // made RlsNodeValidator's own fold read as "nothing objected", #2742). Built LAZILY via
-            // nullable + DefaultIfEmpty() + Select so the message is only ever composed when it is
-            // actually used.
-            .DefaultIfEmpty()
-            .Select(outcome => outcome
-                ?? (DeletePreflight.Unestablished,
-                    $"the '{node.NodeType}' access rule completed without producing a verdict"));
+            // FAIL CLOSED on both non-granted legs, and say WHICH one it was: a rule reaches the
+            // same starve-able permission fold every other check does, so "it refused" and "it could
+            // not reach a verdict" are different facts and only the first is about the caller.
+            .Select(outcome => outcome.IsGranted
+                ? (DeletePreflight.Allowed, (string?)null)
+                : outcome.IsUndetermined
+                    ? (DeletePreflight.Unestablished, outcome.UndeterminedReason)
+                    : (DeletePreflight.Denied, (string?)null));
     }
 
     /// <summary>

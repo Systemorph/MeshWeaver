@@ -62,13 +62,48 @@ the overwhelming majority at runtime — so "everything is unanchored" cannot pa
 | `SecurityQueries.Roles` | a custom `Role` definition may live in any partition; a truncated role set silently drops every permission derived from the missing role |
 | `SecurityQueries.Memberships` | the group and the grant that names it live in different partitions (above) |
 | `SecurityQueries.GatedNodes(type)` | instances of a gated NodeType are authored wherever their owner lives, and the gate map is matched against target paths from every partition |
-| root `namespace:_Access` | the ROOT scope's anchor is the satellite segment `_Access`, which resolves to **no partition** — there is no partition name to write |
-| root `namespace:` + `id:_Policy` | the root scope's policy leg carries the EMPTY namespace by construction, for the same reason |
 
-Note what is NOT on the list: every *scoped* leg (`namespace:{scope}/_Access`,
-`namespace:{scope} id:_Policy`) already pins its partition through its first path segment, and the
-fold's scope recursion means those are the queries it issues most often. The global legs are five
-process-wide cached subscriptions, not a per-render storm — which is why the ordering below matters.
+**Struck from this table on 2026-09-02 (#2194) — the two ROOT legs.** Earlier revisions listed
+`namespace:_Access` ("resolves to no partition") and `namespace: id:_Policy` here. Both were wrong
+about the router, not about the data: a `_`-prefixed first segment is resolved through the
+REGISTERED global-satellite definitions (`DefaultPartitionProvider`: `_Access` → schema
+`system_access`), so the grants leg (`SecurityQueries.RootAssignments`) was always served by ONE
+schema. The policy leg had no first segment at all and DID fan out — 179 `[CrossSchema] SLOW` lines
+in five minutes on memex-cloud, for a row that cannot exist on Postgres (an unregistered `_` first
+segment is unroutable for writes too). It is now `SecurityQueries.RootPolicy` = `path:_Policy …`:
+the same node, with a first segment, so the router never UNIONs for it. Neither move anchors a read
+to the VIEWER — the root scope has exactly one home — so neither is the truncation this page is
+about. Measurement and attribution: [Cross-Schema Fan-Out Elimination](../CrossSchemaFanOutElimination)
+→ "The 2026-09-02 census".
+
+Note what is NOT on the list: the **per-partition** legs (`path:{partition} scope:descendants
+nodeType:AccessAssignment`, and its `_Policy` twin) pin their partition through the first path
+segment. The global legs are three process-wide cached subscriptions, not a per-render storm — but
+a process-wide subscription still RE-RUNS on every relevant change, and on a multi-pod portal every
+cross-process notification counts as relevant (it carries no entity to classify); that multiplier,
+not the subscription count, is what the Loki census counts. See the same section.
+
+## The distinction that makes one anchoring sound and the other a regression (#3093)
+
+Those per-partition legs used to be **per-scope** legs — one cached query per scope on the target
+path's chain — and that shape was O(nodes), not O(partitions): a node's own path is always the LEAF
+of its own scope chain, so every node ever permission-checked minted its own live
+`$security-access:{path}` + `$security-policy:{path}` pair. The per-user RLS filter on a shared
+synced query checks EVERY node in a snapshot before its first emission, so a listing paid that twice
+per row. Measured (`SecurityQueryScaleTest`): **13** security queries for a 4-node listing, **69**
+for a 32-node one; **5 either way** after the fold started reading per partition.
+
+Anchoring those legs is **not** the truncation this page forbids, and the difference is worth
+stating precisely, because "anchor it to a partition" is the sentence that means both things:
+
+| | Subject | Anchoring to a partition is… |
+|---|---|---|
+| `Memberships`, `Roles`, `GatedNodes` | a record that may live in **any** partition — a `GroupMembership` under the GROUP node, a `Role` wherever it was authored | **truncation.** The record is elsewhere, so it is not returned: the grant vanishes and the group DENY fails open |
+| the per-partition grant/policy legs | `{scope}/_Access` where the scope is a **prefix of the target path** | **exact.** The subject is in that path's own partition by construction, so a partition-wide read is a strict SUPERSET of the per-scope walk |
+
+The test to apply is not "is it anchored" but **"can the subject live outside the anchor"**. Where it
+can, anchoring loses a permission. Where it provably cannot, per-scope reads were only ever paying
+for the same rows N times.
 
 ## What IS tractable, and what needs a decision
 

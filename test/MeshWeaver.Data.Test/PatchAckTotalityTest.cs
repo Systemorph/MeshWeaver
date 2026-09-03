@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Mesh;
+using Microsoft.Reactive.Testing;
 using Xunit;
 
 namespace MeshWeaver.Data.Test;
@@ -69,7 +70,7 @@ public class PatchAckTotalityTest
         using var h = new Harness();
 
         using var sub = DataExtensions.ArmPatchAckWatcher(
-            Observable.Empty<int>(), _ => Observable.Return(true), FlushTimeout, h.AckOnce, h.Register, HubPath);
+            Observable.Empty<int>(), _ => Observable.Return(true), FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
 
         h.Acks.Should().ContainSingle(
             "a stream that completes without emitting is Rx's third termination; a two-arm subscribe "
@@ -100,7 +101,7 @@ public class PatchAckTotalityTest
         var flush = new Subject<bool>();
 
         using var sub = DataExtensions.ArmPatchAckWatcher(
-            Observable.Return(42), _ => flush, FlushTimeout, h.AckOnce, h.Register, HubPath);
+            Observable.Return(42), _ => flush, FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
 
         h.Acks.Should().BeEmpty(
             "Take(1) has completed right after the echo while the flush is in flight — a completion "
@@ -120,7 +121,7 @@ public class PatchAckTotalityTest
         using var h = new Harness();
 
         using var sub = DataExtensions.ArmPatchAckWatcher(
-            Observable.Return(42), _ => null, FlushTimeout, h.AckOnce, h.Register, HubPath);
+            Observable.Return(42), _ => null, FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
 
         h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null));
     }
@@ -138,7 +139,7 @@ public class PatchAckTotalityTest
         using var h = new Harness();
 
         using var sub = DataExtensions.ArmPatchAckWatcher(
-            Observable.Return(42), _ => Observable.Empty<bool>(), FlushTimeout, h.AckOnce, h.Register, HubPath);
+            Observable.Return(42), _ => Observable.Empty<bool>(), FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
 
         h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null),
             "nothing to persist is not a failure; a NACK here would fail a write that committed");
@@ -153,7 +154,7 @@ public class PatchAckTotalityTest
 
         using var sub = DataExtensions.ArmPatchAckWatcher(
             Observable.Throw<int>(new TimeoutException("owner echo timed out")),
-            _ => Observable.Return(true), FlushTimeout, h.AckOnce, h.Register, HubPath);
+            _ => Observable.Return(true), FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
 
         h.Acks.Should().ContainSingle();
         h.Acks[0].Success.Should().BeFalse();
@@ -170,11 +171,90 @@ public class PatchAckTotalityTest
 
         using var sub = DataExtensions.ArmPatchAckWatcher(
             Observable.Return(42), _ => Observable.Throw<bool>(new UnauthorizedAccessException("row-level security")),
-            FlushTimeout, h.AckOnce, h.Register, HubPath);
+            FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
 
         h.Acks.Should().ContainSingle();
         h.Acks[0].Success.Should().BeFalse();
         h.Acks[0].Error!.Code.Should().Be(MeshNodeErrorCode.AccessDenied);
+    }
+
+    /// <summary>
+    /// 🚨 THE #3112 REGRESSION — a slow flush reported as a lost write. The commit echo has arrived
+    /// (the merge landed, the Version advanced), the durable flush is still queued behind a congested
+    /// store when the flush bound expires. Before: <c>Take(1).Timeout(bound)</c> faulted into the NACK
+    /// arm — <c>Unknown</c> + <c>TimeoutException</c>, "the write did NOT apply" — AND disposed the
+    /// flush, so the queued storage write was cancelled and re-queued through the sampler. On the
+    /// node-repo gate (Manufacturing run 33623113056) that NACK made the bake seed abandon an adoption
+    /// stamp that had committed; the sweep compiled over it and the gate DECLINED the bundle. After: the
+    /// bound acks <c>true</c> once — the commit IS the verdict — and the flush keeps its subscriber.
+    /// Driven on a virtual clock: no wall time, no race.
+    /// </summary>
+    [Fact]
+    public void FlushThatOutlivesTheBound_AcksTrueOnceOnTheCommit_AndKeepsTheFlushRunning()
+    {
+        using var h = new Harness();
+        var flush = new Subject<bool>();
+        var clock = new TestScheduler();
+
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Return(42), _ => flush, FlushTimeout, h.AckOnce, h.Register, HubPath, () => false,
+            logger: null, flushBoundScheduler: clock);
+
+        clock.AdvanceBy(FlushTimeout.Ticks - 1);
+        h.Acks.Should().BeEmpty("inside the bound the ack waits for the durable flush");
+        flush.HasObservers.Should().BeTrue("the flush is in flight");
+
+        clock.AdvanceBy(1);
+        h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null),
+            "the echo already proved the merge committed — on the bound the owner acks the commit; a NACK "
+            + "here told the writer a landed write had NOT applied (#3112)");
+        flush.HasObservers.Should().BeTrue(
+            "the bound is a wait bound on the ack, not a cancellation of the storage write — disposing it "
+            + "re-queued every slow flush through the sampler under the congestion that made it slow");
+
+        flush.OnNext(true);
+        h.Acks.Should().ContainSingle("the flush landing after the bound finds the once-only gate claimed");
+        flush.HasObservers.Should().BeFalse("Take(1) completes on the flush's own emission");
+    }
+
+    /// <summary>A flush that faults AFTER the bound acked the commit must not re-verdict it: the gate
+    /// is latched on the owner, so the fault is logged and the sampler stays the writer of record.</summary>
+    [Fact]
+    public void FlushThatFaultsAfterTheBound_LeavesTheAckedCommitStanding()
+    {
+        using var h = new Harness();
+        var flush = new Subject<bool>();
+        var clock = new TestScheduler();
+
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Return(42), _ => flush, FlushTimeout, h.AckOnce, h.Register, HubPath, () => false,
+            logger: null, flushBoundScheduler: clock);
+
+        clock.AdvanceBy(FlushTimeout.Ticks);
+        flush.OnError(new System.IO.IOException("disk full"));
+
+        h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null),
+            "the fault arrives after the commit was acked on the bound; it is a durability event, not a verdict");
+    }
+
+    /// <summary>The happy path is unchanged: a flush landing inside the bound acks once on its emission
+    /// and the bound timer is released with it — advancing the clock past the bound posts nothing more.</summary>
+    [Fact]
+    public void FlushThatLandsInsideTheBound_AcksOnce_AndTheBoundTimerIsReleased()
+    {
+        using var h = new Harness();
+        var flush = new Subject<bool>();
+        var clock = new TestScheduler();
+
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Return(42), _ => flush, FlushTimeout, h.AckOnce, h.Register, HubPath, () => false,
+            logger: null, flushBoundScheduler: clock);
+
+        flush.OnNext(true);
+        h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null));
+
+        clock.AdvanceBy(FlushTimeout.Ticks * 2);
+        h.Acks.Should().ContainSingle("the bound timer was disposed with the flush's terminal — no second ack");
     }
 
     /// <summary>
@@ -254,5 +334,45 @@ public class PatchAckTotalityTest
                 + "latches, that NACK would win over the flush's later true");
         }
         foreach (var d in inner) d.Dispose();
+    }
+
+    /// <summary>
+    /// 🚨 THE TEARDOWN TRAP (Plugins <c>LateNackReenqueueTest</c> / <c>NackReachesTheWaiterDuringTeardownTest</c>,
+    /// red on core main 2026-09-02). The echo stream ends empty because the OWNER is shutting down —
+    /// its sync hub disposes in the DisposeHostedHubs phase and completes the store. The watcher must
+    /// post NOTHING: the ShutDown-phase disposal NACK owns that verdict. Minted here it is one phase
+    /// too early (the dying activation still holds the address, so the writer's immediate re-enqueue is
+    /// rejected ShuttingDown and the write fails Unknown) and, under a whole-mesh teardown, on a
+    /// transport that is dropped — having claimed the once-only gate, the registrant's direct
+    /// <c>Dispatch</c> to the armed waiter is then skipped and the caller hears nothing.
+    /// </summary>
+    [Fact]
+    public void EchoStreamThatEndsWhileTheOwnerIsShuttingDown_LeavesTheVerdictToTheDisposalNack()
+    {
+        using var h = new Harness();
+
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Empty<int>(), _ => Observable.Return(true), FlushTimeout, h.AckOnce, h.Register, HubPath,
+            ownerIsShuttingDown: () => true);
+
+        h.Acks.Should().BeEmpty(
+            "the stream ended as part of the owner's own teardown; the ShutDown-phase disposal NACK "
+            + "(RegisterOwnerDisposingNack) is the verdict for a patch in flight at owner teardown — it fires "
+            + "when the address is released, so the writer's re-enqueue lands on a fresh activation, and it "
+            + "hands the verdict to the armed late watch directly, which a post from a disposing hub cannot");
+    }
+
+    /// <summary>The live-owner counterpart: the same empty completion, owner alive, still NACKs promptly.</summary>
+    [Fact]
+    public void EchoStreamThatEndsWhileTheOwnerLives_StillNacksPromptly()
+    {
+        using var h = new Harness();
+
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Empty<int>(), _ => Observable.Return(true), FlushTimeout, h.AckOnce, h.Register, HubPath,
+            ownerIsShuttingDown: () => false);
+
+        h.Acks.Should().ContainSingle().Which.Error!.Code.Should().Be(MeshNodeErrorCode.OwnerDisposing,
+            "mirror eviction while the hub lives is #3033's case, and it has no other seam to answer on");
     }
 }

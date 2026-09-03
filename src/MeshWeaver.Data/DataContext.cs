@@ -531,11 +531,11 @@ public sealed record DataContext : IDisposable
             // reactivate; retry") immediately. It records no InitializationError, no
             // fail-level log and no errored data streams — the post-mortem FAILED residue
             // #1122 removed stays removed.
-            Hub.FailGate(InitializationGateName,
-                $"Hub '{Hub.Address}' is shutting down; its DataContext initialization ended "
-                + $"without opening '{InitializationGateName}', which can therefore never open. "
-                + "The address may reactivate (recycle / restart); retry to get the "
-                + "authoritative answer.");
+            Hub.FailGate(InitializationGateName, ShutdownNack.RetryForTheAuthoritativeAnswer(
+                Hub.Address,
+                null,
+                $"its DataContext initialization ended without opening "
+                + $"'{InitializationGateName}', which can therefore never open"));
             return;
         }
 

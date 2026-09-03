@@ -760,6 +760,17 @@ public class MeshQuery : IMeshQueryCore
     }
 
     /// <summary>
+    /// The FINAL sort dimension of the merged result set: <see cref="MeshNode.Path"/>, ascending
+    /// and ordinal. It is what turns the score ordering into a TOTAL order, so that the
+    /// <see cref="MeshQueryRequest.Skip"/>/<see cref="MeshQueryRequest.Limit"/> clip below is a
+    /// partition of the result set rather than three independent samples of an arbitrary one.
+    /// A non-<see cref="MeshNode"/> hit sorts under the empty key and so keeps its arrival order
+    /// among its peers — LINQ's sorts are stable.
+    /// </summary>
+    private static string PathTiebreak<T>((T Item, double Score) hit)
+        => hit.Item is MeshNode node ? node.Path ?? "" : "";
+
+    /// <summary>
     /// Sort + skip + clip the merged initial set. The authoritative ordering
     /// pass for every multi-provider Initial emission. Mirrors the post-collect
     /// pipeline that <c>StorageAdapterMeshQueryProvider.RunQueryNodes</c> runs per-provider.
@@ -782,9 +793,12 @@ public class MeshQuery : IMeshQueryCore
     ///     scores and hands them here. Higher score = stronger match.
     ///     See <see cref="QueryResultChange{T}.Scores"/> for the per-provider
     ///     scoring conventions.</item>
-    ///   <item>Insertion order as the final tiebreaker — preserves the
-    ///     provider's own deterministic ordering for two items at the same
-    ///     score (e.g. two PG rows tied on the prefix bonus).</item>
+    ///   <item><b>Path ascending</b> as the FINAL tiebreaker
+    ///     (<see cref="PathTiebreak{T}"/>) — the dimension that makes this a TOTAL order, which
+    ///     is what <see cref="MeshQueryRequest.Skip"/> needs to be paging rather than sampling.
+    ///     It replaced "insertion order", which reads as a tiebreaker and is not one: nothing
+    ///     orders two providers' Initial emissions against each other, and even a single
+    ///     provider's scope walk emits in read-COMPLETION order.</item>
     /// </list>
     ///
     /// <para><b>Why score sort lives here, not in each provider.</b> A single
@@ -818,8 +832,14 @@ public class MeshQuery : IMeshQueryCore
                     if (item is MeshNode node && node.Path is not null)
                         scoreByItem[node] = score;
                 }
+                // Path-ordered BEFORE the OrderBy: OrderResults sorts stably, so the explicit
+                // sort dimension wins and ties fall back to path rather than to the arbitrary
+                // order the providers happened to merge in. See PathTiebreak below.
                 var ordered = evaluator
-                    .OrderResults(hits.Select(h => h.Item).OfType<MeshNode>(), orderBy)
+                    .OrderResults(
+                        hits.Select(h => h.Item).OfType<MeshNode>()
+                            .OrderBy(n => n.Path ?? "", StringComparer.Ordinal),
+                        orderBy)
                     .ToList();
                 merged = ordered.Select(node => ((T)(object)node,
                     scoreByItem.TryGetValue(node, out var s) ? s : 0.0));
@@ -828,11 +848,20 @@ public class MeshQuery : IMeshQueryCore
         else
         {
             // No explicit OrderBy → score IS the sort dimension. Sort
-            // descending so the highest-relevance match lands first;
-            // insertion order is the implicit tiebreaker because
-            // OrderByDescending is stable in LINQ-to-objects.
-            merged = hits.OrderByDescending(h => h.Score);
+            // descending so the highest-relevance match lands first.
+            merged = hits.OrderByDescending(h => h.Score)
+                .ThenBy(PathTiebreak, StringComparer.Ordinal);
         }
+        // 🚨 The Skip below is only paging if the sequence it skips over has a TOTAL order.
+        // Insertion order — the tiebreaker this used to rely on — is the order the providers'
+        // Initial emissions merged in, which is not an order at all: two providers race, and even
+        // ONE provider's scope walk emits in read-COMPLETION order. Three page queries then agree
+        // idle and disagree under load, re-serving one row while dropping another
+        // (MeshWeaver.Plugins#1135, measured 11/120 under 36 CPU burners vs 0/120 idle).
+        // PathTiebreak is what makes Skip/Take a partition; every provider ordering above ends in
+        // it, and StorageAdapterMeshQueryProvider applies the same key before its own load cap —
+        // it clips to Skip+Limit BEFORE this merge sees the rows, so a total order here alone
+        // would still be paging over three different subsets.
         if (request.Skip is int skip && skip > 0)
             merged = merged.Skip(skip);
         var effectiveLimit = request.Limit ?? parsed.Limit;

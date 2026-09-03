@@ -66,9 +66,20 @@ public class OrleansDirectoryInstabilityClassificationTest
         + "grainId messagehub/Doc (it maps to S10.244.3.44:11111:146515001, which is not a valid silo). "
         + "Retry later.";
 
+    /// <summary>
+    /// Verbatim from the production log (#3139) — the REGISTRATION-side variant, thrown by
+    /// <c>LocalGrainDirectoryPartition.AddSingleActivation</c> when a stream subscription's
+    /// rendezvous grain is handed to a silo membership has already buried. Neither of the two
+    /// texts above appears in it, which is exactly why it was never retried.
+    /// </summary>
+    private const string InvalidSiloRegistrationText =
+        "Trying to register pubsubrendezvous/Memory/null/activity/_tracking on invalid silo: "
+        + "S10.244.4.125:11111:146517689. Known status: Dead";
+
     [Theory]
     [InlineData(HopLimitText)]
     [InlineData(NotStableText)]
+    [InlineData(InvalidSiloRegistrationText)]
     public void DirectoryInstability_IsTransient(string message)
     {
         // The bare OrleansException the caller actually receives — NOT an
@@ -230,5 +241,95 @@ public class OrleansDirectoryInstabilityClassificationTest
             + "LocalGrainDirectory. If Orleans reworded it, the classifier no longer recognises a "
             + "grain directory mid-handoff — deliveries stop being retried and are NACK'd as "
             + "permanent again (#1742/#2357). REPAIR THE MARKER; do not delete this assertion");
+    }
+
+    /// <summary>
+    /// 🚨 <b>Issue #3139 — the ATTACH leg, and the half the delivery-leg tests above cannot see.</b>
+    ///
+    /// <para>Both existing markers are <c>LookupAsync</c>'s — READING a directory entry. Attaching a
+    /// hub's cross-process stream subscription WRITES one: <c>SubscribeAsync</c> registers the
+    /// stream's <c>PubSubRendezvousGrain</c>, and a registration handed to a silo the membership
+    /// oracle has already marked <c>Dead</c> throws a bare <see cref="OrleansException"/> carrying
+    /// neither phrase. So <see cref="OrleansRoutingService.IsTransientFailure"/> said "terminal" on
+    /// attempt 0, <c>AttachWithBoundedRetry</c>'s budget was never entered, and the hub latched into
+    /// "cross-process routing DISABLED" for the rest of its life. 13 occurrences on memex-cloud
+    /// across three ReplicaSet generations, 2026-08-23 → 2026-09-02.</para>
+    ///
+    /// <para>This asserts the CURE, not just the classification: the retry primitive re-invokes the
+    /// attach, which is what re-resolves the rendezvous grain against settled membership. Pre-fix
+    /// this observes <c>attempts == 1</c> and a faulted observable.</para>
+    /// </summary>
+    [Fact]
+    public async Task AnInvalidSiloRegistration_ReAttachesWithAFreshResolve_RatherThanLatchingDisabled()
+    {
+        var attempts = 0;
+
+        var handle = await OrleansRoutingService.AttachWithBoundedRetry(
+                attach: () =>
+                {
+                    attempts++;
+                    // Two membership-churn rejections, then the directory settles — the shape every
+                    // rolling deploy produces, and the one the log shows recurring per churn window.
+                    return attempts <= 2
+                        ? Task.FromException<string>(new OrleansException(InvalidSiloRegistrationText))
+                        : Task.FromResult("attached");
+                },
+                isTransient: OrleansRoutingService.IsTransientFailure,
+                onTransientRetry: (_, _, _) => { },
+                backoff: NoBackoff,
+                scheduler: Scheduler.Immediate)
+            .Await(TestContext.Current.CancellationToken);
+
+        attempts.Should().Be(3,
+            "the registration failed against a silo membership had already buried, and a fresh "
+            + "SubscribeAsync re-resolves the rendezvous grain — pre-fix the classifier did not "
+            + "match this text, so the attach was tried exactly once and the hub's cross-process "
+            + "routing was disabled for the rest of its life (#3139)");
+        handle.Should().Be("attached");
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE ANTI-INERT PIN for the registration-side marker. If this fails after an Orleans
+    /// upgrade the classifier has gone SILENTLY INERT — repair the marker, never delete the test.</b>
+    /// Same contract as <see cref="RetryLaterMarker_IsStillTheShippedOrleansWording"/>, and the
+    /// phrase is likewise a literal of the SHIPPED <c>Orleans.Runtime</c> rather than a copy of it.
+    /// </summary>
+    [Fact]
+    public void InvalidSiloMarker_IsStillTheShippedOrleansWording()
+    {
+        var runtimeAssembly = Path.Combine(AppContext.BaseDirectory, "Orleans.Runtime.dll");
+
+        File.Exists(runtimeAssembly).Should().BeTrue(
+            $"this fact reads Orleans' own string literals out of {runtimeAssembly}; without the "
+            + "file it would pass having verified nothing");
+
+        ShippedLiteralPresent(runtimeAssembly, OrleansRoutingService.DirectoryInvalidSiloMarker)
+            .Should().BeTrue(
+                $"'{OrleansRoutingService.DirectoryInvalidSiloMarker}' is the phrase "
+                + "IsDirectoryUnstable matches a rendezvous-grain registration against a dead silo "
+                + "on, and it comes from Orleans' own LocalGrainDirectoryPartition. If Orleans "
+                + "reworded it, a hub's cross-process routing latches DISABLED on the first "
+                + "membership-churn window again (#3139). REPAIR THE MARKER; do not delete this");
+    }
+
+    /// <summary>
+    /// 🚨 <b>Reads the #US heap at BOTH byte alignments, and that is load-bearing.</b> A managed
+    /// string literal's UTF-16 payload follows a compressed-integer length, so a blob can begin at
+    /// an ODD file offset — decoding the file from offset 0 only, as this pin originally did, then
+    /// misses a phrase that is genuinely present. That is a FALSE RED on the one assertion whose
+    /// entire value is being believed when it fires: it reports "Orleans reworded the message" for
+    /// a heap layout that shifted. Measured 2026-09-02 — searching from offset 0 alone reports
+    /// <c>on invalid silo</c> ABSENT from the pinned 10.2.2 build, where it is in fact present.
+    /// </summary>
+    private static bool ShippedLiteralPresent(string assemblyPath, string phrase)
+    {
+        var raw = File.ReadAllBytes(assemblyPath);
+
+        // OrdinalIgnoreCase on both decodes, matching the classifier — a recasing Orleans could
+        // make freely is one the classifier still handles, so it must not red this pin.
+        return Encoding.Unicode.GetString(raw)
+                   .Contains(phrase, StringComparison.OrdinalIgnoreCase)
+            || Encoding.Unicode.GetString(raw, 1, raw.Length - 1)
+                   .Contains(phrase, StringComparison.OrdinalIgnoreCase);
     }
 }

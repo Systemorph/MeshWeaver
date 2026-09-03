@@ -35,7 +35,8 @@ the two investigations.**
 | `OwnerUnreachable` | `The owner of '…' returned no verdict for this update within Ns. The patch was posted and may still apply… Request trail: …` | The owner produced **no terminal at all**. The writer's late-response window expired. | The **owner's** activation: is it alive, mid-recycle, pinned dead? |
 | `Unknown` | `{ExceptionTypeName}: {message}` — e.g. `TimeoutException: The operation has timed out.` | The owner **answered**, with a NACK carrying its own internal exception. | The owner's **ack chain**: which of its two internal bounds expired. |
 | `AccessDenied` / `Deserialization` / `Validation` | `Access denied: …` / `Patch deserialization failed: …` / `Validation failed: …` | The owner answered with a classified application-level refusal. | The patch itself. |
-| `OwnerDisposing` | `the owner's stream ended before this patch's commit echo arrived — … the write's fate is UNKNOWN; safe to retry …` | The owner **answered**: the stream its ack watcher was on completed before the echo — mirror eviction while the hub lives. The writer auto-retries it (a re-enqueue re-diffs, so a merge that did commit is a no-op). | The owner's **stream lifetime** (`ReclaimIfUnheld`, `SynchronizationStream.Dispose`), not its bounds. |
+| `OwnerDisposing` | `the owner's stream ended before this patch's commit echo arrived — … the write's fate is UNKNOWN; safe to retry …` | The owner **answered**: the stream its ack watcher was on completed before the echo — mirror eviction **while the hub lives**. The writer auto-retries it (a re-enqueue re-diffs, so a merge that did commit is a no-op). | The owner's **stream lifetime** (`ReclaimIfUnheld`, `SynchronizationStream.Dispose`), not its bounds. |
+| `OwnerDisposing` | `owner activation disposing before the merge turn ran — the patch was NOT applied; safe to retry against the fresh activation` | The owner **answered from its ShutDown phase**: the patch was in flight when the owner hub tore down. This is the disposal NACK (`RegisterOwnerDisposingNack`), handed to the armed late watch directly; the writer's re-enqueue lands on the fresh activation. | The owner's **teardown** (`HubDisposalModel`): why did the activation go down under a live patch? |
 
 Rows two and three come from one classifier on the **owner**:
 
@@ -68,27 +69,63 @@ var postSub = ArmPatchAckWatcher(
         .Take(1)
         .Timeout(TimeSpan.FromSeconds(20)),            // ① commit echo
     committed => hub.ServiceProvider.GetService<IPostCommitFlush>()?.Flush(committed.Value!),
-    TimeSpan.FromSeconds(10),                          // ② durable flush
-    AckOnce, d => hub.RegisterForDisposal(d), hubPath);
+    TimeSpan.FromSeconds(10),                          // ② flush bound — a WAIT bound on the ack, not a fate
+    AckOnce, d => hub.RegisterForDisposal(d), hubPath, () => hub.IsShuttingDown, patchAckLogger);
 ```
 
 `ArmPatchAckWatcher` subscribes the echo with all three arms (see "The ack watcher's completion arm"
-below); the two bounds are unchanged.
+below). **Only bound ① can mint the timeout NACK.** Bound ② no longer produces a verdict at all —
+see "The flush bound is not a verdict" below.
 
 **Which one fired is readable from the elapsed time** between the user's action and the log line:
 
-- **~20 s** → ① the commit echo never arrived. The merge turn did not reach the stream, or the
-  reduced stream's fan-out is starved.
-- **~25–30 s** → ② the commit landed and `IPostCommitFlush` (i.e. `StoragePostCommitFlush` →
-  `storage.WriteAndPublishUpdated`, a Postgres write) did not finish in 10 s.
+- **~20 s** and a NACK `Unknown` + `TimeoutException` → ① the commit echo never arrived. The merge turn
+  did not reach the stream, or the reduced stream's fan-out is starved. The write's fate is genuinely
+  unknown: read the node's `Version` before retrying anything that accumulates.
+- **~10 s after the merge**, a SUCCESS, and an owner-side `FLUSH_OUTLIVED_BOUND` warning → ② the commit
+  landed and `IPostCommitFlush` (i.e. `StoragePostCommitFlush` → `storage.WriteAndPublishUpdated`) had
+  not finished in 10 s. The write applied; the storage behind that owner is slow. This is the signal
+  to read when a bulk operation drags — never a reason to retry the write.
 - **~31 s** → neither: this is the writer's `OwnerUnreachable` window, and the `Code` will say so.
 
-🚨 **In case ② the write is already committed in memory when the NACK is sent.** The caller is told
-the write failed, and the node's `Version` has nonetheless advanced. Check the version before
-retrying anything that accumulates — an append, a counter, a `with { X = X + 1 }`. This is the
-write-side twin of the read-side hazard in
-[Durable But Unreadable](/Doc/Architecture/DurableButUnreadable): the durable state and the
-reported outcome disagree, in opposite directions.
+## The flush bound is not a verdict (#3112)
+
+Reaching the flush at all means the owner's reduced stream emitted the echo **containing this write**:
+the merge landed, the `Version` advanced, every mirror is already receiving the new state. Whatever
+happens to the durable flush afterwards decides *when* the ack is posted, never *whether* the write
+applied. Until #3112 the code disagreed with that: `durable.Take(1).Timeout(10 s)` fed the fault arm, so
+a flush still queued at the bound became a NACK `Unknown` + `TimeoutException` — read by the writer as
+`LATE_NACK_TERMINAL … the write did NOT apply and is not auto-retryable` and by its caller as a failed
+write — and the `Timeout` also **disposed** the flush, cancelling a storage write that had been queued
+for the whole bound and handing the row to the persistence sampler, which queued it again. Under the
+congestion that made the flush slow, every slow flush became two writes and one false failure.
+
+**The measurement.** MeshWeaver.Manufacturing PR #48, run 33623113056, `test-repos / Compile + render
+node repos`: the gate's disposable mesh installs 37 upstream packages and, per installed NodeType,
+re-seeds the sealed bake's prebuilt assembly through one cross-hub `Update` on the type's node. For
+`Radzen/Gallery` the trace reads `ADVANCE_WITHOUT_HANDOFF … bound=5000ms` at +5 s, then at
++10.02 s `LATE_NACK_TERMINAL … code=Unknown … msg=TimeoutException` — the owner **answered**, ten
+seconds after the post, which is the flush bound measured from an echo that arrived within
+milliseconds. The seed logged `seeding Radzen/Gallery … did not complete — the sweep compiles it
+instead`, the sweep compiled the type over the adoption stamp that had in fact committed, and the
+consumption postcondition reported `adopted 101 of 102 … DECLINED: Radzen/Gallery`. The control arm —
+Reinsurance run 33623801785, same seal, same bytes, minutes later — adopted `Radzen.zip 1/1`. Same
+store, same code; only the queue depth differed. In the same failing log, `portal/nodeops` held a
+`CreateOrUpdateNodeRequest` for 60 s (`[STALE-CALLBACK] … AWAITING`), which is the depth of the queue
+the flush was sitting in.
+
+**The shape now.** On the bound the owner acks **Success** — the commit is what "saved" means (#2661),
+so this is the truthful verdict — logs `[PatchAck] FLUSH_OUTLIVED_BOUND path=… bound=10000ms` on the
+`MeshWeaver.Data.PatchAck` channel, and **leaves the flush running**. The flush's own terminal then
+finds the once-only gate claimed: an emission is a no-op; a fault is logged as
+`FLUSH_FAULTED_AFTER_ACK` and the sampler — whose claim `StoragePostCommitFlush` releases in `Finally`
+— stays the writer of record for that version. A flush that faults **inside** the bound still NACKs
+with its classified code: a storage refusal is a fact the caller should hear; slowness is not a
+verdict. `PatchAckTotalityTest` pins all three paths on a virtual clock.
+
+Under a genuinely slow store the writer therefore sees the ack arrive late — `LATE_ACK`, the caller
+completes with success — and `ADVANCE_WITHOUT_HANDOFF` at 5 s still says the successor diffed against
+the mirror. That warning is now the one to read for storage pressure; it is not a failed write.
 
 ## The ack watcher's completion arm (the gap closed by #3033)
 
@@ -108,11 +145,13 @@ emitted" — so every path posts exactly one terminal:
 | Path | Verdict |
 |---|---|
 | commit echo arrives, flush emits | `Success` — posted once, on the flush's emission |
-| **echo stream ends without the echo** | NACK `OwnerDisposing`, message `the owner's stream ended before this patch's commit echo arrived — … the write's fate is UNKNOWN; safe to retry …` |
+| **echo stream ends without the echo, owner alive** | NACK `OwnerDisposing`, message `the owner's stream ended before this patch's commit echo arrived — … the write's fate is UNKNOWN; safe to retry …` |
+| **echo stream ends without the echo, owner shutting down** (`hub.IsShuttingDown`) | **nothing from the watcher** — the ShutDown-phase disposal NACK (`RegisterOwnerDisposingNack`) is the verdict; see the third point below |
 | flush ends without emitting | `Success` — `IPostCommitFlush.Flush` is contracted to complete empty for entity types it does not persist, so the in-memory commit is the durable state (the same verdict as when no hook is registered) |
-| either stream faults | NACK with `ClassifyPatchException`'s code (a timeout stays `Unknown` + `TimeoutException`) |
+| **flush outlives its 10 s bound** | `Success` on the bound, `FLUSH_OUTLIVED_BOUND` logged, the flush keeps running (#3112 — see "The flush bound is not a verdict") |
+| the echo stream faults, or the flush faults inside its bound | NACK with `ClassifyPatchException`'s code (the echo bound's timeout stays `Unknown` + `TimeoutException`) |
 
-Two things about that shape are load-bearing:
+Three things about that shape are load-bearing:
 
 - 🚨 **The completion arm is guarded on "no emission was ever observed".** A bare
   `onCompleted => AckOnce(false)` would NACK every *successful* write: on the happy path `Take(1)`
@@ -125,6 +164,21 @@ Two things about that shape are load-bearing:
   against the **fresh** state and re-diffs, so a merge that did commit before the stream ended becomes a
   no-op. "Fate unknown, safe to retry" is the honest verdict — and because the timeout verdict stays
   `Unknown`, the two are separable by `Code`.
+- 🚨 **The completion arm stands aside when the OWNER is shutting down** (`hub.IsShuttingDown`, passed
+  to `ArmPatchAckWatcher` as `ownerIsShuttingDown`). An owner hub's teardown completes the very same
+  stream — its sync hub disposes in the `DisposeHostedHubs` phase and `Store.OnCompleted()`s — but that
+  completion is not the eviction case, and answering it from the watcher broke both teardown-NACK tests
+  on 2026-09-02 (`LateNackReenqueueTest`, `NackReachesTheWaiterDuringTeardownTest`). Two defects in one
+  claim of the once-only ack gate: **one phase too early** — a hosted hub leaves its parent's registry
+  only in its ShutDown phase ([Hub Disposal Model](../HubDisposalModel)), so a "safe to retry against
+  the fresh activation" minted at DisposeHostedHubs sent the writer's immediate re-enqueue into the
+  *dying* activation, which rejected it `ShuttingDown`, and the write failed `Unknown`; and **the wrong
+  transport** — `hub.Post` from a hub past Quiescing is dropped under a whole-mesh teardown, and with
+  the gate already claimed the disposal registrant's direct `ILatePatchVerdictSink.Dispatch` (the one
+  route that still reaches the armed waiter) was skipped, so the caller burned its whole verdict budget
+  in silence (#2778's shape again). The ShutDown-phase `RegisterOwnerDisposingNack` — registered on the
+  same hub, total for a disposing hub — therefore owns the verdict for a patch in flight at owner
+  teardown, and the watcher's arm fires only while the owner lives.
 
 The generic deferred path (`ApplyJsonMergePatchAndUpdate`, non-MeshNode data hubs) had the same gap
 twice over — its initial `stream.Take(1)` read had *neither* an error nor a completion arm, and its
@@ -139,7 +193,9 @@ ran).
 3. **Read the node's `Version`.** If it advanced, the write landed and only the ack failed — do not
    retry a non-idempotent write.
 4. **Only then look at the owner.** For `OwnerUnreachable`, ask whether the activation was alive at
-   all; for `Unknown` + `TimeoutException`, ask what made the commit echo or the storage flush slow.
+   all; for `Unknown` + `TimeoutException`, ask what kept the commit echo from the owner's reduced
+   stream for 20 s (the flush bound cannot produce this code any more — a slow flush is a
+   `FLUSH_OUTLIVED_BOUND` warning beside a successful write).
 
 ## See also
 

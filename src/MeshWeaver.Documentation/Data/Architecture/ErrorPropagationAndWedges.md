@@ -100,6 +100,46 @@ answered flag first, then read the CARRIED verdict, and fall back to the shared 
 `MeshNodeStreamCache.IsTransientOwnerFailure` use) rather than to a terminal default.** A verdict
 that cannot be read is not evidence of a permanent failure.
 
+#### Who refused? The BANNER, not the classification (#3017)
+
+A caller that gets `ErrorType.ShuttingDown` still has a second question to answer: **did the OWNER
+refuse me, or did the routing layer fail to reach it?** They call for opposite responses — re-probe
+the address that announced its own return, versus stop asking about one nothing can route to — and
+the classification cannot tell them apart, because the routing layer mints `ShuttingDown` too, off
+the owner's own text (`ClassifyRoutedFailure`).
+
+The evidence that does separate them is the **banner**: `Hub {address} is shutting down`. Only the
+owner makes THIS address the subject of it. The routing layer says `No node found at 'x'`,
+`No route to 'x'`, `Mesh is shutting down, cannot route to x`, `Host is shutting down, cannot route
+to x` — the mesh or the host is the subject there, never the address you asked about.
+
+**One seam composes every owner-side refusal, and the same seam recognises one.**
+`ShutdownNack.RejectingNow` (a delivery turned away at the door) and
+`ShutdownNack.RetryForTheAuthoritativeAnswer` (work the hub accepted and can no longer finish) build
+the sentence; `ShutdownNack.IsAnsweredByOwner` reads the banner back out. The producers are the
+intake gate and the late turn (`MessageService`), the access gate (`AccessControlPipeline`, which
+runs INSIDE the owner and is its own intake — not the routing layer), the typed
+`HubDisposingException` a handler throws, and the `DataContext` gate that can never open.
+
+**Why it is a seam and not a convention.** Recognition used to be a LIST of the refusal sentences
+somebody had thought of, and the list lost a race with the source three times. #1599 removed the
+first version (pinning one arm's free text — 21 failures in 60 on unmodified `main`). A fourth
+terminal was added after it reddened a suite in 2026-08. A fifth did the same in #3017 — the access
+gate's refusal, rejected as "not from the owner" although it is the owner's own gate — and a sixth
+was live and unlisted the whole time, the intake gate's `Rejecting now.` form. Each round the
+enumeration's own guard passed, because **a guard over an enumeration can only assert the members
+already written down**: it cannot discover the terminal nobody listed. A derived predicate follows
+the producers instead of trailing them, and a seventh terminal is recognised the day it is written.
+
+The wording of these sentences is contract in the other direction too — the transient classifiers
+(`MeshNodeStreamCache.IsTransientOwnerFailure`, `AreaErrorClassifier.IsTransientHubFailure`,
+`OrleansRoutingService.ClassifyRoutedFailure`) match on `is shutting down` / `Rejecting now`, and a
+casual reword silently restores #2727: nothing fails to compile, the delivery is still refused, and
+the caller simply stops retrying. Composing through the seam is what makes both contracts hold by
+construction rather than by memory. `OwnerAnswerRecognitionGuard` calls every reachable producer and
+runs the real predicate and the real classifier over what they actually say; `DisposalRaceNackTest`
+pins the same recognition on a NACK that travelled the real path.
+
 ### Long-running operations (activity → activity log)
 
 An import / compile / mirror runs as an activity. A fault must not strand the activity "Running" forever — it writes `Status = Error` with the message onto the activity node, which the activity log and any progress reader render. Persistence at the bottom of the stack never re-gates and never fail-closes a write that was already approved; it forwards. See [Activity Control Plane](/Doc/Architecture/ActivityControlPlane) and [Activity Operations](/Doc/Architecture/ActivityOperations).
