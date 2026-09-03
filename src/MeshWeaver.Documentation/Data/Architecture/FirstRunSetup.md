@@ -116,6 +116,47 @@ but no keyed factory existed, so `Graph:Storage:Type=Sqlite` answered `Unknown s
 > search degrades from meaning to words **with no error and no log line**. That is why the wizard
 > asks for an embeddings endpoint and warns when it is left blank.
 
+## 🚨 What a real cluster found that no test could
+
+The wizard was written, unit-tested, and driven end to end in a browser against a local host — and
+it still could not be reached on Kubernetes, for **three** independent reasons. Every one of them is
+total and silent: the portal serves the wizard perfectly while nobody can get to it. They are
+recorded here because each was invisible until the thing was actually deployed.
+
+| What was wrong | Why nothing caught it | Guarded by |
+|---|---|---|
+| **The image pre-answered the storage question.** `Memex.Portal.Distributed/appsettings.json` baked `Graph:Storage:Type = "PostgreSql"`, so `MarkAwaitingSetup` was never reached — the chart correctly omitted the key, the pod's environment carried none, and the portal booted configured anyway. | Every test supplied configuration explicitly. Nothing asked what the *image* says when you supply nothing. | `DeployedImageDoesNotPreAnswerStorageTest` (Plugins) |
+| **The pod never went READY.** The chart probes `/health` (startup) and `/alive` (readiness + liveness); the setup host mapped only `/healthz`. Every probe 404-ed, so the previous replica kept the traffic and the wizard was unreachable through the ingress. | The surface tests drive it over an in-process pipeline, where there are no probes and no replicas. | `SetupProbeEndpointsTest`, which reads the paths **out of the chart** |
+| **The setup token was swallowed.** It is the only way into an unauthenticated surface that collects a connection string, model keys and the platform-admin list — and it was logged at `Information` under a category every deployment filters to `Warning`. Wizard serving, token minted, nobody able to learn it. | Tests read the token from DI, never from the log. Log *levels* are deployment configuration, invisible in-process. | It goes to **stdout**, which no log level can suppress |
+
+The shared lesson: **a surface that must work when nothing else does cannot depend on anything
+configurable.** Not a log level, not a route another component maps, not a default someone else
+supplies.
+
+## 🚨 The dangerous direction — and why it is guarded on two sides
+
+Removing the image's baked storage default is what makes the wizard reachable. Its safety rests
+**entirely** on the deployment paths supplying the value themselves. If one of them ever stops, the
+failure is not a crash:
+
+> A configured production portal with real data reboots into a **first-run setup wizard** — serving
+> no content, and offering whoever arrives the chance to configure it. No exception, no crashloop,
+> because "no storage configured" is now a *legitimate* state by design.
+
+That is strictly worse than an outage, which at least looks like one. So the two halves are asserted
+on opposite sides, and neither can be satisfied by the other moving:
+
+- **The image must NOT answer** — `DeployedImageDoesNotPreAnswerStorageTest` (MeshWeaver.Plugins).
+- **The deployment paths MUST** — `DeploymentPathsSupplyStorageTest` (core), covering the helm chart
+  *and* `MemexHostingExtensions` (the Azure Container Apps lane, which does not use the chart at all,
+  so the chart assertion says nothing about it).
+
+The one gap no guard can see is an environment values file in the private deployment repo that
+overrides the key to `""` — an empty value is omitted by the ConfigMap template, which reads
+identically to never stating it. Verified by hand on the shared `memex` portal
+(2026-09-03: `memex-portal-config.data.Graph__Storage__Type = "PostgreSql"`); any new environment
+should be checked the same way once, at ramp-up.
+
 ## The chart had to stop answering these questions
 
 The portal ConfigMap lists keys explicitly, so an unconditional line emits `Graph__Storage__Type=""`
