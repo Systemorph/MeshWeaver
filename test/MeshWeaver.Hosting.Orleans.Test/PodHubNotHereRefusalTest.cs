@@ -97,6 +97,69 @@ public class PodHubNotHereRefusalTest
     }
 
     /// <summary>
+    /// 🚨 THE VERDICT THE EVICTION WAS WRITTEN FOR. When the activation that answered is the
+    /// owner's RELEASE tombstone (<see cref="PodHubNotHereException.Released"/> — the registration
+    /// that claimed the address was disposed: a closed Blazor circuit, a torn-down hub), "nobody
+    /// serves this hub" is a fact, not a roll window, and the router must say so with
+    /// <see cref="ErrorType.NotFound"/> beside the stamp. <c>DataExtensions.HandleTargetUnservedFailure</c>
+    /// evicts on exactly that pair and — deliberately, #2756 — on nothing that says ShuttingDown; so
+    /// before this branch every dead circuit was answered transiently, the eviction never fired, and
+    /// the owner fanned every change out to the corpse until the stream's idle release (memex,
+    /// 2026-09-03: 46 minutes, 300–1,169 refusals per minute, zero evictions).
+    ///
+    /// <para><b>Fails on unfixed code:</b> the parameter does not exist and the only verdict the
+    /// method can produce is ShuttingDown.</para>
+    /// </summary>
+    [Fact]
+    public async Task AReleasedAddress_IsNackedTerminally_SoTheOwnerEvicts_AndNeverReachesTheStream()
+    {
+        var nacks = new List<Nack>();
+        var published = 0;
+
+        await RoutingGrain.AnswerPodHubNotHere(
+                Delivery("d-released"), "portal/closed-circuit", "portal",
+                Declaring(),
+                fallBackToStream: () => { published++; return Observable.Return(Unit.Default); },
+                postFailureToSender: (m, t, u) => nacks.Add(new Nack(m, t, u)),
+                logger: new RecordingLogger(),
+                respondingSilo: "10.0.0.2:11111@1",
+                released: true)
+            .Await();
+
+        published.Should().Be(0, "a released address is as unreachable over the stream as over the grain");
+
+        var nack = nacks.Should().ContainSingle().Subject;
+        nack.TargetUnserved.Should().BeTrue("the stamp is what makes the verdict the OWNER's to act on");
+        nack.Type.Should().Be(ErrorType.NotFound,
+            "the owner released the address, so nothing will re-claim it — this is the TERMINAL shape "
+            + "HandleTargetUnservedFailure evicts on, and the one shape #2756's ShuttingDown guard must "
+            + "never see here, or the fan-out-to-a-corpse storm (#2426/#2546) is back for every closed tab");
+        nack.Message.Should().Contain("portal/closed-circuit").And.Contain("RELEASED");
+    }
+
+    /// <summary>
+    /// The transient shape is UNCHANGED by the release branch: a refusal that is not a release still
+    /// rides out as ShuttingDown, so the #2756 guard keeps protecting a subscriber that is merely
+    /// mid-roll. Pinned beside the terminal case so the two can never be confused again.
+    /// </summary>
+    [Fact]
+    public async Task AnUnreleasedRefusal_IsStillTransient()
+    {
+        var nacks = new List<Nack>();
+        await RoutingGrain.AnswerPodHubNotHere(
+                Delivery("d-unreleased"), "portal/mid-roll", "portal", Declaring(),
+                fallBackToStream: () => throw new InvalidOperationException("must not publish"),
+                postFailureToSender: (m, t, u) => nacks.Add(new Nack(m, t, u)),
+                logger: new RecordingLogger(),
+                respondingSilo: "10.0.0.2:11111@1",
+                released: false)
+            .Await();
+
+        nacks.Should().ContainSingle().Which.Should().Be(nacks[0] with { Type = ErrorType.ShuttingDown, TargetUnserved = true },
+            "a claim that has not landed yet must keep the ride-out verdict");
+    }
+
+    /// <summary>
     /// The other direction, and the reason the gate is a DECLARATION: for a type whose hubs live in
     /// an Orleans client the stream is not a fallback, it is the only transport there is. NACKing
     /// those would make every such hub permanently unreachable.

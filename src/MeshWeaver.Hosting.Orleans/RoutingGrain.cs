@@ -500,7 +500,7 @@ internal class RoutingGrain(
                 ? AnswerPodHubNotHere(
                     delivery, addressPath, address.Type, meshConfig,
                     FallBackToStream, PostVerdictToSender, logger, podHubRefusalLog,
-                    RespondingSilo(ex))
+                    RespondingSilo(ex), WasReleased(ex))
                 // A REAL failure of the call, transient retries exhausted (or a non-transient
                 // fault) — the owning silo threw, went away mid-call, or the placement could not
                 // be made. This is the whole gain over a publish: it is OBSERVABLE, so it becomes
@@ -607,6 +607,14 @@ internal class RoutingGrain(
     /// The silo whose activation answered — see <see cref="RespondingSilo"/> for why this is on the
     /// line at all. Null on a peer that predates the field.
     /// </param>
+    /// <param name="released">
+    /// True when the activation that answered is the owner's RELEASE tombstone
+    /// (<see cref="PodHubNotHereException.Released"/>): the registration that claimed the address
+    /// was disposed. That is the one case where "nobody serves this hub" is not a lifecycle
+    /// transition but a fact, and the verdict is TERMINAL — <see cref="ErrorType.NotFound"/> beside
+    /// the stamp, the shape <c>DataExtensions.HandleTargetUnservedFailure</c> evicts on. The transient
+    /// shape is unchanged for every other refusal, so the #2756 ride-out is untouched.
+    /// </param>
     internal static IObservable<Unit> AnswerPodHubNotHere(
         IMessageDelivery delivery,
         string addressPath,
@@ -616,10 +624,52 @@ internal class RoutingGrain(
         Action<string, ErrorType, bool> postFailureToSender,
         ILogger logger,
         DeadTargetRefusalLog? refusalLog = null,
-        string? respondingSilo = null)
+        string? respondingSilo = null,
+        bool released = false)
     {
         if (meshConfig.ClientHostedAddressTypes.Contains(addressType))
             return fallBackToStream();
+
+        if (released)
+        {
+            // 🚨 THE TERMINAL VERDICT. The owner released this address — Detach ran because the
+            // registration was disposed (a closed Blazor circuit, a torn-down hosted hub) — and the
+            // tombstone it left behind is what answered. Nothing will re-claim it: a closed circuit
+            // id is never reused, and a hub that comes back claims afresh through Attach. So this is
+            // NOT "come back and re-ask": it is NotFound + TargetUnserved, the exact shape the
+            // owner-side client-subscription eviction (#2426/#2546) acts on — and the shape the
+            // transient refusal below can never be, because #2756 guards eviction against
+            // ShuttingDown. Before this branch existed every dead circuit was answered below, the
+            // eviction never fired, and the owner fanned out to the corpse until the stream's idle
+            // release (memex 2026-09-03: 46 minutes, 300–1,169 refusals/min, zero evictions).
+            var releasedReason =
+                $"Directed delivery to pod hub '{addressPath}' was refused: its OWNER RELEASED the "
+                + "address (the registration that claimed it was disposed — a closed circuit, a "
+                + "torn-down hub). Nobody will claim it again, so this is a TERMINAL verdict: the "
+                + "sender's owner-side client-subscription eviction drops the server-side stream it "
+                + "was still fanning out to, instead of pushing to the corpse until idle release. The "
+                + $"tombstone that answered is on silo '{respondingSilo ?? "(not reported)"}'.";
+            var suppressed = 0;
+            if (refusalLog is null || refusalLog.ShouldReport(addressPath, out suppressed))
+                logger.LogWarning(
+                    "[ROUTE] {Reason} Message {MessageType} ({DeliveryId}) from {Sender} was NOT posted; "
+                    + "surfacing a TERMINAL DeliveryFailure (NotFound, TargetUnserved) to the sender. "
+                    + "{Suppressed} earlier refusal(s) of this address since the last such line were "
+                    + "logged at Debug.",
+                    releasedReason, delivery.Message?.GetType().Name ?? "(null)", delivery.Id,
+                    delivery.Sender, suppressed);
+            else
+                logger.LogDebug(
+                    "[ROUTE] {Reason} Message {MessageType} ({DeliveryId}) from {Sender} was NOT posted; "
+                    + "refusal windowed (see the Warning line for this address). Surfacing a TERMINAL "
+                    + "DeliveryFailure to the sender.",
+                    releasedReason, delivery.Message?.GetType().Name ?? "(null)", delivery.Id,
+                    delivery.Sender);
+            RoutingGrainTrace.Write(
+                $"RoutingGrain.RouteMessage POD_HUB_RELEASED_REFUSED addr={addressPath} id={delivery.Id} sender={delivery.Sender}");
+            postFailureToSender(releasedReason, ErrorType.NotFound, true);
+            return Observable.Return(Unit.Default);
+        }
 
         var reason =
             $"Directed delivery to pod hub '{addressPath}' was refused: no silo in this cluster is "
@@ -678,6 +728,21 @@ internal class RoutingGrain(
         null => null,
         PodHubNotHereException notHere => notHere.RespondingSilo,
         _ => RespondingSilo(ex.InnerException),
+    };
+
+    /// <summary>
+    /// Whether the refusal came from the owner's RELEASE tombstone
+    /// (<see cref="PodHubNotHereException.Released"/>), dug out of the same wrapped chain
+    /// <see cref="IsPodHubNotHere"/> walks. False on a peer that predates the field — which
+    /// degrades to the transient verdict, never to a wrong eviction.
+    /// </summary>
+    /// <param name="ex">The exception the pod-hub call failed with.</param>
+    /// <returns>True when the owner released the address.</returns>
+    internal static bool WasReleased(Exception? ex) => ex switch
+    {
+        null => false,
+        PodHubNotHereException notHere => notHere.Released,
+        _ => WasReleased(ex.InnerException),
     };
 
     /// <summary>

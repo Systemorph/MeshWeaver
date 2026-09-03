@@ -34,6 +34,61 @@ public interface IDeploymentUpdater
     /// annotation gives the right answer there — old stamp, floor elapsed, roll immediately.</para>
     /// </summary>
     Task<DateTimeOffset?> LastRolledAtAsync(CancellationToken ct);
+
+    /// <summary>
+    /// 🚨 Moves the SCHEMA before the image moves: runs the database migration for
+    /// <paramref name="versionTag"/> to completion — on Kubernetes, a run-once Job
+    /// (<c>memex-migration-su-&lt;tag&gt;</c>) built from the same ConfigMap and Secret the chart's
+    /// <c>helm upgrade</c> Job uses — and reports how it ended. The poller calls this BEFORE
+    /// <see cref="PatchToVersionAsync"/> on every roll and refuses the roll on
+    /// <see cref="MigrationRunOutcome.Failed"/> / <see cref="MigrationRunOutcome.TimedOut"/>.
+    ///
+    /// <para><b>Why it exists (2026-09-03).</b> The migration is a Job that only <c>helm upgrade</c>
+    /// minted, named by release revision; a self-update patches the portal image with
+    /// <c>kubectl set image</c> and could never mint one. So the first automatic roll across a
+    /// <c>db_version</c> boundary (Plugins #1216, V55) rolled both AKS portals to a build whose pods
+    /// refused to start (<c>DbVersionGate</c>) while the old ReplicaSet kept answering 200 — memex
+    /// for seven hours, memex-cloud while its old pods ran the very fan-out storm the new build
+    /// fixed. <c>Doc/Architecture/DatabaseMigrationProcedure</c> is the routine.</para>
+    ///
+    /// <para>Default implementation answers <see cref="MigrationRunOutcome.NotSupported"/>: a host
+    /// whose updater predates this member rolls exactly as it did before, with <c>DbVersionGate</c>
+    /// as the only net — and the poller says so at Warning. A default rather than an abstract member
+    /// so the seam can land in core first without turning every dependent's build red.</para>
+    /// </summary>
+    /// <param name="versionTag">The platform version tag whose migration must run.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>How the migration ended; never throws for an outcome the poller can act on.</returns>
+    Task<MigrationRunOutcome> RunMigrationAsync(string versionTag, CancellationToken ct) =>
+        Task.FromResult(MigrationRunOutcome.NotSupported);
+}
+
+/// <summary>
+/// How <see cref="IDeploymentUpdater.RunMigrationAsync"/> ended. The poller's rule: only
+/// <see cref="Completed"/> proves the schema moved; <see cref="Failed"/> and <see cref="TimedOut"/>
+/// prove it did NOT and refuse the roll; <see cref="NotSupported"/> and <see cref="Forbidden"/> are
+/// the two "could not even try" states, which roll as before — loudly.
+/// </summary>
+public enum MigrationRunOutcome
+{
+    /// <summary>The migration ran to completion (<c>Database migration completed. Version: N</c>).</summary>
+    Completed,
+
+    /// <summary>The migration ran and failed (the Job's pods exhausted their backoff).</summary>
+    Failed,
+
+    /// <summary>The migration did not complete within <see cref="SelfUpdateOptions.MigrationJobTimeout"/> — stuck, not slow.</summary>
+    TimedOut,
+
+    /// <summary>This updater cannot run a migration at all (a host predating the seam, or no Kubernetes).</summary>
+    NotSupported,
+
+    /// <summary>
+    /// The cluster refused to create the Job (403): the portal's service account has not been
+    /// granted <c>batch/jobs</c> — the chart's <c>memex-portal/rbac.yaml</c> grants it, and takes
+    /// effect on the next <c>helm upgrade</c>.
+    /// </summary>
+    Forbidden,
 }
 
 /// <summary>Probes the deployment target so the k8s-patch path only arms where it can actually

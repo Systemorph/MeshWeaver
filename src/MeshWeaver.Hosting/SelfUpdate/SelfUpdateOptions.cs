@@ -34,6 +34,29 @@ public record SelfUpdateOptions
     public string MigrationContainer { get; init; } = "memex-migration";
 
     /// <summary>
+    /// The ConfigMap the migration Job reads its environment from — the same one the chart's
+    /// <c>memex-migration/job.yaml</c> mounts, so a Job the self-updater creates runs with exactly
+    /// the inputs a <c>helm upgrade</c> Job would.
+    /// </summary>
+    public string MigrationConfigMap { get; init; } = "memex-migration-config";
+
+    /// <summary>The Secret the migration Job reads its connection string from (see <see cref="MigrationConfigMap"/>).</summary>
+    public string MigrationSecret { get; init; } = "memex-migration-secrets";
+
+    /// <summary>
+    /// 🚨 How long a migration Job may run before the roll is REFUSED as stuck. A migration is a
+    /// bounded amount of work (every step is idempotent and batched); one that has not completed in
+    /// this long is not slow, it is wedged — deadlocked against live traffic, or waiting on a lock
+    /// it will never get — and rolling the portal image on top of an unmigrated schema is exactly
+    /// the state <c>DbVersionGate</c> refuses. Measured: 6 min on memex (153 schemas), 11 min on
+    /// memex-cloud (208 schemas, after contention was removed).
+    /// </summary>
+    public TimeSpan MigrationJobTimeout { get; init; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>How often the Job's status is read while it runs.</summary>
+    public TimeSpan MigrationJobPollInterval { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
     /// The RETRY interval — how long a faulted watch waits before re-establishing itself.
     ///
     /// <para>🚨 No longer a poll cadence. The update check is event-driven: exactly one pass at

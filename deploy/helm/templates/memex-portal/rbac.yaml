@@ -3,6 +3,15 @@
 # deployments (scoped by resourceNames), nothing else. This is what lets the portal "change the image
 # version from inside the memex" (ReleaseStrategy.md). Without this the PATCH returns 403 and the
 # poller logs + keeps ticking (no crash).
+#
+# 🚨 batch/jobs is what lets a self-update MOVE THE SCHEMA before it moves the image. The migration
+# is a run-once Job (memex-migration/job.yaml) that only `helm upgrade` used to mint; a self-update
+# that rolled the portal across a db_version boundary without it left the new pods refusing to start
+# (DbVersionGate) behind a portal that still answered 200 — memex and memex-cloud, 2026-09-03, seven
+# hours. The self-updater now creates `memex-migration-su-<tag>` and waits for it BEFORE the PATCH
+# (Doc/Architecture/DatabaseMigrationProcedure). Jobs cannot be scoped by resourceNames (the name
+# carries the tag), so the rule is namespace-wide on jobs only. Until a `helm upgrade` has applied
+# this rule the Job POST answers 403, and the self-updater says so at Warning on every roll.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -18,6 +27,9 @@ rules:
       - "memex-portal-deployment"
       - "memex-migration-deployment"
     verbs: ["get", "patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
