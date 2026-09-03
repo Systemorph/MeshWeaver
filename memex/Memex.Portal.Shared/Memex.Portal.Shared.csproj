@@ -32,18 +32,16 @@
          deployment turns each on by listing its DLL, which is what that switch is for. Their
          collocated JS and OpenStreetMap's vendored wwwroot/leaflet/ are already addressed as
          ./_content/<Pack>/... — exactly what the module static-asset provider serves (#1724). -->
-    <!-- 🚨 DIRECT ON PURPOSE, and it must not be "tidied away" as unused. MeshWeaver.Maps is a
-         CANONICAL CONTENT-SURFACE assembly (FrameworkBuildIdentity.ContentSurfaceAssemblies), and
-         until the view packs flipped (#1974) this host reached it only through them — every map
-         pack references it. Losing it from the COMPILE closure does not fail a build: the surface
-         manifest is written from @(ReferencePathWithRefAssemblies), so the line simply vanishes,
-         this host hashes Maps as 'absent' while mw-plugin-test still hashes a real surface id, and
-         the two hosts of ONE commit resolve DIFFERENT framework identities. Every bake then lands
-         at an address no portal reads — publication green, pods compiling everything at boot, every
-         cover serving a compilation-fallback card. That is the 2026-08-17 outage (#1814); it
-         recurred here the moment the map packs left, and
-         FrameworkBuildIdentityTest.CanonicalContentSurface_IsRecordedByEverySurfaceManifestHost
-         is what caught it. No portal code uses these types — the reference IS the point. -->
+    <!-- 🚨 MeshWeaver.Maps is NOT referenced, and must never be again (maintainer, 2026-09-03:
+         "all maps should be in plugins and removed from core — move 100% to plugins"). It WAS a
+         direct reference here while it was a canonical content-surface assembly (#1814 needed
+         every surface-manifest host to carry it, or two hosts of one commit resolved two
+         identities). It left the content surface and this repo (#2941) and is a Store MODULE in
+         MeshWeaver.Plugins — landed from the registry, composed into bakes with the tester's
+         module flag. A portal host that referenced it again became the SECOND PRODUCER of one
+         assembly: the bake recorded the module's build (mvid:…) while every portal carried the
+         app-closure copy (ref:…), and every map gallery was declined at adoption fleet-wide
+         (#3175). BakeHost refuses that double by name now; this comment is the other half. -->
     <!-- MeshWeaver.Blazor.EntityViews is deliberately NOT referenced (the Analysis/#1974 shape):
          it ships via the registry as a module, its EntityViewsViewPackModuleAttribute registers
          the views when the DLL is listed under Modules:Assemblies, and Modules:Required declares

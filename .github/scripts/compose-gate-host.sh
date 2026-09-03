@@ -10,7 +10,7 @@
 # deliberately runs that same adoption code rather than a gate-only reader, so a gate can only judge
 # the platform's bake when its process IS the platform host. Until #3022 the gate ran as the TESTER
 # image — whose /app is a strict subset of the portal's (measured on 3.0.0-rc9.ci.7534: 88 vs 219
-# assemblies; MeshWeaver.Maps, .AI, .ContentCollections.Indexing, the Blazor and hosting halves exist
+# assemblies; on that image MeshWeaver.Maps, .AI, .ContentCollections.Indexing — modules since — and the Blazor and hosting halves existed
 # only in the portal) — so content binding a portal-shipped assembly could neither compile in the bake
 # nor load in the gate, and every such failure read as a CONTENT error on source nobody had changed.
 #
@@ -24,7 +24,7 @@
 #     tester's identity, which is the exact confusion this host exists to end;
 #   * the tester's mw-plugin-test.deps.json is NEVER copied — 🚨 load-bearing, not tidiness: with an
 #     app-local deps.json the dotnet host builds the TPA from THAT file's entries only, and every
-#     portal-only assembly (Maps…) would be on disk yet unloadable ("could not load file or assembly").
+#     portal-only assembly (a Blazor half…) would be on disk yet unloadable ("could not load file or assembly").
 #     Without it the host probes the application directory and every assembly in it is in the TPA
 #     (documented host behaviour: no deps.json ⇒ all assemblies in the app directory are added).
 #     The portal's own <Host>.deps.json stays; the runtime reads only <entry>.deps.json.
@@ -51,9 +51,9 @@ if [ "${1:-}" = "--self-test" ]; then
   fail() { echo "SELF-TEST FAILED: $1"; exit 1; }
   portal="$tmp/portal"; tester="$tmp/tester"; out="$tmp/host"
   mkdir -p "$portal/modules/X" "$tester/razor-generators/linux-x64" "$tester/cs"
-  printf 'MeshWeaver.Layout=aaaa\nMeshWeaver.Maps=bbbb\n' > "$portal/meshweaver-surface.manifest"
+  printf 'MeshWeaver.Layout=aaaa\nMeshWeaver.PortalOnly=bbbb\n' > "$portal/meshweaver-surface.manifest"
   printf 'PORTAL' > "$portal/MeshWeaver.Layout.dll"
-  printf 'PORTAL' > "$portal/MeshWeaver.Maps.dll"
+  printf 'PORTAL' > "$portal/MeshWeaver.PortalOnly.dll"
   printf 'PORTAL' > "$portal/Newtonsoft.Json.dll"
   printf '{}' > "$portal/Memex.Portal.Distributed.deps.json"
   printf '{}' > "$portal/Memex.Portal.Distributed.runtimeconfig.json"
@@ -70,7 +70,7 @@ if [ "${1:-}" = "--self-test" ]; then
 
   "$self" "$portal" "$tester" "$out" > "$tmp/log" || fail "the happy path exited non-zero: $(cat "$tmp/log")"
   [ "$(cat "$out/Newtonsoft.Json.dll")" = "PORTAL" ]      || fail "a file both images carry must keep the PORTAL's bytes"
-  [ "$(cat "$out/MeshWeaver.Maps.dll")" = "PORTAL" ]      || fail "portal-only assemblies must be in the host"
+  [ "$(cat "$out/MeshWeaver.PortalOnly.dll")" = "PORTAL" ]      || fail "portal-only assemblies must be in the host"
   [ -f "$out/mw-plugin-test.dll" ]                        || fail "the tester CLI must be in the host"
   [ -f "$out/MeshWeaver.Hosting.Monolith.dll" ]           || fail "tester-only assemblies must ride"
   [ -f "$out/razor-generators/linux-x64/Razor.dll" ]      || fail "tester-only subdirectories must ride"

@@ -90,7 +90,7 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                 + "as --image). The tester image only EXECUTES; the portal supplies the reference "
                 + "set, the framework identity and the runtime. There is no fallback to the tester's "
                 + "/app: it is a strict subset of the portal's (88 vs 219 assemblies on "
-                + "3.0.0-rc9.ci.7534), so content binding MeshWeaver.Maps, .AI or .Indexing fails to "
+                + "3.0.0-rc9.ci.7534), so content binding a portal-only assembly fails to "
                 + "compile against it (MeshWeaver#3022 / #3113).");
             return 9;
         }

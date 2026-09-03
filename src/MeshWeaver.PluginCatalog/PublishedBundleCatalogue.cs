@@ -1,7 +1,12 @@
 using System.Collections.Immutable;
+using System.IO.Compression;
 using System.Reactive.Linq;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
+using MeshWeaver.Compiler;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Plugin.Packaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.PluginCatalog;
@@ -104,7 +109,7 @@ public static class PublishedBundleCatalogue
 
             return new ReleaseObservation(
                 new ReleaseTarget(targetVersion, identity),
-                new ReleaseArtifacts(SealedBundlesForIdentity(publishedRoot, identity, logger)));
+                ArtifactsForIdentity(Path.Combine(publishedRoot, identity), logger));
         }
         catch (Exception ex)
         {
@@ -145,6 +150,134 @@ public static class PublishedBundleCatalogue
         if (!Directory.Exists(identityDirectory))
             return ReleaseArtifacts.Of([]).SealedBundles;
         return ReleaseArtifacts.Of(SealedBundleNames(identityDirectory, logger)).SealedBundles;
+    }
+
+    /// <summary>
+    /// 🚨 The FULL observation of one identity (#3175): the sealed bundle ids, the module set every
+    /// complete source sealed (each module bundle's entry assembly read for its MVID, spelt as the
+    /// dependency records spell it), and every sealed bundle's per-NodeType dependency record. The
+    /// bytes were always on disk — <see cref="SealedModulesOf"/> already refused a torn set — and
+    /// <see cref="ReleaseAvailability"/> can only assert CONSISTENCY when it is handed both halves.
+    /// Reads manifests and one PE header per module; never a bundle's assembly bytes.
+    /// </summary>
+    /// <remarks>A module bundle that cannot be read, or a source sealed before module sealing
+    /// existed, becomes the set's <see cref="SealedModuleSet.Refusal"/> — a named unreadability the
+    /// gate turns into a HOLD — and never a silent omission that would read as "no module here".</remarks>
+    internal static ReleaseArtifacts ArtifactsForIdentity(string identityDirectory, ILogger? logger)
+    {
+        var bundles = new List<string>();
+        var records = ImmutableArray.CreateBuilder<BundleDependencyRecord>();
+        var sealedBy = new Dictionary<string, (string Mvid, string Source)>(StringComparer.Ordinal);
+        var conflicts = ImmutableArray.CreateBuilder<string>();
+        var refusals = new List<string>();
+
+        foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory)
+                     .OrderBy(d => d, StringComparer.Ordinal))
+        {
+            var complete = CompleteBundlesOf(sourceDirectory, logger);
+            if (complete is null)
+                continue;
+            var source = Path.GetFileName(sourceDirectory)!;
+            bundles.AddRange(complete);
+            foreach (var bundle in complete)
+                records.AddRange(DependencyRecordsOf(Path.Combine(sourceDirectory, bundle), bundle));
+
+            var modules = SealedModulesOf(sourceDirectory, logger);
+            if (modules.Modules is null)
+            {
+                refusals.Add($"source '{source}': {modules.Refusal}");
+                continue;
+            }
+            foreach (var moduleBundle in modules.Modules)
+            {
+                var path = Path.Combine(sourceDirectory, ModulesDirectoryName, moduleBundle);
+                string name, mvid;
+                try
+                {
+                    (name, mvid) = SealedModuleMvidOf(path);
+                }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or BadImageFormatException or InvalidOperationException)
+                {
+                    refusals.Add($"source '{source}': module bundle '{moduleBundle}' is unreadable — {ex.Message}");
+                    continue;
+                }
+                if (sealedBy.TryGetValue(name, out var existing))
+                {
+                    if (!string.Equals(existing.Mvid, mvid, StringComparison.Ordinal))
+                        conflicts.Add(
+                            $"module {name}: source '{existing.Source}' sealed {existing.Mvid}, "
+                            + $"source '{source}' sealed {mvid}");
+                    continue;
+                }
+                sealedBy[name] = (mvid, source);
+            }
+        }
+
+        var conflicted = conflicts.Select(c => c[..c.IndexOf(':')]["module ".Length..]).ToHashSet(StringComparer.Ordinal);
+        return new ReleaseArtifacts(ReleaseArtifacts.Of(bundles).SealedBundles)
+        {
+            Modules = new SealedModuleSet(
+                sealedBy.Where(kv => !conflicted.Contains(kv.Key))
+                    .ToImmutableDictionary(kv => kv.Key, kv => kv.Value.Mvid, StringComparer.Ordinal),
+                conflicts.ToImmutable(),
+                refusals.Count == 0 ? null : string.Join("; ", refusals)),
+            DependencyRecords = records.ToImmutable(),
+        };
+    }
+
+    /// <summary>
+    /// A sealed module bundle's entry assembly and its MVID in the dependency-record spelling
+    /// (<c>mvid:&lt;N&gt;</c> — <c>NodeTypeCompilationHelpers.ModuleMvidsOf</c>'s projection, so the
+    /// gate compares the id the seeder will compute). The entry is the manifest's
+    /// <c>module.assemblyName</c>, else the single assembly under the module folder — the same
+    /// resolution the lanes apply when they compose the bundle.
+    /// </summary>
+    internal static (string Name, string Mvid) SealedModuleMvidOf(string moduleBundlePath)
+    {
+        var manifest = BundleReader.ReadManifest(moduleBundlePath);
+        using var file = File.OpenRead(moduleBundlePath);
+        using var archive = new ZipArchive(file, ZipArchiveMode.Read);
+        var name = manifest?.Module?.AssemblyName;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            var candidates = archive.Entries
+                .Where(e => e.FullName.StartsWith(NuGetPackageWriter.ModuleFolder + "/", StringComparison.Ordinal)
+                            && e.FullName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+                            && !e.FullName[(NuGetPackageWriter.ModuleFolder.Length + 1)..].Contains('/'))
+                .ToList();
+            if (candidates.Count != 1)
+                throw new InvalidOperationException(
+                    $"cannot identify the module's entry assembly (no manifest module.assemblyName; "
+                    + $"{NuGetPackageWriter.ModuleFolder}/ holds {candidates.Count} dll(s))");
+            name = Path.GetFileNameWithoutExtension(candidates[0].FullName);
+        }
+        var entry = archive.GetEntry($"{NuGetPackageWriter.ModuleFolder}/{name}.dll")
+            ?? throw new InvalidOperationException(
+                $"{NuGetPackageWriter.ModuleFolder}/{name}.dll is missing from the bundle");
+        using var stream = entry.Open();
+        using var bytes = new MemoryStream();
+        stream.CopyTo(bytes);
+        bytes.Position = 0;
+        using var pe = new PEReader(bytes);
+        var metadata = pe.GetMetadataReader();
+        var mvid = metadata.GetGuid(metadata.GetModuleDefinition().Mvid);
+        return (name, CompiledDependencies.MvidScheme + mvid.ToString("N"));
+    }
+
+    private static IEnumerable<BundleDependencyRecord> DependencyRecordsOf(string bundlePath, string bundleFileName)
+    {
+        var id = bundleFileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+            ? bundleFileName[..^4]
+            : bundleFileName;
+        var manifest = BundleReader.ReadManifest(bundlePath);
+        foreach (var assembly in manifest?.Assemblies ?? [])
+        {
+            if (assembly.Dependencies is null || string.IsNullOrEmpty(assembly.NodePath))
+                continue;
+            yield return new BundleDependencyRecord(
+                id, assembly.NodePath,
+                assembly.Dependencies.ToImmutableDictionary(StringComparer.Ordinal));
+        }
     }
 
     private static IEnumerable<string> SealedBundleNames(string identityDirectory, ILogger? logger)

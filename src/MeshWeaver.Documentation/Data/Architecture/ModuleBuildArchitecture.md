@@ -396,6 +396,67 @@ No component ever publishes from the mesh router — the router names a spokesma
 | Module pack tool | 48–79s `dotnet build` × N jobs | ~5s download, built once |
 | Orleans test suite | ~90 silo boots + disposal drain | **3 clusters** (the mesh pool; see WritingTests § The Mesh Pool) |
 
+## One producer per (module, framework identity) — and the set is what is gated (#3175)
+
+**A module's bytes have exactly one producer for a given framework identity, and every dependent in
+a sealed publication was built against THAT build.** This is not a style preference; it is the
+invariant the adoption contract already assumes, and on 2026-09-03 it was broken twice in one
+morning, with no diff in any repo:
+
+| where | what the record said | what the consumer held | outcome |
+|---|---|---|---|
+| every satellite gate (Reinsurance 33727661313, Manufacturing 33727661850) | `'MeshWeaver.Maps' built against mvid:4d04617…` | `live is ref:1D8FDE5B…` | 4 of 240 DECLINED, `GATE FAILED`, nothing sealed, memex-cloud `HOLDING` |
+| memex.meshweaver.cloud on ci.7621 | `'MeshWeaver.Markdown.Collaboration' built against mvid:A` | `live is mvid:B` | SocialMedia adopted 0/4, `/Posts` rendered empty (#3174) |
+
+The first row is a **second producer in space**: a portal host had taken a direct project reference
+to `MeshWeaver.Maps`, a Store module. The bake composed Maps with `--module` — the id resolver puts
+modules first, so every record said `mvid:` — while every portal and every gate host carried the
+app-closure copy and resolved the name from its surface manifest as `ref:`. Two schemes, never
+equal, every map gallery declined. The maintainer's ruling closes it structurally: *"all maps should
+be in plugins and removed from core — move 100% to plugins."* The portal host references no module
+project; a module is landed from the registry and composed into bakes, nowhere else.
+
+The second row is a **second producer in time**: core CD's `plugins-modules` rebuilds
+`MeshWeaver.Markdown.Collaboration` per platform release to feed the Plugins seal (mvid A), while
+the registry's package endpoint serves the Plugins lane's last content-versioned publication (mvid
+B) — the bytes a portal actually installs. This row is NOT closed by this change (core holds no
+registry credential, so its bake cannot compose the registry's bytes); what changed is that the
+availability gate now sees it (below) instead of rolling onto it.
+
+### The two controls
+
+1. **The bake refuses a double by name** (`BakeHost.ShippedByHostProblem`, run by `compile` /
+   `--bake-output` under both `--app` and in-process). A module composed with `--module` whose
+   simple name the host also ships in its application directory — or lists in its surface manifest —
+   fails the bake RED: *"two builds of one assembly name in one bake … remove the assembly from the
+   platform host's closure or stop composing it."* Caught where both provenances are in one hand,
+   never sealed and discovered at the fleet. Pinned by
+   `BakeAgainstPlatformHostTest.AComposedModuleTheHostAlsoShips_IsRefusedByName`.
+2. **Availability asserts the SET** (`ReleaseAvailability.IsUpdatable` over the observation
+   `PublishedBundleCatalogue.ArtifactsForIdentity` makes). For the candidate identity the registry
+   reads every complete source's sealed module set — each module bundle's entry assembly, PE header
+   only, for its MVID — and every sealed bundle's per-NodeType dependency record (manifest only,
+   never assembly bytes). Then: every `mvid:` entry naming a module the set carries must equal the
+   MVID sealed for it, and no module may be sealed at two MVIDs by two sources. A violation is
+   `PackageAvailabilityKind.SealedSetInconsistent` — a HOLD that names the bundle, the NodeType, the
+   module and both builds — and it is consumed unchanged by the self-update poll, CD's post-promote
+   assertion and `/api/plugins/is-updatable`, because all three call the same predicate. Both
+   failure directions are pinned (`SealedSetConsistencyTest`): an unreadable or pre-module-sealing
+   module set is `Indeterminate` (hold, named — never "compatible"), and a module the set does not
+   carry is not judged, because the gate cannot see the bytes a registry install landed.
+
+### What the gate still cannot see
+
+The registry's package endpoint (`/api/plugins/bundles/<pkg>/<version>`) is content-versioned
+(Plugins #931): an instance that installed a module from it holds whatever that lane published last,
+and a platform release that rebuilds the module for the seal produces a *consistent* sealed set whose
+module MVID differs from the instance's landed one. The set check passes; the instance still
+declines. Closing that needs ONE producer in time as well — either the seal composes the registry's
+bytes for the root source (`registry-modules` in core CD, which needs a registry credential core
+does not hold today), or the instance adopts module bytes for its identity from the sealed
+publication it already adopts bundles from. Until one of those lands, `ShippedPrebuiltBundles`'
+`dependency record mismatch … live is mvid:` line on a portal is that gap, not a new defect.
+
 ## Adoption contract (every repo)
 
 1. Pin the reusable lanes (`node-repo-*.yml`) at a MeshWeaver main SHA — never copy them.

@@ -71,6 +71,48 @@ internal sealed class BakeHost
     public string? Note { get; init; }
 
     /// <summary>
+    /// 🚨 <b>One producer per assembly name (#3175).</b> A module composed with <c>--module</c> that
+    /// the host ALSO ships in its application directory — or lists in its surface manifest — is two
+    /// builds of one simple name inside one bake. The id resolver puts modules first, so every
+    /// dependency record this bake writes says <c>mvid:&lt;the module's&gt;</c>; the portal that
+    /// consumes the bundle carries the name in its app closure, refuses the same-identity module at
+    /// landing (409), and resolves the name from its surface manifest as <c>ref:&lt;hash&gt;</c>. The
+    /// two schemes never compare equal, so EVERY NodeType binding the name is declined at adoption
+    /// — <i>"dependency record mismatch — 'MeshWeaver.Maps' built against mvid:4d04617…, live is
+    /// ref:1D8FDE5B…"</i> on four galleries of every satellite gate on 2026-09-03, after a portal
+    /// host had taken a direct project reference to what is a Store module. Nothing in any repo
+    /// had changed. The maintainer's ruling: a module lives in exactly one place, and this is the
+    /// assertion that makes a second producer RED at bake time instead of DECLINED fleet-wide.
+    /// </summary>
+    /// <param name="appDirectory">The host's application directory.</param>
+    /// <param name="surfacePairs">The host's surface-manifest pairs (what it compiled against).</param>
+    /// <param name="modules">The composed module assemblies.</param>
+    /// <returns>The refusal naming every doubly-produced assembly, or null when there is none.</returns>
+    internal static string? ShippedByHostProblem(
+        string appDirectory,
+        IReadOnlyDictionary<string, string> surfacePairs,
+        IReadOnlyList<InstalledModuleAssembly> modules)
+    {
+        var shipped = modules
+            .Select(module => module.Assembly.GetName().Name ?? string.Empty)
+            .Where(name => name.Length > 0)
+            .Where(name => surfacePairs.ContainsKey(name)
+                           || File.Exists(Path.Combine(appDirectory, name + ".dll")))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToImmutableArray();
+        if (shipped.Length == 0)
+            return null;
+        return $"module(s) {string.Join(", ", shipped)} are composed with --module AND shipped by the "
+               + $"platform host at '{appDirectory}' — two builds of one assembly name in one bake. "
+               + "The records this bake would write name the module's build (mvid:…) while a portal "
+               + "carrying the name in its app closure resolves the platform's (ref:…), so every "
+               + "NodeType binding it would be DECLINED at adoption (\"dependency record mismatch\"). "
+               + "A module has exactly one producer: remove the assembly from the platform host's "
+               + "closure (it is a module, landed from the registry) or stop composing it (#3175).";
+    }
+
+    /// <summary>
     /// The host every bake resolved before <c>--app</c> existed: this process — its
     /// <c>TRUSTED_PLATFORM_ASSEMBLIES</c> composed with the modules, its manifest, its MVIDs, its
     /// live identity. Correct exactly when the process IS the platform (the portal compiling its
@@ -196,6 +238,10 @@ internal sealed class BakeHost
 
         var pairs = FrameworkBuildIdentity.ParseSurfaceManifest(
             File.ReadAllText(Path.Combine(app, FrameworkBuildIdentity.SurfaceManifestFileName)));
+        // 🚨 ONE PRODUCER PER ASSEMBLY NAME (#3175) — refused here, where both provenances are in
+        // one hand, never sealed and discovered at the fleet.
+        if (ShippedByHostProblem(app, pairs, modules) is { } twoProducers)
+            return (null, twoProducers);
         string? HostMvidOf(string name) => FrameworkBuildIdentity.ImplMvidInDirectory(app, name);
         var live = PrebuiltAssemblySeeder.LiveFrameworkMvid;
         return (new BakeHost

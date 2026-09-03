@@ -14,7 +14,7 @@ namespace MeshWeaver.PluginTester;
 /// gate can judge the platform's bake is to run AS the platform: the platform image's <c>/app</c>
 /// with this CLI laid beside it (<c>compose-gate-host.sh</c>), started from the platform image's
 /// runtime. Then the manifest is the platform's, the MVIDs are the platform's, every
-/// platform-shipped assembly (<c>MeshWeaver.Maps</c>…) is in the TPA and LOADS, and adoption is
+/// platform-shipped assembly (the Blazor and hosting halves…) is in the TPA and LOADS, and adoption is
 /// decided exactly as a portal would decide it.</para>
 ///
 /// <para>🚨 A gate running as a DIFFERENT host would not fail — it would decline every bundle the
