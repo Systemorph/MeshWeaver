@@ -78,7 +78,7 @@ produced. A stricter pin does not close it; only executing the pair the image la
 | 17:00 | Another session runs the migration by hand (`memex-migration-v55-manual`, the helm Job template with the new tag). `Database migration completed. Version: 55` at 17:06. |
 | 17:02 | The 7658 pods pass the gate; the rollout scales the 7632 ReplicaSet to zero. From this second every signed-in request faults in `LoadUserRoles` with `UnanchoredQueryException` and the middleware answers 503 "This is a temporary problem on our side" (issue #637's designed answer for an *infrastructure* fault). The Store dies on `nodeType:PluginCatalog`; GitHub sync, instance sync, notifications, outbound mail, model-credit and free-text search fault the same way. Loki, over the six hours ending 18:34Z: **156 refusals** on the two pods that served (100 + 56), plus 32 more on the pod evicted earlier — and **18 identity 503s attributable to this cause** (4 + 14). |
 | 17:05 | Reported: "memex.systemorph.com is completely down". Anonymous `curl` of `/`, `/Doc`, `/healthz` all answer 200 — the shell renders; only the signed-in read fails. |
-| 17:20 | `kubectl set image` to `ci.7693` (core `e36f04c`, which contains #3206, with Plugins `2d32a175`). The surge pod stays `Pending`: every silos node is CPU-full, the pool is at its maximum, and the old 7632 pod is holding a node in `Terminating` — deadlocked in dispose, 3.5 cores, 30-minute grace. It is force-deleted (it was already out of the Service and would have been SIGKILLed at 17:32 anyway); the surge pod schedules within seconds. |
+| 17:20 | `kubectl set image` to `ci.7693` (core `e36f04c`, which contains #3206, with Plugins `2d32a175`). The surge pod stays `Pending`: every silos node is CPU-full, the pool is at its maximum, and the old 7632 pod is holding a node in `Terminating` at 3.5 cores. It is NOT wedged — it is draining its Blazor circuits under the chart's `preStop` hook, which blocks for up to 28 minutes and is why the pod still looks busy (see *Recorded, not fixed*). It is force-deleted, which cuts those sessions short deliberately; it was already out of the Service, and the surge pod schedules within seconds. |
 | 17:22:56 | Rollout complete. Zero refusals, zero 503s on the new pods. |
 
 The roll cleared more than sign-in. On the sister portal, measured across the same change, the
@@ -171,48 +171,52 @@ git merge-base --is-ancestor <fix sha> <core half>                              
   logged 23 of those. An unfiltered `grep "UNAVAILABLE for"` therefore hands you pre-incident noise
   as incident evidence; the cause-filtered query is the one quoted above.
 - A pending surge pod on `Insufficient cpu` with the pool at its maximum: look for a `Terminating`
-  pod holding a node — the dispose deadlock in `ci.7632` is still open (the pod ran 3.5 cores for
-  18 minutes after its containers were told to stop).
-- Rolling forward to the newest promoted tag is the right triage when it carries the fix, but check
-  the seal first: an unsealed tag serves sign-in and the Store while module-bound NodeTypes decline.
+  pod still holding a node. 🚨 It is very likely NOT wedged — the chart's `preStop` hook blocks for
+  up to 28 minutes draining Blazor circuits, and the `Killing` event marks the START of `preStop`,
+  not SIGTERM. Such a pod is out of the Service but running normally by design. Force-deleting it
+  frees the node immediately at the cost of cutting those sessions off, which is a decision to take
+  knowingly rather than a wedge to clear.
 
 ## Recorded, not fixed
 
-- **A portal host burning CPU long past SIGTERM — cause UNDETERMINED.** What is measured, with
-  timestamps, on the sister portal on 2026-09-03:
+- **A "terminating" portal pod at 5,705 millicores — DETERMINED, and it is the chart working as
+  designed.** The pod was **not** past SIGTERM, not deadlocked, and not failing to drain. It had
+  not been signalled at all.
 
-  | time | observation |
-  |---|---|
-  | 18:15:59 | the pod is ~20 min past SIGTERM at **5,705 millicores / 13,040 Mi**, `ready=true` |
-  | 18:15:59 | `kubectl logs --since=3m` shows real work — a platform release broadcast for a newer build, plus deserialization warnings |
-  | 18:22:51 | the same pod has logged **zero lines in 2 minutes**, and nothing matching shutdown/stopping/drain/dispose in the preceding 25 |
-  | 18:23:11 | the pod is gone; **no CPU sample was ever taken during the silent window** |
+  `deploy/helm/templates/memex-portal/deployment.yaml` gives the portal a **`preStop` hook that
+  polls `/drain` and BLOCKS until this pod's last Blazor circuit closes**, bounded at
+  `drainSeconds − shutdownMarginSeconds` (1800 − 120 = 1680 s ≈ 28 min). Kubernetes delivers
+  SIGTERM only when `preStop` **returns**. So for up to half an hour a "Terminating" pod is out of
+  the Service but running completely normally — no `ApplicationStopping`, no dispose, still serving
+  every circuit it already had. That is deliberate: it is what stops a roll cutting people off
+  mid-task, and it is why `terminationGracePeriodSeconds` is 1800 rather than the default 30.
 
-  Two earlier readings of this were both wrong and are both **withdrawn**. The first called it a
-  dispose deadlock and named core `71a41b231` (the IoPool drain-cancel fix, in `ci.7693` and not in
-  `ci.7632`/`ci.7652`) as the candidate — falsified by a control arm: the pod's own sibling, **on
-  the same image**, drained normally over the same minutes (238 m, then 70 m). The second called it
-  "still serving, not deadlocked" — overstated, because a 3-minute log window does not establish
-  that those lines were concurrent with the CPU sample.
+  🚨 **The trap, and the reason this took three attempts to read: the `Killing` event marks the
+  START of `preStop`, NOT SIGTERM.** Every instinct says otherwise. Read against that, the specimen
+  is unremarkable in every particular — `ready=true`, ordinary application work in the log, zero
+  shutdown-shaped lines in 25 minutes, and high CPU — because *nothing had asked it to stop yet*.
+  Its sibling on the same image sat at 238 m simply because it held fewer circuits. The chart's own
+  comment already records an earlier round of exactly this confusion (memex, 2026-08-21: "a
+  terminating pod still executing application code 68 s before the ceiling").
 
-  So the verdict is **undetermined between "still serving late" and "spinning silently"**, and the
-  image pairing is unsupported in either direction. The number is worth keeping; the label is not.
-  What would settle it is one CPU sample taken during a silent window, or a stack.
+  **What the CPU number is actually worth keeping for:** 5,705 m and 13 GB is the *pre-anchoring
+  fan-out storm*, measured on a pod still serving its circuits — the same load the roll to `ci.7693`
+  cleared, and the reason the sister portal's slow cross-schema unions fell from 1,917 per pod per
+  30 minutes to 0–1 per pod per 10 minutes. It is evidence about the query fan-out, not about
+  shutdown.
 
-  🚨 **And the obvious way to get that stack does NOT work here.** `kubectl debug` cannot attach an
-  ephemeral container to a pod that already has a `deletionTimestamp`: the API accepts the command
-  and prints its "Targeting container" line, and then creates nothing —
-  `ephemeralContainerStatuses` stayed empty on both attempts. The published recipe for profiling a
-  live portal pod therefore does not work on precisely this class of specimen. To capture a
-  terminating host you must attach the probe **before** deletion is requested, or go in from the
-  node. That, not the grace window, is why neither specimen produced a stack.
+  **Two earlier readings on this page were wrong and are withdrawn.** "A dispose deadlock caused by
+  the absence of core `71a41b231`" — falsified by the sibling on the same image. "Still serving
+  after SIGTERM, so the shutdown path is not quiescing intake" — wrong in its premise, because
+  SIGTERM had not been sent. Both were built by reasoning from the pod's *phase* instead of reading
+  what the chart does.
 
-  🚨 **The grace period hides the whole shape.** `terminationGracePeriodSeconds` is 1800, so a host
-  that burns CPU for twenty-nine minutes past SIGTERM and one that stops in two look identical from
-  outside: the pod disappears, the rollout succeeds, nothing is logged. The only tell is CPU on a
-  pod whose `deletionTimestamp` is set, and nothing watches that. The cost is real — during this
-  incident's own rollout such a pod held the last schedulable node, which is why the surge pod
-  stayed `Pending` and the recovery needed a force-delete.
+  🚨 **A tooling note that outlives the specimen:** `kubectl debug` **cannot** attach an ephemeral
+  container to a pod that already carries a `deletionTimestamp` — the API accepts the command,
+  prints its "Targeting container" line, and creates nothing, silently
+  (`ephemeralContainerStatuses` stayed empty on both attempts). So the published recipe for
+  profiling a live portal pod does not work on a draining one. Attach the probe **before** the
+  delete is requested, or go in from the node.
 
 - **Nothing executes the image pair before it is promoted** — the largest open item, and a
   deliberate decision rather than an oversight. See *What is still open* above.
