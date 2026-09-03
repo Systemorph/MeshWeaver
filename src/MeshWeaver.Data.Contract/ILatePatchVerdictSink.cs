@@ -39,4 +39,29 @@ public interface ILatePatchVerdictSink
     /// this mesh was waiting — which the caller may then treat as a checked fact rather than a
     /// guess.</returns>
     bool Dispatch(string requestId, PatchDataResponse response);
+
+    /// <summary>
+    /// 🚨 Whether a late verdict for <paramref name="requestId"/> would still be ACTED ON — an
+    /// armed, unexpired watch (#3197).
+    ///
+    /// <para><b>Why a predicate exists at all.</b> The owner's ack watcher deliberately posts
+    /// NOTHING when the owner is shutting down, deferring the verdict to the ShutDown-phase
+    /// disposal NACK, whose transport still reaches the waiter. That deferral rested on an
+    /// assumption — "the disposal NACK is coming, and soon" — which the code could not check and
+    /// which the hosted-hub drain stopped guaranteeing when its flat 5 s cap was removed (#1317).
+    /// Standing aside for a route that will not deliver converts an answerable write into
+    /// silence.</para>
+    ///
+    /// <para>It answers "is a route armed NOW", not "will it still be armed then" — no
+    /// implementation can promise the latter. A stand-aside that clears this check and is
+    /// nevertheless overtaken by expiry is reported by the registry rather than dropped in
+    /// silence, which is the other half of the same issue.</para>
+    ///
+    /// <para>The default is <c>true</c> — the assumption this predicate replaces — so an
+    /// implementation that cannot answer keeps the previous behaviour rather than silently
+    /// changing it.</para>
+    /// </summary>
+    /// <param name="requestId">The originating <c>PatchDataRequest</c> delivery id.</param>
+    /// <returns><c>true</c> when a late verdict would still be delivered.</returns>
+    bool IsAdmissible(string requestId) => true;
 }
