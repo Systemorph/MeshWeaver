@@ -455,9 +455,32 @@ public static class MeshNodeExtensions
             .Finally(() => inFlight?.Dispose())
             .Subscribe(
                 _ => logger?.LogDebug("TrackActivity DONE: {Path}", activityPath),
-                ex => logger?.LogError(ex,
-                    "Failed to track activity for user={UserId} path={Path}",
-                    req.UserId, req.NodePath));
+                ex =>
+                {
+                    // 🚨 A TEARDOWN IS NOT A TRACKING FAILURE (#3148). This write is detached and
+                    // fire-and-forget by design, so a hub recycle, a grain deactivation or a closed
+                    // circuit can always land between the post and the response — and when it does,
+                    // the request can never be answered. That is the platform behaving correctly,
+                    // and reporting it at `fail` with a stack trace made an ordinary pod recycle
+                    // look like a defect while telling nobody anything actionable: the entry is
+                    // lost either way and there is nothing to fix.
+                    //
+                    // Classified, never swallowed — every OTHER fault still surfaces at Error,
+                    // which is what keeps a real tracking bug visible.
+                    if (HubDisposedBeforeResponseException.IsHubDisposedBeforeResponse(ex)
+                        || HubDisposingException.IsHubDisposal(ex)
+                        || HubDisposingException.IsDisposedContainer(ex))
+                    {
+                        logger?.LogDebug(ex,
+                            "TrackActivity for user={UserId} path={Path} ended in a hub teardown — "
+                            + "this activity entry is not recorded. Expected during a recycle.",
+                            req.UserId, req.NodePath);
+                        return;
+                    }
+                    logger?.LogError(ex,
+                        "Failed to track activity for user={UserId} path={Path}",
+                        req.UserId, req.NodePath);
+                });
         return delivery.Processed();
     }
 
