@@ -330,6 +330,23 @@ public static class MemexConfiguration
                         + $"{ex.Message}) — the flag stays set; activation itself is unaffected.");
                 }
 
+            // The first-run setup surface's three inputs, registered HERE — after
+            // InstallAssemblies (so a module's assembly attribute has already registered its keyed
+            // storage factory) and BEFORE the storage decision below, whose "awaiting setup" branch
+            // returns early. A registration after that return would exist on a configured instance
+            // and be missing on precisely the instance that needs it.
+            builder = (TBuilder)builder.ConfigureServices(services =>
+            {
+                // Read off the collection NOW: an IServiceProvider can resolve a keyed service you
+                // name but cannot enumerate the keys, so this set is unrecoverable later.
+                services.TryAddSingleton(Setup.StorageBackendCatalog.Discover(services));
+                // A factory, so IsAwaitingSetup is read after the whole builder has run — the two
+                // hosts call this method on opposite sides of their portal configuration.
+                services.TryAddSingleton(_ => Setup.InstanceSetupStatusAccessor.For(builder));
+                services.TryAddSingleton<Setup.SetupAccessToken>();
+                return services;
+            });
+
             // Read graph storage config — from this host's configuration, or from the INSTANCE
             // MANIFEST an earlier setup wrote (#2550).
             //
