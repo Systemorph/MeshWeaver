@@ -159,12 +159,18 @@ data:
          MarkAwaitingSetup and AddPersistence throws "Unknown storage type: ''" instead. Every
          existing deployment sets these in values.yaml and is byte-identical; only a deployment
          that deliberately leaves them blank — a fresh install meant to be configured through the
-         wizard — sees a difference. */}}
-  {{- with .Values.config.memex_portal.Graph__Storage__Type }}
-  Graph__Storage__Type: "{{ . }}"
+         wizard — sees a difference.
+
+         🚨 `if`, never `with`: `with` rebinds the dot, so the emitting line stops NAMING the key —
+         and "the chart names every config key explicitly" is the premise
+         check-values-are-read.sh rests on to decide whether a values key is read by anything. It
+         refuses a chart that breaks that premise rather than emitting findings it cannot stand
+         behind, which is the right call and cost one red run to learn. */}}
+  {{- if .Values.config.memex_portal.Graph__Storage__Type }}
+  Graph__Storage__Type: "{{ .Values.config.memex_portal.Graph__Storage__Type }}"
   {{- end }}
-  {{- with .Values.config.memex_portal.Graph__Storage__BasePath }}
-  Graph__Storage__BasePath: "{{ . }}"
+  {{- if .Values.config.memex_portal.Graph__Storage__BasePath }}
+  Graph__Storage__BasePath: "{{ .Values.config.memex_portal.Graph__Storage__BasePath }}"
   {{- end }}
   Mcp__BaseUrl: "{{ .Values.config.memex_portal.Mcp__BaseUrl }}"
   # ---- Public base URL — the instance's own https host --------------------
@@ -600,11 +606,11 @@ data:
          every reader — AuthenticationOptions.EnableDevLogin already defaults to false and
          SignInProviderCatalog treats blank as unset — so a deployment that states these is
          unaffected. */}}
-  {{- with .Values.config.memex_portal.Authentication__Provider }}
-  Authentication__Provider: "{{ . }}"
+  {{- if .Values.config.memex_portal.Authentication__Provider }}
+  Authentication__Provider: "{{ .Values.config.memex_portal.Authentication__Provider }}"
   {{- end }}
-  {{- with .Values.config.memex_portal.Authentication__EnableDevLogin }}
-  Authentication__EnableDevLogin: "{{ . }}"
+  {{- if .Values.config.memex_portal.Authentication__EnableDevLogin }}
+  Authentication__EnableDevLogin: "{{ .Values.config.memex_portal.Authentication__EnableDevLogin }}"
   {{- end }}
   {{- /* DevLogin is a PAIR. EnableDevLogin turns the built-in developer login on; DevAdminUsers is
          the comma-separated list of ids that get platform admin when they sign in that way
@@ -613,11 +619,11 @@ data:
          nothing on — and it fails SILENTLY, because a key this configmap does not list never
          reaches a container while helm reports success. Same defect as Modules__Root (#1924) and
          Modules__Required__N (#2104). */}}
-  {{- with .Values.config.memex_portal.Authentication__DevAdminUsers }}
-  Authentication__DevAdminUsers: "{{ . }}"
+  {{- if .Values.config.memex_portal.Authentication__DevAdminUsers }}
+  Authentication__DevAdminUsers: "{{ .Values.config.memex_portal.Authentication__DevAdminUsers }}"
   {{- end }}
-  {{- with .Values.config.memex_portal.Authentication__Microsoft__ClientId }}
-  Authentication__Microsoft__ClientId: "{{ . }}"
+  {{- if .Values.config.memex_portal.Authentication__Microsoft__ClientId }}
+  Authentication__Microsoft__ClientId: "{{ .Values.config.memex_portal.Authentication__Microsoft__ClientId }}"
   {{- end }}
   {{- /* 🚨 Never an EMPTY default here: an env var cannot be null, so "" reached the portal as a
          tenant and the OIDC authority became login.microsoftonline.com//v2.0 — every Microsoft
@@ -629,11 +635,11 @@ data:
   {{- if .Values.config.memex_portal.Authentication__Microsoft__ClientId }}
   Authentication__Microsoft__TenantId: "{{ .Values.config.memex_portal.Authentication__Microsoft__TenantId | default "organizations" }}"
   {{- end }}
-  {{- with .Values.config.memex_portal.Authentication__Google__ClientId }}
-  Authentication__Google__ClientId: "{{ . }}"
+  {{- if .Values.config.memex_portal.Authentication__Google__ClientId }}
+  Authentication__Google__ClientId: "{{ .Values.config.memex_portal.Authentication__Google__ClientId }}"
   {{- end }}
-  {{- with .Values.config.memex_portal.Authentication__LinkedIn__ClientId }}
-  Authentication__LinkedIn__ClientId: "{{ . }}"
+  {{- if .Values.config.memex_portal.Authentication__LinkedIn__ClientId }}
+  Authentication__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Authentication__LinkedIn__ClientId }}"
   {{- end }}
   # Apple: ClientId is the Services ID; TeamId/KeyId identify the Sign in with Apple key
   # whose private key (the secret) is Authentication__Apple__PrivateKey in secrets.yaml.
