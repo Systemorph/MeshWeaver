@@ -250,6 +250,21 @@ public class HomeTabsTest
     }
 
     [Fact]
+    public void Apps_AreRearrangeableByDragAndDrop_InGroupsTheRecordsThemselvesCarry()
+    {
+        // "group the applications into different groups on the user screen and allow for
+        // re-ordering via drag and drop (similar to iPhone)" — the grid is Sortable, its sections
+        // are the records' own App.Group, and a drop writes order/group back onto the records.
+        var apps = UserActivityLayoutAreas.BuildAppsBand(NodePath, null);
+
+        apps.Sortable.Should().Be(true);
+        apps.Grouping!.GroupByProperty.Should().Be(nameof(App.Group));
+        var scope = apps.ScopeTabs!.Single();
+        scope.Sortable.Should().BeTrue("the view reads the per-scope setting while the scope is active");
+        scope.SortByAccess.Should().BeTrue("tiles the viewer has never placed keep the phone order behind the placed ones");
+    }
+
+    [Fact]
     public void Apps_RendersTheIconGridFromTheQueryRows_NavigatingToTheApp()
     {
         // "should load from mesh, icon should be the icon of the app, then it should render

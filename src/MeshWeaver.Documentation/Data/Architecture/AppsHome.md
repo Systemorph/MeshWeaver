@@ -98,6 +98,41 @@ default home template (the `area/Threads` area stays registered for authored bod
 A `~/`-prefixed `DefaultApps` entry always means "an area on the viewer's own hub" rather than a
 node path.
 
+## Groups and manual order — drag and drop, iPhone-style
+
+The grid is **rearrangeable**: a viewer drags a tile to a new position, into another group, onto
+the *New group* zone (which asks for a name), and renames a group from its header. The arrangement
+is **per user** and is stored **nowhere but on the records themselves**:
+
+| Field | Meaning |
+|---|---|
+| `App.Group` | the section the tile sits in. `null` = never grouped (the Store stamps the package's `category` at install, and its tile refresh fills a *missing* group from it); `""` = the viewer deliberately ungrouped the tile — a value no heal may overwrite. A group exists exactly while a tile carries its name; renaming a group rewrites its members. |
+| `App.Order` | the position inside the group, `1..n`. `0` = never placed: such tiles paint **behind** the placed ones, in the grid's own most-recently-used order, so a freshly installed app lands at the end of its group the way a phone appends a new icon. |
+
+This repo holds the CONTRACT: `BuildAppsBand` declares it — `WithGroupBy(nameof(App.Group))` +
+`WithSortable()` on the `MeshSearchControl` (and `Sortable = true` on its one scope). The GUI that
+honours it lives with the Blazor layer in **MeshWeaver.Plugins**: its `MeshSearchView` renders a
+`Sortable` Icons grid through the reusable `SortableTileGrid` component — native HTML5 drag events
+handled by Blazor (`dragstart` / `dragenter` / `drop`), **no JS interop**, so there is no module
+to dispose and nothing that can throw *Cannot access a disposed object: JSObjectReference* when a
+circuit goes away mid-drag. A platform without that GUI module simply paints the plain Icons grid;
+the declaration is inert until a view reads it.
+
+What the contract asks of any such view: a drop computes the target group's new sequence, renumbers
+it `1..n`, and writes **only the records whose `group` or `order` changed** through
+`IMeshNodeStreamCache.Update(recordPath, …)` — the ONE mutation API, a field-level merge patch per
+record, so a concurrent heal of the same record's icon or name never collides with the viewer's
+arrangement. There is no layout document, no `/data` replica and no save button: the grid re-paints
+from the same reactive query that painted it, and the records ARE the state. Because the
+arrangement rides on the rows, a Sortable grid's projection must include `content` (the row-only
+select the plain Icons grid uses would drop it).
+
+> 🚨 **Why not one layout node per user.** A `{user}/_Home` document holding `groups[].apps[]`
+> would need an existence gate before every read (a point read of an absent node trips the
+> storm-breaker), a seed for every existing user, and a reconciliation pass whenever a tile is
+> installed or removed. The records already have all three properties: they exist exactly when
+> the tile does, they are per user, and the Store's install/uninstall lifecycle keeps them right.
+
 ## The config — `Admin/HomeConfig`
 
 The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reloading):

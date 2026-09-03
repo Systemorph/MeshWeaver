@@ -116,6 +116,15 @@ public record MeshSearchScopeTab(string Label, string Query)
     public bool? NavigateToMainNode { get; init; }
 
     /// <summary>
+    /// When true, the Icons grid of this scope is REARRANGEABLE by drag and drop: a tile's
+    /// <c>content.order</c> is its position inside its group and <c>content.group</c> (the
+    /// control's group-by property) the section it sits in; dropping a tile rewrites both on the
+    /// records themselves through the node stream — per viewer, nowhere else. Null keeps the
+    /// control-level <see cref="MeshSearchControl.Sortable"/>.
+    /// </summary>
+    public bool? Sortable { get; init; }
+
+    /// <summary>
     /// Order this scope's results by when the VIEWER last opened each result's navigation target,
     /// most recent first, with never-opened results keeping the query's own order behind them —
     /// the phone-home rule: what you use most sits where your thumb is. Applied wherever results
@@ -233,6 +242,18 @@ public record MeshSearchControl()
     /// overrides this while its scope is active.
     /// </summary>
     public object? NavigateToMainNode { get; init; }
+
+    /// <summary>
+    /// When true, the Icons grid can be REARRANGED by drag and drop (default false): tiles are
+    /// ordered by their <c>content.order</c> inside the sections the group-by property forms, and
+    /// a drop writes the moved tiles' <c>order</c> (and <c>group</c>) back onto the result nodes
+    /// through the node stream. Tiles without an order trail the ordered ones in the grid's own
+    /// paint order. A per-scope <see cref="MeshSearchScopeTab.Sortable"/> overrides this.
+    /// </summary>
+    public object? Sortable { get; init; }
+
+    /// <summary>Sets <see cref="Sortable"/>.</summary>
+    public MeshSearchControl WithSortable(bool value = true) => This with { Sortable = value };
 
     /// <summary>
     /// Whether to exclude the base path node from results (default true).
