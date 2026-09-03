@@ -307,6 +307,24 @@ spec:
           livenessProbe:
             # Self-heal a genuinely wedged pod (the connection-exhaustion wedge we hit). Conservative
             # — only a sustained /alive failure restarts it, so a transient blip never loops.
+            #
+            # 🚨 /alive MEASURES PROGRESS; it is not a synonym for /healthz (MeshWeaver#2194 item 4).
+            # It answers 503 once GC pause share has stayed above 60% for five consecutive checks —
+            # the shape of a silo whose superseded NodeType assemblies (ALCs) have accumulated until
+            # it is GC-bound. On 2026-08-25 two replicas held exactly that state for THREE AND A HALF
+            # HOURS while passing every probe, because /alive had no handler at all and was answered
+            # by the renderer; they stayed in the Service endpoints serving hung pages.
+            #
+            # 🚨 Do NOT point readinessProbe here. Readiness must stay on the trivial /healthz: a
+            # readiness check that fails under load removes the pod, and the survivors inherit its
+            # traffic — the 2026-07-21 death-spiral. Liveness restarting ONE pegged replica has no
+            # such feedback loop.
+            #
+            # Ready-but-degraded triage: one replica far heavier than its siblings is the fingerprint
+            # (`kubectl top pods -n <ns>`); the PortalReplicaWorkingSetDiverged alert in
+            # values.observability.yaml watches for it, and the fix is convergence
+            # (Modules:AutoRecycleOnStaleBuild, on fleet-wide) plus prebuilt-only modules
+            # (Modules:RequirePrebuilt).
             httpGet: { path: /alive, port: 8080 }
             periodSeconds: 15
             timeoutSeconds: 10
