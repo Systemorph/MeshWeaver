@@ -2695,8 +2695,9 @@ public static class MeshNodeStreamExtensions
     /// </para>
     /// </summary>
     /// <param name="hub">The hub the caller holds. When it is the ROOT MESH HUB (the router), the
-    /// read is issued on <see cref="MeshExtensions.NodeOperationIssuingHub"/> instead — the router
-    /// must be neither end of a delivery (ROUTER_TRAFFIC).</param>
+    /// read is issued on <see cref="MeshExtensions.ReadIssuingHub"/> instead — the router must be
+    /// neither end of a delivery (ROUTER_TRAFFIC), and a bounded read must not queue behind the
+    /// mesh's node CRUD.</param>
     /// <param name="path">The mesh path to read.</param>
     /// <param name="timeout">Wall-clock budget for the read; defaults to 10 seconds.</param>
     /// <param name="onTimeout">
@@ -2758,9 +2759,18 @@ public static class MeshNodeStreamExtensions
             // the GetDataResponse (or, for a missing node, the DeliveryFailure) is addressed straight
             // back at mesh/{id} — both exactly what the ROUTER_TRAFFIC detector reports (production
             // 2026-08: "GetDataResponse has the mesh hub as target (sender: Hosting/_Access/…)" /
-            // "DeliveryFailure … (sender: Plugins/_DefaultInstallLedger)"). Same seam MeshService
-            // uses for CRUD; a non-router caller gets itself back, unchanged.
-            var issuingHub = hub.NodeOperationIssuingHub();
+            // "DeliveryFailure … (sender: Plugins/_DefaultInstallLedger)"). A non-router caller gets
+            // itself back, unchanged.
+            //
+            // 🚨 The READ seam, not the node-operation one. This used to hop onto
+            // portal/nodeops-{meshId} — the mesh's ONE node-CRUD EXECUTION hub — so the reply to
+            // this bounded read had to be dispatched by the same single action block that runs
+            // every create/upsert in the mesh, one turn at a time. Under a bulk node-CRUD burst the
+            // reply is DELIVERED and then waits in that buffer, and this read reports
+            // "the owning per-node hub never answered" about a hub that answered promptly (#2901,
+            // Cause B in Doc/Architecture/ContentRoute503). portal/reads-{meshId} registers no
+            // handlers, so its block only ever dispatches replies to reads issued on it.
+            var issuingHub = hub.ReadIssuingHub();
 
             // ♻️ A TRANSIENT NODE PROBE HAS NO MESH NODE — so reading its OWN address is a CYCLE,
             // and the only way it ever ended was by spending the entire budget.

@@ -219,6 +219,26 @@ consistent with the actor loop awaiting the full rule chain:
 Do **not** raise `InstallTimeout`, `LateResponseWatchBound` or `QueueAdvanceBound` to make the gate
 pass. Every one of those bounds is already reporting the truth: the shared hub is not draining.
 
+### 🚨 One confound has been removed — read `PendingCallbacks` differently from now on
+
+The 2026-08-28 capture reads `PendingCallbacks=26[ GetDataRequest@Store/Core, @Store/Install, … ]`
+alongside `Executing(CreateNodeRequest, 24888ms)`. Those 26 were **not** issued by anything running
+on `nodeops`: they are one-shot `GetMeshNode` reads from mesh-singleton services that hold the DI
+root hub (the plugin catalog's boot services, the credential resolvers, the content route), and
+`NodeOperationIssuingHub()` hopped every one of them onto this hub because it was the only
+off-router hub there was. They then sat in the same block that could not dispatch them.
+
+They now register on `portal/reads-{meshId}` instead — a hub with no handlers at all — via
+`MeshExtensions.ReadIssuingHub()`. See [The /api/content 503](../ContentRoute503) for why, and for
+the deterministic repro of the read side. Two consequences for the next measurement here:
+
+- **A contributor is gone, not the cause.** Those reads no longer add deliveries to this block, and
+  no longer burn 10 s budgets that their callers retry — but nothing about the duration of a
+  node-CRUD turn has changed. If the bimodal latency survives, that is the real answer.
+- **`PendingCallbacks` on `nodeops` is now attributable.** A read still pending there was issued by
+  something running **on this hub**, which is a much smaller set to search than "any mesh singleton
+  in the process".
+
 ## Related
 
 - [Action-Block Wedge Prevention](../ActionBlockWedgePrevention) — the invariants a single-threaded hub
