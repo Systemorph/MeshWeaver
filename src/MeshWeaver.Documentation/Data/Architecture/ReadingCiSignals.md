@@ -370,6 +370,53 @@ and every run after it failed, with no downstream commit in between.
 **The rule:** record the **core tip** alongside any cross-repo verdict, and resolve it once per run
 rather than per checkout step. A verdict without that stamp cannot be reproduced or disputed.
 
+### 🚨 A sweep goes blind when its SUBJECT moves repos — not when its detector breaks
+
+The failure this page keeps naming is *"the sink appeared later than the window"*. There is a second
+shape, and it is harder to see because nothing about the detector changes: **the suite that carries
+the defect leaves the repository, and the sweep keeps returning a confident, calibrated zero.**
+
+Measured on **#890** (a Roslyn `Emit` that poisons a test host process, so every later NodeType
+compile NREs). Swept core CI on 2026-09-02 across 958 `dotnet-test.yml` runs:
+
+| window | occurrences |
+|---|---|
+| 2026-08-30T00:05Z → 2026-09-01T11:34Z | **11** — 1.76 % of non-cancelled runs |
+| 2026-09-01T11:34Z → 2026-09-02T10:27Z (201 runs) | **0** |
+
+The clean tail reads like a fix, and at that rate a 201-run gap is a ~4 % coincidence. It is neither.
+**PR #2847 merged at 2026-09-01T14:06:31Z and deleted `MeshWeaver.Hosting.Monolith.Test` and
+`MeshWeaver.PluginCatalog.Test` from core**; they now live in `MeshWeaver.Plugins/src/`. Every one of
+the 11 occurrences fired inside one of those two suites. The last one is 2 h 35 m before the removal.
+
+Be precise about what left, because "the suite moved" and "the repo is now immune" are different
+claims. Core still emits NodeType assemblies in `Compiler.Pipeline.Test` and `Graph.Test` — but those
+run in **9 s** and **100 s**, against the **13 m 38 s** of compile-heavy integration work that walked
+out, and the onset in every measured occurrence was ~2 minutes into such an assembly. What the
+removal took was not the possibility, it was **the exposure that made the rate measurable** — which
+is enough to make a post-removal null uninformative either way.
+
+**The rule:** before believing a null, ask *"does the code that produces this signal still run in
+this repository, in this window?"* Confirm it positively — name a run and the suite verdict line it
+printed (`Passed! - … - <Suite>.dll`) — rather than inferring it from the sweep's own silence. A
+subject that moved and a defect that stopped are indistinguishable from inside one repo, and
+[deleted and relocated look identical too](/Doc/Architecture/CrossRepoPairGate).
+
+### The same fault surfaces through a DIFFERENT sink in each repo
+
+Having found where the suites went, the follow-up sweep in the other repo is not the same command.
+Core streams a test's log output into the job log as live `[OUTPUT]` lines — **5 852** of them in the
+calibrated #890 occurrence. The equivalent MeshWeaver.Plugins job, running the very same suite,
+carries **0**: it dumps `Standard Output Messages:` post-hoc, per *failing* test, and keeps the
+`_meshweaver-test-trace.log` phase trace only inside a `teardown-stragglers-*` artifact.
+
+A detector keyed on the framing (`[OUTPUT]`, a project-name-plus-`exit=124` string, a `(part N/M)`
+suffix) therefore returns a clean, fast, entirely vacuous zero. **Grep the signature the code emits**
+— here `canary=`, `PROCESS CANNOT EMIT`, `GetConsolidatedTypeParameters` — **never the harness's
+packaging around it**, and prove the sink is alive in the target repo with a positive control before
+reporting the null (17 of 43 Plugins trace artifacts carried real `Compile failure for …` records,
+which is what made that null worth stating).
+
 ### A grep hit is not a binder
 
 Twice in one day, prose was mistaken for the thing it described. A quoted phrase in a `//` comment
@@ -496,6 +543,60 @@ If the same check name appears in every PR's failure list, stop triaging PRs and
 repository. `UNSTABLE` means the required set passed and something non-required did not — it is
 mergeable, and it is the state a hoistable assertion leaves behind.
 
+## 🚨 A lane hand-copied into N repos is N lanes, and N−1 of them are stale
+
+The arm lane is a single file, `.github/workflows/auto-arm.yml` in this repository, and every
+satellite reaches it through `workflow_call`:
+
+```yaml
+# MeshWeaver.<Satellite>/.github/workflows/auto-arm.yml — the whole file
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  arm:
+    uses: Systemorph/MeshWeaver/.github/workflows/auto-arm.yml@<sha>
+    secrets:
+      MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+      MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+```
+
+It was not always. Until 2026-09-02 the file was hand-copied into every repo in the fleet with a
+comment at the top asserting the copies were identical, and **they were not** — a comment claiming
+"the single implementation, so they cannot drift" is a hypothesis, and this one was false in three
+separate ways at once. Core had been moved to a minted App installation token; every satellite copy
+was still arming with `secrets.GITHUB_TOKEN`. Only `.Crm` carried the `landed:` read-back branch.
+Some copies had no `timeout-minutes` at all. (Figures below are a record of that day's measurement,
+not a live inventory of the fleet — the roster is read with
+`gh search code --owner Systemorph "auto-arm.yml@"`, never from prose.)
+
+**The consequence is the #2916 outage, running unnoticed in every satellite.** An auto-merge is
+performed as the identity that armed it; a push created with `GITHUB_TOKEN` does not trigger
+workflow runs; so each satellite's `main` was accumulating merges that started nothing.
+MeshWeaver.Reinsurance's `main` had no `push`-event run after 09:11Z that day, while PRs merged all
+afternoon. Nothing was red anywhere, because the evidence that would have been red is precisely the
+run that never existed.
+
+**How to see it — ask main whether its last commits produced runs, not whether the runs passed:**
+
+```bash
+gh api repos/Systemorph/<repo>/actions/runs --jq \
+  '[.workflow_runs[] | select(.event=="push" and .head_branch=="main")][0]
+   | "\(.created_at)  \(.name)  \(.conclusion)"'
+gh api repos/Systemorph/<repo>/commits/main --jq '.commit.committer.date'
+```
+
+A last-push-run timestamp older than main's HEAD commit is the signature. `github-actions[bot]` as
+the merging identity on recent merges is the cause. Neither is visible from any pull request.
+
+**The rule this generalises to** is already in AGENTS.md and `/ci`: a satellite's CI *calls* this
+repository's reusable workflows, it does not copy them. A copied lane costs nothing on the day it
+is copied and diverges silently forever after — and the divergence is invisible from inside any one
+repo, because each copy is self-consistent. Only a fleet-wide read finds it.
+
 ## 🚨 Delivery can stop for hours with every dashboard green — look for CANCELLED, not failed
 
 A cancelled run is not a failed run, and nothing alerts on it. `alert-on-failure` keys on failure;
@@ -551,7 +652,21 @@ nothing. The two together are what makes off-branch triggers destructive.
 Guarded by `WorkflowRunTriggerBranchFilterGuard`, which carries a control arm: if its block matcher
 ever stops recognising `workflow_run:`, it fails rather than passing having examined nothing.
 
+## 🚨 A queue ejection is not a red on the PR — read the steward's comment, not the PR's checks
+
+With the merge queue on, a pull request's own checks can be entirely green while the PR is *not
+landing*: the queue built it on top of the entries ahead of it, that group build failed, and the
+entry was ejected. The red lives on a `merge_group` run whose head branch is
+`gh-readonly-queue/main/pr-<N>-<sha>`, not on the PR's commit — `gh pr checks` shows nothing.
+
+The merge-queue steward acts on every ejection and leaves a comment saying what it found and did:
+re-queued (a catalogued flake, an infrastructure death, a timeout, or a bisect of a multi-PR group),
+or left out with the failing assertion, the run URL and the `queue-rejected` label. Read that
+comment first. Never re-run the failed queue build and never re-queue by hand — a re-run hides the
+bug and destroys the control arm; the steward re-queues on evidence and records the attempt. The
+whole protocol is [The Merge Queue](/Doc/Architecture/MergeQueue).
+
 ## Related
 
-[Module Versioning](/Doc/Architecture/ModuleVersioning) · [Modules](/Doc/Architecture/Modules) ·
-[Deploying Plugin Changes](/Doc/Architecture/DeployingPluginChanges)
+[The Merge Queue](/Doc/Architecture/MergeQueue) · [Module Versioning](/Doc/Architecture/ModuleVersioning)
+· [Modules](/Doc/Architecture/Modules) · [Deploying Plugin Changes](/Doc/Architecture/DeployingPluginChanges)

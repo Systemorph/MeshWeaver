@@ -304,6 +304,25 @@ public static class ShippedPrebuiltBundles
         ImmutableHashSet<string>? typePathFilter = null, Action<string>? onCovered = null)
         => Observable.Defer(() =>
         {
+            // 🚨 #3129 — NO ADOPTION PASS STARTS ON A HUB THAT IS LEAVING. Every route into
+            // seeding converges here (boot, on-demand from the compile watcher, a push's recompile,
+            // an install), and every one of them stamps NodeType nodes the whole deployment
+            // shares. A pod under SIGTERM is not the pod that will serve those types; on the roll
+            // measured in #3129 the terminating pod re-ran this pass on every access for 25
+            // minutes, and each run replaced the live build's coordinates with a stale bundle's,
+            // which the owner then refused and cleared. Answering 0 — "nothing adopted", the
+            // caller's ordinary compile-instead signal — is the same rule #3109 gave
+            // BuildupActions. A pass already in flight stops at its next node boundary: each
+            // PrebuiltAssemblySeeder.Seed re-asks at subscribe time.
+            if (mesh.IsLeaving())
+            {
+                logger?.LogInformation(
+                    "ShippedPrebuiltBundles: this hub is LEAVING (#3129: shutting down, or hosted by a "
+                    + "process that has begun stopping) — no adoption pass starts on it; the next "
+                    + "generation seeds its own bundles");
+                return Observable.Return(0);
+            }
+
             if (!Directory.Exists(dir))
             {
                 logger?.LogDebug(

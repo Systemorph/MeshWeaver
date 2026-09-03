@@ -282,7 +282,11 @@ static string? PromptForToken()
     var pathArg = new Argument<string>("path")
     { Description = "Path to the plugin repo (the directory mounted as /repo)." };
     var imageOpt = new Option<string>("--image")
-    { Description = "Image to build against, e.g. meshweaver.azurecr.io/mw-plugin-test:<tag>. Pulled and pinned by digest.", Required = true };
+    { Description = "TESTER image, e.g. meshweaver.azurecr.io/mw-plugin-test:<tag>. Pulled and pinned by digest. It EXECUTES the build; it does not supply the reference set.", Required = true };
+    // 🚨 Not `Required = true` on the option: the refusal in BuildPluginCommand explains WHY there is
+    // no fallback to the tester's /app, and "Option '--platform-image' is required." would not.
+    var platformImageOpt = new Option<string?>("--platform-image")
+    { Description = "PORTAL image, e.g. meshweaver.azurecr.io/memex-portal-ai@sha256:… — REQUIRED. It supplies the reference set, the framework identity and the runtime; pin it from the SAME CD wave as --image." };
     var bakeOpt = new Option<string?>("--bake-output")
     { Description = "Directory for the bake (bundles + framework-mvid.txt). Default: a temp dir." };
     var extOpt = new Option<string?>("--external-modules")
@@ -301,7 +305,7 @@ static string? PromptForToken()
     { Description = "Space-separated upstream SOURCES whose sealed publication seeds the gate's mesh (e.g. \"plugins\") — the packages a requires chain reaches, not merely their DLLs." };
 
     var plugin = new Command("plugin", "Build a plugin: install its dependencies, bake its packages, then test the BAKED bytes.")
-    { pathArg, imageOpt, bakeOpt, extOpt, shaOpt, allowOpt, regUrlOpt, regModulesOpt, regKeyOpt, upstreamOpt };
+    { pathArg, imageOpt, platformImageOpt, bakeOpt, extOpt, shaOpt, allowOpt, regUrlOpt, regModulesOpt, regKeyOpt, upstreamOpt };
 
     plugin.SetAction((result, ct) => new BuildPluginCommand(Console.Out, Console.Error).RunAsync(
         new BuildPluginOptions(
@@ -316,6 +320,7 @@ static string? PromptForToken()
             RegistryModules = result.GetValue(regModulesOpt),
             RegistryKey = result.GetValue(regKeyOpt) ?? Environment.GetEnvironmentVariable("MW_REGISTRY_KEY"),
             UpstreamSeed = result.GetValue(upstreamOpt),
+            PlatformImage = result.GetValue(platformImageOpt),
         },
         ct));
 

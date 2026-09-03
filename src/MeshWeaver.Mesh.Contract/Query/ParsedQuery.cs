@@ -33,6 +33,32 @@ public record ParsedQuery(
 )
 {
     /// <summary>
+    /// From <c>partitions:all</c> — the caller has EXPLICITLY asked to span every partition. Fan-out
+    /// is opt-in: a storage provider refuses a query that names no partition and did not set this,
+    /// because a silent cross-schema UNION locks every relation it touches and stalls unrelated
+    /// pinned reads.
+    ///
+    /// <para>🚨 A FLAG, not a path value, on purpose. <c>path:*</c> reads like the same statement and
+    /// is not: partition resolvers take a path's first segment as a schema NAME, so <c>path:*</c>
+    /// pins the query to a partition literally called <c>*</c>, the statement dies on
+    /// <c>relation "*.threads" does not exist</c>, and the caller gets an EMPTY result instead of an
+    /// error.</para>
+    ///
+    /// <para>🚨 An init-only PROPERTY, not a positional parameter, also on purpose: a record's
+    /// primary-constructor arity is binary contract, and adding a parameter — even one with a
+    /// default — breaks every compiled caller. The <c>Public surface (binary compatibility)</c> gate
+    /// catches it as <c>record ParsedQuery — arity</c>.</para>
+    /// </summary>
+    public bool CrossPartition { get; init; }
+
+    /// <summary>
+    /// The qualifier that sets <see cref="CrossPartition"/> — the EXPLICIT "span every partition"
+    /// request, and the only thing that makes an otherwise unanchored query legal. Spelled once here
+    /// so callers declare it by reference instead of by copied string.
+    /// </summary>
+    public const string CrossPartitionQualifier = "partitions:all";
+
+    /// <summary>
     /// An empty query with no filters.
     /// </summary>
     public static ParsedQuery Empty => new(null, null);

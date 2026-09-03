@@ -5,6 +5,7 @@ using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Security;
 using Microsoft.Extensions.DependencyInjection;
@@ -64,14 +65,16 @@ public static class AccessControlPipeline
     /// </summary>
     /// <summary><see cref="RecyclingRefusal(Address, string, Exception)"/> for a reason string.</summary>
     internal static string RecyclingRefusal(Address address, string messageTypeName, string? reason) =>
-        $"Hub {address} is shutting down (its access gate could not reach a verdict: {reason}) "
-        + $"— cannot evaluate access for {messageTypeName}; the address may reactivate "
-        + "(recycle / restart). Rejecting now.";
+        ShutdownNack.RejectingNow(
+            address,
+            $"its access gate could not reach a verdict: {reason}",
+            $"cannot evaluate access for {messageTypeName}");
 
     internal static string RecyclingRefusal(Address address, string messageTypeName, Exception error) =>
-        $"Hub {address} is shutting down (its lifetime scope is gone, {error.GetType().Name}) "
-        + $"— cannot evaluate access for {messageTypeName}; the address may reactivate "
-        + "(recycle / restart). Rejecting now.";
+        ShutdownNack.RejectingNow(
+            address,
+            $"its lifetime scope is gone, {error.GetType().Name}",
+            $"cannot evaluate access for {messageTypeName}");
 
     /// <summary>
     /// <see cref="IsHubGone(IMessageHub, Exception)"/> for a path that has a REASON STRING rather
@@ -106,6 +109,104 @@ public static class AccessControlPipeline
     /// delivery — the whole point of running the checks in order.
     /// </summary>
     private sealed record EvaluatedCheck(string Path, Permission Permission, PermissionCheckOutcome Outcome);
+
+    /// <summary>
+    /// Re-decides a DENIED check through the node type's own <see cref="INodeTypeAccessRule"/> —
+    /// the authority <c>MeshExtensions.CheckDeletePermissionForNode</c> already consults, resolved
+    /// through the same <see cref="NodeTypeAccessRuleGate"/> so the two cannot drift (issue #3061).
+    ///
+    /// <para><b>What it may change, and what it may not.</b> It is only ever reached from a
+    /// definitive DENIAL — never from a grant (nothing to reconsider) and never from an undetermined
+    /// fold (there is no verdict to reconsider, and "we could not check" must not be laundered into
+    /// a rule question). Its answer replaces the denial ONLY when the rule grants; a rule that
+    /// refuses leaves the delivery refused, and a rule that cannot reach a verdict answers
+    /// <see cref="PermissionCheckOutcome.Undetermined(string)"/>, which is still
+    /// <c>IsGranted = false</c>. Fail-closed on every leg.</para>
+    ///
+    /// <para><b>Four conditions, each of which returns the original denial unchanged:</b>
+    /// <list type="bullet">
+    ///   <item><description>the check is not on THIS hub's own path — a rule at this hub speaks for
+    ///     the node at this hub, nothing else;</description></item>
+    ///   <item><description>the permission does not name an operation a rule can decide about that
+    ///     node (<see cref="NodeTypeAccessRuleGate.SubjectOperationFor"/> — notably Create, whose
+    ///     subject is a node that does not exist yet);</description></item>
+    ///   <item><description>nothing is served at that path, so there is no node type to look
+    ///     up;</description></item>
+    ///   <item><description>no rule governs (node type, operation) — <c>Find</c> returning null is
+    ///     "no rule has an opinion", and the standard check's denial stands.</description></item>
+    /// </list></para>
+    ///
+    /// <para>🚨 A node READ that FAULTS answers Undetermined, not the original denial. Falling back
+    /// to the denial would make a transient storage fault silently restore the pre-fix behaviour —
+    /// the gate's own input deciding whether the gate ran, which is the shape AGENTS.md bans and
+    /// <c>MissingEvaluatorFailsClosedTests</c> pins one level up. Undetermined is still fail-closed;
+    /// it just stops claiming a verdict nobody reached.</para>
+    /// </summary>
+    private static IObservable<PermissionCheckOutcome> ReconsiderThroughNodeTypeRule(
+        IMessageHub hub,
+        IMessageDelivery delivery,
+        string hubPath,
+        (string Path, Permission Permission) check,
+        string userId,
+        ILogger? logger)
+    {
+        if (!string.Equals(check.Path, hubPath, StringComparison.OrdinalIgnoreCase))
+            return Observable.Return(PermissionCheckOutcome.Denied);
+
+        if (NodeTypeAccessRuleGate.SubjectOperationFor(check.Permission) is not { } operation)
+            return Observable.Return(PermissionCheckOutcome.Denied);
+
+        return NodeTypeAccessRuleGate.ReadSubjectNode(hub, hubPath)
+            .SelectMany(node =>
+            {
+                if (node is null
+                    || NodeTypeAccessRuleGate.Find(hub, node.NodeType, operation) is not { } rule)
+                    return Observable.Return(PermissionCheckOutcome.Denied);
+
+                var accessService = hub.ServiceProvider.GetService<AccessService>();
+                var context = new NodeValidationContext
+                {
+                    Operation = operation,
+                    Node = node,
+                    // The DELIVERY's context, exactly as CheckDeletePermissionByRule builds it —
+                    // it is the only copy that survives the scheduler hops to here.
+                    AccessContext = delivery.AccessContext
+                                    ?? accessService?.Context
+                                    ?? accessService?.CircuitContext,
+                    // A ValidateDeleteRequest / DeleteNodeRequest issued as part of a cascade names
+                    // its root; invariant validators use it to tell "the whole subtree is going
+                    // away" from "this one node is". Absent for every other message shape.
+                    DeleteCascadeRootPath = CascadeRootOf(delivery.Message)
+                };
+                logger?.LogDebug(
+                    "AccessControlPipeline: {Permission} on {Path} was denied by the standard check — "
+                    + "re-deciding through the {NodeType} access rule, which governs this node type",
+                    check.Permission, check.Path, node.NodeType);
+                return NodeTypeAccessRuleGate.Evaluate(rule, context, userId, logger);
+            })
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "AccessControlPipeline: could not read the node at {Path} to apply its node-type "
+                    + "access rule — reporting UNAVAILABLE rather than a denial nobody established",
+                    hubPath);
+                return Observable.Return(PermissionCheckOutcome.Undetermined(
+                    $"the node at '{hubPath}' could not be read to apply its node-type access rule "
+                    + $"({ex.GetType().Name})"));
+            });
+    }
+
+    /// <summary>
+    /// The cascade root a delete-shaped message belongs to, or <c>null</c> for every other message.
+    /// Mirrors what <c>MeshExtensions.CheckDeletePermissionByRule</c> puts on the context, so a rule
+    /// sees the same input whichever seam asked it.
+    /// </summary>
+    private static string? CascadeRootOf(object message) => message switch
+    {
+        ValidateDeleteRequest v => v.RootPath ?? v.Path,
+        DeleteNodeRequest d => d.CascadeRootPath ?? d.Path,
+        _ => null
+    };
 
     /// <summary>
     /// Adds the access control pipeline step to a per-node hub. Checks
@@ -411,6 +512,26 @@ public static class AccessControlPipeline
                         // the handler body runs, and the pool hop flows ExecutionContext
                         // anyway. See HubPermissionExtensions.TakeDecisionOutsideGate.
                         .TakeDecisionOutsideGate()
+                        // 🚨 THE NODE TYPE'S OWN RULE IS THE AUTHORITY, and the raw fold above does
+                        // not know it exists — issue #3061. `attr.GetPermissionChecks` yields a RAW
+                        // (hubPath, Permission) pair, so this gate demanded Delete on a satellite's
+                        // own path while the satellite's registered INodeTypeAccessRule says a
+                        // satellite's Delete is Update on its MainNode. #2913 taught
+                        // MeshExtensions.CheckDeletePermissionForNode to resolve that rule; it did
+                        // not teach the gate, and the gate runs FIRST — so on production a recursive
+                        // delete of Edu/Course was refused for all 72 of its `_Activity` satellites
+                        // ("lacks Delete permission on 'Edu/Course/_Activity/compile-…'") by a check
+                        // the node's own type says should pass, and the orphan could not be removed
+                        // through any API. Both seams now go through NodeTypeAccessRuleGate.
+                        //
+                        // Reached ONLY on a definitive denial, and that ordering is load-bearing in
+                        // two directions. It costs nothing on the hot path (a granted SubscribeRequest
+                        // never reads a node), and it never turns an UNDETERMINED fold into a rule
+                        // question — "we could not check" must stay "we could not check".
+                        .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
+                            ? Observable.Return(outcome)
+                            : ReconsiderThroughNodeTypeRule(
+                                hub, delivery, hubPath, check, effectiveUserId, logger))
                         .Select(outcome => new EvaluatedCheck(check.Path, check.Permission, outcome)))
                     // Concat, not Merge: the checks run ONE AT A TIME, in order — which is what
                     // makes the termination below actually save the remaining evaluations, and

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data.Serialization;
@@ -49,6 +50,44 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
         return WithTypeSource(typeof(T), typeSource);
     }
 
+    /// <summary>First backoff step before a faulted provider is rebuilt; doubles per attempt.</summary>
+    internal static readonly TimeSpan ProviderRetryBaseDelay = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// The ceiling the backoff saturates at. A provider whose upstream is genuinely gone is then
+    /// rebuilt once a minute — cheap enough to be irrelevant, slow enough that it can never be
+    /// the load.
+    /// </summary>
+    internal static readonly TimeSpan ProviderRetryMaxDelay = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Backoff before rebuilding a faulted provider: 1s, 2s, 4s … saturating at
+    /// <see cref="ProviderRetryMaxDelay"/>. Pure, so the policy is an assertion rather than a
+    /// timing observation (issue #3155).
+    /// </summary>
+    /// <param name="attempt">1-based attempt number.</param>
+    /// <returns>How long to wait before the next rebuild.</returns>
+    internal static TimeSpan ProviderRetryDelay(int attempt)
+    {
+        if (attempt <= 0)
+            return ProviderRetryBaseDelay;
+        // Shift on a long and clamp: the loop is unbounded by design, so "the counter cannot get
+        // that high" is not an argument — a naive 1 << (attempt - 1) overflows into a NEGATIVE
+        // delay around attempt 63, and a negative timer delay fires immediately, turning the rate
+        // ceiling into a spin exactly when the outage has lasted longest.
+        var doublings = Math.Min(attempt - 1, 32);
+        var ms = ProviderRetryBaseDelay.TotalMilliseconds * (1L << doublings);
+        return ms >= ProviderRetryMaxDelay.TotalMilliseconds
+            ? ProviderRetryMaxDelay
+            : TimeSpan.FromMilliseconds(ms);
+    }
+
+    /// <summary>
+    /// Scheduler for the provider-rebuild backoff. An INSTANCE seam, never static state: a test
+    /// pins the policy without waiting out real seconds.
+    /// </summary>
+    internal IScheduler ProviderRetryScheduler { get; set; } = TaskPoolScheduler.Default;
+
     /// <summary>
     /// Builds the backing entity-store stream and subscribes to each virtual type source's
     /// stream updates so later emissions from the provider are pushed into the local mirror.
@@ -85,7 +124,32 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
         {
             var isFirst = true;
             stream.RegisterForDisposal(
-                typeSource.GetStreamUpdates()
+                // 🚨 #3155 — Defer, so every re-subscribe re-ASKS the type source for its chain
+                // rather than re-attaching to the one that faulted. Paired with the eviction in the
+                // fault arm below, that is what makes the rebuild real: the cached chain is
+                // Replay(1).RefCount(), whose subject latches OnError, so a re-subscribe without
+                // the eviction replays the same fault for ever.
+                Observable.Defer(typeSource.GetStreamUpdates)
+                    .RetryWhen(faults => faults
+                        .Select((error, i) => (Error: error, Attempt: i + 1))
+                        .SelectMany(f =>
+                        {
+                            var delay = ProviderRetryDelay(f.Attempt);
+                            // Reported every time, never swallowed — the fault is real and the
+                            // collection IS stale until the rebuild lands. What changed is the
+                            // second sentence: it used to say "frozen … will receive no further
+                            // updates", which was true and permanent.
+                            Logger.LogError(f.Error,
+                                "Virtual data source {DataSource}: the provider for collection "
+                                + "'{Collection}' faulted (attempt {Attempt}) on hub {Address}. That "
+                                + "collection is stale until the provider is rebuilt, which is "
+                                + "scheduled in {Delay}.",
+                                Id, typeSource.CollectionName, f.Attempt, Workspace.Hub.Address, delay);
+                            // Drop the latched chain BEFORE the timer, so the re-subscribe above
+                            // builds a fresh one instead of replaying this fault.
+                            typeSource.EvictCachedStream();
+                            return Observable.Timer(delay, ProviderRetryScheduler);
+                        }))
                     .Subscribe(instances =>
                     {
                         // Skip the first emission since it's handled by initialization
@@ -130,10 +194,17 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
                     // the SAME faulted Replay(1) (VirtualTypeSource.StreamUpdates), so a fault
                     // during init still fails the hub's startup through the normal path — this arm
                     // exists so a fault can never take the process with it.
+                    // With the unbounded RetryWhen above this arm is the LAST LINE OF DEFENCE
+                    // rather than the policy — but it must stay, and for the reason spelled out
+                    // above: Rx's default one-argument onError is Stubs.Throw, which rethrows on
+                    // whatever thread carried the fault, and that thread is almost never one with a
+                    // catch (#2468: a TimerQueue thread, an unhandled exception, a core-dumped
+                    // host, and a gate that "failed before it produced a verdict").
                     error => Logger.LogError(error,
                         "Virtual data source {DataSource}: the provider for collection "
-                        + "'{Collection}' faulted. That collection is frozen at its last emission "
-                        + "and will receive no further updates on hub {Address}",
+                        + "'{Collection}' terminated on hub {Address} — the rebuild sequence itself "
+                        + "ended, so this collection is frozen at its last emission until the hub "
+                        + "is recycled.",
                         Id, typeSource.CollectionName, Workspace.Hub.Address))
             );
         }
@@ -157,6 +228,22 @@ public abstract record VirtualTypeSource : TypeSource<VirtualTypeSource>
     /// <summary>Returns an observable that emits the current set of instances whenever the underlying stream changes.</summary>
     /// <returns>An observable of the type's instances as untyped objects.</returns>
     public abstract IObservable<IEnumerable<object>> GetStreamUpdates();
+
+    /// <summary>
+    /// Drops the cached provider chain so the NEXT <see cref="GetStreamUpdates"/> rebuilds it from
+    /// the configured provider.
+    ///
+    /// <para>🚨 <b>Without this a retry is inert — issue #3155.</b> The cached chain is
+    /// <c>Replay(1).RefCount()</c>, and a <c>ReplaySubject</c> that has seen <c>OnError</c> LATCHES
+    /// it: every later subscriber gets the same fault replayed immediately, for the lifetime of the
+    /// object. So re-subscribing to a faulted provider is recovery inside the failed component —
+    /// it would spin at whatever rate the retry allows and never recover. The corpse has to be
+    /// dropped first.</para>
+    ///
+    /// <para>Virtual by design rather than abstract: a source with no cache has nothing to evict,
+    /// and this is public surface on a shipped contract.</para>
+    /// </summary>
+    public virtual void EvictCachedStream() { }
 }
 
 /// <summary>
@@ -198,6 +285,9 @@ public record VirtualTypeSource<T>(
     {
         return StreamUpdates().Select(items => items.Cast<object>());
     }
+
+    /// <inheritdoc />
+    public override void EvictCachedStream() => cachedStream = null;
 
     /// <summary>
     /// Pure observable composition over the type's stream provider — no <c>await</c>,

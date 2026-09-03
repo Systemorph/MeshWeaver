@@ -5,6 +5,11 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <!-- ChangeFeedResetReleasesUpstreamTest (#3110) drives a REAL monolith mesh: the defect is in
+         MeshNodeStreamCache's eviction teardown, and this assembly is the one MeshWeaver.Hosting
+         already grants InternalsVisibleTo for the cache's eviction seam (ReadStreamEvictions /
+         IsReadStreamLive). -->
+    <ProjectReference Include="..\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- Concrete HostBuilder for MeshHostBuilderTeardownOrderingTest (the legacy

@@ -9,6 +9,9 @@
          is pinned there: its discrimination and its WORDING are both contract, and the wording is
          only meaningful against MeshNodeStreamCache's transient classifier in the same assembly. -->
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Test" />
+    <!-- InstanceKeyLiveResolutionTest probes MeshNodeStreamCache.IsReadStreamLive / ReadStreamEvictions
+         to prove the registry authenticator reads through the process-wide cache (#3119). -->
+    <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
   </ItemGroup>
   <PropertyGroup>
     <ProjectGuid>{93595120-3ccf-45c6-8783-4829a1120166}</ProjectGuid>

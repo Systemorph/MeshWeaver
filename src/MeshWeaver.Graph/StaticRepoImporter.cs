@@ -855,6 +855,11 @@ public static class StaticRepoImporter
                                 result.Outcome switch
                                 {
                                     "ImportedWithErrors" => ActivityStatus.Warning,
+                                    // 🚨 #3101 — a Space whose assets the transport refused has NOT
+                                    // succeeded. Falling through to the `_ => Succeeded` default would
+                                    // stamp the content-addressed marker green and skip the Space on
+                                    // every later boot, which is the defect itself.
+                                    "ImportedWithRefusedContent" => ActivityStatus.Warning,
                                     // 🚨 The LOCK's status is the durable short-circuit the next boot
                                     // reads. An import a claim stopped from creating declared nodes has
                                     // NOT succeeded, so it must not stamp Succeeded here either —
@@ -1510,15 +1515,18 @@ public static class StaticRepoImporter
 
                         // Sync content-collection files (the assets behind @@content/<file> embeds)
                         // collection→collection into each owning node — AFTER the node upsert.
-                        return SyncContentImports(hub, source, logger).SelectMany(embedCount =>
+                        return SyncContentImports(hub, source, logger).SelectMany(embedContent =>
                         // Mirror inline (byte-carrying) content into each owning node's content
                         // collection — the git-committed {Space}/content/** binaries a GitSync import
                         // supplies. Binary-safe + mirroring (writes what the repo has, prunes what the
                         // SOURCE dropped) so committed course videos/posters land and stop getting wiped,
                         // while user uploads the source never tracked are preserved (issue #435).
-                        SyncInlineContent(hub, source, previousContentPaths, logger).SelectMany(inlineCount =>
+                        SyncInlineContent(hub, source, previousContentPaths, logger).SelectMany(inlineContent =>
                         {
-                        var contentCount = embedCount + inlineCount;
+                        var contentCount = embedContent.Written + inlineContent.Written;
+                        // 🚨 #3101 — the owning nodes whose content sync did NOT succeed. Folded into
+                        // the terminal status below so a refused Space cannot stamp Succeeded.
+                        var refusedContent = embedContent.Refused.AddRange(inlineContent.Refused);
                         // Persist the per-node manifest LAST (after upserts + prune) so the NEXT import's
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
                         return WriteManifest(hub, source.Partition, nodes, manifest, changedNodePaths,
@@ -1554,7 +1562,13 @@ public static class StaticRepoImporter
                             // blank and nothing says why" shape, one level up. It is self-clearing —
                             // the pruned type is gone from `existing` next pass, so it can never be a
                             // prune candidate again and the very next import stamps Succeeded.
+                            // 🚨 #3101 joins the Warning side for the SAME reason as a blocked create,
+                            // argued above: the source declares the assets, the transport refuses them,
+                            // and no boot can change that. Succeeded at this fingerprint IS the durable
+                            // short-circuit, so stamping it froze a Space's assets out of the mesh
+                            // permanently and invisibly — the content-layer twin of #2211.
                             var status = failed > 0 || blockedCreates.Count > 0 || stranded.Count > 0
+                                             || refusedContent.Count > 0
                                 ? ActivityStatus.Warning
                                 : ActivityStatus.Succeeded;
                             // Two-way preserved local changes: kept-not-overwritten (upsert conflicts) PLUS
@@ -1580,6 +1594,19 @@ public static class StaticRepoImporter
                                   + ". Un-claim them, import the source that defines the missing NodeType, "
                                   + "or drop them from the source."
                                 : "";
+                            // NAMED, not counted — "synced 0 content file(s)" is exactly what a Space
+                            // with no content says, which is the ambiguity #3101 is about.
+                            var refusedNote = refusedContent.Count > 0
+                                ? $" 📦 {refusedContent.Count} node(s) whose CONTENT SYNC WAS REFUSED — their "
+                                  + "assets are NOT in the mesh (most often a delivery over the transport's "
+                                  + "size budget): "
+                                  + string.Join(", ", refusedContent.Take(BlockedPathsNamed))
+                                  + (refusedContent.Count > BlockedPathsNamed
+                                      ? $", … (+{refusedContent.Count - BlockedPathsNamed} more)"
+                                      : "")
+                                  + ". Recorded as Warning so the next boot re-attempts instead of "
+                                  + "short-circuiting on a green marker."
+                                : "";
                             // The summary NAMES the pruned nodes (issue #604) — the count alone left
                             // a destructive import unauditable ("pruned 7" — which seven? unknown).
                             var prunedNote = prunedPaths.Count > 0
@@ -1590,8 +1617,8 @@ public static class StaticRepoImporter
                             // reads as routine housekeeping unless it says what the prune broke.
                             var strandedNote = strandedReport is null ? "" : " " + strandedReport;
                             var summary = failed > 0
-                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}{strandedNote}"
-                                : $"Imported {count.Imported} node(s){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}{strandedNote}";
+                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}{refusedNote}{strandedNote}"
+                                : $"Imported {count.Imported} node(s){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}{refusedNote}{strandedNote}";
                             NodeTypeCompilationActivity.Complete(hub, activityPath, status,
                                 new[]
                                 {
@@ -1619,9 +1646,15 @@ public static class StaticRepoImporter
                                 + "failed {Failed}, claimed {Claimed}, pruned {Pruned}, content {Content} at {Fingerprint}.",
                                 source.Partition, count.Imported, tally.Requests, failed, count.Claimed,
                                 prunedPaths.Count, contentCount, fingerprint);
+                            // 🚨 #3101 — THE OUTCOME, not just the attempt's status. The attempt
+                            // activity is the human-readable log; the OUTCOME is what StampLock turns
+                            // into the marker, and the marker is the durable short-circuit. Colouring
+                            // only the attempt would have left the lock stamped Succeeded and the Space
+                            // skipped for ever — the fix would have looked right and changed nothing.
                             return new StaticRepoImportResult(source.Partition, fingerprint,
                                 failed > 0 ? "ImportedWithErrors"
-                                    : blockedCreates.Count > 0 ? "ImportedWithBlockedCreates" : "Imported",
+                                    : blockedCreates.Count > 0 ? "ImportedWithBlockedCreates"
+                                    : refusedContent.Count > 0 ? "ImportedWithRefusedContent" : "Imported",
                                 count.Imported, preserved)
                             {
                                 WrittenPaths = count.Written,
@@ -1810,28 +1843,68 @@ public static class StaticRepoImporter
     /// under System (never a hand-rolled cross-hub write). Per-entry failures log and continue. Returns
     /// the total files imported.
     /// </summary>
-    private static IObservable<int> SyncContentImports(IMessageHub hub, IStaticRepoSource source, ILogger? logger)
+    /// <summary>
+    /// What one content-sync pass did: how many files landed, and which owning nodes the sync was
+    /// REFUSED for.
+    ///
+    /// <para>🚨 <b>Issue #3101 — the refused set is the point.</b> Both content passes used to fold
+    /// a failure into <c>0</c> files, which is indistinguishable from a Space that simply has no
+    /// content. The import then summed zero, stamped <c>Succeeded</c>, and — because Succeeded at a
+    /// fingerprint IS the durable short-circuit — every later import skipped the Space without
+    /// looking. A Space whose assets are refused on every attempt reported exactly the same thing as
+    /// one that was fully in sync, for ever, and the person who found out was a learner opening a
+    /// page with a missing video.</para>
+    ///
+    /// <para>This is the same argument this method's own terminal-status block already makes for a
+    /// blocked create (#2211): <i>"the source declares it, the claim refuses its creation, and no
+    /// boot can ever change that … recording it there froze the divergence permanently and
+    /// invisibly."</i> A transport that refuses a Space's assets is that shape verbatim.</para>
+    /// </summary>
+    /// <param name="Written">Files actually written by the pass.</param>
+    /// <param name="Refused">Owning node paths whose sync did not succeed.</param>
+    private sealed record ContentSyncCount(int Written, ImmutableList<string> Refused)
+    {
+        public static readonly ContentSyncCount None = new(0, ImmutableList<string>.Empty);
+
+        public ContentSyncCount Add(ContentSyncCount other) =>
+            new(Written + other.Written, Refused.AddRange(other.Refused));
+    }
+
+    private static IObservable<ContentSyncCount> SyncContentImports(IMessageHub hub, IStaticRepoSource source, ILogger? logger)
     {
         var imports = source.EnumerateContentImports();
         if (imports.Count == 0)
-            return Observable.Return(0);
+            return Observable.Return(ContentSyncCount.None);
 
         return imports
             .Select(import => AsSystem(hub, () => hub.ImportContent(import.NodePath)
                     .From(import.SourceCollection, import.SourcePath)
                     .To(import.TargetCollection, import.TargetPath)
                     .Post())
-                .Select(r => r.Success ? r.FilesImported : 0)
-                .Catch<int, Exception>(ex =>
+                // 🚨 #3101 — a refusal is NOT "zero files". The unsuccessful arm used to map to 0
+                // silently, with no log at all, so a Space whose content was refused was
+                // indistinguishable from one that has none.
+                .Select(r =>
+                {
+                    if (r.Success)
+                        return new ContentSyncCount(r.FilesImported, ImmutableList<string>.Empty);
+                    logger?.LogWarning(
+                        "[StaticRepoImport] {Partition}: content import for {Node} was REFUSED — "
+                        + "its assets are NOT in the mesh. Recorded on the import activity so this "
+                        + "fingerprint does not stamp Succeeded and skip the Space next boot.",
+                        source.Partition, import.NodePath);
+                    return new ContentSyncCount(0, ImmutableList.Create(import.NodePath));
+                })
+                .Catch<ContentSyncCount, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
                         "[StaticRepoImport] {Partition}: content import for {Node} failed (continuing).",
                         source.Partition, import.NodePath);
-                    return Observable.Return(0);
+                    return Observable.Return(new ContentSyncCount(0, ImmutableList.Create(import.NodePath)));
                 }))
             .ToObservable()
             .Merge(BatchSize)
-            .Sum();
+            .Aggregate(ContentSyncCount.None, (total, one) => total.Add(one));
     }
 
     /// <summary>
@@ -1847,7 +1920,7 @@ public static class StaticRepoImporter
     /// paths are persisted as the content manifest so the next import knows what it owns.</para>
     /// Per-group failures log and continue. Returns the total files written.
     /// </summary>
-    private static IObservable<int> SyncInlineContent(
+    private static IObservable<ContentSyncCount> SyncInlineContent(
         IMessageHub hub, IStaticRepoSource source,
         IReadOnlyList<string> previouslyOwnedContentPaths, ILogger? logger)
     {
@@ -1856,7 +1929,7 @@ public static class StaticRepoImporter
             // No content this import → don't touch the collection (never an empty mirror that would wipe
             // user uploads) and leave the prior content manifest intact (conservative — a removed-to-zero
             // source set is not pruned, matching ContentAssetMapper's zero-asset behavior).
-            return Observable.Return(0);
+            return Observable.Return(ContentSyncCount.None);
 
         // The full collection-relative paths this source owns THIS import. Persisted as the content
         // manifest below so the NEXT import can tell a genuinely-removed source file (prune) from a user
@@ -1875,17 +1948,33 @@ public static class StaticRepoImporter
                     // Prune only files the source PREVIOUSLY owned — preserves user uploads (#435).
                     .SourceOwned(previouslyOwnedContentPaths)
                     .Post())
-                .Select(r => r.Success ? r.FilesImported : 0)
-                .Catch<int, Exception>(ex =>
+                // 🚨 #3101 — a REFUSED sync is not "zero files". This is the arm that made
+                // AgenticEngineering's 106 MB of assets stop syncing silently: the oversized-delivery
+                // guards (#1890/#2897/#3018/#3032) began refusing the delivery, `Success` came back
+                // false, and it folded to 0 with no log — identical to a Space with no content.
+                .Select(r =>
+                {
+                    if (r.Success)
+                        return new ContentSyncCount(r.FilesImported, ImmutableList<string>.Empty);
+                    logger?.LogWarning(
+                        "[StaticRepoImport] {Partition}: inline content sync for {Node} was REFUSED — "
+                        + "its assets are NOT in the mesh. A transport refusal is correct behaviour at "
+                        + "the transport and a DELIVERY FAILURE at the content layer; recorded on the "
+                        + "import activity so this fingerprint does not stamp Succeeded and skip the "
+                        + "Space next boot.",
+                        source.Partition, sync.NodePath);
+                    return new ContentSyncCount(0, ImmutableList.Create(sync.NodePath));
+                })
+                .Catch<ContentSyncCount, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
                         "[StaticRepoImport] {Partition}: inline content sync for {Node} failed (continuing).",
                         source.Partition, sync.NodePath);
-                    return Observable.Return(0);
+                    return Observable.Return(new ContentSyncCount(0, ImmutableList.Create(sync.NodePath)));
                 }))
             .ToObservable()
             .Merge(BatchSize)
-            .Sum()
+            .Aggregate(ContentSyncCount.None, (total, one) => total.Add(one))
             // Persist the current source-owned content set LAST (after the mirror) so the next import's
             // prune preserves user uploads. Best-effort: a failed write only makes the next import prune
             // nothing (conservative), never wrong.

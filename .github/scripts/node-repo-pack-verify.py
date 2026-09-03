@@ -52,6 +52,18 @@ carries the bundle it attests and the closure evidence its build resolved, and a
 either is refused here rather than trusted because of where its step happened to sit in the job.
 🚨 None of this touches the module's TESTS: the marker is still dropped BEFORE them (#2710,
 Plugins#937) so a red suite cannot read as "bundle missing" to a gate that only composes.
+
+🚨 …BUT THE SUITE ITSELF IS ACCOUNTED FOR HERE TOO, because it no longer always runs in the pack
+job. On a run that PUBLISHES, the suite stays inline in `pack` so a red suite can never publish;
+on a run that does not, it runs in a `tests` job beside the pack matrix, so a caller whose gates
+consume only the bundle artifact does not wait 12.7 minutes for a verdict they never read
+(MeshWeaver.Plugins run 33656010754). Two mutually exclusive conditions can BOTH be false, and a
+suite that ran in neither lane renders exactly like one that passed — so each pack receipt records
+which lane OWNS its suite (`tests`: `none` | `inline` | `lane`), the tests lane drops a receipt of
+its own, and `--test-receipts` / `--tests-result` make the pairing checkable: a delegated module
+with no test receipt, a test receipt for a module that delegated nothing, and a tests lane that
+did not succeed are each RED, under this job's own unchanged context name. `bundles-built` is
+deliberately untouched by all of it.
 """
 from __future__ import annotations
 
@@ -265,6 +277,78 @@ def bundles_built(expected: list[str], built: set[str], declared: set[str] | Non
     return True, (f"bundles-built: true — {len(want)} of {len(want)} selected bundle(s) exist as "
                   f"this call's artifacts, each recording the bundle and the closure it was "
                   f"composed from" + aside)
+
+
+def own_receipts(receipts: dict[str, dict], lane: str,
+                 declared: set[str] | None) -> dict[str, dict]:
+    """The receipts THIS call produced — the same two filters `verify` applies internally, exposed
+    so the test-lane accounting below sees exactly the set the count gate counted."""
+    out = receipts
+    if lane:
+        out = {m: r for m, r in out.items() if r.get("lane") == lane}
+    if declared is not None:
+        out = {m: r for m, r in out.items() if m in declared}
+    return out
+
+
+def test_lane(receipts: dict[str, dict], test_receipts: dict[str, dict], broken: list[str],
+              tests_result: str) -> tuple[list[str], list[str]]:
+    """(errors, notes) — did every suite this call DELEGATED actually run?
+
+    🚨 THE FAILURE THIS EXISTS TO CATCH IS "NEITHER LANE RAN IT". The suite runs inline in `pack`
+    when the call publishes and in the `tests` job when it does not; those two `if:` conditions are
+    complements today and one edit away from both being false, at which point nothing is red and
+    nothing is missing — a suite simply stops existing. So the answer is not read off a condition:
+    the pack leg WRITES which lane owns its suite and the tests lane WRITES that it ran one, and
+    this pairs them.
+
+    `tests_result` is `needs.tests.result`. A lane that FAILED is red here as well as on its own
+    job, so the lane's one stable context still goes red on a red suite — which is the whole
+    reason moving the suite off the critical path does not move it out of the gate. An empty
+    string means the caller did not ask for this accounting (an older workflow against a newer
+    script) and the check stands down, saying so."""
+    errors: list[str] = []
+    notes: list[str] = []
+    if not tests_result:
+        return errors, notes
+
+    delegated = sorted(m for m, r in receipts.items() if r.get("tests") == "lane")
+    ran = sorted(test_receipts)
+
+    if tests_result not in ("success", "skipped"):
+        errors.append(f"the module TEST lane reported '{tests_result}' — the suites run beside the "
+                      f"pack matrix on a non-publishing run, and a red suite must red this context "
+                      f"exactly as it did when it ran inside the pack job. Read that job.")
+    if broken:
+        errors.append(f"{len(broken)} test receipt file(s) could not be read as a receipt: "
+                      + ", ".join(broken))
+    if delegated and tests_result == "skipped":
+        errors.append(f"{len(delegated)} module(s) delegated their suite to the tests lane and that "
+                      f"lane did NOT RUN AT ALL (result: skipped) — the suite ran in neither lane, "
+                      f"which renders exactly like one that passed: " + ", ".join(delegated))
+    missing = sorted(set(delegated) - set(ran))
+    if missing and tests_result != "skipped":
+        errors.append(f"{len(missing)} module(s) delegated their suite to the tests lane but no "
+                      f"test receipt arrived for them — the suite did not get to the end: "
+                      + ", ".join(missing))
+    # A test receipt for a module whose OWN pack receipt says the suite belongs elsewhere: the two
+    # halves of the switch disagree. Modules with no pack receipt at all are not judged here — that
+    # is already the count gate's finding, and blaming the suite for it would misname the cause.
+    disagree = sorted(m for m in ran
+                      if m in receipts and receipts[m].get("tests") != "lane")
+    if disagree:
+        errors.append(f"{len(disagree)} module(s) ran a suite in the tests lane while their own "
+                      f"pack receipt says the suite was "
+                      + ", ".join(f"{m} ({receipts[m].get('tests')!r})" for m in disagree)
+                      + " — the two halves of the switch disagree, so one of them is wrong about "
+                        "where the verdict came from.")
+    if not errors:
+        inline = sorted(m for m, r in receipts.items() if r.get("tests") == "inline")
+        none = sorted(m for m, r in receipts.items() if r.get("tests") == "none")
+        notes.append(f"suites: {len(delegated)} ran in the tests lane beside the pack matrix, "
+                     f"{len(inline)} inline in the pack job (this call publishes, so a red suite "
+                     f"cannot publish), {len(none)} not owed a run by the selection")
+    return errors, notes
 
 
 def parse_declared(text: str) -> set[str] | None:
@@ -518,6 +602,57 @@ def self_test() -> int:
               code == 1 and any("ZERO" in e and "receipts arrived" in e for e in errors),
               f"{errors}")
 
+        # ── THE TESTS LANE ────────────────────────────────────────────────────────────────
+        # 🚨 Every case here is a mutation of a green run in which the suites ran BESIDE the pack
+        # matrix. The one that matters most is the SKIP: two mutually exclusive `if:`s can both be
+        # false, and "the suite ran nowhere" is otherwise indistinguishable from "the suite passed".
+        print("the tests lane — the suite may move off the critical path, never out of the gate:")
+
+        def packr(mode: str) -> dict[str, dict]:
+            return {m: {"lane": "floor-abc123", "module": m, "tests": mode} for m in three}
+
+        def testr(modules) -> dict[str, dict]:
+            return {m: {"lane": "floor-abc123", "module": m, "tests": "lane",
+                        "suite": "present", "result": "passed"} for m in modules}
+
+        delegated, ran = packr("lane"), testr(three)
+        errs, nts = test_lane(delegated, ran, [], "success")
+        check("every delegated suite has a receipt and the lane is green ⇒ pass",
+              not errs and bool(nts), f"{errs}")
+        for bad in ("failure", "cancelled"):
+            errs, _ = test_lane(delegated, ran, [], bad)
+            check(f"a {bad.upper()} tests lane reds this context — the gate MOVED, it did not "
+                  f"vanish", any(f"reported '{bad}'" in e for e in errs), f"{errs}")
+        errs, _ = test_lane(delegated, {}, [], "skipped")
+        check("delegated suites + a SKIPPED lane ⇒ red: the suite ran in NEITHER lane, which "
+              "renders exactly like one that passed",
+              any("did NOT RUN AT ALL" in e for e in errs), f"{errs}")
+        errs, _ = test_lane(delegated, testr(m for m in three if m != "MeshWeaver.Mcp"), [],
+                            "success")
+        check("a delegated module whose suite never reached its receipt ⇒ red, naming it",
+              any("MeshWeaver.Mcp" in e and "no test receipt" in e for e in errs), f"{errs}")
+        errs, _ = test_lane(packr("inline"), ran, [], "success")
+        check("a test receipt for a module whose pack receipt says the suite ran INLINE ⇒ red "
+              "(the two halves of the switch disagree)",
+              any("disagree" in e for e in errs), f"{errs}")
+        errs, _ = test_lane(delegated, ran, ["MeshWeaver.Ghost.json"], "success")
+        check("a corrupt test receipt is not a receipt ⇒ red, naming the file",
+              any("could not be read" in e for e in errs), f"{errs}")
+
+        print("…and the shapes that must stay GREEN, so the gate is not merely loud:")
+        errs, nts = test_lane(packr("inline"), {}, [], "skipped")
+        check("a PUBLISHING run — every suite inline, the lane deliberately skipped ⇒ pass",
+              not errs and bool(nts), f"{errs}")
+        errs, nts = test_lane(packr("none"), {}, [], "skipped")
+        check("a selection that owes no test run at all + a skipped lane ⇒ pass",
+              not errs and bool(nts), f"{errs}")
+        errs, nts = test_lane(delegated, {}, [], "")
+        check("no --tests-result ⇒ the accounting stands down (an older caller against a newer "
+              "script), silently adding nothing", not errs and not nts, f"{errs}")
+        errs, _ = test_lane({}, ran, [], "success")
+        check("test receipts whose pack legs produced NO receipt are the COUNT gate's finding, "
+              "not this one's — it must not misname the cause", not errs, f"{errs}")
+
     if failures:
         print(f"\n::error title=node-repo-pack-verify self-test failed::{len(failures)} case(s) — "
               "this gate is the only thing standing between a narrowed matrix and a silently "
@@ -528,8 +663,11 @@ def self_test() -> int:
           "receipt LANE cases (own stamp counts, a sibling lane's does not — even for a module "
           "both calls declared), 12 built-marker cases (foreign lane, unstamped, no closure, no "
           "bundle, corrupt, zero markers — every one fail-closed — plus #2710's red-suite "
-          "survival), and 5 empty-selection cases including the scope=full contradiction lock — "
-          "all green.")
+          "survival), 5 empty-selection cases including the scope=full contradiction lock, and 11 "
+          "TESTS-LANE cases (a failed or cancelled lane is red, a skipped lane with delegated "
+          "suites is red because the suite then ran NOWHERE, a missing or corrupt test receipt is "
+          "red, the inline/lane halves disagreeing is red — and the publishing, nothing-owed, "
+          "older-caller and pack-failed shapes must stay green) — all green.")
     return 0
 
 
@@ -556,6 +694,15 @@ def main() -> int:
                    help="directory the module-built-* markers were merged into; with --github-output, "
                         "writes bundles_built=true|false — the receipt-independent 'this call built "
                         "a complete, composable bundle' claim")
+    p.add_argument("--test-receipts", default="", dest="test_receipts",
+                   help="directory the module-tests-receipt-* artifacts were merged into — the "
+                        "positive evidence that a DELEGATED suite ran. Paired with --tests-result.")
+    p.add_argument("--tests-result", default="", dest="tests_result",
+                   help="the tests lane's aggregated result (needs.tests.result). A lane that did "
+                        "not succeed is RED here too, so a red suite still reds this context; a "
+                        "SKIPPED lane with delegated suites is red because the suite then ran "
+                        "nowhere. Empty ⇒ the caller does not run a tests lane and the check "
+                        "stands down.")
     p.add_argument("--github-output", default="", dest="github_output",
                    help="the $GITHUB_OUTPUT file to append bundles_built to")
     p.add_argument("--self-test", action="store_true", dest="self_test")
@@ -579,6 +726,21 @@ def main() -> int:
         if args.github_output:
             with open(args.github_output, "a", encoding="utf-8") as fh:
                 fh.write(f"bundles_built={'true' if ok else 'false'}\n")
+
+    # 🚨 AFTER the bundles-built answer and deliberately unable to change it: a red suite must red
+    # THIS context and must NOT read as "bundle missing" to a gate that only composes the bundle
+    # (#2710, Plugins#937). Those are two different questions and this is the second one.
+    if args.test_receipts or args.tests_result:
+        declared_set = parse_declared(args.declared)
+        t_receipts, t_broken = (read_receipts(Path(args.test_receipts))
+                                if args.test_receipts else ({}, []))
+        t_errors, t_notes = test_lane(own_receipts(receipts, args.lane, declared_set),
+                                      own_receipts(t_receipts, args.lane, declared_set),
+                                      t_broken, args.tests_result)
+        notes.extend(t_notes)
+        errors.extend(t_errors)
+        if t_errors:
+            code = 1
     for note in notes:
         print(f"✓ {note}")
     for error in errors:

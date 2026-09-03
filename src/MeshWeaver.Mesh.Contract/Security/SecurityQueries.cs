@@ -79,15 +79,36 @@ public static class SecurityQueries
     }
 
     /// <summary>
-    /// A GLOBAL (path-less) security read over every instance of <paramref name="nodeType"/> in the
-    /// mesh. Path-less on purpose — the subject and the grant that names it may live in different
+    /// A GLOBAL security read over every instance of <paramref name="nodeType"/> in the mesh.
+    /// Mesh-wide on purpose — the subject and the grant that names it may live in different
     /// partitions — and therefore always an enumeration.
+    ///
+    /// <para>🚨 <b><c>partitions:all</c> is what makes the fan-out DECLARED, and it is load-bearing.</b>
+    /// Fan-out is opt-in: a storage provider refuses a query that names no partition and did not ask
+    /// to span them, because a silent cross-schema UNION locks every relation it touches and stalls
+    /// unrelated pinned reads (measured memex-cloud 2026-09-02: 7 786 fan-outs in 30 min, 4 328 over
+    /// 199 of 199 schemas). These reads are the legitimate exception — so they SAY SO here rather
+    /// than being the accident that the refusal exists to catch.</para>
+    ///
+    /// <para>🚨 <b>Do not "fix" this by anchoring it.</b> Narrowing the fold to a viewer's partition
+    /// is TRUNCATION, not optimisation: a <c>GroupMembership</c> lives under its GROUP while the
+    /// grant naming it lives elsewhere, so a partition-scoped read silently drops memberships — and
+    /// a group-scoped DENY that loses its membership rows fails OPEN (#2011), with nothing logged.
+    /// The cost is real and the lever is materialisation, never a narrower query. See
+    /// <c>Doc/Architecture/CrossSchemaFanOutElimination</c> and <c>Doc/Architecture/UnanchoredSecurityReads</c>.</para>
     /// </summary>
     /// <param name="nodeType">The node type to enumerate.</param>
     /// <param name="projection">The <c>select:</c> projection; content by default.</param>
     /// <returns>The query string.</returns>
     public static string Global(string nodeType, string projection = ContentProjection)
-        => Enumeration($"nodeType:{nodeType} scope:subtree {projection}");
+        => Enumeration($"nodeType:{nodeType} {ExplicitFanOut} scope:subtree {projection}");
+
+    /// <summary>
+    /// The qualifier that turns an unanchored read into an EXPLICITLY cross-partition one. A query
+    /// carrying it has said "every partition" out loud; a query without any anchor at all has said
+    /// nothing, and is refused rather than silently served the most expensive plan the mesh has.
+    /// </summary>
+    public const string ExplicitFanOut = ParsedQuery.CrossPartitionQualifier;
 
     /// <summary>Every custom <c>Role</c> definition in the mesh (<c>$security-roles</c>).</summary>
     public static string Roles => Global(RoleNodeType);
@@ -106,14 +127,104 @@ public static class SecurityQueries
     public static string GatedNodes(string nodeType) => Global(nodeType, IdentityProjection);
 
     /// <summary>
-    /// A security read anchored to one scope — the per-scope <c>AccessAssignment</c> and
-    /// <c>_Policy</c> walks. Anchored reads are normally served by a single partition's delegate, but
-    /// the ROOT scope's anchor (<c>_Access</c> / the empty namespace) resolves to no partition and
-    /// falls through to the same cross-schema fan-out, so these are stamped too.
+    /// A security read anchored to one scope — the root <c>AccessAssignment</c> and <c>_Policy</c>
+    /// legs (<see cref="RootAssignments"/>, <see cref="RootPolicy"/>). Anchored reads are served by
+    /// a single schema's delegate; they are stamped like every other fold read because the
+    /// completeness rule in the class remarks does not depend on WHERE a read is served.
     /// </summary>
     /// <param name="query">The anchored query string.</param>
     /// <returns>The query string, stamped as an enumeration.</returns>
     public static string Scoped(string query) => Enumeration(query);
+
+    /// <summary>
+    /// The ROOT scope's satellite namespace for grants — a root-scope <c>AccessAssignment</c> lives
+    /// at <c>_Access/{id}</c>. A <c>_</c>-prefixed first segment is not a partition: the Postgres
+    /// router resolves it ONLY through the REGISTERED global-satellite definitions
+    /// (<c>DefaultPartitionProvider</c> registers <c>_Access</c> with schema <c>system_access</c>),
+    /// so a read anchored here is served by that ONE schema and never by the cross-schema fan-out.
+    /// </summary>
+    public const string RootAccessNamespace = "_Access";
+
+    /// <summary>
+    /// The ROOT scope's policy node — <c>{scope}/_Policy</c> with the empty root scope, i.e. the
+    /// node whose path is exactly <c>_Policy</c>.
+    /// </summary>
+    public const string RootPolicyPath = "_Policy";
+
+    /// <summary>
+    /// Every root-scope <c>AccessAssignment</c> (<c>$security-access:</c>) — the grants that apply
+    /// across every partition (platform-wide viewer / admin). Anchored on
+    /// <see cref="RootAccessNamespace"/>, which the router pins to the registered
+    /// <c>system_access</c> schema: one schema, not 199.
+    /// </summary>
+    public static string RootAssignments
+        => Scoped($"namespace:{RootAccessNamespace} "
+            + $"nodeType:{SecurityCollections.AccessAssignmentNodeType} {ContentProjection}");
+
+    /// <summary>
+    /// The root-scope <c>_Policy</c> (<c>$security-policy:</c>), read as the node at exactly
+    /// <see cref="RootPolicyPath"/>.
+    ///
+    /// <para>🚨 <b>Why <c>path:_Policy</c> and not <c>namespace: id:_Policy</c></b> (issue #2194,
+    /// measured on memex-cloud 2026-09-02). The two name the SAME node — a namespace of <c>""</c>
+    /// plus an id of <c>_Policy</c> IS the path <c>_Policy</c> — but the old spelling carried no
+    /// path, so the Postgres router had no first segment to route on and answered it with a
+    /// <c>UNION ALL</c> over every partition schema: 179 <c>[CrossSchema] SLOW</c> lines in five
+    /// minutes (<c>nodeType:PartitionAccessPolicy path:- scope:Children</c>), each 1–4 s of
+    /// <c>LWLock/LockManager</c> contention shared with every other query on the database — and
+    /// every one of them necessarily EMPTY: an unregistered <c>_</c>-prefixed first segment is
+    /// unroutable, so no write can ever land a root <c>_Policy</c> row in Postgres in the first
+    /// place. The anchored spelling gives the router a concrete first segment, so it never fans
+    /// out: today it answers empty (no schema is registered for <c>_Policy</c>), and registering
+    /// <c>_Policy</c> as a global satellite the way <c>_Access</c> is would make it pinned WITHOUT
+    /// touching this query. In-memory and static-node providers answer both spellings identically.</para>
+    /// </summary>
+    public static string RootPolicy
+        => Scoped($"path:{RootPolicyPath} "
+            + $"nodeType:{SecurityCollections.PartitionAccessPolicyNodeType} {ContentProjection}");
+
+    /// <summary>
+    /// Every <c>AccessAssignment</c> in ONE partition — the grants for every scope on any path
+    /// rooted there, in one anchored read.
+    ///
+    /// <para>🚨 <b>Why the PARTITION and not the scope</b> (issue #3093). A grant lives at
+    /// <c>{scope}/_Access/{id}</c>, and every scope on a path's chain except the root is a PREFIX
+    /// of that path — so all of them live in the path's own partition, which is where
+    /// <c>_Access</c> is stored (one schema per partition; the <c>_Access</c> segment routes to
+    /// that schema's <c>access</c> table). Asking per SCOPE therefore multiplies one partition's
+    /// read by the depth of the path AND by how many paths are checked: a node's own path is
+    /// always the LEAF of its own chain, so every node ever permission-checked minted its own
+    /// live <c>$security-access:{path}</c> query. Measured on this tree: filtering a 4-node
+    /// listing opened 13 security queries, a 32-node listing 69 — exactly +2 per node, and the
+    /// population never falls below the stream cache's idle window.</para>
+    ///
+    /// <para>The verdict is unchanged because it was never a function of WHICH scopes were read:
+    /// <c>ComputeScopeRoles</c> buckets whatever it is given by each node's own namespace, and
+    /// <c>ComputeRoleState</c> then consults only the scopes on the target path's chain. A
+    /// partition-wide read is a strict SUPERSET of the per-scope walk, so no grant and no DENY
+    /// can be lost — the direction that matters, since a short read in this fold reads as
+    /// "denied" (see the class remarks and #2011).</para>
+    ///
+    /// <para>Anchored by <c>path:</c>, which pins the partition through its first segment. That is
+    /// also what makes the Admin partition work without a special case: <c>Admin</c> is excluded
+    /// from <c>searchable_schemas</c>, so a namespace-only read never reached <c>admin.access</c>
+    /// and platform-admin grants silently never loaded.</para>
+    /// </summary>
+    /// <param name="partition">The partition (first path segment) to read.</param>
+    /// <returns>The query string.</returns>
+    public static string PartitionAssignments(string partition)
+        => Enumeration($"path:{partition} scope:descendants "
+            + $"nodeType:{SecurityCollections.AccessAssignmentNodeType} {ContentProjection}");
+
+    /// <summary>
+    /// Every <c>_Policy</c> node in ONE partition — the <see cref="PartitionAssignments"/> twin for
+    /// <c>PartitionAccessPolicy</c>, anchored and read for the same reason.
+    /// </summary>
+    /// <param name="partition">The partition (first path segment) to read.</param>
+    /// <returns>The query string.</returns>
+    public static string PartitionPolicies(string partition)
+        => Enumeration($"path:{partition} scope:descendants id:_Policy "
+            + $"nodeType:{SecurityCollections.PartitionAccessPolicyNodeType} {ContentProjection}");
 
     /// <summary>
     /// Every query shape this class produces, for the completeness test that pins them. A member
@@ -125,7 +236,9 @@ public static class SecurityQueries
         Roles,
         Memberships,
         GatedNodes("Store/Plugin"),
-        Scoped("namespace:_Access nodeType:AccessAssignment " + ContentProjection),
-        Scoped("namespace: id:_Policy nodeType:PartitionAccessPolicy " + ContentProjection),
+        RootAssignments,
+        RootPolicy,
+        PartitionAssignments("acme"),
+        PartitionPolicies("acme"),
     ];
 }

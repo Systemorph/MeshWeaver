@@ -345,7 +345,7 @@ public sealed class MessageHub : IMessageHub
         // Also register in the disposables composite so a NORMAL teardown kills the
         // timer promptly (rather than waiting for the next tick after GC). Double-dispose
         // with the explicit Quiescing-phase dispose is harmless (Rx is idempotent).
-        disposables.Add(sub);
+        disposables.Add(GuardRegistrant(sub));
     }
 
     /// <summary>Single scan tick — extracted so the timer closure captures only a
@@ -490,8 +490,37 @@ public sealed class MessageHub : IMessageHub
         var actions = Configuration.BuildupActions;
         logger.LogDebug("Message hub {address} has {count} BuildupActions to run", Address, actions.Count);
 
+        // 🚨 A BuildupAction never STARTS after teardown has begun. The init turn is queued at Build and
+        // runs whenever the action block reaches it — which can be after this hub's own Dispose() (a
+        // transient probe is created and disposed in one breath: ContentTypeRegistration.ProbeRegister,
+        // the schema probes) or after an ancestor's cascade froze the subtree. Every action is a piece
+        // of the per-node control plane — a watcher over the own node, an eagerly created child hub, a
+        // ticker — and installed on a hub that is already leaving each one is born dead and faults on
+        // the way out: HostedHubsCollection refuses the child with a Warning ("Rejecting hosted hub
+        // creation … during disposal"), the teardown errors the watcher's stream. The .Catch below
+        // already classifies "teardown ENDED an action" as a recognised shutdown; this is the same
+        // policy one step earlier, at the action boundary: once IsShuttingDown, the remaining actions
+        // are skipped, the gate still opens (so the disposal state machine flows) and nothing is
+        // installed. Measured: the boot-time content-type registration probe of the Thread NodeType
+        // reached its _Exec child creation after its own Dispose() in 159 of 643 test logs of one CI
+        // run (MeshWeaver CD 33619142646) — a Warning each time, and the one test that asserts a
+        // fault-free probe teardown (ProbeHubCostTest) red whenever the late creation landed in its
+        // window. Pinned by InitializationStopsAtTeardownStartTest.
+        var skipLogged = false;
         return Observable
-            .Concat(actions.Select(a => a(this).DefaultIfEmpty(Unit.Default).Take(1)))
+            .Concat(actions.Select(a => Observable.Defer(() =>
+            {
+                if (!IsShuttingDown)
+                    return a(this).DefaultIfEmpty(Unit.Default).Take(1);
+                if (!skipLogged)
+                {
+                    skipLogged = true;
+                    logger.LogDebug(
+                        "Message hub {address} began shutting down before its BuildupActions completed — the remaining actions are skipped; nothing is installed on a hub that is leaving",
+                        Address);
+                }
+                return Observable.Empty<Unit>();
+            })))
             .ToList()
             // 🚫 Liveness bound. A BuildupAction that HANGS — never emits and never completes (a
             // dependency that never initialises, a stuck NodeType compile, a subscribe that never
@@ -1581,7 +1610,10 @@ public sealed class MessageHub : IMessageHub
         // CompositeDisposable. If disposal has already started the composite is
         // disposed and Add disposes the registrant immediately — late registrants
         // never leak. No bag, no imperative drain.
-        disposables.Add(disposable);
+        // Wrapped so a registrant that throws is named rather than truncating the
+        // whole teardown walk — see GuardRegistrant. Applies to the late-registrant
+        // path above too, which disposes through the same wrapper.
+        disposables.Add(GuardRegistrant(disposable));
         return this;
     }
 
@@ -2019,9 +2051,44 @@ public sealed class MessageHub : IMessageHub
         }
 
         // 2. Synchronous teardown of every registered subscription / Action cleanup —
-        //    normal Rx subscription logic, no bag.
+        //    normal Rx subscription logic, no bag. Every registrant went in wrapped by
+        //    GuardRegistrant, so one that throws is named and the walk continues.
         disposables.Dispose();
     }
+
+    /// <summary>
+    /// Wraps a registered cleanup so a fault in it is NAMED and the teardown continues.
+    ///
+    /// <para>🚨 Rx's <c>CompositeDisposable.Dispose</c> walks its list with no per-item guard, so
+    /// the FIRST registrant that throws ends the walk and every cleanup registered after it is
+    /// silently skipped — a subscription left live, a NACK never minted, and nothing in the log
+    /// naming which registrant did it (the caller sees one warning attributed to
+    /// <c>DisposeImpl</c> as a whole). Measured on main shard 4, 2026-09-02: one disposal action
+    /// resolving out of an already-closed lifetime scope threw <c>ObjectDisposedException</c>
+    /// here, and the <c>OwnerDisposing</c> NACK behind it never reached its waiting writer, which
+    /// then burned the full 31 s verdict budget (<c>LateNackReenqueueTest</c>, run 33630685580).</para>
+    ///
+    /// <para>This swallows nothing: the fault is logged with the registrant that raised it, and
+    /// the remaining cleanups still run. A registrant that throws is a bug IN THAT REGISTRANT —
+    /// it is now visible as one instead of as a truncated teardown. It is the same per-leg
+    /// isolation the reactive dispose actions already have in <see cref="DisposeImpl"/>.</para>
+    /// </summary>
+    private IDisposable GuardRegistrant(IDisposable registrant) =>
+        System.Reactive.Disposables.Disposable.Create(() =>
+        {
+            try { registrant.Dispose(); }
+            catch (Exception e)
+            {
+                // 🚨 The EXCEPTION, not its ToString(): a registrant that throws here is a bug in
+                // that registrant, and the only thing that says WHICH line raised it is the stack
+                // trace. Type+message alone names the symptom and hides the site — and this arm is
+                // now the ONLY report of that fault, since the walk no longer ends on it.
+                TryLog(LogLevel.Warning, e,
+                    "[DISPOSE-REGISTRANT] {Address}: a registered cleanup ({Registrant}) faulted. "
+                    + "The remaining cleanups still ran.",
+                    Address, registrant.GetType().Name);
+            }
+        });
 
     /// <summary>
     /// Multi-line snapshot of the hub's disposal state. Reports own RunLevel + disposal
@@ -2586,8 +2653,13 @@ public sealed class MessageHub : IMessageHub
         {
             try
             {
-                entry.Subject.OnError(new ObjectDisposedException(nameof(MessageHub),
-                    $"Hub {Address} was disposed before the response arrived (request type {entry.RequestType}, target {entry.Target})."));
+                // 🚨 TYPED, so callers can classify it (#3148). This is a teardown fact — the hub
+                // was recycled or deactivated with the request outstanding — not a fault of the
+                // work that hit it, and until it had a type the only way to tell the two apart was
+                // to match this message. The message itself is unchanged on purpose; see
+                // HubDisposedBeforeResponseException.
+                entry.Subject.OnError(new HubDisposedBeforeResponseException(
+                    nameof(MessageHub), Address, entry.RequestType, entry.Target?.ToString()));
             }
             catch
             {

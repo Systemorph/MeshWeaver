@@ -926,6 +926,8 @@ public static class MeshExtensions
                                 logger.LogDebug("[CreateNode] step=post-handlers-done path={Path} — posting Ok", resultNode.Path);
                                 hub.NoteRequestStage(request.Id, "CREATE_POST_HANDLERS_DONE");
                                 Respond(CreateNodeResponse.Ok(resultNode));
+                                // 🚨 STRICTLY AFTER the response (#3153) — see the method's remarks.
+                                ActivatePendingControlPlane(hub, resultNode, logger);
                             });
                 },
                 ex =>
@@ -3425,8 +3427,10 @@ public static class MeshExtensions
         if (userId == WellKnownUsers.System)
             return Observable.Return((DeletePreflight.Allowed, (string?)null));
 
-        var accessRule = hub.ServiceProvider.GetService<NodeTypeAccessRuleSet>()
-            ?.Find(node.NodeType, NodeOperation.Delete);
+        // 🚨 NodeTypeAccessRuleGate.Find, not a direct NodeTypeAccessRuleSet lookup — the delivery
+        // gate resolves through the same call (#3061), so "which rule governs this?" has exactly
+        // one implementation on both seams.
+        var accessRule = NodeTypeAccessRuleGate.Find(hub, node.NodeType, NodeOperation.Delete);
 
         return accessRule is null
             ? CheckDeletePermissionByPath(hub, userId, node, logger)
@@ -3438,6 +3442,11 @@ public static class MeshExtensions
     /// exactly as <see cref="RunDeletionValidatorsWithWarningsObs"/> builds it, so the rule sees the
     /// same inputs on both paths — including the DELIVERY's AccessContext, which is the only copy
     /// that survives the scheduler hops between handler entry and here.
+    ///
+    /// <para>🚨 The evaluation itself lives in <see cref="NodeTypeAccessRuleGate.Evaluate"/>, shared
+    /// with the <c>[RequiresPermission]</c> DELIVERY gate (issue #3061). When it was written out
+    /// here, the gate — which runs FIRST — never consulted a rule at all, and refused every
+    /// satellite delete the rule permits.</para>
     /// </summary>
     private static IObservable<(DeletePreflight Verdict, string? Detail)> CheckDeletePermissionByRule(
         IMessageHub hub,
@@ -3458,48 +3467,28 @@ public static class MeshExtensions
             DeleteCascadeRootPath = request.CascadeRootPath ?? request.Path
         };
 
-        return accessRule.HasAccess(context, userId)
-            // TakeDecisionOutsideGate for the reason spelled out in CheckDeletePermissionByPath:
-            // the rules reach the very same permission fold (SatelliteAccessRule calls
-            // hub.CheckPermission), and the caller chains the entire delete pipeline onto this.
-            .TakeDecisionOutsideGate()
-            .Select(allowed =>
+        // 🚨 THROUGH NodeTypeAccessRuleGate, never a local copy of the evaluation — issue #3061.
+        // The three terminals (verdict / fault / completed-without-emitting), the
+        // TakeDecisionOutsideGate hop and the "detail names the exception TYPE, never its message"
+        // rule used to be written out HERE, which is exactly how this seam and the DELIVERY gate
+        // came to answer the same question two ways. Both now call the same evaluation; the only
+        // thing that stays local is the projection onto this method's own vocabulary.
+        return NodeTypeAccessRuleGate.Evaluate(accessRule, context, userId, logger)
+            .Do(outcome =>
             {
-                if (!allowed)
+                if (!outcome.IsGranted && !outcome.IsUndetermined)
                     logger.LogDebug(
                         "[DeleteNode] rule-denied for {User} on {Path} (the {NodeType} access rule refused)",
                         userId, node.Path, node.NodeType);
-                return ((DeletePreflight Verdict, string? Detail)?)
-                    (allowed ? DeletePreflight.Allowed : DeletePreflight.Denied, null);
             })
-            // 🚨 FAIL CLOSED, and say WHICH failure it was. A rule reaches the same starve-able
-            // permission fold every other check does, so it can fault — and a fault is not a
-            // refusal. Answering Unestablished refuses the delete (the caller posts a failure) while
-            // reporting an availability problem rather than a decision about the caller's rights.
-            .Catch((Exception ex) =>
-            {
-                logger.LogWarning(ex,
-                    "[DeleteNode] the {NodeType} access rule for {Path} could not reach a verdict for "
-                    + "{User} — refusing the delete and reporting an availability failure, not a denial",
-                    node.NodeType, node.Path, userId);
-                // 🚨 The TYPE, never the exception's MESSAGE. This detail is echoed to the CALLER
-                // in the DeleteNodeResponse, and an arbitrary rule's exception text can carry
-                // internal paths, connection strings or another tenant's identifiers. The type
-                // names the condition, which is all a caller can act on ("retry, or ask an
-                // operator"); the full exception — message and stack — is on the LogWarning above,
-                // where only an operator sees it. (Copilot review, #2945.)
-                return Observable.Return<(DeletePreflight Verdict, string? Detail)?>(
-                    (DeletePreflight.Unestablished,
-                        $"the '{node.NodeType}' access rule failed ({ex.GetType().Name})"));
-            })
-            // 🚨 THE THIRD TERMINAL — a chain can also COMPLETE WITHOUT EMITTING (the shape that
-            // made RlsNodeValidator's own fold read as "nothing objected", #2742). Built LAZILY via
-            // nullable + DefaultIfEmpty() + Select so the message is only ever composed when it is
-            // actually used.
-            .DefaultIfEmpty()
-            .Select(outcome => outcome
-                ?? (DeletePreflight.Unestablished,
-                    $"the '{node.NodeType}' access rule completed without producing a verdict"));
+            // FAIL CLOSED on both non-granted legs, and say WHICH one it was: a rule reaches the
+            // same starve-able permission fold every other check does, so "it refused" and "it could
+            // not reach a verdict" are different facts and only the first is about the caller.
+            .Select(outcome => outcome.IsGranted
+                ? (DeletePreflight.Allowed, (string?)null)
+                : outcome.IsUndetermined
+                    ? (DeletePreflight.Unestablished, outcome.UndeterminedReason)
+                    : (DeletePreflight.Denied, (string?)null));
     }
 
     /// <summary>
@@ -3726,6 +3715,114 @@ public static class MeshExtensions
             })
             .Take(1)
             .DefaultIfEmpty(null);
+    }
+
+    /// <summary>
+    /// 🚨 <b>#3153 — a control-plane request filed by a CREATE must actually run.</b>
+    ///
+    /// <para>A <c>RequestedXxx</c> field is a request addressed to a watcher the owning per-node
+    /// hub installs in its <c>WithInitialization</c> (see
+    /// <c>Doc/Architecture/RequestViaStreamUpdate</c>), and that watcher runs <b>on activation</b>.
+    /// A create only writes the row: nothing activates the owner, so the watcher never sees the
+    /// request. It sits at <c>Requested</c> with no error, no log line and no failed state — until
+    /// something unrelated happens to open the node (a page view, a stream subscription, an MCP
+    /// <c>get</c>), at which point it runs within seconds. Measured on memex.meshweaver.cloud: a
+    /// <c>Store/Subscription</c> created via MCP sat untouched for 4.5 h and completed 20 s after
+    /// the first read. The same node created from the admin UI activated in 31 s, because the open
+    /// page kept the hub alive — which is why this never showed up from the UI.</para>
+    ///
+    /// <para>Every non-UI writer hits it: MCP and agents, scripts, and the billing webhook the
+    /// control plane explicitly anticipates as "one more authorized writer of this same node".
+    /// <c>Problem()</c> validators exist so a bad request cannot sit silently forever; this
+    /// reintroduced exactly that failure for a <b>well-formed</b> one.</para>
+    ///
+    /// <para>🚨 <b>Why it is gated on the content and not done for every create.</b> Opening the
+    /// stream is what activates the owner, and a cold per-node activation can take 5–45 s in CI
+    /// (NodeType compile, dependency load, JIT) — the same cost the delete path documents avoiding.
+    /// A bulk install fans <c>CreateOrUpdateNodeRequest</c> out into an inner <c>CreateNodeRequest</c>
+    /// per node, so activating unconditionally would wake a hub per imported file — 141 for
+    /// <c>Hosting</c>, 425 for the core samples. Inert data needs no watcher; only a node that
+    /// actually carries a pending request does.</para>
+    ///
+    /// <para>🚨 <b>Fire-and-forget, strictly after the response.</b> The caller is already answered,
+    /// so activation can never delay, fail or gate a create — a control plane that could not be
+    /// woken is a warning naming the path, and the node is still exactly as created. Subscribed
+    /// (never left cold), bounded, and errors are surfaced rather than swallowed.</para>
+    /// </summary>
+    private static void ActivatePendingControlPlane(IMessageHub hub, MeshNode node, ILogger logger)
+    {
+        if (!CarriesPendingRequest(node.Content, hub.JsonSerializerOptions, node.Path, logger))
+            return;
+
+        logger.LogDebug(
+            "[CreateNode] {Path} carries a pending control-plane request — activating its owner so "
+            + "the WithInitialization watcher observes it.", node.Path);
+
+        // The read IS the activation (SubscribeRequest to the owner). One emission is enough: the
+        // watcher is installed during activation and keeps running on the now-live hub, so nothing
+        // here has to stay subscribed for it to finish its work.
+        hub.GetMeshNodeStream(node.Path)
+            .Where(n => n is not null)
+            .Take(1)
+            .Timeout(ControlPlaneActivationBudget)
+            .Subscribe(
+                _ => logger.LogDebug("[CreateNode] {Path}: owner activated for its control plane.", node.Path),
+                ex => logger.LogWarning(ex,
+                    "[CreateNode] {Path} was created with a pending control-plane request, but its "
+                    + "owner could not be activated within {Budget}s — the request will not run until "
+                    + "something next opens this node. The node itself is created and unchanged.",
+                    node.Path, ControlPlaneActivationBudget.TotalSeconds));
+    }
+
+    /// <summary>
+    /// How long the activation above may take before it is abandoned. Generous, because it bounds a
+    /// COLD per-node activation (NodeType compile, dependency load, JIT — 5–45 s in CI), not a
+    /// healthy one. Abandoning costs only the warning: nothing downstream waits on it.
+    /// </summary>
+    private static readonly TimeSpan ControlPlaneActivationBudget = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// TRUE when <paramref name="content"/> carries a pending <c>RequestedXxx</c> — the ONE
+    /// convention <c>Doc/Architecture/RequestViaStreamUpdate</c> defines for addressing the owning
+    /// hub's watcher ("Add a <c>RequestedXxx</c> field to the node's content and watch it from the
+    /// owning hub"). Read off the SERIALIZED shape so it works for a typed CLR content and for the
+    /// JSON a cross-hub create arrives as, without this assembly knowing any domain type.
+    ///
+    /// <para>Null, absent and empty-string values are not requests — <c>RequestedStatus = null</c>
+    /// is precisely "nothing is being asked for". Never throws: a content that cannot be
+    /// serialized here is answered "no pending request", which costs at most the pre-#3153
+    /// behaviour for that node rather than failing a create that has already succeeded.</para>
+    /// </summary>
+    private static bool CarriesPendingRequest(
+        object? content, JsonSerializerOptions options, string path, ILogger logger)
+    {
+        if (content is null)
+            return false;
+        try
+        {
+            var element = content as JsonElement? ?? JsonSerializer.SerializeToElement(content, options);
+            if (element.ValueKind != JsonValueKind.Object)
+                return false;
+            foreach (var property in element.EnumerateObject())
+            {
+                if (!property.Name.StartsWith("requested", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (property.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+                    continue;
+                if (property.Value.ValueKind == JsonValueKind.String
+                    && string.IsNullOrEmpty(property.Value.GetString()))
+                    continue;
+                return true;
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "[CreateNode] could not inspect the content of {Path} for a pending control-plane "
+                + "request; treating it as carrying none.", path);
+            return false;
+        }
     }
 
     /// <summary>

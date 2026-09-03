@@ -37,6 +37,7 @@ public static class GraphConfigurationExtensions
                 .AddScopeType()
                 .AddReleaseType()
                 .AddBuildType()
+                .AddModuleBuildType()
                 .AddMarkdownType()
                 // Slide/Deck are NOT built-in any more: the Publish pack owns them as dynamic
                 // NodeTypes (Publish/Slide, Publish/Deck) with in-mesh layout areas; V53 retyped
@@ -265,6 +266,21 @@ public static class GraphConfigurationExtensions
                 // where a static-registration-only ratchet cannot see it. Stateless, like
                 // CodeNodeSegmentNameValidator below.
                 services.AddScoped<INodeValidator, Security.NodeTypeDeclarationSelfTypingValidator>();
+
+                // The authoring gate for NodeTypeDefinition.InstanceLocations (#3039): a declaration
+                // of where a type's instances live is refused for every type the permission fold
+                // enumerates mesh-wide (NeverNarrowedNodeTypes — the SAME set the storage planner
+                // refuses at query time), naming the reason, so the mistake is a red import rather
+                // than an inert declaration. Scoped, like the other content-integrity validators.
+                services.AddScoped<INodeValidator, Security.InstanceLocationDeclarationValidator>();
+
+                // The nodeType → instance-locations projection the storage layer narrows an
+                // unanchored nodeType:X fan-out with (#3039; the planner is in MeshWeaver.Plugins and
+                // resolves INodeTypeInstanceLocations with GetService, so this registration is what
+                // arms it). One per mesh: the static fold plus the live definitions on this process.
+                services.AddSingleton<NodeTypeInstanceLocations>();
+                services.AddSingleton<INodeTypeInstanceLocations>(sp =>
+                    sp.GetRequiredService<NodeTypeInstanceLocations>());
 
                 // The UPDATE-path half of the NodeType existence rule (#2993). The create path
                 // has always refused a NodeType that names nothing; update refused nothing, so
