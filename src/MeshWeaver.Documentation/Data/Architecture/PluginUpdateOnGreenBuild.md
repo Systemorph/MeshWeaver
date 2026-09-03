@@ -227,6 +227,52 @@ present:
    prune, exactly as the static-repo importer skips it. Claiming is the deliberate act that
    decouples one node from its package; an unclaimed local edit is overwritten, by design.
 
+## 🚨 A reminder is told ONCE — the gate the content-identity check cannot be (#3213)
+
+The content-identity gate above is the whole story for the **unattended** path and no part of it
+for the **reminder** path, and conflating the two shipped a real defect: on memex.meshweaver.cloud,
+**124 of the newest 200 notification rows** were this one emitter, four rows for the same package
+in a single day, two packages accounting for over half of everything the mesh had written in four
+days.
+
+The gate asks *is the candidate installed?*:
+
+- On the `AutoUpdate` path that question is **self-silencing**. The apply advances the record's
+  `ModuleVersion`, so the next reconcile compares equal and says nothing.
+- On the reminder path it is **unsatisfiable**. Nothing is installed — by design, the user has not
+  acted — so `ModuleVersion` never advances and the comparison evaluates false on every subsequent
+  reconcile, forever. And the reconcile runs often: at boot, whenever a feed read drains a deferred
+  registry, and on every build webhook.
+
+The notify path needs the *other* question — *have I already told them about this candidate?* — so
+it carries its own answer, and the fix is two independent halves. **Either one alone still
+duplicates:**
+
+1. **A satisfiable silence gate.** `PackageManifest.NotifiedModuleVersion` records the candidate
+   the user was last reminded about, on the durable install record. Writing it is what makes the
+   gate *become true* — which is exactly what the version comparison could never do here. It lives
+   on the node rather than in a cache because a cache loses its memory on every pod start and
+   re-notifies, which is the symptom itself.
+2. **A deterministic notification identity.** `NotificationService.CreateNotification` takes an
+   optional `identity`; when given, the node id is derived from *(main node, identity)* with the
+   platform's content-addressing helper and the write becomes an atomic upsert. The reconciler
+   keys it on *(record, kind, candidate version)*, so a repeat that does reach the notify path —
+   two reconcile entry points overlapping, a marker write that failed — lands on the **same** node
+   instead of adding a row.
+
+The gate sits inside `Notify`, deliberately **not** in front of `Apply`: an unattended apply must
+keep retrying every reconcile so a restored admin grant heals itself. It is only the *telling* that
+is once per candidate. A refusal notification ("Update needs a Global Admin") is gated the same way
+and by the same marker.
+
+Order matters within the notify path: the bell is written **first**, the marker second. A marker
+written first whose notification then failed would silence the reminder permanently; a bell written
+first whose marker then failed costs one repeat, which the deterministic identity absorbs into the
+same node.
+
+A genuinely **new** candidate version changes both the marker comparison and the derived id, so it
+gets its own unread bell — the suppression is per candidate, never per package.
+
 ## Configuration
 
 ### 1. Register the webhook on the plugin repo
@@ -264,7 +310,10 @@ install-time seed.
   common case and it is supposed to be quiet.
 - **A module changed** → an "Update available" notification on the install record, naming how many
   files changed and removed, and the short sha it was built from. Nothing installs — this is the
-  platform default.
+  platform default. **Exactly one** notification per candidate version, however many times the
+  reconcile runs (see *A reminder is told once* below).
+- **The SAME module change, seen again** → nothing at all. No new row, no re-raised bell, not one
+  file fetched.
 - **A module changed on an opted-in record** → the delta install runs, touching only the changed
   files — claimed (non-`Include` `SyncBehavior`) nodes excepted.
 
@@ -276,6 +325,7 @@ install-time seed.
 | A module never updates, and the log says it "has no module content identity" | The module's `manifest.lock` is missing or unparseable, so there is no `ModuleVersion` to compare and "has it changed" is unanswerable. A missing hash is the **absence of evidence**, not evidence of a change: treating it as changed would re-install the module on every green build of the repo *and* on every pod start, which is acting on the event rather than the content. It is refused, loudly, and the catalog card's manual **Update** stays available. Fix the module's CI to emit the sidecar. |
 | Nothing happens on a green build, **and the log says the delivery "matched NONE of the N sync config(s)"** | No `_GitSync` targets that repository — usually because the repository was **renamed** and the configs still store its old name. The matcher falls back to GitHub's canonical `full_name` (which follows the rename redirect) and repoints the config when it finds one, so this line surviving means the lookup could not be made either: the repository is unreachable with the config creator's credential, or the hook really is installed on a repository this mesh does not sync. The Warning names both sides — the incoming repository and everything it was compared against. |
 | Build node updates but no installation reacts | The package is not installed on that instance. A catalog lists far more packages than any instance installs; only packages with an install record are considered. |
+| The same "Update available" reminder keeps reappearing, or the bell re-lights on one you dismissed | Before #3213 this was the norm — a new row per reconcile, forever. The reminder is now told once per candidate version: the install record carries `NotifiedModuleVersion`, and the notification's id is derived from *(record, kind, candidate)*. Seeing it again means the candidate genuinely moved (`ModuleVersion` differs from the one on the record's marker) — read the record and compare the two, rather than assuming a duplicate. |
 | The boot log says the feed of a registry could not be read after N attempts and was **recorded as PENDING**, and admins got a bell notification pointing at `Plugins/_RegistryReconcileLedger` | The registry stayed unavailable for longer than the boot's retry budget (#2888). Nothing is lost: the ledger entry for that registry reads `Pending: true`, and the reconcile runs on the next successful feed read — open the catalog page (or install anything from that registry) once the registry is back, then check the entry reads `LastReconciledVia: feed-read`. If the registry answers a *definite* refusal (401/403) instead, the entry is pending too, but no catalog open will drain it until the key or grant is fixed — the `LastFault` names which. |
 
 The webhook **never throws** on a write failure: GitHub retries a non-2xx delivery, so an unhandled
