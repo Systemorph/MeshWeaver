@@ -8,7 +8,7 @@ Order: -20260903
 
 # A hidden menu entry no longer leaves its divider behind
 
-The node menu is grouped into sections — edit and organise, then content and history, then the
+The node menu is grouped into sections — edit and organize, then content and history, then the
 lifecycle actions at the bottom — with a thin rule between them. Those rules were being decided too
 early: the built-in list worked out where they belonged from **its own entries**, before two things
 that change the answer.
