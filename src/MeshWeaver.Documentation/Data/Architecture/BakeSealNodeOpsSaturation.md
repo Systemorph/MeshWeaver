@@ -7,8 +7,9 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Bake seal — the hub that stops answering is `portal/nodeops`
 
-The CD job `Plugins: bake + seal the publication for this identity / Bake + publish NodeType
-assemblies to portal storage` fails intermittently. It is filed as
+The CD job
+`Plugins: bake + seal the publication for this identity / Bake + publish NodeType assemblies to portal storage`
+fails intermittently. It is filed as
 [#2543](https://github.com/Systemorph/MeshWeaver/issues/2543), *"per-node hubs stop answering
 mid-bake"*.
 
