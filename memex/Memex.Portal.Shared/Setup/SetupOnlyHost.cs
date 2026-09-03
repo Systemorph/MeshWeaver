@@ -39,20 +39,29 @@ public static class SetupOnlyHost
     /// <summary>
     /// Whether this instance has no storage and must therefore be set up.
     ///
-    /// <para>🚨 <b>An ABSENT <c>Graph:Storage</c> section, not an empty one</b> —
-    /// <c>GraphStorageConfig.Type</c> defaults to <c>FileSystem</c>, so a section that EXISTS but
-    /// says nothing binds to a working-looking file-system configuration and would boot straight
-    /// past setup onto container-ephemeral disk. A blank <c>Type</c> is treated as absent for the
-    /// same reason: an environment variable cannot be null, only empty.</para>
+    /// <para>🚨 <b>Decided on the RAW <c>Graph:Storage:Type</c> key, never on the bound record.</b>
+    /// <c>GraphStorageConfig.Type</c> carries the initializer <c>FileSystem</c>, so binding a
+    /// section that EXISTS but names no type yields a working-looking file-system configuration —
+    /// and that section legitimately exists for other reasons (the deployed image states
+    /// <c>UnanchoredQueryPolicy</c> there deliberately). Binding would read "configured" off a
+    /// query policy, put the instance on container-ephemeral disk, and make this wizard
+    /// unreachable. Blank counts as absent too: an environment variable cannot be null, only
+    /// empty.</para>
     /// </summary>
     /// <param name="configuration">The host's configuration, with the instance manifest already
     /// layered in (see <see cref="InstanceManifestConfigurationExtensions.AddInstanceManifest"/>).</param>
     public static bool IsAwaitingSetup(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        var storage = configuration.GetSection(InstanceManifestProjection.StorageSection)
-            .Get<GraphStorageConfig>();
-        return storage is null || string.IsNullOrWhiteSpace(storage.Type);
+        // 🚨 The RAW key, never the bound record. `GraphStorageConfig.Type` carries the initializer
+        // "FileSystem", so BINDING a section that exists but names no Type yields a working-looking
+        // file-system store — and the section legitimately exists for other reasons: the deployed
+        // image states Graph:Storage:UnanchoredQueryPolicy there so no chart or environment can
+        // forget it. Binding would therefore read "configured" off a section whose only content is
+        // a query policy, make the wizard unreachable again, and point a real instance at
+        // container-ephemeral disk. Absent and blank are both "no storage stated".
+        return string.IsNullOrWhiteSpace(
+            configuration[$"{InstanceManifestProjection.StorageSection}:Type"]);
     }
 
     /// <summary>

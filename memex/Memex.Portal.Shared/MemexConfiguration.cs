@@ -358,7 +358,19 @@ public static class MemexConfiguration
             // today is appsettings-configured and has no manifest, and this path must leave all of
             // them byte-identical — an additive mechanism that changed a configured instance's
             // storage would be a data-loss bug, not a feature.
-            var graphStorageConfig = configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
+            // 🚨 The section is bound ONLY when the raw Graph:Storage:Type key actually names a
+            // backend. `GraphStorageConfig.Type` carries the initializer "FileSystem", so binding a
+            // section that exists but states no type hands back a working-looking file-system
+            // configuration — and the section legitimately exists for other reasons: the deployed
+            // image states Graph:Storage:UnanchoredQueryPolicy there so no chart or environment can
+            // forget it (the ci.7658 503 incident). Without this test, that one query-policy line
+            // would silently mean "storage is configured": MarkAwaitingSetup is never reached, the
+            // first-run wizard becomes unreachable, and a real instance is pointed at
+            // container-ephemeral disk — issue #435's shape, arriving from a file nobody edited.
+            var graphStorageConfig =
+                string.IsNullOrWhiteSpace(configuration["Graph:Storage:Type"])
+                    ? null
+                    : configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
             // 🚨 COMPLETE, and with a real backend named (Copilot review). A manifest that exists
             // is not a manifest that ANSWERS: the wizard's own starting point is
             // State=AwaitingStorage with a pre-filled type, and an Unreadable one answers nothing
