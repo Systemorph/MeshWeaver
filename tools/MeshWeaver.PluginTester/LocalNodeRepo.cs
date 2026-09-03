@@ -179,11 +179,7 @@ public static class LocalNodeRepo
     public static IReadOnlyList<PackageManifest> OrderByDependencies(
         IReadOnlyList<PackageManifest> packages, RepoSnapshot snapshot)
     {
-        var ids = packages.Select(p => p.Id).ToImmutableHashSet(StringComparer.Ordinal);
-        var dependencies = packages.ToDictionary(
-            p => p.Id,
-            p => CollectDependencies(p, snapshot, ids),
-            StringComparer.Ordinal);
+        var dependencies = DependencyMap(packages, snapshot);
 
         // Kahn topological sort, alphabetical among the ready set for determinism.
         var result = new List<PackageManifest>();
@@ -204,6 +200,28 @@ public static class LocalNodeRepo
             remaining.Remove(next);
         }
         return result;
+    }
+
+    /// <summary>
+    /// The package-id → direct-dependency-ids map <see cref="OrderByDependencies"/> sorts by, and
+    /// the ONE place a caller may ask "what does this package need present".
+    ///
+    /// <para>🚨 It is exposed rather than recomputed because a second reader of these three edge
+    /// kinds is how an edge silently disappears: MeshWeaver.Plugins' own
+    /// <c>scripts/affected-modules.py</c> is already a second implementation of exactly this
+    /// contract, and 51 of its 52 <c>requires</c> edges were dead for a while because it compared
+    /// the raw entry (<c>"Store@^1.0.0"</c>) against a package id. <see cref="GateShardPlan"/>
+    /// — which decides what a shard must MOUNT so its installs resolve — reads this map, never a
+    /// copy of the rules.</para>
+    /// </summary>
+    public static ImmutableDictionary<string, ImmutableHashSet<string>> DependencyMap(
+        IReadOnlyList<PackageManifest> packages, RepoSnapshot snapshot)
+    {
+        var ids = packages.Select(p => p.Id).ToImmutableHashSet(StringComparer.Ordinal);
+        return packages.ToImmutableDictionary(
+            p => p.Id,
+            p => CollectDependencies(p, snapshot, ids),
+            StringComparer.Ordinal);
     }
 
     private static ImmutableHashSet<string> CollectDependencies(

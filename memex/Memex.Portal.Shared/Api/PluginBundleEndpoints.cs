@@ -464,6 +464,24 @@ public static class PluginBundleEndpoints
                     return Results.Json(new { error = decline }, statusCode: StatusCodes.Status400BadRequest);
                 }
 
+                // 🚨 #3211 — the arming signal for the LAST refusal, named per publisher.
+                // A bundle stating no framework identity shelves a null, the index advertises a
+                // null, and ModuleUpdateDecision (#3154) then answers "already landed — the
+                // identity could not be checked" for this module on every reconcile of every
+                // installation, forever: an unknown on the SERVED side is the one landing cannot
+                // heal. The producer's own lane already refuses to pack or POST such a bundle, so
+                // reaching here means a publisher on a pin older than #3211. This line is what says
+                // WHICH — the measurement the registry-side 400 waits on, rather than a refusal
+                // armed on faith that would take the fleet's publishes down with it.
+                if (string.IsNullOrWhiteSpace(accepted.FrameworkMvid))
+                    logger?.LogWarning(
+                        "Module publish for {Plugin}: '{Module}' version {Version} states NO "
+                        + "framework identity, so it shelves a null and every consumer of it will "
+                        + "answer 'up to date — identity could not be checked' on every reconcile "
+                        + "(#3154). Its producer packs on a lane older than MeshWeaver#3211; bump "
+                        + "that repo's node-repo-module-pack.yml pin. This becomes a 400.",
+                        plugin, accepted.Module, accepted.Version ?? "(unversioned)");
+
                 ModuleLandingOutcome outcome;
                 try
                 {

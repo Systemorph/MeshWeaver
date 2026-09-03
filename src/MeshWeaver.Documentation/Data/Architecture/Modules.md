@@ -127,9 +127,10 @@ folder is deleted, and the change likewise takes effect at restart.
   The gate is `ModulePlatformFloor.DeclineReason` — the ONE notion of the module platform
   requirement, shared with landing and serving. Deliberately a **semver floor, never MVID
   equality**: a module is a plain assembly binding by simple name, so a landed module keeps
-  loading across ordinary platform updates; the MVID it was built with is recorded on the entry
-  as diagnostics only (MVID equality is bake semantics and belongs to the NodeType assembly
-  lane).
+  loading across ordinary platform updates; MVID equality is bake semantics and belongs to the
+  NodeType assembly lane. The identity it was built with, recorded on the entry, is never a
+  LANDING gate — it answers the separate question of whether there is anything new to land
+  ("Already landed" means this content against this FRAMEWORK, below).
 - **Missing DLL** — the entry's `modules/<name>/<name>.dll` does not exist (lost volume, manual
   deletion). Skipped loudly; re-install to heal. The check is that path SPECIFICALLY — a
   same-named DLL in the app closure never satisfies a store-installed entry (the
@@ -518,9 +519,11 @@ transport end to end — there is deliberately no second distribution channel:
    carries them onto the record. A package with content nodes AND a module is one Store product —
    card, price, install funnel, pre-install eligibility all unchanged.
 2. **Build** — `MeshWeaver.Plugin.Build`'s `module-pack` mode packs a built module's closure into
-   a bundle recording the `minMeshVersion` floor (`--min-mesh-version`) and, as diagnostics, the
-   MVID of the identity anchor (`MeshWeaver.Compiler.dll`, #1707) in the build output. It is a
-   plain dotnet invocation over
+   a bundle recording the `minMeshVersion` floor (`--min-mesh-version`) and — **required, not
+   diagnostic, since #3211** — the identity of the anchor assembly the module was compiled against
+   (`MeshWeaver.Compiler.dll`, #1707), named with `--graph-dll` or stated with `--framework-mvid`.
+   A pack that can supply neither exits 2 rather than writing a bundle whose consumers can never
+   tell a rebuild from a no-op. It is a plain dotnet invocation over
    an output folder, so ANY node repo's CI can drive it — SocialMedia builds its own module
    bundle the same way the platform repo does — and because the gate is the floor, ONE bundle
    serves every compatible platform build: nothing is rebundled per CI build. The closure is an
@@ -586,8 +589,14 @@ download loop:**
 
 The remaining blind spot (a registry that states no identity) is closed **where it is created**, not
 by churning consumers: a bundle that cannot say what it was built against must not be publishable.
-See [Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) → "Content-addressed outputs" for the
-producer half.
+That is #3211, and it matters more than it sounds — measured on MeshWeaver.Plugins run 33773265959
+(2026-09-03), **all 34 bundles** packed `built-against MVID (unrecorded)`, so on the day the
+comparison shipped it had nothing to compare anywhere in the fleet. The producing lane now refuses
+three times over: `module-pack` will not write a bundle with no identity, the pack step names the
+anchor assembly explicitly and is RED when it is not there, and the **hand-over refuses to POST**
+bytes whose manifest states none. See
+[Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) → "A bundle states what it
+was built against" for the producer half.
 
 The policy gate is the deployment's **existing update policy — `Admin/UpdatePolicy`**, the same
 single surface that governs the platform image roll; there is no module-specific knob.

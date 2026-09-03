@@ -687,6 +687,7 @@ static async Task<int> RunGate(string[] args)
     string? sourceSha = null;
     string? gateApp = null;
     BakeSeed? seed = null;
+    GateShard? shard = null;
     var externalModules = new List<string>();
 
     for (var i = 0; i < args.Length; i++)
@@ -769,6 +770,24 @@ static async Task<int> RunGate(string[] args)
             case "--source-sha" when i + 1 < args.Length:
                 sourceSha = args[++i];
                 break;
+            // 🚨 ONE SLICE of the discovered packages (`--shard 2/4`, 1-based). The node-repo gate
+            // fans out across runners because a single serial pass over ~60 packages — each paying
+            // the portal/nodeops tax of MeshWeaver#2543 — ran 17.9-30.4 minutes against a
+            // 30-minute cap, and a cap cut reports as `cancelled`, indistinguishable from a real
+            // cancellation. Refused HERE, before a mesh boots, for the same reason --seed and
+            // --module are: a malformed shard that silently gated everything, or nothing, would
+            // look exactly like a shard that did its share.
+            case "--shard" when i + 1 < args.Length:
+            {
+                var (parsed, problem) = GateShard.Parse(args[++i]);
+                if (problem is not null)
+                {
+                    Console.Error.WriteLine($"mw-plugin-test: --shard — {problem}");
+                    return 2;
+                }
+                shard = parsed;
+                break;
+            }
             // 🚨 A module built OUTSIDE this image — the seam that lets a node repo gate content
             // against a module whose source lives in that repo (the platform image cannot build
             // it). Repeatable. Refused HERE, before a mesh exists, for the same reason --seed is:
@@ -791,7 +810,8 @@ static async Task<int> RunGate(string[] args)
             // A value-taking option as the LAST argument would otherwise fall through to the default
             // case as "Unknown argument" — a misleading message for a missing value.
             case "--compile-timeout" or "--render-timeout" or "--allow" or "--report"
-                or "--bake-output" or "--seed" or "--source-sha" or "--module" or "--app":
+                or "--bake-output" or "--seed" or "--source-sha" or "--module" or "--app"
+                or "--shard":
                 Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
                 return 2;
             // Diagnostic: print the framework build identity this process resolves — the exact value
@@ -812,10 +832,14 @@ static async Task<int> RunGate(string[] args)
                 Console.WriteLine(
                     "usage: mw-plugin-test build <repo-root> [<package>... | all] ...   (see build --help)\n       mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
                     + "[--allow <file>] [--report <file>] [--seed <dir>] [--bake-output <dir>] "
-                    + "[--source-sha <sha>] [--module <dll>]... [--app <dir>] [--print-framework-identity]\n"
+                    + "[--source-sha <sha>] [--module <dll>]... [--app <dir>] [--shard <i>/<n>] "
+                    + "[--print-framework-identity]\n"
                     + "  --app <dir>: the platform host this gate must RUN AS (a portal image's /app); the "
                     + "run is refused before a mesh boots unless this process resolves that host's "
-                    + "framework identity.");
+                    + "framework identity.\n"
+                    + "  --shard <i>/<n>: gate only slice i of n of the discovered packages (1-based). The "
+                    + "shard also INSTALLS that slice's dependency closure so its installs resolve, but "
+                    + "does not gate it — every package is gated exactly once across the fan-out.");
                 return 0;
             default:
                 if (args[i].StartsWith('-') || root is not null)
@@ -850,6 +874,7 @@ static async Task<int> RunGate(string[] args)
         SourceSha = sourceSha,
         Seed = seed,
         ExternalModules = externalModules,
+        Shard = shard,
     };
 
     Console.WriteLine($"mw-plugin-test: gating node repos under '{Path.GetFullPath(options.RepoRoot)}'");

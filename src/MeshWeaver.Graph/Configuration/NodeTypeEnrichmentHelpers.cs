@@ -2673,10 +2673,28 @@ internal static class NodeTypeEnrichmentHelpers
         IMessageHub meshHub,
         ILogger? logger)
     {
+        // 🚨 NAME THE STATE, not just the fact. This line used to carry only the type version, so an
+        // operator reading it could not tell a compile that is WORKING from one that will never
+        // terminate — the two look identical here, and the distinguishing fields were only in a
+        // different logger's COMPILE-TRACE lines, leaving whoever is debugging to correlate two
+        // sources by timestamp (Plugins#1279, where a type sat behind this overlay for 48s with no
+        // status transition and no compile error logged anywhere).
+        //
+        // `Status` says which phase it is stuck in — a null status means NOTHING has dispatched the
+        // build at all (the first-build kickoff never ran), which is a different defect from
+        // Compiling-forever. `HubConfig` says whether the type is truly static, which is the other
+        // way a type reaches here without a compile to wait for.
+        var inFlightDefinition = typeNode.Content as NodeTypeDefinition;
         logger?.LogInformation(
             "EnrichWithNodeType: compile for '{NodeType}' still in flight after {Grace:0}s — "
-            + "activating compilation-in-progress overlay for '{InstancePath}' (type version {Version})",
-            nodeType, InFlightOverlayGrace.TotalSeconds, node.Path, typeNode.Version);
+            + "activating compilation-in-progress overlay for '{InstancePath}' "
+            + "(type version {Version}, Status={Status}, HubConfig={HasHubConfig}, "
+            + "dispatched={Dispatched}, lastStarted={LastStarted})",
+            nodeType, InFlightOverlayGrace.TotalSeconds, node.Path, typeNode.Version,
+            inFlightDefinition?.CompilationStatus?.ToString() ?? "(null — nothing dispatched a build)",
+            typeNode.HubConfiguration is not null,
+            inFlightDefinition?.DispatchedBuildInputs ?? "(unstamped)",
+            inFlightDefinition?.LastCompileStartedAt?.ToString("O") ?? "(never)");
 
         var overlay = CreateCompilationInProgressConfiguration(nodeType, node.Path);
         var nack = new UnhandledMessageNack(

@@ -1649,6 +1649,12 @@ jobs:
           MODULE: ${{ matrix.entry.module }}
           VERSION: ${{ steps.identity.outputs.version }}
           FLOOR: ${{ steps.identity.outputs.floor }}
+          # 🚨 THE IDENTITY ANCHOR'S HOME — the SAME expression the build step uses, so the anchor
+          # named below and the reference set the bytes were compiled against cannot be two
+          # different things. When a platform image is pinned, `platform-refs` is a `docker cp` of
+          # its /app, which the sdk build passes as `-p:MeshWeaverRefs=$REFS` and the container
+          # build compiles inside; when none is, it is empty and the platform came from source.
+          REFS: ${{ inputs.platform-image-digest != '' && format('{0}/platform-refs', runner.temp) || '' }}
         run: |
           set -euo pipefail
           # 🚨 The closure flags come from the COMPILER THAT RAN, written to a file by the step
@@ -1657,6 +1663,34 @@ jobs:
           # emitted (--with). Re-deriving here would be a second opinion about what ships.
           closure=()
           while IFS= read -r flag; do closure+=("$flag"); done < "$RUNNER_TEMP/pack-args"
+          # ───────── WHAT THIS BUNDLE WAS BUILT AGAINST, STATED — never omitted (#3211) ─────────
+          # Measured on MeshWeaver.Plugins run 33773265959 (2026-09-03): all 34 bundles packed
+          # "built-against MVID (unrecorded)", sdk and container alike, so #3154's
+          # (version, identity) comparison shipped with nothing to compare on every installation in
+          # the fleet. The cause is WHERE the anchor is, and it moves with the platform:
+          #
+          #   * platform pinned as an IMAGE (`REFS` = the docker cp of its /app, which the sdk build
+          #     passes as MeshWeaverRefs and the container build compiles inside) — the anchor is in
+          #     there, and the module's own output deliberately carries no platform assembly. This
+          #     is every satellite call, and it is the case the packer's default probe cannot see.
+          #   * platform built from SOURCE (`REFS` empty — core's own main-cd call) — the platform
+          #     ProjectReferences are real, so MeshWeaver.Compiler.dll IS beside the module in the
+          #     publish output. Measured green on CD run 33779812466:
+          #     "built-against MVID ce81fd4e3f5146c7a6ebaa6dc72da3f2".
+          #
+          # Both arms end in a RED with no anchor — neither is a quiet fallback, and the packer
+          # refuses again behind them, so a bundle whose identity is a guess cannot exist.
+          if [ -n "$REFS" ]; then
+            anchor="$REFS/MeshWeaver.Compiler.dll"
+            where="the pinned platform image's extracted /app"
+          else
+            anchor="$PACKDIR/MeshWeaver.Compiler.dll"
+            where="the module's own build output (no platform image is pinned, so the platform was built from source)"
+          fi
+          if [ ! -f "$anchor" ]; then
+            echo "::error::no identity anchor for $MODULE — expected MeshWeaver.Compiler.dll at '$anchor', i.e. in $where. Every bundle must state the framework build its bytes were compiled against (#3211): a consumer compares it against what it has landed, and an unstated one makes every reconcile answer 'up to date, identity could not be checked' forever. Nothing here may guess it, so the pack stops."
+            exit 1
+          fi
           echo "packing $MODULE from $PACKDIR (compiler: $COMPILER); closure flags: ${closure[*]:-<none>}"
           dotnet "$RUNNER_TEMP/pack-tool/MeshWeaver.Plugin.Build.dll" \
             module-pack "$PACKDIR" \
@@ -1665,6 +1699,7 @@ jobs:
             --plugin "$PACKAGE" \
             --package-version "$VERSION" \
             --min-mesh-version "$FLOOR" \
+            --graph-dll "$anchor" \
             --own-platform "$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src")" \
             --out "$RUNNER_TEMP/bundles"
 
@@ -1698,6 +1733,14 @@ jobs:
             || { echo "::error::manifest module.assemblies misses the entry DLL"; exit 1; }
           jq -e --arg f "$FLOOR" '.module.minMeshVersion == $f' "$manifest" > /dev/null \
             || { echo "::error::manifest floor differs from content.minMeshVersion"; exit 1; }
+          # 🚨 THE BUILT-AGAINST IDENTITY, ASSERTED ON THE BYTES — not inferred from the packer's
+          # exit code (#3211). The packer refuses to omit it, so this reads the artifact back and
+          # says so: a manifest with no `frameworkMvid` is a bundle whose consumers can never tell
+          # a rebuild against a new platform from a no-op (#3154's comparison with nothing to
+          # compare), and it must never leave this job.
+          jq -e '(.frameworkMvid // "") | test("^\\S+$")' "$manifest" > /dev/null \
+            || { echo "::error::the bundle states no framework identity (manifest .frameworkMvid is $(jq -c '.frameworkMvid' "$manifest")). It was built against SOMETHING; a bundle that cannot say what parks every consumer in 'up to date, identity could not be checked' forever (#3211). The pack step names the anchor — this manifest did not get it."; exit 1; }
+          echo "built against: $(jq -r '.frameworkMvid' "$manifest")"
           # A module bundle must NEVER carry a PLATFORM assembly beside its entry — it would
           # shadow the platform's own binary at the consumer (the same trap-door landing refuses
           # for the entry DLL). MODULE-OWNED MeshWeaver.* assemblies (their source lives in THIS
@@ -1970,6 +2013,32 @@ jobs:
             echo "::error::publish was requested but no publish-token secret was provided — the registry would never receive $MODULE, and this job would have reported success"
             exit 1
           fi
+          # ───────── THE PUBLISH-SIDE GATE: a bundle that states no framework identity is
+          # ───────── UNPUBLISHABLE (#3211, part 3 of Plugins#931)
+          # 🚨 HERE, on the bytes about to be POSTed, and NOT only in the inspection above — the
+          # inspection runs on the BUILD leg alone, and the reuse leg hands over an artifact an
+          # earlier run packed, which may predate the packer that refuses to omit the field. This
+          # step is the one every published byte passes through, so this is where the refusal binds.
+          #
+          # Why it must be a refusal and not a warning: the registry shelves what arrives
+          # (ModulePublish.Accepted.FrameworkMvid -> ShelveModule) and advertises it per bundle on
+          # /api/plugins/bundles/index.json. A null there is not "unknown for now" — a registry that
+          # states no identity states none next time either, so ModuleUpdateDecision (#3154) answers
+          # SkipUpToDate-and-say-so for that module on every reconcile of every installation,
+          # forever. Unlike an unknown on the LANDED side, one fetch cannot heal it. Publishing such
+          # a bundle is therefore not a smaller good than refusing: it is the defect.
+          # Neither the exit status nor unzip's own stderr is swallowed: "could not check" must
+          # never render as "checked", and the log has to say WHY it could not.
+          if ! manifest_json="$(unzip -p "$BUNDLE" meshweaver/manifest.json)" || [ -z "$manifest_json" ]; then
+            echo "::error::cannot read meshweaver/manifest.json out of $BUNDLE (see unzip's message above) — refusing to publish bytes whose manifest this lane could not check (#3211)"
+            exit 1
+          fi
+          identity="$(printf '%s' "$manifest_json" | jq -r '.frameworkMvid // ""' | tr -d '[:space:]')"
+          if [ -z "$identity" ]; then
+            echo "::error::REFUSING to publish $MODULE@$VERSION — the bundle states no framework identity (manifest .frameworkMvid is $(printf '%s' "$manifest_json" | jq -c '.frameworkMvid')). The registry would shelve a null and advertise a null, and every consumer of this module would answer 'already landed — the identity could not be checked' on every reconcile, forever (#3154). A rebuild of unchanged source against a new platform republishes under the SAME version, so the identity is the only thing that tells that rebuild from a no-op. Repack with the platform's MeshWeaver.Compiler.dll as --graph-dll (or state it with --framework-mvid); if these bytes were REUSED from an earlier run, that run packed them before the identity was recorded — rebuild them."
+            exit 1
+          fi
+          echo "publishing $MODULE@$VERSION, built against $identity"
           code=$(curl -sS -o "$RUNNER_TEMP/publish-$MODULE.json" -w '%{http_code}' \
             -X POST "$REGISTRY/api/plugins/bundles/$PACKAGE?version=$VERSION&packagePath=$REGISTRY_SOURCE/$PACKAGE" \
             -H "Authorization: Bearer $TOKEN" \
