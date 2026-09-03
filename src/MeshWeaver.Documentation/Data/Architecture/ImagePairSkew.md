@@ -97,6 +97,16 @@ first sealable set is the first CD run after Plugins #1268 lands.
 - **Plugins CI was green** — its tests ran against the platform pin, and the pin was on one side of
   the boundary or the other, never both. #1281 fixed the tests to assert both arms; that fixes the
   *tests*, not the image.
+
+  🚨 **But the class DID announce itself, hours earlier and for free, in a PR check.** Two access
+  suites in the plugin repository asserted the pre-#3206 query literals and reddened trunk the
+  moment the pin resolved core's tip. Replacing them with the post-#3206 literals then failed in
+  the OPPOSITE direction, because the pin had meanwhile been set to a commit that predates #3206.
+  **That mirror-image red — the same test failing both ways within a day — is the cheapest
+  diagnostic signature this class has**, and it appears in a check long before it appears as a 503.
+  Read as "our tests are wrong" it produces a literal-chasing fix; read as "the pin moves both
+  ways" it names the boundary. The shape a test must take to survive a pin that moves both
+  ways is its own subject, and is being written up separately.
 - **Core CI was green** — `UnanchoredQueryCensusTest` and `SignInReadsAreAnchoredTest` (#3206) judge
   core's *current* callers with the *current* planner rules. They cannot see an older core paired
   with a newer planner, because that pair exists only in ACR.
