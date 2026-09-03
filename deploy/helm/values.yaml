@@ -544,9 +544,25 @@ secrets:
     # credential — it refuses rather than persisting one in plaintext. Every real
     # deployment must set it in an overlay / --set / Key Vault CSI.
     Ai__KeyProtection__MasterKey: ""
-    # Plugin catalog. Consumer: the instance token issued to this install. Registry: the list of
-    # tokens it accepts (empty list = serves ANY anonymous caller — dev/e2e only).
+    # ---- Plugin catalog credentials -------------------------------------------
+    # CONSUMER ONLY. There is no registry-side token allowlist here any more: the
+    # `PluginCatalog__RegistryTokens` list this block used to advertise bound to nothing (no such
+    # property on PluginCatalogOptions; PluginRegistryTokens.SectionName/.Validate are [Obsolete]),
+    # so the "empty list = serves ANY anonymous caller, configure it in production" advice it
+    # carried bought a belief in an access control and no access control. A registry is gated by
+    # RequireInstanceKey plus the instance keys it issues, each resolving to a MeshWeaverInstance
+    # and its admin-owned PluginGrant.
+    #
+    # The instance key THIS install presents, as `Authorization: Bearer`. Labelled the legacy
+    # single-registry key and superseded in SHAPE by the per-registry list below, but fully read
+    # and what memex authenticates with today (RegistryTokenResolver.LegacyTokenFallback keeps it
+    # working for a sole or URL-matching registry) — not deprecated.
     PluginCatalog__RegistryToken: ""
+    # Per-registry consumer keys, INDEX-ALIGNED with pluginCatalog.registries — rendered as
+    # PluginCatalog__Registries__<i>__Token. Declared here (empty) so `helm show values` reveals
+    # the supported surface; a list entry is a secret, so set it from an overlay or the Key Vault
+    # CSI mount, never in a committed values file.
+    PluginCatalogConsumerRegistryTokens: []
     # ---- GitHub App identity (the machine credential for PRIVATE repos) -------
     # PEM private key of the GitHub App whose INSTALLATION TOKEN every server-side GitHub read
     # uses: the store's package feed (StoreManifestSource), the Store card's Provision → Import
