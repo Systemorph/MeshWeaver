@@ -715,8 +715,12 @@ public static class StaticRepoImporter
                 // within 30s" — the repair needed the grants it existed to write (memex Store, 2026-08-07).
                 // Only the BOOKKEEPING is Systemed here; the imported CONTENT keeps the exact write path
                 // (and identity) it always had.
+                // 🚨 `outcome` rides in ActivityLog.ReturnValue, not in the summary text (#3146). The
+                // skip arm below decides whether to re-run from it, and a decision that parses a log
+                // line is one re-wording away from silently re-importing forever again.
                 MeshNode BookkeepingNode(
-                    string id, string name, ActivityStatus status, params LogMessage[] messages) =>
+                    string id, string name, ActivityStatus status, string? outcome = null,
+                    params LogMessage[] messages) =>
                     new(id, activityNamespace)
                     {
                         Name = name,
@@ -729,6 +733,10 @@ public static class StaticRepoImporter
                             HubPath = source.Partition,
                             Status = status,
                             End = status == ActivityStatus.Running ? null : DateTime.UtcNow,
+                            ReturnValue = outcome is null
+                                ? null
+                                : System.Text.Json.JsonSerializer.SerializeToElement(
+                                    new ImportMarkerVerdict(outcome)),
                             Messages = ImmutableList.CreateRange(messages),
                         }
                     };
@@ -761,11 +769,11 @@ public static class StaticRepoImporter
                 // node that may not exist yet (the early-failure path) AND on one left forked by a prior
                 // half-write. The human-readable log lives on the attempt; the lock carries the verdict
                 // plus a pointer to the attempt that produced it.
-                IObservable<int> StampLock(ActivityStatus status, string summary) =>
+                IObservable<int> StampLock(ActivityStatus status, string summary, string? lockOutcome = null) =>
                     // A scoped run never touches the content-addressed marker — see isScopedRun.
                     isScopedRun
                     ? Observable.Return(0)
-                    : Upsert(hub, BookkeepingNode(activityId, lockName, status,
+                    : Upsert(hub, BookkeepingNode(activityId, lockName, status, lockOutcome,
                             new LogMessage(summary, status is ActivityStatus.Succeeded
                                 ? Microsoft.Extensions.Logging.LogLevel.Information
                                 : status is ActivityStatus.Warning
@@ -852,7 +860,8 @@ public static class StaticRepoImporter
                         //    (Run guards its own faults into a "Failed" RESULT rather than an exception,
                         //    so this arm — not the Catch below — is what a failed run reaches.)
                         .SelectMany(result => StampLock(
-                                result.Outcome switch
+                                lockOutcome: result.Outcome,
+                                status: result.Outcome switch
                                 {
                                     "ImportedWithErrors" => ActivityStatus.Warning,
                                     // 🚨 #3101 — a Space whose assets the transport refused has NOT
@@ -865,10 +874,14 @@ public static class StaticRepoImporter
                                     // NOT succeeded, so it must not stamp Succeeded here either —
                                     // otherwise the very next boot skips before it can look (#2211).
                                     "ImportedWithBlockedCreates" => ActivityStatus.Warning,
+                                    // 🚨 #3146 — Failed, not Warning, and that is load-bearing: it is
+                                    // the status the skip arm reads to stop re-running content that
+                                    // provably cannot import at this fingerprint.
+                                    "ImportedWithContentErrors" => ActivityStatus.Failed,
                                     "Failed" => ActivityStatus.Failed,
                                     _ => ActivityStatus.Succeeded,
                                 },
-                                $"{result.Outcome}: {result.Count} node(s) imported — see {attemptPath}.")
+                                summary: $"{result.Outcome}: {result.Count} node(s) imported — see {attemptPath}.")
                             .Select(_ => result))
                         .Catch<StaticRepoImportResult, Exception>(ex =>
                         {
@@ -890,6 +903,30 @@ public static class StaticRepoImporter
                 // on a genuine Succeeded marker and re-imports every single time. ContentAs recovers the
                 // degraded JsonElement (typed → as-is, JsonElement → deserialized, else null + logged).
                 var existingLog = existing?.ContentAs<ActivityLog>(hub.JsonSerializerOptions, logger);
+
+                // 🚨 #3146 — a recorded CONTENT verdict at this fingerprint is as final as a green
+                // one, and for the same reason: the marker is content-addressed, so re-running reads
+                // the same bytes and re-derives the same refusal. memex-cloud paid 19 full passes in
+                // 3 h — ≈425 identical validation failures plus a NodeType compile storm each — on a
+                // portal already at 8/8 replicas, because "not Succeeded" was read as "try again".
+                //
+                // Only an ALL-deterministic pass lands here (see the outcome fold); a single
+                // retryable failure among them keeps Warning and keeps re-importing, and a
+                // fingerprint change re-runs this from scratch because the marker id IS the
+                // fingerprint. Force still re-runs — that is its purpose.
+                if (policy?.Force != true
+                    && existingLog is { Status: ActivityStatus.Failed }
+                    && MarkerOutcome(existingLog) == "ImportedWithContentErrors")
+                {
+                    logger?.LogWarning(
+                        "[StaticRepoImport] {Partition} already FAILED at {Fingerprint} on content "
+                        + "rules — skipping. These same bytes cannot import; re-running compiles and "
+                        + "re-writes for nothing. Fix the source (or force) — see {Path}.",
+                        source.Partition, fingerprint, activityPath);
+                    return Observable.Return(
+                        new StaticRepoImportResult(source.Partition, fingerprint, "Skipped"));
+                }
+
                 if (existingLog is not { Status: ActivityStatus.Succeeded })
                     return Reimport();
 
@@ -1378,6 +1415,7 @@ public static class StaticRepoImporter
                     .Select(results => (
                         Imported: results.Sum(x => x.Imported),
                         Failed: results.Sum(x => x.Failed),
+                        FailedDeterministic: results.Sum(x => x.FailedDeterministic),
                         Preserved: results.Sum(x => x.Preserved),
                         Claimed: results.Sum(x => x.Claimed),
                         // The paths a claim blocks from EVER being created — the durable, actionable
@@ -1652,7 +1690,15 @@ public static class StaticRepoImporter
                             // only the attempt would have left the lock stamped Succeeded and the Space
                             // skipped for ever — the fix would have looked right and changed nothing.
                             return new StaticRepoImportResult(source.Partition, fingerprint,
-                                failed > 0 ? "ImportedWithErrors"
+                                // 🚨 #3146 — a pass whose EVERY failure was a content verdict is a
+                                // verdict about this fingerprint, not about this moment. It gets its
+                                // own outcome so the marker can record "re-running these same bytes
+                                // cannot help" — the one thing that stops the forever-loop. A single
+                                // retryable failure among them keeps the ordinary Warning, because
+                                // then a later pass genuinely might do better.
+                                failed > 0 && count.FailedDeterministic == failed
+                                    ? "ImportedWithContentErrors"
+                                : failed > 0 ? "ImportedWithErrors"
                                     : blockedCreates.Count > 0 ? "ImportedWithBlockedCreates"
                                     : refusedContent.Count > 0 ? "ImportedWithRefusedContent" : "Imported",
                                 count.Imported, preserved)
@@ -2384,12 +2430,32 @@ public static class StaticRepoImporter
     }
 
     /// <summary>
+    /// What the content-addressed import marker records about the pass that wrote it (#3146),
+    /// carried in <c>ActivityLog.ReturnValue</c>. Structured on purpose: the skip decision reads it,
+    /// and a decision that parsed the summary text would silently start re-importing forever the
+    /// first time somebody re-worded a log line.
+    /// </summary>
+    /// <param name="Outcome">The <c>StaticRepoImportResult.Outcome</c> of that pass.</param>
+    private sealed record ImportMarkerVerdict(
+        // 🚨 PINNED, not left to the serializer's naming policy. The reader matches this name to
+        // decide whether to re-import, and the first version silently never matched: written by the
+        // default policy it is "Outcome", and the reader looked for "outcome" — so the skip never
+        // fired and the loop this fixes stayed exactly as it was, with every test green except the
+        // one that measured the second pass.
+        [property: System.Text.Json.Serialization.JsonPropertyName("outcome")]
+        string Outcome);
+
+    /// <summary>
     /// ONE source node's contribution to the upsert phase's tally: the counters, the path it wrote or
     /// could not create, and the per-file activity line that rides along to the phase's single
     /// <c>AppendLogs</c> (written per item it is O(n²) — see the phase-log note at the call site).
     /// </summary>
     /// <param name="Imported">1 when the node was written, else 0.</param>
     /// <param name="Failed">1 when the write was attempted and faulted, else 0.</param>
+    /// <param name="FailedDeterministic">1 when that fault was a CONTENT verdict — a rule this node
+    /// breaks, which the same bytes will break again at the same fingerprint forever (#3146) — else
+    /// 0. Always accompanied by <c>Failed: 1</c>; the pair is what separates "retry cannot help"
+    /// from "the store blipped".</param>
     /// <param name="Preserved">1 when a server-newer copy was kept, else 0.</param>
     /// <param name="Claimed">1 when a claim declined the node, else 0.</param>
     /// <param name="Written">The path that landed, or <c>null</c>.</param>
@@ -2398,11 +2464,75 @@ public static class StaticRepoImporter
     private readonly record struct ImportItem(
         int Imported = 0,
         int Failed = 0,
+        int FailedDeterministic = 0,
         int Preserved = 0,
         int Claimed = 0,
         string? Written = null,
         string? Blocked = null,
         LogMessage? Log = null);
+
+    /// <summary>
+    /// The outcome a prior pass recorded on the marker, or <c>null</c> when it recorded none (every
+    /// marker written before #3146, and every scoped run). Tolerant by construction: an unreadable
+    /// or absent verdict answers null, which re-imports — the safe direction.
+    /// </summary>
+    /// <param name="log">The marker's activity log.</param>
+    /// <returns>The recorded outcome string, or <c>null</c>.</returns>
+    private static string? MarkerOutcome(ActivityLog log)
+    {
+        if (log.ReturnValue is not { } value)
+            return null;
+        try
+        {
+            return value.ValueKind == System.Text.Json.JsonValueKind.Object
+                   && value.TryGetProperty("outcome", out var outcome)
+                   && outcome.ValueKind == System.Text.Json.JsonValueKind.String
+                ? outcome.GetString()
+                : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 🚨 TRUE when an upsert fault is a verdict about the CONTENT rather than about the moment
+    /// (#3146) — a rule these bytes break, which they will break identically on every later pass
+    /// while the fingerprint is unchanged.
+    ///
+    /// <para>The distinction is the whole fix. The marker is content-addressed, so a re-run at the
+    /// same fingerprint re-reads the same nodes and re-derives the same verdict: re-running is only
+    /// meaningful when something OUTSIDE the content could have changed. memex-cloud measured the
+    /// cost of not making it — 19 full passes in 3 h, each ≈425 identical
+    /// <c>InvalidOperationException</c>s ("A 'Space' owns its partition, so it must be top-level",
+    /// "NodeType 'Northwind/Article' is not registered") plus a NodeType compile storm, on a portal
+    /// already at 8/8 replicas.</para>
+    ///
+    /// <para>🚨 It is deliberately a SHORT allow-list of verdict-shaped faults, and everything else
+    /// — a store blip, an owner that did not answer, a hub going down mid-import — stays retryable.
+    /// Getting that backwards is the far worse failure: it is #3101 again, a partition frozen out of
+    /// the mesh by a marker nobody re-examines. Unknown means retryable.</para>
+    /// </summary>
+    /// <param name="exception">The fault the upsert raised.</param>
+    /// <returns><c>true</c> only when re-running at the same fingerprint provably cannot help.</returns>
+    private static bool IsContentVerdict(Exception? exception)
+    {
+        // Transient wins outright: these say "not evaluated / ask again", never "these bytes are wrong".
+        if (StoreReachability.IsStoreUnreachable(exception)
+            || HubDisposingException.IsHubDisposal(exception)
+            || HubDisposingException.IsDisposedContainer(exception)
+            || HubDisposedBeforeResponseException.IsHubDisposedBeforeResponse(exception)
+            || ExceptionChain.Contains<TimeoutException>(exception)
+            || ExceptionChain.Contains<OperationCanceledException>(exception))
+            return false;
+
+        // A validator refused these bytes, or the mesh has no such type: the same content re-read at
+        // the same fingerprint produces the same refusal.
+        return ExceptionChain.Contains<ArgumentException>(exception)
+               || ExceptionChain.Contains<UnauthorizedAccessException>(exception)
+               || ExceptionChain.Contains<InvalidOperationException>(exception);
+    }
 
     /// <summary>
     /// Writes ONE node through the canonical per-node upsert verb, isolated.
@@ -2444,6 +2574,7 @@ public static class StaticRepoImporter
                     partition, node.Path);
                 return Observable.Return(new ImportItem(
                     Failed: 1,
+                    FailedDeterministic: IsContentVerdict(ex) ? 1 : 0,
                     Log: new LogMessage(
                         $"⚠ Failed to import {node.Path}: {ex.Message}",
                         Microsoft.Extensions.Logging.LogLevel.Warning)));
