@@ -161,6 +161,32 @@ public record NodeTypeDefinition
     public List<string>? RestrictedToNamespaces { get; init; }
 
     /// <summary>
+    /// Where instances of this type LIVE, as mesh query strings whose <c>namespace:</c>/<c>path:</c>
+    /// leg names the partitions — <c>namespace:Admin/Menu</c>, <c>namespace:A|B|C</c>,
+    /// <c>path:Ops/Mail</c> (#3039; Plugins#1127). Authored on the type and installed with the
+    /// package that owns it, so ownership stays decentral. The storage layer reads it through
+    /// <see cref="INodeTypeInstanceLocations"/> and INTERSECTS the declared partitions with the ones
+    /// an unanchored <c>nodeType:X</c> query would have UNION-ed, so a declaration can only ever
+    /// drop branches whose schema cannot hold an instance.
+    ///
+    /// <para><b>Null or empty means undeclared: the query fans out over everything, as today.</b>
+    /// The contract is fail-open — an unparseable entry, a wildcarded first segment, or a type the
+    /// planner has never heard of all answer "cannot narrow". An OVER-stated declaration (naming a
+    /// partition with no instances) costs one zero-row branch and changes no answer; an UNDER-stated
+    /// one <b>silently loses rows</b> — nothing errors, nothing logs — so declare every location
+    /// instances can be written to, or declare nothing.</para>
+    ///
+    /// <para>🚨 <b>Refused for the permission fold's own types</b> — <c>Role</c>,
+    /// <c>GroupMembership</c>, <c>AccessAssignment</c>, <c>PartitionAccessPolicy</c> and every
+    /// type-declared gate (<c>Mesh.Security.NeverNarrowedNodeTypes</c>): in that fold a short read is
+    /// a vanished grant (#2011) or a deny that fails OPEN. <c>InstanceLocationDeclarationValidator</c>
+    /// refuses such a declaration at the write boundary and the static fold refuses it at startup,
+    /// naming the reason; the planner refuses it again at query time. See
+    /// <c>Doc/Architecture/UnanchoredSecurityReads</c>.</para>
+    /// </summary>
+    public IReadOnlyList<string>? InstanceLocations { get; init; }
+
+    /// <summary>
     /// When <c>true</c>, this NodeType's CURRENT baked assembly joins the kernel's
     /// cell-scripting surface (issue #1649): every kernel session resolves it per session
     /// through the compilation cache — metadata reference for compile-time visibility plus a

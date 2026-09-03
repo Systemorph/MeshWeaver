@@ -196,6 +196,48 @@ group-derived permission vanish AND a group-scoped deny fail open, with nothing 
 failing. It also carries the per-lever verdicts (what is tractable, what needs a decision) and the
 executable census `SecurityQueryShapesTest` pins.
 
+## Declared instance locations (#3039) — enabling infrastructure, NOT the fix for the seven
+
+Plugins#1127 added a **fourth fan-out narrowing** to `PostgreSqlPartitionedMeshQuery`: a NodeType
+DECLARES where its instances live, and an unanchored `nodeType:X` query intersects the declared
+partitions with the schemas it was going to UNION. Core #3039 supplies what that planner was
+missing — the declaration and its projection:
+
+- **`NodeTypeDefinition.InstanceLocations`** (`MeshWeaver.Graph.Contract`): `namespace:`/`path:`
+  query strings, authored on the type, shipped with the package that owns it, round-tripping through
+  JSON and a package install like every other field.
+- **`INodeTypeInstanceLocations`** (`MeshWeaver.Graph.Contract`) and its in-box implementation
+  `NodeTypeInstanceLocations` (`MeshWeaver.Graph`, registered by `AddGraph()`): the static fold over
+  the builder-registered definitions plus a dynamic lane fed by each definition node's OWN hub while
+  it is live on the process — an entry follows every edit and is forgotten with the hub, so the
+  projection can never serve a stale (under-stated) declaration. Undeclared, unknown, or
+  another-silo definitions answer `null`: **fail-open, the query fans out in full — slow, never
+  partial.**
+- **The authoring gate.** `NeverNarrowedNodeTypes` (`MeshWeaver.Mesh.Contract`, hoisted from
+  Plugins so there is ONE list) names the fold's types — `Role`, `GroupMembership`,
+  `AccessAssignment`, `PartitionAccessPolicy`, plus every `MeshConfiguration.NodeTypeGates` type.
+  `InstanceLocationDeclarationValidator` refuses a declaration on any of them at Create/Update, and
+  the static fold throws for an in-process one, both naming the reason: in the fold a short read is a
+  vanished grant (#2011) or a deny that fails OPEN ([Unanchored Security Reads](../UnanchoredSecurityReads)).
+  The planner refuses the same set again at query time, so a declaration that slipped past both
+  would still be inert — the gate exists so it is a red import instead.
+
+🚨 **This does not remove any of the fan-outs in the census above, and cannot.** The seven shapes
+measured on 2026-09-01 (Plugins `Hosting/NodeTypeInstanceLocations`) live in per-partition
+satellite containers — `{any}/_Access`, `{owner}/_Thread`, `{mainNode}/_Notification`, per-user
+`_Email` — or ARE the fold (refused outright). No honest declaration narrows them: `namespace:*/_X`
+correctly resolves to "cannot narrow". What removes them is still this page's own plan, in its order:
+the fold materialization (plan 2), recipient-side notification delivery (plan 1), then anchoring
+`Thread`/`UiContribution`/`Email` at their call sites. The declaration serves the types that DO have
+a home — an `Admin/Menu` entry, a package's own dimension types — and any future type whose author
+can say where it lives.
+
+**Plugins follow-up** (the planner already resolves the interface with `GetService`, so nothing is
+wired until this lands): `src/MeshWeaver.Hosting.PostgreSql/NodeTypeInstanceLocations.cs` drops its
+own `INodeTypeInstanceLocations` and `NeverNarrowedNodeTypes` in favour of core's
+(`using MeshWeaver.Graph.Configuration;` / `using MeshWeaver.Mesh.Security;`), keeping only
+`DeclaredNodeTypeInstanceLocations`, the test fixture.
+
 Related: issue #2640 (the per-page floor this eliminates), #2876 (a transient connect timeout took
 a whole area render down — the same fan-out, from the render side), #2895 (the rebake write storm
 whose mutual blocking with the fan-outs produced the 08-31 outages), #2011/#2048 (why the fold must
