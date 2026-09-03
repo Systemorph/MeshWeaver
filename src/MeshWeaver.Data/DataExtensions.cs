@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -880,6 +881,156 @@ public static class DataExtensions
     }
 
     /// <summary>
+    /// 🚨 A one-shot owner-side read that reaches a terminal on ALL FOUR of Rx's outcomes — the
+    /// seam #3194 and #3195 close, and the ORDER #3193 got wrong made structural.
+    ///
+    /// <para><c>Subscribe(onNext, onError)</c> covers two. <see cref="WhenCompletesEmpty{T}"/>
+    /// (#3033) added the third. The fourth — <b>never emits and never completes</b> — is settled as
+    /// silence by all three, and it is not hypothetical: a stream's <c>Store</c> is a
+    /// <c>ReplaySubject</c>, so one that has never published and is never disposed hands
+    /// <c>Take(1)</c> nothing, forever.</para>
+    ///
+    /// <list type="bullet">
+    ///   <item><b>Emits</b> → the value passes through; <c>Take(1)</c>'s completion is NOT a
+    ///     verdict, so work started in <c>onNext</c> is undisturbed.</item>
+    ///   <item><b>Errors</b> → <c>onError</c>.</item>
+    ///   <item><b>Completes empty</b> → <paramref name="onEmptyCompletion"/>, then completion.</item>
+    ///   <item><b>Neither</b> → <c>onError(TimeoutException)</c> at <paramref name="bound"/>.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>The Timeout sits BELOW the caller's filter and below the <c>Take(1)</c>, and that
+    /// is the point of having a seam at all.</b> A <c>Timeout</c> placed upstream of an operator
+    /// that DROPS emissions is re-armed by every dropped one, so it can never fire on a busy
+    /// stream — the bound is present, reviewed, and unreachable. That is #3193 exactly. Callers
+    /// hand in their already-filtered source and cannot get the order wrong.</para>
+    ///
+    /// <para>Internal, and a PURE composition over <see cref="IObservable{T}"/> — no hub, no mesh —
+    /// so <c>OneShotReadTotalityTest</c> drives all four outcomes on a <c>TestScheduler</c>.</para>
+    /// </summary>
+    /// <param name="source">The already-filtered source; its FIRST emission is the one awaited.</param>
+    /// <param name="bound">The wait for that emission.</param>
+    /// <param name="onEmptyCompletion">Runs when the source ends without ever emitting.</param>
+    /// <param name="scheduler">Timer scheduler; null ⇒ <see cref="Scheduler.Default"/>.</param>
+    internal static IObservable<T> ArmedOneShotRead<T>(
+        this IObservable<T> source,
+        TimeSpan bound,
+        Action onEmptyCompletion,
+        IScheduler? scheduler = null)
+        => source
+            .Take(1)
+            .Timeout(bound, scheduler ?? Scheduler.Default)
+            .WhenCompletesEmpty(onEmptyCompletion);
+
+    /// <summary>
+    /// 🚨 Routes an owner-side patch verdict and REPORTS whether a route took it (#3196) — the
+    /// decision half of <see cref="PostPatchVerdict"/>, kept a pure composition over two delegates
+    /// so <c>PatchVerdictRoutingTest</c> can drive it without a hub (the house rule: never mock
+    /// <see cref="IMessageHub"/>).
+    ///
+    /// <para>Post FIRST, sink SECOND — the reverse of <see cref="RegisterOwnerDisposingNack"/>,
+    /// deliberately. That one runs at disposal, where no <c>Observe</c> callback is pending and the
+    /// message is only a long way round to the registry. This runs on the LIVE path, where the
+    /// caller's callback IS armed and the post is the designed seam; sending every ordinary ack to
+    /// the late-verdict registry instead would change the transport for writes that are working.</para>
+    ///
+    /// <para>A <c>null</c> or <see cref="MessageDeliveryState.Failed"/> delivery is the refusal:
+    /// <c>MessageService.PostImplGeneric</c> stamps <c>POST_REFUSED_SHUTTING_DOWN</c> and returns
+    /// exactly that when the owner AND its parent are past <c>DisposeHostedHubs</c>, and its own
+    /// comment says "This site does NOT answer the sender itself".</para>
+    /// </summary>
+    /// <returns><c>true</c> when the post was accepted or the sink found an armed caller.</returns>
+    internal static bool RoutePatchVerdict(
+        PatchDataResponse response,
+        string requestId,
+        Func<PatchDataResponse, IMessageDelivery?> post,
+        Func<string, PatchDataResponse, bool>? dispatchLate)
+    {
+        var delivery = post(response);
+        if (delivery is not null && delivery.State != MessageDeliveryState.Failed)
+            return true;
+        return dispatchLate is not null && dispatchLate(requestId, response);
+    }
+
+    /// <summary>
+    /// How long the GENERIC (non-MeshNode / no-primary-data-source) patch path waits for its
+    /// initial base read before answering (#3194).
+    ///
+    /// <para>🚨 This bound covers Rx's FOURTH outcome — <b>never emits and never completes</b> —
+    /// which is the one a <c>Subscribe(onNext, onError)</c> plus a
+    /// <see cref="WhenCompletesEmpty{T}"/> arm still settles as silence. The stream's
+    /// <c>Store</c> is a <c>ReplaySubject</c>, so a stream that has never published and is never
+    /// disposed hands <c>Take(1)</c> nothing, forever; and the only other bounded watcher on this
+    /// path (<c>postSub</c>) is armed INSIDE the <c>onNext</c> arm, so on that stream it is never
+    /// armed at all.</para>
+    ///
+    /// <para>Ten seconds, matching the in-turn path's cold-activation defer, because it is the same
+    /// question — has the owner's store produced state yet. It is the FIRST thing on this path, so
+    /// it composes with nothing else and sits well inside the caller's 31 s
+    /// <c>WriteVerdictBound</c> (Doc/Architecture/BoundsMustBeOrdered). Expiry is not a lost write:
+    /// the merge provably never ran, so the verdict is the auto-retried
+    /// <see cref="MeshNodeErrorCode.OwnerNotReady"/> rather than the 31 s
+    /// <c>OwnerUnreachable</c> the caller reports today.</para>
+    /// </summary>
+    private static readonly TimeSpan GenericBaseReadBound = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Posts an owner-side patch verdict and VERIFIES that a route accepted it (#3196).
+    ///
+    /// <para>🚨 <b>Why the post's result cannot be discarded.</b> Both ack gates latch their
+    /// once-only <c>ackPosted</c> flag BEFORE posting, which is right — two racing legs must not
+    /// both answer. But latching is also what disables the ONLY route that still works during
+    /// teardown: once the gate is claimed, <see cref="RegisterOwnerDisposingNack"/>'s
+    /// <c>tryClaimAck()</c> returns false and its <see cref="ILatePatchVerdictSink"/> dispatch is
+    /// skipped. So a post that is REFUSED — the owner past <c>DisposeHostedHubs</c> with a parent
+    /// past it too, where <c>MessageService.PostImplGeneric</c> stamps
+    /// <c>POST_REFUSED_SHUTTING_DOWN</c> and returns a <see cref="MessageDeliveryState.Failed"/>
+    /// delivery whose own comment says "This site does NOT answer the sender itself" — threw the
+    /// verdict away AND closed the door behind it. The caller then burned its full 31 s
+    /// <c>WriteVerdictBound</c> and reported <c>OwnerUnreachable</c> for a write the owner had
+    /// already judged.</para>
+    ///
+    /// <para>Claim-then-VERIFY: the gate still latches first, but the verdict now falls through to
+    /// the sink when the transport refuses it — the same order
+    /// <see cref="RegisterOwnerDisposingNack"/> already demonstrates ("Dispatch RETURNS whether a
+    /// caller was armed, so the question is now answered rather than assumed"). The post stays
+    /// FIRST here, unlike there: this runs on the live path where the caller's <c>Observe</c>
+    /// callback is still pending and the message IS the designed seam; the registry is the
+    /// late-verdict route, and hijacking every ordinary ack onto it would change the transport for
+    /// writes that are working.</para>
+    ///
+    /// <para>A miss on both routes is a checked fact, not a guess: nobody in this mesh is armed and
+    /// the transport is gone. It is logged rather than swallowed, because the remaining case — a
+    /// caller in another process — is one this registry cannot see.</para>
+    /// </summary>
+    /// <param name="hub">The owning per-node hub answering the patch.</param>
+    /// <param name="request">The in-flight patch request being answered.</param>
+    /// <param name="response">The verdict.</param>
+    /// <param name="lateVerdicts">The late-verdict sink, resolved on the handler's TURN by the
+    /// caller and closed over — never resolved from here, which can run at disposal time.</param>
+    /// <param name="logger">Optional logger for the both-routes-missed case.</param>
+    private static void PostPatchVerdict(
+        IMessageHub hub,
+        IMessageDelivery<PatchDataRequest> request,
+        PatchDataResponse response,
+        ILatePatchVerdictSink? lateVerdicts,
+        ILogger? logger)
+    {
+        if (RoutePatchVerdict(
+                response,
+                request.Id,
+                resp => hub.Post(resp, o => o.ResponseFor(request)),
+                lateVerdicts is null ? null : lateVerdicts.Dispatch))
+            return;
+
+        logger?.LogWarning(
+            "Patch verdict for request {RequestId} on {Address} reached no route: the post was refused "
+            + "(run level {RunLevel}) and no caller was armed in this mesh. A same-mesh caller would "
+            + "have been served by the late-verdict sink; a cross-process one now waits out its "
+            + "WriteVerdictBound.",
+            request.Id, hub.Address, hub.RunLevel);
+    }
+
+    /// <summary>
     /// 🚨 Owner-side disposal NACK for an in-flight <see cref="PatchDataRequest"/>. The patch
     /// pipeline registers its ack watcher / merge turn on structures that DIE SILENTLY with the
     /// hub (postSub / deferSub / flushSub are <c>hub.RegisterForDisposal</c>'d; the merge turn's
@@ -1581,6 +1732,13 @@ public static class DataExtensions
         // Once-only ack gate at METHOD scope (not inside the Take(1) callback): the disposal
         // NACK below must be able to claim it even when the hub dies BEFORE the stream's first
         // emission released the callback — the deferred path's silent-death window.
+        // 🚨 Resolved HERE, on the handler's TURN, and closed over — the identical rule (and the
+        // identical incident) as RegisterOwnerDisposingNack: a DI touch from an ack path that can
+        // run at disposal time throws once the lifetime scope is closed, and the verdict is then
+        // never produced at all.
+        var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
+        var ackLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Data.PatchAck");
         var ackPosted = 0;
         void AckOnce(bool success, MeshNodeError? error = null)
         {
@@ -1588,30 +1746,38 @@ public static class DataExtensions
             var resp = new PatchDataResponse(success, hub.Version);
             if (error is not null)
                 resp = resp with { Error = error.Message, NodeError = error };
-            hub.Post(resp, o => o.ResponseFor(request));
+            // Claim-then-VERIFY (#3196): claiming the gate above is what disables
+            // RegisterOwnerDisposingNack's sink route, so a refused post must fall through to it
+            // here or the verdict is lost with the door shut behind it.
+            PostPatchVerdict(hub, request, resp, lateVerdicts, ackLogger);
         }
         RegisterOwnerDisposingNack(hub, request, hubPath,
             () => System.Threading.Interlocked.Exchange(ref ackPosted, 1) == 0);
 
         stream
-            .Take(1)
-            // 🚨 Totality (#3033): this initial read had NEITHER an error nor a completion arm. A
-            // stream that faults or ENDS before delivering the state to merge against left the
-            // request accepted and silently unanswered — the writer then burned its full
-            // confirmation window and reported OwnerUnreachable. Here the merge provably never
-            // ran, so OwnerDisposing ("the patch was NOT applied; safe to retry") is exact — unless
-            // the stream ended because the OWNER is shutting down, in which case the ShutDown-phase
-            // disposal NACK (RegisterOwnerDisposingNack, above) owns the verdict: minted here it
-            // would be one phase too early and on the wrong transport (see ArmPatchAckWatcher).
-            .WhenCompletesEmpty(() =>
-            {
-                if (hub.IsShuttingDown)
-                    return;
-                AckOnce(false, new MeshNodeError(
-                    MeshNodeErrorCode.OwnerDisposing, hubPath,
-                    "the owner's stream ended before it delivered the current state to merge against — "
-                    + "the patch was NOT applied; safe to retry against the fresh activation"));
-            })
+            // 🚨 All four Rx outcomes (#3194 — the fourth had NOTHING here: no Timeout anywhere
+            // between the stream and the Subscribe, and postSub, this path's only other bounded
+            // watcher, is armed INSIDE the onNext arm, so a stream that never emits never arms it).
+            // The bound's verdict is minted in the onError arm below rather than by
+            // ClassifyPatchException, which would settle a TimeoutException as Unknown — true of an
+            // echo that may have committed, wrong here, where the merge provably never ran.
+            .ArmedOneShotRead(GenericBaseReadBound, () =>
+                // 🚨 Totality (#3033): the empty-completion arm. A stream that ENDS before
+                // delivering the state to merge against left the request accepted and silently
+                // unanswered. Here the merge provably never ran, so OwnerDisposing ("the patch was
+                // NOT applied; safe to retry") is exact — unless the stream ended because the OWNER
+                // is shutting down, in which case the ShutDown-phase disposal NACK
+                // (RegisterOwnerDisposingNack, above) owns the verdict: minted here it would be one
+                // phase too early and on the wrong transport (see ArmPatchAckWatcher).
+                {
+                    if (hub.IsShuttingDown)
+                        return;
+                    AckOnce(false, new MeshNodeError(
+                        MeshNodeErrorCode.OwnerDisposing, hubPath,
+                        "the owner's stream ended before it delivered the current state to merge "
+                        + "against — the patch was NOT applied; safe to retry against the fresh "
+                        + "activation"));
+                })
             .Subscribe(change =>
             {
                 try
@@ -1774,7 +1940,18 @@ public static class DataExtensions
                     AckOnce(false, ClassifyPatchException(ex, hubPath));
                 }
             },
-            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+            ex => AckOnce(false, ex is TimeoutException
+                // The store never produced a base within the bound: an activation that has not
+                // LOADED, not an owner answering. Same reading — and same auto-retried code — as
+                // the in-turn path's cold-activation defer, and deliberately NOT NotFound, which
+                // would poison existence checks and the stream cache's negative cache for a node
+                // that exists (#667).
+                ? new MeshNodeError(
+                    MeshNodeErrorCode.OwnerNotReady, hubPath,
+                    "the owner's stream did not deliver the current state to merge against within "
+                    + $"{GenericBaseReadBound.TotalSeconds:0}s — the patch was NOT applied; safe to "
+                    + "retry once the activation has loaded")
+                : ClassifyPatchException(ex, hubPath)));
     }
 
     /// <summary>
@@ -1806,6 +1983,13 @@ public static class DataExtensions
         var mergeGuardLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Data.MergeGuard");
 
+        // 🚨 Resolved HERE, on the handler's TURN, and closed over — the identical rule (and the
+        // identical incident) as RegisterOwnerDisposingNack: a DI touch from an ack path that can
+        // run at disposal time throws once the lifetime scope is closed, and the verdict is then
+        // never produced at all.
+        var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
+        var ackLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Data.PatchAck");
         var ackPosted = 0;
         void AckOnce(bool success, MeshNodeError? error = null)
         {
@@ -1813,7 +1997,10 @@ public static class DataExtensions
             var resp = new PatchDataResponse(success, hub.Version);
             if (error is not null)
                 resp = resp with { Error = error.Message, NodeError = error };
-            hub.Post(resp, o => o.ResponseFor(request));
+            // Claim-then-VERIFY (#3196): claiming the gate above is what disables
+            // RegisterOwnerDisposingNack's sink route, so a refused post must fall through to it
+            // here or the verdict is lost with the door shut behind it.
+            PostPatchVerdict(hub, request, resp, lateVerdicts, ackLogger);
         }
 
         // 🚨 Write-identity stamps — set by the merge lambda AT COMMIT TIME (the same
@@ -1963,8 +2150,34 @@ public static class DataExtensions
                             var deferSub = primary
                                 .Where(ci => ci.Value?.Collections.GetValueOrDefault(collectionName)
                                     is { Instances.Count: > 0 })
-                                .Take(1)
-                                .Timeout(TimeSpan.FromSeconds(10))
+                                // 🚨 Through the shared seam: Take(1) + bound + empty-completion
+                                // arm, with the bound BELOW the Where above — a Timeout placed over
+                                // the unfiltered primary would be re-armed by every sibling emission
+                                // the filter drops, which is #3193's unreachable bound exactly.
+                                .ArmedOneShotRead(TimeSpan.FromSeconds(10), () =>
+                                // 🚨 The THIRD termination (#3195). Two arms cover three: if the
+                                // primary's store COMPLETES inside the bound — a documented,
+                                // non-hypothetical shape, see RequireBaseState's remarks on the
+                                // three producers of it — the completion passes Take(1) and CANCELS
+                                // the Timeout above (a terminal notification disposes its timer), so
+                                // neither arm below can ever run. The merge turn that armed this
+                                // already returned null, so nothing else is in flight and this leg
+                                // produces no verdict at all. Placed LAST so it sees every terminal
+                                // that reaches the subscriber, and guarded on "never emitted" so the
+                                // happy path — Take(1) completing right after its value, while
+                                // RunMergeTurn is still in flight — cannot trip it.
+                                {
+                                    // Stand aside for a shutting-down owner, exactly as the generic
+                                    // path's base read does: the ShutDown-phase disposal NACK owns
+                                    // that verdict, on the transport that still reaches the waiter.
+                                    if (hub.IsShuttingDown)
+                                        return;
+                                    AckOnce(false, new MeshNodeError(
+                                        MeshNodeErrorCode.OwnerDisposing, hubPath,
+                                        "the owner's store ended before the activation finished "
+                                        + "loading — the patch was NOT applied; safe to retry "
+                                        + "against the fresh activation"));
+                                })
                                 .Subscribe(
                                     _ => RunMergeTurn(deferred: true),
                                     // 🚨 NOT NotFound (#667): the store never initialized within the
