@@ -83,16 +83,12 @@ public sealed class FrameworkReleaseBroadcaster
     private IIoPool HttpPool => ioPools.Get(IoPoolNames.Http);
 
     /// <summary>
-    /// Broadcasts to the <see cref="FrameworkBroadcastOptions.Subscribers"/> configured on this
-    /// instance — the config-seam fallback used when no explicit list is supplied (the Hosting
-    /// registry, once populated, calls <see cref="Broadcast"/> with its own set instead).
-    /// </summary>
-    public IObservable<BroadcastOutcome> BroadcastToConfigured(string? version = null) =>
-        Broadcast(options.Subscribers, version);
-
-    /// <summary>
-    /// Broadcasts the release to an EXPLICIT subscriber set — what the Hosting subscriber registry
-    /// passes in. Mints one installation token, then POSTs a <c>repository_dispatch</c> to each
+    /// Broadcasts the release to the subscriber set the caller derived from the mesh — the Hosting
+    /// module's <c>PlatformBuildInboxWatcher</c> passes the registry-source repositories of every
+    /// <c>Hosting/Deployment</c> record on this instance (there is no configured list; the former
+    /// <c>BroadcastToConfigured</c> config seam was retired 2026-09-03, see
+    /// <see cref="FrameworkBroadcastOptions"/>). Mints one installation token, then POSTs a
+    /// <c>repository_dispatch</c> to each
     /// repo in turn. Never throws: an unconfigured App, an empty set, or a per-repo failure all
     /// resolve to a <see cref="BroadcastOutcome"/> the caller can log. Cold — nothing runs until
     /// subscribed.
@@ -100,8 +96,13 @@ public sealed class FrameworkReleaseBroadcaster
     /// <param name="subscribers">Repositories as <c>owner/name</c> (normalized by <see cref="NormalizeSubscribers"/>).</param>
     /// <param name="version">The released version, carried in the dispatch <c>client_payload</c> for the logs; optional.</param>
     /// <param name="eventType">Override the dispatch event type; defaults to <see cref="FrameworkBroadcastOptions.EventType"/>.</param>
+    /// <param name="payload">Further <c>client_payload</c> fields the registered record carries — for a
+    /// bundle publication (<c>meshweaver-upstream-published</c>) the publishing <c>source</c>, its
+    /// <c>identity</c>, <c>image</c> and <c>platform_image</c>. Merged over the defaults
+    /// (<c>version</c>, <c>source = "memex"</c>), so a caller may name the real source.</param>
     public IObservable<BroadcastOutcome> Broadcast(
-        IEnumerable<string>? subscribers, string? version = null, string? eventType = null)
+        IEnumerable<string>? subscribers, string? version = null, string? eventType = null,
+        IReadOnlyDictionary<string, string>? payload = null)
     {
         var repos = NormalizeSubscribers(subscribers);
         var evt = string.IsNullOrWhiteSpace(eventType) ? options.EventType : eventType!.Trim();
@@ -131,11 +132,11 @@ public sealed class FrameworkReleaseBroadcaster
                     "Framework-release broadcast: this instance ACCEPTS platform-build deliveries "
                     + "({Target} is allowlisted in {TargetsKey}) but has NO subscribers, so the "
                     + "release wave dispatches to nobody and every node repo falls back to its "
-                    + "schedule poll. Set {SubscribersKey}0..N (one owner/name per slot) on this "
-                    + "deployment.",
+                    + "schedule poll. The subscriber set is DATA IN THE MESH: every repository a "
+                    + "Hosting/Deployment record on this instance serves as a registry source "
+                    + "(pluginRepos[].isRegistrySource) — no record here names one.",
                     FrameworkBroadcastOptions.PlatformBuildsTarget,
-                    WebhookInbox.TargetsConfigSection,
-                    FrameworkBroadcastOptions.SubscribersEnvKeyPrefix);
+                    WebhookInbox.TargetsConfigSection);
             else
                 logger?.LogInformation(
                     "Framework-release broadcast: no subscribers configured and this instance does "
@@ -146,7 +147,7 @@ public sealed class FrameworkReleaseBroadcaster
 
         return tokens.GetInstallationToken().SelectMany(token =>
                 Observable
-                    .Concat(repos.Select(repo => DispatchOne(token, repo, evt, version)))
+                    .Concat(repos.Select(repo => DispatchOne(token, repo, evt, version, payload)))
                     .ToList()
                     .Select(results =>
                     {
@@ -186,14 +187,16 @@ public sealed class FrameworkReleaseBroadcaster
     // Run: Run is the eager promise-cache shape — it starts the POST at call time, decoupled from
     // the subscription, so an unsubscribe (timeout, shutdown) would leave the dispatch running and
     // holding an HTTP pool slot. Invoke stays cold and propagates cancellation into the leaf's ct.
-    private IObservable<RepoDispatch> DispatchOne(string token, string repo, string eventType, string? version) =>
-        HttpPool.Invoke(ct => PostDispatchAsync(token, repo, eventType, version, ct))
+    private IObservable<RepoDispatch> DispatchOne(
+        string token, string repo, string eventType, string? version, IReadOnlyDictionary<string, string>? payload) =>
+        HttpPool.Invoke(ct => PostDispatchAsync(token, repo, eventType, version, payload, ct))
             .Catch((Exception ex) => Observable.Return(new RepoDispatch(repo, false, ex.Message)));
 
     private async Task<RepoDispatch> PostDispatchAsync(
-        string token, string repo, string eventType, string? version, CancellationToken ct)
+        string token, string repo, string eventType, string? version,
+        IReadOnlyDictionary<string, string>? payload, CancellationToken ct)
     {
-        var (url, body) = BuildDispatch(appOptions.ApiBaseUrl, repo, eventType, version);
+        var (url, body) = BuildDispatch(appOptions.ApiBaseUrl, repo, eventType, version, payload);
         using var req = new HttpRequestMessage(HttpMethod.Post, url);
         req.Headers.Accept.ParseAdd("application/vnd.github+json");
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -248,14 +251,17 @@ public sealed class FrameworkReleaseBroadcaster
     /// <c>source</c> breadcrumb). Pure. Internal for the offline shape test.
     /// </summary>
     internal static (string Url, string Body) BuildDispatch(
-        string apiBaseUrl, string repo, string eventType, string? version)
+        string apiBaseUrl, string repo, string eventType, string? version,
+        IReadOnlyDictionary<string, string>? payload = null)
     {
         var url = $"{apiBaseUrl.TrimEnd('/')}/repos/{repo}/dispatches";
-        var body = JsonSerializer.Serialize(new
-        {
-            event_type = eventType,
-            client_payload = new { version, source = "memex" },
-        });
+        var fields = ImmutableSortedDictionary<string, string?>.Empty
+            .Add("version", version)
+            .Add("source", "memex");
+        if (payload is not null)
+            foreach (var (key, value) in payload)
+                fields = fields.SetItem(key, value);
+        var body = JsonSerializer.Serialize(new { event_type = eventType, client_payload = fields });
         return (url, body);
     }
 

@@ -221,15 +221,61 @@ the red lands in the repository that owns the fix.
 The event source is the MESH. The target shape (maintainer, 2026-09-03): **memex issues an event
 that something has a new version** — a platform build landed in `Hosting/PlatformBuilds`, a module
 bundle was published to the registry — and **the GitHub repositories subscribe to it** and trigger
-their builds. Today the transitional emitter is core's `main-cd.yml`, which sends a
-`repository_dispatch` to every node repository when it promotes a platform image set (the
-release-follow); moving that emitter into memex removes the last CI-to-CI link between repositories. Each dependent's `ci.yml`
+their builds. The emitter IS memex (since 2026-09-03): core's CD POSTs the signed build fact into
+`Hosting/PlatformBuilds` and finishes; the Hosting module's `PlatformBuildInboxWatcher`
+(MeshWeaver.Plugins) fans `meshweaver-framework-released` out to every repository the
+`Hosting/Deployment` records name as a registry source — data in the mesh, not a list in any
+workflow. Core's own `notify-dependents` dispatcher, the last CI-to-CI link between repositories,
+was withdrawn the same day, and `PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository` refuses a
+`/dispatches` POST in any workflow core runs on its own behalf. Each dependent's `ci.yml`
 receives it, resolves its `platform-ref` to that release, builds its `src/` and content against it,
 runs its suites and — only if everything passes — seals and publishes its bundles for that platform
 identity. A shape-1…6 break therefore surfaces as a red release-follow run **in the dependent's
 repository**, minutes after the platform published, with the dependent's own test names in the
 log, and it is fixed there by a pull request in that repository. Nothing in core polls, reads back
 or blocks on it.
+
+**The contract (maintainer, 2026-09-03: *"end of github pipeline must call memex, which must
+register release and publish event"*) is three sentences:**
+
+1. **Every publishing pipeline ENDS with one call to memex.** Core's CD, after the image set is
+   promoted, POSTs the signed platform build (`event: platform-build`) into the control instance's
+   `Hosting/PlatformBuilds` inbox (`notify-platform-update`). Every node repository's
+   `node-repo-publish-bake.yml` run, after its bundles are sealed for an identity, POSTs the signed
+   publication record (`event: bundle-publication` — source, identity, commit, tester + portal image)
+   into the same inbox (`register-publication`, its last job). Nothing runs after that call, and no
+   pipeline sends a `repository_dispatch` to another repository.
+2. **memex REGISTERS the release** as a durable node — `Hosting/PlatformBuilds/<version>` for a
+   platform build, `Hosting/Publications/<identity>/<source>` for a bundle publication — the source
+   of truth for "what is published for which identity" (what the self-update availability check reads).
+3. **memex PUBLISHES the event** from that registration: `FrameworkReleaseBroadcaster` sends
+   `meshweaver-framework-released` (platform) or `meshweaver-upstream-published` (bundle publication,
+   `client_payload.version` = the identity) to the subscribed repositories — the repositories the
+   control instance's `Hosting/Deployment` records name as registry sources. The subscribers' CI
+   receives it, resolves both images from the version, builds and publishes for that identity — and
+   ends by calling memex (1).
+
+```
+ pipeline (core CD | a node repo's publish-bake)        memex (control instance)              subscriber CI
+ ───────────────────────────────────────────────        ────────────────────────              ─────────────
+ promote / seal ✅                                       WebhookInbox Hosting/PlatformBuilds
+   └─ ONE signed POST ──(platform-build |──────────────▶│ verify HMAC
+      bundle-publication)… and FINISH                    ├─ REGISTER  Hosting/PlatformBuilds/<version>
+                                                         │            Hosting/Publications/<identity>/<source>
+                                                         ├─ subscribers = Hosting/Deployment records'
+                                                         │              pluginRepos[].isRegistrySource
+                                                         └─ PUBLISH   repository_dispatch ─────────────▶ on: repository_dispatch:
+                                                            meshweaver-framework-released |               types: [meshweaver-framework-released,
+                                                            meshweaver-upstream-published                        meshweaver-upstream-published]
+                                                                                                          → bake for the version → seal → POST memex
+```
+
+Where the pieces are: the POST steps in `main-cd.yml` and `node-repo-publish-bake.yml` (this repo);
+the inbox watcher, registration and broadcast in the Hosting module's `PlatformBuildInboxWatcher`
+(MeshWeaver.Plugins, `Hosting/Deployment/Source`); the broadcaster in `src/MeshWeaver.GitSync`.
+`PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository` refuses a dispatch SENDER in any workflow
+under `.github/workflows` — there is no ledger — and
+`UpstreamBuildGateGuard.TheLaneEndsByRegisteringWithMemex_AndDispatchesToNobody` pins the lane's call.
 
 What this deliberately does NOT do: put a context on the core pull request that only a plugin
 repository can turn green. A dispatcher of that shape (`dependent-suites.yml`, `core-pr-suites`) was

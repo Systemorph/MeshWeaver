@@ -360,11 +360,14 @@ it resolves `docker manifest inspect -v` → `.Descriptor.digest` and **fails lo
 digest, because silently falling back to the pin would republish an identity that is already
 published and leave every instance held, under a green tick.
 
-🚨 **`repository_dispatch` is DORMANT — the `schedule` is the mechanism.** There is no
-`notify-dependents` in core CD; it was removed 2026-08-22 (addressed notification where the design
-calls for a broadcast, needing a cross-repo write credential, and never provisioned — it printed a
-not-configured notice for its whole life while the fleet stayed a release behind, every check
-green). **A node repo without `schedule` never bakes for a released identity.** It bakes its pin,
+🚨 **`repository_dispatch` is memex's EVENT; the `schedule` is the fallback.** The registry's
+`PlatformBuildInboxWatcher` dispatches `meshweaver-framework-released` to every repository the
+`Hosting/Deployment` records name as a registry source — so a new repo is subscribed by being named
+on a Deployment record (Systemorph/Memex `mesh/Deployments/*.json`, `pluginRepos[]` with
+`isRegistrySource`), never by an edit in core. Core CD dispatches to no repository (its
+`notify-dependents` was withdrawn 2026-09-03; the 2026-08-22 predecessor printed a not-configured
+notice for its whole life while the fleet stayed a release behind, every check green). **A node repo
+without `schedule` never bakes for a released identity when a dispatch is lost.** It bakes its pin,
 on its own pushes, forever, and the only symptom is an instance HELD on that repo's bundles.
 Stagger the minute; observed today: SocialMedia `7,37`, Plugins `17,47`, Reinsurance `22,52`,
 Education `32`.

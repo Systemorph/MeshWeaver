@@ -79,20 +79,7 @@ jobs:
     - name: Publish compiler tool to nuget.org
       run: dotnet nuget push ./tool-nupkgs/MeshWeaver.Compiler.Cli.*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_PAT }} --skip-duplicate
 
-  # 🚨 PACKAGES ARE HALF OF WHAT A PLUGIN REPO PINS. The images move on a platform release and the
-  # NuGet packages move here, and a plugin repo compiles its in-mesh source against the newest
-  # PUBLISHED package set — so a package release that nobody is told about leaves every plugin repo
-  # building against the previous one until its next schedule poll.
-  #
-  # Same fan-out as main-cd's, same credential, same "fails RED when it notifies nobody" rule.
-  notify-dependents:
-    name: "Push the package release to dependent repos"
-    needs: publish
-    if: needs.publish.result == 'success'
-    uses: ./.github/workflows/notify-dependents.yml
-    with:
-      version: ${{ needs.publish.outputs.version }}
-      reason: packages
-    secrets:
-      app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
-      private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+  # There is deliberately NO dispatch to the node repos here. In-mesh source compiles against the
+  # platform IMAGE, never against a NuGet feed (the package-floor lane was retired 2026-08-30), so a
+  # package release changes nothing a node repo builds — and a repository dispatching into another
+  # repository's CI is the coupling the release rule forbids (main-cd.yml, "THE RELEASE WAVE").

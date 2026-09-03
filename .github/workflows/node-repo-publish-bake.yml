@@ -304,16 +304,25 @@ on:
         default: ''
       dispatch-dependents:
         description: >-
-          After a SUCCESSFUL publish, send `repository_dispatch: meshweaver-upstream-published` to
-          every repo the dispatch App is installed on whose ci.yml declares this bake-source as an
-          upstream (`upstream-sources:` / `upstream-seed:`). That is the package-publish half of
-          the rebuild wave: "otherwise only dependent packages — then publish package built and
-          cascade recursively". Each receiver bakes against the SAME image (client_payload.image),
-          publishes, and emits the same event for its own source; the payload carries the chain of
-          sources so a cycle can never loop. Needs the dispatch-app-* secrets, asserted RED.
+          RETIRED 2026-09-03 (maintainer: "end of github pipeline must call memex, which must
+          register release and publish event"). Ignored. This lane no longer sends any
+          repository_dispatch; it ENDS with one signed POST of the publication record to memex
+          (webhook-url / webhook-secret), and memex registers it and emits
+          `meshweaver-upstream-published` to the subscribed repositories. Kept declared only so a
+          caller pinned to an earlier lane validates while it moves its pin; drop it from the call.
         required: false
         type: boolean
         default: false
+      webhook-url:
+        description: >-
+          The control instance's webhook inbox for publication records, e.g.
+          https://<instance>/api/hooks/Hosting/PlatformBuilds — the SAME inbox core's CD posts the
+          platform build to. This is the ONE call a publishing pipeline ends with. Asserted RED after
+          a successful publish when empty (a publication memex was never told about is silent drift);
+          never skipped.
+        required: false
+        type: string
+        default: ''
     secrets:
       acr-username:
         description: >-
@@ -352,13 +361,16 @@ on:
           registry-url. Needed only when registry-modules is set.
         required: false
       dispatch-app-id:
-        description: >-
-          App id of a GitHub App installed on every repo that may depend on this one, with
-          Contents: Read (to read their ci.yml) and Contents: Write (repository_dispatch).
-          Required when dispatch-dependents is true; asserted RED, never skipped.
+        description: RETIRED 2026-09-03 with dispatch-dependents — ignored; drop it from the call.
         required: false
       dispatch-app-private-key:
-        description: Private key (PEM) of that App.
+        description: RETIRED 2026-09-03 with dispatch-dependents — ignored; drop it from the call.
+        required: false
+      webhook-secret:
+        description: >-
+          The shared HMAC the control instance verifies X-Hub-Signature-256 against
+          (Hosting:PlatformWebhookSecret) — the same secret core's CD signs the platform build with.
+          Asserted RED after a successful publish when empty; never skipped.
         required: false
       content-app-id:
         description: >-
@@ -1186,123 +1198,78 @@ jobs:
           echo "This is a VERIFIED outcome, not a skipped gate: the sealed publication was read from"
           echo "every target in BAKE_PUBLISH_TARGETS and compared against this commit's content."
 
-  # ────────────────── DISPATCH DEPENDENTS (the package-publish half of the wave) ──────────────────
-  # "otherwise only dependent packages — then publish package built and cascade recursively"
-  # (maintainer, 2026-08-29). A platform release rebuilds EVERYTHING (the platform's CD sends
-  # meshweaver-framework-released to every installed repo); a package publish wakes ONLY the repos
-  # that declare this source as an upstream, against the SAME image, and each of those emits the
-  # same event for its own source after it publishes — recursion by construction, terminated by the
-  # chain carried in the payload.
+  # ────────────────── REGISTER THE PUBLICATION WITH MEMEX — the pipeline's LAST word ──────────────────
+  # Maintainer, 2026-09-03: "end of github pipeline must call memex, which must register release and
+  # publish event". So this lane ENDS with exactly one call: a signed POST of the publication record
+  # into the control instance's inbox (the same `Hosting/PlatformBuilds` inbox core's CD posts the
+  # platform build to). memex REGISTERS it as a durable node and PUBLISHES the event —
+  # `meshweaver-upstream-published` to the repositories its Hosting/Deployment records name as
+  # registry sources (FrameworkReleaseBroadcaster, called by the Hosting module's
+  # PlatformBuildInboxWatcher). Nothing runs after this job, and nothing here dispatches to another
+  # repository: the `dispatch-dependents` job that used to live here read every installed repo's
+  # ci.yml to discover dependents and POSTed to their /dispatches — CI-to-CI coupling by another
+  # name, retired with core's own notify-dependents (MeshWeaver#3185).
   #
-  # Dependents are DISCOVERED, never listed: every repo the dispatch App is installed on is asked
-  # for its .github/workflows/ci.yml, and a repo depends on this source iff that file declares it
-  # under `upstream-sources:` or `upstream-seed:`. Installing the App on a new node repo is the
-  # whole subscription. A repo with no ci.yml, or one that does not name this source, is skipped
-  # and SAID so — silence is not a skip.
-  #
-  # 🚨 A failed dispatch is RED, not a warning. "The next own push re-bakes it" is precisely the
-  # silent-drift shape the maintainer is removing; a dependent that was not told is a dependent
-  # that is out of date, and this job's summary must say which one.
-  dispatch-dependents:
-    name: Dispatch dependents (meshweaver-upstream-published)
+  # 🚨 RED, never skipped, when the inbox is not provisioned or refuses the record: a publication
+  # memex was never told about is a wave that did not happen, and "the dependents' schedule poll
+  # will catch it" is exactly the silent-drift shape the maintainer is removing. The bundles are
+  # already sealed when this runs, so a red here unpublishes nothing; it names what to provision
+  # (webhook-url + webhook-secret on the caller). A 2xx means the record was STORED — whether memex
+  # then dispatched is read on memex (`[PlatformBuilds] release broadcast …` in its log) and on the
+  # dependents (a repository_dispatch run), never here.
+  register-publication:
+    name: Register the publication with memex
     needs: publish-bake
-    if: >-
-      inputs.dispatch-dependents && needs.publish-bake.result == 'success'
-      && needs.publish-bake.outputs.published == 'true'
+    if: needs.publish-bake.result == 'success' && needs.publish-bake.outputs.published == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - name: "Preflight: the dispatch credential must be provisioned"
+      - name: "Sign and POST the publication record"
         env:
-          APP_ID: ${{ secrets.dispatch-app-id }}
-          APP_KEY: ${{ secrets.dispatch-app-private-key }}
-        run: |
-          set -euo pipefail
-          missing=()
-          [ -n "${APP_ID:-}" ]  || missing+=("dispatch-app-id (secret) — a GitHub App installed on every dependent repo, Contents: Read + Write")
-          [ -n "${APP_KEY:-}" ] || missing+=("dispatch-app-private-key (secret) — that App's private key, PEM")
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::dispatch-dependents is on but its credential is not provisioned — a publish that wakes nobody is silent drift:"
-            for m in "${missing[@]}"; do echo "  • $m"; done
-            exit 1
-          fi
-      - name: Mint an installation token for the dependents
-        id: app
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.dispatch-app-id }}
-          private-key: ${{ secrets.dispatch-app-private-key }}
-          owner: ${{ github.repository_owner }}
-      - name: Dispatch to every installed repo that declares this source as an upstream
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          URL: ${{ inputs.webhook-url }}
+          SECRET: ${{ secrets.webhook-secret }}
           SOURCE: ${{ inputs.bake-source }}
           IMAGE: ${{ needs.publish-bake.outputs.image }}
           PLATFORM_IMAGE: ${{ needs.publish-bake.outputs.platform }}
           IDENTITY: ${{ needs.publish-bake.outputs.identity }}
-          CHAIN_IN: ${{ toJSON(github.event.client_payload.chain) }}
           RELEASED_VERSION: ${{ github.event.client_payload.version }}
-          RELEASED_SHA: ${{ github.event.client_payload.sha }}
           SELF: ${{ inputs.content-repository || github.repository }}
         run: |
           set -euo pipefail
-          # The chain: every source that led here, plus this one. A repo whose own bake-source is
-          # already in it is never dispatched — that is the cycle guard, and it needs no registry.
-          chain=$(jq -cn --argjson in "${CHAIN_IN:-null}" --arg s "$SOURCE" '(if ($in|type)=="array" then $in else [] end) + [$s]')
-          echo "source=$SOURCE image=$IMAGE platform_image=${PLATFORM_IMAGE:-?} identity=${IDENTITY:-?} chain=$chain"
-          [ -n "${PLATFORM_IMAGE:-}" ] || { echo "::error::this bake resolved no platform image, so its dependents cannot be told which portal to bake against — a wave composed of two portals is exactly what the platform_image payload field prevents (MeshWeaver#3022)."; exit 1; }
-          repos=$(gh api --paginate /installation/repositories --jq '.repositories[].full_name')
-          [ -n "$repos" ] || { echo "::error::the dispatch App is installed on NO repository — nothing can subscribe. Install it on the dependent repos."; exit 1; }
-          # A receiver's own gate wants the bare digest (its image-digest input); the bake wants
-          # the full reference. Carry both — the digest is the part after '@' when the image was
-          # resolved by digest, empty when it was a tag (then the receiver resolves it itself).
-          # `platform_image` is the portal this bake compiled against: the receiver bakes against
-          # the SAME one (MeshWeaver#3022), never against its own pin paired with our tester.
-          digest=""; case "$IMAGE" in *@sha256:*) digest="${IMAGE#*@}" ;; esac
-          payload=$(jq -cn --arg s "$SOURCE" --arg i "$IMAGE" --arg pi "$PLATFORM_IMAGE" --arg d "$digest" --arg id "${IDENTITY:-}" --argjson c "$chain" \
-            --arg v "${RELEASED_VERSION:-}" --arg sha "${RELEASED_SHA:-}" \
-            '{source:$s, image:$i, platform_image:$pi, digest:$d, identity:$id, chain:$c, version:$v, sha:$sha}')
-          dispatched=(); skipped=(); failed=()
-          for repo in $repos; do
-            if [ "$repo" = "$SELF" ]; then continue; fi
-            # A missing ci.yml is a designed skip (404, said so); ANY other failure to read it is
-            # RED — a transient API error must never read as "this repo has no CI", because that
-            # is exactly a dependent silently left out of the wave.
-            err="$RUNNER_TEMP/ci-read.err"
-            if ! resp=$(gh api "repos/$repo/contents/.github/workflows/ci.yml" 2>"$err"); then
-              if grep -q "HTTP 404" "$err"; then skipped+=("$repo (no .github/workflows/ci.yml)"); continue; fi
-              failed+=("$repo (could not read its ci.yml: $(tr '\n' ' ' <"$err" | head -c 200))"); continue
-            fi
-            ci=$(jq -r '.content' <<<"$resp" | base64 -d)
-            own=$(printf '%s\n' "$ci" | sed -nE 's/^[[:space:]]*bake-source:[[:space:]]*//p' | head -1 | sed -E 's/["'"'"']//g; s/[[:space:]]+$//')
-            if [ -n "$own" ] && jq -e --arg o "$own" 'index($o) != null' <<<"$chain" >/dev/null; then
-              skipped+=("$repo (its source '$own' is already in the chain — cycle guard)"); continue
-            fi
-            if ! printf '%s\n' "$ci" | grep -Eq "^[[:space:]]*(upstream-sources|upstream-seed):[[:space:]]*.*(^|[[:space:],\"'])${SOURCE}([[:space:],\"']|$)"; then
-              skipped+=("$repo (does not declare upstream '$SOURCE')"); continue
-            fi
-            code=$(curl -sS -o /tmp/resp -w '%{http_code}' -X POST \
-              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$repo/dispatches" \
-              -d "$(jq -cn --argjson p "$payload" '{event_type:"meshweaver-upstream-published", client_payload:$p}')") || code=000
-            case "$code" in
-              2*) dispatched+=("$repo") ;;
-              *)  failed+=("$repo (HTTP $code: $(head -c 200 /tmp/resp | tr '\n' ' '))") ;;
-            esac
-          done
-          {
-            echo "### 📣 upstream '$SOURCE' published — dependents dispatched"
-            echo "- image: \`$IMAGE\`  identity: \`${IDENTITY:-?}\`  chain: \`$chain\`"
-            for r in "${dispatched[@]}"; do echo "- ✅ $r"; done
-            for r in "${skipped[@]}";    do echo "- ⏭️ $r"; done
-            for r in "${failed[@]}";     do echo "- ❌ $r"; done
-          } >> "$GITHUB_STEP_SUMMARY"
-          for r in "${dispatched[@]}"; do echo "dispatched: $r"; done
-          for r in "${skipped[@]}";    do echo "skipped:    $r"; done
-          if [ ${#failed[@]} -gt 0 ]; then
-            for r in "${failed[@]}"; do echo "::error::dispatch failed: $r"; done
+          missing=()
+          [ -n "${URL:-}" ]    || missing+=("webhook-url (input) — the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds (core CD: vars.PLATFORM_WEBHOOK_URL)")
+          [ -n "${SECRET:-}" ] || missing+=("webhook-secret (secret) — the shared HMAC, byte-identical to the instance's Hosting:PlatformWebhookSecret (core CD: secrets.PLATFORM_WEBHOOK_SECRET)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the publication is sealed but memex was NOT told — provision on the calling repository, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
             exit 1
           fi
-          echo "dependents dispatched: ${#dispatched[@]}"
+          [ -n "${PLATFORM_IMAGE:-}" ] || { echo "::error::this bake resolved no platform image, so the record cannot name the identity's portal (MeshWeaver#3022)."; exit 1; }
+          digest=""; case "$IMAGE" in *@sha256:*) digest="${IMAGE#*@}" ;; esac
+          # The record memex registers: which SOURCE sealed a publication for which IDENTITY, from
+          # which commit, against which tester + portal. `version` is the platform tag the identity
+          # was baked for when this run was itself a release-follow — memex carries it into the
+          # event so dependents resolve the same set by name.
+          BODY=$(jq -cn --arg repo "$SELF" --arg s "$SOURCE" --arg sha "$GITHUB_SHA" --arg id "${IDENTITY:-}" \
+            --arg i "$IMAGE" --arg d "$digest" --arg pi "$PLATFORM_IMAGE" --arg v "${RELEASED_VERSION:-}" \
+            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{event:"bundle-publication", repo:$repo, source:$s, sha:$sha, identity:$id, image:$i, digest:$d, platformImage:$pi, version:$v, run:$run}')
+          SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
+          code=$(curl -sS -o /tmp/resp -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+            -X POST "$URL" -H 'Content-Type: application/json' \
+            -H "X-Hub-Signature-256: $SIG" --data "$BODY") || code=000
+          echo "POST $URL -> $code"; cat /tmp/resp || true
+          case "$code" in
+            2*)
+              {
+                echo "### 📣 Publication registered with memex (HTTP $code)"
+                echo "- source: \`$SOURCE\`  identity: \`${IDENTITY:-?}\`  image: \`$IMAGE\`  platform: \`$PLATFORM_IMAGE\`"
+                echo "memex STORED the record. Whether it dispatched meshweaver-upstream-published is read on memex and on the dependents, never here."
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            000) echo "::error::could not reach the inbox at all (DNS/TLS/connection refused) — the publication is sealed but unregistered; no dependent is told until its schedule poll."; exit 1 ;;
+            404) echo "::error::the inbox answered 404 — FAIL-CLOSED for both an unlisted target and a wrong URL; check webhook-url against the instance's WebhookInbox:Targets."; exit 1 ;;
+            *)   echo "::error::the inbox refused the publication record (HTTP $code) — sealed but unregistered."; exit 1 ;;
+          esac
