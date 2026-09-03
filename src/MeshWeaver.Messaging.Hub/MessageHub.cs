@@ -2653,8 +2653,13 @@ public sealed class MessageHub : IMessageHub
         {
             try
             {
-                entry.Subject.OnError(new ObjectDisposedException(nameof(MessageHub),
-                    $"Hub {Address} was disposed before the response arrived (request type {entry.RequestType}, target {entry.Target})."));
+                // 🚨 TYPED, so callers can classify it (#3148). This is a teardown fact — the hub
+                // was recycled or deactivated with the request outstanding — not a fault of the
+                // work that hit it, and until it had a type the only way to tell the two apart was
+                // to match this message. The message itself is unchanged on purpose; see
+                // HubDisposedBeforeResponseException.
+                entry.Subject.OnError(new HubDisposedBeforeResponseException(
+                    nameof(MessageHub), Address, entry.RequestType, entry.Target?.ToString()));
             }
             catch
             {
