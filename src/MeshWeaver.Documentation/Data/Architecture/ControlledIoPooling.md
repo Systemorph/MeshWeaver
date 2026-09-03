@@ -441,6 +441,67 @@ So the mesh teardown awaits **all three**, in order, before the scope is dispose
    continuous influx — a *version-target* wait would not (the queue is a message stream / endless
    messages). `DrainedVersion` advances once per item, the test hook.
 
+### 🚨 A residual with NO site is the CANCEL join — and a subscriber can park it
+
+`IoPool.Drain()` reports three things under one number: gate permits it could not re-acquire, blocking
+leaves still running, and a **cancel that did not return**. The first two always name a site (every
+leaf registers one on entry); the third is not a leaf and had none. So a trace that read
+
+```
+DISPOSE_IOPOOL_DRAIN_DONE elapsed=30016ms leakedIoLeaves=1 pools=[Query=1]
+```
+
+— `Query=1` with nothing in brackets — meant exactly one thing, **`_poolCts.Cancel()` on the Query pool
+never returned**, and nothing on the page said so. It now reads
+`Query=1 [IoPool.Drain: the pool token's cancel did not return within the budget — …]`.
+
+**What parks a cancel.** Cancelling the pool token runs, inline on the `IoPool-cancel` thread, one
+callback per live `SubscribeThroughPool` subscription: `inner.Dispose(); observer.OnCompleted();` —
+that subscription's whole downstream teardown. Two facts about the libraries underneath turn a race
+into a deadlock:
+
+1. **`CancellationTokenRegistration.Dispose()` blocks until a callback executing on another thread has
+   finished** (`WaitForCallbackIfNecessary`; only the callback's own thread is exempt).
+   `Unregister()` never waits.
+2. **Rx operators forward from their timers under their gate.** `Throttle.Propagate` runs
+   `ForwardOnNext` inside `lock (_gate)`, and `Throttle.OnCompleted` takes the same gate; `Take(1)`
+   completes and **disposes upstream synchronously** — still inside that gate.
+
+So a consumer shaped `Query(...).Throttle(1 s).Take(1)` whose timer fires as the drain cancels holds
+the operator gate while its upstream disposal waits in `Dispose()` for the drain callback, and the
+drain callback waits in `Throttle.OnCompleted` for the operator gate. Two locks, two threads, no exit.
+The drain reports the cancel residual after its budget, RSS is flat the whole time (parked, not
+computing), and the two threads stay deadlocked for the life of the process.
+
+**The occurrence.** `MeshNodeLanguageServiceTest` went DIRTY at teardown on 2026-08-28 (#2578,
+#2616), 08-30 (twice), and 09-03 (Plugins #1260 attempt 1, shard 3) — always the same shape: the test
+body PASSES in ~1 s (1018 ms / 1044 ms in the two traces that survived), the drain then spends its
+whole 30 s, and the residual is `Query=1` with no site. The consumer is `CompletionUsageIndex.EnsureFresh()`,
+whose `Throttle(1 s)` lands on exactly those ~1 s bodies; a faster machine ends the test before the
+timer fires, which is why twenty local runs never reproduced it. #2598 fixed a different leaf (the
+first-in-process script-reference build, on the Compile pool) on the strength of the same anonymous
+`1`; the failure recurred unchanged four hours later.
+
+**The rules this leaves behind:**
+
+- **Never put a raw `CancellationTokenRegistration` where a subscriber disposes it.** The
+  subscription's disposable unregisters (`drainReg.Unregister()`); the drain callback stays exactly-once
+  through its latch and completes on its own. More generally: **never dispose a registration from a
+  thread that may hold a lock the callback needs** — in Rx that is every operator gate.
+- **A request-scoped subscription needs an OWNER.** `EnsureFresh()`'s query used to be fire-and-forget
+  with a 30 s `Timeout` — a second, unowned 30 s budget coinciding with the drain's. It is held in a
+  `SerialDisposable` and disposed with the hub (`hub.RegisterForDisposal(...)`, which runs in
+  `DisposeImpl` — strictly before `DisposalCompleted`, hence before `DrainAll()`); the same for the
+  completion memory store's debounced save. Three lifetimes exist for any deferred work — the
+  **caller's** (`WaitAsync(ct)`), the **owner's** (the hub or service that started it), and **never**
+  (a process-wide memo) — and "no caller cancels this" must not silently become "nothing ever does".
+- **Read a residual by its site.** A bracketed site is a leaf; no site is the cancel join, now
+  labelled. `Query=1` and `Compile=1` are different bugs, and so are `Query=1 [MeshQuery…]` and
+  `Query=1 [IoPool.Drain: the pool token's cancel did not return…]`.
+
+Pinned by `IoPoolDrainCancelJoinTest` (deterministic: a `TestScheduler`-driven `Throttle` fired from a
+thread the test owns, with the two interleavings the deadlock needs made explicit).
+
 ### 🚨 `IoPool.Unbounded` is LEDGERLESS — I/O on it does not exist to this drain
 
 The three-phase drain only covers what it can *see*, and `IoPool.Unbounded` is invisible to it **by

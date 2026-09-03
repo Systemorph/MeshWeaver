@@ -215,30 +215,55 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <c>MeshQuery+&lt;&gt;c__DisplayClass22_0.&lt;MergeProviderObservables&gt;b__1</c> points at the
     /// exact operation that did not unwind. Empty when the pool drained clean.
     /// </summary>
-    internal IReadOnlyList<string> PendingLeafSites =>
-        _inFlightLeaves.Values
-            .Select(d =>
-            {
-                try
+    internal IReadOnlyList<string> PendingLeafSites
+    {
+        get
+        {
+            var leaves = _inFlightLeaves.Values
+                .Select(d =>
                 {
-                    // A delegate names its enclosing method through the compiler-generated
-                    // lambda; anything else (the subscribe path's observable) can only offer
-                    // its type, which still says WHICH chain is stuck.
-                    if (d is Delegate del)
+                    try
                     {
-                        var m = del.Method;
-                        return $"{m.DeclaringType?.FullName ?? "?"}.{m.Name}";
+                        // A delegate names its enclosing method through the compiler-generated
+                        // lambda; anything else (the subscribe path's observable) can only offer
+                        // its type, which still says WHICH chain is stuck.
+                        if (d is Delegate del)
+                        {
+                            var m = del.Method;
+                            return $"{m.DeclaringType?.FullName ?? "?"}.{m.Name}";
+                        }
+                        return d.GetType().FullName ?? d.GetType().Name;
                     }
-                    return d.GetType().FullName ?? d.GetType().Name;
-                }
-                catch
-                {
-                    // A diagnostic must never be the reason a teardown fails.
-                    return "(unavailable)";
-                }
-            })
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+                    catch
+                    {
+                        // A diagnostic must never be the reason a teardown fails.
+                        return "(unavailable)";
+                    }
+                })
+                .Distinct(StringComparer.Ordinal);
+            // The third residual Drain() can report is not a leaf and registers no site of its own:
+            // a cancel that never returned. Label it, or the residual reads as an anonymous count —
+            // the shape that misdirected #2598 (see Drain).
+            return _cancelJoinExpired
+                ? leaves.Prepend(CancelJoinResidualSite).ToArray()
+                : leaves.ToArray();
+        }
+    }
+
+    /// <summary>
+    /// The site <see cref="PendingLeafSites"/> reports when <see cref="Drain"/>'s CANCEL join expired:
+    /// <c>_poolCts.Cancel()</c> did not return within the budget because a registered teardown
+    /// callback is parked. Every leaf names itself on entry; this residual is not a leaf, so it needs
+    /// a name of its own — <c>Query=1</c> with no site is exactly what it used to look like.
+    /// </summary>
+    internal const string CancelJoinResidualSite =
+        "IoPool.Drain: the pool token's cancel did not return within the budget — a registered teardown "
+        + "callback is parked (a subscriber's OnCompleted or unsubscribe waiting on a lock the callback "
+        + "holds; see Doc/Architecture/ControlledIoPooling → 'A residual with NO site is the CANCEL join')";
+
+    // Set by Drain() when its cancel join expires; read by PendingLeafSites, which the registry
+    // consults right after Drain() returns. Never cleared — Drain is terminal.
+    private volatile bool _cancelJoinExpired;
 
     /// <summary>
     /// Runs an async I/O leaf off the calling scheduler under the pool's concurrency gate.
@@ -594,7 +619,31 @@ public sealed class IoPool : IIoPool, IDisposable
                     observer.OnCompleted();
                 });
 
-                return new CompositeDisposable(setup, inner, drainReg);
+                // 🚨 UNREGISTER, NEVER DISPOSE, the drain registration from the subscriber's side.
+                //
+                // CancellationTokenRegistration.Dispose() BLOCKS until a callback that is executing on
+                // another thread has finished (WaitForCallbackIfNecessary; only the callback's own
+                // thread is exempt). Unregister() never waits. The callback above is the subscriber's
+                // downstream teardown run inline on the IoPool-cancel thread — and Rx operators
+                // forward from their timers UNDER THEIR GATE: Throttle.Propagate calls ForwardOnNext
+                // inside `lock (_gate)`, Throttle.OnCompleted takes the same gate, and Take(1)
+                // completes and disposes upstream synchronously, still inside it. So a consumer
+                // shaped `Query(...).Throttle(1 s).Take(1)` whose timer fired as the drain cancelled
+                // held its operator gate while `.Dispose()` here waited for the drain callback, and
+                // the drain callback waited in Throttle.OnCompleted for that gate. Two locks, two
+                // threads, no exit: _poolCts.Cancel() never returned, Drain() reported the cancel
+                // residual after its whole budget (`pools=[Query=1]`, no site, RSS flat — parked, not
+                // computing), and the pair stayed deadlocked for the life of the process.
+                // MeshNodeLanguageServiceTest went DIRTY that way on 2026-08-28 (#2578, #2616), 08-30
+                // and 09-03 (Plugins #1260, attempt 1, shard 3): the body PASSED in ~1 s and the
+                // 1 s Throttle of CompletionUsageIndex.EnsureFresh() landed on the drain. Pinned by
+                // IoPoolDrainCancelJoinTest.
+                //
+                // Unregistering is exactly right for both orders: a callback that has not started is
+                // removed (the consumer left, nothing to terminate); one that IS running finishes on
+                // its own — `inner.Dispose()` is idempotent and the observer's OnCompleted is
+                // exactly-once through Rx's AutoDetachObserver — and nobody waits for it.
+                return new CompositeDisposable(setup, inner, Disposable.Create(() => drainReg.Unregister()));
             }
             finally
             {
@@ -657,6 +706,11 @@ public sealed class IoPool : IIoPool, IDisposable
             // in the residual — which is the whole difference between #2394's silent 8-minute
             // wall-clock kill and a named, failing teardown.
             var cancelResidual = StartCancelOffCallerThread().Join(_drainTimeout) ? 0 : 1;
+            // 🚨 NAME IT. A cancel that does not return is not a leaf, so it registers no site — and
+            // an unlabelled `Query=1` sent two investigations (#2598, then this) into leaves that held
+            // no permit. PendingLeafSites carries the label from here on.
+            if (cancelResidual != 0)
+                _cancelJoinExpired = true;
             var acquired = 0;
             for (var i = 0; i < _maxConcurrency; i++)
             {
