@@ -468,6 +468,88 @@ data:
   # the picker (catalog source not registered). Does NOT affect embeddings, which are
   # wired separately from Embedding__* — see MemexConfiguration.
   Features__Ai__Providers__AzureFoundry: "{{ .Values.config.memex_portal.Features__Ai__Providers__AzureFoundry | default "true" }}"
+  # ---- The rest of the provider + CLI gates ---------------------------------
+  # 🚨 These keys existed on the CLUSTER and in NO chart, so a values file could not express them
+  # and an operator had exactly one way to set them: editing the live ConfigMap, or
+  # `kubectl set env`. That is how memex and memex-cloud came to carry six AI settings that no
+  # committed source describes (MeshWeaver#2355, Systemorph/Memex#148 section B) — the chart was
+  # not merely out of date, it made the correct thing IMPOSSIBLE.
+  #
+  # Emitted only when a deployment sets it — deliberately NOT `| default "true"` like the two
+  # above. A rendered key is chart-OWNED, so a default would push a value onto every environment
+  # the moment this block shipped, overwriting live settings that are currently `false`
+  # (measured 2026-09-03: memex runs OpenAI/OpenAICompatible false, OpenRouter true). Opt-in
+  # rendering means adding these keys changes nothing anywhere until an overlay says so, which is
+  # what makes the migration off cluster-only config safe to do one environment at a time.
+  {{- if hasKey .Values.config.memex_portal "Features__Ai__Providers__AzureOpenAI" }}
+  Features__Ai__Providers__AzureOpenAI: "{{ .Values.config.memex_portal.Features__Ai__Providers__AzureOpenAI }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Features__Ai__Providers__OpenAI" }}
+  Features__Ai__Providers__OpenAI: "{{ .Values.config.memex_portal.Features__Ai__Providers__OpenAI }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Features__Ai__Providers__OpenAICompatible" }}
+  Features__Ai__Providers__OpenAICompatible: "{{ .Values.config.memex_portal.Features__Ai__Providers__OpenAICompatible }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Features__Ai__Providers__OpenRouter" }}
+  Features__Ai__Providers__OpenRouter: "{{ .Values.config.memex_portal.Features__Ai__Providers__OpenRouter }}"
+  {{- end }}
+  # The co-hosted CLI harnesses (Claude Code, GitHub Copilot) — same gate shape, same reasoning.
+  {{- if hasKey .Values.config.memex_portal "Features__Ai__Clis__ClaudeCode" }}
+  Features__Ai__Clis__ClaudeCode: "{{ .Values.config.memex_portal.Features__Ai__Clis__ClaudeCode }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Features__Ai__Clis__Copilot" }}
+  Features__Ai__Clis__Copilot: "{{ .Values.config.memex_portal.Features__Ai__Clis__Copilot }}"
+  {{- end }}
+  # ---- LogWatch: which repository a log route files into ----------------------
+  # Also cluster-only until now (memex carries DefaultRepository + routes 0 and 1).
+  #
+  # 🚨 INDEX BY INDEX, never a range, and THE CEILING IS 3. This ConfigMap's contract is that it
+  # names every key literally — EveryConfigKeySetInAValuesFile_IsBoundInTheConfigMap enforces it
+  # by looking the key up, and a `range` renders correctly while being invisible to that guard.
+  # A bounded list is what the guard can check. memex uses 0..1 today, so 0..3 leaves two
+  # appendable slots; RAISING IT is one hasKey pair per index and nothing else — do that rather
+  # than reusing a baseline index, and state the new ceiling here.
+  {{- if hasKey .Values.config.memex_portal "LogWatch__DefaultRepository" }}
+  LogWatch__DefaultRepository: "{{ .Values.config.memex_portal.LogWatch__DefaultRepository }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "LogWatch__Routes__0__Prefix" }}
+  LogWatch__Routes__0__Prefix: "{{ .Values.config.memex_portal.LogWatch__Routes__0__Prefix }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "LogWatch__Routes__0__Repository" }}
+  LogWatch__Routes__0__Repository: "{{ .Values.config.memex_portal.LogWatch__Routes__0__Repository }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "LogWatch__Routes__1__Prefix" }}
+  LogWatch__Routes__1__Prefix: "{{ .Values.config.memex_portal.LogWatch__Routes__1__Prefix }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "LogWatch__Routes__1__Repository" }}
+  LogWatch__Routes__1__Repository: "{{ .Values.config.memex_portal.LogWatch__Routes__1__Repository }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "LogWatch__Routes__2__Prefix" }}
+  LogWatch__Routes__2__Prefix: "{{ .Values.config.memex_portal.LogWatch__Routes__2__Prefix }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "LogWatch__Routes__2__Repository" }}
+  LogWatch__Routes__2__Repository: "{{ .Values.config.memex_portal.LogWatch__Routes__2__Repository }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "LogWatch__Routes__3__Prefix" }}
+  LogWatch__Routes__3__Prefix: "{{ .Values.config.memex_portal.LogWatch__Routes__3__Prefix }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "LogWatch__Routes__3__Repository" }}
+  LogWatch__Routes__3__Repository: "{{ .Values.config.memex_portal.LogWatch__Routes__3__Repository }}"
+  {{- end }}
+  # ---- Speech (whisper sidecar) and Commerce ---------------------------------
+  # The last of the cluster-only set: memex-cloud carries all four as inline env.
+  {{- if hasKey .Values.config.memex_portal "Speech__Enabled" }}
+  Speech__Enabled: "{{ .Values.config.memex_portal.Speech__Enabled }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Speech__Endpoint" }}
+  Speech__Endpoint: "{{ .Values.config.memex_portal.Speech__Endpoint }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Speech__Language" }}
+  Speech__Language: "{{ .Values.config.memex_portal.Speech__Language }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Commerce__BaseUrl" }}
+  Commerce__BaseUrl: "{{ .Values.config.memex_portal.Commerce__BaseUrl }}"
+  {{- end }}
   # ---- AI: extra non-secret knobs (optional; default empty) -----------------
   # Order is an int — empty string fails Int32 binding, so default to "0" (NOT "").
   Anthropic__Order: "{{ .Values.config.memex_portal.Anthropic__Order | default "0" }}"
