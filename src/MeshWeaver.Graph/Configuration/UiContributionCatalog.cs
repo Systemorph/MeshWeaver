@@ -92,7 +92,9 @@ public sealed class UiContributionCatalog : IDisposable
                 using (accessService?.ImpersonateAsSystem())
                 {
                     return meshService
-                        .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{UiContributionNodeType.NodeType}"))
+                        // Contributions are authored wherever the contributing plugin lives, so the
+                        // catalog is mesh-wide by nature (#3202 — fan-out is opt-in).
+                        .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(UiContributionNodeType.NodeType)))
                         .Subscribe(OnChange, ex =>
                         {
                             // Degrade to the last known set; the compiled menu is unaffected.

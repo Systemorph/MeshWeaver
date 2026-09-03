@@ -463,13 +463,18 @@ public sealed class MeshWeaverInstanceService(
             return Observable.Throw<Unit>(new ArgumentException("instanceId is required", nameof(instanceId)));
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        // An instance is keyed by its id but LIVES under whichever user registered it
+        // ({user}/MeshWeaverInstance/{id}), so a lookup by id has no partition to anchor to and
+        // must say so (#3202 — fan-out is opt-in). The durable fix is an id → owner index in a
+        // pinned partition, the way RegistrationKeyIndex already indexes keys.
         var request = new MeshQueryRequest
         {
-            Query = $"nodeType:{MeshWeaverInstanceNodeType.NodeType} id:{instanceId}",
+            Query = MeshWideQuery.Declare(
+                $"nodeType:{MeshWeaverInstanceNodeType.NodeType} id:{instanceId}"),
         };
-        return Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => meshService.Query(request))
+        // RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)` — store and restore
+        // of the identity must land on the same thread (AGENTS.md; #1790).
+        return accessService.RunAsSystem(() => meshService.Query(request))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .SelectMany(results =>
@@ -536,13 +541,18 @@ public sealed class MeshWeaverInstanceService(
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        // An instance is keyed by its id but LIVES under whichever user registered it
+        // ({user}/MeshWeaverInstance/{id}), so a lookup by id has no partition to anchor to and
+        // must say so (#3202 — fan-out is opt-in). The durable fix is an id → owner index in a
+        // pinned partition, the way RegistrationKeyIndex already indexes keys.
         var request = new MeshQueryRequest
         {
-            Query = $"nodeType:{MeshWeaverInstanceNodeType.NodeType} id:{instanceId}",
+            Query = MeshWideQuery.Declare(
+                $"nodeType:{MeshWeaverInstanceNodeType.NodeType} id:{instanceId}"),
         };
-        return Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => meshService.Query(request))
+        // RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)` — store and restore
+        // of the identity must land on the same thread (AGENTS.md; #1790).
+        return accessService.RunAsSystem(() => meshService.Query(request))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .Select(results => results.Count == 0);

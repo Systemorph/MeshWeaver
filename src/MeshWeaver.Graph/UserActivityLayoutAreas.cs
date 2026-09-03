@@ -544,7 +544,10 @@ public static class UserActivityLayoutAreas
             return Observable.Return<IReadOnlyList<string>>([]);
         return mesh
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"nodeType:AccessAssignment content.accessObject:{ownerId}"))
+                // A share grant lives in the GRANTING partition — that is what makes it a share —
+                // so "shared with me" cannot be anchored to the viewer and says so (#3202 —
+                // fan-out is opt-in). Doc/Architecture/UnanchoredSecurityReads → "Needs a decision".
+                MeshWideQuery.Declare($"nodeType:AccessAssignment content.accessObject:{ownerId}")))
             .Scan(ImmutableDictionary<string, MeshNode>.Empty,
                 (map, change) =>
                 {
@@ -694,7 +697,9 @@ public static class UserActivityLayoutAreas
     /// (leading-space <c>-nodeType:…</c> clauses) applies to the OWN leg only — the root leg has
     /// nothing left to exclude.</summary>
     private static string FirstLevelUnion(string ownerId, string sortSuffix, string exclusions = "") =>
-        $"namespace: is:main is:content{RootTypeFilter} {sortSuffix}\n" +
+        // The root leg enumerates the partition roots of EVERY partition — mesh-wide by nature, and
+        // it says so (#3202 — fan-out is opt-in). The own leg is anchored to the user's home.
+        $"namespace: is:main is:content{RootTypeFilter} {sortSuffix} {ParsedQuery.CrossPartitionQualifier}\n" +
         $"namespace:{ownerId} is:main is:content{exclusions} {sortSuffix}";
 
     /// <summary>The catalog query for a scope + sort suffix: the first-level union (the SPACES the viewer
@@ -705,7 +710,8 @@ public static class UserActivityLayoutAreas
     /// <c>Subtree</c> is the admin's explicit "show me everything" and keeps the deny-list shape.</summary>
     private static string CatalogQuery(HomeCatalogScope scope, string ownerId, string sortSuffix, string exclusions = "") =>
         scope == HomeCatalogScope.Subtree
-            ? $"is:main is:content -nodeType:User{exclusions} {sortSuffix}"
+            // "Show me everything" is every partition by definition (#3202 — fan-out is opt-in).
+            ? $"is:main is:content -nodeType:User{exclusions} {sortSuffix} {ParsedQuery.CrossPartitionQualifier}"
             : FirstLevelUnion(ownerId, sortSuffix, exclusions);
 
     // The three user-selectable sort orders (the view-options "Sort by" dropdown). LAST ACCESSED:

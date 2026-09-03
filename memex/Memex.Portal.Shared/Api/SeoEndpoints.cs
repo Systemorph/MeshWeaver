@@ -293,10 +293,15 @@ public static class SeoEndpoints
         // Candidate enumeration runs as System (an anonymous HTTP entry has no query identity);
         // ANONYMOUS readability is then decided per node by the fail-closed gate — the sitemap
         // can never list more than a logged-out visitor can open.
+        // RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)`: the scope's store
+        // and restore must land on the SAME thread (AGENTS.md; #1790), and Using disposes on
+        // whichever thread the inner stream terminates on.
         var candidates = CandidateNodeTypes
-            .Select(type => Observable.Using(
-                () => accessService?.ImpersonateAsSystem() ?? System.Reactive.Disposables.Disposable.Empty,
-                _ => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{type} is:main limit:500"))
+            .Select(type => accessService.RunAsSystem(() =>
+                // Mesh-wide by nature: the sitemap enumerates the partition ROOTS of every
+                // partition, so there is no partition to anchor to (#3202 — fan-out is opt-in).
+                mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    MeshWideQuery.Declare($"nodeType:{type} is:main limit:500")))
                     .Take(1)
                     .Select(change => change.Items
                         .Where(n => !n.Path.Contains('/'))     // top-level roots only

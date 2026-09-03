@@ -68,8 +68,11 @@ public class WhatsNewSatelliteEntryTest(ITestOutputHelper output) : MonolithMesh
         WhatsNewSettingsTab.ListingQueries.Should().Contain(
             $"path:{WhatsNewSettingsTab.WhatsNewNamespace} scope:children",
             "the 612 existing entries carry no nodeType — dropping this lane would empty the feed");
+        // The type lane is mesh-wide BY DESIGN (a satellite files entries in its own tree), so it
+        // DECLARES the fan-out — fan-out is opt-in since Plugins #1231, and an undeclared
+        // path-less read is refused at runtime (#3202).
         WhatsNewSettingsTab.ListingQueries.Should().Contain(
-            $"nodeType:{WhatsNewSettingsTab.EntryNodeType}",
-            "the satellite lane is what #2539 adds");
+            MeshWideQuery.OfType(WhatsNewSettingsTab.EntryNodeType),
+            "the satellite lane is what #2539 adds, and it says out loud that it spans every partition");
     }
 }

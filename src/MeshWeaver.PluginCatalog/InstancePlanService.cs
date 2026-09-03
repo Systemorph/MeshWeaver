@@ -42,9 +42,13 @@ public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanSer
 
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        // Keyed by id, filed under whichever user registered it — no partition to anchor to, so
+        // the read declares its cost (#3202 — fan-out is opt-in); the durable fix is an id → owner
+        // index in a pinned partition.
         var request = new MeshQueryRequest
         {
-            Query = $"nodeType:{MeshWeaverInstanceNodeType.NodeType} id:{instanceId.Trim()}",
+            Query = MeshWideQuery.Declare(
+                $"nodeType:{MeshWeaverInstanceNodeType.NodeType} id:{instanceId.Trim()}"),
         };
         return accessService.RunAsSystem(() => meshService.Query(request))
             .Take(1)

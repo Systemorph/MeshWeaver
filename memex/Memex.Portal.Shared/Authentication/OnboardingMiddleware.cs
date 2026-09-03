@@ -407,7 +407,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     internal static IObservable<IdentityReadOutcome<MeshNode>> FindUserByEmail(
         IWorkspace workspace, string email, ILogger? logger)
     {
-        var query = $"nodeType:User content.email:{email} limit:1";
+        var query = UserByEmailQuery(email);
         var accessService = workspace.Hub.ServiceProvider.GetService<AccessService>();
 
         // As System, for the reason given on LoadUserRoles — and this read needs it MORE, being
@@ -494,7 +494,8 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     }
 
     /// <summary>
-    /// Reactive load of the user's role names from AccessAssignment nodes via the
+    /// Reactive load of the user's PLATFORM role names from the three anchored
+    /// <see cref="RoleQueries"/> legs (root, <c>Admin</c>, own partition — #3202) via the
     /// canonical synced query (<c>workspace.GetQuery</c>). Same machinery as
     /// <c>FindUserByEmail</c> — bypasses RLS, dedupes, gates on Initial,
     /// includes static providers. Bearer auth uses this via
@@ -544,17 +545,9 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         // ratchet guard fails the build at any new site).
         return IdentityRead.Bounded(
             accessService.RunAsSystem(() =>
-                workspace.GetQuery(
-                        $"auth:userRoles:{username}",
-                        // Through the SecurityQueries seam, which overwrites any limit with
-                        // `limit:all`. This query carried `limit:10`: a viewer with more than ten
-                        // AccessAssignment nodes got an arbitrary ten and the rest of their roles
-                        // vanished, silently — the truncation #2011 fixed for the security fold,
-                        // which that class exists to make structurally impossible. "A query string
-                        // that never reaches this class is the only way back to the defect", and
-                        // this was one. It fires on GROWTH, so the largest install first.
-                        SecurityQueries.Enumeration(
-                            $"nodeType:AccessAssignment content.accessObject:\"{username}\" scope:subtree"))
+                // The (id, query set) pair is the cache key, so the three anchored legs below get
+                // their own process-wide snapshot; the synced layer UNIONs them, deduped by path.
+                workspace.GetQuery($"auth:userRoles:{username}", RoleQueries(username))
                     .Do(items => logger?.LogDebug(
                         "LoadUserRoles({User}): synced query emit, items={Count}",
                         username, items.Count()))
@@ -562,6 +555,69 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                     .Select(items => (IReadOnlyCollection<string>?)FoldRoles(items, jsonOptions))),
             budget ?? LookupTimeout, $"LoadUserRoles({username})", logger);
     }
+
+    /// <summary>
+    /// The partition that holds the platform-admin grants — "global admin" has exactly one meaning,
+    /// <c>Permission.All</c> at scope <c>Admin</c>, i.e. an <c>AccessAssignment</c> in
+    /// <c>Admin/_Access</c> (AGENTS.md → "Global admin"; <c>hub.IsGlobalAdmin()</c> keys off it).
+    /// </summary>
+    internal const string AdminPartition = "Admin";
+
+    /// <summary>
+    /// The account lookup: <c>nodeType:User</c> with no path. That is deliberate and it is PINNED,
+    /// not unanchored — <c>UserNodeType</c> registers a <c>QueryRoutingRule</c> that routes a
+    /// path-less <c>nodeType:User</c> query to the <c>Auth</c> partition (the auth-mirror of every
+    /// User node in the mesh, excluded from cross-schema search), and the Postgres planner consults
+    /// that rule BEFORE refusing a query as unanchored. <c>SignInReadsAreAnchoredTest</c> pins that
+    /// the rule resolves this exact text on the real mesh configuration.
+    /// </summary>
+    /// <param name="email">The sign-in email.</param>
+    /// <returns>The query string.</returns>
+    internal static string UserByEmailQuery(string email) =>
+        $"nodeType:User content.email:{email} limit:1";
+
+    /// <summary>
+    /// The three ANCHORED reads whose union is the user's platform role set (#3202) — each pinned to
+    /// ONE schema, none a mesh-wide fan-out:
+    /// <list type="number">
+    ///   <item>the ROOT scope — <c>_Access/{id}</c>, the registered global satellite
+    ///     (<c>system_access</c>): platform-wide viewer/admin grants;</item>
+    ///   <item>the <see cref="AdminPartition"/> — <c>Admin/_Access/{id}</c>: the platform-admin
+    ///     grant, the ONE meaning of "global admin";</item>
+    ///   <item>the user's OWN partition — <c>{user}/_Access/{id}</c>: the Admin-of-my-own-home
+    ///     grant onboarding writes.</item>
+    /// </list>
+    ///
+    /// <para><b>Why not every partition.</b> The read this replaces,
+    /// <c>nodeType:AccessAssignment content.accessObject:"{user}" scope:subtree</c>, named no
+    /// partition: on Postgres that was a UNION over every partition schema on EVERY request (199
+    /// schemas on memex-cloud, ~4 s each under load — #2194), and since MeshWeaver.Plugins #1231
+    /// made fan-out opt-in it was REFUSED outright, so every signed-in user got a 503. The obvious
+    /// remedy — <c>partitions:all</c> — would restore the fan-out, not remove it.</para>
+    ///
+    /// <para><b>Why three homes are the COMPLETE answer.</b> <c>AccessContext.Roles</c> is read by
+    /// no permission decision: <c>PermissionEvaluator</c> deliberately ignores claim roles (a claim
+    /// role used to be a global, undeniable grant — the 2026-08-05 paywall bypass), and its only
+    /// consumer in core or MeshWeaver.Plugins is the per-viewer access-cache KEY. What the set
+    /// means is "this user's PLATFORM roles", and a platform role is granted in exactly these three
+    /// places by contract (<c>Doc/Architecture/AccessControl</c> → "Where to look"). A grant in an
+    /// arbitrary space (Editor on <c>acme</c>) is a DATA permission the fold evaluates from the
+    /// space's own <c>_Access</c> at check time; folding it into the platform roles was incidental
+    /// to the mesh-wide query, not a requirement of any caller.</para>
+    ///
+    /// <para><b>Why the #2011 deny hazard does not apply.</b> Narrowing a fold read is dangerous
+    /// where a DENY may live outside the anchor — a group deny that loses its membership rows fails
+    /// OPEN. <see cref="FoldRoles"/> honours no deny at all (it collects non-denied role names and
+    /// subtracts nothing), so no scope's deny can be lost by not reading that scope.</para>
+    /// </summary>
+    /// <param name="username">The mesh user id whose grants to read.</param>
+    /// <returns>The three anchored query strings, each stamped complete.</returns>
+    internal static string[] RoleQueries(string username) =>
+    [
+        SecurityQueries.RootAssignmentsFor(username),
+        SecurityQueries.PartitionAssignmentsFor(AdminPartition, username),
+        SecurityQueries.PartitionAssignmentsFor(username, username),
+    ];
 
     /// <summary>Back-compat overload used by callers that don't yet pass a logger.</summary>
     internal static IObservable<IdentityReadOutcome<IReadOnlyCollection<string>>> LoadUserRoles(
