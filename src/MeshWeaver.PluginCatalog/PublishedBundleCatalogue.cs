@@ -269,8 +269,10 @@ public static class PublishedBundleCatalogue
     }
 
     /// <summary>
-    /// The per-NodeType dependency records one sealed bundle carries — or NONE, logged, when the
-    /// bundle is not a readable archive or its manifest does not parse.
+    /// The per-NodeType dependency records one sealed bundle carries. EMPTY when the archive carries
+    /// no manifest entry or its manifest lists no records (a legacy bundle — nothing to judge, not an
+    /// error); EMPTY and LOGGED when the bundle is not a readable archive or its manifest does not
+    /// parse.
     ///
     /// <para>🚨 Per-bundle, never per-identity. The first cut let a bundle that was not a zip throw
     /// out of <see cref="Read"/>'s outer catch, so ONE unreadable file made the whole identity
