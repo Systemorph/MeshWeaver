@@ -535,10 +535,14 @@ routine:
   root, which the lane mounts and which no selection can shrink.
 - 🚨 **A `.razor` component counts as a definition.** The move that motivated the option
   (MeshWeaver.Plugins#1268) was three Razor views, whose types exist in no `.cs` file — a check that
-  indexed only C# would call the entry stale in precisely the case it was built for. A component
-  matches on its file name plus the directory path it sits under; the namespace PREFIX is the Razor
-  SDK's to compute, and a re-derivation that got the root namespace wrong would produce the false red
-  this check must never produce.
+  indexed only C# would call the entry stale in precisely the case it was built for. And matching on
+  the folder alone is not enough either: `CS0436` needs the SAME fully-qualified name on both sides,
+  so a view that leaves an image-shipped assembly **keeps its old namespace** with an `@namespace`
+  directive (or an `_Imports.razor` covering its folder), and its new folder then says nothing about
+  its namespace. Both declared forms are read and recorded exactly; the file-name-plus-directory-path
+  rule is an additional fallback for the derived case, never the only rule — the `RootNamespace`
+  prefix is the Razor SDK's to compute, and a re-derivation that got it wrong would produce the false
+  red this check must never produce.
 
 Every other ambiguity is resolved the same way — towards quiet. Type FORWARDERS in the image's copy
 count as definitions (a forwarded type is as visible to the compiler as a defined one), and an

@@ -42,11 +42,14 @@ namespace MeshWeaver.PluginTester;
 /// missed staleness costs what the status quo already costs. So the image side counts type
 /// FORWARDERS as definitions (a forwarded type is just as visible to the compiler), the source side
 /// counts every <c>.cs</c> under the root — in-mesh <c>Source/*.cs</c> nodes included, they are this
-/// repository's source too — and a <c>.razor</c>/<c>.cshtml</c> component matches on its simple name
-/// plus its directory suffix, because its generated namespace is the Razor SDK's to compute and a
-/// re-derivation of it that got the root namespace wrong would produce precisely the false red this
-/// check must never produce. Razor is not a corner case here: the move that motivated the whole
-/// option (MeshWeaver.Plugins#1268) was three <c>.razor</c> views.</para>
+/// repository's source too — and a <c>.razor</c>/<c>.cshtml</c> component contributes BOTH the
+/// namespace it declares (an <c>@namespace</c> directive, or the nearest <c>_Imports.razor</c> plus
+/// the folder path below it — which is how a moved view keeps the old namespace <c>CS0436</c>
+/// requires) AND, as a fallback, its simple name with its directory suffix, since the
+/// <c>RootNamespace</c> prefix is the Razor SDK's to compute and a re-derivation that got it wrong
+/// would produce precisely the false red this check must never produce. Razor is not a corner case
+/// here: the move that motivated the whole option (MeshWeaver.Plugins#1268) was three <c>.razor</c>
+/// views.</para>
 ///
 /// <para>An assembly whose metadata cannot be READ is a refusal of its own, never a staleness
 /// verdict — naming the wrong entry to delete is worse than saying nothing.</para>
