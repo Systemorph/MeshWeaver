@@ -102,15 +102,17 @@ Both are SIGSEGV. They are different bugs and the dump distinguishes them in one
 | | fault address | reading | verdict |
 |---|---|---|---|
 | **Use-after-unload** | `si_code = SI_KERNEL`, `si_addr = 0`, faulting register holds a **non-canonical** value (e.g. `rax = 0x0074007300200022` — UTF-16 text where a pointer belonged) | a **#GP on a non-canonical pointer**, not a null deref — freed-and-reused memory | **OURS.** Family A below. |
-| **Zeroed MethodTable header** | `si_code = 1` (`SEGV_MAPERR`), `si_addr = 0x0`, `TRAPNO=14`/`ERR=0x4`, `RIP` inside file-backed `libcoreclr` `gc_heap::*`, instruction `mov ecx,[rax]` with `RAX = 0` | one 8-byte object header reads as exactly zero while its block stays coherent | **CoreCLR GC.** Not ours. |
+| **Zeroed MethodTable header** | `si_code = 1` (`SEGV_MAPERR`), `si_addr = 0x0`, `TRAPNO=14`/`ERR=0x4`, `RIP` inside file-backed `libcoreclr` `gc_heap::*`, instruction reading `MT->m_dwFlags` off a register that is `0` (`mov ecx,[rax]` with `RAX = 0`; `mov r9d,[rcx]` with `RCX = 0` — the register allocation varies, the dereference does not) | one 8-byte object header reads as exactly zero while its block stays coherent | **CoreCLR GC.** Not ours. |
 
-The second one is the FutuRe family — **eight sightings, and the collectible-ALC hypothesis has been
+The second one is the FutuRe family — **nine sightings, and the collectible-ALC hypothesis has been
 falsified three separate ways** (RIP is in file-backed runtime code; a freed `LoaderAllocator` yields
 a non-null *unmapped* pointer, never `0x0`; a free-list item has no ALC at all). Do not keep paying
 that hypothesis forward, and **do not "fix" it by disabling concurrent GC** — that was tried
 (#1274), changed nothing measurable, and was removed. Read the instruction + registers, not the
-function name: the frame moved across `background_sweep` → `plan_phase` → `find_first_object` while
-the fault did not. Full table: DebuggingNativeCrashes.md.
+function name: the frame moved across `background_sweep` → `plan_phase` → `find_first_object` →
+`background_mark_simple1` (2026-09-03) while the fault did not. Measured base rate on Plugins CI over
+1,197 runs: **0.74 %**, `MeshWeaver.FutuRe.Test` only, `main` included. Full table:
+DebuggingNativeCrashes.md.
 
 🚨 **One more non-ours case, specific to test hosts:** `exit=139` in a process where **ClrMD** runs
 anywhere means suspect the DAC first. `DataTarget.Dispose` dlcloses `libmscordaccore.so` without
