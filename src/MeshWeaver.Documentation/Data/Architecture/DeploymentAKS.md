@@ -147,10 +147,21 @@ deploy/aks/scripts/check-chart-drift.sh -n <NS> -r <release> \
 ```
 
 It renders the chart, reads the live `memex-portal-config` and `memex-portal-deployment` plus the
-namespace's `PodDisruptionBudget` and `ScaledObject`, and classifies every difference as
-**CLUSTER-ONLY** (hand-applied — the next `helm upgrade` deletes it), **CHART-ONLY** (described
-but never applied — nobody is getting it), or **DIFFERS**. Secret values are never printed;
-inline `env` is compared by name only.
+namespace's `PodDisruptionBudget` and `ScaledObject`, and classifies every difference into the five
+classes below — **COLLIDES** and **SHADOWS** (an inline `env:` entry that overrides `envFrom`, so
+the value the chart supplies is dead or resolved at random per pod start), then **CLUSTER-ONLY**
+(hand-applied, and in no committed source), **CHART-ONLY** (described but never applied — nobody is
+getting it), and **DIFFERS**.
+
+🚨 **CLUSTER-ONLY does NOT mean "the next `helm upgrade` deletes it".** This page said that until
+2026-09-03 and it is false — measured, and contradicted four paragraphs below by this same page.
+Helm's three-way merge removes only what Helm previously owned, so drift applied out of band
+survives every deploy. Ranking the backlog by "what a deploy would destroy" ranked it by a hazard
+that does not exist and buried the two classes that are wrong *now*.
+
+Secret values are never printed, and neither are inline `env` values — but both are **compared**:
+an entry present on both the chart and the pod with a different value is reported as `DIFFERS`
+without printing either side.
 
 The **availability shape** — `spec.replicas`, the budget, the autoscaler — is compared because
 without it the check cannot see an outage. On 2026-08-14 `memex-cloud` served every request from

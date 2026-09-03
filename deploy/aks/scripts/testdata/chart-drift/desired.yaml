@@ -45,6 +45,25 @@ spec:
                 "configMapRef": {
                   "name": "memex-portal-config"
                 }
+              },
+              {
+                "configMapRef": {
+                  "name": "portal-extra"
+                }
+              }
+            ],
+            "env": [
+              {
+                "name": "DOTNET_DbgMiniDumpType",
+                "value": "2"
+              },
+              {
+                "name": "DOTNET_DbgMiniDumpName",
+                "value": "/data/dumps/coredump.%p.%t"
+              },
+              {
+                "name": "AZURE_CLIENT_ID",
+                "value": "00000000-0000-0000-0000-000000000001"
               }
             ],
             "lifecycle": {

@@ -1,0 +1,4 @@
+secret/portal-secrets	PluginCatalog__RegistryToken
+secret/portal-secrets	ConnectionStrings__memex
+secret/portal-secrets	SPEECH__APIKEY
+configmap/portal-extra	Commerce__BaseUrl

@@ -29,10 +29,11 @@
 #
 # WHAT IT COMPARES (portal only — the object a code update actually rolls):
 #   ConfigMap  memex-portal-config       every key and value
-#   Deployment memex-portal-deployment   the portal container's inline env (NAMES only — values
-#                                        are never printed, they hold tokens), envFrom refs,
-#                                        lifecycle.preStop, terminationGracePeriodSeconds, the
-#                                        three probes, and the AVAILABILITY shape below
+#   Deployment memex-portal-deployment   the portal container's inline env — every entry, name AND
+#                                        value; values are COMPARED but never PRINTED, because they
+#                                        hold tokens — plus envFrom refs, lifecycle.preStop,
+#                                        terminationGracePeriodSeconds, the three probes, and the
+#                                        AVAILABILITY shape below
 #   PodDisruptionBudget / ScaledObject   existence and shape
 #
 # 🚨 THE AVAILABILITY SHAPE was added 2026-08-14, because the check as first written would have
@@ -93,7 +94,13 @@
 #                  it is invisible to review. Fleet rule: nothing may live only on the cluster.
 #   CHART-ONLY     rendered, not live   → described but never applied; nobody is getting it
 #   DIFFERS        both, values differ  → chart and cluster disagree; a deploy does NOT resolve it,
-#                  so it persists until somebody decides which side is authoritative
+#                  so it persists until somebody decides which side is authoritative. ONE exception,
+#                  and the finding names it: an `inline env` entry the chart RENDERS is helm-owned,
+#                  so an upgrade does reset that one. Until 2026-09-03 this comparison did not exist
+#                  at all — an entry present on both sides was matched by NAME and skipped, having
+#                  incremented the comparison counter, so `kubectl set env` over one of the chart's
+#                  own entries (the DOTNET_Dbg* crash-dump block, the self-updater's
+#                  AZURE_CLIENT_ID) was the one drift shape this script could not see.
 #
 # EXPECTED post-helm patches. An env's deploy.sh applies portal-patch.json AFTER `helm upgrade`
 # (the CSI envFrom, extra volumes, nodeSelector, resources). Pass that file with --expect-patch
@@ -224,12 +231,12 @@ fetch() { # $1 = resource
 # credentials onto a CI runner's disk for the lifetime of the job — a drift checker must not be
 # the thing that leaks the secrets it is auditing. `-o go-template` over `.data` emits the keys and
 # nothing else, is built into kubectl (no jq on the runner), and works on both transports.
-fetch_secret_keys() { # $1 = secret name
+fetch_data_keys() { # $1 = resource, e.g. secret/foo or configmap/bar
   local tmpl='{{range $k,$v := .data}}{{$k}}{{"\n"}}{{end}}'
   case "$VIA" in
-    kubectl)    kubectl -n "$NS" get "secret/$1" -o go-template="$tmpl" 2>"$WORK/kubectl.err" ;;
+    kubectl)    kubectl -n "$NS" get "$1" -o go-template="$tmpl" 2>"$WORK/kubectl.err" ;;
     aks-invoke) az aks command invoke -g "$RG" -n "$AKS" -o tsv --query logs \
-                   --command "kubectl -n $NS get secret/$1 -o go-template='$tmpl'" 2>"$WORK/kubectl.err" ;;
+                   --command "kubectl -n $NS get $1 -o go-template='$tmpl'" 2>"$WORK/kubectl.err" ;;
   esac
 }
 
@@ -246,34 +253,42 @@ done
 # ---------------------------------------------------------------------------
 # COMPARE
 # ---------------------------------------------------------------------------
-# Every key an envFrom SECRET supplies reaches the portal exactly like a ConfigMap key — so an
-# inline env of the same name shadows it just as silently. memex proves it is not theoretical: the
-# Key-Vault-provisioned PluginCatalog__RegistryToken sits under an inline entry carrying a
+# Every key an envFrom source supplies reaches the portal exactly like a memex-portal-config key —
+# so an inline env of the same name shadows it just as silently. memex proves it is not theoretical:
+# the Key-Vault-provisioned PluginCatalog__RegistryToken sits under an inline entry carrying a
 # DIFFERENT token, so the managed credential is dead and the pod authenticates with a plaintext
 # copy (MeshWeaver#3201). Reading only the names is enough to see that, and is all we read.
-SECRET_KEYS="$WORK/live-envfrom-secret-keys.txt"
-: > "$SECRET_KEYS"
-for sec in $(python3 - "$WORK/live-deployment-memex-portal-deployment.json" <<'PYEOF'
+#
+# 🚨 BOTH source kinds, not just Secrets. `.Values.extraEnvFrom` takes verbatim EnvFromSource
+# objects and the chart documents `{configMapRef: {name: …}}` as one of the two shapes, so
+# enumerating only `secretRef` would leave exactly the blind spot #3204 closed, one source-kind
+# over — a checker that can see half of the class it is named for. memex-portal-config is EXCLUDED
+# here because it is fetched in full above: only for that one are the VALUES known, which is what
+# lets a shadow over it carry an agree/disagree verdict at all.
+SOURCE_KEYS="$WORK/live-envfrom-source-keys.txt"
+: > "$SOURCE_KEYS"
+for src in $(python3 - "$WORK/live-deployment-memex-portal-deployment.json" <<'PYEOF'
 import json, sys
 dep = json.load(open(sys.argv[1]))
 for c in ((dep.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers", []):
     if c.get("name") == "memex-portal":
         for e in c.get("envFrom") or []:
-            n = (e.get("secretRef") or {}).get("name")
-            if n:
-                print(n)
+            for kind, prefix in (("secretRef", "secret"), ("configMapRef", "configmap")):
+                n = (e.get(kind) or {}).get("name")
+                if n and not (prefix == "configmap" and n == "memex-portal-config"):
+                    print(f"{prefix}/{n}")
 PYEOF
 ); do
-  if ! keys=$(fetch_secret_keys "$sec"); then
-    echo "::error::could not read the KEY NAMES of secret/$sec in namespace '$NS'. An envFrom secret"
-    echo "    this script cannot enumerate is a blind spot in the shadow check, not an absence of"
+  if ! keys=$(fetch_data_keys "$src"); then
+    echo "::error::could not read the KEY NAMES of $src in namespace '$NS'. An envFrom source this"
+    echo "    script cannot enumerate is a blind spot in the shadow check, not an absence of"
     echo "    drift — failing rather than reporting on a partial view."
     [ -s "$WORK/kubectl.err" ] && sed 's/^/    /' "$WORK/kubectl.err"
     exit 1
   fi
-  # `sec<TAB>key`, one per line. Nothing else about the secret is read, stored or printed.
+  # `<kind>/<name><TAB>key`, one per line. Nothing else about the source is read, stored or printed.
   printf '%s\n' "$keys" | while IFS= read -r k; do
-    [ -n "$k" ] && printf '%s\t%s\n' "$sec" "$k" >> "$SECRET_KEYS"
+    [ -n "$k" ] && printf '%s\t%s\n' "$src" "$k" >> "$SOURCE_KEYS"
   done
 done
 
@@ -284,7 +299,7 @@ python3 "$SELF_DIR/chart-drift-compare.py" \
   "$EXPECT_PATCH" \
   "$WORK/live-poddisruptionbudgets.json" \
   "$WORK/live-scaledobjects-keda-sh.json" \
-  "$SECRET_KEYS"
+  "$SOURCE_KEYS"
 rc=$?
 
 if [ "$rc" -ne 0 ]; then
