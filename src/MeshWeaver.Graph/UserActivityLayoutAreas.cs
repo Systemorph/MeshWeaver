@@ -905,6 +905,13 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(false)
             .WithItemLimit(50)
             .WithReactiveMode(true)
+            // GROUPS + DRAG AND DROP, iPhone-style: the sections are the records' own
+            // App.Group (per viewer — the Store stamps the package's category, the viewer
+            // regroups by dragging), the order inside a section is App.Order, and a drop writes
+            // both back onto the moved records through the node stream. Nothing else stores the
+            // arrangement: a group exists exactly while a tile carries its name.
+            .WithGroupBy(AppGroupProperty)
+            .WithSortable()
             with
             {
                 NavigateToMainNode = true,
@@ -917,10 +924,14 @@ public static class UserActivityLayoutAreas
                         RenderMode = nameof(MeshSearchRenderMode.Icons),
                         NavigateToMainNode = true,
                         SortByAccess = true,
+                        Sortable = true,
                     },
                 ],
             };
     }
+
+    /// <summary>The record content property the Apps grid groups by — <see cref="App.Group"/>.</summary>
+    internal const string AppGroupProperty = nameof(App.Group);
 
     /// <summary>
     /// The <b>Shared with me</b> band — #385: modules in OTHER partitions the caller was invited
