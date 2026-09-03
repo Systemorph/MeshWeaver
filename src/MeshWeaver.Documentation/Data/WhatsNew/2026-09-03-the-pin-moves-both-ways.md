@@ -1,6 +1,8 @@
 ---
 Name: A pinned platform moves in both directions — and tests have to survive it
 Description: Three incidents in one day, two in tests and one a production 503, all from a satellite encoding a core contract that the platform pin can straddle. The new Architecture page says what shape survives it.
+Category: Fix
+Order: -20260903
 ---
 
 A satellite repo compiles against a platform commit named by `MW_PLATFORM_REF`. That pin moves
