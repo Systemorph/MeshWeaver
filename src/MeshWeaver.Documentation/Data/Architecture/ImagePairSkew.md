@@ -166,22 +166,37 @@ git merge-base --is-ancestor <fix sha> <core half>                              
 
 ## Recorded, not fixed
 
-- **A portal host that keeps SERVING after SIGTERM.** Measured on the sister portal at 18:15Z:
-  a pod **20 minutes past SIGTERM at 5,705 millicores and 13,040 Mi, still `ready=true`**. Its own
-  log over that window shows it doing live work — dispatching a platform release broadcast,
-  deserializing payloads — so it is **not deadlocked**: it is still accepting and processing intake
-  instead of draining. The shutdown path is not quiescing the intake, which is a different defect
-  from a blocked dispose and has a different fix.
+- **A portal host burning CPU long past SIGTERM — cause UNDETERMINED.** What is measured, with
+  timestamps, on the sister portal on 2026-09-03:
 
-  🚨 **The image half is NOT the discriminator, and a control arm says so.** The same pod's sibling,
-  on the SAME image, drained normally over the same minutes (238 m, then 70 m). So this is about
-  what one pod was holding, not about which core half it carried. An earlier draft of this page
-  named core `71a41b231` (the IoPool drain-cancel fix, present in `ci.7693` and absent from
-  `ci.7632`/`ci.7652`) as the leading candidate; **that hypothesis is withdrawn** — it was built on
-  two pods in different namespaces with no control, and the sibling falsifies it.
+  | time | observation |
+  |---|---|
+  | 18:15:59 | the pod is ~20 min past SIGTERM at **5,705 millicores / 13,040 Mi**, `ready=true` |
+  | 18:15:59 | `kubectl logs --since=3m` shows real work — a platform release broadcast for a newer build, plus deserialization warnings |
+  | 18:22:51 | the same pod has logged **zero lines in 2 minutes**, and nothing matching shutdown/stopping/drain/dispose in the preceding 25 |
+  | 18:23:11 | the pod is gone; **no CPU sample was ever taken during the silent window** |
+
+  Two earlier readings of this were both wrong and are both **withdrawn**. The first called it a
+  dispose deadlock and named core `71a41b231` (the IoPool drain-cancel fix, in `ci.7693` and not in
+  `ci.7632`/`ci.7652`) as the candidate — falsified by a control arm: the pod's own sibling, **on
+  the same image**, drained normally over the same minutes (238 m, then 70 m). The second called it
+  "still serving, not deadlocked" — overstated, because a 3-minute log window does not establish
+  that those lines were concurrent with the CPU sample.
+
+  So the verdict is **undetermined between "still serving late" and "spinning silently"**, and the
+  image pairing is unsupported in either direction. The number is worth keeping; the label is not.
+  What would settle it is one CPU sample taken during a silent window, or a stack.
+
+  🚨 **And the obvious way to get that stack does NOT work here.** `kubectl debug` cannot attach an
+  ephemeral container to a pod that already has a `deletionTimestamp`: the API accepts the command
+  and prints its "Targeting container" line, and then creates nothing —
+  `ephemeralContainerStatuses` stayed empty on both attempts. The published recipe for profiling a
+  live portal pod therefore does not work on precisely this class of specimen. To capture a
+  terminating host you must attach the probe **before** deletion is requested, or go in from the
+  node. That, not the grace window, is why neither specimen produced a stack.
 
   🚨 **The grace period hides the whole shape.** `terminationGracePeriodSeconds` is 1800, so a host
-  that serves for twenty-nine minutes past SIGTERM and one that stops in two look identical from
+  that burns CPU for twenty-nine minutes past SIGTERM and one that stops in two look identical from
   outside: the pod disappears, the rollout succeeds, nothing is logged. The only tell is CPU on a
   pod whose `deletionTimestamp` is set, and nothing watches that. The cost is real — during this
   incident's own rollout such a pod held the last schedulable node, which is why the surge pod
