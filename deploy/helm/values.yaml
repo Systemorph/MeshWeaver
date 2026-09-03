@@ -35,11 +35,15 @@ selfUpdate:
 # the catalog over HTTP at /api/plugins. Every other install is a CONSUMER — it sets `registryUrl`
 # (or `registries` for several) and needs NO git access. npm/NuGet-style credential encapsulation.
 #
-# Tokens are secrets: set them under secrets.memex_portal (PluginCatalog__RegistryToken on a
-# consumer, PluginCatalog__RegistryTokens on a registry) or inject them from the Key Vault CSI
-# mount. 🚨 A registry with NO tokens configured serves its whole catalog — and every package's
-# file content — to ANY anonymous caller. That is the local-dev / e2e stub mode; a production
-# registry must always configure tokens.
+# Tokens are secrets: set them under secrets.memex_portal — PluginCatalog__RegistryToken on a
+# consumer (or PluginCatalogConsumerRegistryTokens, index-aligned with pluginCatalog.registries) —
+# or inject them from the Key Vault CSI mount.
+#
+# 🚨 There is no longer a REGISTRY-side token list here. `PluginCatalog__RegistryTokens` bound to
+# nothing (no such property on PluginCatalogOptions; PluginRegistryTokens.SectionName/.Validate are
+# [Obsolete]) and this paragraph used to tell operators to configure it — advice that produced a
+# comfortable belief and no access control. A registry is gated by RequireInstanceKey plus the
+# instance keys it issues, each resolving to a MeshWeaverInstance and its admin-owned PluginGrant.
 #
 # See Doc/Architecture/PluginRegistry.md.
 pluginCatalog:
@@ -540,10 +544,25 @@ secrets:
     # credential — it refuses rather than persisting one in plaintext. Every real
     # deployment must set it in an overlay / --set / Key Vault CSI.
     Ai__KeyProtection__MasterKey: ""
-    # Plugin catalog. Consumer: the instance token issued to this install. Registry: the list of
-    # tokens it accepts (empty list = serves ANY anonymous caller — dev/e2e only).
+    # ---- Plugin catalog credentials -------------------------------------------
+    # CONSUMER ONLY. There is no registry-side token allowlist here any more: the
+    # `PluginCatalog__RegistryTokens` list this block used to advertise bound to nothing (no such
+    # property on PluginCatalogOptions; PluginRegistryTokens.SectionName/.Validate are [Obsolete]),
+    # so the "empty list = serves ANY anonymous caller, configure it in production" advice it
+    # carried bought a belief in an access control and no access control. A registry is gated by
+    # RequireInstanceKey plus the instance keys it issues, each resolving to a MeshWeaverInstance
+    # and its admin-owned PluginGrant.
+    #
+    # The instance key THIS install presents, as `Authorization: Bearer`. Labelled the legacy
+    # single-registry key and superseded in SHAPE by the per-registry list below, but fully read
+    # and what memex authenticates with today (RegistryTokenResolver.LegacyTokenFallback keeps it
+    # working for a sole or URL-matching registry) — not deprecated.
     PluginCatalog__RegistryToken: ""
-    PluginCatalog__RegistryTokens: []
+    # Per-registry consumer keys, INDEX-ALIGNED with pluginCatalog.registries — rendered as
+    # PluginCatalog__Registries__<i>__Token. Declared here (empty) so `helm show values` reveals
+    # the supported surface; a list entry is a secret, so set it from an overlay or the Key Vault
+    # CSI mount, never in a committed values file.
+    PluginCatalogConsumerRegistryTokens: []
     # ---- GitHub App identity (the machine credential for PRIVATE repos) -------
     # PEM private key of the GitHub App whose INSTALLATION TOKEN every server-side GitHub read
     # uses: the store's package feed (StoreManifestSource), the Store card's Provision → Import
