@@ -35,15 +35,16 @@ incidental coupling that can be tidied away.
 | `main-cd.yml:849` → `:974` | checks out Plugins @ `vars.MW_PLUGINS_REF \|\| main`, publishes `plugins-repo/src/Memex.Portal.Distributed` | a Plugins compile error turns core CD red; **no images publish for that core commit** |
 | `main-cd.yml:1020` → `:1080` | same, for `Memex.Database.Migration` | ditto — and a missing migration tag is the 6.5 h production outage of 2026-08-27 (#2555) |
 | `main-cd.yml:524` | `git ls-remote` the Plugins HEAD, to key the image set on the PAIR (#2622) | fails RED, deliberately: an unresolvable HEAD means the image identity cannot be established |
-| `main-cd.yml:2094` (`plugins-modules`), `:2166` (`plugins-bake`) | core's CD packs and bakes the Plugins module bundles the portals adopt for this identity | a red leg means the sealed publication is missing for an identity the images already carry — **and it stops the whole fleet**: `notify-dependents` is gated on `needs.plugins-bake.result == 'success'` (`:1982`), so Education, Reinsurance, SocialMedia and Manufacturing are never told the platform released |
+| `main-cd.yml:2094` (`plugins-modules`), `:2166` (`plugins-bake`) | core's CD packs and bakes the Plugins module bundles the portals adopt for this identity | a red leg means the sealed publication is missing for an identity the images already carry — **and it stalls the whole fleet**: memex still wakes every satellite for that identity, but each of their bakes seeds the Plugins publication and fails `upstream 'plugins' has no SEALED publication` until it exists |
 | `release-images.yml:34` → `:101`, `:114`, `:126` | the `v*.*.*` tag lane, same two projects | a tag release publishes no portal image |
 | `edge-images.yml:39` → `:92`, `:105` | the manual edge channel, same two projects | edge builds fail |
 
 🚨 **The blast radius is the FLEET, not this repo.** A broken plugins tree does not merely red a
-core job: `notify-dependents` — the one fan-out that tells every satellite a platform release
-happened — sits behind `needs.plugins-bake.result == 'success'`. So one repository's compile error
-silences the release wave for four others, which then adopt nothing and report `FrameworkDeclined`
-at their next fetch. That is the cost of the edge, stated plainly.
+core job. The release wave itself is memex's — the build fact still reaches `Hosting/PlatformBuilds`
+and memex still dispatches `meshweaver-framework-released` to every subscribed repository — but each
+satellite's bake seeds the Plugins publication for the released identity, so with `plugins-bake` red
+every one of them fails `upstream 'plugins' has no SEALED publication` and the fleet adopts nothing,
+reporting `FrameworkDeclined` at its next fetch. That is the cost of the edge, stated plainly.
 
 🚨 **`ref: main` is the dishonest part, not the checkout.** A live checkout of a sibling's moving
 default branch means "which plugins commit shipped with which core commit" is decided by whoever
@@ -131,9 +132,57 @@ Checked and cleared — do not "fix" these:
   — `workflow_call` only. A plugin repo calling core's reusable workflow is the intended shape.
   `plugin-build.yml` carries an explicit note that its cross-repo checkout was REMOVED and must not
   be re-added on the strength of a grep.
-- **`notify-dependents.yml`** — core pushes a `repository_dispatch` wave and does not wait for it.
-  The subscriber set is read at run time from the App's installation list, so no repo name is
-  hard-coded and adding one is an App installation, not an edit here.
+- **No dispatcher.** Core sends `repository_dispatch` to no repository. `notify-dependents.yml` was
+  withdrawn on 2026-09-03 (maintainer: *"core publishes an event and finishes"*): the release wave is
+  emitted by memex from the build fact core POSTs into `Hosting/PlatformBuilds`, to the repositories
+  the `Hosting/Deployment` records name as registry sources. `PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository`
+  refuses a `/dispatches` POST in ANY workflow under `.github/workflows` — the reusable lanes
+  included: `node-repo-publish-bake.yml` no longer wakes dependents itself, it ENDS by registering
+  the publication with memex (`register-publication`), and memex emits
+  `meshweaver-upstream-published`.
+
+**The contract (maintainer, 2026-09-03: *"end of github pipeline must call memex, which must
+register release and publish event"*) is three sentences:**
+
+1. **Every publishing pipeline ENDS with one call to memex.** Core's CD, after the image set is
+   promoted, POSTs the signed platform build (`event: platform-build`) into the control instance's
+   `Hosting/PlatformBuilds` inbox (`notify-platform-update`). Every node repository's
+   `node-repo-publish-bake.yml` run, after its bundles are sealed for an identity, POSTs the signed
+   publication record (`event: bundle-publication` — source, identity, commit, tester + portal image)
+   into the same inbox (`register-publication`, its last job). Nothing runs after that call, and no
+   pipeline sends a `repository_dispatch` to another repository.
+2. **memex REGISTERS the release** as a durable node — `Hosting/PlatformBuilds/<version>` for a
+   platform build, `Hosting/Publications/<identity>/<source>` for a bundle publication — the source
+   of truth for "what is published for which identity" (what the self-update availability check reads).
+3. **memex PUBLISHES the event** from that registration: `FrameworkReleaseBroadcaster` sends
+   `meshweaver-framework-released` (platform) or `meshweaver-upstream-published` (bundle publication,
+   `client_payload.version` = the identity) to the subscribed repositories — the repositories the
+   control instance's `Hosting/Deployment` records name as registry sources. The subscribers' CI
+   receives it, resolves both images from the version, builds and publishes for that identity — and
+   ends by calling memex (1).
+
+```
+ pipeline (core CD | a node repo's publish-bake)        memex (control instance)              subscriber CI
+ ───────────────────────────────────────────────        ────────────────────────              ─────────────
+ promote / seal ✅                                       WebhookInbox Hosting/PlatformBuilds
+   └─ ONE signed POST ──(platform-build |──────────────▶│ verify HMAC
+      bundle-publication)… and FINISH                    ├─ REGISTER  Hosting/PlatformBuilds/<version>
+                                                         │            Hosting/Publications/<identity>/<source>
+                                                         ├─ subscribers = Hosting/Deployment records'
+                                                         │              pluginRepos[].isRegistrySource
+                                                         └─ PUBLISH   repository_dispatch ─────────────▶ on: repository_dispatch:
+                                                            meshweaver-framework-released |               types: [meshweaver-framework-released,
+                                                            meshweaver-upstream-published                        meshweaver-upstream-published]
+                                                                                                          → bake for the version → seal → POST memex
+```
+
+Where the pieces are: the POST steps in `main-cd.yml` and `node-repo-publish-bake.yml` (this repo);
+the inbox watcher, registration and broadcast in the Hosting module's `PlatformBuildInboxWatcher`
+(MeshWeaver.Plugins, `Hosting/Deployment/Source`); the broadcaster in `src/MeshWeaver.GitSync`.
+`PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository` refuses a dispatch SENDER in any workflow
+under `.github/workflows` — there is no ledger — and
+`UpstreamBuildGateGuard.TheLaneEndsByRegisteringWithMemex_AndDispatchesToNobody` pins the lane's call.
+
 - **`scripts/check-type-forwards.py --sibling`** — the flag can resolve a departed type against a
   sibling checkout, and CI deliberately does NOT pass it (`dotnet-test.yml`): without the flag the
   gate is the conservative one, and passing it would make a core verdict depend on another repo's

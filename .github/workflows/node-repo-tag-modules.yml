@@ -30,9 +30,8 @@ name: Node repo tag-modules (reusable)
 on:
   workflow_call:
     secrets:
-      # Optional: a token that may POST /repos/{owner}/{repo}/dispatches on the subscriber repos.
-      # Omitted → the announce step reports itself DORMANT rather than failing, so a repo that has
-      # not been wired up yet still tags normally.
+      # RETIRED 2026-09-03: the announce step that used this is gone (memex publishes the event).
+      # Declared so a caller pinned to an earlier lane still validates; drop it from the call.
       dispatch-token:
         required: false
 
@@ -83,53 +82,7 @@ jobs:
             else jq -r '.[] | "- **\(.module)** \(.version)"' <<<"$modules"; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # 📣 ANNOUNCE IT. Publishing without announcing is why a downstream repo can sit on a stale
-      # module version indefinitely: the version exists, and nothing that depends on it ever
-      # learns. This is the outbound twin of the platform's `meshweaver-framework-released`
-      # dispatch that node repos already RECEIVE.
-      #
-      # 🚨 Dormant without MODULE_SUBSCRIBER_REPOS, and it says so out loud. A notifier that
-      # quietly does nothing is indistinguishable from one that works and has no subscribers —
-      # and this whole mechanism exists because "quietly does nothing" is expensive.
-      - name: Announce the published modules to subscribers
-        if: steps.published.outputs.count != '0'
-        env:
-          GH_TOKEN: ${{ secrets.dispatch-token }}
-          SUBSCRIBERS: ${{ vars.MODULE_SUBSCRIBER_REPOS }}
-          MODULES: ${{ steps.published.outputs.modules }}
-        run: |
-          set -euo pipefail
-          if [ -z "${SUBSCRIBERS:-}" ] || [ -z "${GH_TOKEN:-}" ]; then
-            echo "::notice::DORMANT — modules published but not announced. Set the repo variable \
-          MODULE_SUBSCRIBER_REPOS (comma-separated owner/repo) and pass a dispatch-token secret \
-          to enable. Published: $MODULES"
-            exit 0
-          fi
-          # 🚨 The WHOLE request body as JSON, posted with --input. `-f`/`--raw-field` send
-          # client_payload as a STRING, and GitHub then delivers it as a string: every downstream
-          # `github.event.client_payload.sha` resolves to empty, with no error anywhere. The
-          # notification would be sent, accepted, and useless — the silent-success shape this
-          # whole change exists to remove.
-          body=$(jq -nc --arg repo "$GITHUB_REPOSITORY" --arg sha "$GITHUB_SHA" \
-            --argjson modules "$MODULES" \
-            '{event_type: "meshweaver-modules-published",
-              client_payload: {repo: $repo, sha: $sha, modules: $modules}}')
-          failed=0
-          for target in ${SUBSCRIBERS//,/ }; do
-            target=$(echo "$target" | xargs)
-            [ -z "$target" ] && continue
-            if printf '%s' "$body" | gh api "repos/$target/dispatches" --input - >/dev/null 2>&1; then
-              echo "announced to $target"
-            else
-              # Do NOT fail the job: the tags are already pushed, so failing here would leave a
-              # published version behind a red run and invite a re-run that re-tags nothing.
-              echo "::warning::could not notify $target — it will not learn about $MODULES"
-              failed=1
-            fi
-          done
-          # `[ ... ] && echo` as the last statement would return 1 under `set -e` when the test is
-          # false — failing the job precisely when everything WORKED. An if, not a chain.
-          if [ "$failed" = "1" ]; then
-            echo "::warning::at least one subscriber was not notified"
-          fi
-          exit 0
+      # There is deliberately NO announce/dispatch step here (retired 2026-09-03). The version is
+      # published by the tag; the repository's publish-bake lane ENDS by registering its publication
+      # with memex, and memex publishes the event to the subscribed repositories — a lane must never
+      # POST to another repository's /dispatches (MeshWeaver#3185, PlatformReleaseNotifyGuard).

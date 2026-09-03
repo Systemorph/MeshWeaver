@@ -16,14 +16,16 @@ namespace MeshWeaver.Documentation.Test;
 /// an empty subscriber set reports <c>0 dispatched, 0 failed</c> (identical to a mesh that is not
 /// the control instance).
 ///
-/// <para>🚨 <b>The failure this file exists for.</b> <c>FrameworkBroadcast:Subscribers</c> — the
-/// only source of the subscriber set that exists — was rendered by <b>no chart in either repo</b>
-/// for the whole life of the feature, so no deployment could set it. Every broadcast ran against an
-/// empty set and logged it at <c>Information</c> as normal. Nothing was red, because a key that no
-/// chart renders cannot be distinguished from a key a deployment chose to leave empty. The
-/// companion defect was prose: <c>main-cd.yml</c> and the CD contract both said the set "lives in
-/// the Hosting fleet registry on memex", and no such registry was ever built — so every reader who
-/// went looking for the seam was sent to a mechanism that does not exist.</para>
+/// <para>🚨 <b>The failure this file exists for.</b> <c>FrameworkBroadcast:Subscribers</c> — then
+/// the only source of the subscriber set — was rendered by <b>no chart in either repo</b> for the
+/// whole life of the feature, so no deployment could set it. Every broadcast ran against an empty
+/// set and logged it at <c>Information</c> as normal. Nothing was red, because a key that no chart
+/// renders cannot be distinguished from a key a deployment chose to leave empty. The companion
+/// defect was prose: <c>main-cd.yml</c> and the CD contract both said the set "lives in the Hosting
+/// fleet registry on memex", and no such registry was ever built — so every reader who went looking
+/// for the seam was sent to a mechanism that does not exist. (Since 2026-09-03 the subscriber set is
+/// no longer a key at all — it is derived from the <c>Hosting/Deployment</c> records — so that joint
+/// left this ledger; the remaining joints are still configuration and still silent when off.)</para>
 ///
 /// <para><see cref="PlatformReleaseNotifyGuard"/> pins the SENDER (CD's notify leg cannot skip or
 /// downgrade a failed delivery). This file pins the RECEIVER's provisioning: each joint's key must
@@ -85,16 +87,14 @@ public class ReleaseDeliveryChainGuard
             "CD's notify-platform-update 404s on every promoted build and no release event ever "
             + "reaches the mesh");
 
-        // Joint 2 — the verified release fans out. FrameworkBroadcastOptions owns the env-key
-        // prefix precisely so this entry cannot drift from what the broadcaster reads. FOUR slots:
-        // one per node repo in the fan-out (Plugins, Education, Reinsurance, SocialMedia). Losing
-        // the tail slots does not read as an error either — it silently SHRINKS the wave, and the
-        // only evidence is a repo that stops re-baking promptly.
-        yield return new ChainKey(
-            "the release wave has subscribers",
-            FrameworkBroadcastOptions.SubscribersEnvKeyPrefix, 4,
-            "every broadcast dispatches to an empty set — 0 dispatched, 0 failed, logged as the "
-            + "normal state of a non-control mesh — so no satellite ever re-bakes promptly");
+        // Joint 2 — the verified release fans out — is NOT a configuration key any more. Since
+        // 2026-09-03 the subscriber set is data in the mesh (the Hosting/Deployment records'
+        // registry-source mounts, derived by PlatformBuildInboxWatcher in MeshWeaver.Plugins), so
+        // there is nothing for a chart to render and nothing for a deployment to leave blank. The
+        // control for THAT joint is the broadcaster's own warning (FrameworkBroadcastEmptySubscribersGuard:
+        // an empty set on the control instance WARNS naming the records) plus the Plugins-side
+        // DeploymentTests pinning the derivation. The retired FrameworkBroadcast__Subscribers__N
+        // slots must NOT come back here: a guard asserting a key nothing reads is a false control.
     }
 
     /// <summary>
@@ -134,23 +134,28 @@ public class ReleaseDeliveryChainGuard
     /// CD contract are the two places a reader goes to ask "who is subscribed?", and for the whole
     /// life of the feature both answered "the Hosting fleet registry on memex" — a registry with no
     /// node type, no reader and no writer in any repo. That sentence is why the empty subscriber set
-    /// survived two rounds of investigation into why nothing was delivered. Both must name the seam
-    /// that actually exists, so the next reader lands on something they can set.
+    /// survived two rounds of investigation into why nothing was delivered. Both must name the source
+    /// that actually exists — since 2026-09-03 the <c>Hosting/Deployment</c> records' registry-source
+    /// mounts (<c>pluginRepos[].isRegistrySource</c>), read from the mesh by the Hosting module's
+    /// inbox watcher — so the next reader lands on something they can set (a record, not a key).
     /// </summary>
     [Fact]
     public void TheDocumentedSubscriberSource_IsTheOneThatExists()
     {
         var root = SourceScan.FindRepoRoot();
-        var section = FrameworkBroadcastOptions.ConfigSection;
 
         foreach (var file in new[] { Workflow, ContractDoc })
         {
             var text = File.ReadAllText(Path.Combine(root, file.Replace('/', Path.DirectorySeparatorChar)));
-            Assert.True(text.Contains(section, StringComparison.Ordinal),
-                $"{file} explains where the release wave's subscribers come from and never names "
-                + $"'{section}' — the only source that exists. It used to name a Hosting fleet "
-                + "registry instead; that registry was never built, and pointing readers at it is "
-                + "what kept #2235's empty subscriber set invisible through two investigations.");
+            Assert.True(
+                text.Contains("Hosting/Deployment", StringComparison.Ordinal)
+                && text.Contains("isRegistrySource", StringComparison.Ordinal),
+                $"{file} explains where the release wave's subscribers come from and never names the "
+                + "source that exists — the Hosting/Deployment records' registry-source mounts "
+                + "(pluginRepos[].isRegistrySource). It used to name a Hosting fleet registry (never "
+                + "built) and then a FrameworkBroadcast__Subscribers__N config list (retired); pointing "
+                + "readers at a source that does not exist is what kept #2235's empty subscriber set "
+                + "invisible through two investigations.");
         }
     }
 

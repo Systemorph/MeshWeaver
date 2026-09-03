@@ -21,15 +21,21 @@ namespace MeshWeaver.Documentation.Test;
 /// <c>WebhookInbox:Targets</c> allowlist carries <see cref="FrameworkBroadcastOptions.PlatformBuildsTarget"/>,
 /// which is what makes it the mesh that receives release events. The broadcaster reads that
 /// section itself (<c>IConfiguration</c> is injected for exactly this), so the level of the line
-/// depends on nothing but the deployment's own config: WARNING naming the env key to set on the
-/// control instance, INFORMATION everywhere else. These tests fail if either side regresses — a
-/// warning that fires on every non-control mesh is noise nobody reads, and an Information line on
+/// depends on nothing but the deployment's own config: WARNING naming where a subscriber is declared
+/// on the control instance, INFORMATION everywhere else. These tests fail if either side regresses —
+/// a warning that fires on every non-control mesh is noise nobody reads, and an Information line on
 /// the control instance is the four silent days again.</para>
+///
+/// <para>Since 2026-09-03 the subscriber set is DATA IN THE MESH — the repositories the
+/// <c>Hosting/Deployment</c> records serve as registry sources — derived by the Hosting module's
+/// <c>PlatformBuildInboxWatcher</c> and passed to <c>Broadcast</c>. The warning therefore sends the
+/// reader to the records, never to the retired <c>FrameworkBroadcast__Subscribers__N</c> slots: a
+/// key nothing reads, named in a warning, is the next silent misconfiguration.</para>
 /// </summary>
 public class FrameworkBroadcastEmptySubscribersGuard
 {
     [Fact]
-    public void OnTheControlInstance_ZeroSubscribers_IsAWarningNamingTheKeyToSet()
+    public void OnTheControlInstance_ZeroSubscribers_IsAWarningNamingWhereASubscriberIsDeclared()
     {
         var logger = new CapturingLogger();
         using var pools = new IoPoolRegistry();
@@ -42,8 +48,11 @@ public class FrameworkBroadcastEmptySubscribersGuard
         Assert.Empty(outcome!.Results);   // nothing is dispatched either way — the point is the LEVEL
         var warning = Assert.Single(logger.Lines, l => l.Level == LogLevel.Warning).Message;
         Assert.Contains(FrameworkBroadcastOptions.PlatformBuildsTarget, warning);
-        // The warning must name the exact env key a deployment sets, or the reader is sent searching again.
-        Assert.Contains(FrameworkBroadcastOptions.SubscribersEnvKeyPrefix, warning);
+        // The warning must name where a subscriber IS declared — the Deployment record's registry
+        // sources — and must NOT name the retired config slots, or the reader is sent to a dead key.
+        Assert.Contains("Hosting/Deployment", warning);
+        Assert.Contains("isRegistrySource", warning);
+        Assert.DoesNotContain("FrameworkBroadcast__Subscribers", warning);
         Assert.DoesNotContain(logger.Lines, l => l.Level == LogLevel.Information);   // never "the normal state" here
     }
 

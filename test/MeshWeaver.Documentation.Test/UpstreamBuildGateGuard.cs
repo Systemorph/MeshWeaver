@@ -97,33 +97,40 @@ public class UpstreamBuildGateGuard
     }
 
     /// <summary>
-    /// 🚨 A package publish wakes ONLY the repos that depend on it — "otherwise only dependent
-    /// packages — then publish package built and cascade recursively" (maintainer, 2026-08-29) —
-    /// and the way it does so is pinned, because the previous version of this cascade POSTed to a
-    /// declared list with a stored token and was removed for exactly that: a hand-maintained second
-    /// copy of a graph whose missing entry fails silently. Now: opt-in (<c>dispatch-dependents</c>),
-    /// dependents DISCOVERED from the installed repos' own <c>upstream-sources</c>/<c>upstream-seed</c>
-    /// declarations, an App token minted per run (no stored PAT), the credential asserted RED, a
-    /// failed dispatch RED naming the repo, and the source chain carried so a cycle cannot loop.
+    /// 🚨 THE LANE ENDS BY CALLING MEMEX AND DISPATCHES TO NOBODY. Maintainer, 2026-09-03: "end of
+    /// github pipeline must call memex, which must register release and publish event". After a
+    /// successful publish the lane's LAST job POSTs the signed publication record
+    /// (<c>event: bundle-publication</c>) into the control instance's inbox; memex registers it and
+    /// emits <c>meshweaver-upstream-published</c> to the subscribed repositories. The
+    /// <c>dispatch-dependents</c> job that used to read every installed repo's ci.yml and POST to
+    /// their <c>/dispatches</c> was CI-to-CI coupling and is gone. Pinned: the call exists, it is
+    /// signed, it is RED (never skipped, never a warning) when unprovisioned or refused, and no
+    /// dispatch of any kind remains in the lane.
     /// </summary>
     [Fact]
-    public void TheCascadeIsOptInDiscoveredAppCredentialedAndRed()
+    public void TheLaneEndsByRegisteringWithMemex_AndDispatchesToNobody()
     {
         var body = Body();
         Assert.DoesNotContain("dependent-dispatch-token", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n  dispatch-dependents:", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("/dispatches", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("event_type", body, StringComparison.Ordinal);
 
-        var job = JobBlock(body, "dispatch-dependents:");
-        Assert.Contains("inputs.dispatch-dependents", job, StringComparison.Ordinal);
+        var job = JobBlock(body, "register-publication:");
         Assert.Contains("needs.publish-bake.outputs.published == 'true'", job, StringComparison.Ordinal);
-        Assert.Contains("actions/create-github-app-token", job, StringComparison.Ordinal);
-        Assert.Contains("secrets.dispatch-app-id", job, StringComparison.Ordinal);
-        Assert.Contains("/installation/repositories", job, StringComparison.Ordinal);
-        Assert.Contains("upstream-sources|upstream-seed", job, StringComparison.Ordinal);
-        Assert.Contains("meshweaver-upstream-published", job, StringComparison.Ordinal);
-        Assert.Contains("chain", job, StringComparison.Ordinal);
+        Assert.Contains("inputs.webhook-url", job, StringComparison.Ordinal);
+        Assert.Contains("secrets.webhook-secret", job, StringComparison.Ordinal);
+        Assert.Contains("\"bundle-publication\"", job, StringComparison.Ordinal);
+        Assert.Contains("X-Hub-Signature-256", job, StringComparison.Ordinal);
+        Assert.Contains("openssl dgst -sha256 -hmac", job, StringComparison.Ordinal);
+        Assert.Contains("code=000", job, StringComparison.Ordinal);
         Assert.DoesNotContain("continue-on-error", job, StringComparison.Ordinal);
         Assert.DoesNotContain("::warning", job, StringComparison.Ordinal);
         Assert.Contains("exit 1", job, StringComparison.Ordinal);
+        // The job may depend only on the run's publish outcome — never on whether its inputs exist.
+        var condition = job[..job.IndexOf("runs-on:", StringComparison.Ordinal)];
+        Assert.DoesNotContain("inputs.webhook", condition, StringComparison.Ordinal);
+        Assert.DoesNotContain("secrets.", condition, StringComparison.Ordinal);
     }
 
     /// <summary>Everything from a job's key to the next job key at the same indent.</summary>
