@@ -76,13 +76,23 @@ name: Chart Drift
 # name, in `deployments/aks/envs.json` in $DEPLOY_REPO, and `discover` reads the matrix from there.
 # Adding or retiring an environment is a one-line change THERE and needs no change here.
 #
-# ⚠️ EXPECT THE FIRST COMPLETING RUN TO BE VERY RED, legitimately. A local run of
-# check-chart-drift.sh against ns memex on 2026-08-17 compared 149 fields and found 121
-# divergences — the accumulated backlog of `kubectl patch`-applied config the chart has never heard
-# of (AzureFoundry/ModelTier routing, probe initialDelaySeconds, replicas 2-vs-1), plus the one
-# that bites hardest: ConfigMap Authentication__Microsoft__ClientId is still
-# `CHANGE_ME_aad_application_client_id` in the chart, so a `helm upgrade` today would overwrite
-# working auth with the placeholder. That backlog is the finding, not a defect in the gate.
+# ⚠️ EXPECT THIS TO BE RED, legitimately. A local run of check-chart-drift.sh against ns memex on
+# 2026-08-17 compared 149 fields and found 121 divergences — the accumulated backlog of
+# `kubectl patch`-applied config the chart has never heard of. That backlog is the finding, not a
+# defect in the gate; it is triaged, by class, in MeshWeaver#2355 and in
+# src/MeshWeaver.Documentation/Data/Architecture/ChartDriftSemantics.md.
+#
+# 🚨 A WARNING THAT USED TO SIT HERE WAS WRONG, AND IT IS THE REASON THIS PARAGRAPH IS DATED. It
+# read: "ConfigMap Authentication__Microsoft__ClientId is still `CHANGE_ME_aad_application_client_id`
+# in the chart, so a `helm upgrade` today would overwrite working auth with the placeholder." Both
+# halves are false and each was falsifiable from the day it was written:
+#   * NO run has EVER reported an `Authentication__` finding (2026-08-26, 09-02, 09-03). Every
+#     environment sets a real client id in its own overlay, which is layered over the chart default,
+#     so nothing renders the placeholder in the first place.
+#   * A `helm upgrade` does not overwrite a live value with a rendered one anyway — measured, see
+#     check-chart-drift.sh's header. The whole "a deploy would destroy this" model was wrong.
+# Left in place as a correction rather than deleted: this file's own warning is what #2355 was
+# triaged against for a week, and an un-measured hazard in a gate's header propagates as fact.
 
 on:
   schedule:
