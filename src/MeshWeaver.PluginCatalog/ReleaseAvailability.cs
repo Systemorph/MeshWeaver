@@ -141,13 +141,28 @@ public static class ReleaseAvailability
     /// version; if not ⇒ nothing goes"</i>.
     ///
     /// <para>The rule: every <c>mvid:</c> entry in a bundle's dependency records that names a module
-    /// the identity's sealed module set carries must equal the MVID sealed for it, and no module may
-    /// be sealed at two MVIDs by two sources. A module the sealed set does NOT carry is one the
+    /// the identity's sealed module set carries must equal the MVID sealed for it, and no assembly
+    /// name may appear in the set at two MVIDs. A module the sealed set does NOT carry is one the
     /// instance lands from the registry outside any publication — this gate cannot see those bytes
     /// and does not pretend to. Records that cannot be checked because the module set is unreadable
     /// answer <see cref="PackageAvailabilityKind.Indeterminate"/> — a HOLD, never an incompatibility
     /// verdict, and never a pass: an unsealed or torn module set is exactly the case that let ci.7621
     /// through.</para>
+    ///
+    /// <para>🚨 <b>"No name at two MVIDs" counts RIDING copies, not just declared ones (#3221).</b> A
+    /// module-owned <c>MeshWeaver.*</c> sibling rides every bundle that references it, so one name
+    /// commonly reaches a mesh from many bundles at once — measured on MeshWeaver.Plugins
+    /// <c>main</c> 2026-09-03, 19 of 37 module bundles carry a copy of an assembly some other package
+    /// declares as its module. That is the sanctioned shape and it is NOT refused
+    /// (<see href="../ModuleOwnedSiblingsRide">Module-Owned Siblings Ride</see>): excluding declared
+    /// modules from the closure would invert the package graph — <c>AI</c> requires only <c>Store</c>
+    /// yet would need <c>Essentials</c>' module, while <c>Essentials</c> requires <c>AI</c> — and a
+    /// solo install would fault on its first touch. What IS refused is the copies DISAGREEING: the
+    /// loader binds <c>MeshWeaver.*</c> by a strictly synchronised <c>AssemblyVersion</c> and keeps
+    /// whichever copy it saw first, so two builds under one name make the live MVID a coin toss and
+    /// decline every NodeType that recorded the other. Byte equality per (assembly name, framework
+    /// identity) is the invariant; this is where it is asserted rather than assumed from a uniform
+    /// CD wave.</para>
     /// </summary>
     private static PackageAvailability? SealedSetProblem(
         RequiredPackage package, ReleaseTarget target, ReleaseArtifacts artifacts)
@@ -176,10 +191,11 @@ public static class ReleaseAvailability
                     return new PackageAvailability(
                         package.Name,
                         PackageAvailabilityKind.SealedSetInconsistent,
-                        $"'{package.BundleName}' ({record.NodePath}) binds module {name}, which two sources "
-                        + $"sealed as DIFFERENT builds for framework identity {target.FrameworkIdentity} "
-                        + $"({conflict}) — whichever the instance composes, the other's NodeTypes are "
-                        + "declined at adoption; the set is inconsistent and nothing rolls");
+                        $"'{package.BundleName}' ({record.NodePath}) binds module {name}, which the set "
+                        + $"sealed for framework identity {target.FrameworkIdentity} carries as TWO "
+                        + $"DIFFERENT builds ({conflict}) — the loader keeps whichever it sees first, so "
+                        + "the other's NodeTypes are declined at adoption; the set is inconsistent and "
+                        + "nothing rolls");
 
                 if (set.MvidByModule.TryGetValue(name, out var sealedMvid)
                     && !string.Equals(sealedMvid, id, StringComparison.Ordinal))
@@ -323,10 +339,16 @@ public enum PackageAvailabilityKind
 /// dependency record sealed for it must name (#3175).
 /// </summary>
 /// <param name="MvidByModule">Module simple name → its id in the dependency-record spelling
-/// (<c>mvid:&lt;32 hex&gt;</c>), for every module exactly one source sealed.</param>
-/// <param name="Conflicts">One line per module two sources sealed as DIFFERENT builds, each starting
-/// <c>module &lt;name&gt;:</c> and naming both sources and both ids. A conflict is an inconsistency
-/// of the set itself, whatever any bundle recorded.</param>
+/// (<c>mvid:&lt;32 hex&gt;</c>), for every module exactly one bundle DECLARED. A riding copy never
+/// defines an entry here (#3221): the declared module is what an instance registers as an
+/// <c>InstalledModuleAssembly</c>, so it alone is what a dependency record can be judged against.</param>
+/// <param name="Conflicts">One line per assembly name the identity's sealed set carries at TWO
+/// DIFFERENT builds, each starting <c>module &lt;name&gt;:</c> and naming both producers — source,
+/// module bundle, id, and whether that copy was the bundle's declared module or a sibling riding
+/// beside it (#3221). A conflict is an inconsistency of the set itself, whatever any bundle
+/// recorded, and the two producers may be one source: a module-owned <c>MeshWeaver.*</c> sibling
+/// rides every bundle that references it, so one name commonly reaches a mesh from many bundles at
+/// once and they must all be one build.</param>
 /// <param name="Refusal">Why the set could not be read completely (a source sealed before module
 /// sealing existed, a torn module index, an unreadable module bundle), or null when it was. Non-null
 /// makes every record that names a module <see cref="PackageAvailabilityKind.Indeterminate"/>.</param>
