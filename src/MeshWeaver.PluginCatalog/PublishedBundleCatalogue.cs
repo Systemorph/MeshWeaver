@@ -256,7 +256,10 @@ public static class PublishedBundleCatalogue
             ?? throw new InvalidOperationException(
                 $"{NuGetPackageWriter.ModuleFolder}/{name}.dll is missing from the bundle");
         using var stream = entry.Open();
-        using var bytes = new MemoryStream(checked((int)entry.Length));
+        if (entry.Length is < 0 or > int.MaxValue)
+            throw new InvalidOperationException(
+                $"{entry.FullName} declares an implausible length ({entry.Length} bytes) — the module bundle is corrupt");
+        using var bytes = new MemoryStream((int)entry.Length);
         stream.CopyTo(bytes);
         bytes.Position = 0;
         using var pe = new PEReader(bytes);
