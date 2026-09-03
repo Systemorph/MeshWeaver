@@ -9,9 +9,10 @@ is test-chart-drift-compare.sh, which chart-gate.yml runs on every pull request.
 
 Arguments, in order:
   desired.yaml  live-configmap.json  live-deployment.json  expect-patch.json
-  live-poddisruptionbudgets.json  live-scaledobjects.json  live-envfrom-secret-keys.txt
+  live-poddisruptionbudgets.json  live-scaledobjects.json  live-envfrom-source-keys.txt
 
-The last file is `secret<TAB>key` lines — the NAMES of the keys each envFrom secret supplies, and
+The last file is `secret/<name><TAB>key` and `configmap/<name><TAB>key` lines — the NAMES of the
+keys every OTHER envFrom source supplies (memex-portal-config is fetched in full separately), and
 nothing else. No secret VALUE is read by this script, and none may be added to it.
 Exit 0 = no drift, 1 = drift or the comparison could not be made.
 """
@@ -19,13 +20,15 @@ import json, sys, yaml
 
 desired_path, live_cm_path, live_dep_path, expect_patch = sys.argv[1:5]
 live_pdb_path, live_so_path = sys.argv[5:7]
-# `secret<TAB>key` lines. Key NAMES only — see the module docstring.
-secret_keys = {}
+# `<kind>/<name><TAB>key` lines. Key NAMES only — see the module docstring. A ConfigMap reaches the
+# container through envFrom exactly as a Secret does, so an inline env shadows either identically;
+# enumerating only the secrets would leave the same blind spot #3204 closed, one source-kind over.
+envfrom_keys = {}
 if len(sys.argv) > 7 and sys.argv[7]:
     for _line in open(sys.argv[7]):
         if "\t" in _line:
-            _sec, _key = _line.rstrip("\n").split("\t", 1)
-            secret_keys.setdefault(_key, []).append(_sec)
+            _src, _key = _line.rstrip("\n").split("\t", 1)
+            envfrom_keys.setdefault(_key, []).append(_src)
 
 findings, comparisons = [], 0
 def finding(kind, what, detail=""):
@@ -115,11 +118,18 @@ def by_lower(d):
         out.setdefault(k.lower(), []).append(k)
     return out
 d_cm_by_lower, l_cm_by_lower = by_lower(d_data), by_lower(l_data)
-# An envFrom SECRET key reaches the container exactly like a ConfigMap key, so an inline env of the
-# same name shadows it identically — the case the ConfigMap-only comparison missed on memex
-# (MeshWeaver#3201). Its value is deliberately unknown here, so such a shadow is reported WITHOUT an
-# agree/disagree verdict rather than with a guessed one.
-sec_by_lower = by_lower(secret_keys)
+# A key from ANY OTHER envFrom source — a Secret, or a second ConfigMap added through
+# .Values.extraEnvFrom — reaches the container exactly like a memex-portal-config key, so an inline
+# env of the same name shadows it identically. The Secret half was the case the ConfigMap-only
+# comparison missed on memex (MeshWeaver#3201); the second-ConfigMap half is the same blind spot one
+# source-kind over, and the chart documents `{configMapRef: {name: …}}` as a supported extraEnvFrom
+# entry. Only the key NAMES of these sources are read, so their values are deliberately unknown here
+# and such a shadow is reported WITHOUT an agree/disagree verdict rather than with a guessed one.
+ext_by_lower = by_lower(envfrom_keys)
+
+def env_shape(e):
+    """The entry minus its literal value — a ref NAME is not a secret, a value may be."""
+    return {k: v for k, v in e.items() if k != "value"}
 
 for n in sorted(d_env | l_env):
     comparisons += 1
@@ -127,11 +137,29 @@ for n in sorted(d_env | l_env):
         finding("CHART-ONLY", f"inline env {n}", "rendered but not on the running pod spec")
         continue
     if n in d_env:
+        # 🚨 On BOTH sides is NOT the same as agreeing, and this branch used to `continue` — so a
+        # `kubectl set env` over an entry the chart renders inline was the one drift shape this
+        # script could not see at all. It compared the NAMES and nothing else, having counted the
+        # comparison. The chart renders five such entries today (the DOTNET_Dbg* crash-dump block
+        # and the self-updater's AZURE_CLIENT_ID), and a wrong AZURE_CLIENT_ID silently breaks the
+        # ACR credential the self-updater pulls with. Values are compared and NEVER printed.
+        d_e, l_e = d_env_v[n], l_env_v[n]
+        if env_shape(d_e) != env_shape(l_e):
+            finding("DIFFERS", f"inline env {n}",
+                    f"the chart renders {json.dumps(env_shape(d_e))} and the pod carries "
+                    f"{json.dumps(env_shape(l_e))} — the entry's SHAPE differs (a literal against a "
+                    f"valueFrom ref, or two different refs), so they cannot be the same setting")
+        elif d_e.get("value") != l_e.get("value"):
+            finding("DIFFERS", f"inline env {n}",
+                    "the chart renders this entry AND the pod carries it, with DIFFERENT values "
+                    "(withheld — an inline env can hold a token). helm owns this entry, so unlike "
+                    "every other class here a `helm upgrade` DOES reset it; until one runs, the pod "
+                    "runs the hand-set value and the chart's is not what is executing")
         continue
     # live-only inline env. Does it collide with a key that reaches the pod via envFrom?
     d_twins = d_cm_by_lower.get(n.lower(), [])
     l_twins = l_cm_by_lower.get(n.lower(), [])
-    s_twins = sec_by_lower.get(n.lower(), [])
+    s_twins = ext_by_lower.get(n.lower(), [])
     twins = sorted(set(d_twins) | set(l_twins) | set(s_twins))
     if not twins:
         finding("CLUSTER-ONLY", f"inline env {n}",
@@ -139,17 +167,18 @@ for n in sorted(d_env | l_env):
                 "PRESERVES it (measured), but it exists in no committed source — so it is lost on "
                 "any rebuild and no reviewer can see it")
         continue
-    # Where the twins come from, for the messages below. A secret twin is NOT a lesser case: a
-    # secret key reaches the container through envFrom exactly like a ConfigMap key, so it collides
-    # and shadows identically. What differs is only that its VALUE is unknown here by design.
-    secs = sorted({sec for k in s_twins for sec in secret_keys.get(k, [])})
+    # Where the twins come from, for the messages below. A twin from another envFrom source is NOT
+    # a lesser case: its key reaches the container exactly like a memex-portal-config key, so it
+    # collides and shadows identically. What differs is only that its VALUE is unknown here by
+    # design — this script reads key names from those sources and nothing more.
+    exts = sorted({src for k in s_twins for src in envfrom_keys.get(k, [])})
     sources = []
     if d_twins or l_twins:
         sources.append("ConfigMap key(s) " + ", ".join(sorted(set(d_twins) | set(l_twins))))
-    if secs:
-        sources.append("key(s) from " + " and ".join("secret/" + x for x in secs))
+    if exts:
+        sources.append("key(s) from " + " and ".join(exts))
     origin = " and ".join(sources)
-    secret_only = bool(s_twins) and not d_twins and not l_twins
+    external_only = bool(s_twins) and not d_twins and not l_twins
 
     # Which ConfigMap value would the pod read if this inline entry were removed? The LIVE map is
     # what is mounted, so it decides the effective value; fall back to the render when the key is
@@ -168,14 +197,14 @@ for n in sorted(d_env | l_env):
                 f"resolves case-insensitively and the last enumerated wins — the effective value is "
                 f"a COIN TOSS PER POD START. Delete the inline entry (`kubectl set env deploy/… "
                 f"{n}-`); adding it to the chart does NOT remove the collision")
-    elif secret_only:
+    elif external_only:
         finding("SHADOWS", f"inline env {n}",
                 f"{origin} supplies '{n}' through envFrom, and an inline env OVERRIDES envFrom — so "
-                f"this entry wins and the SECRET's value is dead. Whether the two agree is NOT "
-                f"checked here (this script never reads a secret value) and must not be assumed: on "
-                f"memex they differed, leaving the pod on a plaintext copy while the Key Vault "
+                f"this entry wins and THAT source's value is dead. Whether the two agree is NOT "
+                f"checked here (only key names are read from that source) and must not be assumed: "
+                f"on memex they differed, leaving the pod on a plaintext copy while the Key Vault "
                 f"credential went unused (MeshWeaver#3201). Establish which value is the live one "
-                f"FIRST, then put it in the secret and delete the inline entry")
+                f"FIRST, then put it in that source and delete the inline entry")
     else:
         in_chart = n in d_data
         # An entry sourced with valueFrom (secretKeyRef/fieldRef) carries no literal to compare —
@@ -411,6 +440,8 @@ print("                 the inline entry — either step alone leaves the pod on
 print("CLUSTER-ONLY  → a `helm upgrade` does NOT drop it (measured); the risk is that it lives in no")
 print("                 committed source. Move it onto the Deployment record + chart, then delete it.")
 print("CHART-ONLY    → apply it: `helm upgrade` for chart-managed fields; nobody is getting it today.")
-print("DIFFERS       → a deploy does NOT resolve it (measured). Decide which side is authoritative,")
-print("                 then make the other match.")
+print("DIFFERS       → a deploy does NOT resolve it (measured) for a ConfigMap key or a probe field:")
+print("                 decide which side is authoritative, then make the other match. The ONE")
+print("                 exception is `inline env` — helm owns an entry it renders, so an upgrade")
+print("                 DOES reset that one; the finding says so.")
 sys.exit(1)

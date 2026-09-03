@@ -27,7 +27,7 @@ run_case() {
     "$DATA/$case/expect-patch.json" \
     "$DATA/$case/live-poddisruptionbudgets.json" \
     "$DATA/$case/live-scaledobjects.json" \
-    "$DATA/$case/envfrom-secret-keys.txt" 2>&1
+    "$DATA/$case/envfrom-source-keys.txt" 2>&1
 }
 
 check() {  # check <description> <expected> <actual>
@@ -116,6 +116,47 @@ if echo "$out" | grep -A1 'SHADOWS *inline env Grpc__TrustedPort' | grep -q 'THE
   fail=1
 else
   echo "  ok   agreeing SHADOWS is not reported as a disagreement"
+fi
+
+# An inline env the CHART renders and the pod also carries, with a different value. Until
+# 2026-09-03 this shape was invisible: the comparator matched the two by NAME and skipped, having
+# counted the comparison, so `kubectl set env` over one of the chart's own entries reported nothing.
+expect_class "DIFFERS"      "inline env AZURE_CLIENT_ID"
+# ...and it must not print either value — an inline env can hold a token.
+if echo "$out" | grep -A1 'DIFFERS *inline env AZURE_CLIENT_ID' | grep -qE '00000000|99999999'; then
+  echo "::error::the inline-env DIFFERS finding PRINTS the values it compared. Inline env entries"
+  echo "         hold tokens; the finding may say that they differ and nothing more."
+  fail=1
+else
+  echo "  ok   an inline-env DIFFERS withholds both values"
+fi
+# The CONTROL for that comparison: an entry identical on both sides must NOT be reported. Without
+# this, a comparator that flagged every both-sides entry would pass the assertion above.
+if echo "$out" | grep -q 'inline env DOTNET_DbgMiniDumpType'; then
+  echo "::error::DOTNET_DbgMiniDumpType is IDENTICAL on both sides and was reported anyway — the"
+  echo "         both-sides comparison flags everything, which is not a comparison."
+  fail=1
+else
+  echo "  ok   an inline env identical on both sides is not reported"
+fi
+# A same-name entry whose SHAPE changed (chart literal vs live valueFrom) is not the same setting.
+expect_class "DIFFERS"      "inline env DOTNET_DbgMiniDumpName"
+# An inline env over a key from a SECOND envFrom ConfigMap. `.Values.extraEnvFrom` takes
+# `{configMapRef: …}` as well as `{secretRef: …}`, so enumerating only secrets would leave exactly
+# the blind spot #3204 closed, one source-kind over.
+expect_class "SHADOWS"      "inline env Commerce__BaseUrl"
+if echo "$out" | grep -A1 'SHADOWS *inline env Commerce__BaseUrl' | grep -q 'configmap/portal-extra'; then
+  echo "  ok   a shadow over a second envFrom ConfigMap names that ConfigMap"
+else
+  echo "::error::the Commerce__BaseUrl finding does not name the envFrom ConfigMap supplying it."
+  fail=1
+fi
+if echo "$out" | grep -A1 'SHADOWS *inline env Commerce__BaseUrl' | grep -q 'THE TWO DISAGREE'; then
+  echo "::error::the second-ConfigMap shadow asserts a value verdict it cannot have — only that"
+  echo "         source's key NAMES are read, so agreement is unknown and must not be stated."
+  fail=1
+else
+  echo "  ok   a shadow over a key-names-only source states no value verdict"
 fi
 
 # An inline entry sourced with valueFrom carries no literal — it must not be compared as if it did.
