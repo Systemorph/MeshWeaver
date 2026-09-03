@@ -1255,9 +1255,45 @@ Removing or renaming any public framework surface — extension methods on
 `MessageHubConfiguration` / `IMessageHub`, `Controls.*`, `host.*` helpers, content base types — is
 a **breaking change to code the compiler cannot see**. Before deleting one:
 
-1. `grep -rn "<Symbol>" content samples/*/Data` — catches in-repo node source.
-2. Search the **live mesh** (`search_chunks`) — catches nodes that drifted from the repo.
-3. Port or delete the callers in the same change, then sweep.
+1. `grep -rn "<Symbol>" content samples/*/Data` — catches in-repo node source. **Grep the node
+   JSON too, without a `--include='*.cs'`**: a `Code` node stores its C# in a `content.code` string
+   and a NodeType stores its `configuration` lambda the same way, so a `.cs`-only sweep reports
+   *"no callers"* over a page full of them.
+2. **Grep every OTHER node repository** — `MeshWeaver.Education`, `.Plugins`, `.Reinsurance`,
+   `.SocialMedia`, `.Manufacturing`, `Memex`. A symbol on the cell surface is called by bare name
+   from content this repository has never seen.
+3. Search the **live mesh** (`search_chunks`) — catches nodes that drifted from the repo.
+   🚨 An answer carrying `"searched": false` is a **failed** sweep, not a clean one: that
+   deployment has no embedding provider, nothing was searched, and the envelope deliberately
+   carries no `count` so an absent field cannot be read as "no callers". Sweep on another
+   deployment or stop.
+4. Port or delete the callers in the same change, then sweep.
+
+#### 🚨 A cell-surface symbol has no retirement that ends in a delete
+
+Steps 1–4 can reach zero and still be wrong, because they only cover content **somebody can edit**.
+
+Installing a course or an app **copies** its nodes into the installer's own space. The copy is a
+snapshot: the cell inside it is that person's content, its code is whatever it said on the day they
+installed, and no repository change and no plugin update rewrites it. So for a type published with
+`cellSurface: true` — reachable by bare name from every kernel session in the mesh — there is no
+state a caller sweep can establish that means "nothing calls this any more".
+
+That is not a hypothetical either. #975 retired `TrainingSimResponder` on a "no callers left"
+reading of core and `MeshWeaver.Plugins`. Thirteen callers were live in `MeshWeaver.Education` (five
+of them C# inside a JSON string), and behind those an unknown number of installed copies. Every
+live prompt cell in the AgenticEngineering course failed with `CS0103: The name
+'TrainingSimResponder' does not exist in the current context`, showing learners a page that promised
+a prompt box and a ✨ button and rendered neither. Fixing the course repaired the central pages and
+every future install and **nothing already installed** (Plugins#1258).
+
+**So the last step is a forwarder, not a delete.** Keep the old name on the same cell surface as a
+shim that delegates to the successor, `[Obsolete]` as a *warning* — never `error: true`, which would
+break the very copies it exists to keep compiling, and warnings never reach a cell anyway, since the
+kernel only surfaces `CompilationErrorException`. Pin its surface with a test in the NodeType's
+`Test/` area so the shim cannot be narrowed by accident; a parameter quietly dropped from a
+forwarder is the same invisible break one layer down. The shim may go when the installed copies are
+gone — which is a fact about a running mesh, not about a repository.
 
 **ADDING a symbol has the same hazard, in reverse.** In-mesh source that references a brand-new
 framework helper compiles only once the image carrying it has actually shipped — and node content
@@ -1301,7 +1337,8 @@ protocol lives in the `/code` skill.
 | Pin instances to a fixed release | Set `NodeTypeDefinition.RequestedReleasePath` |
 | Understand why it recompiled | `HasUsableBuild` failed rule 2 (assembly gone) or rule 3 (framework changed) |
 | Understand a "Compile leg '…' did not complete within Ns" error | That stage stopped answering — see [Every stage is bounded](#every-stage-is-bounded--a-compile-can-never-park-at-compiling) |
-| Delete or rename a public framework API | Grep `content` + `samples/*/Data` **and** search the live mesh for callers first — CI never compiles in-mesh source |
+| Delete or rename a public framework API | Grep `content` + `samples/*/Data` + **every other node repo, JSON included** and search the live mesh (`searched:false` = failed sweep) — CI never compiles in-mesh source |
+| Delete a symbol published with `cellSurface: true` | You cannot. Installed copies call it and nobody can edit them — leave an `[Obsolete]` forwarder and pin its surface with a test (#1258) |
 | Add a framework API that in-mesh source will call | Ship the framework half FIRST; the content half is safe only once the portal reports the image carrying it (#1386) |
 | Check the mesh is shippable | `Search('nodeType:NodeType')` → `LspDiagnosticsForNode` per type → every one reads `Ok` |
 | Understand why one bad NodeType took the portal down | `CompileError` → dependents `UpstreamFailed` → readiness refused → 60 s hub-activation faults |
