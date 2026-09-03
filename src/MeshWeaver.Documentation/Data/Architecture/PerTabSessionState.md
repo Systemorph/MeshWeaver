@@ -1,7 +1,7 @@
 ---
 Name: Per-Tab Session State
 Category: Architecture
-Description: A mesh node is shared by every tab of one account by construction, so "which page is this viewer on" and "navigate ME there" must never live on a per-user node — the RCA for the chat cross-talk in MeshWeaver#3060.
+Description: A mesh node is shared by every tab of one account by construction, so "which page is this viewer on" and "navigate ME there" must never live on a per-user node — and a hazard is only a defect once you have found the code that renders it.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="9" height="16" rx="1"/><rect x="13" y="4" width="9" height="16" rx="1"/><path d="M6.5 9h0"/><path d="M17.5 9h0"/></svg>
 ---
 
@@ -12,7 +12,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 - **"Which page is the viewer looking at?"** — the navigation context.
 - **"Take *me* there."** — a navigation command addressed to one window.
 
-This page is the root-cause analysis of [MeshWeaver#3060](https://github.com/Systemorph/MeshWeaver/issues/3060) ("chat session cross-talk when the same account opens a second browser tab"), and the rule the analysis produced.
+This page came out of [MeshWeaver#3060](https://github.com/Systemorph/MeshWeaver/issues/3060) ("chat session cross-talk when the same account opens a second browser tab"). It carries two lessons: the scoping rule above, and a methodological one the investigation learned the hard way — **a mechanism you can read in the code is a hypothesis until you have found the code that RENDERS it.** The most incriminating call sites here turned out to sit in a component with no render site, and the first version of this page reported them as live.
 
 ## The layering that makes this a trap
 
@@ -49,23 +49,24 @@ Its content (`ThreadComposer`) mixes three different lifetimes in one record:
 | `ContextPath`, `ContextReference` | **which page this viewer is on** | **per tab** |
 | `OpenThreadPath` | **"navigate ME to this thread"** | **per tab** |
 
-The last two rows are unambiguous, and both are read and written from per-circuit components:
+### What is LIVE today
 
-1. **Every navigation, in any tab, overwrites the context.**
-   `MeshWeaver.Plugins/src/MeshWeaver.Blazor.Chat/ThreadSidePanelContent.razor.cs:77` (`OnNavigationContextChanged`) calls `WriteComposerContext` at `:89`, which at `:105` does
-   `StreamCache.Update(ThreadComposerNodeType.PathFor(userHome), … ContextPath = contextPath …)`.
-   Tab B navigating therefore rewrites the context chip that **tab A** is displaying, and the context **tab A's** next Send will carry.
+**The draft and the selections are one live binding across every tab.** The composer's default (`""`) layout area is reached at the composer NODE's own path through `ApplicationPage`'s catch-all — `ThreadNodeType`'s `BuildCreate` redirects "+ new chat" straight to `/{chatInputPath}` (`ThreadNodeType.cs:319`) — and out of a thread `ThreadChatView` also binds it (`_templatePath = ThreadComposerNodeType.PathFor(_userHome)`, `ThreadChatView.razor.cs:565`), projecting `Harness`/`AgentName`/`ModelName` from it (`:827`) and writing the user's default back (`WriteComposerSelection`, `:866`). So typing a draft, attaching a reference, or re-picking a model in one tab is observed live by the other. For the preference fields that is the intent; for the draft it is at best debatable.
 
-2. **Every tab consumes the navigation signal.**
-   `ThreadSidePanelContent.razor.cs:166` subscribes to the same node and, on a non-empty `OpenThreadPath`, navigates *its own* circuit — `NavigationManager.NavigateTo($"/{threadPath}")` at `:195` or `SidePanelState.SetContentPath(threadPath)` at `:199` — then clears the field at `:176`.
-   Tab B pressing Send therefore **navigates tab A** to tab B's brand-new thread. Both tabs also race to clear the signal, so the tab that actually sent can lose its own navigation to the other tab's clear.
+### What is LATENT — and why the reachability check matters more than the code
 
-3. **The draft and the selections are one live binding.**
-   The side panel renders the composer as a `LayoutAreaView` over that node's default area (`ThreadSidePanelContent.razor.cs:246` + the `.razor`), and out of a thread `ThreadChatView` sets `_templatePath = ThreadComposerNodeType.PathFor(_userHome)` (`ThreadChatView.razor.cs:565`) and projects `Harness`/`AgentName`/`ModelName` from it (`:827`). Typing, clearing (`OnNewChat`, `:281`) or re-picking a model in one tab is observed live by the other.
+`ContextPath` and `OpenThreadPath` are the two fields whose semantics are unambiguously per-tab, and **their writer and their consumer both live in a component that has no render site**:
 
-## Why this is not display-only
+- `MeshWeaver.Plugins/src/MeshWeaver.Blazor.Chat/ThreadSidePanelContent.razor.cs:77` → `:89` → `:105` writes `ContextPath` on every navigation, and `:166` → `:195`/`:199` consumes `OpenThreadPath` by navigating *its own* circuit.
+- Nothing renders `ThreadSidePanelContent`. Its only mentions in either repo are its own two files and three doc-comments; `PortalLayoutBase.razor:282-316` renders `DispatchView` over a `ThreadChatControl` instead. The component was orphaned by the #977 module split (`3cc44431`).
 
-The shared `ContextPath` is not a label — it is the **root against which the round's writes resolve**:
+So today: **nothing writes `ContextPath` on the per-user composer node**, and `ThreadComposerView.Send` (`:255`) reads `null`, falls to `ns = user`, and creates the thread in the user's own home. The cross-tab wrong-target write is a hazard the design *permits*, not a defect the product currently exhibits — and the one thing that would re-arm it is restoring a live writer for that field, which is exactly what "put the side panel back" would do.
+
+One half of the pair is live and asymmetric, which is its own bug: `StartThreadIn`'s `onCreated` still stamps `OpenThreadPath = node.Path` (`ThreadComposerView.cs:338`), and **no live code consumes it** — so a Send from the composer area creates the thread, never navigates to it, and leaves a stale navigate-signal on the node until something clears it (`ThreadChatView.StartNewComposer`, `:3325`).
+
+### Where the hazard would lead if a writer returned
+
+`ContextPath` is not a label — it is the root the round's writes resolve against, so re-arming it is not a cosmetic regression:
 
 ```
 ThreadComposerView.Send            (ThreadComposerView.cs:250)
@@ -79,12 +80,11 @@ ThreadComposerView.Send            (ThreadComposerView.cs:250)
               → MeshPlugin.cs:87 patch · :103 edit_content · :130 recycle · :142 move · :156 copy
 ```
 
-So two distinct wrong-target write classes are reachable:
+`OwningNamespace` (`ThreadComposerView.cs:288`) only redirects to the user's home when they *cannot* `Create` in the namespace, so inside any partition the user can write, the thread would land under the other tab's node — and a bare single-segment argument to an agent write tool (`patch("Notes", …)`) would resolve to `{otherTabsContext}/Notes`.
 
-- **The thread node itself is created in the wrong place.** `OwningNamespace` (`ThreadComposerView.cs:288`) falls back to the user's home only when the user *cannot* `Create` in that namespace — inside any partition the user can write, the thread simply lands under the other tab's node.
-- **The agent's own write tools target the wrong subtree.** A bare single-segment argument (`patch("Notes", …)`) resolves to `{contextPath}/Notes`, and `contextPath` is whatever the other tab last navigated to.
+### What this does NOT explain
 
-The bleed is **fixed at submit time**, not mutated mid-round: a round already in flight keeps the context it started with (`NavigationContextProjection` is reference-only and captured at submit), and inside a thread the composer is the thread's own embedded `Thread.Composer`, not the shared node. What a running chat *is* exposed to is item 2 — being navigated away by the other tab.
+**The live chat surface takes its context per-circuit.** `ThreadChatView` derives `initialContext` from the circuit's own `INavigationService.NavigationContext` and submits with it (`ThreadChatView.razor.cs:1255-1322`); inside a thread the composer is the thread's own embedded `Thread.Composer`. So a *running* chat in tab A following tab B's page is **not** accounted for by anything on this page. The shared-node hazard is real and worth removing; it is not, on the evidence here, the reported symptom.
 
 ## The same shape elsewhere
 
@@ -106,7 +106,23 @@ Three shapes that are correct:
 
 And one anti-pattern: **do not "fix" it by minting a node per tab** (`{user}/_Thread/ThreadComposer/{circuitId}`). Circuits are unbounded and short-lived; that trades a correctness bug for unbounded node churn and loses the durability the node was there for in the first place.
 
-## Reproducing it
+## And the second rule: find the render site before you call it a defect
+
+A Blazor component is reachable only if something renders it — a `<Tag />` in a `.razor`, a `DispatchView` over a control the view registry maps to it, or a routable `@page` in an assembly the router was given. **None of those is implied by the file existing, by it compiling, or by it being referenced in a doc-comment.** `ThreadSidePanelContent` has all three of the latter and none of the former.
+
+So for any component-level claim, the check is mechanical and takes one command:
+
+```bash
+grep -rn "<TheComponent" --include='*.razor' src/          # a tag
+grep -rn "WithView<.*, TheComponent>" --include='*.cs' src/ # the control→view seam
+grep -rn "AddAdditionalAssemblies\|AdditionalAssemblies" src/ # which assemblies the router scans
+```
+
+An empty result for all three means the code you are reading does not run, and everything downstream of it is a hazard rather than a symptom. This is the same failure mode as a CI gate that never executes: the code is *present*, so it reads as *in force*.
+
+## Reproducing the seam
+
+🚨 **What this reproduces is the SEAM, not a live user journey.** It drives the shared node directly, standing in for the writer that `ThreadSidePanelContent` would be if it were rendered. It proves that a write from one subscriber is observed by another and that `Send`'s namespace decision follows that shared field; it does **not** prove a live writer exists — see "What is LATENT" above. Run it before and after any change that gives `ContextPath` a live writer.
 
 Two independent client hubs stand in for two circuits (each has its own workspace and its own subscription; a Blazor circuit's portal hub is exactly this shape). Against a `MonolithMeshTestBase` mesh with `AddAI()`:
 
@@ -116,7 +132,7 @@ Two independent client hubs stand in for two circuits (each has its own workspac
 4. Run `Send`'s decision on hub A — `ThreadNodeType.MainNodeOf(ContextPath)` → `hub.StartThread(namespacePath: …)` — and the created thread's path starts with `TestData/PageB/`.
 5. Stamp `OpenThreadPath` from hub B; hub A's `Select(…OpenThreadPath).Where(non-empty).DistinctUntilChanged()` — `ThreadSidePanelContent`'s observer verbatim — emits it. That value is the argument to `NavigateTo`.
 
-Steps 2–3 are the bleed, step 4 is the wrong-target write, step 5 is the navigation hijack. All three passed on 2026-09-03 against MeshWeaver.Plugins `6a3bceff`.
+Steps 2–3 are the bleed, step 4 is the wrong-target write the bleed enables, step 5 is the navigation hijack. All three passed on 2026-09-03 against MeshWeaver.Plugins `6a3bceff`.
 
 **And the negative control**, because an assertion that cannot fail is not an assertion. Re-run with the three expectations flipped to the *isolated* outcome and all three fail, each printing the bleed verbatim:
 
