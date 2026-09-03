@@ -129,37 +129,58 @@ public class SealedSetConsistencyTest
     }
 
     /// <summary>
-    /// 🚨 The contract that predates records still holds: a sealed bundle that is NOT a readable
-    /// archive counts for presence, the identity resolves, and the verdict is available — with
-    /// nothing for the consistency check to judge. The first cut let that bundle throw out of
-    /// <c>Read</c>'s outer catch, turning the WHOLE identity unreadable and losing its resolved
-    /// identity; MeshWeaver.Plugins' catalogue tests (which publish bundles as literal bytes) went
-    /// red on main within the hour of #3187 merging.
+    /// 🚨 THE case that could falsify the fix: one sealed bundle that is NOT a readable archive — a
+    /// file of literal bytes, deliberately not a zip — beside a readable, INCONSISTENT one. The read
+    /// must still resolve the identity, count the unreadable bundle for presence (nothing for the
+    /// consistency check to judge, as for a legacy bundle), and still JUDGE the rest of the set:
+    /// the readable bundle built against another module build holds, by name. The first cut let the
+    /// unreadable file throw out of <c>Read</c>'s outer catch, turning the WHOLE identity unreadable
+    /// and losing its resolved identity — MeshWeaver.Plugins' catalogue tests (which stage bundles as
+    /// literal bytes) went red on main within the hour of #3187 merging, and every portal reading
+    /// such a root would have held every update with a reason nobody could act on.
     /// </summary>
     [Fact]
-    public void ABundleThatIsNotAReadableArchive_StillCountsForPresence_AndTheIdentityResolves()
+    public void AnUnreadableBundle_CountsForPresence_AndTheRestOfTheSetIsStillJudged()
     {
-        var root = Path.Combine(Path.GetTempPath(), "mw-sealed-set-" + Guid.NewGuid().ToString("N"));
+        var recorded = AnotherBuild;
+        var root = PublishedRoot(recorded);
         try
         {
-            var source = Path.Combine(root, Identity, "plugins");
-            Directory.CreateDirectory(Path.Combine(root, PublishedBundleCatalogue.ReleaseMarkerDirectoryName));
-            Directory.CreateDirectory(source);
+            // A second source whose only bundle is NOT an archive, sealed with an EMPTY module set
+            // ("composed nothing" — a legitimate seal, distinct from "predates module sealing").
+            var education = Path.Combine(root, Identity, "education");
+            Directory.CreateDirectory(Path.Combine(education, PublishedBundleCatalogue.ModulesDirectoryName));
+            File.WriteAllText(Path.Combine(education, "Doc.zip"), "bytes");
             File.WriteAllText(
-                Path.Combine(root, PublishedBundleCatalogue.ReleaseMarkerDirectoryName, Version), Identity);
-            File.WriteAllText(Path.Combine(source, "Doc.zip"), "bytes");
+                Path.Combine(education, PublishedBundleCatalogue.ModulesDirectoryName,
+                    PublishedBundleCatalogue.ModulesIndexFileName), string.Empty);
             File.WriteAllText(
-                Path.Combine(source, ShippedPrebuiltBundles.CompletionSentinelFileName), "Doc.zip\n");
+                Path.Combine(education, ShippedPrebuiltBundles.CompletionSentinelFileName), "Doc.zip\n");
 
             var observation = PublishedBundleCatalogue.Read(root, Version);
 
             Assert.Equal(Identity, observation.Target.FrameworkIdentity);
             Assert.Null(observation.Artifacts.ReadFailure);
             Assert.Contains("Doc", observation.Artifacts.SealedBundles);
-            Assert.Empty(observation.Artifacts.DependencyRecords);
+            Assert.Contains(Bundle, observation.Artifacts.SealedBundles);
+            // The unreadable bundle contributed no records; the readable one did.
+            Assert.Equal([Bundle], observation.Artifacts.DependencyRecords.Select(r => r.Bundle).Distinct());
+            Assert.NotNull(observation.Artifacts.Modules);
+            Assert.Null(observation.Artifacts.Modules.Refusal);
+
             var verdict = ReleaseAvailability.IsUpdatable(
-                observation.Target, [new RequiredPackage("Doc", "doc")], observation.Artifacts);
-            Assert.True(verdict.IsUpdatable, verdict.HoldReason);
+                observation.Target,
+                [new RequiredPackage("Doc", "Doc"), Required],
+                observation.Artifacts);
+
+            Assert.False(verdict.IsUpdatable);
+            Assert.False(verdict.IsIndeterminate, "an unreadable BUNDLE is not an unreadable SET");
+            var doc = Assert.Single(verdict.Packages, p => p.Package == "Doc");
+            Assert.Equal(PackageAvailabilityKind.Available, doc.Kind);
+            var widget = Assert.Single(verdict.Packages, p => p.Package == Bundle);
+            Assert.Equal(PackageAvailabilityKind.SealedSetInconsistent, widget.Kind);
+            Assert.Contains(recorded, widget.Reason!, StringComparison.Ordinal);
+            Assert.Contains(SealedMvid, widget.Reason!, StringComparison.Ordinal);
         }
         finally
         {
