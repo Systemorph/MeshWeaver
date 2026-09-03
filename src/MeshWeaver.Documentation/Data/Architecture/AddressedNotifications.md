@@ -192,6 +192,8 @@ These are product decisions, not implementation details, and each one changes **
 
 ## 5. Two defects the measurement exposed (not #3156, but caused by the same gap)
 
+Both are filed: MeshWeaver.Plugins#1275 and #3213.
+
 - **The ChatReady recipient is a partition name, not a user.** `ThreadExecution.cs:3565` computes
   `recipient = threadPath.Split('/').First()`, commented as "the thread lives under its owner's
   partition". The live data says otherwise: threads live under whatever node they were started
@@ -201,11 +203,11 @@ These are product decisions, not implementation details, and each one changes **
   a `User` (no `Email`, so the mail is silently skipped). The real addressee is the thread node's
   `CreatedBy` — which also makes the migration in §6 derivable.
   `NotificationTriageService.cs:104` derives its recipient the same way and escalates into
-  `{space}/_Triage`, with the same defect.
+  `{space}/_Triage`, with the same defect. **MeshWeaver.Plugins#1275.**
 - **Plugin-update notifications are unbounded.** `PackageUpdateReconciler.Notify` raises a fresh
   `Notification` node on every reconcile that still sees an update — measured at four rows for the
   same package in one day, 124 of the newest 200 rows overall. There is no "already told you"
-  suppression. This is the bell's row count, independent of where the rows live.
+  suppression. This is the bell's row count, independent of where the rows live. **#3213.**
 
 ## 6. The migration
 
