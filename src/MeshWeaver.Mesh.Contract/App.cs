@@ -27,9 +27,26 @@ public record App
     [Key]
     public string Plugin { get; init; } = string.Empty;
 
-    /// <summary>Position of the app icon on the owner's Apps grid (lower = earlier).</summary>
+    /// <summary>
+    /// Position of the app icon on the owner's Apps grid (lower = earlier). <c>0</c> means the
+    /// viewer has never placed this tile: it paints BEHIND every explicitly ordered tile, in the
+    /// grid's own order (most recently used first) — a freshly installed app lands at the end of
+    /// its group, the way a phone appends a new icon. A drop on the grid renumbers the target
+    /// group <c>1..n</c> and writes only the records whose number changed.
+    /// </summary>
     [Browsable(false)]
     public int Order { get; init; }
+
+    /// <summary>
+    /// The GROUP this tile sits in on the owner's Apps grid — a section the viewer sorts tiles
+    /// into by drag and drop, iPhone-style. <c>null</c> = never grouped (the Store stamps the
+    /// package's category on install and its tile refresh fills a missing group from it);
+    /// <c>""</c> = the viewer deliberately ungrouped the tile, which no heal may overwrite. Groups
+    /// are per user and live nowhere but on the records themselves: a group exists exactly while a
+    /// tile carries its name.
+    /// </summary>
+    [Browsable(false)]
+    public string? Group { get; init; }
 
     /// <summary>
     /// Optional navigation override — where the icon opens. Empty resolves to the
