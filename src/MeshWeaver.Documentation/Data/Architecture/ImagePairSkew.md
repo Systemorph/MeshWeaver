@@ -1,7 +1,7 @@
 ---
 Name: Image Pair Skew
 Category: Architecture
-Description: A promoted portal image pairs a core commit with a Plugins head resolved hours later; each half is green in its own repository and the pair is never executed. The 2026-09-03 sign-in outage, what every guard missed, and the two fixes.
+Description: A promoted portal image pairs a core commit with a Plugins head resolved hours later; each half is green in its own repository and the pair is never executed. The 2026-09-03 sign-in outage, what every guard missed, the runtime fix that shipped, and the delivery gap left open.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="16" rx="1"/><rect x="13" y="8" width="8" height="12" rx="1"/><path d="M11 12h2"/></svg>
 ---
 
@@ -16,13 +16,13 @@ repository, against its own pin. Nobody ever ran the pair.**
 On 2026-09-03 that pair was core `e7f1d699` (08:05Z) with Plugins `12500c9` (13:31Z), tagged
 `memex-portal-ai:3.0.0-rc9.ci.7658`, and it answered **503 to every signed-in request** on
 memex.systemorph.com for twenty minutes. This page records the property, the timeline, why every
-guard missed it, and the two fixes.
+guard missed it, the runtime fix that shipped, and the delivery gap deliberately left open.
 
 ## 🚨 The one sentence
 
 `Promote` and `Verify every image shipped` green means the images EXIST; it says nothing about
 whether the pair inside them can serve a signed-in request. Only booting the pair proves that, and
-until the `signin-smoke` job below lands (core #3254), nothing in CD does.
+**nothing in CD does.** That remains true as this is written.
 
 ## The property
 
@@ -62,8 +62,7 @@ run creation and resolves the Plugins half when `gate` runs.
 
 A pin is the right tool for a test lane: it makes a suite reproducible. The defect is that nothing
 compares the pin to what the image lane actually used, and nothing executes the pair the image lane
-produced. That is precisely the hole the `signin-smoke` job below fills, and it is why the fix is a
-gate on the IMAGE rather than a stricter pin.
+produced. A stricter pin does not close it; only executing the pair the image lane built does.
 
 ## The timeline (UTC, 2026-09-03)
 
@@ -122,30 +121,40 @@ first sealable set is the first CD run after Plugins #1268 lands.
   `/api/og` and `/healthz` are negative controls here, exactly as
   [The `/api/content` 503](/Doc/Architecture/ContentRoute503) already records for its own leg.
 
-## The two fixes
+## The fix that shipped, and the one that did not
 
 **Runtime — a refusal is a CI invariant, never a production answer** (MeshWeaver.Plugins #1300).
 `PostgreSqlPartitionedMeshQuery` gains an `UnanchoredQueryPolicy`. The default is `Refuse`
-(fail-closed: a host that never heard of the property keeps the CI invariant). The production
-hosts — `Memex.Portal.Distributed` and `Memex.Portal.Monolith` — opt into `ServeAndReport` in their
-own committed `appsettings.json`, baked into the image so no chart or ConfigMap can forget it. Under
-`ServeAndReport` an unlisted unanchored shape is *served* by the fan-out and logged at **Error**
-naming the offender, which the red-log ticketing turns into an incident. The trade this reverses:
-a hard refusal converted a *performance* hazard (a cross-schema `UNION` contending on the lock
-manager) into a total *availability* outage on the request path. After the change the allow-file
-governs two different things: in CI the Grace-versus-Refuse verdict, unchanged; in production the
-log level (listed → Warning, unlisted → Error). It may still only shrink.
+(fail-closed: a host that never heard of the property keeps the CI invariant). The production host
+opts into `ServeAndReport` in its own committed `appsettings.json`, baked into the image so no chart
+or ConfigMap can forget it, and a contract test discovers the Postgres hosts from source so the rule
+cannot silently cover nothing. Under `ServeAndReport` an unlisted unanchored shape is *served* by
+the fan-out and logged at **Error** naming the offender, which the red-log ticketing turns into an
+incident. The trade this reverses: a hard refusal converted a *performance* hazard (a cross-schema
+`UNION` contending on the lock manager) into a total *availability* outage on the request path.
+After the change the allow-file governs two different things: in CI the Grace-versus-Refuse verdict,
+unchanged; in production the log level (listed → Warning, unlisted → Error). It may still only
+shrink.
 
-**CD — boot the pair and sign in before promoting it** (core #3254, `main-cd.yml`). A
-`signin-smoke` job that `promote` depends on: a Postgres service, the run's staging migration
-image (asserting `Database migration completed. Version: N`), the run's staging portal image with
-`Authentication__EnableDevLogin=true`, then a DevLogin sign-in and a **cookie-carrying** `GET /` and
-`GET /Store` that must answer 200 without the identity-unavailable text, plus a grep of the
-container log for `UnanchoredQueryException` and `UNAVAILABLE for`. The `ci.7658` pair is its
-negative control. The job writes the core sha, the Plugins sha, the staging tags and the migration
-version into the step summary, so the next skew is diagnosable from the run page instead of from a
-dump. It lands on the CD run *after* the fleet's first sealable set, so a first-run failure of the
-gate costs a cycle rather than the unblock.
+**So a repeat of THIS fault is caught at the layer where it fired.** An image whose two halves
+disagree about anchoring no longer takes sign-in down; it serves the query and files an incident.
+
+### 🚨 What is still open: nothing executes the pair before it is promoted
+
+A CD gate that booted the run's own image pair, signed in through DevLogin and asserted a
+**cookie-carrying** `GET /` and `GET /Store` was written and proven against both controls — it
+passes the pair that shipped fixed and fails `ci.7658` on the signed-in `GET /` — and was
+**deliberately not adopted**: a new required job in front of `promote` was judged not worth the
+standing cost and the first-run risk to the release lane. That decision is recorded here rather than
+argued: it is a real trade, and the residual it leaves is real too.
+
+**The residual, stated plainly.** `promote` and `Verify every image shipped` still attest only that
+the images EXIST. No step boots the pair, and none signs in. The pair's two halves are still chosen
+at different moments from different refs, so a *different* disagreement — one the runtime policy
+above does not cover, because it is not about unanchored queries — would ship exactly as this one
+did, and the first thing to notice would again be production. Anyone reopening this should know the
+proof already exists as a standalone script with a two-control verification; it is the adoption that
+was declined, not the mechanism.
 
 ## Reading the signals next time
 
