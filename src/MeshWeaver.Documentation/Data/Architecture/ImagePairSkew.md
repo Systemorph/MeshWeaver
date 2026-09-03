@@ -1,0 +1,152 @@
+---
+Name: Image Pair Skew
+Category: Architecture
+Description: A promoted portal image pairs a core commit with a Plugins head resolved hours later; each half is green in its own repository and the pair is never executed. The 2026-09-03 sign-in outage, what every guard missed, and the two fixes.
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="16" rx="1"/><rect x="13" y="8" width="8" height="12" rx="1"/><path d="M11 12h2"/></svg>
+---
+
+# Image Pair Skew
+
+**A portal image is two commits from two repositories, and continuous delivery pairs them at
+different moments. The core half is the commit the run was created for; the Plugins half is
+`refs/heads/main` of MeshWeaver.Plugins at the moment the run's `gate` job finally ran. When the
+run queues for hours — it did — the two halves can be hours apart. Each half was green in its own
+repository, against its own pin. Nobody ever ran the pair.**
+
+On 2026-09-03 that pair was core `e7f1d699` (08:05Z) with Plugins `12500c9` (13:31Z), tagged
+`memex-portal-ai:3.0.0-rc9.ci.7658`, and it answered **503 to every signed-in request** on
+memex.systemorph.com for twenty minutes. This page records the property, the timeline, why every
+guard missed it, and the two fixes.
+
+## 🚨 The one sentence
+
+`Promote` and `Verify every image shipped` green means the images EXIST; it says nothing about
+whether the pair inside them can serve a signed-in request. Only booting the pair proves that, and
+until the `signin-smoke` job below lands, nothing in CD does.
+
+## The property
+
+| | the core half | the Plugins half |
+|---|---|---|
+| chosen by | the commit `gate` resolved (push or reconcile) | `refs/heads/main` of MeshWeaver.Plugins, resolved ONCE in `gate` and threaded (#2622) |
+| chosen when | the run is created | the `gate` job actually runs |
+| recorded as | `<core short sha>` in the image tag `<core>-p<plugins>` | `p<plugins short sha>` in the same tag |
+| tested in | core CI, against core's own code | Plugins CI, against the platform pin the Plugins repo carries |
+
+Threading the Plugins sha once (#2622) made a run *internally* consistent — the portal image and the
+module bundles come from one Plugins commit. It did not make the run *externally* consistent: a core
+commit that queued for five hours is paired with a Plugins main five hours younger than anything
+that core commit was ever tested with. The Plugins pin moves the other way too — the Plugins repo
+pins a platform sha, and on the same afternoon its own tests went red in both directions as that
+pin crossed the same boundary (Plugins #1281 asserts both arms by detecting the platform at
+runtime).
+
+The class is: **a promoted set whose two halves encode different contracts.** Sign-in is where it
+surfaced, because sign-in is the first read every request makes.
+
+## The timeline (UTC, 2026-09-03)
+
+| time | event |
+|---|---|
+| 08:05 | core `e7f1d699` merges (#3177, apps home groups). |
+| 08:37 | CD run #7658 is created by the reconcile schedule, target `e7f1d699`. |
+| 11:05 | core #3206 merges: the sign-in reads are anchored (`OnboardingMiddleware.LoadUserRoles` asks three anchored questions instead of one unanchored `nodeType:AccessAssignment content.accessObject:"<user>" scope:subtree`). |
+| 11:45 | Plugins #1263 merges: `PostgreSqlPartitionedMeshQuery` REFUSES an unanchored query unless its shape is on the shrink-only grace list `unanchored-queries.allow` — and the sign-in shape is not on it, because core had just anchored it. |
+| 13:31 | Plugins `12500c9` (#1252) is the Plugins main when run #7658's `gate` resolves it. The image `e7f1d699-p12500c9` = `ci.7658` is built, promoted, verified. |
+| 13:32 | memex's self-updater patches the deployment to `ci.7658`. `DbVersionGate` refuses — `db_version=54 < expected 55` — and the new pods crash-loop while the old `ci.7632` pods keep serving. Invisible from the front door: the URL answers 200 the whole time (see [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall)). |
+| 13:32–17:00 | Every refused boot dies as an unhandled `OperationCanceledException` → SIGABRT → a 666 MB `createdump`; 45 of them exceed the 30 Gi `memex-dumps` emptyDir and evict a pod (Plugins #1290 turns that into a clean exit 1). |
+| 17:00 | Another session runs the migration by hand (`memex-migration-v55-manual`, the helm Job template with the new tag). `Database migration completed. Version: 55` at 17:06. |
+| 17:02 | The 7658 pods pass the gate; the rollout scales the 7632 ReplicaSet to zero. From this second every signed-in request faults in `LoadUserRoles` with `UnanchoredQueryException` and the middleware answers 503 "This is a temporary problem on our side" (issue #637's designed answer for an *infrastructure* fault). The Store dies on `nodeType:PluginCatalog`; GitHub sync, instance sync, notifications, outbound mail, model-credit and free-text search fault the same way. Loki: 138 refusals and 19 identity 503s on the two pods. |
+| 17:05 | Reported: "memex.systemorph.com is completely down". Anonymous `curl` of `/`, `/Doc`, `/healthz` all answer 200 — the shell renders; only the signed-in read fails. |
+| 17:20 | `kubectl set image` to `ci.7693` (core `e36f04c`, which contains #3206, with Plugins `2d32a175`). The surge pod stays `Pending`: every silos node is CPU-full, the pool is at its maximum, and the old 7632 pod is holding a node in `Terminating` — deadlocked in dispose, 3.5 cores, 30-minute grace. It is force-deleted (it was already out of the Service and would have been SIGKILLed at 17:32 anyway); the surge pod schedules within seconds. |
+| 17:22:56 | Rollout complete. Zero refusals, zero 503s on the new pods. |
+
+`ci.7693` is **up but unsealed**: its `Plugins: bake + seal` job failed on the #3175 one-producer
+guard (`MeshWeaver.Markdown.Collaboration` composed as a module and still shipped in `/app`), as did
+every promoted build since #7683. NodeTypes binding module types decline at adoption on it. The
+first sealable set is the first CD run after Plugins #1268 lands.
+
+## Why every guard missed it
+
+- **Plugins CI was green** — its tests ran against the platform pin, and the pin was on one side of
+  the boundary or the other, never both. #1281 fixed the tests to assert both arms; that fixes the
+  *tests*, not the image.
+- **Core CI was green** — `UnanchoredQueryCensusTest` and `SignInReadsAreAnchoredTest` (#3206) judge
+  core's *current* callers with the *current* planner rules. They cannot see an older core paired
+  with a newer planner, because that pair exists only in ACR.
+- **The grace list could not protect the window by construction.** It is regenerated from the
+  census of callers still issuing an unanchored shape and fails the build when a listed shape has no
+  caller. The moment core anchored the sign-in read, the list had to drop it — while every image
+  built from an older core half still issued it.
+- **`Promote` and `Verify every image shipped` were green.** They prove existence and provenance,
+  not behaviour. The seal was red, but for an unrelated reason (#3175), and nothing surfaces the
+  seal at the tag.
+- **The front door lied twice.** During the crash loop the old ReplicaSet answered 200; after the
+  cutover the anonymous shell answered 200. The failing leg needed a *signed-in* request.
+  `/api/og` and `/healthz` are negative controls here, exactly as
+  [The `/api/content` 503](/Doc/Architecture/ContentRoute503) already records for its own leg.
+
+## The two fixes
+
+**Runtime — a refusal is a CI invariant, never a production answer** (Plugins, the planner).
+`PostgreSqlPartitionedMeshQuery` gains an `UnanchoredQueryPolicy`. The default is `Refuse`
+(fail-closed: a host that never heard of the property keeps the CI invariant). The production
+hosts — `Memex.Portal.Distributed` and `Memex.Portal.Monolith` — opt into `ServeAndReport` in their
+own committed `appsettings.json`, baked into the image so no chart or ConfigMap can forget it. Under
+`ServeAndReport` an unlisted unanchored shape is *served* by the fan-out and logged at **Error**
+naming the offender, which the red-log ticketing turns into an incident. The trade this reverses:
+a hard refusal converted a *performance* hazard (a cross-schema `UNION` contending on the lock
+manager) into a total *availability* outage on the request path. After the change the allow-file
+governs two different things: in CI the Grace-versus-Refuse verdict, unchanged; in production the
+log level (listed → Warning, unlisted → Error). It may still only shrink.
+
+**CD — boot the pair and sign in before promoting it** (core, `main-cd.yml`). A
+`signin-smoke` job that `promote` depends on: a Postgres service, the run's staging migration
+image (asserting `Database migration completed. Version: N`), the run's staging portal image with
+`Authentication__EnableDevLogin=true`, then a DevLogin sign-in and a **cookie-carrying** `GET /` and
+`GET /Store` that must answer 200 without the identity-unavailable text, plus a grep of the
+container log for `UnanchoredQueryException` and `UNAVAILABLE for`. The `ci.7658` pair is its
+negative control. The job writes the core sha, the Plugins sha, the staging tags and the migration
+version into the step summary, so the next skew is diagnosable from the run page instead of from a
+dump. It lands on the CD run *after* the fleet's first sealable set, so a first-run failure of the
+gate costs a cycle rather than the unblock.
+
+## Reading the signals next time
+
+```
+kubectl logs <pod> -n memex -c memex-portal --since=20m | grep -c 'UNAVAILABLE for'
+kubectl logs <pod> -n memex -c memex-portal --since=20m | grep -oE "no partition could be determined from '[^']{0,100}" | sort | uniq -c
+az acr manifest list-metadata -r meshweaver -n memex-portal-ai --orderby time_desc --top 30 -o json   # tags read <core>-p<plugins>
+git merge-base --is-ancestor <fix sha> <core half>                                                     # is the fix in this image's half?
+```
+
+- `UNAVAILABLE for` with `UnanchoredQueryException` is this class. `UNAVAILABLE for` with
+  `DeliveryFailureException` is a transient hub fault and is not.
+- A pending surge pod on `Insufficient cpu` with the pool at its maximum: look for a `Terminating`
+  pod holding a node — the dispose deadlock in `ci.7632` is still open (the pod ran 3.5 cores for
+  18 minutes after its containers were told to stop).
+- Rolling forward to the newest promoted tag is the right triage when it carries the fix, but check
+  the seal first: an unsealed tag serves sign-in and the Store while module-bound NodeTypes decline.
+
+## Recorded, not fixed
+
+- The dispose deadlock in the `ci.7632` portal host (a `Terminating` pod at full CPU for the whole
+  grace period). Its evidence went with the force-delete; the next occurrence needs a dump before
+  the delete.
+- The silos node pool has no headroom for one surge pod when both portals are at full replica count.
+  A rollout that must surge waits for a termination, and a wedged termination waits for the grace
+  period.
+- The self-updater cannot cross a schema bump on its own (the migration is a helm-revision Job) —
+  [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall).
+
+## See also
+
+- [Unanchored Security Reads](/Doc/Architecture/UnanchoredSecurityReads) — why the sign-in fold reads
+  the way it does, and the census this outage was the runtime twin of.
+- [The Cross-Repo Pair Gate](/Doc/Architecture/CrossRepoPairGate) — the same class at the source
+  level: two halves that must land in an order, and the gate that holds the deleting half last.
+- [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract) — all-or-nothing
+  publication; verify the image, never the tick.
+- [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall) — why the roll to `ci.7658`
+  wedged silently for three and a half hours before it could fail loudly.
+- [Reading CI Signals](/Doc/Architecture/ReadingCiSignals) — which greens mean what.
