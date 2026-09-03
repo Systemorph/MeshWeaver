@@ -137,6 +137,61 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     private static readonly TimeSpan ConflictRebaseBound = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// 🚨 How long a write waits for a USABLE base state — a mirror emission that actually carries
+    /// the node. Authored once, here, because both base-read sites need the same number and
+    /// <see cref="BaseStateSource"/> is the only place either of them may spell it.
+    /// </summary>
+    internal static readonly TimeSpan BaseStateWaitBound = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// 🚨 The BOUNDED base read — issue #2543. Both write paths read this hub's mirror, drop the
+    /// emissions that carry no node, and wait <see cref="BaseStateWaitBound"/> for one that does.
+    /// The order of those two steps is the whole point.
+    ///
+    /// <para><b>The defect.</b> Both sites composed it as
+    /// <c>mirror.Timeout(30s).Where(c =&gt; c.Value is not null).Select(...)</c> — the bound applied to
+    /// the RAW mirror, upstream of the filter. Rx's <c>Timeout(TimeSpan)</c> is an INTER-EMISSION
+    /// deadline: it restarts on every <c>OnNext</c> it sees. A mirror that keeps emitting change
+    /// items whose <c>Value</c> is <c>null</c> therefore resets that clock forever while the filter
+    /// discards every one of them, so the subscriber downstream never runs and the bound that was
+    /// written to rescue it can never fire. The comment it sat under — "a 30 s outer timeout bounds
+    /// the wait so a missing per-node hub surfaces with a precise TimeoutException" — states the
+    /// intent exactly; the composition did not deliver it.</para>
+    ///
+    /// <para>The consequence is spelled out verbatim in <see cref="RequireBaseState"/>: no
+    /// <c>OnNext</c>, no <c>OnError</c>, no <c>OnCompleted</c> on the caller's observer, no patch
+    /// posted, and not even the outer <c>VERDICT_TIMEOUT</c> — that deadline is armed inside the
+    /// response wait, which a write with no base never reaches. <b>The writer hangs for the life of
+    /// the process, silently.</b> #3001 closed the sibling case (the mirror COMPLETES having carried
+    /// nothing) through <see cref="RequireBaseState"/>; this one — the mirror never completes and
+    /// never carries anything usable — was left with an unreachable bound.</para>
+    ///
+    /// <para><b>What it costs.</b> One such write parks whatever composed it. In the CD bake+seal
+    /// gate, <c>PackageInstaller</c>'s release wave is
+    /// <c>nodeTypePaths.Select(ObserveNodeTypeRelease).Merge().ToList()</c> — no per-leg bound and
+    /// no outer bound — so ONE non-terminating leg parks the entire package install, silently, until
+    /// the gate's own 600 s <c>InstallTimeout</c> reports <c>install: TimeoutException</c> against a
+    /// package that installed fine 8 minutes earlier
+    /// (Doc/Architecture/BakeSealNodeOpsSaturation).</para>
+    ///
+    /// <para><b>The fix is the ORDER, not the number.</b> 30 s is unchanged; it now measures what
+    /// the caller actually waits for. This can only ADD terminals: a mirror that yields a usable
+    /// base is untouched, and one that never does now faults instead of parking.</para>
+    ///
+    /// <para>Static, with the mirror and the scheduler as seams, so the rule is asserted
+    /// deterministically — no hub, no cluster, no wall clock.</para>
+    /// </summary>
+    /// <param name="mirror">This hub's view of the node.</param>
+    /// <param name="scheduler">Timer seam for tests.</param>
+    internal static IObservable<MeshNode> BaseStateSource(
+        IObservable<ChangeItem<MeshNode>> mirror,
+        IScheduler? scheduler = null)
+        => mirror
+            .Where(change => change.Value is not null)
+            .Select(change => change.Value!)
+            .Timeout(BaseStateWaitBound, scheduler ?? Scheduler.Default);
+
+    /// <summary>
     /// 🚨 The emission a (re)attempt rebuilds its patch from — and the whole of the #1910 fix.
     ///
     /// <para><b>The defect.</b> A cross-hub <c>stream.Update</c> reads this hub's MIRROR, runs the
@@ -1451,11 +1506,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // resolved it, one reclaimed mid-write, or one whose every emission the null-filter
             // drops — would settle nothing at all and park the caller forever.
             var initialSub = RequireBaseState(
-                    remoteStream
-                        .Timeout(TimeSpan.FromSeconds(30))
-                        .Where(change => change.Value is not null)
-                        .Select(change => change.Value!)
-                        .Take(1),
+                    // 🚨 BOUNDED AFTER the null-filter — see BaseStateSource (#2543). The comment
+                    // above names the third case: "one whose every emission the null-filter drops".
+                    // RequireBaseState covers that only when the mirror COMPLETES; a mirror that
+                    // keeps emitting null-valued changes reset the old upstream timer forever.
+                    BaseStateSource(remoteStream).Take(1),
                     refusedBaseVersion: 0)
                 .Subscribe(
                     _ =>
@@ -1509,7 +1564,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // as a TimeoutException too, and flattening it to this sentence is
                             // what made the boot-install failures unreadable (#2387).
                             observer.OnError(new TimeoutException(
-                                $"Update aborted: no initial state arrived for '{_path}' within 30s.", ex));
+                                $"Update aborted: no initial state arrived for '{_path}' within {BaseStateWaitBound.TotalSeconds:0}s.", ex));
                         else observer.OnError(ex);
                     });
             composite.Add(initialSub);
@@ -1593,10 +1648,10 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // happened (#2305 / #2291). See PatchBaseSource.
             var initialSub = PatchBaseSource(
                     RebaseSource(
-                        remoteStream
-                            .Timeout(TimeSpan.FromSeconds(30))
-                            .Where(change => change.Value is not null)
-                            .Select(change => change.Value!),
+                        // 🚨 BOUNDED AFTER the null-filter — see BaseStateSource (#2543). The bound
+                        // used to sit upstream of it, where Rx's inter-emission timer was reset by
+                        // every emission the filter then dropped, so it could not fire at all.
+                        BaseStateSource(remoteStream),
                         refusedBaseVersion,
                         staleVersion => diagLogger?.LogWarning(
                             "[UpdateRemote] STALE_MIRROR hub={Hub} target={Path} attempt={Attempt} — the "
@@ -2329,7 +2384,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // the boot-install failures claiming a 30s wait that never happened
                             // (#2387).
                             observer.OnError(new TimeoutException(
-                                $"Update aborted: no initial state arrived for '{_path}' within 30s. " +
+                                $"Update aborted: no initial state arrived for '{_path}' within {BaseStateWaitBound.TotalSeconds:0}s. " +
                                 "Likely causes — (1) RLS silently rejected the prior CreateNode, " +
                                 "(2) the path is misspelled / points at a namespace no NodeType claims, " +
                                 "(3) the node was deleted between create and update, or (4) the per-node " +
