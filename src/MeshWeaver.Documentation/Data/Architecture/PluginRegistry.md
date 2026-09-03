@@ -370,6 +370,42 @@ rendered as one titled catalog section each. It lists each registry's packages v
 against this instance's install registry — the `Package` nodes under the `Plugins` partition — to
 render **Install / Update / Installed** per module.
 
+### Categories first, packages per category
+
+> 🚨 **The catalog must not load the full thing — only categories first.** (maintainer, 2026-09-03,
+> after `/Store` on the cloud took minutes to paint.)
+
+The page a visitor lands on lists the source's **categories** — one tile per
+`PackageManifest.Category` with its package count, plus an *All packages* entry — and reads
+**nothing but the source's manifest listing** to do so: no install record, no permission
+evaluation, no activation-state read. Picking a tile (`?category=…`) renders that category's cards
+and joins **only its members** against the install registry — one exact-path read per member,
+batched into one request (`CatalogLayoutAreas.InstalledRecordQueries`), never the registry's whole
+children listing. An install record carries the package's whole installed-file baseline, which is
+exactly the payload a page rendering one category must not load for every package on the instance;
+the click's dependency closure gets the installed *ids* from a `select:`-projected listing that
+leaves the `content` column out of the read. The flat list stays reachable behind `?all=true`, and
+it is the one page that can show the orphaned records below. The pure seams a test pins this with
+are `CatalogLayoutAreas.Plan` (the landing's card set is empty by construction) and
+`CatalogLayoutAreas.Categories`.
+
+Two findings from the same investigation, recorded so the next reader does not re-derive them:
+
+- **`/Store` — the storefront every user sees — is not this view.** It is in-mesh source in
+  MeshWeaver.Plugins (`Store/Catalog/Source/StoreCatalogLayoutAreas.cs`). It already opens on a
+  category grid, but it still derives that grid from the full mesh-wide `nodeType:Store/Plugin`
+  synced feed (content included, plus one per-node Read probe per subscriber in
+  `SyncedQueryDataSourceExtensions.FilterByReadPermission`) before the tiles can paint; its
+  `Store/FirstFrame.md` keeps the feed off the first frame but does not make it cheaper. The same
+  rule applies there: a landing needs a `select:` shell projection (category, name, icon, order —
+  every one a `MeshNode` shell field) or a category summary written once by the owning hub, and
+  per-viewer facts only for the category actually opened.
+- **A `path:a|b|c` alternation is not yet a live query.** The storage provider derives ONE
+  change-feed scope filter per query string, keyed on the FIRST path, so a change under `b` or `c`
+  never re-runs it. The multi-`Queries` request (one `path:` per member) gets a scope filter per
+  query and is what the category page uses; a synced consumer that needs the single-statement
+  `IN (…)` form also needs that relevance rule widened to every path first.
+
 ## Installing
 
 An admin clicks **Install** (or **Update**). No GitHub credential is involved on the consumer:
