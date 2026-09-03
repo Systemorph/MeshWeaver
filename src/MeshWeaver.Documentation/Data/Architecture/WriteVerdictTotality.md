@@ -130,6 +130,68 @@ flush started in `onNext` is still in flight, and a bare completion arm would NA
 about to succeed. Which verdict each path posts, and why the code is `OwnerDisposing`, is in
 [Reading a Write Verdict](../ReadingAWriteVerdict).
 
+## The FOURTH outcome — never emits, never completes
+
+The three terminations above are the ones Rx *delivers*. There is a fourth outcome, and it delivers
+nothing at all: **a source that neither emits nor completes**. `WhenCompletesEmpty` cannot see it —
+there is no completion to observe — and neither can an `onError` arm. It is settled as silence by
+every guard on this page.
+
+It is not hypothetical. A stream's `Store` is a `ReplaySubject`, so one that has never published and
+is never disposed hands `Take(1)` nothing, for the life of the process. Two owner-side legs had it,
+in different shapes (#3194, #3195):
+
+| Leg | What it had | What was missing |
+|---|---|---|
+| The generic patch path's initial base read | `Take(1)` + empty-completion arm | **No bound anywhere.** The only other bounded watcher on that path is armed *inside* the `onNext` arm, so a stream that never emits never arms it |
+| The cold-activation defer | a 10 s bound | **No completion arm.** A completing primary store passes `Take(1)` and *cancels the Timeout* — a terminal disposes the timer — so neither arm runs |
+
+Both now compose through one seam, `DataExtensions.ArmedOneShotRead`:
+
+```csharp
+source                      // already filtered by the caller
+    .Take(1)
+    .Timeout(bound, scheduler)
+    .WhenCompletesEmpty(onEmptyCompletion);
+```
+
+Four outcomes, four terminals. And the seam exists rather than three hand-written chains for a
+second reason: **the bound sits below the caller's filter.** A `Timeout` placed *above* an operator
+that drops emissions is re-armed by every dropped one, so on a busy stream it can never fire — a
+bound that is present, reviewed, and unreachable, which is exactly what
+[Bounds must be ordered](../BoundsMustBeOrdered) is about. Handing the seam an already-filtered
+source makes that order structural instead of remembered.
+
+Expiry is not a lost write. On both legs the merge provably never ran, so the verdict is the
+auto-retried `OwnerNotReady` / `OwnerDisposing` rather than the caller's 31 s `OwnerUnreachable` —
+see [Reading a Write Verdict](../ReadingAWriteVerdict).
+
+## A verdict also needs a route that is CHECKED
+
+Totality is about producing a verdict. It is not finished until one has been *delivered*, and the
+two ack gates produced theirs and then discarded it (#3196):
+
+```csharp
+if (Interlocked.Exchange(ref ackPosted, 1) != 0) return;   // gate claimed HERE
+…
+hub.Post(resp, o => o.ResponseFor(request));               // result DISCARDED
+```
+
+Claiming first is right — two racing legs must not both answer. But claiming is *also* what disables
+the fallback: `RegisterOwnerDisposingNack`'s `tryClaimAck()` now returns false, so its
+`ILatePatchVerdictSink` dispatch — the one route that still reaches an armed waiter with no message
+routed at all — is skipped. And the post can be refused: with the owner past `DisposeHostedHubs` and
+its parent past it too, `MessageService.PostImplGeneric` stamps `POST_REFUSED_SHUTTING_DOWN` and
+returns a `Failed` delivery, its own comment noting that *"This site does NOT answer the sender
+itself"*. The verdict was thrown away and the door shut behind it.
+
+**Claim, then VERIFY.** The gate still latches first; the verdict now falls through to the sink when
+the transport refuses it. The post stays first here, unlike in the disposal NACK — this runs on the
+live path, where the caller's `Observe` callback is armed and the message *is* the designed seam.
+Missing both routes is then a checked fact (nobody in this mesh is armed, and the transport is gone)
+and is logged rather than swallowed, because the remaining case — a caller in another process — is
+one the registry cannot see.
+
 ## What this is NOT
 
 **It is not a timeout, a retry, or a watchdog.** No bound moves; nothing is re-attempted; no poller is
