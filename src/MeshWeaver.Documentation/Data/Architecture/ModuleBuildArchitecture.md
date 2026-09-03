@@ -192,7 +192,7 @@ identity, and `ShelveModule` shelves the null the index then advertises. Arming 
 every producer's `node-repo-module-pack.yml` pin has moved would take the fleet's publishes down
 rather than the nulls — the pin is bumped deliberately, per repo, in its own PR. Until then the
 publish endpoint logs a warning naming the package, the module and the version, which is the
-measurement the arming step reads.
+measurement the arming step reads. The criterion and the two repos it waits on are #3240.
 
 ## Content-addressed outputs = the module build ledger (as built, 2026-09-02)
 
