@@ -26,7 +26,8 @@ run_case() {
     "$DATA/$case/live-deployment.json" \
     "$DATA/$case/expect-patch.json" \
     "$DATA/$case/live-poddisruptionbudgets.json" \
-    "$DATA/$case/live-scaledobjects.json" 2>&1
+    "$DATA/$case/live-scaledobjects.json" \
+    "$DATA/$case/envfrom-secret-keys.txt" 2>&1
 }
 
 check() {  # check <description> <expected> <actual>
@@ -71,6 +72,34 @@ expect_class "CLUSTER-ONLY" "inline env Features__Ai__Clis__Copilot"
 expect_class "CLUSTER-ONLY" "ConfigMap LogWatch__DefaultRepository"
 expect_class "CHART-ONLY"   "ConfigMap PluginCatalog__RegistryUrl"
 expect_class "DIFFERS"      "livenessProbe"
+# An inline env over an envFrom SECRET key — the shape the ConfigMap-only comparison could not see,
+# and the one that is live on memex today (MeshWeaver#3201).
+expect_class "SHADOWS"      "inline env PluginCatalog__RegistryToken"
+if echo "$out" | grep -A1 'SHADOWS *inline env PluginCatalog__RegistryToken' | grep -q 'secret/portal-secrets'; then
+  echo "  ok   a secret-backed shadow names the secret"
+else
+  echo "::error::the PluginCatalog__RegistryToken finding does not name the secret supplying it."
+  fail=1
+fi
+# A secret key differing from the inline name ONLY IN CASE is a COLLISION, not a shadow: the pod
+# carries both variables and .NET picks per start. Routing secret twins past the case check was the
+# first cut of this feature and Copilot caught it on #3204.
+expect_class "COLLIDES"     "inline env Speech__ApiKey"
+if echo "$out" | grep -A1 'COLLIDES *inline env Speech__ApiKey' | grep -q 'secret/portal-secrets'; then
+  echo "  ok   a case-collision against a SECRET names the secret"
+else
+  echo "::error::the Speech__ApiKey collision does not name the secret it collides with."
+  fail=1
+fi
+
+# ...and must NOT claim to know whether the values agree — this script never reads a secret value.
+if echo "$out" | grep -A1 'SHADOWS *inline env PluginCatalog__RegistryToken' | grep -q 'THE TWO DISAGREE'; then
+  echo "::error::the secret-backed shadow asserts a value verdict it cannot have — no secret value"
+  echo "         is ever read, so agreement is unknown and must not be stated."
+  fail=1
+else
+  echo "  ok   a secret-backed shadow states no value verdict"
+fi
 
 # A SHADOWS whose two values disagree must SAY so — that verdict is the whole point of the class.
 if echo "$out" | grep -A1 'SHADOWS *inline env PreWarm__GateReadiness' | grep -q 'THE TWO DISAGREE'; then
