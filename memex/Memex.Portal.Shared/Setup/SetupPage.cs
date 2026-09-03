@@ -113,8 +113,13 @@ public static class SetupPage
         var hint = catalog.Storage.Select(o => o.ConnectionStringHint).FirstOrDefault(h => h is not null);
         html.Append("<div class=field>");
         html.Append($"<label for=cs>{Escape(strings.ConnectionStringLabel)}</label>");
+        // 🚨 NEVER echoed back, for exactly the reason a client secret is not: a connection string
+        // CARRIES A PASSWORD, and re-rendering it after a failed submit puts that password in the
+        // page source, the browser cache and any screenshot of the form. This was inconsistent —
+        // the sign-in secrets were already withheld and this one was not (Copilot review). The
+        // operator retypes it, which is the same price the other credentials already pay.
         html.Append(
-            $"<input id=cs name=\"storage.connectionString\" type=password value=\"{Escape(submitted?.ConnectionString)}\" "
+            $"<input id=cs name=\"storage.connectionString\" type=password value=\"\" "
             + $"placeholder=\"{Escape(hint)}\" spellcheck=false>");
         html.Append("</div><div class=field>");
         html.Append($"<label for=bp>{Escape(strings.BasePathLabel)}</label>");
@@ -132,15 +137,21 @@ public static class SetupPage
         var devOption = catalog.SignIn.FirstOrDefault(o => o.IsSwitch);
         if (devOption is not null)
         {
-            var on = submitted?.EnableDevLogin ?? true;
+            var on = submitted?.EnableDevLogin ?? !devOption.AlreadyConfigured || devOption.AlreadyConfigured;
             html.Append("<label class=choice>");
-            html.Append($"<input type=checkbox name=\"signin.dev\" value=on{(on ? " checked" : "")}>");
-            html.Append($"<span>{Escape(strings.DevLoginLabel)}</span></label>");
+            html.Append(
+                $"<input type=checkbox name=\"signin.dev\" value=on{(on ? " checked" : "")}"
+                + $"{Disabled(devOption.AlreadyConfigured)}>");
+            html.Append($"<span>{Escape(strings.DevLoginLabel)}");
+            if (devOption.AlreadyConfigured)
+                html.Append($" <span class=badge>{Escape(strings.AlreadyConfigured)}</span>");
+            html.Append("</span></label>");
             html.Append($"<p class=help>{Escape(strings.DevLoginHelp)}</p>");
             html.Append("<div class=field>");
             html.Append($"<label for=devadmins>{Escape(strings.DevAdminsLabel)}</label>");
             html.Append(
-                $"<input id=devadmins name=\"signin.devAdmins\" type=text value=\"{Escape(submitted?.DevAdminUsers)}\">");
+                $"<input id=devadmins name=\"signin.devAdmins\" type=text "
+                + $"value=\"{Escape(submitted?.DevAdminUsers)}\"{Disabled(devOption.AlreadyConfigured)}>");
             html.Append("</div>");
         }
 
@@ -152,13 +163,24 @@ public static class SetupPage
             if (option.AlreadyConfigured)
                 html.Append($" <span class=badge>{Escape(strings.AlreadyConfigured)}</span>");
             html.Append("</legend>");
-            Field(html, $"signin.{option.Name}.clientId", strings.ClientIdLabel, answer?.ClientId);
+            // 🚨 A route this DEPLOYMENT already answers is REPORTED, never offered for editing —
+            // the fields are disabled, so the browser submits nothing for them. Rendering them
+            // editable was a surface promising an effect it cannot deliver: the manifest is layered
+            // UNDER the host's own configuration, so anything typed here would be accepted, stored,
+            // and then silently outranked at the next boot. That is the shape of MeshWeaver.Plugins#980
+            // — a surface showing its own stored answer while the process runs on a different one
+            // (Copilot review, which caught the doc and the markup disagreeing).
+            var locked = Disabled(option.AlreadyConfigured);
+            Field(html, $"signin.{option.Name}.clientId", strings.ClientIdLabel, answer?.ClientId,
+                extraAttributes: locked);
             if (option.HasTenant)
-                Field(html, $"signin.{option.Name}.tenantId", strings.TenantLabel, answer?.TenantId);
+                Field(html, $"signin.{option.Name}.tenantId", strings.TenantLabel, answer?.TenantId,
+                    extraAttributes: locked);
             // 🚨 A submitted secret is NEVER echoed back into the form. Re-filling a password field
             // after a failed submit is convenient and is also how a credential ends up in a browser
             // cache, a screenshot and a page source. The operator retypes it.
-            Field(html, $"signin.{option.Name}.clientSecret", strings.ClientSecretLabel, null, password: true);
+            Field(html, $"signin.{option.Name}.clientSecret", strings.ClientSecretLabel, null,
+                password: true, extraAttributes: locked);
             html.Append("</fieldset>");
         }
         html.Append("</section>");
@@ -228,16 +250,25 @@ public static class SetupPage
 
     private static void Field(
         StringBuilder html, string name, string label, string? value, bool password = false,
-        string? placeholder = null)
+        string? placeholder = null, string extraAttributes = "")
     {
         var id = name.Replace('.', '-');
         html.Append("<div class=field>");
         html.Append($"<label for=\"{Escape(id)}\">{Escape(label)}</label>");
         html.Append(
             $"<input id=\"{Escape(id)}\" name=\"{Escape(name)}\" type={(password ? "password" : "text")} "
-            + $"value=\"{Escape(value)}\" placeholder=\"{Escape(placeholder)}\" spellcheck=false>");
+            + $"value=\"{Escape(value)}\" placeholder=\"{Escape(placeholder)}\" spellcheck=false{extraAttributes}>");
         html.Append("</div>");
     }
+
+    /// <summary>
+    /// <c>disabled</c> when a route is already answered by this deployment.
+    ///
+    /// <para><b>disabled, not readonly.</b> A disabled control is not submitted at all, so the
+    /// operator cannot send a value that would be silently outranked; a readonly one still posts
+    /// its contents.</para>
+    /// </summary>
+    private static string Disabled(bool locked) => locked ? " disabled" : "";
 
     private static void AppendMessages(
         StringBuilder html, string cssClass, string heading, ImmutableList<string>? messages)
