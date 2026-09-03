@@ -22,6 +22,7 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 | **Database backups** & disaster recovery — managed PITR, geo-redundancy, restore | [DatabaseBackups.md](/Doc/Architecture/DatabaseBackups) |
 | Understand the release model, merge gates, version channels, and **policy-driven self-update** | [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy) |
 | Know what CD **guarantees** about a published image set — all-or-nothing publication, the promote ordering, the self-healing reconciler — and why you verify the IMAGE and never the green tick | [ContinuousDeliveryContract.md](/Doc/Architecture/ContinuousDeliveryContract) |
+| Work out whether an install can actually **take** the newest release — the schema boundary self-update cannot cross, why the resulting stall is invisible, and the three conditions a tag must clear before it is a safe `helm upgrade` target | [SelfUpdateSchemaWall.md](/Doc/Architecture/SelfUpdateSchemaWall) |
 | Ship a code update to the `memex` portal on the shared AKS cluster | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
 | Deploy an Aspire-orchestrated `test`/`prod` Container Apps environment | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
 | Understand the private-AKS-cluster architecture & operations behind the shared portal | [MemexCloudDeployment.md](/Doc/Architecture/MemexCloudDeployment) |
