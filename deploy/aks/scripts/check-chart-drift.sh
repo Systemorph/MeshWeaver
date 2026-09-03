@@ -219,6 +219,20 @@ fetch() { # $1 = resource
 # a real absence identically. A list GET always returns a valid List document when the transport
 # works (possibly with `items: []`) and invalid output when it does not, which keeps "no PDB here"
 # a POSITIVE finding while a broken connection stays RED.
+# 🚨 KEY NAMES ONLY, never values, and the projection happens INSIDE the cluster. A Secret's
+# `-o json` carries every value base64-encoded, so fetching one the ordinary way would write live
+# credentials onto a CI runner's disk for the lifetime of the job — a drift checker must not be
+# the thing that leaks the secrets it is auditing. `-o go-template` over `.data` emits the keys and
+# nothing else, is built into kubectl (no jq on the runner), and works on both transports.
+fetch_secret_keys() { # $1 = secret name
+  local tmpl='{{range $k,$v := .data}}{{$k}}{{"\n"}}{{end}}'
+  case "$VIA" in
+    kubectl)    kubectl -n "$NS" get "secret/$1" -o go-template="$tmpl" 2>"$WORK/kubectl.err" ;;
+    aks-invoke) az aks command invoke -g "$RG" -n "$AKS" -o tsv --query logs \
+                   --command "kubectl -n $NS get secret/$1 -o go-template='$tmpl'" 2>"$WORK/kubectl.err" ;;
+  esac
+}
+
 for res in "configmap/memex-portal-config" "deployment/memex-portal-deployment" \
            "poddisruptionbudgets" "scaledobjects.keda.sh"; do
   out="$WORK/live-$(echo "$res" | tr '/' '-' | tr '.' '-').json"
@@ -232,13 +246,45 @@ done
 # ---------------------------------------------------------------------------
 # COMPARE
 # ---------------------------------------------------------------------------
+# Every key an envFrom SECRET supplies reaches the portal exactly like a ConfigMap key — so an
+# inline env of the same name shadows it just as silently. memex proves it is not theoretical: the
+# Key-Vault-provisioned PluginCatalog__RegistryToken sits under an inline entry carrying a
+# DIFFERENT token, so the managed credential is dead and the pod authenticates with a plaintext
+# copy (MeshWeaver#3201). Reading only the names is enough to see that, and is all we read.
+SECRET_KEYS="$WORK/live-envfrom-secret-keys.txt"
+: > "$SECRET_KEYS"
+for sec in $(python3 - "$WORK/live-deployment-memex-portal-deployment.json" <<'PYEOF'
+import json, sys
+dep = json.load(open(sys.argv[1]))
+for c in ((dep.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers", []):
+    if c.get("name") == "memex-portal":
+        for e in c.get("envFrom") or []:
+            n = (e.get("secretRef") or {}).get("name")
+            if n:
+                print(n)
+PYEOF
+); do
+  if ! keys=$(fetch_secret_keys "$sec"); then
+    echo "::error::could not read the KEY NAMES of secret/$sec in namespace '$NS'. An envFrom secret"
+    echo "    this script cannot enumerate is a blind spot in the shadow check, not an absence of"
+    echo "    drift — failing rather than reporting on a partial view."
+    [ -s "$WORK/kubectl.err" ] && sed 's/^/    /' "$WORK/kubectl.err"
+    exit 1
+  fi
+  # `sec<TAB>key`, one per line. Nothing else about the secret is read, stored or printed.
+  printf '%s\n' "$keys" | while IFS= read -r k; do
+    [ -n "$k" ] && printf '%s\t%s\n' "$sec" "$k" >> "$SECRET_KEYS"
+  done
+done
+
 python3 "$SELF_DIR/chart-drift-compare.py" \
   "$WORK/desired.yaml" \
   "$WORK/live-configmap-memex-portal-config.json" \
   "$WORK/live-deployment-memex-portal-deployment.json" \
   "$EXPECT_PATCH" \
   "$WORK/live-poddisruptionbudgets.json" \
-  "$WORK/live-scaledobjects-keda-sh.json"
+  "$WORK/live-scaledobjects-keda-sh.json" \
+  "$SECRET_KEYS"
 rc=$?
 
 if [ "$rc" -ne 0 ]; then

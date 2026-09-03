@@ -79,12 +79,30 @@ owned.
 | class | meaning | when it bites |
 |---|---|---|
 | `COLLIDES` | inline `env:` + a ConfigMap key differing **only in case** | **already**, at random, every pod start |
-| `SHADOWS` | inline `env:` + the **same** ConfigMap key | **already** — the ConfigMap value is dead |
+| `SHADOWS` | inline `env:` + the **same** key from a ConfigMap **or an envFrom secret** | **already** — the shadowed value is dead |
 | `CLUSTER-ONLY` | live, in no committed source | on a rebuild or restore, and at every review |
 | `CHART-ONLY` | rendered, never applied | nobody is getting it today |
 | `DIFFERS` | both sides, values disagree | never resolves itself; needs a decision |
 
-`SHADOWS` reports whether the two values **agree today**. Agreeing is not safe — it means the next
+### A secret can be shadowed too, and that one is silent in both directions
+
+`envFrom` carries **secrets** as well as ConfigMaps, and an inline `env:` overrides both. A shadowed
+secret is the worst version of this: the credential the platform provisioned through Key Vault is
+inert, and the value actually in use sits in plaintext on the Deployment spec, in no committed
+source, readable by anything that can `get deploy`.
+
+That is live on `memex` today (MeshWeaver#3201): `PluginCatalog__RegistryToken` exists both in
+`secret/memex-portal-secrets` and as an inline entry, and **the two values differ** — so the portal
+authenticates to the plugin registry with the plaintext copy while the managed credential goes
+unused. It also means the obvious cleanup is wrong: deleting the inline entry does not restore the
+status quo, it switches the portal onto a different token.
+
+The checker therefore reports a secret-backed `SHADOWS` **without** an agree/disagree verdict. It
+reads only the KEY NAMES of each envFrom secret, projected inside the cluster — a drift checker
+must not become the thing that copies the credentials it audits onto a CI runner's disk. Unknown is
+reported as unknown rather than guessed.
+
+`SHADOWS` over a ConfigMap reports whether the two values **agree today**. Agreeing is not safe — it means the next
 change to the chart will silently fail to take effect. Disagreeing means somebody is already
 reading a setting no pod uses.
 
