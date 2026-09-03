@@ -711,7 +711,7 @@ public record MessageHubConfiguration
     /// dispose, which compounds across N test classes.
     /// </para>
     /// </summary>
-    internal TimeSpan QuiesceTimeout { get; init; } = TimeSpan.FromSeconds(2);
+    public TimeSpan QuiesceTimeout { get; init; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// Sets the Quiescing-phase drain budget for this hub. See <see cref="QuiesceTimeout"/>.

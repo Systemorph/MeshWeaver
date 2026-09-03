@@ -409,6 +409,9 @@ public sealed class MessageHub : IMessageHub
         this.hostedHubs = hostedHubs;
         ServiceProvider = serviceProvider;
         Configuration = configuration;
+        // The owner claims its collection: hosted hubs created through it drain under THIS hub's
+        // Quiescing budget unless their own configuration says otherwise (one policy per subtree).
+        hostedHubs.InheritedQuiesceTimeout = configuration.QuiesceTimeout;
         unhandledNack = configuration.Get<UnhandledMessageNack>();
         parentAddress = parentHub?.Address;
         accessService = serviceProvider.GetRequiredService<AccessService>();
@@ -2156,6 +2159,10 @@ public sealed class MessageHub : IMessageHub
     private bool AnyHubQuiescingTimedOut(int depth)
     {
         if (QuiescingTimedOut) return true;
+        // Children that have already departed took their verdict with them — until the collection
+        // started keeping it (HostedHubsCollection.DepartedQuiesceTimeouts). Without this line a
+        // hosted hub's leaked callback was invisible on the owner by construction.
+        if (!hostedHubs.DepartedQuiesceTimeouts.IsEmpty) return true;
         if (depth >= MaxHostedHubRecursionDepth) return false;
         foreach (var child in hostedHubs.Hubs)
             if (child is MessageHub childMh && childMh.AnyHubQuiescingTimedOut(depth + 1)) return true;
@@ -2191,6 +2198,12 @@ public sealed class MessageHub : IMessageHub
         foreach (var child in hostedHubs.Hubs)
             if (child is MessageHub childMh)
                 childMh.AppendQuiescingTimeoutSummary(sb, depth + 1);
+        // Departed children: their summaries were rendered at their own depth 0 when they left, so
+        // re-indent under this owner.
+        var indent = new string(' ', (depth + 1) * 2);
+        foreach (var departed in hostedHubs.DepartedQuiesceTimeouts)
+            foreach (var line in departed.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                sb.Append(indent).AppendLine(line.TrimEnd('\r'));
     }
 
     private void AppendDiagnostics(System.Text.StringBuilder sb, int depth)

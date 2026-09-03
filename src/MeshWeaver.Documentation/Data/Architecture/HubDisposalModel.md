@@ -214,6 +214,39 @@ late construction produced, so a hub built during the teardown window is never l
 outside the snapshot. On completion **or** the cap, the owner advances to ShutDown — a
 hung child never blocks the parent.
 
+### 🚨 A departed child's verdict stays with the owner — and a subtree drains under one budget
+
+Two facts about hosted hubs that were each correct on their own and, together, made a whole class
+of leaks unreportable (measured 2026-09-03 on a MeshWeaver.Plugins suite: **72 of 690 disposals
+took exactly the 2 s hosted-hub Quiescing budget — 145 s of an 11-minute run — and the leak
+detector reported zero**).
+
+1. A hosted hub **removes itself from its owner's `HostedHubsCollection`** in its own ShutDown
+   phase (`DisposeImpl` runs the `RegisterForDisposal` callbacks, one of which is
+   `messageHubs.TryRemove`). That is *after* its Quiescing phase has set `QuiescingTimedOut`.
+2. The owner's `AnyHubQuiescingTimedOut()` / `GetQuiescingTimeoutSummary()` walk
+   `hostedHubs.Hubs` — and a caller can only ask after the owner's *own* `DisposalCompleted`,
+   which is after every child has finished and left. So a child's timed-out quiesce was
+   **unreachable by construction**: the verdict left with the child.
+
+`HostedHubsCollection` now snapshots a departing child's summary
+(`DepartedQuiesceTimeouts`) in that same removal callback, and both walkers consult it. The
+report names the hub and the request, which is the line someone greps for.
+
+The second half is the budget itself. `CreateMessageHub` starts every hub from a fresh
+`MessageHubConfiguration`, whose `QuiesceTimeout` is the production default (2 s) — so a mesh that
+configured a different budget on its root (the test base's 500 ms; an operator's longer one) had
+children draining under a different clock than their owner, and a test base that thought it had
+bounded leaks at 500 ms was paying 2 s per leaked child. The owner now seeds its collection with
+its own budget (`InheritedQuiesceTimeout`); a hosted hub inherits it unless its configuration
+says otherwise, so **one policy per subtree** and a hub-specific override still wins. In
+production nothing changes — every hub already carried the default.
+
+Pinned by `HostedHubQuiesceLeakVisibilityTest`: a self-addressed request the child swallows
+(a request aimed at the *owner* does not leak — the owner's teardown NACKs it, which is exactly
+the case that settles), the owner disposed, and the owner's report naming the child and the
+request after the child has departed.
+
 ### ShutDown — tear down and signal
 
 Runs on the action block, fully synchronous: `CancelCallbacks()` (push

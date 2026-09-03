@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -178,6 +179,37 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     private readonly ConcurrentDictionary<Address, Lazy<IMessageHub?>> creations = new(AddressComparer.Instance);
 
     /// <summary>
+    /// The Quiescing verdicts of hosted hubs that have ALREADY LEFT this collection — captured at the
+    /// instant each one removed itself, so the owner's leak report can still name them.
+    ///
+    /// <para>🚨 Why this exists (measured 2026-09-03). A hosted hub removes itself from
+    /// <see cref="Hubs"/> in its own <c>DisposeImpl</c> — the ShutDown phase, which runs AFTER its
+    /// Quiescing phase has set <see cref="MessageHub.QuiescingTimedOut"/>. The owner's
+    /// <see cref="MessageHub.AnyHubQuiescingTimedOut()"/> walks <see cref="Hubs"/> only after ITS OWN
+    /// disposal completed, i.e. after every child has finished and departed — so a child's timed-out
+    /// quiesce was unreachable by construction. In one Plugins suite 52 of 320 test classes disposed
+    /// at exactly the 2 s child budget (104 s of wall clock), every one of them a leaked callback in
+    /// a hosted hub, and the detector reported zero. A departed child's verdict is a fact about THIS
+    /// teardown; it must not leave with the child.</para>
+    /// </summary>
+    internal ImmutableList<string> DepartedQuiesceTimeouts => departedQuiesceTimeouts;
+    private ImmutableList<string> departedQuiesceTimeouts = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// The Quiescing budget a hosted hub is created with unless its own configuration says
+    /// otherwise — the OWNER's, set by <see cref="MessageHub"/> when it takes this collection.
+    ///
+    /// <para><c>CreateMessageHub</c> starts every hub from a fresh <see cref="MessageHubConfiguration"/>
+    /// whose budget is the production default, so a mesh that configured a different budget on its
+    /// root (a test base's short one, an operator's long one) had children draining under a
+    /// different clock than their owner. A subtree drains under ONE policy; a caller that needs a
+    /// hub-specific budget still wins, because its configuration function runs after this seed.
+    /// Null means no owner has claimed the collection yet (the root of a mesh) and nothing is
+    /// seeded.</para>
+    /// </summary>
+    internal TimeSpan? InheritedQuiesceTimeout { get; set; }
+
+    /// <summary>
     /// Registers a hub under its own address, wires its removal from the registry on disposal and
     /// the closing of the lifetime scope it owns (see <see cref="CloseScopeWhenDisposed"/>), and
     /// notifies <see cref="HubAdded"/> subscribers.
@@ -186,7 +218,15 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     public void Add(IMessageHub hub)
     {
         messageHubs[hub.Address] = hub;
-        hub.RegisterForDisposal(h => messageHubs.TryRemove(h.Address, out _));
+        hub.RegisterForDisposal(h =>
+        {
+            // Snapshot BEFORE removal: this callback runs in the child's ShutDown phase, after its
+            // Quiescing verdict is final and before the owner's own teardown can ask for it.
+            if (h is MessageHub departing && departing.AnyHubQuiescingTimedOut())
+                ImmutableInterlocked.Update(ref departedQuiesceTimeouts,
+                    list => list.Add(departing.GetQuiescingTimeoutSummary()));
+            messageHubs.TryRemove(h.Address, out _);
+        });
         CloseScopeWhenDisposed(hub);
         try { _hubAdded.OnNext(hub); } catch { /* never throw on notification */ }
     }
@@ -346,7 +386,11 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         try
         {
             logger.LogDebug("Creating new hosted hub for address {Address} in host {Host} ", address, Host);
-            var hub = serviceProvider.CreateMessageHub(address, config);
+            // The owner's Quiescing budget first, the caller's configuration after it — so the
+            // subtree drains under one policy and a hub-specific override still wins.
+            var inherited = InheritedQuiesceTimeout;
+            var hub = serviceProvider.CreateMessageHub(address,
+                inherited is { } budget ? c => config(c.WithQuiesceTimeout(budget)) : config);
             return hub;
         }
         catch (Exception ex)
