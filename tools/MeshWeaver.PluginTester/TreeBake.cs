@@ -226,7 +226,10 @@ public static class TreeBake
         // (Modules resolve FIRST inside the id resolver and by exact-build MVID, so the record a
         // consumer checks names the same build it will bind — the second half of #2563.)
         var (host, hostProblem) = options.AppDirectory is null
-            ? ((BakeHost?)BakeHost.InProcess(modules), (string?)null)
+            ? BakeHost.ShippedByHostProblem(
+                  AppContext.BaseDirectory, FrameworkBuildIdentity.ProcessSurfacePairs, modules) is { } twoProducers
+                ? ((BakeHost?)null, (string?)twoProducers)
+                : ((BakeHost?)BakeHost.InProcess(modules), (string?)null)
             : BakeHost.ResolveDirectory(options.AppDirectory, options.SharedFrameworksRoot!, modules);
         if (host is null)
             return new Report(processIdentity, [], [], hostProblem);

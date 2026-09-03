@@ -39,7 +39,8 @@ name: Node repo gate (reusable)
 # the portal's /app with the tester CLI beside it (compose-gate-host.sh) — started by the portal
 # image's own `dotnet`. The tester's /app is a strict subset of the portal's (88 vs 219 assemblies
 # on 3.0.0-rc9.ci.7534), so a gate compiling against the tester's /app reports every NodeType
-# that binds a portal-only assembly (MeshWeaver.Maps, .AI, .Indexing…) as a CONTENT error.
+# that binds a portal-only assembly (the Blazor and hosting halves; on ci.7534 also MeshWeaver.Maps
+# and .AI, both modules since) as a CONTENT error.
 #     secrets:
 #       acr-username: ${{ secrets.ACR_USERNAME }}
 #       acr-password: ${{ secrets.ACR_PASSWORD }}
