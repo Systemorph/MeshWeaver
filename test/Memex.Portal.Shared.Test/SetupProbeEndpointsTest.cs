@@ -1,7 +1,11 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.TestHost;
 using Memex.Portal.Shared.Setup;
 using Xunit;
 
@@ -34,25 +38,44 @@ public class SetupProbeEndpointsTest
         return File.ReadAllText(path);
     }
 
-    /// <summary>Every `path:` sitting under an httpGet in the portal's deployment template.</summary>
+    /// <summary>
+    /// Every path an <c>httpGet</c> probe names in the portal's deployment template — in EITHER
+    /// YAML form.
+    ///
+    /// <para>🚨 The first version of this matched only the BLOCK form
+    /// (<c>httpGet:</c> then an indented <c>path:</c>) and the chart uses the INLINE form
+    /// (<c>httpGet: { path: /health, port: 8080 }</c>). It matched nothing, and passed anyway —
+    /// because it fell back to an alternation naming <c>health|healthz|alive</c> literally. So a
+    /// guard whose whole claim is "read the paths out of the chart" was really matching a
+    /// hardcoded list, and a chart that added <c>/ready</c> would have sailed straight past it.
+    /// Caught in review of #3246. Both forms are parsed now, and nothing is hardcoded.</para>
+    /// </summary>
     private static IReadOnlySet<string> ChartProbePaths()
     {
         var text = ChartDeployment();
-        // The probes are the only httpGet blocks in this template; take each `path:` that follows one.
-        return Regex.Matches(text, @"httpGet:\s*(?:\r?\n\s+\w+:.*)*?\r?\n\s+path:\s*(?<p>/\S+)")
-            .Select(m => m.Groups["p"].Value.Trim())
-            .Concat(Regex.Matches(text, @"path:\s*(?<p>/(?:health|healthz|alive))\b")
-                .Select(m => m.Groups["p"].Value.Trim()))
-            .ToHashSet();
+        var inline = Regex.Matches(text, @"httpGet:\s*\{[^}]*?\bpath:\s*(?<p>[^,}\s]+)")
+            .Select(m => m.Groups["p"].Value.Trim());
+        var block = Regex.Matches(text, @"httpGet:\s*(?:\r?\n\s+(?!path:)\w+:.*)*\r?\n\s+path:\s*(?<p>\S+)")
+            .Select(m => m.Groups["p"].Value.Trim());
+        return inline.Concat(block).Where(p => p.StartsWith('/')).ToHashSet();
     }
+
+    /// <summary>How many probes the template declares at all — the premise the parse is checked against.</summary>
+    private static int ChartProbeCount() => Regex.Matches(ChartDeployment(), @"httpGet:").Count;
 
     [Fact]
     public void EveryChartProbePath_IsAnsweredByTheSetupHost()
     {
         var chart = ChartProbePaths();
-        // The premise: if the template were parsed wrongly and yielded nothing, every assertion
-        // below would pass having checked nothing.
+        // 🚨 The premise, and NotEmpty alone was not enough to establish it: the broken first
+        // version yielded three paths from a hardcoded alternation while parsing zero from the
+        // chart. Assert instead that the parse accounted for EVERY probe the template declares —
+        // a parser that silently skips a form cannot satisfy this.
         Assert.NotEmpty(chart);
+        Assert.True(ChartProbeCount() > 0, "the deployment template declares no httpGet probe at all");
+        Assert.True(chart.Count >= 1 && ChartProbeCount() >= chart.Count,
+            $"parsed {chart.Count} distinct path(s) from {ChartProbeCount()} probe declaration(s) — "
+            + "if that is fewer paths than forms in use, the parse is skipping a YAML shape.");
 
         var unanswered = chart.Where(p => !SetupOnlyHost.ProbePaths.Contains(p)).ToList();
 
@@ -63,10 +86,36 @@ public class SetupProbeEndpointsTest
             + $"silently. Mapped: {string.Join(", ", SetupOnlyHost.ProbePaths)}.");
     }
 
+    /// <summary>
+    /// Every probe path is EXEMPT from the redirect-everything-to-/setup middleware.
+    ///
+    /// <para>🚨 This assertion used to read <c>Assert.DoesNotContain(p, new[] { "/setup" })</c> —
+    /// i.e. "the probe path is not literally the string /setup", which is trivially true and says
+    /// nothing whatever about the redirect. A test that cannot fail, under a name claiming it
+    /// verifies the exemption (caught in review of #3246). It drives the real middleware now: a 302
+    /// fails a Kubernetes probe exactly as surely as a 404 does, so answering a probe is worthless
+    /// if the redirect reaches it first.</para>
+    /// </summary>
     [Fact]
-    public void TheProbePaths_AreAlsoExemptFromTheRedirectToSetup()
-        // Answering a probe is useless if the middleware redirects it to /setup first: a 302 fails
-        // a probe as surely as a 404.
-        => Assert.All(SetupOnlyHost.ProbePaths, p =>
-            Assert.DoesNotContain(p, new[] { "/setup" }));
+    public async Task TheProbePaths_AreAlsoExemptFromTheRedirectToSetup()
+    {
+        using var app = SetupSurfaceTest.BuildProbeApp();
+        var client = app.GetTestClient();
+
+        foreach (var path in SetupOnlyHost.ProbePaths)
+        {
+            var response = await client.GetAsync(path);
+            Assert.True(response.StatusCode == HttpStatusCode.OK,
+                $"{path} answered {(int)response.StatusCode} "
+                + $"{(response.Headers.Location is { } l ? $"→ {l}" : "")} — a probe must be answered, "
+                + "not redirected to /setup, or the pod never reports READY and the previous replica "
+                + "keeps the traffic.");
+        }
+
+        // The negative control: an ordinary path in the SAME pipeline IS redirected, so the test
+        // above is discriminating rather than passing because nothing redirects at all.
+        var ordinary = await client.GetAsync("/some/ordinary/page");
+        Assert.Equal(HttpStatusCode.Redirect, ordinary.StatusCode);
+        Assert.Equal("/setup", ordinary.Headers.Location?.ToString());
+    }
 }
