@@ -1367,8 +1367,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// while waiting for <see cref="IMessageHub.DisposalCompleted"/> — every tick lands in
     /// <see cref="MeshWeaver.Fixture.TestBase.FileOutput"/> (xUnit test output) so a slow dispose shows
     /// progress incrementally instead of producing one giant snapshot at the timeout.
+    ///
+    /// <para>🚨 One second, not three: the ticker must tick BELOW the smallest budget it exists to
+    /// observe. The hosted-hub Quiescing default is 2 s, and 72 of 690 disposals in one suite sat
+    /// at exactly that budget (2026-09-03) — at 3 s the first snapshot landed after every one of
+    /// them had already finished, so the diagnostics that name the pending callback were never
+    /// written for the very case they were built for.</para>
     /// </summary>
-    private static readonly TimeSpan DisposeProgressInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan DisposeProgressInterval = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// xUnit async lifecycle hook run after each test: disposes the clients created during the test,
