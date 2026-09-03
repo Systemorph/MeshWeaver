@@ -1,8 +1,8 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -26,8 +26,28 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class AdminVerdictFailsClosedTest
 {
-    private static Task<bool> Resolve(IObservable<bool> source) =>
-        AdminVerdict.FailClosed(source, "rbuergi", NullLogger.Instance).FirstAsync().ToTask();
+    /// <summary>
+    /// A fault that reached the observer AFTER the verdict settled. <see cref="AdminVerdict.FailClosed"/>
+    /// catches into <c>false</c> and completes, so this must stay null on every row — a late fault here
+    /// would mean the catch arm let something through behind the answer.
+    /// </summary>
+    private Exception? lateFault;
+
+    /// <summary>
+    /// 🚨 NOT <c>.ToTask()</c>. That bridge resumes the awaiter INLINE on the signalling thread and
+    /// discards a fault arriving after the task settles — banned repo-wide, and the guard
+    /// <c>ObservableToTaskBridgeGuard</c> fails the build on a new site. <see cref="ReactiveCompletion"/>
+    /// is the sanctioned bridge: it settles on the first notification without blocking, keeps the
+    /// error arm attached, and hands a late fault to <see cref="lateFault"/> rather than dropping it.
+    /// </summary>
+    private async Task<bool> Resolve(IObservable<bool> source)
+    {
+        var verdict = await AdminVerdict
+            .FailClosed(source, "rbuergi", NullLogger.Instance)
+            .ObserveCompletion(ex => lateFault = ex, TestContext.Current.CancellationToken);
+        Assert.Null(lateFault);
+        return verdict;
+    }
 
     /// <summary>THE CONTROL ARM — a real admin still gets true, or the fail-closed rows prove nothing.</summary>
     [Fact]
