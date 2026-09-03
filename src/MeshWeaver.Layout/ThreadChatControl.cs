@@ -48,6 +48,21 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
     public bool ShowThreadNav { get; init; }
 
     /// <summary>
+    /// A draft the SERVER declares for the composer — text the reader finds already typed in, and
+    /// is free to edit or clear before sending.
+    ///
+    /// <para>The first caller is the markdown <c>```prompt</c> fence (#2511): a page author's
+    /// suggested prompt becomes the initial draft, the reader edits it in place, and Submit starts
+    /// a real thread. It exists because that composer is RENDERED rather than opened by a click, so
+    /// there is no interaction to carry a draft in on.</para>
+    ///
+    /// <para>🚨 Seeding it is the CLIENT's decision and must be one-shot: a composer the user has
+    /// deliberately emptied must not find the prompt typed back in on the next render. The control
+    /// only declares the text; it says nothing about when it is applied.</para>
+    /// </summary>
+    public string? InitialDraft { get; init; }
+
+    /// <summary>
     /// Data-bound thread view model (via JsonPointerReference).
     /// Contains ThreadPath, InitialContext, Messages — all thread state.
     /// Null when control is created directly (side panel, dashboard).
@@ -72,6 +87,9 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
     /// <summary>Returns a copy with <paramref name="show"/> controlling whether the collapsible threads side menu renders even without an open thread.</summary>
     /// <param name="show">When <c>true</c>, the threads side menu renders beside the chat.</param>
     public ThreadChatControl WithShowThreadNav(bool show = true) => this with { ShowThreadNav = show };
+    /// <summary>Returns a copy with <paramref name="draft"/> as the text the composer opens pre-filled with.</summary>
+    /// <param name="draft">The draft text; <c>null</c> or empty leaves the composer empty.</param>
+    public ThreadChatControl WithInitialDraft(string? draft) => this with { InitialDraft = draft };
     /// <summary>Returns a copy with <paramref name="threadViewModel"/> as the data-bound thread view model.</summary>
     /// <param name="threadViewModel">A data-bound thread view model or pointer reference; <c>null</c> for direct-path mode.</param>
     public ThreadChatControl WithThreadViewModel(object? threadViewModel) => this with { ThreadViewModel = threadViewModel };
