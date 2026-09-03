@@ -190,7 +190,7 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
 
         var frame = await Render(null)
             .Where(f => Leaves(f).Contains("categories"))
-            .FirstAsync().Timeout(RenderBudget);
+            .FirstAsync().Timeout(RenderBudget).Await();
 
         var leaves = Leaves(frame);
         leaves.Should().Contain(["cat-1", "cat-2", "cat-3", "all"]);
@@ -226,7 +226,7 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
         var insurance = Render($"{CatalogLayoutAreas.CatalogArea}?{CatalogLayoutAreas.CategoryParam}=insurance");
         var frame = await insurance
             .Where(f => f.Value.ToString().Contains(InstalledFragment, StringComparison.Ordinal))
-            .FirstAsync().Timeout(RenderBudget);
+            .FirstAsync().Timeout(RenderBudget).Await();
 
         Cards(frame).Should().Equal(["pkg-1"], "one member, one card");
         var json = frame.Value.ToString();
@@ -237,7 +237,7 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
 
         var education = await Render($"{CatalogLayoutAreas.CatalogArea}?{CatalogLayoutAreas.CategoryParam}=Education")
             .Where(f => Cards(f).Count == 2)
-            .FirstAsync().Timeout(RenderBudget);
+            .FirstAsync().Timeout(RenderBudget).Await();
         var educationJson = education.Value.ToString();
         educationJson.Should().Contain("Alpha Course").And.Contain("Beta Course")
             .And.NotContain("Gamma Cover", "the other category's card never renders here")
@@ -254,7 +254,7 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
 
         var frame = await Render(null)
             .Where(f => Leaves(f).Contains("empty"))
-            .FirstAsync().Timeout(RenderBudget);
+            .FirstAsync().Timeout(RenderBudget).Await();
 
         frame.Value.ToString().Should().Contain(expected);
         Leaves(frame).Should().NotContain("categories").And.NotContain("all");
@@ -274,12 +274,17 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
     };
 
     // The real installer writes the record — the same node the catalog joins against in production.
-    // Awaited as an observable (never .ToTask(): a Task completed inside the Rx trampoline resumes
-    // its awaiter on the signalling thread and changes what the test measures).
-    private IObservable<InstallResult> Install(PackageManifest manifest) =>
+    //
+    // 🚨 Through ObservableAwait.Await(), never `await` on the observable itself and never
+    // .ToTask(): Rx's own awaiter resumes the continuation INLINE on the signalling thread, still
+    // inside the trampoline, so the rest of the test would run on whatever thread the install
+    // happened to complete on. Await() queues the continuation instead. The .Timeout stays — Await
+    // bounds nothing by itself.
+    private Task<InstallResult> Install(PackageManifest manifest) =>
         PackageInstaller.Install(Mesh, manifest, [new PackageFile($"{manifest.Id}/Doc.md", $"# {manifest.Id}")], "HEAD")
             .FirstAsync()
-            .Timeout(RenderBudget);
+            .Timeout(RenderBudget)
+            .Await();
 
     private IObservable<ChangeItem<JsonElement>> Render(string? id) =>
         GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
