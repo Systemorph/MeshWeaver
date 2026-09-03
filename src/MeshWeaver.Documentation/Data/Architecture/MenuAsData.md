@@ -163,16 +163,24 @@ providers → CombineLatest → sorted set
                  ├── ⨯ MenuPresentation stream   ← the catalog node, live
                  │      patch · hide · nest · re-sort
                  │
-                 └── Localized(access) → MenuControl → $Menu:{context}
+                 ├── Localized(access)
+                 │
+                 └── WithSectionDividers → MenuControl → $Menu:{context}
 ```
 
 Order matters: the overlay runs **before** `Localized(access)` and clears `LabelKey` wherever it
 supplies a label, so the translation pass cannot resolve an override back to the compiled text. And it
 **re-sorts**, because the providers sorted the compiled order before any override existed.
 
+Section dividers come **last**, derived from the finished list rather than emitted by a provider —
+which is what lets you hide the final entry of a section without stranding the rule that followed it.
+See [The Menu Contribution Boundary](/Doc/Architecture/MenuContributionBoundary).
+
 ## See Also
 
 - [Node Menu Items](/Doc/GUI/NodeMenu) — the provider contract, contexts, and how the menu renders
+- [The Menu Contribution Boundary](/Doc/Architecture/MenuContributionBoundary) — what an entry may be
+  as data, and which built-ins stay compiled
 - [Localization](/Doc/Architecture/Localization) — the key catalog and `[Translation]`
 - [Access Control](/Doc/Architecture/AccessControl) — permissions and the Admin partition
 - [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation) — why in-mesh code is a different risk class
