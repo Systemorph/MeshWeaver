@@ -330,27 +330,13 @@ data:
   # 404'd on every promoted build with no error anywhere until #2268 made the 404 fail loud. A
   # deployment needing more than one inbox target sets __0 AND __1 (not two writers of __0).
   WebhookInbox__Targets__1: "{{ .Values.config.memex_portal.WebhookInbox__Targets__1 | default "" }}"
-  # ---- Framework-release broadcast subscribers (#2235) -----------------------------------
-  # 🚨 THE KEY NO CHART RENDERED, IN EITHER REPO, FOR THE WHOLE LIFE OF THE FEATURE. The control
-  # instance turns a verified platform-build delivery into one repository_dispatch per subscriber
-  # (FrameworkReleaseBroadcaster, src/MeshWeaver.GitSync) and reads that set from
-  # FrameworkBroadcast:Subscribers. Nothing rendered the key, so no deploy could set it, so every
-  # broadcast resolved to an EMPTY set — 0 dispatched, 0 failed, logged at Information as the
-  # normal state of a non-control mesh. Zero dispatches and nothing red anywhere: the same
-  # silent-deletion shape as SelfUpdate__PollInterval (#1778) and SelfUpdate__MinRollInterval
-  # (#1925), except here the key was never wired at all rather than renamed out from under one.
-  #
-  # It stayed unnoticed because main-cd.yml said the subscriber set "lives in the Hosting fleet
-  # registry ON memex". No such registry was ever built — no subscriber node type in Hosting/, no
-  # code anywhere reading one — so the sentence sent every reader away from the only seam there is.
-  #
-  # Empty on every deployment EXCEPT the control instance (the one whose WebhookInbox__Targets
-  # accepts Hosting/PlatformBuilds); one owner/name per slot, written out index by index because
-  # this ConfigMap names every key explicitly. An empty slot is dropped by NormalizeSubscribers.
-  FrameworkBroadcast__Subscribers__0: "{{ .Values.config.memex_portal.FrameworkBroadcast__Subscribers__0 | default "" }}"
-  FrameworkBroadcast__Subscribers__1: "{{ .Values.config.memex_portal.FrameworkBroadcast__Subscribers__1 | default "" }}"
-  FrameworkBroadcast__Subscribers__2: "{{ .Values.config.memex_portal.FrameworkBroadcast__Subscribers__2 | default "" }}"
-  FrameworkBroadcast__Subscribers__3: "{{ .Values.config.memex_portal.FrameworkBroadcast__Subscribers__3 | default "" }}"
+  # ---- Framework-release broadcast: NO subscriber slots (retired 2026-09-03) --------------
+  # FrameworkBroadcast__Subscribers__0..3 used to be rendered here as the release wave's
+  # subscriber list. The set is DATA IN THE MESH now — every repository a Hosting/Deployment
+  # record on the control instance serves as a registry source (pluginRepos[].isRegistrySource),
+  # derived by the Hosting module's PlatformBuildInboxWatcher at broadcast time — so there is no
+  # key to render and nothing here to leave blank (Memex#140: the four slots rendered blank for a
+  # week while nothing was red). An overlay that still sets them sets env nothing reads.
   # The MODULES a deployment refuses to run without (MeshBuilderModuleActivation.RequiredKey).
   # The image ships a baseline list in appsettings; a deployment OVERRIDES an entry here and
   # blanks one it cannot satisfy.

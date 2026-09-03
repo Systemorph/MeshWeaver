@@ -35,6 +35,55 @@ The two routes provision and run on different platforms (raw AKS deployments + H
 
 ---
 
+# How a release reaches the fleet
+
+**The contract (maintainer, 2026-09-03: *"end of github pipeline must call memex, which must
+register release and publish event"*) is three sentences:**
+
+1. **Every publishing pipeline ENDS with one call to memex.** Core's CD, after the image set is
+   promoted, POSTs the signed platform build (`event: platform-build`) into the control instance's
+   `Hosting/PlatformBuilds` inbox (`notify-platform-update`). Every node repository's
+   `node-repo-publish-bake.yml` run, after its bundles are sealed for an identity, POSTs the signed
+   publication record (`event: bundle-publication` — source, identity, commit, tester + portal image)
+   into the same inbox (`register-publication`, its last job). Nothing runs after that call, and no
+   pipeline sends a `repository_dispatch` to another repository.
+2. **memex REGISTERS the release** as a durable node — `Hosting/PlatformBuilds/<version>` for a
+   platform build, `Hosting/Publications/<identity>/<source>` for a bundle publication — the source
+   of truth for "what is published for which identity" (what the self-update availability check reads).
+3. **memex PUBLISHES the event** from that registration: `FrameworkReleaseBroadcaster` sends
+   `meshweaver-framework-released` (platform) or `meshweaver-upstream-published` (bundle publication,
+   `client_payload.version` = the identity) to the subscribed repositories — the repositories the
+   control instance's `Hosting/Deployment` records name as registry sources. The subscribers' CI
+   receives it, resolves both images from the version, builds and publishes for that identity — and
+   ends by calling memex (1).
+
+```
+ pipeline (core CD | a node repo's publish-bake)        memex (control instance)              subscriber CI
+ ───────────────────────────────────────────────        ────────────────────────              ─────────────
+ promote / seal ✅                                       WebhookInbox Hosting/PlatformBuilds
+   └─ ONE signed POST ──(platform-build |──────────────▶│ verify HMAC
+      bundle-publication)… and FINISH                    ├─ REGISTER  Hosting/PlatformBuilds/<version>
+                                                         │            Hosting/Publications/<identity>/<source>
+                                                         ├─ subscribers = Hosting/Deployment records'
+                                                         │              pluginRepos[].isRegistrySource
+                                                         └─ PUBLISH   repository_dispatch ─────────────▶ on: repository_dispatch:
+                                                            meshweaver-framework-released |               types: [meshweaver-framework-released,
+                                                            meshweaver-upstream-published                        meshweaver-upstream-published]
+                                                                                                          → bake for the version → seal → POST memex
+```
+
+Where the pieces are: the POST steps in `main-cd.yml` and `node-repo-publish-bake.yml` (this repo);
+the inbox watcher, registration and broadcast in the Hosting module's `PlatformBuildInboxWatcher`
+(MeshWeaver.Plugins, `Hosting/Deployment/Source`); the broadcaster in `src/MeshWeaver.GitSync`.
+`PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository` refuses a dispatch SENDER in any workflow
+under `.github/workflows` — there is no ledger — and
+`UpstreamBuildGateGuard.TheLaneEndsByRegisteringWithMemex_AndDispatchesToNobody` pins the lane's call.
+
+Operator view: after a promote, the control instance's log carries `[PlatformBuilds] verified build …`,
+then `[PlatformBuilds] release broadcast for <version>: N subscriber(s) dispatched.`; each subscribed
+repository shows a `repository_dispatch` run whose payload carries `source: memex`; the node repos'
+pin-bump PRs follow. A 2xx on the pipeline's POST proves only that memex STORED the record.
+
 # Running Locally
 
 ## Aspire (local mode)

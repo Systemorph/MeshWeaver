@@ -44,7 +44,7 @@ An event asserts *something happened*; only a query establishes *what is true no
 | **Ingest** | `POST /webhooks/github` — `GitHubWebhookEndpoints`, HMAC-verified (`GitHub:Webhook:Secret`), dispatched by `GitHubWebhookProcessor.Process(eventType, payload)` | **exists** — already switches on `push`, `workflow_run`, `issues`, `issue_comment`; needs a `release` branch |
 | **Storage** | a `Release` node per `(repository, packageId, version)` | to build |
 | **Query** | "are all my dependencies satisfied?" | `ModulePublish` already gates a placement on the module's declared `MinMeshVersion` — the same predicate, widened from one floor to a declared set |
-| **Fan-out** | `FrameworkReleaseBroadcaster` — memex holds the GitHub App and the subscriber list | **exists, and has never dispatched** — see below |
+| **Fan-out** | `FrameworkReleaseBroadcaster` — memex holds the GitHub App; the subscriber set is the `Hosting/Deployment` records' registry sources | **exists, and dispatched nothing until 2026-09-03** (no caller) — see below |
 
 The ingest surface is not new, which matters: a new public endpoint is a new thing to secure, and
 this one is already HMAC-verified and already routes by event type.
@@ -58,7 +58,7 @@ is open:
 |---|---|---|
 | the inbox accepts the release event | `WebhookInbox__Targets__N` on the control instance | 404 — byte-identical to a wrong URL |
 | the delivery verifies | `Hosting__PlatformWebhookSecret` | the watcher drops it as unverifiable; the POST already answered 2xx |
-| the verified release fans out | a caller of `Broadcast(...)`, and `FrameworkBroadcast__Subscribers__N` | `0 dispatched, 0 failed` — identical to a mesh that is not the control instance |
+| the verified release fans out | a caller of `Broadcast(...)` (since 2026-09-03: `PlatformBuildInboxWatcher`, MeshWeaver.Plugins) and at least one `Hosting/Deployment` record naming a registry source | `0 dispatched, 0 failed` — now a WARNING naming the records on the control instance |
 
 Two lessons the rest of this design should inherit. **A key the code reads and no chart renders can
 never be set**, so its feature is permanently off while reading as "off by choice" —

@@ -948,16 +948,16 @@ An instance self-updates to the newest release tag. If no satellite baked agains
 sweep, and the boot takes minutes instead of seconds. **The bundles are not missing because
 publication is broken — they are missing because nothing told the satellites a release happened.**
 
-So a satellite must **follow the release**, and it must do so by POLLING. The push
-`repository_dispatch` fan-out is not the mechanism and must not be relied on:
-
-- it was **never armed** (`BAKE_SUBSCRIBER_REPOS` / `DEPENDENT_DISPATCH_TOKEN` unprovisioned), so
-  `notify-dependents` reported SUCCESS while notifying nobody — a green tick over a no-op;
-- it required a human-minted cross-repo PAT on four satellites, which was **removed deliberately on
-  2026-08-21**. Credentials that let one repo drive another's CI are not the architecture we want.
-
-A poll needs nothing provisioned and nobody to remember. It uses the ACR credentials the satellite
-already has for its gates.
+So a satellite must **follow the release**. The event is memex's: the registry's
+`PlatformBuildInboxWatcher` dispatches `meshweaver-framework-released` to every repository the
+`Hosting/Deployment` records name as a registry source, from the build fact core CD POSTs into
+`Hosting/PlatformBuilds` — core itself dispatches to no repository (its `notify-dependents` fan-out,
+which discovered subscribers by reading other repositories, was withdrawn on 2026-09-03; the earlier
+PAT-driven variant was removed on 2026-08-21 for the same reason — credentials that let one repo
+drive another's CI are not the architecture we want). The `schedule` poll below is the FALLBACK, and
+a satellite carries it because a lost dispatch must cost one delayed wave, never a fleet held on
+stale bundles. A poll needs nothing provisioned and nobody to remember; it uses the ACR credentials
+the satellite already has for its gates.
 
 #### The four parts — a repo has ALL of them or it follows nothing
 
