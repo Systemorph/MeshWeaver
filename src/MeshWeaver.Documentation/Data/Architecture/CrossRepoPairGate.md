@@ -221,9 +221,13 @@ the red lands in the repository that owns the fix.
 The event source is the MESH. The target shape (maintainer, 2026-09-03): **memex issues an event
 that something has a new version** — a platform build landed in `Hosting/PlatformBuilds`, a module
 bundle was published to the registry — and **the GitHub repositories subscribe to it** and trigger
-their builds. Today the transitional emitter is core's `main-cd.yml`, which sends a
-`repository_dispatch` to every node repository when it promotes a platform image set (the
-release-follow); moving that emitter into memex removes the last CI-to-CI link between repositories. Each dependent's `ci.yml`
+their builds. The emitter IS memex (since 2026-09-03): core's CD POSTs the signed build fact into
+`Hosting/PlatformBuilds` and finishes; the Hosting module's `PlatformBuildInboxWatcher`
+(MeshWeaver.Plugins) fans `meshweaver-framework-released` out to every repository the
+`Hosting/Deployment` records name as a registry source — data in the mesh, not a list in any
+workflow. Core's own `notify-dependents` dispatcher, the last CI-to-CI link between repositories,
+was withdrawn the same day, and `PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository` refuses a
+`/dispatches` POST in any workflow core runs on its own behalf. Each dependent's `ci.yml`
 receives it, resolves its `platform-ref` to that release, builds its `src/` and content against it,
 runs its suites and — only if everything passes — seals and publishes its bundles for that platform
 identity. A shape-1…6 break therefore surfaces as a red release-follow run **in the dependent's

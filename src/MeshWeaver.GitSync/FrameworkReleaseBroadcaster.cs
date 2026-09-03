@@ -83,16 +83,12 @@ public sealed class FrameworkReleaseBroadcaster
     private IIoPool HttpPool => ioPools.Get(IoPoolNames.Http);
 
     /// <summary>
-    /// Broadcasts to the <see cref="FrameworkBroadcastOptions.Subscribers"/> configured on this
-    /// instance — the config-seam fallback used when no explicit list is supplied (the Hosting
-    /// registry, once populated, calls <see cref="Broadcast"/> with its own set instead).
-    /// </summary>
-    public IObservable<BroadcastOutcome> BroadcastToConfigured(string? version = null) =>
-        Broadcast(options.Subscribers, version);
-
-    /// <summary>
-    /// Broadcasts the release to an EXPLICIT subscriber set — what the Hosting subscriber registry
-    /// passes in. Mints one installation token, then POSTs a <c>repository_dispatch</c> to each
+    /// Broadcasts the release to the subscriber set the caller derived from the mesh — the Hosting
+    /// module's <c>PlatformBuildInboxWatcher</c> passes the registry-source repositories of every
+    /// <c>Hosting/Deployment</c> record on this instance (there is no configured list; the former
+    /// <c>BroadcastToConfigured</c> config seam was retired 2026-09-03, see
+    /// <see cref="FrameworkBroadcastOptions"/>). Mints one installation token, then POSTs a
+    /// <c>repository_dispatch</c> to each
     /// repo in turn. Never throws: an unconfigured App, an empty set, or a per-repo failure all
     /// resolve to a <see cref="BroadcastOutcome"/> the caller can log. Cold — nothing runs until
     /// subscribed.
@@ -131,11 +127,11 @@ public sealed class FrameworkReleaseBroadcaster
                     "Framework-release broadcast: this instance ACCEPTS platform-build deliveries "
                     + "({Target} is allowlisted in {TargetsKey}) but has NO subscribers, so the "
                     + "release wave dispatches to nobody and every node repo falls back to its "
-                    + "schedule poll. Set {SubscribersKey}0..N (one owner/name per slot) on this "
-                    + "deployment.",
+                    + "schedule poll. The subscriber set is DATA IN THE MESH: every repository a "
+                    + "Hosting/Deployment record on this instance serves as a registry source "
+                    + "(pluginRepos[].isRegistrySource) — no record here names one.",
                     FrameworkBroadcastOptions.PlatformBuildsTarget,
-                    WebhookInbox.TargetsConfigSection,
-                    FrameworkBroadcastOptions.SubscribersEnvKeyPrefix);
+                    WebhookInbox.TargetsConfigSection);
             else
                 logger?.LogInformation(
                     "Framework-release broadcast: no subscribers configured and this instance does "

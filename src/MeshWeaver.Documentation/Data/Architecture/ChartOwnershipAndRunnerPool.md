@@ -34,7 +34,7 @@ references, each of which breaks silently if it is left behind:
 
 | Consumer | What it holds |
 |---|---|
-| `main-cd.yml` | renders `FrameworkBroadcast__Subscribers__0..N` from `deploy/helm/templates/memex-portal/config.yaml` |
+| `main-cd.yml` | renders `WebhookInbox__Targets__N` from `deploy/helm/templates/memex-portal/config.yaml` (the `FrameworkBroadcast__Subscribers__N` slots were retired 2026-09-03 — the subscriber set is the `Hosting/Deployment` records') |
 | `homebrew.yml` | **path filters on `deploy/helm/**`** — a chart change is what triggers a tap rebuild |
 | `deploy/aks/scripts/check-chart-invariants.sh`, `check-values-are-read.py` | the gate's own implementation |
 | `deploy/aks/envs/example/deploy.sh`, `secretproviderclass.yaml` | first-time environment setup |

@@ -298,9 +298,9 @@ jobs:
           [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID           OIDC app registration for azure/login")
           [ -n "$AZURE_TENANT_ID" ]       || missing+=("secrets.AZURE_TENANT_ID           the Systemorph AAD tenant")
           [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID     the subscription holding ACR meshweaver")
-          [ -n "$PLATFORM_WEBHOOK_URL" ]  || missing+=("vars.PLATFORM_WEBHOOK_URL         the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds — WITHOUT it no release event ever reaches the mesh, so the framework-release broadcast to the node repos never fires and every satellite falls back to its schedule poll")
+          [ -n "$PLATFORM_WEBHOOK_URL" ]  || missing+=("vars.PLATFORM_WEBHOOK_URL         the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds — WITHOUT it no release event ever reaches the mesh — and that POST is the ONE event core emits: memex fans it out to the node repos, so without it every satellite falls back to its schedule poll")
           [ -n "$PLATFORM_WEBHOOK_SECRET" ] || missing+=("secrets.PLATFORM_WEBHOOK_SECRET  the shared HMAC the inbox watcher verifies X-Hub-Signature-256 against. It must be BYTE-IDENTICAL to the control instance's Hosting:PlatformWebhookSecret (Key Vault -> Hosting-PlatformWebhookSecret, see deploy/aks/envs/example/secretproviderclass.yaml); a mismatch is INVISIBLE from here — the POST still answers 2xx and the watcher silently drops every delivery as unverifiable")
-          [ -n "$DEPENDENT_DISPATCH_APP_ID" ]          || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID          GitHub App installed on every node repo (Contents: Read + Write) — the release wave's sender")
+          [ -n "$DEPENDENT_DISPATCH_APP_ID" ]          || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID          GitHub App whose installation token reads the Plugins content tree for plugins-modules / plugins-bake (content-app-id) — NOT a dispatch credential: core dispatches to no repository")
           [ -n "$DEPENDENT_DISPATCH_APP_PRIVATE_KEY" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY that App's private key, PEM")
           [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares the Plugins publication is sealed to (<account>/<share>…)")
           if [ ${#missing[@]} -gt 0 ]; then
@@ -1972,66 +1972,32 @@ jobs:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: .github/scripts/check-release-availability.sh "$RELEASE_VERSION" meshweaver-content
 
-  # ────────────────── NOTIFY DEPENDENT REPOS (repository_dispatch) ──────────────────
-  # "Subscribe to new releases of any dependency and rebuild": dependency bumps INSIDE a repo are
-  # already covered by the commit-scoped framework identity (a Dependabot merge is a commit ⇒ a
-  # new identity ⇒ a fresh CI bake). The cross-REPO edge — this platform releasing while the node
-  # repos (Plugins, Education, Reinsurance, SocialMedia) sit unchanged — is closed BY MEMEX'S
-  # BROADCAST (see the block below): one repository_dispatch per subscriber, which their CI
-  # receives with
-  #   on: repository_dispatch: { types: [meshweaver-framework-released] }
-  # and answers by re-running its gate + bake + publish against the new framework identity.
-  # REPORTER-CLASS like notify-platform-update: a lost dispatch costs one delayed rebake wave
-  # (the next release re-notifies, and the schedule poll is the standing fallback) and can never
-  # hide a defect.
+  # ────────────────── THE RELEASE WAVE: core publishes ONE event and finishes ──────────────────
+  # Maintainer, 2026-09-03: "None of the top-level repos should have any dependency to anyone else.
+  # It must be event based: (1) memex issues an event that something has a new version; (2) GitHub
+  # subscribes to this and triggers the build. Core publishes an event and finishes."
   #
-  # 🚨 Provisioning note (#1755): a subscriber whose own upstreams are not yet published EXITS
-  # without building and is re-woken by its upstream's `meshweaver-upstream-published` event, so
-  # ────────────────── NO DEPENDENT DISPATCH *FROM HERE*: memex broadcasts (2026-08-23) ──────────
-  # 🚨 SUPERSEDED 2026-08-29 — the paragraph below is kept as the record of a design that never
-  # delivered (#2235: the mesh broadcast's subscriber set was empty on every deploy, and #777: the
-  # inbox watcher that would have run the pin updater is armed on an on-demand hub). The maintainer's
-  # decision: "it should be github actions trigger — no in mesh baking — plugins is top level, built
-  # with platform — on platform update ⇒ update all". The dispatch now happens HERE, in the
-  # `notify-dependents` job below, after `plugins-bake` has sealed the Plugins publication for
-  # this run's identity; the mesh notify below stays for the portals' own self-update only.
-  # (Historical, superseded:) There is deliberately no job here that dispatches to the node repos —
-  # but the wave is now BROADCAST, not only pulled. The broadcast happens ONE HOP AWAY, in memex,
-  # and this workflow already feeds it: the `notify-platform-update` job below signs a POST telling
-  # the registry mesh "a new platform build exists". memex, on that fact, fans a
-  # `repository_dispatch` (`meshweaver-framework-released`) out to every subscriber repo, whose CI
-  # answers with `on: repository_dispatch: { types: [meshweaver-framework-released] }` and re-bakes
-  # against the new framework in SECONDS instead of up to a schedule interval.
+  # So there is NO job here that dispatches to another repository. The only thing this workflow
+  # emits is the signed build fact `notify-platform-update` POSTs into the control instance's
+  # `Hosting/PlatformBuilds` inbox (below). memex verifies it, bumps the node repos' platform pins
+  # and fans `repository_dispatch: meshweaver-framework-released` out to every subscribed repository
+  # with the GitHub App it already holds for GitSync (`FrameworkReleaseBroadcaster`,
+  # src/MeshWeaver.GitSync — called by the Hosting module's `PlatformBuildInboxWatcher` in
+  # MeshWeaver.Plugins). The subscriber set is DATA IN THE MESH: every repository a
+  # `Hosting/Deployment` record on the control instance serves as a registry source
+  # (`pluginRepos[].isRegistrySource`). Nothing is named here, no credential here can reach a
+  # satellite's CI, and `PlatformReleaseNotifyGuard` fails the build if a `/dispatches` POST returns
+  # to any workflow core runs on its own behalf.
   #
-  # 🚨 Why the broadcast lives in memex and NOT here — it resolves the two objections that kept the
-  # old GitHub→GitHub `notify-dependents` job (which needed `BAKE_SUBSCRIBER_REPOS` + a satellite
-  # write credential, was never provisioned, and printed "NOT CONFIGURED" for its whole life):
-  #   • no credential in the release path — the PLATFORM still holds no write access to any
-  #     satellite and no PAT. memex does the fan-out with the GitHub App it ALREADY holds for
-  #     GitSync (`FrameworkReleaseBroadcaster`, `src/MeshWeaver.GitSync`); the release only signs a
-  #     POST to memex, exactly like every other `notify-*` job here.
-  #   • no hand-maintained list HERE — the subscriber set is the control instance's own
-  #     configuration (`FrameworkBroadcast:Subscribers`, rendered as
-  #     `FrameworkBroadcast__Subscribers__0..N` by deploy/helm/templates/memex-portal/config.yaml);
-  #     nothing is named in this file.
-  # 🚨 THIS BLOCK USED TO SAY the set "lives in the Hosting fleet registry ON memex", and that
-  # sentence cost #2235 three days: no such registry was ever built — there is no subscriber node
-  # type under Hosting/ and no code in any repo reads one — while the seam that DOES exist
-  # (FrameworkBroadcast:Subscribers) was rendered by no chart in either repo, so no deploy could
-  # set it. Every broadcast therefore dispatched to an empty set and logged it as the normal state
-  # of a non-control mesh. Do not re-describe a registry here until one ships with a reader; a
-  # mechanism named in prose and absent from the code is what stops the next reader looking.
-  # 🚨 `BAKE_SUBSCRIBER_REPOS` IS GONE — deleted as a repo variable on 2026-08-25, not merely
-  # unused. It survived the 2026-08-23 redesign holding one stale repo name, and a leftover
-  # variable that LOOKS like the live subscriber list is worse than none: the next person to debug
-  # a missing rebake reads it, believes the fan-out targets exactly that repo, and stops looking.
-  # If you need to know who is subscribed, read `FrameworkBroadcast__Subscribers__0..N` on the
-  # control instance's deployment — that is the only source there is.
-  # Pull stays the fallback: each repo's `schedule` run still reads the registry
-  # (`Resolve the bake target` in each ci.yml) and bakes for the identity it finds, so a lost
-  # dispatch costs at most one delayed rebake wave and a repo that stops baking still shows up as an
-  # instance HELD on its own UpdatePolicy. REPORTER-CLASS: the broadcast makes the wave prompt; the
-  # poll makes it guaranteed.
+  # 🚨 History, so nobody re-adds it: a GitHub→GitHub `notify-dependents` job lived here twice
+  # (2026-08-22, deleted; 2026-08-29 → 2026-09-03, deleted by this change). The second one was
+  # justified as "a second, independent path to the same event" because the memex hop was silent —
+  # and it was silent because the broadcaster had NO CALLER (#2235; fixed in MeshWeaver.Plugins
+  # together with the watcher's missing AccessContext), not because a mesh hop is unreliable. Two
+  # emitters for one event is exactly the cross-repo coupling the rule above forbids; the receivers'
+  # own `schedule` poll remains the fallback for a lost dispatch. Package releases
+  # (`release-packages.yml`) emit nothing either: in-mesh source compiles against the IMAGE, never
+  # against a NuGet feed.
 
   # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (required) ──────────────────
   # After the release is ARMED (promote's last PUT), tell the control instance's mesh that a new
@@ -2065,36 +2031,6 @@ jobs:
   # the watcher drops every delivery as unverifiable and this job still goes green. That is the
   # residual #2235 tracks; its close condition is observing a `repository_dispatch` run on the
   # satellites plus the MW_IMAGE_DIGEST bump PRs — never a green tick here.
-  # ────────────────── PUSH THE RELEASE WAVE (repository_dispatch) ──────────────────
-  # 🚨 The block above says a dispatch job here "never will be" added, for two reasons that were
-  # true when it was written and are not now: there was no credential in the release path, and no
-  # subscriber list that would not drift. Both are answered:
-  #   • `DEPENDENT_DISPATCH_APP_ID` / `_PRIVATE_KEY` were provisioned 2026-08-19 and, until this,
-  #     were referenced by NOTHING in this repo.
-  #   • there is no list — the subscribers are the repos the App is INSTALLED on, read at run time.
-  #     Adding a repo to the wave is installing the App on it.
-  # memex's broadcast stays; this does not replace it. The two are independent paths to the same
-  # event, and the failure that motivated this is that a wave depending on ONE hop through a mesh
-  # is a wave that stops when that hop is unreachable — which is not observable from here.
-  # 🚨 AFTER `plugins-bake`, never merely after `promote`: Plugins is built WITH the platform and
-  # every satellite's bake seeds the Plugins publication for the released identity — woken before
-  # it is sealed, each one fails `upstream 'plugins' has no SEALED publication … for identity`.
-  # The payload is what the receivers read: image + digest (+ sha, version); see notify-dependents.yml.
-  notify-dependents:
-    name: "Push the release wave to dependent repos"
-    needs: [preflight, gate, portal-image, plugin-test-image, promote, plugins-bake, plugins-bake-image]
-    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success' && needs.plugins-bake.result == 'success'
-    uses: ./.github/workflows/notify-dependents.yml
-    with:
-      version: ${{ needs.plugin-test-image.outputs.version }}
-      reason: platform
-      sha: ${{ needs.gate.outputs.sha }}
-      image: ${{ needs.plugins-bake-image.outputs.image }}
-      digest: ${{ needs.plugins-bake-image.outputs.digest }}
-    secrets:
-      app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
-      private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
-
   notify-platform-update:
     name: "Notify platform-update registry"
     # `preflight` is what guarantees URL + SECRET exist, so nothing in this job checks for them.
@@ -2338,16 +2274,6 @@ jobs:
       content-app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
       content-app-private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
 
-  # ────────────────── DISPATCH DEPENDENTS: "on platform update ⇒ update all" ──────────────────
-  # ONE fan-out, and it is `notify-dependents` above — gated on `plugins-bake`, so a satellite is
-  # woken only once the Plugins publication is sealed for this identity (its bake seeds that
-  # publication and refuses an unsealed one). Two sessions built this leg twice on 2026-08-29
-  # (an inline job here and the reusable notify-dependents.yml); the first wave then dispatched
-  # from the reusable BEFORE the bake and with a payload the receivers could not use. The guard
-  # (PlatformReleaseNotifyGuard) now pins a single job carrying the full payload.
-  # Package-only publishes take the other path — the reusable bake's own `dispatch-dependents`
-  # job sends `meshweaver-upstream-published` to dependents only, and recurses.
-
   verify-images:
     name: "Verify every image shipped"
     needs: [gate, portal-image, migration-image, plugin-test-image, promote]
@@ -2445,7 +2371,7 @@ jobs:
     # publish actually happened while it can only see two of the nine jobs that make it happen.
     needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote,
             publish-bake, notify-platform-update, verify-images,
-            plugins-modules, plugins-bake-image, plugins-bake, notify-dependents]
+            plugins-modules, plugins-bake-image, plugins-bake]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2585,7 +2511,6 @@ jobs:
             plugins-modules=${{ needs.plugins-modules.result }}
             plugins-bake-image=${{ needs.plugins-bake-image.result }}
             plugins-bake=${{ needs.plugins-bake.result }}
-            notify-dependents=${{ needs.notify-dependents.result }}
         run: |
           set -euo pipefail
           bad=""

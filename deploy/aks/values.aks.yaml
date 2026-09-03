@@ -93,22 +93,6 @@ config:
     # so the platform-build target silently never took effect even though the ConfigMap was
     # correct. Leave empty when only one target is needed.
     WebhookInbox__Targets__1: ""
-    # ---- Framework-release broadcast subscribers ----------------------------
-    # 🚨 #2235: the subscriber set of the release wave. The control instance (the one whose
-    # WebhookInbox__Targets accepts Hosting/PlatformBuilds) verifies each platform-build
-    # delivery and fans a `meshweaver-framework-released` repository_dispatch out to every
-    # repo listed here, so each satellite re-bakes against the new framework in seconds
-    # instead of at its next schedule poll.
-    #
-    # No chart in EITHER repo rendered this key until #2235, so no deploy could set it: every
-    # broadcast dispatched to an empty set and logged it as the normal state of a non-control
-    # mesh. Zero dispatches, no error, nothing red. Leaving the slots empty here is correct —
-    # a deployment is inert until its overlay names its subscribers — but the slots must EXIST,
-    # or the overlay that names them reaches no container (the #1925 shape).
-    FrameworkBroadcast__Subscribers__0: ""
-    FrameworkBroadcast__Subscribers__1: ""
-    FrameworkBroadcast__Subscribers__2: ""
-    FrameworkBroadcast__Subscribers__3: ""
     # ---- Instance branding (per-env) ----------------------------------------
     # Large Safari bookmark / Start-Page / Add-to-Dock tile (apple-touch-icon, 180×180 PNG).
     # This ships the PROJECT's own mark (Systemorph builds MeshWeaver — the chart's
