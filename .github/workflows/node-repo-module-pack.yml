@@ -258,6 +258,34 @@ on:
           selection fall back to the full set and say why.
         type: string
         required: false
+      superseded-image-assemblies:
+        description: >
+          Comma- or whitespace-separated IMAGE assembly names whose copy in the pinned platform
+          image is SUPERSEDED by this repository's source for this run — dropped from the global
+          build's reference set.
+
+
+          Needed in exactly one situation, and it is not rare: a type MOVES OUT of an
+          image-shipped assembly into a module in the same repo. The builder's shadow set
+          subtracts only what the run compiles FROM SOURCE, and membership is reachability-driven
+          through ProjectReference edges — so the edge that would have shadowed the stale copy is
+          the edge the move deletes. The image still defines the moved type, the module defines it
+          too, and the compile fails CS0436. This input is how the caller says which stale copy to
+          drop.
+
+
+          DECLARED, never inferred: resolving such a collision automatically in favour of the
+          source would mask a genuine two-producers-of-one-assembly defect, which
+          `BakeHost.ShippedByHostProblem` (MeshWeaver#3175) exists to make RED.
+
+
+          Fails closed — an empty name, a name the image does not carry (wrong, or the input is
+          STALE now the image dropped it), or a name the run already builds from source, each
+          refuse the build naming the entry. Omitted, nothing is dropped and the lane behaves
+          exactly as before.
+        type: string
+        required: false
+        default: ''
         default: ''
       platform-image:
         description: >
@@ -611,6 +639,7 @@ jobs:
           COUNT: ${{ steps.scope.outputs.count }}
           PUBLISH: ${{ inputs.publish }}
           TESTER_DIGEST: ${{ inputs.tester-image-digest }}
+          SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
           PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
           PLATFORM_REF: ${{ inputs.platform-ref }}
         run: |
@@ -977,6 +1006,11 @@ jobs:
           rm -rf "$out"; mkdir -p "$out"; chmod 777 "$out"
           accepts=()
           for construct in $ACCEPT; do accepts+=(--accept "$construct"); done
+          # The image's stale copy of a moved type's old home — see superseded-image-assemblies.
+          # Empty ⇒ no flags ⇒ byte-identical invocation to before this input existed.
+          superseded=()
+          for asm in ${SUPERSEDED//,/ }; do superseded+=(--superseded-image-assembly "$asm"); done
+          [ "${#superseded[@]}" -eq 0 ] || echo "superseding ${#superseded[@]} image assembl(y|ies) from the reference set: ${SUPERSEDED}"
           args=()
           for prj in "${projects[@]}"; do args+=("/repo/$prj"); done
           echo "global build: ${#projects[@]} container entr(y|ies) in ONE workspace — ${projects[*]}"
@@ -988,7 +1022,7 @@ jobs:
             -v "$tester_app:/tester:ro" \
             -v "$out:/out" \
             --entrypoint dotnet "$img" \
-            /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out ${accepts[@]+"${accepts[@]}"} 2>&1 | tee "$out/workspace-build.log"
+            /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out ${accepts[@]+"${accepts[@]}"} ${superseded[@]+"${superseded[@]}"} 2>&1 | tee "$out/workspace-build.log"
           echo "built=true" >> "$GITHUB_OUTPUT"
       # 🚨 THE PLATFORM CHECKOUT LANDS **AFTER** THE BUILD, ON PURPOSE. This job mounts
       # `$GITHUB_WORKSPACE` at `/repo:ro` for the container build, so anything checked out beside

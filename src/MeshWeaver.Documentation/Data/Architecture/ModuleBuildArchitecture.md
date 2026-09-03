@@ -467,6 +467,52 @@ does not hold today), or the instance adopts module bytes for its identity from 
 publication it already adopts bundles from. Until one of those lands, `ShippedPrebuiltBundles`'
 `dependency record mismatch … live is mvid:` line on a portal is that gap, not a new defect.
 
+### Moving a type OUT of an image-shipped assembly into a module (the shadow set's blind spot)
+
+The reference set for a container build is **the whole image's `/app`, minus
+`Graph.ShadowedAssemblyNames`** — and that set holds only the assemblies *this run compiles from
+source*. Membership is **reachability-driven**: a project joins the graph through a
+`ProjectReference` edge under the source root.
+
+That is exactly right until a type MOVES OUT of an image-shipped assembly into a module **in the same
+repository**. Then:
+
+- the module's source defines the type;
+- the pinned image still ships the assembly that *also* defines it, because the image is one wave
+  behind;
+- and **the `ProjectReference` edge that would have put the old assembly in the graph — and therefore
+  in the shadow set — is precisely the edge the move deletes.**
+
+So the shadow set structurally cannot see the one case that needs it, and the compile fails
+`CS0436: … conflicts with the imported type … in '<OldAssembly>'`. It is the duplicate-producer
+problem of [One producer per (module, framework identity)](#one-producer-per-module-framework-identity--and-the-set-is-what-is-gated-3175)
+one level down: two definitions of one TYPE rather than two producers of one ASSEMBLY, for exactly
+one wave. Measured on MeshWeaver.Plugins#1268, moving three Razor views out of
+`MeshWeaver.Blazor.Views` into the `MeshWeaver.Markdown.Collaboration` module.
+
+**The remedy is a declaration, not an inference.** The pack lane takes
+`superseded-image-assemblies:` (comma- or whitespace-separated), passed to `build-project` as
+`--superseded-image-assembly <name>`; each name is added to the shadow set, so the image's stale copy
+leaves the reference set for that run.
+
+Three properties are load-bearing:
+
+- **Declared, never inferred.** Resolving such a collision automatically in favour of the source
+  would mask a genuine two-producers-of-one-assembly defect — the thing
+  `BakeHost.ShippedByHostProblem` exists to make RED. The caller names the assembly.
+- **Fails closed.** An empty name, a name the image does not carry (wrong — or the entry is STALE
+  now the image dropped it), or a name the run already builds from source, each refuse the build and
+  say which entry. An input that quietly does nothing reads exactly like an input that worked.
+- **No "is anything else still needed from it?" check.** The compiler already answers that with
+  `CS0246`/`CS0234` naming the missing type, which is a positive, specific signal. A second check
+  would only be able to agree.
+
+⏳ **Known gap:** an entry goes stale once a rebuilt image no longer defines the conflicting types —
+the assembly still exists, so nothing detects it. The durable form is a type-name overlap assertion
+(refuse when the image's copy defines none of the names this run's source defines) — tracked in
+[#3223](https://github.com/Systemorph/MeshWeaver/issues/3223). Until it lands, remove the entry in the same change that moves the pin onto an image
+built after the move.
+
 ## Adoption contract (every repo)
 
 1. Pin the reusable lanes (`node-repo-*.yml`) at a MeshWeaver main SHA — never copy them.
