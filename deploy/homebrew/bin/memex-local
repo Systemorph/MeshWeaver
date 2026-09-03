@@ -13,6 +13,7 @@
 #   down          Tear down (uninstall release, stop port-forward). --purge wipes
 #                 data (namespace + PVC); --stop-colima also stops the VM.
 #   status        Show colima / pods / ingress / port-forward / health.
+#   setup         Print the first-run wizard URL + its one-time token (and open it).
 #   logs          Tail the portal logs (kubectl logs). --migration for migration.
 #   update        Roll the portal+migration to a newer image (build or ACR pull).
 #   verify        Is the portal USABLE — serving, /login routed, view packs present?
@@ -206,12 +207,15 @@ ensure_overlay() {
       -e "s|__AI_MASTER_KEY__|${ai_key}|g" \
       "$share/values.local.yaml" > "$OVERLAY"
   chmod 600 "$OVERLAY"
-  # 🚨 Dev login is the DEFAULT, and this line is what tells a developer so. It used to
-  # send them to Entra first — a tenant, an app registration, a redirect URI and a client
-  # secret on disk, all to sign in to their own machine. The only thing a fresh install
-  # needs is a username: DevLogin self-provisions it on first sign-in.
-  warn "Edit $OVERLAY and set Authentication__DevAdminUsers to your username (§9)."
-  warn "Entra is opt-in — uncomment the Microsoft lines only to test the OAuth flow itself."
+  # 🚨 Nothing to hand-edit any more. This template used to ship an identity DECISION —
+  # dev login on, `<your-username>` as the sole administrator, and a commented Entra block
+  # to uncomment — so a fresh install was configured by whoever wrote the file rather than
+  # by whoever runs it. The portal asks instead: `memex-local setup` prints the wizard's
+  # URL and its one-time token. Editing the overlay still works and still WINS (deployment
+  # configuration outranks the instance manifest), which is how an unattended install pins
+  # its answers.
+  info "Secrets generated. The portal will ask for the database, logins and model keys:"
+  info "  memex-local up  →  memex-local setup"
 }
 
 # ---------------------------------------------------------------------------
@@ -1886,7 +1890,16 @@ cmd_up() {
 each line names its own remedy."
 
   echo
-  ok "memex is up — open https://${HOSTNAME_LOCAL}:${HOST_PORT}"
+  # A fresh install is NOT finished at this point, and saying "open the portal" would be
+  # the same lie `verify_usable` exists to prevent: the portal is serving a setup wizard
+  # nobody has answered. Which state it is in is a fact about the pod, so read it.
+  if kubectl logs deploy/memex-portal-deployment -n "$NAMESPACE" --tail=-1 2>/dev/null \
+       | grep -q "SETUP wizard only"; then
+    ok "memex is up and waiting to be SET UP — it has no database yet."
+    cmd_setup
+  else
+    ok "memex is up — open https://${HOSTNAME_LOCAL}:${HOST_PORT}"
+  fi
   info "logs:   memex-local logs"
   info "status: memex-local status"
 }
@@ -1952,6 +1965,69 @@ cmd_status() {
 cmd_verify() {
   colima_running || die "Colima is not running — run 'memex-local up' first"
   verify_usable "$@"
+}
+
+# ---------------------------------------------------------------------------
+# setup — the first-run wizard's URL and its one-time token
+# ---------------------------------------------------------------------------
+# A portal with no database serves the SETUP WIZARD and nothing else, and mints a
+# token into its own log so that whoever can read the instance's output — and only
+# they — can configure it. That is the whole access control on a surface that
+# collects a connection string, provider API keys and the list of platform admins,
+# so this command reads the token back out of the pod rather than inventing one.
+cmd_setup() {
+  local open_browser="yes"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-open) open_browser="no" ;;
+      *) die "setup: unknown flag '$1'" ;;
+    esac
+    shift
+  done
+
+  local url token
+  url="https://${HOSTNAME_LOCAL}:${HOST_PORT}/setup"
+
+  # The banner is printed once per PROCESS, so a portal that has been restarted since
+  # setup began has a NEW token and the old one is dead — read it fresh every time.
+  token="$(kubectl logs deploy/memex-portal-deployment -n "$NAMESPACE" --tail=-1 2>/dev/null \
+           | awk '/^ *Token: /{ t=$2 } END { print t }')"
+
+  if [ -z "$token" ]; then
+    # No token means the portal is not in setup mode — which is the ordinary state of a
+    # configured instance, and a success, not a failure.
+    if curl -sk -o /dev/null -w '' "https://${HOSTNAME_LOCAL}:${HOST_PORT}/healthz" 2>/dev/null; then
+      ok "This instance is already set up — no setup token is being offered."
+      info "To re-run setup, remove its manifest and restart the portal:"
+      info "  kubectl exec deploy/memex-portal-deployment -n $NAMESPACE -- rm -f /data/instance.json"
+      info "  kubectl rollout restart deploy/memex-portal-deployment -n $NAMESPACE"
+      return 0
+    fi
+    die "No setup token in the portal log, and the portal is not answering. Check 'memex-local logs'."
+  fi
+
+  echo
+  ok "First-run setup is waiting."
+  echo "  URL:   ${url}?token=${token}"
+  echo "  Token: ${token}"
+  echo
+  info "SQLite is pre-selected and needs nothing else running — it lands at"
+  info "  Data Source=/data/memex.db   (on the same PVC that survives 'memex-local update')."
+  info "To use the in-cluster Postgres this chart already deploys, choose PostgreSQL and paste:"
+  local pg_pw
+  pg_pw="$(awk '/memex_postgres_password:/ { gsub(/"/, "", $2); print $2; exit }' "$OVERLAY" 2>/dev/null)"
+  if [ -n "$pg_pw" ]; then
+    echo "  Host=memex-postgres-service;Port=5432;Database=memex;Username=postgres;Password=${pg_pw}"
+  else
+    warn "  (could not read the generated Postgres password from $OVERLAY)"
+  fi
+  echo
+  info "Ollama is already running for you — for Embeddings paste http://ollama:11434/v1"
+  info "so search matches MEANING rather than words. Left blank it degrades silently."
+
+  if [ "$open_browser" = "yes" ] && command -v open >/dev/null 2>&1; then
+    open "${url}?token=${token}" >/dev/null 2>&1 || true
+  fi
 }
 
 cmd_logs() {
@@ -2191,6 +2267,13 @@ COMMANDS:
                   keep the mounted Plugins checkout on origin/main so modules and
                   plugin content auto-roll too (restart-as-fan-out, as in prod).
                   The local equivalent of the AKS in-pod self-update.
+  setup [--no-open]
+                  Print the FIRST-RUN WIZARD's URL and its one-time token, and open
+                  it. A portal with no database serves that wizard and nothing else;
+                  the token is minted into the pod's own log, so being able to read
+                  the instance's output is the proof of access that gates a form
+                  collecting a connection string, model keys and the platform-admin
+                  list. \`up\` runs this for you when the instance is not set up yet.
   port-forward    (Re)start the host:${HOST_PORT} -> ingress:443 forward.
   observability   Install Grafana/Loki/Promtail/Prometheus (§11).
   doctor          Preflight: tools, chart/assets, cluster.
@@ -2503,6 +2586,7 @@ main() {
     instance)      cmd_instance "$@" ;;
     down)          cmd_down "$@" ;;
     status)        cmd_status "$@" ;;
+    setup)         cmd_setup "$@" ;;
     logs)          cmd_logs "$@" ;;
     update)        cmd_update "$@" ;;
     registry)      cmd_registry "$@" ;;

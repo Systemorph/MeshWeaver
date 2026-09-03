@@ -402,7 +402,7 @@ done
 echo "── the CLI still knows every command it documents ────────────────"
 
 help_out="$("$CLI" help 2>&1)"
-for cmd in up down status logs update registry verify port-forward observability doctor; do
+for cmd in up down status setup logs update registry verify port-forward observability doctor; do
   case "$help_out" in
     *"$cmd"*) ;;
     *) bad "help documents '$cmd'" "not in the usage text"; continue ;;

@@ -58,6 +58,18 @@ public sealed record InstanceManifest
     /// </summary>
     public ImmutableList<string> UserPreInstallPackages { get; init; } = [];
 
+    /// <summary>
+    /// Which logins this instance offers. Null means the wizard never answered the question, and
+    /// the host's own configuration decides alone — which is every deployment that exists today.
+    /// </summary>
+    public InstanceSignInSelection? SignIn { get; init; }
+
+    /// <summary>
+    /// The model providers and the embeddings endpoint. Null means no model was configured at
+    /// setup: a valid instance, and one the portal already warns about at boot.
+    /// </summary>
+    public InstanceAiSelection? Ai { get; init; }
+
     /// <summary>Who completed setup, for provenance. Never a credential.</summary>
     public string? SetUpBy { get; init; }
 

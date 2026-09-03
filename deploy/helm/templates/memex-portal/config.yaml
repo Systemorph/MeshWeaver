@@ -151,8 +151,21 @@ data:
   Storage__Name: "{{ .Values.config.memex_portal.Storage__Name }}"
   Storage__SourceType: "{{ .Values.config.memex_portal.Storage__SourceType }}"
   Storage__BasePath: "{{ .Values.config.memex_portal.Storage__BasePath }}"
-  Graph__Storage__Type: "{{ .Values.config.memex_portal.Graph__Storage__Type }}"
-  Graph__Storage__BasePath: "{{ .Values.config.memex_portal.Graph__Storage__BasePath }}"
+  {{- /* 🚨 EMITTED ONLY WHEN SET, and that is what makes the first-run setup wizard reachable
+         on a Helm-deployed portal at all. This ConfigMap lists keys explicitly, so an
+         unconditional line here emits Graph__Storage__Type="" for a values file that states
+         nothing — and an EMPTY section is not an ABSENT one: GetSection("Graph:Storage").Get<T>()
+         answers a non-null object with Type="", so MemexConfiguration never reaches
+         MarkAwaitingSetup and AddPersistence throws "Unknown storage type: ''" instead. Every
+         existing deployment sets these in values.yaml and is byte-identical; only a deployment
+         that deliberately leaves them blank — a fresh install meant to be configured through the
+         wizard — sees a difference. */}}
+  {{- with .Values.config.memex_portal.Graph__Storage__Type }}
+  Graph__Storage__Type: "{{ . }}"
+  {{- end }}
+  {{- with .Values.config.memex_portal.Graph__Storage__BasePath }}
+  Graph__Storage__BasePath: "{{ . }}"
+  {{- end }}
   Mcp__BaseUrl: "{{ .Values.config.memex_portal.Mcp__BaseUrl }}"
   # ---- Public base URL — the instance's own https host --------------------
   # Used to build ABSOLUTE links in outbound email (access-granted notifications,
@@ -579,8 +592,20 @@ data:
   # no-ops on empty). Set a ClientId to "" to DISABLE that provider even when the
   # image's appsettings.json ships a default (env overrides appsettings). Secrets
   # (client secrets) come from the SecretProviderClass, not here.
-  Authentication__Provider: "{{ .Values.config.memex_portal.Authentication__Provider | default "" }}"
-  Authentication__EnableDevLogin: "{{ .Values.config.memex_portal.Authentication__EnableDevLogin | default "false" }}"
+  {{- /* 🚨 The sign-in keys the SETUP WIZARD owns are emitted only when this deployment states
+         them. An always-emitted key WINS over the instance manifest (which is layered under the
+         host's own configuration sources by design), so an unconditional
+         Authentication__EnableDevLogin="false" would silently discard the operator's answer and
+         leave a freshly set-up instance with no way in. Absent and "" are indistinguishable to
+         every reader — AuthenticationOptions.EnableDevLogin already defaults to false and
+         SignInProviderCatalog treats blank as unset — so a deployment that states these is
+         unaffected. */}}
+  {{- with .Values.config.memex_portal.Authentication__Provider }}
+  Authentication__Provider: "{{ . }}"
+  {{- end }}
+  {{- with .Values.config.memex_portal.Authentication__EnableDevLogin }}
+  Authentication__EnableDevLogin: "{{ . }}"
+  {{- end }}
   {{- /* DevLogin is a PAIR. EnableDevLogin turns the built-in developer login on; DevAdminUsers is
          the comma-separated list of ids that get platform admin when they sign in that way
          (DevAuthController.IsConfiguredDevAdmin -> UserOnboardingService.GrantPlatformAdmin).
@@ -588,16 +613,28 @@ data:
          nothing on — and it fails SILENTLY, because a key this configmap does not list never
          reaches a container while helm reports success. Same defect as Modules__Root (#1924) and
          Modules__Required__N (#2104). */}}
-  Authentication__DevAdminUsers: "{{ .Values.config.memex_portal.Authentication__DevAdminUsers | default "" }}"
-  Authentication__Microsoft__ClientId: "{{ .Values.config.memex_portal.Authentication__Microsoft__ClientId | default "" }}"
+  {{- with .Values.config.memex_portal.Authentication__DevAdminUsers }}
+  Authentication__DevAdminUsers: "{{ . }}"
+  {{- end }}
+  {{- with .Values.config.memex_portal.Authentication__Microsoft__ClientId }}
+  Authentication__Microsoft__ClientId: "{{ . }}"
+  {{- end }}
   {{- /* 🚨 Never an EMPTY default here: an env var cannot be null, so "" reached the portal as a
          tenant and the OIDC authority became login.microsoftonline.com//v2.0 — every Microsoft
          sign-in 500-ed on memex-cloud (2026-08-28, #2621). The multi-tenant sign-in app the
          onboarding doc prescribes uses `organizations`; an env that needs a single tenant sets
          its id explicitly. */}}
+  {{- /* The tenant default is meaningful only ALONGSIDE a client id, so it rides with one. On its
+         own it would override a wizard-configured tenant with "organizations". */}}
+  {{- if .Values.config.memex_portal.Authentication__Microsoft__ClientId }}
   Authentication__Microsoft__TenantId: "{{ .Values.config.memex_portal.Authentication__Microsoft__TenantId | default "organizations" }}"
-  Authentication__Google__ClientId: "{{ .Values.config.memex_portal.Authentication__Google__ClientId | default "" }}"
-  Authentication__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Authentication__LinkedIn__ClientId | default "" }}"
+  {{- end }}
+  {{- with .Values.config.memex_portal.Authentication__Google__ClientId }}
+  Authentication__Google__ClientId: "{{ . }}"
+  {{- end }}
+  {{- with .Values.config.memex_portal.Authentication__LinkedIn__ClientId }}
+  Authentication__LinkedIn__ClientId: "{{ . }}"
+  {{- end }}
   # Apple: ClientId is the Services ID; TeamId/KeyId identify the Sign in with Apple key
   # whose private key (the secret) is Authentication__Apple__PrivateKey in secrets.yaml.
   Authentication__Apple__ClientId: "{{ .Values.config.memex_portal.Authentication__Apple__ClientId | default "" }}"
