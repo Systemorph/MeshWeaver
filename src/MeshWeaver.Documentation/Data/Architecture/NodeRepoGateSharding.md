@@ -193,6 +193,39 @@ single block with one terminal verdict, dropping the `[support: …]` copies whe
 shard's entry is present (a package cannot have two verdicts), and re-emits it under the canonical
 `gate-log-<sha>` artifact name — so the caller's ratchet is untouched.
 
+## Verified against the real thing, before a single CI run
+
+The lane is `workflow_call`-only, so core's own CI never exercises it — the first honest test would
+otherwise be a satellite's pin bump. It was instead run **locally against the pinned portal image
+and the real MeshWeaver.Plugins tree**, composing the gate host exactly as the lane does
+(`compose-gate-host.sh` over `memex-portal-ai@sha256:c4467638…` + the tester CLI) and composing the
+same three module bundles (`MeshWeaver.AI`, `.Markdown.Collaboration`, `.Maps`) the caller passes as
+`--module`. The one deviation: the CLI is the branch's own build, because that is where `--shard`
+lives.
+
+Over `Store, Training, Video, Northwind, Chess` (Chess depends on Training, everything depends on
+Store):
+
+```text
+shard 1/2: gating 3 of 5 discovered package(s) — Store, Training, Video; installing 0 support …
+shard 2/2: gating 2 of 5 discovered package(s) — Northwind, Chess; installing 2 support
+           package(s) gated on another shard: Store, Training
+```
+
+Shard 2 installed `Store` and `Training` — it could not install Chess otherwise — and did **not**
+judge them: they appear in its summary as `[PASS] Store (184 node(s), 0 type(s)) [support:
+installed, gated on another shard]`, while shard 1 reports `[PASS] Store (184 node(s), 17
+type(s))` with all seventeen verdicts.
+
+Folding the two real logs and comparing the verdict SET against a `--shard 1/1` run of the same five
+packages: **27 verdict lines each, identical.** Every package once, all 21 NodeTypes
+(17 Store + 1 Training + 3 Chess) compiled, rendered and Tests-executed, `ALL GREEN.`
+
+The earlier attempts are worth keeping, because both failures were the design working: a mount
+missing `Training` failed Chess's install with `NodeType(s) not registered: Training/Tour`, and a run
+without the `MeshWeaver.AI` module failed with `NodeType(s) not registered: Skill` — the same
+content-shaped-error-with-an-infrastructure-cause the lane's own comments warn about.
+
 ## The pin moves with the lane
 
 `--shard` is a flag on `mw-plugin-test`, which ships in the **tester image**. A caller that sets
