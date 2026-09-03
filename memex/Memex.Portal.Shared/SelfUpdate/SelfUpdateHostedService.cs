@@ -940,9 +940,7 @@ public class SelfUpdateHostedService : IHostedService
             // in the AKS implementation, and its answer cannot change the decision when the floor is
             // zero. Skipping it removes an API call and a failure point from the happy path.
             if (_options.MinRollInterval <= TimeSpan.Zero)
-                return _http.Invoke(ct => _updater.PatchToVersionAsync(target, ct))
-                    .Select(_ => SelfUpdateVerdict.Applied(
-                        target, ShippedReleaseSeed.InstalledPlatformVersion, null));
+                return MigrateThenPatch(target, lastRolledAt: null);
 
             return _http.Invoke(ct => _updater.LastRolledAtAsync(ct)).SelectMany(lastRolledAt =>
             {
@@ -951,11 +949,75 @@ public class SelfUpdateHostedService : IHostedService
                     return Observable.Return(
                         SelfUpdateVerdict.Deferred(target, elapsed, _options.MinRollInterval));
 
+                return MigrateThenPatch(target, lastRolledAt);
+            });
+        });
+
+    /// <summary>
+    /// 🚨 THE SCHEMA MOVES FIRST. Runs the migration for <paramref name="target"/> to completion and
+    /// only then patches the portal image — the order <c>helm upgrade</c> always had and a
+    /// <c>set image</c> roll never did, which is how both AKS portals ended up on 2026-09-03 with
+    /// new pods refusing to start on <c>DbVersionGate</c> (db_version 54, image expecting 55) behind
+    /// an old ReplicaSet that still answered 200, for seven hours, with nothing reporting it.
+    ///
+    /// <para>The outcome decides, and the four non-success outcomes are NOT one case:</para>
+    /// <list type="bullet">
+    ///   <item><see cref="MigrationRunOutcome.Failed"/> / <see cref="MigrationRunOutcome.TimedOut"/>
+    ///     — the migration ran and the schema demonstrably did not move ⇒ the roll is REFUSED and
+    ///     recorded as <see cref="SelfUpdateOutcome.MigrationFailed"/>. Rolling anyway would only
+    ///     reproduce the wedge.</item>
+    ///   <item><see cref="MigrationRunOutcome.NotSupported"/> / <see cref="MigrationRunOutcome.Forbidden"/>
+    ///     — the migration could not even be attempted (an updater predating the seam; the
+    ///     service account not yet granted <c>batch/jobs</c> by a <c>helm upgrade</c>) ⇒ the roll
+    ///     proceeds exactly as it always did, with <c>DbVersionGate</c> as the only net, and says so
+    ///     at Warning naming the fix. Refusing here would freeze every install until an operator
+    ///     acts, silently — the worse failure shape (#2553).</item>
+    /// </list>
+    /// <para>Both calls run on the Http pool like every other Kubernetes edge here; the migration
+    /// wait is bounded by <see cref="SelfUpdateOptions.MigrationJobTimeout"/> inside the updater.</para>
+    /// </summary>
+    private IObservable<SelfUpdateVerdict> MigrateThenPatch(string target, DateTimeOffset? lastRolledAt) =>
+        _http.Invoke(ct => _updater.RunMigrationAsync(target, ct))
+            .SelectMany(outcome =>
+            {
+                switch (outcome)
+                {
+                    case MigrationRunOutcome.Completed:
+                        _logger?.LogInformation(
+                            "[SelfUpdate] database migration for {Tag} completed; patching the portal image.", target);
+                        break;
+                    case MigrationRunOutcome.Failed:
+                    case MigrationRunOutcome.TimedOut:
+                        _logger?.LogCritical(
+                            "[SelfUpdate] database migration for {Tag} ended {Outcome} — the schema did NOT "
+                            + "move, so the portal image is NOT patched. A roll on top of an unmigrated "
+                            + "schema is exactly the DbVersionGate crash-loop behind a 200 that this step "
+                            + "exists to prevent. Read the Job log and Doc/Architecture/DatabaseMigrationProcedure.",
+                            target, outcome);
+                        return Observable.Return(SelfUpdateVerdict.MigrationFailed(target, outcome));
+                    case MigrationRunOutcome.Forbidden:
+                        _logger?.LogWarning(
+                            "[SelfUpdate] rolling {Tag} WITHOUT running its database migration: the cluster "
+                            + "refused the migration Job (403 — the portal service account has no batch/jobs "
+                            + "grant; the chart's memex-portal/rbac.yaml grants it on the next helm upgrade). "
+                            + "If this build expects a newer db_version the new pods will refuse to start "
+                            + "(DbVersionGate) while the old ones keep serving. Doc/Architecture/DatabaseMigrationProcedure.",
+                            target);
+                        break;
+                    case MigrationRunOutcome.NotSupported:
+                        _logger?.LogWarning(
+                            "[SelfUpdate] rolling {Tag} WITHOUT running its database migration: this "
+                            + "install's IDeploymentUpdater cannot run one (it predates the seam, or the "
+                            + "host is not Kubernetes). DbVersionGate is the only net. "
+                            + "Doc/Architecture/DatabaseMigrationProcedure.",
+                            target);
+                        break;
+                }
+
                 return _http.Invoke(ct => _updater.PatchToVersionAsync(target, ct))
                     .Select(_ => SelfUpdateVerdict.Applied(
                         target, ShippedReleaseSeed.InstalledPlatformVersion, lastRolledAt));
             });
-        });
 
     /// <summary>
     /// Stamps the outcome of one check on the policy node, as System — the durable half of

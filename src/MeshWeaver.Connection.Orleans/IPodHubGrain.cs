@@ -56,7 +56,9 @@ public interface IPodHubGrain : IGrainWithStringKey
     /// This silo has no local route for the address. Deliberately NOT a transient Orleans rejection:
     /// retrying would re-place the activation on the caller and loop. The router treats it as
     /// "nobody serves this address through the grain transport" and — for one release — falls back
-    /// to the stream publish.
+    /// to the stream publish. With <see cref="PodHubNotHereException.Released"/> set, the owner
+    /// itself said goodbye (<see cref="Detach"/>) and the router answers TERMINALLY instead — see
+    /// that property for why the difference is the whole #2426 eviction.
     /// </exception>
     Task<IMessageDelivery> Deliver(IMessageDelivery delivery);
 }
@@ -92,6 +94,18 @@ public sealed class PodHubNotHereException : Exception
         Address = address;
         RespondingSilo = respondingSilo;
     }
+
+    /// <summary>
+    /// Creates the exception for an address whose OWNER released it — the
+    /// <see cref="Released"/> shape. Distinct from the two-argument form on purpose: that one says
+    /// "I cannot find it", this one says "it told me it is gone", and only the second is terminal.
+    /// </summary>
+    /// <param name="address">The address the owner released.</param>
+    /// <param name="respondingSilo">The silo the released activation is on, or null when unknown.</param>
+    /// <param name="released">Must be <c>true</c>; the parameter exists so the call site reads as what it is.</param>
+    public PodHubNotHereException(string address, string? respondingSilo, bool released)
+        : this(address, respondingSilo)
+        => Released = released;
 
     /// <summary>Parameterless ctor for the serializer.</summary>
     public PodHubNotHereException() { }
@@ -134,10 +148,39 @@ public sealed class PodHubNotHereException : Exception
     [global::Orleans.Id(2)]
     public bool ClaimRefusal { get; set; }
 
+    /// <summary>
+    /// True when the OWNER of this address released it — its registration was disposed
+    /// (<c>OrleansRoutingService.RegisterStream</c>'s handle: a Blazor circuit that closed, a hosted
+    /// hub that was torn down) and <see cref="IPodHubGrain.Detach"/> ran. The activation stays
+    /// behind as a short-lived TOMBSTONE that answers every delivery with this shape.
+    ///
+    /// <para>🚨 <b>This is the one refusal that is TERMINAL, and the distinction is load-bearing.</b>
+    /// Without it the router can only say "no silo serves this hub right now", which it must call
+    /// transient (<c>ErrorType.ShuttingDown</c>) because it cannot tell a claim that has not landed
+    /// yet from an address nobody will ever claim again — and the owner-side eviction that ends the
+    /// fan-out-to-a-corpse storm (#2426/#2546) deliberately does NOT act on a transient verdict
+    /// (#2756). So a closed circuit's owner kept fanning every change out to the corpse, each
+    /// delivery refused and re-logged, until the stream's own idle release — measured on memex
+    /// 2026-09-03 at 300–1,169 refusals per minute for 46 minutes after ONE tab closed, with zero
+    /// evictions. A released address is not "moving between pods": Blazor never reuses a closed
+    /// circuit id, and a hub that re-registers claims it afresh through <c>Attach</c>, which clears
+    /// the tombstone. So the router stamps it <c>NotFound</c> + <c>TargetUnserved</c>, the verdict
+    /// the eviction was written for.</para>
+    ///
+    /// <para>False on an older peer, which degrades to the transient shape — never to a wrong
+    /// eviction.</para>
+    /// </summary>
+    [global::Orleans.Id(3)]
+    public bool Released { get; set; }
+
     /// <inheritdoc />
     public override string Message => ClaimRefusal
         ? $"The pod-hub claim for '{Address}' was refused: Attach answered false, so the activation "
           + "this process reached is on a silo that has no local route for the address. The owner's "
           + "claim has NOT landed and the cluster cannot reach this hub by directed grain call."
-        : base.Message;
+        : Released
+            ? $"'{Address}' was RELEASED by its owner: the registration that claimed it was disposed, "
+              + "so no silo will serve it again through the pod-hub transport. This is a terminal "
+              + "verdict, not a roll window."
+            : base.Message;
 }

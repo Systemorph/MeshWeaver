@@ -18,6 +18,14 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public static class OrleansTestMeshExtensions
 {
     /// <summary>
+    /// The one stream-routed address type this rig hosts on a SILO rather than declaring
+    /// client-hosted (see the registration below). Addresses of this type take the pod-hub leg
+    /// exactly as <c>portal/…</c> does in production — the only way a test here can reach
+    /// <c>RoutingGrain.AnswerPodHubNotHere</c> rather than the stream fallback.
+    /// </summary>
+    public const string SiloHostedStreamRoutedType = "silohub";
+
+    /// <summary>
     /// Builds the shared test mesh.
     /// </summary>
     /// <param name="builder">The mesh builder.</param>
@@ -48,6 +56,11 @@ public static class OrleansTestMeshExtensions
             .AddClientHostedAddressType("mesh")
             .AddClientHostedAddressType("portal")
             .AddClientHostedAddressType("cache")
+            // 🚨 And ONE stream-routed type the rig does NOT declare client-hosted — so a test can
+            // exercise the production leg end to end: RegisterStream on a silo → pod-hub claim →
+            // directed delivery → PodHubNotHere → AnswerPodHubNotHere's verdicts. Every type above
+            // falls back to the stream publish in this rig, which can never produce those verdicts.
+            .AddStreamRoutedAddressType(SiloHostedStreamRoutedType)
             .InstallAssemblies(assemblyLocation)
             .AddMeshNodes(MeshNode.FromPath($"{AddressExtensions.AppType}/HubFactory") with
             {
