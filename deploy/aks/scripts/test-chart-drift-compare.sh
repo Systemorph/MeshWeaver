@@ -81,6 +81,17 @@ else
   echo "::error::the PluginCatalog__RegistryToken finding does not name the secret supplying it."
   fail=1
 fi
+# A secret key differing from the inline name ONLY IN CASE is a COLLISION, not a shadow: the pod
+# carries both variables and .NET picks per start. Routing secret twins past the case check was the
+# first cut of this feature and Copilot caught it on #3204.
+expect_class "COLLIDES"     "inline env Speech__ApiKey"
+if echo "$out" | grep -A1 'COLLIDES *inline env Speech__ApiKey' | grep -q 'secret/portal-secrets'; then
+  echo "  ok   a case-collision against a SECRET names the secret"
+else
+  echo "::error::the Speech__ApiKey collision does not name the secret it collides with."
+  fail=1
+fi
+
 # ...and must NOT claim to know whether the values agree — this script never reads a secret value.
 if echo "$out" | grep -A1 'SHADOWS *inline env PluginCatalog__RegistryToken' | grep -q 'THE TWO DISAGREE'; then
   echo "::error::the secret-backed shadow asserts a value verdict it cannot have — no secret value"
