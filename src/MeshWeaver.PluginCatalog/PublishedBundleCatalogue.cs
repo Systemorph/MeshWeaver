@@ -154,21 +154,42 @@ public static class PublishedBundleCatalogue
 
     /// <summary>
     /// 🚨 The FULL observation of one identity (#3175): the sealed bundle ids, the module set every
-    /// complete source sealed (each module bundle's entry assembly read for its MVID, spelt as the
-    /// dependency records spell it), and every sealed bundle's per-NodeType dependency record. The
-    /// bytes were always on disk — <see cref="SealedModulesOf"/> already refused a torn set — and
-    /// <see cref="ReleaseAvailability"/> can only assert CONSISTENCY when it is handed both halves.
-    /// Reads every bundle's MANIFEST, and for each sealed module bundle inflates its entry assembly into
-    /// memory to read the MVID from its PE metadata — never a content bundle's NodeType assembly bytes.
+    /// complete source sealed (each module bundle read for the MVID of every <c>MeshWeaver.*</c>
+    /// assembly it CARRIES, spelt as the dependency records spell it), and every sealed bundle's
+    /// per-NodeType dependency record. The bytes were always on disk — <see cref="SealedModulesOf"/>
+    /// already refused a torn set — and <see cref="ReleaseAvailability"/> can only assert CONSISTENCY
+    /// when it is handed both halves. Reads every bundle's MANIFEST, and for each sealed module bundle
+    /// inflates its module-folder assemblies into memory to read the MVID from their PE metadata —
+    /// never a content bundle's NodeType assembly bytes.
     /// </summary>
-    /// <remarks>A module bundle that cannot be read, or a source sealed before module sealing
-    /// existed, becomes the set's <see cref="SealedModuleSet.Refusal"/> — a named unreadability the
-    /// gate turns into a HOLD — and never a silent omission that would read as "no module here".</remarks>
+    /// <remarks>
+    /// <para>A module bundle that cannot be read, or a source sealed before module sealing existed,
+    /// becomes the set's <see cref="SealedModuleSet.Refusal"/> — a named unreadability the gate turns
+    /// into a HOLD — and never a silent omission that would read as "no module here".</para>
+    ///
+    /// <para>🚨 <b>Every COPY is accounted for, not only the declared one (#3221).</b> A module-owned
+    /// <c>MeshWeaver.*</c> sibling RIDES the bundles that reference it
+    /// (<see href="../ModuleClosureAccounting">Module Closure Accounting</see>), so one assembly name
+    /// reaches a mesh from several bundles at once: measured on MeshWeaver.Plugins <c>main</c>
+    /// 2026-09-03, 19 of 37 module bundles carry a copy of an assembly some OTHER package declares as
+    /// its module — <c>MeshWeaver.Markdown.Collaboration</c> (Essentials') rides 14 of them and
+    /// <c>MeshWeaver.AI</c> (AI's) rides 12. Those copies must be the SAME BUILD: the loader collapses
+    /// them to whichever loads first, so a divergence makes the live MVID a coin toss and every
+    /// NodeType binding the name is declined at adoption. Riding copies therefore take part in
+    /// <see cref="SealedModuleSet.Conflicts"/>, while only the DECLARED entry defines
+    /// <see cref="SealedModuleSet.MvidByModule"/> — the entry is what an instance registers as an
+    /// <c>InstalledModuleAssembly</c> and therefore what <c>NodeTypeCompilationHelpers.ModuleMvidsOf</c>
+    /// reports, so a ride-only name must not start standing in for a module nothing declares.</para>
+    /// </remarks>
     internal static ReleaseArtifacts ArtifactsForIdentity(string identityDirectory, ILogger? logger)
     {
         var bundles = new List<string>();
         var records = ImmutableArray.CreateBuilder<BundleDependencyRecord>();
+        // The DECLARED modules — what an instance registers, and therefore what a record must name.
         var sealedBy = new Dictionary<string, (string Mvid, string Source)>(StringComparer.Ordinal);
+        // EVERY copy of every MeshWeaver.* assembly the sealed module bundles carry, declared or
+        // riding: the first one seen per name, against which every later copy must compare equal.
+        var producedBy = new Dictionary<string, SealedCopy>(StringComparer.Ordinal);
         var conflicts = ImmutableArray.CreateBuilder<string>();
         var refusals = new List<string>();
 
@@ -192,25 +213,33 @@ public static class PublishedBundleCatalogue
             foreach (var moduleBundle in modules.Modules)
             {
                 var path = Path.Combine(sourceDirectory, ModulesDirectoryName, moduleBundle);
-                string name, mvid;
+                ImmutableArray<SealedModuleAssembly> carried;
                 try
                 {
-                    (name, mvid) = SealedModuleMvidOf(path);
+                    carried = SealedModuleAssembliesOf(path);
                 }
                 catch (Exception ex) when (ex is IOException or InvalidDataException or BadImageFormatException or InvalidOperationException)
                 {
                     refusals.Add($"source '{source}': module bundle '{moduleBundle}' is unreadable — {ex.Message}");
                     continue;
                 }
-                if (sealedBy.TryGetValue(name, out var existing))
+                foreach (var (name, mvid, isEntry) in carried)
                 {
-                    if (!string.Equals(existing.Mvid, mvid, StringComparison.Ordinal))
-                        conflicts.Add(
-                            $"module {name}: source '{existing.Source}' sealed {existing.Mvid}, "
-                            + $"source '{source}' sealed {mvid}");
-                    continue;
+                    if (producedBy.TryGetValue(name, out var first))
+                    {
+                        if (!string.Equals(first.Mvid, mvid, StringComparison.Ordinal))
+                            conflicts.Add(
+                                $"module {name}: source '{first.Source}' sealed {first.Mvid} "
+                                + $"{RoleOf(first.IsEntry)} '{first.Bundle}', source '{source}' sealed "
+                                + $"{mvid} {RoleOf(isEntry)} '{moduleBundle}'");
+                    }
+                    else
+                    {
+                        producedBy[name] = new SealedCopy(mvid, source, moduleBundle, isEntry);
+                    }
+                    if (isEntry)
+                        sealedBy.TryAdd(name, (mvid, source));
                 }
-                sealedBy[name] = (mvid, source);
             }
         }
 
@@ -227,46 +256,90 @@ public static class PublishedBundleCatalogue
     }
 
     /// <summary>
-    /// A sealed module bundle's entry assembly and its MVID in the dependency-record spelling
+    /// Every <c>MeshWeaver.*</c> assembly a sealed module bundle CARRIES — its declared entry first,
+    /// then each riding sibling — with each MVID in the dependency-record spelling
     /// (<c>mvid:&lt;N&gt;</c> — <c>NodeTypeCompilationHelpers.ModuleMvidsOf</c>'s projection, so the
     /// gate compares the id the seeder will compute). The entry is the manifest's
     /// <c>module.assemblyName</c>, else the single assembly under the module folder — the same
     /// resolution the lanes apply when they compose the bundle.
+    ///
+    /// <para>🚨 <b>What is read, and why that set (#3221).</b> The module folder is FLAT and holds
+    /// the module's private closure, so it carries the entry plus whatever rode with it. Only
+    /// <c>MeshWeaver.*</c> names are folded in: those bind by a strictly synchronised
+    /// <c>AssemblyVersion</c>, so two copies under one simple name are one assembly identity and the
+    /// loader keeps whichever it saw first — that is the double-production hazard. A third-party
+    /// diamond RIDES by design, versions independently, and is deliberately NOT judged here. The
+    /// files are read from the ARCHIVE rather than from <c>module.assemblies</c>, because what lands
+    /// is what the bundle contains, not what its manifest claims.</para>
     /// </summary>
-    internal static (string Name, string Mvid) SealedModuleMvidOf(string moduleBundlePath)
+    internal static ImmutableArray<SealedModuleAssembly> SealedModuleAssembliesOf(string moduleBundlePath)
     {
         var manifest = BundleReader.ReadManifest(moduleBundlePath);
         using var file = File.OpenRead(moduleBundlePath);
         using var archive = new ZipArchive(file, ZipArchiveMode.Read);
+        var flat = archive.Entries
+            .Where(e => e.FullName.StartsWith(NuGetPackageWriter.ModuleFolder + "/", StringComparison.Ordinal)
+                        && e.FullName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+                        && !e.FullName[(NuGetPackageWriter.ModuleFolder.Length + 1)..].Contains('/'))
+            .OrderBy(e => e.FullName, StringComparer.Ordinal)
+            .ToList();
         var name = manifest?.Module?.AssemblyName;
         if (string.IsNullOrWhiteSpace(name))
         {
-            var candidates = archive.Entries
-                .Where(e => e.FullName.StartsWith(NuGetPackageWriter.ModuleFolder + "/", StringComparison.Ordinal)
-                            && e.FullName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
-                            && !e.FullName[(NuGetPackageWriter.ModuleFolder.Length + 1)..].Contains('/'))
-                .ToList();
-            if (candidates.Count != 1)
+            if (flat.Count != 1)
                 throw new InvalidOperationException(
                     $"cannot identify the module's entry assembly (no manifest module.assemblyName; "
-                    + $"{NuGetPackageWriter.ModuleFolder}/ holds {candidates.Count} dll(s))");
-            name = Path.GetFileNameWithoutExtension(candidates[0].FullName);
+                    + $"{NuGetPackageWriter.ModuleFolder}/ holds {flat.Count} dll(s))");
+            name = Path.GetFileNameWithoutExtension(flat[0].FullName);
         }
         var entry = archive.GetEntry($"{NuGetPackageWriter.ModuleFolder}/{name}.dll")
             ?? throw new InvalidOperationException(
                 $"{NuGetPackageWriter.ModuleFolder}/{name}.dll is missing from the bundle");
-        using var stream = entry.Open();
+
+        var carried = ImmutableArray.CreateBuilder<SealedModuleAssembly>(flat.Count);
+        carried.Add(new SealedModuleAssembly(name, MvidOf(entry), IsEntry: true));
+        foreach (var sibling in flat)
+        {
+            var simple = Path.GetFileNameWithoutExtension(sibling.FullName);
+            if (string.Equals(simple, name, StringComparison.Ordinal) || !IsPlatformAssemblyName(simple))
+                continue;
+            carried.Add(new SealedModuleAssembly(simple, MvidOf(sibling), IsEntry: false));
+        }
+        return carried.ToImmutable();
+    }
+
+    /// <summary>The MVID of one archived assembly, in the dependency-record spelling. Inflated into
+    /// memory (a zip entry is not seekable, and <c>PEReader</c> needs to seek).</summary>
+    private static string MvidOf(ZipArchiveEntry entry)
+    {
         if (entry.Length is < 0 or > int.MaxValue)
             throw new InvalidOperationException(
                 $"{entry.FullName} declares an implausible length ({entry.Length} bytes) — the module bundle is corrupt");
+        using var stream = entry.Open();
         using var bytes = new MemoryStream((int)entry.Length);
         stream.CopyTo(bytes);
         bytes.Position = 0;
         using var pe = new PEReader(bytes);
         var metadata = pe.GetMetadataReader();
-        var mvid = metadata.GetGuid(metadata.GetModuleDefinition().Mvid);
-        return (name, CompiledDependencies.MvidScheme + mvid.ToString("N"));
+        return CompiledDependencies.MvidScheme
+               + metadata.GetGuid(metadata.GetModuleDefinition().Mvid).ToString("N");
     }
+
+    /// <summary>The names that bind by a strictly synchronised <c>AssemblyVersion</c> and therefore
+    /// collapse to ONE identity in a loaded process — the same predicate
+    /// <c>MeshWeaver.Plugin.Build.DepsClosure</c> uses to decide what the platform side owns.</summary>
+    private static bool IsPlatformAssemblyName(string name) =>
+        name.StartsWith("MeshWeaver.", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "MeshWeaver", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Which bundle, from which source, sealed the first copy of one assembly name, and
+    /// whether it was that bundle's DECLARED module or a sibling riding beside it.</summary>
+    private readonly record struct SealedCopy(string Mvid, string Source, string Bundle, bool IsEntry);
+
+    /// <summary>How a copy reached the sealed set — the half of a conflict line that tells an
+    /// operator which producer to change.</summary>
+    private static string RoleOf(bool isEntry) =>
+        isEntry ? "as the declared module of" : "as a sibling riding";
 
     /// <summary>
     /// The per-NodeType dependency records one sealed bundle carries. EMPTY when the archive carries
@@ -460,6 +533,19 @@ public static class PublishedBundleCatalogue
 /// <summary>One reading of a sealed publication's module set: the listed bundle names, or
 /// <c>null</c> with the reason a consumer must not compose from it.</summary>
 public sealed record ModuleSetReading(IReadOnlyList<string>? Modules, string? Refusal);
+
+/// <summary>
+/// One <c>MeshWeaver.*</c> assembly a sealed module bundle carries, and the build it is
+/// (<c>mvid:&lt;N&gt;</c>). <paramref name="IsEntry"/> separates the bundle's DECLARED module — the
+/// one an instance registers, and therefore the one a dependency record must name — from a sibling
+/// RIDING beside it because it is module-owned and exists nowhere in <c>/app</c>
+/// (<see href="../ModuleClosureAccounting">Module Closure Accounting</see>). Both must be the same
+/// build for one framework identity; only the entry defines what the identity's module IS (#3221).
+/// </summary>
+/// <param name="Name">The assembly's simple name.</param>
+/// <param name="Mvid">Its MVID in the dependency-record spelling (<c>mvid:&lt;32 hex&gt;</c>).</param>
+/// <param name="IsEntry">True for the bundle's declared module, false for a riding sibling.</param>
+public readonly record struct SealedModuleAssembly(string Name, string Mvid, bool IsEntry);
 
 /// <summary>One reading of the catalogue: what the target release turned out to be, and what was
 /// published for it.</summary>

@@ -146,5 +146,6 @@ lane and by the container lane, must declare the same non-framework closure.** A
 lane divergence pretending to be a build decision.
 
 See also: [Module Build Architecture](../ModuleBuildArchitecture) ·
+[Module-Owned Siblings Ride](../ModuleOwnedSiblingsRide) ·
 [Module Versioning](../ModuleVersioning) · [Plugin Build Contract](../PluginBuildContract) ·
 [NodeType Compilation](../NodeTypeCompilation)

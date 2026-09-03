@@ -444,16 +444,27 @@ availability gate now sees it (below) instead of rolling onto it.
    `BakeAgainstPlatformHostTest.AComposedModuleTheHostAlsoShips_IsRefusedByName`.
 2. **Availability asserts the SET** (`ReleaseAvailability.IsUpdatable` over the observation
    `PublishedBundleCatalogue.ArtifactsForIdentity` makes). For the candidate identity the registry
-   reads every complete source's sealed module set — each module bundle's entry assembly, PE header
-   only, for its MVID — and every sealed bundle's per-NodeType dependency record (manifest only,
-   never assembly bytes). Then: every `mvid:` entry naming a module the set carries must equal the
-   MVID sealed for it, and no module may be sealed at two MVIDs by two sources. A violation is
-   `PackageAvailabilityKind.SealedSetInconsistent` — a HOLD that names the bundle, the NodeType, the
-   module and both builds — and it is consumed unchanged by the self-update poll, CD's post-promote
-   assertion and `/api/plugins/is-updatable`, because all three call the same predicate. Both
-   failure directions are pinned (`SealedSetConsistencyTest`): an unreadable or pre-module-sealing
-   module set is `Indeterminate` (hold, named — never "compatible"), and a module the set does not
-   carry is not judged, because the gate cannot see the bytes a registry install landed.
+   reads every complete source's sealed module set — every `MeshWeaver.*` assembly each module
+   bundle CARRIES, PE header only, for its MVID — and every sealed bundle's per-NodeType dependency
+   record (manifest only, never assembly bytes). Then: every `mvid:` entry naming a module the set
+   carries must equal the MVID sealed for it, and no assembly name may appear in the set at two
+   MVIDs. A violation is `PackageAvailabilityKind.SealedSetInconsistent` — a HOLD that names the
+   bundle, the NodeType, the module and both builds — and it is consumed unchanged by the
+   self-update poll, CD's post-promote assertion and `/api/plugins/is-updatable`, because all three
+   call the same predicate. Both failure directions are pinned (`SealedSetConsistencyTest`): an
+   unreadable or pre-module-sealing module set is `Indeterminate` (hold, named — never
+   "compatible"), and a module the set does not carry is not judged, because the gate cannot see the
+   bytes a registry install landed.
+
+   🚨 **"No name at two MVIDs" counts RIDING copies, not just declared ones (#3221).** A
+   module-owned `MeshWeaver.*` sibling rides every bundle that references it, so one name commonly
+   reaches a mesh from many bundles at once — 19 of MeshWeaver.Plugins' 37 module bundles carry a
+   copy of an assembly another package declares. That shape is sanctioned and is NOT refused;
+   excluding declared modules from the closure would invert the package graph and break solo
+   installs. What is refused is the copies DISAGREEING, because the loader keeps whichever it saw
+   first and declines every NodeType that recorded the other. Only the DECLARED entry defines what
+   the identity's module IS. Full reasoning and the measurement:
+   [Module-Owned Siblings Ride](../ModuleOwnedSiblingsRide).
 
 ### What the gate still cannot see
 
@@ -637,6 +648,7 @@ producer of the same publication and is removed — a follow-up, not part of thi
   mirror volume, `git worktree add` per run at the release ref, worktree deleted at job end.
 
 See also: [ModuleClosureAccounting](../ModuleClosureAccounting) ·
+[ModuleOwnedSiblingsRide](../ModuleOwnedSiblingsRide) ·
 [ModuleVersioning](../ModuleVersioning) ·
 [NodeTypeCompilation](../NodeTypeCompilation) · [PluginBuildContract](../PluginBuildContract) ·
 [BuildProcess](../BuildProcess) · [InMeshBuildAndTest](../InMeshBuildAndTest).
