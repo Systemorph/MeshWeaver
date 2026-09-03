@@ -95,9 +95,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           # The detector compares the pull request's head against its merge base, so history is
-          # needed. On pull_request the default ref IS refs/pull/<n>/merge; a manual run names it.
+          # needed. On pull_request `github.sha` IS the merge commit of refs/pull/<n>/merge — the very
+          # commit dotnet-test.yml builds — so it is named explicitly rather than left to the
+          # action's default; a manual run names the merge ref of the number it was given. Both
+          # branches are non-empty, so the ref can never be blank.
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.core_pr) || '' }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.core_pr) || github.sha }}
 
       - name: Assert the dispatch credential, or fail naming what to provision
         env:
