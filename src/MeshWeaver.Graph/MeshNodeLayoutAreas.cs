@@ -1840,11 +1840,12 @@ public static class MeshNodeLayoutAreas
     internal static ThreadChatControl PromptComposer(string nodePath, string? draft)
     {
         var nodeName = nodePath.Contains('/') ? nodePath[(nodePath.LastIndexOf('/') + 1)..] : nodePath;
-        var composer = new ThreadChatControl()
+        return new ThreadChatControl()
             .WithHideEmptyState(true)
             .WithInitialContext(nodePath)
-            .WithInitialContextDisplayName(nodeName);
-        return string.IsNullOrEmpty(draft) ? composer : composer.WithInitialDraft(draft);
+            .WithInitialContextDisplayName(nodeName)
+            // WithInitialDraft takes a nullable: no draft simply leaves the composer empty.
+            .WithInitialDraft(draft);
     }
 
     #endregion
