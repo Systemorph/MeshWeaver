@@ -915,12 +915,15 @@ public static class DataExtensions
         // hosted hub's scope on DisposalCompleted, and the watchdog's out-of-band
         // ForceTeardownAfterWatchdog runs hostedHubs.Dispose() BEFORE DisposeImpl(). A resolve then
         // throws ObjectDisposedException ("Instances cannot be resolved … from this LifetimeScope"),
-        // which costs this NACK twice over: the verdict is never dispatched — so the writer burns
-        // the full 31 s WriteVerdictBound and reports OwnerUnreachable, the exact acked-write-loss
-        // this registration exists to prevent — and, because the hub's synchronous cleanups live in
-        // one Rx CompositeDisposable whose Dispose stops at the first throw, EVERY disposal action
-        // registered after this one is skipped as well. Observed on main shard 4, 2026-09-02
+        // and the verdict is then never dispatched — so the writer burns the full 31 s
+        // WriteVerdictBound and reports OwnerUnreachable, the exact acked-write-loss this
+        // registration exists to prevent. Observed on main shard 4, 2026-09-02
         // (LateNackReenqueueTest, run 33630685580).
+        //
+        // MessageHub.GuardRegistrant now stops such a throw from also cancelling the cleanups
+        // registered BEHIND this one — that was the second half of the same incident — but it
+        // cannot mint a verdict this registrant failed to produce. The isolation makes the blast
+        // radius one registrant; capturing eagerly is what keeps this registrant out of it.
         var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
         var parent = hub.Configuration.ParentHub;
         hub.RegisterForDisposal(_ =>

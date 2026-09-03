@@ -2079,10 +2079,14 @@ public sealed class MessageHub : IMessageHub
             try { registrant.Dispose(); }
             catch (Exception e)
             {
-                TryLog(LogLevel.Warning,
-                    "[DISPOSE-REGISTRANT] {Address}: a registered cleanup ({Registrant}) faulted: "
-                    + "{Type}: {Message}. The remaining cleanups still ran.",
-                    Address, registrant.GetType().Name, e.GetType().Name, e.Message);
+                // 🚨 The EXCEPTION, not its ToString(): a registrant that throws here is a bug in
+                // that registrant, and the only thing that says WHICH line raised it is the stack
+                // trace. Type+message alone names the symptom and hides the site — and this arm is
+                // now the ONLY report of that fault, since the walk no longer ends on it.
+                TryLog(LogLevel.Warning, e,
+                    "[DISPOSE-REGISTRANT] {Address}: a registered cleanup ({Registrant}) faulted. "
+                    + "The remaining cleanups still ran.",
+                    Address, registrant.GetType().Name);
             }
         });
 
