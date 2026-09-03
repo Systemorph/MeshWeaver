@@ -145,8 +145,23 @@ ran and *failed*.
 
 An aggregate job is therefore **not** a substitute for requiring the gate itself. It closes the
 skip hole; the failure hole is closed only by the gate's own context being required, or by the
-aggregate also asserting `result == 'success'` for each need. A wall of ticks that includes an
-aggregate which cannot go red is the same defect as a gate that skips on missing input.
+aggregate also asserting `result == 'success'` for each need.
+
+🚨 Read that narrowness precisely, because the obvious inference from the table is wrong. `Every
+gate executed` is **not** a check that cannot fail: it goes red the moment any gate `skipped`, which
+is exactly the hole it was built to close. Its 28/28 is the honest report that no gate skipped in
+those runs — not evidence of inertness. The two look identical in a run list and are opposites, and
+only the job's source tells them apart:
+
+```yaml
+# it fails if any gate reached a terminal state that is neither success nor an
+# honest failure — which is what a `skipped` is.
+```
+
+So the defect to look for is never "this tick is always green" — a gate watching for something rare
+*should* be. It is **a required context whose green does not mean what the wall implies it means**.
+Here the wall implies "every gate is satisfied"; the tick only means "every gate ran". That gap is
+closed by requiring the gate itself, not by removing or distrusting the aggregate.
 
 ## The lever
 
