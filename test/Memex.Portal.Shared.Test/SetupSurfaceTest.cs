@@ -243,6 +243,63 @@ public class SetupSurfaceTest : IDisposable
     }
 
     [Fact]
+    public async Task TheConnectionString_IsNeverEchoedBackIntoTheForm()
+    {
+        // 🚨 A connection string CARRIES A PASSWORD, so it gets exactly the treatment the sign-in
+        // secrets already had. It did not: the field was re-rendered with value="…" after a failed
+        // submit, putting the password in the page source, the browser cache and any screenshot of
+        // the form (Copilot review on #3220 — an inconsistency inside one file).
+        using var app = BuildApp();
+        var token = app.Services.GetRequiredService<SetupAccessToken>().Value;
+        var form = Answers(token);
+        form["storage.type"] = "Cosmos";                       // force a re-render
+        form["storage.connectionString"] = "Host=db;Password=hunter2";
+
+        var response = await app.GetTestClient().PostAsync("/setup", new FormUrlEncodedContent(form));
+        var html = await response.Content.ReadAsStringAsync();
+
+        Assert.DoesNotContain("hunter2", html);
+        Assert.DoesNotContain("Host=db", html);
+    }
+
+    [Fact]
+    public async Task ARouteTheDeploymentAlreadyAnswers_IsReported_NotOfferedForEditing()
+    {
+        // 🚨 The manifest is layered UNDER the host's own configuration, so anything typed for an
+        // already-configured route would be accepted, stored, and then silently outranked at the
+        // next boot. SetupSignInOption.AlreadyConfigured documented exactly this behaviour and the
+        // markup did not implement it (Copilot review on #3220). Disabled, not readonly: a disabled
+        // control is not submitted at all.
+        using var app = BuildApp(catalog: Catalog with
+        {
+            SignIn =
+            [
+                new SetupSignInOption("Dev", "Developer login", "Authentication", IsSwitch: true),
+                new SetupSignInOption("Microsoft", "Microsoft", "Authentication:Microsoft",
+                    HasTenant: true, AlreadyConfigured: true),
+            ],
+        });
+        var token = app.Services.GetRequiredService<SetupAccessToken>().Value;
+        var client = app.GetTestClient();
+
+        var html = await client.GetStringAsync("/setup");
+        Assert.Contains("already configured by this deployment", html);
+        // The client-id field for that route carries `disabled`, so nothing is posted for it.
+        Assert.Matches(@"name=""signin\.Microsoft\.clientId""[^>]*\bdisabled\b", html);
+
+        // …and the endpoint does not depend on the markup: a hand-crafted POST is ignored too,
+        // because a manifest claiming a provider the instance does not run on is worse than silence.
+        var form = Answers(token);
+        form["signin.Microsoft.clientId"] = "smuggled-in";
+        form["signin.Microsoft.clientSecret"] = "smuggled-secret";
+        await client.PostAsync("/setup", new FormUrlEncodedContent(form));
+
+        var manifest = InstanceManifest.Read(root);
+        Assert.NotNull(manifest);
+        Assert.Empty(manifest!.SignIn!.Providers);
+    }
+
+    [Fact]
     public async Task TheGermanHeader_GetsTheGermanPage()
     {
         // The wizard runs pre-mesh, so there is no AccessContext to read a locale from — but that

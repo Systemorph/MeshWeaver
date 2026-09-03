@@ -161,6 +161,16 @@ public static class SetupComposition
                 continue;
             }
 
+            // 🚨 A route this DEPLOYMENT already answers is not recorded, whatever arrives here.
+            // The page disables those fields so a browser submits nothing for them, but the endpoint
+            // must not depend on the markup: the manifest is projected UNDER the host's own
+            // configuration, so an entry written here could never take effect, and a manifest that
+            // CLAIMS a provider the instance does not actually run on is worse than one that stays
+            // quiet — it is the "surface showing its own stored answer while the process runs on a
+            // different one" state (MeshWeaver.Plugins#980), preserved on disk.
+            if (option.AlreadyConfigured)
+                continue;
+
             // A scheme turned on with no secret renders its button and fails at the token
             // exchange — strictly worse than an absent provider, so it is refused.
             if (string.IsNullOrWhiteSpace(answer.ClientSecret))
