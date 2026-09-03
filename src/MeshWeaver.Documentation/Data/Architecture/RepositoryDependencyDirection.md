@@ -35,15 +35,16 @@ incidental coupling that can be tidied away.
 | `main-cd.yml:849` → `:974` | checks out Plugins @ `vars.MW_PLUGINS_REF \|\| main`, publishes `plugins-repo/src/Memex.Portal.Distributed` | a Plugins compile error turns core CD red; **no images publish for that core commit** |
 | `main-cd.yml:1020` → `:1080` | same, for `Memex.Database.Migration` | ditto — and a missing migration tag is the 6.5 h production outage of 2026-08-27 (#2555) |
 | `main-cd.yml:524` | `git ls-remote` the Plugins HEAD, to key the image set on the PAIR (#2622) | fails RED, deliberately: an unresolvable HEAD means the image identity cannot be established |
-| `main-cd.yml:2094` (`plugins-modules`), `:2166` (`plugins-bake`) | core's CD packs and bakes the Plugins module bundles the portals adopt for this identity | a red leg means the sealed publication is missing for an identity the images already carry — **and it stops the whole fleet**: `notify-dependents` is gated on `needs.plugins-bake.result == 'success'` (`:1982`), so Education, Reinsurance, SocialMedia and Manufacturing are never told the platform released |
+| `main-cd.yml:2094` (`plugins-modules`), `:2166` (`plugins-bake`) | core's CD packs and bakes the Plugins module bundles the portals adopt for this identity | a red leg means the sealed publication is missing for an identity the images already carry — **and it stalls the whole fleet**: memex still wakes every satellite for that identity, but each of their bakes seeds the Plugins publication and fails `upstream 'plugins' has no SEALED publication` until it exists |
 | `release-images.yml:34` → `:101`, `:114`, `:126` | the `v*.*.*` tag lane, same two projects | a tag release publishes no portal image |
 | `edge-images.yml:39` → `:92`, `:105` | the manual edge channel, same two projects | edge builds fail |
 
 🚨 **The blast radius is the FLEET, not this repo.** A broken plugins tree does not merely red a
-core job: `notify-dependents` — the one fan-out that tells every satellite a platform release
-happened — sits behind `needs.plugins-bake.result == 'success'`. So one repository's compile error
-silences the release wave for four others, which then adopt nothing and report `FrameworkDeclined`
-at their next fetch. That is the cost of the edge, stated plainly.
+core job. The release wave itself is memex's — the build fact still reaches `Hosting/PlatformBuilds`
+and memex still dispatches `meshweaver-framework-released` to every subscribed repository — but each
+satellite's bake seeds the Plugins publication for the released identity, so with `plugins-bake` red
+every one of them fails `upstream 'plugins' has no SEALED publication` and the fleet adopts nothing,
+reporting `FrameworkDeclined` at its next fetch. That is the cost of the edge, stated plainly.
 
 🚨 **`ref: main` is the dishonest part, not the checkout.** A live checkout of a sibling's moving
 default branch means "which plugins commit shipped with which core commit" is decided by whoever
@@ -131,9 +132,13 @@ Checked and cleared — do not "fix" these:
   — `workflow_call` only. A plugin repo calling core's reusable workflow is the intended shape.
   `plugin-build.yml` carries an explicit note that its cross-repo checkout was REMOVED and must not
   be re-added on the strength of a grep.
-- **`notify-dependents.yml`** — core pushes a `repository_dispatch` wave and does not wait for it.
-  The subscriber set is read at run time from the App's installation list, so no repo name is
-  hard-coded and adding one is an App installation, not an edit here.
+- **No dispatcher.** Core sends `repository_dispatch` to no repository. `notify-dependents.yml` was
+  withdrawn on 2026-09-03 (maintainer: *"core publishes an event and finishes"*): the release wave is
+  emitted by memex from the build fact core POSTs into `Hosting/PlatformBuilds`, to the repositories
+  the `Hosting/Deployment` records name as registry sources. `PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository`
+  refuses a `/dispatches` POST in any workflow core runs on its own behalf; the reusable
+  `node-repo-publish-bake.yml` is the one ledgered sender, and it runs in the CALLING satellite's
+  context (a satellite waking its own dependents).
 - **`scripts/check-type-forwards.py --sibling`** — the flag can resolve a departed type against a
   sibling checkout, and CI deliberately does NOT pass it (`dotnet-test.yml`): without the flag the
   gate is the conservative one, and passing it would make a core verdict depend on another repo's

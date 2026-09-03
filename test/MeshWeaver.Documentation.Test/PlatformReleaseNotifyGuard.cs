@@ -8,9 +8,11 @@ namespace MeshWeaver.Documentation.Test;
 /// <summary>
 /// Governance guard for CD's release-event leg (<c>#2235</c>) — the ONE thing that turns a promoted
 /// platform build into a cross-repo rebake wave. CD signs a POST to the control instance's webhook
-/// inbox; the mesh verifies the HMAC, bumps every node repo's <c>MW_IMAGE_DIGEST</c> pin and
-/// broadcasts <c>meshweaver-framework-released</c> to each subscriber
-/// (<c>FrameworkReleaseBroadcaster</c>, <c>src/MeshWeaver.GitSync</c>).
+/// inbox and FINISHES; the mesh verifies the HMAC, bumps every node repo's <c>MW_IMAGE_DIGEST</c>
+/// pin and broadcasts <c>meshweaver-framework-released</c> to each subscriber
+/// (<c>FrameworkReleaseBroadcaster</c>, <c>src/MeshWeaver.GitSync</c>, called by the Hosting
+/// module's <c>PlatformBuildInboxWatcher</c>). Core itself dispatches to no repository — see
+/// <see cref="CoreDispatchesToNoRepository"/>.
 ///
 /// <para>🚨 <b>Why a guard and not a test:</b> the leg cannot be exercised from this repository —
 /// its counterparty is a running mesh — so the ONLY thing that can fail when it regresses is a
@@ -150,60 +152,117 @@ public class PlatformReleaseNotifyGuard
     }
 
     /// <summary>
-    /// 🚨 The dependents ARE dispatched from here (maintainer, 2026-08-29: "it should be github actions
-    /// trigger — no in mesh baking — on platform update ⇒ update all"), and the way it is done is
-    /// what this guard pins, because both previous designs failed in the same silent shape:
-    /// <c>BAKE_SUBSCRIBER_REPOS</c> + a stored PAT printed "NOT CONFIGURED" for its whole life, and
-    /// the mesh broadcast that replaced it dispatched to an empty subscriber set on every deploy
-    /// (#2235). So: no hand-maintained list (the set is the dispatch App's installation, read at
-    /// run time), no stored token (an App installation token minted per run), the credential asserted
-    /// RED in preflight, and the job itself a delivery leg the verdict requires — never a skip.
+    /// 🚨 CORE DISPATCHES TO NO REPOSITORY. Maintainer, 2026-09-03: "None of the top-level repos
+    /// should have any dependency to anyone else. It must be event based: (1) memex issues an event
+    /// that something has a new version; (2) GitHub subscribes to this and triggers the build. Core
+    /// publishes an event and finishes." The one event core emits is the signed build fact
+    /// <c>notify-platform-update</c> POSTs into the control instance's inbox; the fan-out
+    /// (<c>meshweaver-framework-released</c>) is memex's, and the subscriber set is the
+    /// <c>Hosting/Deployment</c> records' registry sources — data in the mesh, not a list here.
+    ///
+    /// <para>What this refuses is any `repository_dispatch` SENDER in a workflow core runs on its own
+    /// behalf — a `/repos/…/dispatches` POST, a dispatch action, an `event_type` payload. Two such
+    /// jobs have lived in this repo (2026-08-22 and 2026-08-29 → 2026-09-03), each justified as "a
+    /// second, independent path to the same event" while the memex hop was silent — and the hop
+    /// was silent because the broadcaster had NO CALLER, not because a mesh hop is unreliable. Two
+    /// emitters for one event is the cross-repo coupling the rule forbids.</para>
+    ///
+    /// <para>The ledger below is the ONE exemption class and it is judged, not skipped: a reusable
+    /// <c>workflow_call</c> lane runs in the CALLING satellite's context, so when
+    /// <c>node-repo-publish-bake.yml</c> sends <c>meshweaver-upstream-published</c> and
+    /// <c>node-repo-tag-modules.yml</c> sends <c>meshweaver-modules-published</c>, the SATELLITE is
+    /// the sender telling its own dependents — core merely hosts the shared lane and never runs it on
+    /// its own behalf. A ledgered file that stops sending fails too: a guard whose subject moved and
+    /// whose roots did not passes having checked nothing.</para>
     /// </summary>
     [Fact]
-    public void TheDispatchIsDiscoveredAppCredentialedAndAssertedRed()
+    public void CoreDispatchesToNoRepository()
     {
+        var workflows = Path.Combine(FindRepoRoot(), ".github", "workflows");
+        // Every ledgered sender must be a reusable lane (`on: workflow_call`) — the property that
+        // makes the caller, not core, the sender. Asserted, not assumed.
+        var ledger = new[] { "node-repo-publish-bake.yml", "node-repo-tag-modules.yml" };
+        foreach (var name in ledger)
+        {
+            var text = File.ReadAllText(Path.Combine(workflows, name));
+            Assert.True(text.Contains("workflow_call:", StringComparison.Ordinal)
+                        && !text.Contains("\n  push:", StringComparison.Ordinal)
+                        && !text.Contains("\n  workflow_run:", StringComparison.Ordinal),
+                $"{name} is ledgered as a satellite-context sender, but it no longer runs only as a "
+                + "reusable workflow_call lane — a dispatch it sends on a push or workflow_run would be core's.");
+        }
+
+        // The withdrawn leg, by name — the shape most likely to be re-added from memory.
+        Assert.False(File.Exists(Path.Combine(workflows, "notify-dependents.yml")),
+            "notify-dependents.yml is back: core must not push the release wave itself — memex does, "
+            + "from the build fact core POSTs (main-cd.yml, 'THE RELEASE WAVE').");
+
+        var senders = Directory.EnumerateFiles(workflows, "*.yml")
+            .Select(f => (Name: Path.GetFileName(f), Sends: SendsARepositoryDispatch(f)))
+            .Where(x => x.Sends)
+            .Select(x => x.Name)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToArray();
+
+        var unexpected = senders.Except(ledger, StringComparer.Ordinal).ToArray();
+        Assert.True(unexpected.Length == 0,
+            "these workflows send a repository_dispatch to another repository:\n  "
+            + string.Join("\n  ", unexpected)
+            + "\nCore publishes ONE event (the build fact POSTed to Hosting/PlatformBuilds) and finishes; "
+            + "the fan-out is memex's (FrameworkReleaseBroadcaster, called by the Hosting module's "
+            + "PlatformBuildInboxWatcher). Remove the dispatch — do not extend the ledger.");
+
+        var vanished = ledger.Except(senders, StringComparer.Ordinal).ToArray();
+        Assert.True(vanished.Length == 0,
+            "ledgered sender(s) no longer send a repository_dispatch — the ledger is stale, or the "
+            + "satellite→dependent wake moved somewhere this guard does not read:\n  "
+            + string.Join("\n  ", vanished));
+
+        // The main CD workflow, specifically: no job key of either historical shape, no reusable call.
         var body = Body();
+        Assert.DoesNotContain("\n  notify-dependents:", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n  dispatch-dependents:", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("uses: ./.github/workflows/notify-dependents.yml", body, StringComparison.Ordinal);
         Assert.DoesNotContain("BAKE_SUBSCRIBER_REPOS", body, StringComparison.Ordinal);
         Assert.DoesNotContain("DEPENDENT_DISPATCH_TOKEN", body, StringComparison.Ordinal);
-
-        // ONE fan-out. Two sessions built this leg twice on 2026-08-29 (an inline job and the
-        // reusable notify-dependents.yml); the reusable then fired BEFORE the Plugins bake with a
-        // payload the receivers could not use (run 33276813173). A second job key here is the
-        // duplication coming back.
-        Assert.DoesNotContain("\n  dispatch-dependents:", body, StringComparison.Ordinal);
-
-        var job = JobBlock(body, "notify-dependents:");
-        Assert.Contains("uses: ./.github/workflows/notify-dependents.yml", job, StringComparison.Ordinal);
-        Assert.Contains("secrets.DEPENDENT_DISPATCH_APP_ID", job, StringComparison.Ordinal);
-        Assert.Contains("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY", job, StringComparison.Ordinal);
-        // Plugins is built WITH the platform (plugins-bake), never told to rebuild — and the wave
-        // fires only after that publication is sealed: a satellite woken earlier seeds nothing.
-        Assert.Contains("needs.plugins-bake.result == 'success'", job, StringComparison.Ordinal);
-        // The receivers read image + digest (+ sha); a version alone is not a release event.
-        Assert.Contains("image: ${{ needs.plugins-bake-image.outputs.image }}", job, StringComparison.Ordinal);
-        Assert.Contains("digest: ${{ needs.plugins-bake-image.outputs.digest }}", job, StringComparison.Ordinal);
-        Assert.Contains("sha: ${{ needs.gate.outputs.sha }}", job, StringComparison.Ordinal);
-
-        // The reusable itself: discovered subscribers, an App token minted per run, RED on any
-        // failed dispatch (collected, then exit 1 — never continue-on-error), and a platform event
-        // without its image refused rather than sent.
-        var reusable = File.ReadAllText(Path.Combine(FindRepoRoot(), ".github", "workflows", "notify-dependents.yml"));
-        Assert.Contains("actions/create-github-app-token", reusable, StringComparison.Ordinal);
-        Assert.Contains("/installation/repositories", reusable, StringComparison.Ordinal);
-        Assert.Contains("meshweaver-framework-released", reusable, StringComparison.Ordinal);
-        Assert.Contains("client_payload:$p", reusable, StringComparison.Ordinal);
-        Assert.Contains("reason=platform but inputs.image is empty", reusable, StringComparison.Ordinal);
-        Assert.DoesNotContain("continue-on-error", reusable, StringComparison.Ordinal);
-        Assert.Contains("exit 1", reusable, StringComparison.Ordinal);
-
-        var preflight = SectionAfter(JobBlock(body, "preflight:"), "missing=()");
-        Assert.Contains("DEPENDENT_DISPATCH_APP_ID", preflight, StringComparison.Ordinal);
-        Assert.Contains("DEPENDENT_DISPATCH_APP_PRIVATE_KEY", preflight, StringComparison.Ordinal);
-
         var legs = SectionAfter(JobBlock(body, "delivery-verdict:"), "LEGS: >-");
-        Assert.Contains("notify-dependents=", legs, StringComparison.Ordinal);
-        Assert.Contains("plugins-bake=", legs, StringComparison.Ordinal);
+        Assert.DoesNotContain("notify-dependents=", legs, StringComparison.Ordinal);
+        Assert.Contains("notify-platform-update=", legs, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// The detector must FIRE on each way a workflow can send a repository_dispatch and stay silent
+    /// on prose about one — otherwise the guard above is either a trapdoor or a nuisance.
+    /// </summary>
+    [Fact]
+    public void TheDispatchDetector_FiresOnEachSendingForm_AndIsSilentOnProse()
+    {
+        Assert.True(Sends("  run: gh api -X POST /repos/$repo/dispatches --input -"), "gh api POST …/dispatches");
+        Assert.True(Sends("  run: curl -X POST https://api.github.com/repos/Systemorph/X/dispatches"), "curl …/dispatches");
+        Assert.True(Sends("  uses: peter-evans/repository-dispatch@v3"), "the dispatch action");
+        Assert.True(Sends("  script: github.rest.repos.createDispatchEvent({owner, repo, event_type})"), "github-script");
+        Assert.True(Sends("  run: jq -cn '{event_type:\"meshweaver-framework-released\", client_payload:$p}'"), "an event_type payload");
+
+        Assert.False(Sends("  # memex fans a repository_dispatch out to every subscriber (/dispatches)"), "a comment");
+        Assert.False(Sends("  # 🚨 History: a `notify-dependents` job lived here twice"), "history prose");
+        Assert.False(Sends("on:\n  repository_dispatch:\n    types: [meshweaver-framework-released]"), "a RECEIVER is not a sender");
+        Assert.False(Sends("  run: echo \"woken by ${{ github.event.action }}\""), "reading the event");
+    }
+
+    private static bool Sends(string yaml) => SendsARepositoryDispatch(yaml.Split('\n'));
+
+    private static bool SendsARepositoryDispatch(string path) =>
+        SendsARepositoryDispatch(File.ReadAllLines(path));
+
+    /// <summary>A workflow SENDS a dispatch when a non-comment line POSTs to a `/dispatches` endpoint,
+    /// uses a dispatch action, calls `createDispatchEvent`, or builds an `event_type` payload. A
+    /// `repository_dispatch:` trigger is a receiver and does not count.</summary>
+    private static bool SendsARepositoryDispatch(string[] lines) =>
+        lines.Where(l => !l.TrimStart().StartsWith('#')).Any(l =>
+            l.Contains("/dispatches", StringComparison.Ordinal)
+            || l.Contains("repository-dispatch@", StringComparison.Ordinal)
+            || l.Contains("createDispatchEvent", StringComparison.Ordinal)
+            || l.Contains("event_type", StringComparison.Ordinal));
 
     // ── helpers ──────────────────────────────────────────────────────────────
 

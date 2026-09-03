@@ -245,6 +245,11 @@ exactly the baseline Plugins#889 asked for, derived correctly: a cancelled, red 
 no Published record, so its modules are rebuilt and published; a PR that built and tested the same
 bytes minutes earlier is reused and only the hand-over runs. Release-follow (`repository_dispatch` /
 `schedule`) still builds everything, correctly: a new platform digest is a new key for every module.
+The `repository_dispatch` is memex's event — `meshweaver-framework-released`, emitted by the
+registry's `PlatformBuildInboxWatcher` from the build fact core CD POSTs into `Hosting/PlatformBuilds`,
+to the repositories the `Hosting/Deployment` records name as registry sources; `schedule` is the
+fallback. Core dispatches to no repository (maintainer, 2026-09-03: *"core publishes an event and
+finishes"*).
 
 ### What a satellite passes
 
