@@ -167,30 +167,18 @@ public class PlatformReleaseNotifyGuard
     /// was silent because the broadcaster had NO CALLER, not because a mesh hop is unreliable. Two
     /// emitters for one event is the cross-repo coupling the rule forbids.</para>
     ///
-    /// <para>The ledger below is the ONE exemption class and it is judged, not skipped: a reusable
-    /// <c>workflow_call</c> lane runs in the CALLING satellite's context, so when
-    /// <c>node-repo-publish-bake.yml</c> sends <c>meshweaver-upstream-published</c> and
-    /// <c>node-repo-tag-modules.yml</c> sends <c>meshweaver-modules-published</c>, the SATELLITE is
-    /// the sender telling its own dependents — core merely hosts the shared lane and never runs it on
-    /// its own behalf. A ledgered file that stops sending fails too: a guard whose subject moved and
-    /// whose roots did not passes having checked nothing.</para>
+    /// <para>There is NO ledger. The reusable lanes core hosts for the satellites
+    /// (<c>node-repo-publish-bake.yml</c>, <c>node-repo-tag-modules.yml</c>) used to send
+    /// <c>meshweaver-upstream-published</c> / <c>meshweaver-modules-published</c> in the calling
+    /// satellite's context — CI-to-CI coupling by another name; since 2026-09-03 a lane ENDS by
+    /// registering its publication with memex, and memex emits the event
+    /// (<c>UpstreamBuildGateGuard.TheLaneEndsByRegisteringWithMemex_AndDispatchesToNobody</c> pins
+    /// the call). Any sender anywhere under <c>.github/workflows</c> is therefore a regression.</para>
     /// </summary>
     [Fact]
     public void CoreDispatchesToNoRepository()
     {
         var workflows = Path.Combine(FindRepoRoot(), ".github", "workflows");
-        // Every ledgered sender must be a reusable lane (`on: workflow_call`) — the property that
-        // makes the caller, not core, the sender. Asserted, not assumed.
-        var ledger = new[] { "node-repo-publish-bake.yml", "node-repo-tag-modules.yml" };
-        foreach (var name in ledger)
-        {
-            var text = File.ReadAllText(Path.Combine(workflows, name));
-            Assert.True(text.Contains("workflow_call:", StringComparison.Ordinal)
-                        && !text.Contains("\n  push:", StringComparison.Ordinal)
-                        && !text.Contains("\n  workflow_run:", StringComparison.Ordinal),
-                $"{name} is ledgered as a satellite-context sender, but it no longer runs only as a "
-                + "reusable workflow_call lane — a dispatch it sends on a push or workflow_run would be core's.");
-        }
 
         // The withdrawn leg, by name — the shape most likely to be re-added from memory.
         Assert.False(File.Exists(Path.Combine(workflows, "notify-dependents.yml")),
@@ -204,19 +192,12 @@ public class PlatformReleaseNotifyGuard
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray();
 
-        var unexpected = senders.Except(ledger, StringComparer.Ordinal).ToArray();
-        Assert.True(unexpected.Length == 0,
+        Assert.True(senders.Length == 0,
             "these workflows send a repository_dispatch to another repository:\n  "
-            + string.Join("\n  ", unexpected)
-            + "\nCore publishes ONE event (the build fact POSTed to Hosting/PlatformBuilds) and finishes; "
-            + "the fan-out is memex's (FrameworkReleaseBroadcaster, called by the Hosting module's "
-            + "PlatformBuildInboxWatcher). Remove the dispatch — do not extend the ledger.");
-
-        var vanished = ledger.Except(senders, StringComparer.Ordinal).ToArray();
-        Assert.True(vanished.Length == 0,
-            "ledgered sender(s) no longer send a repository_dispatch — the ledger is stale, or the "
-            + "satellite→dependent wake moved somewhere this guard does not read:\n  "
-            + string.Join("\n  ", vanished));
+            + string.Join("\n  ", senders)
+            + "\nEvery pipeline ENDS with one call to memex (the signed record POSTed to the control "
+            + "instance's inbox); memex registers it and publishes the event (FrameworkReleaseBroadcaster, "
+            + "called by the Hosting module's PlatformBuildInboxWatcher). Remove the dispatch — there is no ledger.");
 
         // The main CD workflow, specifically: no job key of either historical shape, no reusable call.
         var body = Body();

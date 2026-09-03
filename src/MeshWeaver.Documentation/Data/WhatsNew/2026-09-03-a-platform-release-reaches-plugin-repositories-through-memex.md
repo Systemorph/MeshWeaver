@@ -35,6 +35,10 @@ repositories subscribe to it and trigger their builds. Core publishes an event a
   cannot drift. The `FrameworkBroadcast__Subscribers__N` configuration slots are retired; an empty
   set on the registry is a warning that names the records.
 
+The same shape now holds for the plugin repositories' own publications: their shared publish lane
+ends by registering the sealed publication with memex (one signed POST) instead of dispatching into
+its dependents' CI, and memex publishes `meshweaver-upstream-published` from that record.
+
 Each repository's own `schedule` poll remains the fallback for a lost dispatch, so a missed event
 costs one delayed rebuild wave — never a fleet held on stale bundles under a green tick.
 
