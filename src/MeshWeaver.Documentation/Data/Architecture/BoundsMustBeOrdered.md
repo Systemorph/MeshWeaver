@@ -120,6 +120,50 @@ And **prove it by mutation**: restore the old literal and confirm the guard goes
 and `1` cases and stays green on `3` and `10`. That asymmetry is itself the evidence — it shows the
 guard is measuring the ordering and not merely the size of the number.
 
+## A bound's JUSTIFICATION is a claim about other code, and it rots
+
+Derivation keeps two numbers ordered. It does nothing for the sentence that says *why* a number is
+big enough — and that sentence is usually a claim about code somewhere else, which can change
+without ever touching the bound.
+
+`LateResponseWatchBound` (30 s) was stated as **protocol, not tuning**: it had to dominate every
+owner-side terminal path, enumerated as the disposal NACK after a teardown whose *"hosted-hub drain
+[is] capped at 5 s"*, the cold-store defer (~10 s), and the ack watcher's 20 s. Two years of edits
+later (#3197):
+
+- **The 5 s cap was gone.** `HostedHubsCollection.DisposeHubsReactive` deliberately dropped its flat
+  `Timeout(5s)` in #1317, and what replaced it is a *stall* detector re-armed on every `RunLevel`
+  transition anywhere in the subtree — so a large subtree that keeps making progress never trips it.
+  The drain has no duration bound at all, and the claim's first term was unsupported.
+- **The terms were being added wrongly.** They were enumerated as alternatives, taking their maximum
+  (20 s). On the in-turn path they compose *additively*: cold-store defer → identity-gated echo →
+  durable flush.
+- **Two different clocks.** The owner's starts at handler entry, the caller's at post, with unbounded
+  routing latency between them — measured at 33–49 s during a bake.
+
+Nothing failed a build. A comment cannot go red. The next reader inherits a number presented as
+proven and reasons from it.
+
+> 🚨 **When a bound's justification enumerates other people's bounds, it is a dependency — and it
+> needs the same treatment as any other: re-measure it, or stop asserting it.**
+
+Where re-establishing the guarantee would mean reverting a deliberate change — as it would here —
+the honest repair is to **say what is actually guaranteed** and make the gap *visible* rather than
+asserted away. Two shapes do that:
+
+- **Check the premise where it is used.** The owner's ack watcher stands aside for the disposal NACK
+  instead of posting its own verdict. That deferral assumed "the NACK is coming, and soon". It now
+  asks: `ILatePatchVerdictSink.IsAdmissible(requestId)` — is a route actually armed? With no sink, or
+  a watch already gone, standing aside would convert an answerable write into silence, so it answers
+  now on whatever transport is still open. The predicate answers *"is a route armed now"*, not *"will
+  it still be armed then"* — no implementation can promise the latter, which is exactly why the
+  second shape is also needed.
+- **Make the overrun observable.** A verdict arriving past the window is still not delivered — acting
+  on it is what the bound exists to prevent — but it used to return the same `false` as a request
+  nobody ever armed, so a failing run showed `VERDICT_TIMEOUT` with zero late-terminal records and
+  "never produced" was indistinguishable from "produced, too late". Those are two different
+  investigations. The registry now logs `VERDICT_EXPIRED` with how late it was, and counts it.
+
 ## Where else to look
 
 The same shape appears wherever a wait wraps a wait. When you write a bound, ask what *else* bounds

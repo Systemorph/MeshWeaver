@@ -1926,7 +1926,15 @@ public static class DataExtensions
                         AckOnce,
                         d => hub.RegisterForDisposal(d),
                         hubPath,
-                        () => hub.IsShuttingDown,
+                        // 🚨 Stand aside for the disposal NACK only while a route is ARMED to receive it
+                        // (#3197). The deferral used to rest on "the disposal NACK is coming, and soon" — an
+                        // assumption the code could not check, and one the hosted-hub drain stopped
+                        // guaranteeing when its flat 5 s cap was removed in #1317 (the watchdog that replaced
+                        // it is a STALL detector, re-armed on every RunLevel transition in the subtree, so a
+                        // large subtree making steady progress never trips it). With no sink, or with the
+                        // caller's watch already gone, standing aside converts an answerable write into
+                        // silence — so answer now, on whatever transport is still open.
+                        () => hub.IsShuttingDown && lateVerdicts is not null && lateVerdicts.IsAdmissible(request.Id),
                         hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"));
                     hub.RegisterForDisposal(postSub);
 
@@ -2054,7 +2062,15 @@ public static class DataExtensions
             AckOnce,
             d => hub.RegisterForDisposal(d),
             hubPath,
-            () => hub.IsShuttingDown,
+            // 🚨 Stand aside for the disposal NACK only while a route is ARMED to receive it
+            // (#3197). The deferral used to rest on "the disposal NACK is coming, and soon" — an
+            // assumption the code could not check, and one the hosted-hub drain stopped
+            // guaranteeing when its flat 5 s cap was removed in #1317 (the watchdog that replaced
+            // it is a STALL detector, re-armed on every RunLevel transition in the subtree, so a
+            // large subtree making steady progress never trips it). With no sink, or with the
+            // caller's watch already gone, standing aside converts an answerable write into
+            // silence — so answer now, on whatever transport is still open.
+            () => hub.IsShuttingDown && lateVerdicts is not null && lateVerdicts.IsAdmissible(request.Id),
             hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"));
         hub.RegisterForDisposal(postSub);
         // Registered AFTER postSub so the composite disposes the watcher FIRST, then this NACK
