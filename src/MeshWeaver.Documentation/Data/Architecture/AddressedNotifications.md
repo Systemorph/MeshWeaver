@@ -101,6 +101,40 @@ reaches every viewer who can read the plugin catalog, and why one census line re
 node"; that is **aspirational** — the rule that would make it true is not registered. The addressed
 model below makes the path-based answer the *correct* answer, so no new rule is needed.
 
+### 2b. 🚨 The bell has never shown a single platform-admin notification
+
+`Admin` is **excluded from `public.searchable_schemas`**, which is the registry the cross-schema
+fan-out UNIONs. Core says so twice, in the code that had to work around it:
+
+> *"The Admin special case is GONE because `path:` anchoring is exactly what it needed: `Admin` is
+> excluded from `searchable_schemas`, so the old namespace-only query never reached `admin.access`
+> and platform-admin grants silently never loaded."*
+> — `src/MeshWeaver.Mesh.Contract/Security/PermissionEvaluator.cs:882-885`
+
+> *"`Admin` is excluded from cross-schema search, so a platform-admin grant is reachable ONLY
+> through a path-anchored read."*
+> — `src/MeshWeaver.Mesh.Contract/Security/SecurityQueries.cs:253-255`
+
+**So the bell — an unanchored fan-out — cannot read `admin.notifications` at all.** Measured both
+ways on 2026-09-03: the unanchored `nodeType:Notification sort:lastModified-desc limit:200` listing
+returned **zero** rows whose first segment is `Admin`, while an anchored
+`nodeType:Notification namespace:Admin scope:descendants` returned them immediately —
+
+```text
+Admin/_Notification/Oqk-mQPcp0GujvAQj59IlA   "Startup completed with 101 error(s)"   2026-09-03T10:00:25Z
+Admin/_Notification/sunOdJ5zx0mdiwld6Mn1yw   "Startup completed with 103 error(s)"   2026-09-03T08:11:11Z
+Admin/_Notification/gKVBJ6A4Okm0c-nhukCFNg   "Startup completed with  70 error(s)"   2026-09-03T07:13:27Z
+```
+
+— timestamps well inside the unanchored listing's own window (which reached back to 2026-08-30).
+
+Every notification `StartupErrorNotifier`, `RegistryUpdateReconciler`, `ModuleDiscoveryService`,
+`NodeTypeEnrichmentHelpers` and `ContentIndexingActivity` addresses to platform admins is therefore
+**written, versioned, and shown to nobody**. It is the same defect `PermissionEvaluator` fixed for
+grants — an unanchored read that cannot reach the one schema its answer lives in — still live on the
+bell. Anchoring the bell does not merely make it cheaper: **the `Admin` leg is what finally
+delivers those notifications.** Filed as #3216.
+
 ### The emitter census (core), as of 2026-09-03
 
 | Emitter | `recipient` | `mainNodePath` | Lands in |
@@ -193,12 +227,11 @@ These are product decisions, not implementation details, and each one changes **
    record or the space. Under the invariant they go to `Admin` — visible to platform operators only.
    That is almost certainly right (only an operator can act on either), but it *removes* them from
    ordinary users' bells, and 184 of the sampled 200 rows are in this class.
-2. **Is `Admin/_Notification` actually readable by a platform admin whose own partition is
-   elsewhere?** Three separate comments assert that the Admin partition's RLS scopes it to platform
-   admins (`StartupErrorNotifier.cs:32`, `RegistryUpdateReconciler.cs:437`,
-   `NodeTypeEnrichmentHelpers.cs:2361`) — **there is no test or rule in this repository that
-   establishes it**. The second bell leg depends on it entirely. Verify before anchoring: a wrong
-   answer here is a silently empty admin bell.
+2. ~~Is `Admin/_Notification` readable by a platform admin from another partition?~~
+   **Measured — yes, and the Admin leg is a REPAIR, not a risk.** See §2b: an anchored
+   `namespace:Admin scope:descendants nodeType:Notification` returns the rows; the bell's *fan-out*
+   is what cannot see them. What is still unestablished is the other half of the claim — that a
+   NON-admin cannot read them — which needs an identity this session did not have.
 3. **Do the legacy rows get migrated, or dropped?** See §6.
 4. **Does a space-scoped broadcast survive as a concept?** The invariant says no: a notification has
    one addressee. Anything wanting "everyone who can see X" must address the users explicitly or go
@@ -271,9 +304,11 @@ every notification still sitting in an entity's partition.
 
 ## 8. What is not established here
 
-- **Ruling 2 above** — whether `Admin/_Notification` is readable by a platform admin from another
-  partition — is asserted in comments only and was not verified against a running mesh. Everything
-  in §3 that depends on the `Admin` leg depends on it.
+- **The other half of the Admin claim.** §2b measures that a platform admin CAN read
+  `Admin/_Notification` through an anchored query. It does NOT establish that a non-admin cannot —
+  that needs a second identity, which this session did not have. If the Admin partition turns out
+  to be broadly readable, the `Admin` leg of the bell would show operator notices to everyone, and
+  the addressee for ruling 1 needs to be something narrower.
 - **The total population size.** The measurement is the newest 200 rows (the API caps a listing at
   200); the class *proportions* are measured, the absolute count is not, and it is what decides
   between moving and deleting in §6.
