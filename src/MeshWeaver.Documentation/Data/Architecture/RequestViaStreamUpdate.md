@@ -123,6 +123,41 @@ The canonical reference for both helpers is [ActivityControlPlane.md](/Doc/Archi
 
 ---
 
+## 🚨 The watcher runs on ACTIVATION — so a CREATE has to wake the owner
+
+The watcher is installed by the owning per-node hub's `WithInitialization`, which means it runs **if
+and only if that hub is activated**. A create only writes the row. Nothing else in a create opens the
+node, so before #3153 a request filed *by* a create was never seen: it sat at `Requested` with **no
+error, no failed state, no log line** — and then ran, correctly and immediately, the next time
+anything happened to open the node (a page view, a stream subscription, an MCP `get`).
+
+Measured on memex.meshweaver.cloud: a `Store/Subscription` created via MCP sat untouched for **4.5
+hours** and completed 20 s after the first read. The same node created from the admin UI activated in
+31 s — because the open page held a stream handle, which activated the owner as a side effect.
+
+That side effect is also why the pattern's own tests could not catch it. **A control-plane test that
+subscribes to the node to await its terminal state is the thing making the watcher run**, so it
+passes with the defect fully present. A test that means to pin this must file the request with
+`IMeshService.CreateNode` and observe the outcome through a channel that does not activate the owner
+— durable storage (`IStorageAdapter.Read`) is the one that qualifies. See
+`ControlPlaneRunsWhenTheRequestArrivesByCreateTest`.
+
+`MeshExtensions.ActivatePendingControlPlane` now closes it: after the create response is posted, a
+node whose content carries a pending `RequestedXxx` has its owner opened once, so the watcher sees
+the request. Two properties matter and are deliberate:
+
+- **Strictly after the response, fire-and-forget.** A cold per-node activation can take 5–45 s in CI
+  (NodeType compile, dependency load, JIT), so it must never gate, delay or fail a create. An owner
+  that cannot be woken is a warning naming the path; the node is created and unchanged.
+- **Gated on the content, not done for every create.** A bulk install fans `CreateOrUpdateNodeRequest`
+  out into an inner `CreateNodeRequest` per node, so activating unconditionally would wake a hub per
+  imported file — 141 for `Hosting`, 425 for the core samples. Inert data needs no watcher; only a
+  node that actually carries a pending request does. **This is the load-bearing reason `RequestedXxx`
+  is a naming convention and not a free choice**: it is the only thing that tells the create path a
+  request is present without this assembly knowing any domain type.
+
+---
+
 ## When to Use This Pattern
 
 **Use it when:**
