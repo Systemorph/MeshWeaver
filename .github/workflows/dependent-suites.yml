@@ -45,7 +45,8 @@ name: Dependent suites
 # 🚨 NO SKIP-TRAPDOOR. The secrets are asserted RED by name. The one exemption is on the EVENT —
 # a fork pull request or dependabot, where GitHub withholds org secrets by design — spelled exactly
 # as the pair gate spells it. A manual `workflow_dispatch` takes a pull request NUMBER of this repo
-# and runs the same path against `refs/pull/<n>/merge`, so the wiring is testable on demand.
+# and runs the same path against `refs/pull/<n>/merge` — dispatching regardless of what the
+# surface report says, because a person asked — so the wiring is testable on demand.
 #
 # NOT REQUIRED YET. To require it: Settings → Rules → main → required status checks → add
 # `Dependent suites (MeshWeaver.Plugins)`; because the job skips on fork pull requests, either keep
@@ -159,10 +160,14 @@ jobs:
           # removed on main while this one was open is not read as this one's doing — the same
           # reasoning as the two gates in dotnet-test.yml.
           python3 scripts/check-type-forwards.py --base "$MERGE_BASE" --head "$HEAD_SHA" --surface-json "$RUNNER_TEMP/surface.json"
-          python3 - "$RUNNER_TEMP/surface.json" "$DISPATCH_ON_ADDITIONS" >> "$GITHUB_OUTPUT" <<'PY'
+          python3 - "$RUNNER_TEMP/surface.json" "$DISPATCH_ON_ADDITIONS" "$GITHUB_EVENT_NAME" >> "$GITHUB_OUTPUT" <<'PY'
           import json, sys
           report = json.load(open(sys.argv[1]))
           on_additions = sys.argv[2] == "true"
+          # A MANUAL run is a person asking for the dependent's verdict on this pull request — it
+          # dispatches whatever the surface says. The declaration-set test is the AUTOMATIC path's
+          # economy, not a gate on the question itself; the step summary promises exactly this.
+          manual = sys.argv[3] == "workflow_dispatch"
           # The CONTROL ARM: a scan that read nothing must never decide "nothing changed".
           if report.get("publicTypesAtBase", 0) < 500 or report.get("publicMembersAtBase", 0) < 3000:
               print(f"::error::the surface report saw {report.get('publicTypesAtBase')} public types / "
@@ -170,7 +175,7 @@ jobs:
                     "~1800 / ~11000. The detector examined the wrong tree; refusing to decide on it.", file=sys.stderr)
               sys.exit(1)
           removed, added = report.get("removed", []), report.get("added", [])
-          dispatch = bool(removed) or (on_additions and bool(added))
+          dispatch = manual or bool(removed) or (on_additions and bool(added))
           print(f"dispatch={'true' if dispatch else 'false'}")
           print(f"removed={len(removed)}")
           print(f"added={len(added)}")
