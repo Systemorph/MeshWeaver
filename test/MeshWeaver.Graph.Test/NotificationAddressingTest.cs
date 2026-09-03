@@ -227,6 +227,23 @@ public class NotificationAddressingTest(ITestOutputHelper output) : MonolithMesh
     }
 
     /// <summary>
+    /// 🚨 A recipient given as a PATH resolves to its partition for EVERY channel, not just for
+    /// delivery: the bell lands in <c>{partition}/_Notification</c>, and the preferences read and
+    /// the mailbox used are that partition's — not a lookup at
+    /// <c>{partition}/Documents/spec/_NotificationSettings</c>, which would find nothing and
+    /// silently default. One resolved addressee, used by both channels.
+    /// </summary>
+    [Fact]
+    public async Task APathShapedRecipient_ResolvesToThePersonForDeliveryAndPreferences()
+    {
+        var node = await Dispatch($"{PlainUser}/Documents/spec", "SomeSpace/Docs/spec", "path-shaped-recipient")
+            .Should().Within(Budget).Emit("a path-shaped recipient must still reach the person");
+
+        Assert.Equal($"{PlainUser}/{NotificationService.SatelliteSegment}", node.Namespace);
+        Assert.Equal(PlainUser, node.ContentAs<Notification>(Json)?.Recipient);
+    }
+
+    /// <summary>
     /// The other half of the boundary: one user's bell is not another's. Anchoring the bell to the
     /// viewer's partition is what makes this structural rather than a filter that has to hold.
     /// </summary>

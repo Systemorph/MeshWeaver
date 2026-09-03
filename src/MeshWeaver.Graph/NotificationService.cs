@@ -218,28 +218,37 @@ public static class NotificationService
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         var category = type.ToCategory();
 
+        // 🚨 ONE resolved addressee, used by BOTH channels. The bell writes into
+        // `{addressee}/_Notification`, and the addressee is also whose PREFERENCES are read and
+        // whose mailbox is used — a `recipient` given as a path (`rbuergi/Documents/spec`) would
+        // otherwise deliver to `rbuergi` while looking up settings at
+        // `rbuergi/Documents/spec/_NotificationSettings` and emailing a document. `person` is null
+        // exactly when `recipient` is: a platform notification has no mailbox and no preferences,
+        // which is why the email leg stays gated on it rather than on `addressee`.
+        var addressee = ResolveAddressee(recipient);
+        var person = string.IsNullOrWhiteSpace(recipient) ? null : addressee;
+
         // 🚨 RunAsSystem, never Observable.Using (#1790): impersonation is an AsyncLocal
         // store/restore pair, and Observable.Using splits the two across threads — the caller who
         // subscribes is left running as System, and the write's terminating thread is handed the
         // caller's identity. RunAsSystem opens the scope across the cold writes' Subscribe (where
         // each eager-captures its identity) and closes it on the way out of that same Subscribe.
         return access.RunAsSystem(
-            () => ReadSettings(hub, recipient).SelectMany(settings =>
+            () => ReadSettings(hub, person).SelectMany(settings =>
             {
                 // The two channels are independent — isolate each with Catch so a transient email
                 // fault can't suppress the bell write (or vice versa).
                 var ops = new List<IObservable<Unit>>(2);
                 if (settings.InApp(category))
-                    // 🚨 The addressee is resolved HERE, once: a null recipient is the PLATFORM
-                    // bell (Admin), never "wherever the entity lives". Passed explicitly so the
-                    // compatibility fallback in CreateNotification is never the thing that decides.
+                    // Passed explicitly, so the compatibility fallback in CreateNotification (derive
+                    // the addressee from the main node path) is never the thing that decides here.
                     ops.Add(CreateNotification(
                             meshService, mainNodePath, title, message, type, targetNodePath, createdBy, icon,
-                            recipient: ResolveAddressee(recipient))
+                            recipient: addressee)
                         .Select(_ => Unit.Default)
                         .Catch(Observable.Return(Unit.Default)));
-                if (!string.IsNullOrEmpty(recipient) && settings.Email(category))
-                    ops.Add(MaybeSendEmail(hub, recipient!, title, message, targetNodePath, emailCtaLabel, emailFooterNote)
+                if (person is not null && settings.Email(category))
+                    ops.Add(MaybeSendEmail(hub, person, title, message, targetNodePath, emailCtaLabel, emailFooterNote)
                         .Select(_ => Unit.Default)
                         .Catch(Observable.Return(Unit.Default)));
                 return ops.Count == 0 ? Observable.Return(Unit.Default) : Observable.Merge(ops);
