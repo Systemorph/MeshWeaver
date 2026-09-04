@@ -613,6 +613,18 @@ managed assemblies** it loads, none comes from a project that sets `AllowUnsafeB
 in the repo is `memex/Memex.Client`, which this process never loads. So `unsafe` is not merely absent
 from the sources on the stack — it could not have compiled into anything in the process.
 
+**Re-established fleet-wide on 2026-09-04, from the sources rather than from one dump**, because the
+same branch has to stay closed for #890 and its hosts live in the other repository now:
+`git grep AllowUnsafeBlocks` over every tracked `*.csproj`/`*.props` returns **zero** in
+`Systemorph/MeshWeaver` and **zero** in `Systemorph/MeshWeaver.Plugins` — so no assembly either repo
+builds can contain `unsafe` code at all. The control: the same pattern *does* match where the setting
+exists (`memex/Memex.Client` and `MeshWeaver.BusinessRules.Generator` in older checkouts), so the
+zero is a measurement and not a broken grep. The only span-level memory operations in either `src/`
+tree are one read-only `MemoryMarshal.AsBytes` (`PatchStringSplice.cs`) and one fixed-size
+`stackalloc byte[64]` (`OciDigest.cs`) — neither can write out of bounds. **MeshWeaver code cannot
+scribble on the heap directly; if the heap is being corrupted, the writer is the runtime or a native
+module the runtime loads.**
+
 ### 2026-09-03: sighting #9 — a FOURTH frame (`background_mark_simple1`), and the CI gate named the wrong cause
 
 `MeshWeaver.Futu-49849.dmp` (MeshWeaver.Plugins run
@@ -734,12 +746,32 @@ What #890 *can* contribute that a dump cannot is a measurement #613 has no way t
 crashed process has no "after": **the fault is total and permanent.** On run `33322993649` shard 1,
 after the first throw at 16:42:42.375, **7 of 7** compiles that reached the metadata writer failed
 identically over 6 m 15 s and **none** succeeded — while every compile that needed only diagnostics
-kept returning correct `CS####` codes. A one-off zeroed word cannot produce a 100 % failure rate over
-freshly allocated symbols; a **tier-1 / dynamic-PGO miscompilation** of one method can, and also
-explains the fixed frame, the load dependence and the onset ~80 s into a compile-heavy assembly.
-So the cheap next measurement for BOTH issues is the half of the advice that *is* followable:
-re-run with `DOTNET_TieredCompilation=0` (or `DOTNET_TieredPGO=0`, the sharper probe). See
-[NodeTypeCompilation → When the PROCESS cannot emit](/Doc/Architecture/NodeTypeCompilation).
+kept returning correct `CS####` codes. **Replicated in the other repository** on MeshWeaver.Plugins
+run [`33760859754`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/33760859754) shard
+3 (2026-09-03, a `push` to `main`): **39 of 39** compile faults over 13 m 21 s were the same NRE,
+**zero** were a `CompilationException`. Two separate facts pin the other half there: correct
+`CS0103`/`CS1591` diagnostics were still being produced at **+7 m 32 s** (13:41:55, on
+`type/RedriveRecovers…`'s deliberately broken source), and `BrokenNodeTypeAccessTest` — which
+asserts that a non-compiling NodeType answers a terminal error rather than silence — **passed at
++13 min**. Two repos, two harnesses, two shard layouts, same split: parse and bind healthy, emit
+100 % dead, no recovery.
+
+A one-off zeroed word cannot produce a 100 % failure rate over freshly allocated symbols; a
+**tier-1 / dynamic-PGO miscompilation** of one method can, and also explains the fixed frame and the
+load dependence.
+
+> 🚨 **Do not lean on "onset ~80 s into a compile-heavy assembly" — it is not a stable threshold.**
+> Measured onsets: `33322993649` (core) 130 s in, after **199** `TEST START`s; `33760859754`
+> (Plugins) **33 s** in, after **12**, on the first compile of that class, with `alc=1`, `asm=138`,
+> `gc2=4`, RSS 548 MiB — i.e. an unremarkable, barely-warm process. A warm-up threshold is what a
+> tier-1 promotion argument *predicts*; a 4× spread in wall time and a 16× spread in test count do
+> not refute it (promotion is call-count driven and the call counts are unmeasured) but they are
+> not evidence for it either. **The tiering hypothesis is still UNTESTED**, and the cheap next
+> measurement for BOTH issues is the half of the canary's advice that *is* followable: re-run with
+> `DOTNET_TieredCompilation=0` (or `DOTNET_TieredPGO=0`, the sharper probe). Design it split-arm —
+> at the measured ~1 % per run a single-arm clean result means nothing.
+
+See [NodeTypeCompilation → When the PROCESS cannot emit](/Doc/Architecture/NodeTypeCompilation).
 
 ## Related
 
