@@ -5,8 +5,9 @@
 # Format: <repo-relative path><TAB><count>.  The ratchet may only SHRINK: a new file, a raised
 # count, or a raised TotalBudget is a failure.  Adding a line here is not a fix.
 #
-# 🚨 These twenty-one are NOT a to-do list that nobody got to. They are the two populations that
-# genuinely cannot carry a key, and they are expected to stay:
+# 🚨 These eighteen are NOT a to-do list that nobody got to. #3281 migrated everything that was
+# genuinely migratable; what is left is the two populations that cannot carry a key, and they are
+# expected to stay:
 #
 #   GENERIC PLUMBING — an ILogger adapter, or a helper whose entire input is a `string message`
 #   parameter. The site does not know a SENTENCE, so there is nothing to key. A caller that wants a
@@ -27,22 +28,28 @@ src/MeshWeaver.Kernel.Hub/ActivityLogLogger.cs	1
 src/MeshWeaver.Data/Activity.cs	2
 # ActivityLog.Fail(string error) — the error is the caller's sentence, not this method's.
 src/MeshWeaver.Data.Contract/ActivityLog.cs	1
-# AppendLog(…, string message, …) and Update(…, string? error, …): `string message` plumbing.
+# AppendLog(…, string message, …) and Update(…, string? error, …): `string message` plumbing. A
+# caller with a sentence hands a keyed LogMessage to the BATCHED overload instead — which is what
+# #3281 did to all three StaticRepoImporter callers, with no signature change here.
 src/MeshWeaver.Compiler.Pipeline/NodeTypeCompilationActivity.cs	2
-# AppendInfo / AppendWarning / AppendError(log, string message): `string message` plumbing.
-src/MeshWeaver.Compiler.Pipeline/MeshNodeCompilationService.cs	3
+# AppendVerbatimWarning(log, message) — a Roslyn diagnostic, already formatted by the compiler with
+# its own CS id and span. The Append{Info,Warning,Error} helpers beside it now REQUIRE a key (#3281),
+# so this named exception is the only unkeyed way into the compile transcript.
+src/MeshWeaver.Compiler.Pipeline/MeshNodeCompilationService.cs	1
 # settle.Diagnosis — a post-condition verdict composed elsewhere.
 src/MeshWeaver.Compiler.Pipeline/NodeTypeCompilationHelpers.cs	1
-# The activity TITLE, per-step `message` and terminal `finalMessage` all arrive as string parameters
-# of RunActivity/Log/Finish. MIGRATABLE — the eight call sites in GitHubActivityExtensions compose
-# real sentences — but it needs a key parameter threaded through the public runner. Follow-up.
+# All three are now the deliberate un-keyed spellings, after #3281 threaded LogMessage through the
+# runner (RunActivity's LogMessage-title overload, ActivityContext.Log(LogMessage)) and migrated the
+# eight GitHubActivityExtensions operations onto them: the `string title` forwarder, the
+# `Log(string, level)` convenience, and the terminal line carrying the command's own ex.Message.
 src/MeshWeaver.GitSync/ActivityRunner.cs	3
 # f.Error (a descendant hub's own refusal), PostFail's `error` (which is also the response text) and
 # the ex.Message arm of the terminal delete failure. All upstream text.
 src/MeshWeaver.Mesh.Contract/MeshExtensions.cs	3
 # Two composed multi-clause run summaries (each folds 6+ conditional notes carrying #604/#3101
-# incident wording), the stranded-instances report built by NodeTypeInstanceProbe, and the
-# content-sync ledger's `string message` parameter.
-src/MeshWeaver.Graph/StaticRepoImporter.cs	4
+# incident wording) and the stranded-instances report built by NodeTypeInstanceProbe. The
+# content-sync ledger left this list in #3281 — LedgerNode now takes the LogMessage its two callers
+# build, both keyed.
+src/MeshWeaver.Graph/StaticRepoImporter.cs	3
 # e.Message from a faulted submit.
 src/MeshWeaver.Layout/Client/LayoutClientExtensions.cs	1
