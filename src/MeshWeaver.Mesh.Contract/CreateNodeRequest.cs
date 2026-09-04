@@ -561,6 +561,12 @@ public class CreateOrUpdateNodePermissionAttribute() : RequiresPermissionAttribu
 /// By default copies descendants but NOT satellites — explicitly set <see cref="IncludeSatellites"/>
 /// to <c>true</c> to also copy satellite subtrees (e.g. for Move which is Copy+Delete).
 /// Requires Read permission on the source and Create permission on the target.
+///
+/// <para>🚨 <see cref="IncludeSatellites"/> costs a second ENUMERATION, not just a filter — which is
+/// what made issue #3272 silent for as long as it did. The subtree content query behind this
+/// handler is a primary-table read on every backend, so it returns no <c>_Comment</c>/<c>_Thread</c>/
+/// <c>_Access</c> row to filter in the first place; the satellites are swept separately, one
+/// RLS-filtered query per satellite CONTAINER storage says exists.</para>
 /// </summary>
 /// <param name="SourcePath">The path to copy from.</param>
 /// <param name="TargetPath">The path to copy to.</param>
@@ -577,6 +583,52 @@ public record CopyNodeRequest(string SourcePath, string TargetPath) : IRequest<C
 
     /// <summary>If <c>true</c>, copies satellite nodes (e.g. _Comment, _Activity) attached to the source.</summary>
     public bool IncludeSatellites { get; init; }
+
+    /// <summary>
+    /// 🚨 <c>true</c> only for the copy leg of a <see cref="MoveNodeRequest"/>: the node at the
+    /// target IS the node that was at the source, so <see cref="MeshNode.CreatedDate"/>,
+    /// <see cref="MeshNode.CreatedBy"/>, <see cref="MeshNode.LastModified"/> and
+    /// <see cref="MeshNode.LastModifiedBy"/> travel with it VERBATIM. A relocation changes WHERE a
+    /// node lives, never WHO wrote it or WHEN (issue #3263: one subtree move on
+    /// memex.systemorph.com re-stamped ~80 nodes — a commercial proposal among them — as created
+    /// that minute by whoever ran the move, unrecoverably).
+    ///
+    /// <para>A plain COPY leaves this <c>false</c>, and that is deliberate rather than incidental:
+    /// the copy is a NEW node, so the four stamps are cleared here and the create path stamps the
+    /// copier and the moment of the copy. Preserving them on a copy would be actively wrong —
+    /// <c>AccessContextScope</c> derives the identity to impersonate from
+    /// <see cref="MeshNode.CreatedBy"/>, so a copy that kept the original author would run
+    /// owner-scoped work as someone who never touched it.</para>
+    /// </summary>
+    public bool PreserveAuthorship { get; init; }
+
+    /// <summary>
+    /// 🚨 <c>true</c> only for the copy leg of a <see cref="MoveNodeRequest"/>: the copy must carry
+    /// EVERY node storage holds under the source, and REFUSES — before it creates anything — when
+    /// it cannot. A move is copy-to-target + delete-the-source, so anything the copy leaves behind
+    /// is data the delete leg then destroys; issue #3272 is exactly that, and it reported success.
+    ///
+    /// <para>The check is a set comparison against
+    /// <see cref="Services.IStorageAdapter.ListDescendantPaths"/> — the SAME authoritative enumeration the
+    /// move's delete leg is planned from, so the two legs are held to one inventory instead of two
+    /// (the asymmetry that made the loss silent). A plain COPY leaves this <c>false</c>: it deletes
+    /// nothing, so a copy that carries less than everything loses nothing.</para>
+    ///
+    /// <para>Failing this check fails the copy with
+    /// <see cref="NodeCopyRejectionReason.ValidationFailed"/> and a message opening with
+    /// <see cref="IncompleteCopyRefusal"/>, naming the paths that would have been orphaned. Nothing
+    /// is created and nothing is deleted.</para>
+    /// </summary>
+    public bool RequireComplete { get; init; }
+
+    /// <summary>
+    /// Opening words of the error a <see cref="RequireComplete"/> copy refuses with — the marker
+    /// <c>HandleMoveNodeRequest</c> maps back to
+    /// <see cref="NodeMoveRejectionReason.ValidationFailed"/>. Spelled once here so the producer and
+    /// the reader cannot drift; the alternative is the substring guessing the move's other reasons
+    /// still do.
+    /// </summary>
+    public const string IncompleteCopyRefusal = "Refused: the copy cannot carry";
 }
 
 /// <summary>
@@ -634,9 +686,17 @@ public enum NodeCopyRejectionReason
 
 /// <summary>
 /// Request to move a MeshNode to a new path.
-/// Implemented as Copy(IncludeSatellites=true) + DeleteNode(source) — the handler at the
-/// mesh hub orchestrates the two operations and posts the response.
+/// Implemented as Copy(IncludeSatellites=true, RequireComplete=true) + DeleteNode(source) — the
+/// handler at the mesh hub orchestrates the two operations and posts the response.
 /// Requires Delete permission on the source namespace and Create permission on the target namespace.
+///
+/// <para>🚨 The two legs must be held to ONE inventory. The delete leg enumerates STORAGE
+/// (<c>ListDescendantPaths</c>, every table of the partition); when the copy leg enumerated only the
+/// content query the difference between the two sets was destroyed — every <c>_Comment</c>,
+/// <c>_Thread</c>, <c>_Approval</c> and <c>_Access</c> row under the moved node, with the move
+/// reporting success (issue #3272). <see cref="CopyNodeRequest.RequireComplete"/> is what makes that
+/// difference a REFUSAL instead: it is asserted before anything is created, so a move either
+/// relocates the whole subtree or leaves it exactly where it was.</para>
 /// </summary>
 /// <param name="SourcePath">The current path of the node</param>
 /// <param name="TargetPath">The new path for the node</param>

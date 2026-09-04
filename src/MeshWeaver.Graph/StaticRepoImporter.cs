@@ -1253,7 +1253,9 @@ public static class StaticRepoImporter
                                     Log: new LogMessage(
                                         $"🚫 {path}: NodeType '{sourceNode.NodeType}' is not carried by this "
                                         + "source and is absent from the mesh — no write order can create it.",
-                                        Microsoft.Extensions.Logging.LogLevel.Warning)));
+                                        Microsoft.Extensions.Logging.LogLevel.Warning)
+                                        .WithKey("activity.import.nodeTypeCannotLand",
+                                            ("path", path), ("nodeType", sourceNode.NodeType))));
                                 continue;
                             }
 
@@ -1337,7 +1339,8 @@ public static class StaticRepoImporter
                                     Preserved: 1,
                                     Log: new LogMessage(
                                         $"↩ Kept local change to {path} (newer on the server — commit to sync it back).",
-                                        Microsoft.Extensions.Logging.LogLevel.Information)));
+                                        Microsoft.Extensions.Logging.LogLevel.Information)
+                                        .WithKey("activity.import.keptLocalChange", ("path", path))));
                                 continue;
                             }
 
@@ -1404,6 +1407,8 @@ public static class StaticRepoImporter
                                         + "as Unavailable. Import the source that defines it, or retype "
                                         + "the node.",
                                         Microsoft.Extensions.Logging.LogLevel.Warning)
+                                        .WithKey("activity.import.strandedByNodeType",
+                                            ("path", path), ("nodeType", sourceNode.NodeType))
                                     : null));
                         }
 
@@ -1572,10 +1577,12 @@ public static class StaticRepoImporter
                             keptFromPrune
                                 .Select(kept => new LogMessage(
                                     $"↩ Kept {kept.Path} (added on the server — commit to sync it back).",
-                                    Microsoft.Extensions.Logging.LogLevel.Information))
+                                    Microsoft.Extensions.Logging.LogLevel.Information)
+                                    .WithKey("activity.import.keptServerAddition", ("path", kept.Path)))
                                 .Concat(prunedPaths.Select(p => new LogMessage(
                                     $"🗑 Pruned {p} (absent from the repo).",
-                                    Microsoft.Extensions.Logging.LogLevel.Information)))
+                                    Microsoft.Extensions.Logging.LogLevel.Information)
+                                    .WithKey("activity.import.pruned", ("path", p))))
                                 .Concat(strandedReport is null
                                     ? Array.Empty<LogMessage>()
                                     : [new LogMessage(strandedReport, Microsoft.Extensions.Logging.LogLevel.Warning)])
@@ -2270,10 +2277,16 @@ public static class StaticRepoImporter
     /// (<c>MarkFailed</c>); this additionally raises a bell <see cref="NotificationService"/>
     /// Notification whose <c>TargetNodePath</c> LINKS to that activity log — so a failed boot
     /// import is something the operator SEES (a notification → click → activity log) instead of a
-    /// silent wedge they must dig pod logs for. Created under System (the boot-import identity) as a
-    /// satellite of the failing partition (the same owner the activity lives under — routed to that
-    /// per-node hub, never the mesh hub). Fire-and-forget: a notification hiccup must never fail the
-    /// import, so the error arm only logs.
+    /// silent wedge they must dig pod logs for. Created under System (the boot-import identity).
+    /// Fire-and-forget: a notification hiccup must never fail the import, so the error arm only logs.
+    ///
+    /// <para>🚨 Addressed to the PLATFORM (<see cref="NotificationService.PlatformAddressee"/>): a
+    /// failed startup import is something only an operator can act on, and nobody is individually
+    /// responsible for it. Before the addressed model it was written as a satellite of the FAILING
+    /// PARTITION — <c>{space}/_Notification/{id}</c> — which put it in the bell of everyone who
+    /// could read that space and in no operator's bell in particular (60 of the newest 200 rows on
+    /// memex-cloud; Systemorph/MeshWeaver#3156 §2). The activity log stays the click target, so the
+    /// notification → activity-log path an operator follows is unchanged.</para>
     /// </summary>
     private static void NotifyStartupFailure(
         IMessageHub hub, string partition, string activityPath, string error, ILogger? logger)
@@ -2283,6 +2296,7 @@ public static class StaticRepoImporter
             return;
         AsSystem(hub, () => NotificationService.CreateNotification(
                 meshService,
+                recipient: NotificationService.PlatformAddressee,
                 mainNodePath: partition,
                 title: $"Startup import failed: {partition}",
                 message: string.IsNullOrWhiteSpace(error) ? "Import failed during startup." : error,
@@ -2802,7 +2816,9 @@ public static class StaticRepoImporter
                     FailedDeterministic: IsContentVerdict(ex) ? 1 : 0,
                     Log: new LogMessage(
                         $"⚠ Failed to import {node.Path}: {ex.Message}",
-                        Microsoft.Extensions.Logging.LogLevel.Warning)));
+                        Microsoft.Extensions.Logging.LogLevel.Warning)
+                        .WithKey("activity.import.itemFailed",
+                            ("path", node.Path), ("error", ex.Message))));
             });
 
     /// <summary>

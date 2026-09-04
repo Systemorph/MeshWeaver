@@ -101,6 +101,33 @@ else
   echo "  ok   a secret-backed shadow states no value verdict"
 fi
 
+# ...nor a PROVENANCE. Reading a key NAME says nothing about where that key's value came from. The
+# message asserted "the Key Vault credential went unused" until 2026-09-04, when re-measuring memex
+# showed the shadowed secret was helm-rendered, that its namespace's CSI-backed secret does not carry
+# the key, and that the vault holds no such entry at all. A checker that narrates an unmeasured
+# provenance teaches its reader a wrong fix.
+if echo "$out" | grep -A1 'SHADOWS *inline env PluginCatalog__RegistryToken' | grep -qi 'key vault'; then
+  echo "::error::the secret-backed shadow claims a Key Vault provenance. Only the key NAME is read"
+  echo "         from that source — where its value came from is not observable here."
+  fail=1
+else
+  echo "  ok   a secret-backed shadow claims no provenance"
+fi
+
+# ...and it MUST warn that a credential shadow can be two PRINCIPALS, not two values of one setting.
+# On memex both sides were valid registry instance keys of DIFFERENT registered instances, so the
+# reflex cleanup would have re-identified the portal and widened its entitlement. "Establish which
+# value is live" is not sufficient advice for a credential, and that is the whole lesson of #3201.
+if echo "$out" | grep -A1 'SHADOWS *inline env PluginCatalog__RegistryToken' \
+     | grep -q 'DIFFERENT registered instances'; then
+  echo "  ok   a secret-backed shadow warns the two sides may be different principals"
+else
+  echo "::error::the secret-backed shadow does not warn that the two sides may be different"
+  echo "         PRINCIPALS. Deleting the inline entry can re-identify the deployment, not merely"
+  echo "         change a value — see MeshWeaver#3201."
+  fail=1
+fi
+
 # A SHADOWS whose two values disagree must SAY so — that verdict is the whole point of the class.
 if echo "$out" | grep -A1 'SHADOWS *inline env PreWarm__GateReadiness' | grep -q 'THE TWO DISAGREE'; then
   echo "  ok   disagreeing SHADOWS is called out as such"
