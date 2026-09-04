@@ -1,7 +1,7 @@
 ---
 Name: Controls That Cannot Fail
 Category: Architecture
-Description: A control whose green is guaranteed by construction is not a control. Seven measured instances — a test, a detector, an identity anchor, a preflight, a watcher, a CD verdict, and the git idiom that misled the author of this page while checking it — and the one question that catches all seven.
+Description: A control whose green is guaranteed by construction is not a control. Eight measured instances — a test, a detector, an identity anchor, a preflight, a watcher, a CD verdict, a git idiom that answers the wrong question, and a generator whose failure mode is a success line — and the one question that catches all eight.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/><path d="M12 8v8" opacity="0.25"/></svg>
 ---
 
@@ -17,7 +17,7 @@ silently disappears and the wall stays green.
 > 1. *"If the subject of this check were broken right now, what would this print?"*
 > 2. *"And have I run it against a subject I broke on purpose?"*
 
-**Every one of the seven instances below passes the first question by reasoning, and fails the second.**
+**Every one of the eight instances below passes the first question by reasoning, and fails the second.**
 That is not a coincidence, and it is the reason the first question alone is not enough: reasoning about
 a control is done by the person who built it, in the model they built it from, and a control fails
 precisely where that model is wrong. Instance 1 is the cleanest proof — its probe was *adversarially
@@ -42,12 +42,14 @@ instances. The family is larger, and it is worth recognising by shape.
 | **Blindness rendered as health** | a watcher whose read failure and whose "no matches" look identical | "I cannot see" is reported as "nothing is wrong" |
 | **One word covering three states** | `completed/success` over checked-and-passed, never-ran, and ran-and-did-nothing | the verdict is not the outcome |
 | **A tool that collapses several failures into one exit code** | `git cat-file -e "$sha:$path" \|\| echo ABSENT` | absent-path, bad-sha, missing-object and bad-quoting all read the same |
+| **A writer whose failure mode is a SUCCESS line** | a generator that skips its work and prints a summary anyway | nothing distinguishes "wrote it" from "declined to" |
 
-## Seven measured instances
+## Eight measured instances
 
-The first six were found in a single day, across tests, CI, publication and ops. The seventh was
-found **while writing this page**, by its own author, using the idiom everyone reaches for. Each is
-stated with what was *measured*, not with what was suspected.
+The first six were found in a single day, across tests, CI, publication and ops. The last two were
+found **while writing this page** — one by its author, one by the session that supplied instances
+2–6, independently, within an hour of each other. Each is stated with what was *measured*, not with
+what was suspected.
 
 ### 1. A control served by the transport the test then destroyed
 
@@ -209,6 +211,35 @@ git ls-tree --name-only "$sha" -- "$path"   # prints the path, or prints nothing
   disagreement is a story, and a plausible story is harder to dislodge than a wrong number. Here the
   first reviewer's proposed mechanism — that the wrong file had been read — was itself wrong; the
   values had merely coincided until a pin bump separated them.
+
+### 8. A writer whose failure mode is a success line
+
+Found the same evening as instance 7, and independently by two people within the hour — which is why
+it is here rather than in a footnote about tooling.
+
+`scripts/gen-manifests.py` derives each module's version from a content hash compared against the
+highest published git **tag**. In a checkout with no tags fetched it computes a lower version for
+everything, and a deliberate **forward-only guard** then refuses to write a version downward. That
+guard is correct. Its consequence is not: **a tagless run does nothing and says so in the voice of
+success**, leaving every lock stale while the same tree still fails `gen-manifests.py --check-versions`.
+Write mode and check mode appear to contradict each other. They do not — the writer simply had
+nothing to compare against.
+
+Two encounters, same evening:
+
+- One run reported 25 stale locks at the gate. Tags fetched first (1063 of them), 25 rewritten, and
+  then — **not trusting the writer** — `--check-versions` run as an independent reader: *every
+  module's version matches its content*.
+- Another session, draining six branches, got the no-op line back on five of them and nearly read it
+  as "already current". What saved it was declining to read the writer's report at all: it checked
+  `Validate node repos` on each head instead and got `completed/success` five times. On the sixth the
+  script genuinely rewrote 16 locks, where the gate had been red on 17 stale ones with the fix named
+  in its own output.
+
+**Rule:** never accept a writer's report as evidence that the write happened. Verify with an
+independent reader — the tool's own check mode, or the gate that consumes the artifact. A tool that
+reports success while doing nothing is the purest form of this page's subject: there is no error to
+notice, no red to chase, and the only signal is one you have to go and ask for.
 
 ## What to do about it
 
