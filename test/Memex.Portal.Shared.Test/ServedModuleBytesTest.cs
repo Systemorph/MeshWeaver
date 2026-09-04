@@ -51,6 +51,11 @@ public class ServedModuleBytesTest : IDisposable
     private static string MvidOf(System.Reflection.Assembly assembly) =>
         CompiledDependencies.MvidScheme + assembly.ManifestModule.ModuleVersionId.ToString("N");
 
+    private static readonly byte[] AssetBytes = Encoding.UTF8.GetBytes(".mw-widget{color:#bada55}");
+
+    private static readonly byte[] NestedAssetBytes =
+        Encoding.UTF8.GetBytes("export function init(){ return 'mw-widget'; }");
+
     private readonly string root =
         Path.Combine(Path.GetTempPath(), "mw-served-module-" + Guid.NewGuid().ToString("N"));
 
@@ -83,6 +88,38 @@ public class ServedModuleBytesTest : IDisposable
         Assert.Equal(SealedBytes, Read(served.Files[0]));
         Assert.Contains(Source, served.Provenance, StringComparison.Ordinal);
         Assert.Contains(Identity, served.Provenance, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 The sealed build's STATIC WEB ASSETS ride with it. Switching which producer supplies the
+    /// module must not re-create #2221: a view pack whose <c>wwwroot</c> is dropped lands, loads and
+    /// renders unstyled with nothing in any log, and the seal's bundle carries its assets under
+    /// <c>meshweaver/moduleassets/</c> exactly as the pack lane wrote them
+    /// (<c>ModulePackCommand</c>). Asserted byte-exact, and by RELATIVE path — a component asks for
+    /// <c>_content/&lt;pack&gt;/Components/x.razor.js</c>, so a flattened asset 404s like a missing one.
+    /// </summary>
+    [Fact]
+    public void TheSealedBuildsStaticAssetsRideWithIt()
+    {
+        var shelf = Shelf(ShelfBytes);
+        PublishedRoot(
+            bundleName: ServedModuleBytes.BundleNameFor(Package),
+            moduleBytes: SealedBytes,
+            assets: [("wwwroot/MeshWeaver.Widget.styles.css", AssetBytes),
+                     ("wwwroot/Components/Widget.razor.js", NestedAssetBytes)]);
+
+        var served = ServedModuleBytes.Resolve(
+            Module, Package, shelf.Files, shelf.Assets,
+            new RecordedModuleId(SealedMvid, null),
+            PublishedRootPath, Identity);
+
+        Assert.Null(served.Divergence);
+        Assert.Equal(SealedBytes, Read(served.Files[0]));
+        Assert.Equal(
+            ["wwwroot/Components/Widget.razor.js", "wwwroot/MeshWeaver.Widget.styles.css"],
+            served.Assets.Select(a => a.RelativePath).ToArray());
+        Assert.Equal(NestedAssetBytes, ReadAsset(served.Assets[0]));
+        Assert.Equal(AssetBytes, ReadAsset(served.Assets[1]));
     }
 
     /// <summary>
@@ -261,17 +298,23 @@ public class ServedModuleBytesTest : IDisposable
 
     /// <summary>A SEALED publication for <see cref="Identity"/> whose module set carries one bundle
     /// declaring <see cref="Module"/> at the given build.</summary>
-    private void PublishedRoot(string bundleName, byte[] moduleBytes)
+    private void PublishedRoot(
+        string bundleName, byte[] moduleBytes,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? assets = null)
     {
         var source = Path.Combine(PublishedRootPath, Identity, Source);
         var modules = Path.Combine(source, PublishedBundleCatalogue.ModulesDirectoryName);
         Directory.CreateDirectory(modules);
 
-        WriteZip(
-            Path.Combine(modules, bundleName),
+        var entries = new List<(string Entry, byte[] Bytes)>
+        {
             (NuGetPackageWriter.ManifestEntry,
                 Encoding.UTF8.GetBytes($$$"""{"plugin":"{{{Package}}}","module":{"assemblyName":"{{{Module}}}"}}""")),
-            ($"{NuGetPackageWriter.ModuleFolder}/{Module}.dll", moduleBytes));
+            ($"{NuGetPackageWriter.ModuleFolder}/{Module}.dll", moduleBytes),
+        };
+        foreach (var (relative, bytes) in assets ?? [])
+            entries.Add((NuGetPackageWriter.ModuleAssetEntryPathFor(relative), bytes));
+        WriteZip(Path.Combine(modules, bundleName), [.. entries]);
         File.WriteAllLines(
             Path.Combine(modules, PublishedBundleCatalogue.ModulesIndexFileName), [bundleName]);
 
@@ -283,9 +326,13 @@ public class ServedModuleBytesTest : IDisposable
             Path.Combine(source, ShippedPrebuiltBundles.CompletionSentinelFileName), Package + ".zip\n");
     }
 
-    private static byte[] Read(ServedModuleFile file)
+    private static byte[] Read(ServedModuleFile file) => Drain(file.Open);
+
+    private static byte[] ReadAsset(ServedModuleAsset asset) => Drain(asset.Open);
+
+    private static byte[] Drain(Func<Stream> open)
     {
-        using var stream = file.Open();
+        using var stream = open();
         using var buffer = new MemoryStream();
         stream.CopyTo(buffer);
         return buffer.ToArray();
