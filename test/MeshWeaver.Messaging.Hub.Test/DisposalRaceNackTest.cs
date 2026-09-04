@@ -122,9 +122,13 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
             // 2. Accepted while the hub is healthy, so it lands in the MAIN queue behind the
             //    stall — not in the deferred queue the #672 drain answers for.
             IRequest<RaceResponse> request = faulting ? new FaultingRequest() : new RaceRequest();
+            // 🚨 The messageId OVERLOAD, not `o.WithMessageId(...)`: `Observe<TResponse>` mints the
+            // correlation id itself, so an id set through the options never becomes the ledger key —
+            // the first version of this wait polled a key that did not exist and timed out at 36 s
+            // having proved nothing.
             var requestId = Guid.NewGuid().ToString("N");
             var response = host
-                .Observe<RaceResponse>(request, o => o.WithTarget(victimAddress).WithMessageId(requestId))
+                .Observe((object)request, o => o.WithTarget(victimAddress), requestId)!
                 .FirstAsync()
                 .Await(TestContext.Current.CancellationToken);
 
@@ -156,8 +160,9 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
                 // one would leave this task pending for the [Fact] timeout with no explanation —
                 // exactly the production symptom (an install that spins for 60 s).
                 var served = await response;
-                served.Should().NotBeNull("the request was accepted, so it runs and is answered "
-                    + "before the hub goes down — the shutdown waits its turn behind accepted work");
+                served.Message.Should().BeOfType<RaceResponse>(
+                    "the request was accepted, so it runs and is answered before the hub goes down "
+                    + "— the shutdown waits its turn behind accepted work");
                 await victim.DisposalCompleted.FirstOrDefaultAsync().Await()
                     .WaitAsync(TestTimeouts.Convergence);
                 victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
