@@ -150,9 +150,9 @@ construction. So `Pairs-with: none — <reason>` is an escape, and it is deliber
 statement in the pull-request body, it is printed into the job log, and an unexplained `none` is
 refused. What the gate removes is the case where **nobody was ever asked**.
 
-It also covers exactly TWO of the six shapes below — a public type leaving `src/`, and (since #3103)
-a public member leaving a type that stays. It does not see the other four, and no detector can:
-each of them is detectable only by knowing what the *dependent* consumes.
+It also covers exactly TWO of the seven shapes below — a public type leaving `src/`, and (since
+#3103) a public member leaving a type that stays. It does not see the other five, and no detector
+can: each of them is detectable only by knowing what the *dependent* consumes.
 
 The structural answer to those is the one #2689 names as its acceptance criterion —
 **compile-and-run the dependent's suite against the candidate core commit**, as a CI-time
@@ -161,9 +161,9 @@ still builds and ships without the plugin repos present, and the integration is 
 about* a candidate commit rather than a *link into* it. This gate is the half of that which core can do alone. The other
 half is **event-based and lives in the dependent**: see *"The dependent reacts to core's events"* below.
 
-## The six shapes
+## The seven shapes
 
-Collected on #2689 and #3103. Each column says which mechanism sees it — the pair gate here, or the
+Collected on #2689, #3103 and #3276. Each column says which mechanism sees it — the pair gate here, or the
 dependent's own CI reacting to core's release event.
 
 | # | shape | incident | pair gate | dependent's CI on the release event |
@@ -174,6 +174,7 @@ dependent's own CI reacting to core's release event.
 | 4 | a **comment** another repo's regex parses as data | #2689 (2026-09-01 carve-out wave, failure #1) | no | only when the dependent's gate runs on the dispatch — its `validate` lane does not |
 | 5 | the **i18n mirror**: a *value* change in `strings.{en,de}.json` (#2650) | every Plugins PR red until the mirror PR lands | no | only when `rn-app` runs on the dispatch — it does not (see the receiver's scope) |
 | 6 | a public **member** leaves a type that **stays** (field, const, method, property, event, positional record parameter, enum constant, interface member, nested type) | #3137 — `CacheDuration`/`NegativeCacheDuration`; `CS0117`; `Portal hosts (shard 0)` red on every Plugins PR for three hours, *"nothing was tested"* | **yes** (since #3103) | yes |
+| 7 | a public method's **BEHAVIOUR** changes behind an **unchanged signature** — same name, same parameters, different answer | #3276 — `CatalogLayoutAreas.RenderFromSource` began rendering the category landing instead of the flat package list; two `MeshWeaver.PluginCatalog.Test` render tests in Plugins went red, found 48 commits later by a pin bump | no — nothing is added or removed, so no surface detector can see it | **only if the dependent actually rebuilds against the release — a PINNED dependent does not** (below) |
 
 ## Member-level detection (the sixth shape)
 
@@ -230,10 +231,26 @@ was withdrawn the same day, and `PlatformReleaseNotifyGuard.CoreDispatchesToNoRe
 `/dispatches` POST in any workflow core runs on its own behalf. Each dependent's `ci.yml`
 receives it, resolves its `platform-ref` to that release, builds its `src/` and content against it,
 runs its suites and — only if everything passes — seals and publishes its bundles for that platform
-identity. A shape-1…6 break therefore surfaces as a red release-follow run **in the dependent's
+identity. A shape-1…7 break therefore surfaces as a red release-follow run **in the dependent's
 repository**, minutes after the platform published, with the dependent's own test names in the
 log, and it is fixed there by a pull request in that repository. Nothing in core polls, reads back
 or blocks on it.
+
+🚨 **…as long as the dependent's source lane actually resolves to the released commit. A PINNED
+dependent does not, and #3276 is the measurement.** MeshWeaver.Plugins pins core deliberately
+(`MW_PLATFORM_REF`, its own #1255: a floating `main` reddened that repo three times in one day with
+no diff in any branch there), and its `platform-ref` job resolves the SAME pin on a
+`repository_dispatch` release event as on a pull request — the event changes what is baked, not what
+`src/` compiles against. So the release-follow run rebuilds the dependent against the commit it
+already used, and a break introduced after the pin is invisible to it. It waits, silently, until a
+human bumps the pin — and then arrives as *"my pin bump is red"*, which reads like the bumper's
+problem and is not.
+
+That is not an argument for unpinning: the pin was bought with a real incident and it moves the
+break to a diff the dependent owns. It is an argument for reading the two halves as what they are —
+**the event catches a break for a dependent that TRACKS; for a dependent that PINS, the pin bump IS
+the integration test**, and the cost of a break is proportional to how long the pin sat. #3276 sat
+for 48 commits, and the whole cost was paid by the bisect that found it.
 
 **The contract (maintainer, 2026-09-03: *"end of github pipeline must call memex, which must
 register release and publish event"*) is three sentences:**
@@ -286,7 +303,9 @@ a sibling repository is a dependency whatever token it uses.
 core keeps (the shared-rules sweep and the `Pairs-with:` resolution) and refuses a third.
 
 The consequence the pair gate covers stays: a pull request that REMOVES public surface must name
-its merged counterpart. Everything additive (shapes 2–5) is the dependent's to catch on the event.
+its merged counterpart. Everything additive or behavioural (shapes 2–5 and 7) is the dependent's to
+catch when it next builds against the platform — on the event if it tracks, on the pin bump if it
+pins.
 
 ## Proving it
 
