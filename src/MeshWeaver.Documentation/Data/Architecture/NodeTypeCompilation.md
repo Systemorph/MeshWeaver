@@ -803,6 +803,26 @@ and bind were healthy and only the **emit** was dead. That split is the fastest 
 in a log: correct `CS####` for broken source, `NullReferenceException` for source that should
 succeed.
 
+**Replicated independently in MeshWeaver.Plugins** — run
+[`33760859754`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/33760859754) shard 3,
+2026-09-03, a `push` to `main`, `MeshWeaver.Hosting.Monolith.Test`. Onset **13:34:23.568**, 1.3 s
+into `CodeEditRecompileTest.CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSourceChange` and 33 s
+into the process; it is the **first** `NullReferenceException` in the whole trace, so it is not
+downstream of an earlier fault. Then **39 of 39** compile faults over the next 13 m 21 s were that
+same NRE with `canary=BELOW-ROSLYN` — **zero** `CompilationException` — across 12 unrelated node
+paths and partitions. Parse and bind stayed healthy throughout, on two independent readings:
+correct `CS0103`/`CS1591` diagnostics were still returned at **13:41:55, +7 m 32 s** after onset,
+and `BrokenNodeTypeAccessTest` **passed at +13 min**.
+Memory was flat (managed 147 MiB / RSS 961 MiB) through the final wedge, and
+the ten test hosts that ran after it **on the same runner were clean**, so the condition is
+process-scoped, not machine-scoped. Two repos, two harnesses, two shard layouts, one shape.
+
+🚨 **Onset is not a warm-up threshold.** Core's occurrence fired 130 s and 199 `TEST START`s into the
+host; this one fired at 33 s and 12, with `alc=1`, `asm=138`, `gc2=4` — no ALC churn, no memory
+pressure, and the two ALC-heavy suites (`NodeTypeRecompileAlcLeakTest`,
+`NodeAlcUnloadTeardownOrderingTest`) ran **after** the onset, not before it. Any hypothesis that
+needs a precursor workload has to explain that.
+
 **It is not a MeshWeaver defect and no compile-side change fixes it.** `EmitPipeline`'s canary
 answers that at the first throw, in two legs: re-emit a trivial, freshly parsed, known-good
 compilation against the same references, then — if that fails too — against an image-backed CoreLib
@@ -846,10 +866,22 @@ Two readings that look right and are not:
   written. The retry's own error is the `NullReferenceException`. Compare timestamps, not adjacency.
 - **"That one is just a slow shard."** `ReleaseRequestWatcherHighWaterTest`'s compile threw **174 ms**
   after `TEST START`; the 50 s wait that followed was waiting for an `Ok` that could never arrive.
+- 🚨 **"It's a compile suite and it hit the cap, so it's this."** The 2026-08-13 sweep found that
+  `exit=124` on `MeshWeaver.Hosting.Monolith.Test` was *almost entirely* this defect. **That has
+  stopped being true.** Measured 2026-09-03→04 on MeshWeaver.Plugins: **3** such timeouts in 122
+  runs, of which **1** carries the signature and **2 carry none** — read on the authoritative sink
+  (467 and 560 `[FAULT]` records each, zero `canary=`), so the nulls are not the job log's
+  failing-tests-only blind spot. Both nulls wedged **inside one compile test that never ended** (one
+  unclosed `TEST_START` for the whole 15-minute cap, `methodTimeout` never firing) — a hang, not
+  this defect's fast many-failure cascade, and both were in this issue's own blame set
+  (`NodeTypeReleaseGateTest`, `CodeEditRecompileTest`). **Discriminate on the verdict, never on the
+  suite name plus the exit code**; folding a live wedge into a known-upstream defect hides it.
 
 > 🚨 **The core dump the canary asks for cannot be captured this way.** `DOTNET_DbgEnableMiniDump`
 > fires on a *signal*, and this process never crashes — it throws a managed exception and keeps
-> running until CI's 8-minute cap kills it (`exit=124`, no dump). That is why three weeks of
+> running until CI's per-suite wall-clock cap kills it (`exit=124`, no dump): 8 minutes on core's
+> shards, **15 minutes** on MeshWeaver.Plugins' `Portal hosts` shards, so the cap is a property of
+> the harness and not a fingerprint to grep for. That is why weeks of
 > "capture a core dump" produced none. Its SIGSEGV twin,
 > [#613](https://github.com/Systemorph/MeshWeaver/issues/613), *does* dump — see
 > [Debugging Native Crashes](/Doc/Architecture/DebuggingNativeCrashes) for the invariant the two share (a single
