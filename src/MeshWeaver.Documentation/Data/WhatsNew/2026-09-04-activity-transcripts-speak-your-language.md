@@ -25,7 +25,7 @@ is rendered, from the locale of whoever is looking at it. A German viewer now re
 
 ```
 Branch 'main' steht auf a1b2c3d4 — Ihr Space ist aktuell.
-{sha} committet ({written} geschrieben, {removed} entfernt).
+a1b2c3d4 committet (12 geschrieben, 3 entfernt).
 Die Quellensuche fand 14 Code-Node(s): …
 ```
 

@@ -5,7 +5,7 @@
 # Format: <repo-relative path><TAB><count>.  The ratchet may only SHRINK: a new file, a raised
 # count, or a raised TotalBudget is a failure.  Adding a line here is not a fix.
 #
-# 🚨 These seventeen are NOT a to-do list that nobody got to. #3281 migrated everything that was
+# 🚨 These eighteen are NOT a to-do list that nobody got to. #3281 migrated everything that was
 # genuinely migratable; what is left is the two populations that cannot carry a key, and they are
 # expected to stay:
 #
