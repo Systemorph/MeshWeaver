@@ -56,7 +56,8 @@ them"* — that inventory was right and the detector's legend was wrong.
 One exception, and it follows from the same mechanism rather than qualifying it: a key the LAST
 deploy rendered and the CURRENT chart does not is in the release's own manifest, so helm owned it
 and the merge deletes it. That is not a cluster-only setting surviving; it is a chart retirement
-landing. The discriminator, and today's count, are under *"`CLUSTER-ONLY` splits in two"* below.
+landing. The gate computes that case and reports it as a `PENDING DELETION` — the discriminator and
+the mechanism are under *"`CLUSTER-ONLY` splits in two"* below.
 
 ## The hazard that is real, and was invisible
 
@@ -85,7 +86,7 @@ owned.
 |---|---|---|
 | `COLLIDES` | inline `env:` + a ConfigMap key differing **only in case** | **already**, at random, every pod start |
 | `SHADOWS` | inline `env:` + the **same** key from **any** envFrom source | **already** — the shadowed value is dead |
-| `CLUSTER-ONLY` | live, in no committed source | on a rebuild or restore, and at every review — **unless the release manifest still owns the key**, when the next upgrade deletes it |
+| `CLUSTER-ONLY` | live, in no committed source | on a rebuild or restore, and at every review — **unless the release manifest still owns the key**, when the next upgrade deletes it and the finding reads `PENDING DELETION` |
 | `CHART-ONLY` | rendered, never applied | nobody is getting it today |
 | `DIFFERS` | both sides, values disagree | never resolves itself; needs a decision — except an `inline env`, which helm owns and an upgrade resets |
 
@@ -251,30 +252,83 @@ and a finding can be produced by an un-run deploy rather than by cluster drift.
 Findings are printed worst-first and the summary counts each class. Rank the work that way:
 `COLLIDES` and `SHADOWS` are live-wrong now; `CLUSTER-ONLY` is the migration tracked by
 `Systemorph/Memex#148` (*nothing may live only on the cluster* — every value belongs on the
-`Hosting/Deployment` record, rendered by the chart); `DIFFERS` is a decision, not a deploy.
+`Hosting/Deployment` record, rendered by the chart), **except for the `PENDING DELETION` findings
+inside it, which are dated work: the next deploy removes them**; `DIFFERS` is a decision, not a
+deploy.
 
-## `CLUSTER-ONLY` splits in two, and only one half survives a deploy
+## `CLUSTER-ONLY` splits in two, and the check now computes the split
+
+There are **three** sides to chart drift, not two:
+
+| side | what it is | how it is read |
+|---|---|---|
+| **D** | the chart as CI renders it | `helm template` |
+| **L** | the live cluster objects | `kubectl get …` |
+| **M** | the last-deployed release manifest | `helm get manifest <release> -n <ns>` |
+
+Everything above this section is **D vs L**. `hosting-audit` (`deploy/aks/operator/bin`) computes
+**M vs L**. The deletion hazard is in **neither**: it is **D vs M**.
 
 "A `helm upgrade` does not delete cluster-only settings" is the measured rule, and it is right about
 the *mechanism* — helm removes only what it **previously owned**. But a key can be cluster-only
 *today* precisely **because the chart stopped rendering a key the last deploy did render**, and that
-key IS in the release's own manifest. The three-way merge then deletes it, correctly.
-
-So the class has two mechanically distinguishable halves, and the discriminator is one command —
-`helm get manifest <release> -n <ns>`, the `original` side of the merge:
+key IS in `M`. The three-way merge then deletes it, correctly. So the class has two mechanically
+distinguishable halves, and `M` is the discriminator:
 
 | sub-class | test | next `helm upgrade` |
 |---|---|---|
 | **owned-but-retired** | the key IS in `helm get manifest` | **deletes it** — helm owned it |
 | **never-owned** | the key is NOT in `helm get manifest` | **leaves it** — the migration backlog |
 
-Measured 2026-09-04 over all 36 `CLUSTER-ONLY` findings: **13 owned-but-retired** (`memex` 7,
-`memex-cloud` 6) and **23 never-owned** (`memex` 12, `memex-cloud` 11). Every one of the 13 is
-zero-length live, so all thirteen deletions are no-ops — but that is a property of *these* keys on
-*this* day, not of the sub-class. `Systemorph/Memex#152` asked for exactly this check in the
-opposite direction ("a key that is live and rendered by neither chart nor overlay is about to be
-deleted, which is information no current gate reports"); the manifest probe above is that check, and
-running it before a deploy is what turns a silent deletion into a reviewed one.
+**Since 2026-09-04 the gate computes this itself.** `check-chart-drift.sh` fetches `M` on both
+transports and hands it to the comparator, which reports an owned-but-retired finding as a
+**`PENDING DELETION`** — still inside the `CLUSTER-ONLY` class, because the class is "live and not
+rendered" and both halves are that, but with the verdict written into the finding and a count in the
+summary line. The never-owned half now says *helm never owned it* explicitly rather than leaving
+"a `helm upgrade` PRESERVES it" to be taken on trust.
+
+**The manifest is a required input, and an unreadable one is RED.** Both the script and the
+comparator refuse to run without it. That is not defensiveness: with `M` missing, *every* live-only
+key reads as never-owned — the harmless half — so the report would answer "nothing here is about to
+be deleted" at exactly the moment it could not tell. That is the skip-trapdoor shape
+[AGENTS.md](https://github.com/Systemorph/MeshWeaver/blob/main/AGENTS.md) forbids, expressed as a
+default value rather than as an `if:`.
+
+**Measured before shipping it, read-only, on the live cluster (2026-09-04).** A gate whose new
+required input turns out to be unreadable in production goes red for a missing-input reason on its
+first scheduled run, which is indistinguishable from finding drift. So the input was measured rather
+than assumed: `helm version --short` inside `az aks command invoke` answers **v3.21.1+gc56dd00** —
+the binary is there, on the transport that matters — and `helm get manifest` returns a manifest for
+both production releases (`memex` in `memex`, 76 386 bytes; `memexcloud` in `memex-cloud`, 79 884
+bytes). Every object the comparator hard-requires is in both: the `memex-portal-config` ConfigMap,
+the `memex-portal-deployment` Deployment, and the `memex-portal` container inside it. None of the
+three "the manifest parses but lacks an object" failure paths can fire on either namespace.
+
+🚨 **Reading a release manifest by eye needs a parser, not `grep`.** `helm get manifest` emits
+**quoted** scalars — `kind: "ConfigMap"`, `name: "memex-portal-config"` — so `grep '^kind: ConfigMap'`
+returns nothing and reads as *"the object is absent"*. `yaml.safe_load_all` unquotes them, which is
+why the comparator's `doc.get("kind") == "ConfigMap"` is correct and a quick shell check is not.
+
+🚨 **The finding reports the VALUE's emptiness, never the value.** A pending deletion of a
+zero-length value is a no-op; of a non-empty value it is a real removal. The report says which, and
+for a ConfigMap key gives the length — reading only key names is what turns thirteen no-ops into a
+false alarm.
+
+The baseline observation, measured **by hand** on 2026-09-04 over all 36 `CLUSTER-ONLY` findings —
+the last time anyone had to: **13 owned-but-retired** (`memex` 7, `memex-cloud` 6) and **23
+never-owned** (`memex` 12, `memex-cloud` 11). Every one of the 13 was zero-length live, so all
+thirteen deletions were no-ops — but that is a property of *those* keys on *that* day, not of the
+sub-class, which is why the check reads the value on every run rather than recording the conclusion.
+`Systemorph/Memex#152` asked for exactly this check in the opposite direction ("a key that is live
+and rendered by neither chart nor overlay is about to be deleted, which is information no current
+gate reports"); it is now information the nightly report carries, which is what turns a silent
+deletion into a reviewed one.
+
+The comparator's own regression test (`deploy/aks/scripts/test-chart-drift-compare.sh`, run by
+`chart-gate.yml` on every pull request) drives all four shapes off committed fixtures — a non-empty
+pending deletion, a zero-length one, a never-owned key that must NOT be reported as pending, and a
+key that is live, helm-owned **and still rendered**, which must not be reported at all. That last
+one is the control: without it the check could pass by flagging everything the manifest carries.
 
 🚨 **And read the VALUE, not the key name, before calling such a deletion harmless.**
 `FrameworkBroadcast__Subscribers__0..3` was reported here on 2026-09-03 as "the live keys feed

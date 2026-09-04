@@ -12,13 +12,19 @@
 # The CLEAN case is the control: if the comparator ever stopped classifying at all, or started
 # reporting drift unconditionally, one of the two cases below would fail. A test with only the
 # drifted case would pass on a comparator that flagged everything.
+#
+# THREE SIDES. Each case carries a release-manifest.yaml as well: D = desired.yaml (what the chart
+# renders), L = the live-*.json (what the cluster runs), M = the manifest (what helm previously
+# owned). Sections 1 and 2 exercise D vs L; section 3 exercises D vs M, which is where the ONE
+# deletion hazard lives — and section 4 asserts the comparator refuses to run at all without M,
+# because an unread manifest makes every finding look like the harmless half.
 set -uo pipefail
 SELF_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DATA="$SELF_DIR/testdata/chart-drift"
 CMP="$SELF_DIR/chart-drift-compare.py"
 fail=0
 
-run_case() {
+run_case_with_manifest() {  # run_case_with_manifest <case> <release-manifest-path>
   local case="$1"
   python3 "$CMP" \
     "$DATA/desired.yaml" \
@@ -27,7 +33,12 @@ run_case() {
     "$DATA/$case/expect-patch.json" \
     "$DATA/$case/live-poddisruptionbudgets.json" \
     "$DATA/$case/live-scaledobjects.json" \
-    "$DATA/$case/envfrom-source-keys.txt" 2>&1
+    "$DATA/$case/envfrom-source-keys.txt" \
+    "$2" 2>&1
+}
+
+run_case() {
+  run_case_with_manifest "$1" "$DATA/$1/release-manifest.yaml"
 }
 
 check() {  # check <description> <expected> <actual>
@@ -201,6 +212,131 @@ else
   echo "         initialDelaySeconds inert — the note that stops the wrong fix."
   fail=1
 fi
+
+# ---- 3. PENDING DELETIONS — the third side, D vs M -------------------------
+# D = the chart as CI renders it, L = the live objects, M = the last-deployed release manifest.
+# Every assertion above compares D against L. The deletion hazard is not in that comparison: a key
+# that is in L and in M but NOT in D is a chart RETIREMENT that has not landed — helm owned it, so
+# the three-way merge removes it on the next upgrade. That is the ONE cluster-only shape a deploy
+# destroys, and until the comparator computed it, all 36 findings of 2026-09-04 were reported as
+# the harmless half and the 13 owned ones were split out BY HAND, once, by one person.
+expect_detail() {  # expect_detail <finding-regex> <substring> <why it matters>
+  if echo "$out" | grep -A1 -e "$1" | grep -qF -- "$2"; then
+    echo "  ok   $1 → says '$2'"
+  else
+    echo "::error::the finding matching '$1' does not say '$2' — $3. Actual:"
+    echo "$out" | grep -A1 -e "$1" | sed 's/^/      /'
+    fail=1
+  fi
+}
+refute_detail() {  # refute_detail <finding-regex> <substring> <why it matters>
+  if echo "$out" | grep -A1 -e "$1" | grep -qF -- "$2"; then
+    echo "::error::the finding matching '$1' says '$2' and must not — $3. Actual:"
+    echo "$out" | grep -A1 -e "$1" | sed 's/^/      /'
+    fail=1
+  else
+    echo "  ok   $1 → does not say '$2'"
+  fi
+}
+
+# POSITIVE: live + in the manifest + no longer rendered, with a NON-EMPTY value. A real removal.
+# (Its CLASS is asserted in section 2 — the class does not change, the verdict inside it does.)
+expect_detail 'CLUSTER-ONLY *ConfigMap LogWatch__DefaultRepository' 'PENDING DELETION' \
+  "helm owns this key and the chart no longer renders it, so the next upgrade removes it"
+expect_detail 'CLUSTER-ONLY *ConfigMap LogWatch__DefaultRepository' 'NON-EMPTY' \
+  "the VALUE decides whether the deletion takes anything away, and this one does"
+# ...and the value itself is never printed, only its weight.
+refute_detail 'CLUSTER-ONLY *ConfigMap LogWatch__DefaultRepository' 'NO-OP' \
+  "a non-empty value is not a no-op deletion"
+
+# ZERO-LENGTH: the same shape over an empty value. All 13 owned-but-retired keys measured on
+# 2026-09-04 were zero-length, so reading only the key NAMES would have raised an alarm about
+# deleting nothing at all. The two cases must be distinguishable in the report.
+expect_class  "CLUSTER-ONLY" "ConfigMap Authentication__DevAdminUsers"
+expect_detail 'CLUSTER-ONLY *ConfigMap Authentication__DevAdminUsers' 'PENDING DELETION' \
+  "it is in the manifest and unrendered, exactly like the case above"
+expect_detail 'CLUSTER-ONLY *ConfigMap Authentication__DevAdminUsers' 'NO-OP' \
+  "an empty value means the removal changes nothing the pod reads, and saying so is the point"
+
+# NEVER-OWNED: live, unrendered, and NOT in the manifest. It survives every deploy — the migration
+# backlog, not a hazard. If this ever reads as a pending deletion the split has collapsed one way.
+expect_class  "CLUSTER-ONLY" "ConfigMap Ops__Contact"
+refute_detail 'CLUSTER-ONLY *ConfigMap Ops__Contact' 'PENDING DELETION' \
+  "helm never owned it, so no upgrade removes it"
+expect_detail 'CLUSTER-ONLY *ConfigMap Ops__Contact' 'PRESERVES' \
+  "the never-owned half must still say a deploy leaves it alone"
+
+# The same split over an inline env entry, both halves. (Copilot's class is asserted in section 2.)
+expect_detail 'CLUSTER-ONLY *inline env Features__Ai__Clis__Copilot' 'PENDING DELETION' \
+  "the manifest carries this entry, so helm owns it"
+expect_detail 'CLUSTER-ONLY *inline env Features__Ai__Clis__Copilot' 'NON-EMPTY' \
+  "an inline env's emptiness is readable and decides what the removal costs"
+expect_class  "CLUSTER-ONLY" "inline env Legacy__Flag"
+expect_detail 'CLUSTER-ONLY *inline env Legacy__Flag' 'NO-OP' \
+  "an empty inline env deletes to nothing"
+expect_class  "CLUSTER-ONLY" "inline env Tok"
+refute_detail 'CLUSTER-ONLY *inline env Tok' 'PENDING DELETION' \
+  "it is not in the manifest, so helm never owned it"
+
+# ...and no inline-env pending deletion may print the value it weighed — they hold tokens.
+if echo "$out" | grep -A1 'CLUSTER-ONLY *inline env Features__Ai__Clis__Copilot' | grep -qE "'true'"; then
+  echo "::error::the inline-env pending deletion PRINTS the value it weighed. Inline env entries"
+  echo "         hold tokens; the finding may state emptiness and length and nothing more."
+  fail=1
+else
+  echo "  ok   an inline-env pending deletion withholds the value"
+fi
+
+# 🚨 THE NEGATIVE CONTROL. Retention__Days is live AND in the manifest AND still rendered, with the
+# same value on both sides. It must not be reported at ALL. Without this the whole check could pass
+# by flagging every key the manifest happens to carry, which is not a comparison.
+if echo "$out" | grep -q 'Retention__Days'; then
+  echo "::error::Retention__Days is live, helm-owned AND still rendered — it is not drift of any"
+  echo "         kind, and it was reported anyway. The manifest comparison flags everything."
+  fail=1
+else
+  echo "  ok   a key that is live, helm-owned and still rendered is not reported"
+fi
+
+# The count the report now carries so nobody re-derives it by hand next run.
+if echo "$out" | grep -q '4 of the CLUSTER-ONLY finding(s) are PENDING DELETIONS'; then
+  echo "  ok   the summary counts the pending deletions"
+else
+  echo "::error::the summary does not count the 4 seeded pending deletions. That count was a hand"
+  echo "         measurement (13 of 36 on 2026-09-04) that nothing recomputed on the next run."
+  echo "$out" | grep -i 'pending deletion' | sed 's/^/      /'
+  fail=1
+fi
+
+# ---- 4. FAIL CLOSED on the manifest ---------------------------------------
+# 🚨 AGENTS.md → "A gate NEVER tests its own inputs". An unreadable manifest makes every live-only
+# key look never-owned — i.e. harmless — so treating it as optional would turn "could not check"
+# into "nothing to worry about", silently. Each of the three ways it can be absent must be RED and
+# must name the command that produces it.
+echo "case: fail-closed (the release manifest is a required input)"
+assert_fails_naming_manifest() {  # assert_fails_naming_manifest <description> <manifest-arg>
+  local o rc
+  o="$(run_case_with_manifest clean "$2")"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "::error::$1 — the comparator exited 0. A manifest it could not read must be a FAILURE,"
+    echo "         never a silent 'no pending deletions'."
+    fail=1
+  elif ! echo "$o" | grep -q 'helm get manifest'; then
+    echo "::error::$1 — it failed, but without naming \`helm get manifest\`, so the reader is not"
+    echo "         told what to provide. Output:"
+    echo "$o" | sed 's/^/      /'
+    fail=1
+  else
+    echo "  ok   $1 → fails RED and names \`helm get manifest\`"
+  fi
+}
+assert_fails_naming_manifest "an EMPTY manifest argument" ""
+MISSING="$DATA/clean/this-manifest-does-not-exist.yaml"
+assert_fails_naming_manifest "a manifest path that does not exist" "$MISSING"
+EMPTY_MANIFEST="$(mktemp)"
+: > "$EMPTY_MANIFEST"
+assert_fails_naming_manifest "a manifest file with no objects in it" "$EMPTY_MANIFEST"
+rm -f "$EMPTY_MANIFEST"
 
 if [ "$fail" -eq 0 ]; then
   echo ""
