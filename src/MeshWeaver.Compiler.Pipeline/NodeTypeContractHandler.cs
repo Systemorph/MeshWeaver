@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
@@ -65,15 +66,20 @@ internal static class NodeTypeContractHandler
         // the single-flight lock, the watcher is the only Roslyn driver for a
         // triggered compile.
         //
-        // AwaitCompilationSettled then holds the read until the dispatched compile
+        // SettledAtOrAfter then holds the read until the dispatched compile
         // finishes: a naive Take(1) would hand the requester the previous
         // release's AssemblyLocation while V2 is mid-compile, and every fresh
         // instance hub activated in that gap would render the stale layout.
+        //
+        // 🚨 …and it is ORDERED AGAINST THE DISPATCH (#3265). Waiting on a freshly
+        // subscribed stream let the settle question be answered by the PRE-dispatch
+        // snapshot — status still null, which IsCompilationSettled accepts — so the
+        // gate above was decorative and the inline compile ran anyway. See
+        // SettledAtOrAfter for the measurement and why the predicate is not the bug.
         var workspace = hub.GetWorkspace();
         EnsureCompileDispatched(hub, workspace)
-            .SelectMany(_ => workspace.GetMeshNodeStream()
-                .AwaitCompilationSettled(hub.JsonSerializerOptions)
-                .Take(1))
+            .SelectMany(dispatched => SettledAtOrAfter(
+                workspace.GetMeshNodeStream(), dispatched, hub.JsonSerializerOptions))
             .Timeout(SettleBudget)
             .SelectMany(node =>
             {
@@ -380,6 +386,60 @@ internal static class NodeTypeContractHandler
                 }))
             .Take(1);
     }
+
+    /// <summary>
+    /// 🚨 The settle wait, ORDERED AGAINST THE DISPATCH — the second half of the
+    /// single-compile-driver gate, and the half whose absence made the first half
+    /// decorative.
+    ///
+    /// <para><b>The defect (#3265).</b> <see cref="EnsureCompileDispatched"/> commits the
+    /// <see cref="CompilationStatus.Pending"/> flip and emits the COMMITTED node, and the caller
+    /// then subscribed a FRESH <c>GetMeshNodeStream()</c> to wait for that compile to settle. A
+    /// new subscriber's initial replay is not guaranteed to carry the owner's latest commit — the
+    /// reduced own-node pipeline seeds it from a source that can lag a write the same hub has
+    /// already applied (the same lag <c>UpdateOwn</c>'s echo detection documents: "the
+    /// subscription's initial replay could be delivered AFTER the write applied"). So the wait
+    /// could be handed the PRE-DISPATCH snapshot, whose <c>CompilationStatus</c> is still
+    /// <c>null</c> — and <see cref="NodeTypeBuildState.IsCompilationSettled"/> answers TRUE for
+    /// null, because for a static-only type or one with a usable build "never compiled" is a
+    /// settled answer. <c>Take(1)</c> took it, the handler fell through to
+    /// <see cref="IMeshNodeCompilationService.CompileAndGetConfigurations"/>, and a SECOND Roslyn
+    /// run went off beside the watcher's — precisely what the header comment of
+    /// <see cref="Handle"/> says must never happen.
+    ///
+    /// Measured on 2026-09-04 (monolith, <c>DOTNET_PROCESSOR_COUNT=2</c>, 8/8 runs): dispatch
+    /// committed v3=Pending, the settle wait was handed v1 with a null status, both compiles ran,
+    /// and TWO terminal success writes landed 16 ms apart — this handler's (store key v1, no
+    /// release) publishing <c>Status=Ok</c> first, then <c>RunCompile</c>'s (store key v4, with the
+    /// release). Two DLLs under two store keys for one type, whichever write-back lands last
+    /// deciding which the record names (#1368's family), and a ~16 ms window in which
+    /// <c>Status=Ok</c> is published but the pipeline has not written its last word — so a
+    /// concurrent writer to the node loses its field to the tail (the reported symptom).</para>
+    ///
+    /// <para><b>The rule.</b> A state OLDER than the dispatch cannot answer a question about the
+    /// dispatch. Gate on the version <see cref="EnsureCompileDispatched"/> reached — strictly the
+    /// same discipline as <c>UpdateOwn</c>'s echo detection, which is "WRITE-IDENTITY-based, never
+    /// emission-count-based": accept only a state of the node at-or-past the stamp this caller
+    /// established. A no-op dispatch (already Pending/Compiling/Ok/Error, a usable build, a
+    /// static-only type) emits the authoritative current node from inside the action block, so the
+    /// gate is satisfied by that same version and the wait answers immediately, as before.</para>
+    ///
+    /// <para>🚨 NOT fixed by making <see cref="NodeTypeBuildState.IsCompilationSettled"/> refuse a
+    /// null status: null is a legitimate settled answer for the two kinds of type
+    /// <see cref="EnsureCompileDispatched"/> deliberately leaves alone, and refusing it would hang
+    /// their resolve for the whole <see cref="SettleBudget"/>. The predicate was never wrong — it
+    /// was asked about a state the dispatch had already superseded.</para>
+    /// </summary>
+    /// <param name="ownStream">The per-NodeType hub's own MeshNode stream.</param>
+    /// <param name="dispatched">What <see cref="EnsureCompileDispatched"/> committed (or, on a
+    /// no-op, the authoritative unchanged node) — its <see cref="MeshNode.Version"/> is the floor.</param>
+    /// <param name="options">The hub's serializer options, for the tolerant content read.</param>
+    internal static IObservable<MeshNode> SettledAtOrAfter(
+        IObservable<MeshNode> ownStream, MeshNode dispatched, JsonSerializerOptions options)
+        => ownStream
+            .Where(node => node is not null && node.Version >= dispatched.Version)
+            .AwaitCompilationSettled(options)
+            .Take(1);
 
     /// <summary>
     /// Reads the persisted compile activity (when available) and overlays its
