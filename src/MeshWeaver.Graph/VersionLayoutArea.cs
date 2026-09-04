@@ -63,10 +63,13 @@ public static class VersionLayoutArea
         // 🚨 Ask whether history is RETAINED, not whether the service resolved. The null check
         // alone was unreachable: `NoOpVersionQuery` is registered unconditionally
         // (`PersistenceExtensions`, TryAddSingleton), so this service is never null on any
-        // deployment — and on every DATABASE-backed one it is the no-op, which answers "no
-        // version found" to a question it never records an answer to. So this honest refusal
-        // existed and could not fire, and the caller was told a data-shaped miss about a
-        // configuration fact (MeshWeaver#3264).
+        // deployment — and where the no-op is what wins (a backend that registers no
+        // IVersionQuery of its own), it answers "no version found" to a question it never
+        // records an answer to. So this honest refusal existed and could not fire, and the
+        // caller was told a data-shaped miss about a configuration fact (MeshWeaver#3264).
+        // 🚨 NOT every database deployment is that case, whatever this comment used to say:
+        // Postgres, Cosmos and Snowflake each register a real IVersionQuery from
+        // MeshWeaver.Plugins and DO retain history — see the remarks on IVersionQuery.
         var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
         if (versionQuery is null or { RetainsHistory: false })
         {
@@ -139,10 +142,13 @@ public static class VersionLayoutArea
         // 🚨 Ask whether history is RETAINED, not whether the service resolved. The null check
         // alone was unreachable: `NoOpVersionQuery` is registered unconditionally
         // (`PersistenceExtensions`, TryAddSingleton), so this service is never null on any
-        // deployment — and on every DATABASE-backed one it is the no-op, which answers "no
-        // version found" to a question it never records an answer to. So this honest refusal
-        // existed and could not fire, and the caller was told a data-shaped miss about a
-        // configuration fact (MeshWeaver#3264).
+        // deployment — and where the no-op is what wins (a backend that registers no
+        // IVersionQuery of its own), it answers "no version found" to a question it never
+        // records an answer to. So this honest refusal existed and could not fire, and the
+        // caller was told a data-shaped miss about a configuration fact (MeshWeaver#3264).
+        // 🚨 NOT every database deployment is that case, whatever this comment used to say:
+        // Postgres, Cosmos and Snowflake each register a real IVersionQuery from
+        // MeshWeaver.Plugins and DO retain history — see the remarks on IVersionQuery.
         var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
         if (versionQuery is null or { RetainsHistory: false })
         {
