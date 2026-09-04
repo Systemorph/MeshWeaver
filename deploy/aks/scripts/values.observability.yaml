@@ -235,6 +235,15 @@ prometheus:
               # revision, so the rule above had been merged for a week and was watching nothing. The only
               # evidence a rule is armed is GET /api/v1/rules naming it.
               #
+              # Edge case, stated so it is not rediscovered mid-incident: if the container's memory
+              # LIMIT is ever removed, cAdvisor reports the denominator as 0 and the ratio becomes
+              # +Inf, so this fires. That is deliberate and it is the fail-LOUD direction — with no
+              # container limit .NET applies no GC heap hard limit either, so the heap grows until it
+              # takes the node down. Do NOT "fix" it with `and container_spec_memory_limit_bytes > 0`:
+              # that silences the rule on exactly the misconfiguration it should shout about, which is
+              # a detector that cannot fail (AGENTS.md). The summary reads oddly in that case; the
+              # condition does not.
+              #
               # ⚠️ Working set ≥ 0.75 × limit does NOT by itself mean the MANAGED heap has reached the
               # hard limit — working set also carries native memory, loaded assemblies and stacks, so
               # this fires EARLIER than the spiral. That is deliberate for a warning. Reading the
