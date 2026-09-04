@@ -47,9 +47,14 @@ public record CodeConfiguration
     /// content and compares: a mismatch means the output pane below is showing the result of code the
     /// reader is no longer looking at, and the cell renders a "code changed — re-run" state.
     ///
-    /// <para><c>null</c> until the first run — and also on nodes last executed by a build that predates
-    /// this field, which is why an absent hash reads as "unknown", never as "stale". Claiming staleness
-    /// we cannot prove would light up every legacy node at once.</para>
+    /// <para><c>null</c> until the first run — and also whenever the last-execution stamp landed only
+    /// in part (a node last executed by a build that predates this field, or a merge patch written
+    /// through a narrower shape). 🚨 An absent hash therefore reads as "unknown", which is neither
+    /// "stale" nor "up to date": claiming staleness we cannot prove would light up every legacy node
+    /// at once, and claiming currency we cannot prove is the WRONG claim the whole fingerprint exists
+    /// to avoid. Do not read this field directly to decide what a cell shows —
+    /// <see cref="CodeOutputCurrencyExtensions.OutputCurrency"/> is the one rule, and it fails
+    /// closed on exactly this case (<see cref="CodeOutputCurrency.Unverified"/>).</para>
     /// </summary>
     public string? LastExecutedCodeHash { get; init; }
 

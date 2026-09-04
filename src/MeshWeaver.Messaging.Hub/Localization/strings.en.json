@@ -15,6 +15,8 @@
   "common.run": "Run",
   "common.stop": "Stop",
   "code.staleCell": "Code changed — re-run",
+  "code.unverifiedCell": "Output unverified",
+  "code.unverifiedCellHint": "This run was not fully recorded, so whether the output belongs to the code above cannot be established — re-run to be sure",
   "code.runCell": "Run this code block",
   "code.rerunCell": "The code changed since this output was produced — run it again",
   "code.kernelUnavailable": "Interactive kernel is not available here",
