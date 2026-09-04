@@ -1278,5 +1278,8 @@
   "ui.modelCreditColMarginSource": "Margin source",
   "ui.modelCreditColObserved": "Observed on",
   "ui.modelCreditColDeclared": "Declared",
-  "ui.modelCreditRateMismatch": "⚠️ {0}: the recorded mid and margin do not produce the rate being applied. The rate on the node is what converts the total — the figures beside it are shown as recorded and are never used to recompute it."
+  "ui.modelCreditRateMismatch": "⚠️ {0}: the recorded mid and margin do not produce the rate being applied. The rate on the node is what converts the total — the figures beside it are shown as recorded and are never used to recompute it.",
+  "ui.modelCreditSubscriber": "Subscriber",
+  "ui.modelCreditSubscriberHint": "leave empty for your own",
+  "ui.modelCreditShow": "Show"
 }

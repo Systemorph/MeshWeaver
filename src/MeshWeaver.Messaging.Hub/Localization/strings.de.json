@@ -1278,5 +1278,8 @@
   "ui.modelCreditColMarginSource": "Margenquelle",
   "ui.modelCreditColObserved": "Beobachtet am",
   "ui.modelCreditColDeclared": "Deklariert",
-  "ui.modelCreditRateMismatch": "⚠️ {0}: Der erfasste Mittelkurs und die Marge ergeben nicht den angewandten Kurs. Umgerechnet wird mit dem Kurs auf dem Node — die Angaben daneben werden so gezeigt, wie sie erfasst wurden, und dienen nie zur Neuberechnung."
+  "ui.modelCreditRateMismatch": "⚠️ {0}: Der erfasste Mittelkurs und die Marge ergeben nicht den angewandten Kurs. Umgerechnet wird mit dem Kurs auf dem Node — die Angaben daneben werden so gezeigt, wie sie erfasst wurden, und dienen nie zur Neuberechnung.",
+  "ui.modelCreditSubscriber": "Abonnent",
+  "ui.modelCreditSubscriberHint": "leer lassen für die eigene",
+  "ui.modelCreditShow": "Anzeigen"
 }
