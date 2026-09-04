@@ -248,13 +248,34 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
             .Where(v => string.Equals(v, expected, StringComparison.Ordinal))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
 
-    /// <summary>The reminder satellites of the install record, read LIVE through a children query
-    /// (a query never storms on a parent that does not exist yet, and it re-emits on every write).</summary>
+    /// <summary>This package's reminders on the PLATFORM bell, read LIVE through a children query
+    /// (a query never storms on a parent that does not exist yet, and it re-emits on every write),
+    /// then narrowed to the rows THIS install record raised.
+    ///
+    /// <para>🚨 The reminder is ADDRESSED to the platform operators — only a platform admin can
+    /// apply a plugin update — so it is delivered into
+    /// <see cref="NotificationService.DeliveryNamespace"/> for
+    /// <see cref="NotificationService.PlatformAddressee"/>, not filed beside the plugin record it is
+    /// about (Systemorph/MeshWeaver#3156). The read is <c>path:</c>-anchored, which is also what lets
+    /// it reach <c>Admin</c> at all: that schema is excluded from <c>searchable_schemas</c>, so only a
+    /// path-anchored read is pinned to it (#3216).</para>
+    ///
+    /// <para>🚨 <b>The narrowing is load-bearing, not cosmetic.</b> A shared operations bell holds
+    /// whatever else the mesh reports — a startup error, a discovery status change — so counting that
+    /// namespace raw would make every assertion in this fixture depend on what the boot happened to
+    /// say. <c>TargetNodePath</c> is the install record, which is exactly the click target the notify
+    /// path stamps.</para></summary>
     private IObservable<IReadOnlyList<MeshNode>> Reminders() =>
         Mesh.GetWorkspace()
             .GetQuery("notif|pkg|reminder-idempotence",
-                $"path:{RecordPath}/{NotificationService.SatelliteSegment} scope:children nodeType:Notification")
-            .Select(ns => (IReadOnlyList<MeshNode>)(ns ?? []).ToList());
+                $"path:{NotificationService.DeliveryNamespace(NotificationService.PlatformAddressee)} "
+                + "scope:children nodeType:Notification")
+            .Select(ns => (IReadOnlyList<MeshNode>)(ns ?? [])
+                .Where(n => string.Equals(
+                    n.ContentAs<Notification>(Json)?.TargetNodePath,
+                    RecordPath,
+                    StringComparison.Ordinal))
+                .ToList());
 
     /// <summary>Answers nothing and counts every attempt — the reminder path must never reach it.</summary>
     private sealed class CountingRegistry : HttpMessageHandler

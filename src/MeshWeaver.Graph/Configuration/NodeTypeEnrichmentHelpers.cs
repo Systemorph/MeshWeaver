@@ -2359,10 +2359,17 @@ internal static class NodeTypeEnrichmentHelpers
 
     /// <summary>
     /// Raise ONE platform-admin notification for an instance still serving the compile fallback
-    /// after the self-heal window — anchored under the <c>Admin</c> partition, whose RLS scopes it
-    /// to platform admins (the same anchoring <c>StartupErrorNotifier</c> and
+    /// after the self-heal window — addressed to <see cref="NotificationService.PlatformAddressee"/>,
+    /// whose RLS scopes it to platform admins (the same addressee <c>StartupErrorNotifier</c> and
     /// <c>NodeTypeCompileParkRegistry</c> use). Wrapped whole: an unavailable notification service,
     /// a failed write, anything — degrades to a log line and never disturbs rendering.
+    ///
+    /// <para>🚨 <b>The result MUST be subscribed.</b> <c>Dispatch</c> returns a COLD observable —
+    /// the write happens on <c>Subscribe</c>, not on the call — and this method discarded it, so
+    /// the "stuck on a fallback page" notification was composed and never written, while the log
+    /// line below claimed "platform admins notified". Two independent silences over one signal: the
+    /// row was never created here, and #3216 meant the bell could not have read it if it had been.
+    /// </para>
     /// </summary>
     private static void ReportStuckOverlayToAdmins(
         IMessageHub instanceHub, string nodeType, ILogger? logger)
@@ -2371,20 +2378,24 @@ internal static class NodeTypeEnrichmentHelpers
         {
             var instance = instanceHub.Address.ToString();
             NotificationService.Dispatch(
-                instanceHub,
-                recipient: null,
-                mainNodePath: StartupErrorNotifier.AdminPartition,
-                title: $"Type '{nodeType}' is serving a fallback page",
-                message:
-                    $"The instance '{instance}' has been rendering the \"build did not settle\" "
-                    + $"fallback for over {StuckReportDelay.TotalSeconds:0}s and did not self-heal. "
-                    + "Its NodeType has no usable build on this pod. Users see a broken page until "
-                    + "the type builds or the instance is recycled.",
-                type: NotificationType.System,
-                targetNodePath: nodeType);
-            logger?.LogWarning(
-                "Overlay self-heal: instance '{InstancePath}' still stuck on NodeType '{NodeType}' after {Delay}s — platform admins notified",
-                instanceHub.Address, nodeType, StuckReportDelay.TotalSeconds);
+                    instanceHub,
+                    recipient: null,
+                    mainNodePath: nodeType,
+                    title: $"Type '{nodeType}' is serving a fallback page",
+                    message:
+                        $"The instance '{instance}' has been rendering the \"build did not settle\" "
+                        + $"fallback for over {StuckReportDelay.TotalSeconds:0}s and did not self-heal. "
+                        + "Its NodeType has no usable build on this pod. Users see a broken page until "
+                        + "the type builds or the instance is recycled.",
+                    type: NotificationType.System,
+                    targetNodePath: nodeType)
+                .Subscribe(
+                    _ => logger?.LogWarning(
+                        "Overlay self-heal: instance '{InstancePath}' still stuck on NodeType '{NodeType}' after {Delay}s — platform admins notified",
+                        instanceHub.Address, nodeType, StuckReportDelay.TotalSeconds),
+                    ex => logger?.LogWarning(ex,
+                        "Overlay self-heal: could not notify admins that '{InstancePath}' is stuck on '{NodeType}'",
+                        instanceHub.Address, nodeType));
         }
         catch (Exception ex)
         {
