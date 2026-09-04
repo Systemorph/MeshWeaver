@@ -602,11 +602,33 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
             .Await(TestContext.Current.CancellationToken);
     }
 
-    private Task Record(ComboVerification verdict) =>
-        UpdatePolicyNodeType.RecordVerification(Mesh, verdict)
+    /// <summary>
+    /// Records a verdict and waits until it is READABLE — not merely until the write's own
+    /// observable emitted.
+    ///
+    /// <para>🚨 The gate under test reads the policy through its own stream, and
+    /// <c>stream.Update</c> completing says the patch was accepted, not that every reader can see
+    /// it. When the check ran before the verdict was visible, the gate honestly reported the state
+    /// it could see — "no combo verification has been recorded for this candidate" — and the
+    /// assertion then failed on text that was never about a defect. Measured twice on 2026-09-04
+    /// (runs 33863349195 and the shard-5 red on #3319, a PR whose whole diff is two YAML files and
+    /// two Markdown docs and therefore cannot reach this test at all).</para>
+    ///
+    /// <para>So the record is followed by a read-back on the SAME predicate a real reader uses: the
+    /// verification for this candidate tag is present in the content. That is the condition the
+    /// test actually depends on, and waiting on it removes the race without widening any bound —
+    /// the same cure as the other timing assertions fixed in this repo today.</para>
+    /// </summary>
+    private async Task Record(ComboVerification verdict)
+    {
+        await UpdatePolicyNodeType.RecordVerification(Mesh, verdict)
             .FirstAsync()
             .Timeout(Budget)
             .Await(TestContext.Current.CancellationToken);
+
+        await WaitForContent(c => c.ComboVerifications.Any(
+            v => string.Equals(v.CandidateTag, verdict.CandidateTag, StringComparison.OrdinalIgnoreCase)));
+    }
 
     /// <summary>The first reconciled content matching <paramref name="predicate"/> — the
     /// wait-on-the-condition read, never a bare first emission (which can predate the write).</summary>
