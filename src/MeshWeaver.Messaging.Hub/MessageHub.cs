@@ -1526,12 +1526,27 @@ public sealed class MessageHub : IMessageHub
         Address address,
         Func<MessageHubConfiguration, MessageHubConfiguration> config,
         HostedHubCreation create
+    ) => TryGetHostedHub(address, config, create).Hub;
+
+    /// <summary>
+    /// <see cref="GetHostedHub(Address, Func{MessageHubConfiguration, MessageHubConfiguration}, HostedHubCreation)"/>
+    /// plus the reason a null hub came back — see <see cref="HostedHubOutcome"/>. Same work and
+    /// same logging; this overload just does not throw the classification away
+    /// (Systemorph/MeshWeaver#3243).
+    /// </summary>
+    /// <param name="address">The address of the hosted hub.</param>
+    /// <param name="config">Transform applied to the hosted hub's configuration when it is created.</param>
+    /// <param name="create">Whether to create the hub if it does not yet exist.</param>
+    /// <returns>The hub (when there is one) and the outcome that produced this answer.</returns>
+    public HostedHubResult TryGetHostedHub(
+        Address address,
+        Func<MessageHubConfiguration, MessageHubConfiguration> config,
+        HostedHubCreation create
     )
     {
         if (create != HostedHubCreation.Never && !messageProcessingStarted)
             ReportHubConstructionDuringBuild(address);
-        var messageHub = hostedHubs.GetHub(address, config, create);
-        return messageHub;
+        return hostedHubs.GetHubWithOutcome(address, config, create);
     }
 
     /// <summary>
