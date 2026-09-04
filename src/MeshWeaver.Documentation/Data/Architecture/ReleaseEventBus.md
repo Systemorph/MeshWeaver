@@ -57,7 +57,7 @@ is open:
 | joint | switched on by | when it is open |
 |---|---|---|
 | the inbox accepts the release event | `WebhookInbox__Targets__N` on the control instance | 404 — byte-identical to a wrong URL |
-| the delivery verifies | `Hosting__PlatformWebhookSecret` | the watcher drops it as unverifiable; the POST already answered 2xx |
+| the delivery verifies | `Hosting__PlatformWebhookSecret` | the watcher drops it as unverifiable; the POST already answered 2xx — the mismatched-secret hole, still open: [Webhook Inbox](/Doc/Architecture/WebhookInbox) → "What a 2xx does NOT prove" (#3312) |
 | the verified release fans out | a caller of `Broadcast(...)` (since 2026-09-03: `PlatformBuildInboxWatcher`, MeshWeaver.Plugins) and at least one `Hosting/Deployment` record naming a registry source | `0 dispatched, 0 failed` — now a WARNING naming the records on the control instance |
 
 Two lessons the rest of this design should inherit. **A key the code reads and no chart renders can
