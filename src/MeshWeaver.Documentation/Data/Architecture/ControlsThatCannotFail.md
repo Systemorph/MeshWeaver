@@ -12,11 +12,19 @@ being **able to go red**. When it cannot, its green stops carrying information, 
 is the worst one available: *nothing happens*. No alarm, no red tick, no line in a log. The control
 silently disappears and the wall stays green.
 
-> **The question that catches all six instances below:**
-> *"What makes this go red? Have I seen it do that?"*
+> **The diagnostic, in two halves. The second is the one that does the work.**
 >
-> If the honest answer is "I've never seen it fail" or "it would fail if X, and X can't happen here",
-> you have a decoration, not a control.
+> 1. *"If the subject of this check were broken right now, what would this print?"*
+> 2. *"And have I run it against a subject I broke on purpose?"*
+
+**Every one of the six instances below passes the first question by reasoning, and fails the second.**
+That is not a coincidence, and it is the reason the first question alone is not enough: reasoning about
+a control is done by the person who built it, in the model they built it from, and a control fails
+precisely where that model is wrong. Instance 1 is the cleanest proof — its probe was *adversarially
+self-defeating*, actively delaying the state it asserted, which no amount of reading it would predict.
+
+So the second half is not a formality after the first. It is the only one of the two that consults
+reality.
 
 This is the general form of two rules stated elsewhere as absolutes — a CI gate must never carry a
 skip-trapdoor ([Reading CI Signals](/Doc/Architecture/ReadingCiSignals)), and a regression test is only
@@ -162,9 +170,10 @@ nothing* — indistinguishable without opening that list.
 
 ## What to do about it
 
-1. **Break the subject on purpose, once.** Revert only the fixing lines, or disable the mechanism, and
-   watch the control go red with the message you predicted. Record that output — the red run is the
-   evidence, the green one is not. The procedure is in
+1. **Break the subject on purpose, once — this is the whole discipline.** Revert only the fixing
+   lines, or disable the mechanism, and watch the control go red with the message you predicted.
+   Record that output — the red run is the evidence, the green one is not. Reasoning that it *would*
+   go red is what all six instances below had. The procedure is in
    [Negative Controls](/Doc/Architecture/NegativeControls).
 2. **Ask what serves the precondition while the isolation is absent.** If the answer is "the thing I am
    about to remove", the probe cannot fail.
