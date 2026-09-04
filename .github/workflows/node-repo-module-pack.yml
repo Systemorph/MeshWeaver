@@ -1739,18 +1739,55 @@ jobs:
           #     publish output. Measured green on CD run 33779812466:
           #     "built-against MVID ce81fd4e3f5146c7a6ebaa6dc72da3f2".
           #
-          # Both arms end in a RED with no anchor — neither is a quiet fallback, and the packer
-          # refuses again behind them, so a bundle whose identity is a guess cannot exist.
+          # 🚨 …and the SOURCE arm above is wrong in two ways that only showed once core CD composed
+          # more than two modules (#3290, 2026-09-04). Reading the anchor out of the MODULE's own
+          # publish output makes the identity a property of the MODULE, not of the platform:
+          #
+          #   * a module whose reference chain never reaches MeshWeaver.Compiler simply has no copy.
+          #     Only MeshWeaver.Graph and MeshWeaver.Compiler.Pipeline reference it, so AI and
+          #     Markdown.Collaboration (→ Graph) carry one while Maps (→ Layout) and
+          #     Payments.Stripe (→ Mesh.Contract) do not — CD run 33867996265 died there, and every
+          #     run since 7751 with it;
+          #   * and where a copy DOES exist it is the module's OWN rebuild of the platform, made
+          #     with that module's `-p:Version=$VERSION`, which the assembly attributes carry into
+          #     the MVID. Measured in ONE run (33867996265, core 7d644de95): AI recorded
+          #     frameworkMvid fc70b6e19be34b65983eb5fa15ce5243 and Markdown.Collaboration recorded
+          #     0a96ab4c9eb744558431b2a018dc4699 — two identities for one platform commit.
+          #
+          # Neither value could ever match a consumer either: a portal image is built with
+          # `-p:CIRun=true` on GitHub Actions (main-cd.yml), so its MeshWeaver.Compiler carries the
+          # STAMPED commit identity `g<sha>` (Directory.Build.props → AddCommitHashMetadata, #1660
+          # WS3), never an MVID. So the field #3154 compares on every update decision was being
+          # filled with a token that is unstable across modules and unmatchable by design.
+          #
+          # When the platform is SOURCE, its identity is the COMMIT — state it, exactly as the image
+          # build stamps it, rather than reading a per-module copy. `--framework-mvid` is the
+          # packer's own flag for "the platform's own reading", and `g<sha>` is one of the three
+          # tokens it documents (s<hash>, g<sha>, 32-hex MVID). The IMAGE arm is unchanged: there
+          # the anchor really is in the extracted /app, and reading it is the platform's own reading.
+          #
+          # Both arms still end in a RED with nothing to state — neither is a quiet fallback, and
+          # the packer refuses again behind them, so a bundle whose identity is a guess cannot exist.
+          identity=()
           if [ -n "$REFS" ]; then
             anchor="$REFS/MeshWeaver.Compiler.dll"
-            where="the pinned platform image's extracted /app"
+            if [ ! -f "$anchor" ]; then
+              echo "::error::no identity anchor for $MODULE — expected MeshWeaver.Compiler.dll at '$anchor', i.e. in the pinned platform image's extracted /app. Every bundle must state the framework build its bytes were compiled against (#3211): a consumer compares it against what it has landed, and an unstated one makes every reconcile answer 'up to date, identity could not be checked' forever. Nothing here may guess it, so the pack stops."
+              exit 1
+            fi
+            identity=(--graph-dll "$anchor")
+            echo "identity anchor: $anchor (the pinned platform image's /app)"
           else
-            anchor="$PACKDIR/MeshWeaver.Compiler.dll"
-            where="the module's own build output (no platform image is pinned, so the platform was built from source)"
-          fi
-          if [ ! -f "$anchor" ]; then
-            echo "::error::no identity anchor for $MODULE — expected MeshWeaver.Compiler.dll at '$anchor', i.e. in $where. Every bundle must state the framework build its bytes were compiled against (#3211): a consumer compares it against what it has landed, and an unstated one makes every reconcile answer 'up to date, identity could not be checked' forever. Nothing here may guess it, so the pack stops."
-            exit 1
+            sha="$(git -C "$GITHUB_WORKSPACE/meshweaver" rev-parse HEAD 2>/dev/null || true)"
+            case "$sha" in
+              [0-9a-f]*) ;;
+              *)
+                echo "::error::no identity for $MODULE — the platform was built from SOURCE (no image is pinned), so its identity is the commit it was built from, and 'git rev-parse HEAD' in '$GITHUB_WORKSPACE/meshweaver' produced '$sha'. Every bundle must state the framework build its bytes were compiled against (#3211). Nothing here may guess it, so the pack stops."
+                exit 1
+                ;;
+            esac
+            identity=(--framework-mvid "g$sha")
+            echo "identity: g$sha (the platform was built from source at that commit — the same token its image build stamps)"
           fi
           echo "packing $MODULE from $PACKDIR (compiler: $COMPILER); closure flags: ${closure[*]:-<none>}"
           dotnet "$RUNNER_TEMP/pack-tool/MeshWeaver.Plugin.Build.dll" \
@@ -1760,7 +1797,7 @@ jobs:
             --plugin "$PACKAGE" \
             --package-version "$VERSION" \
             --min-mesh-version "$FLOOR" \
-            --graph-dll "$anchor" \
+            "${identity[@]}" \
             --own-platform "$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src")" \
             --out "$RUNNER_TEMP/bundles"
 

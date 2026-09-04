@@ -73,7 +73,15 @@ from pathlib import Path
 # genuinely differ — and a REUSED pre-#3211 bundle would be refused at the publish step, which is the
 # right verdict for those bytes and the wrong thing to spend a run discovering. One rebuild wave, and
 # every recorded key afterwards attests bytes that state what they were built against.
-RECIPE_VERSION = "2"
+# "2" → "3": when the platform is built from SOURCE the identity is now STATED as the commit
+# (`--framework-mvid g<sha>`), not read off a copy of MeshWeaver.Compiler.dll in the module's own
+# publish output. Recipe 2 recorded a per-MODULE value there — the module's own rebuild of the
+# platform carries its own `-p:Version`, which the assembly attributes take into the MVID: measured
+# in ONE run (33867996265) AI packed fc70b6e19be34b65983eb5fa15ce5243 and Markdown.Collaboration
+# 0a96ab4c9eb744558431b2a018dc4699 for the same platform commit, and neither could ever match a
+# portal image, which stamps `g<sha>`. Bundles recorded under recipe 2 therefore attest an identity
+# no consumer can use; they must be repacked, not reused.
+RECIPE_VERSION = "3"
 
 # Repo-level files that change what EVERY project compiles or tests. Presence and content both
 # count; a file the repo does not have hashes as null so adding it later changes the key.

@@ -41,21 +41,38 @@ public class ModuleIdentityPublishGuard
     {
         var pack = JobBody("pack");
 
-        // The anchor is the SAME reference set the build bound against, and WHERE that is moves
-        // with the platform: the pinned image's extracted /app when one is pinned (`platform-refs`
-        // — which the sdk build passes as MeshWeaverRefs and the container build compiles inside),
-        // the module's own output when the platform was built from source. It is never a second
-        // opinion, and never left to the packer's default probe, which is exactly the probe that
-        // found nothing on all 34 of the fleet's bundles.
+        // WHERE the identity comes from moves with the platform, and so does HOW it is obtained.
+        //
+        //  * platform pinned as an IMAGE — the anchor really is a file, in the extracted /app
+        //    (`platform-refs`, which the sdk build passes as MeshWeaverRefs and the container build
+        //    compiles inside). Read it; never leave it to the packer's default probe, which is
+        //    exactly the probe that found nothing on all 34 of the fleet's bundles.
+        //  * platform built from SOURCE — the identity is the COMMIT, stated. Reading it off the
+        //    module's own publish output made it a property of the MODULE: a module whose reference
+        //    chain never reaches MeshWeaver.Compiler has no copy at all (Maps, Payments.Stripe — CD
+        //    run 33867996265, and every run since 7751), and where a copy exists it is that
+        //    module's own rebuild of the platform carrying its own `-p:Version`, which the assembly
+        //    attributes take into the MVID. One run recorded TWO identities for one platform commit
+        //    (AI fc70b6e1…, Markdown.Collaboration 0a96ab4c…) — and neither could ever match a
+        //    consumer, because a portal image is built `-p:CIRun=true` on GitHub Actions and its
+        //    MeshWeaver.Compiler therefore carries the stamped `g<sha>` (#1660 WS3), never an MVID.
         Assert.Contains("anchor=\"$REFS/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
-        Assert.Contains("anchor=\"$PACKDIR/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
-        Assert.Contains("--graph-dll \"$anchor\"", pack, StringComparison.Ordinal);
+        Assert.Contains("identity=(--graph-dll \"$anchor\")", pack, StringComparison.Ordinal);
+        Assert.Contains("identity=(--framework-mvid \"g$sha\")", pack, StringComparison.Ordinal);
+        Assert.Contains("\"${identity[@]}\"", pack, StringComparison.Ordinal);
 
-        // 🚨 BOTH arms end RED when there is no anchor — the branch picks WHERE to look, never
-        // whether to check. A bundle whose identity is a guess is worse than a pack that stops.
+        // 🚨 The source arm must NOT go back to reading the anchor out of the module's own output —
+        // that is the per-module identity this guard now exists to keep from returning.
+        Assert.DoesNotContain("anchor=\"$PACKDIR/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
+
+        // 🚨 BOTH arms end RED when there is nothing to state — the branch picks WHERE the identity
+        // comes from, never whether to have one. A bundle whose identity is a guess is worse than a
+        // pack that stops.
         Assert.Contains("if [ ! -f \"$anchor\" ]; then", pack, StringComparison.Ordinal);
         Assert.Contains("::error::no identity anchor for $MODULE", pack, StringComparison.Ordinal);
+        Assert.Contains("::error::no identity for $MODULE", pack, StringComparison.Ordinal);
         Assert.DoesNotContain("--graph-dll \"${anchor:-", pack, StringComparison.Ordinal);
+        Assert.DoesNotContain("--framework-mvid \"g${sha:-", pack, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -108,7 +125,12 @@ public class ModuleIdentityPublishGuard
         var key = File.ReadAllText(Path.Combine(FindRepoRoot(), KeyScript));
         var recipe = Regex.Match(key, @"^RECIPE_VERSION = ""(?<v>[^""]+)""", RegexOptions.Multiline);
         Assert.True(recipe.Success, $"{KeyScript} must declare RECIPE_VERSION");
+        // Every byte-changing lane edit moves it: "1" → "2" was #3211 (the manifest gained
+        // frameworkMvid at all); "2" → "3" is the source arm stating the commit, so the recorded
+        // value differs for the SAME source and a reused recipe-2 bundle attests an identity no
+        // consumer can match.
         Assert.NotEqual("1", recipe.Groups["v"].Value);
+        Assert.NotEqual("2", recipe.Groups["v"].Value);
     }
 
     private static string JobBody(string job)
