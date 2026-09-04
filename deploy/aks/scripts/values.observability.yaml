@@ -124,29 +124,56 @@ prometheus:
                   Either every watched pod is genuinely silent, or the pipeline is broken upstream of
                   Loki. mw-log-watcher cannot tell those apart from an empty query result.
 
-        # 🚨 ALERT ON A REPLICA THAT DEGRADES WHILE STAYING READY (MeshWeaver#2194, item 5).
+        # 🚨 ALERT ON A REPLICA THAT DEGRADES WHILE STAYING READY (MeshWeaver#2194, items 4-5).
         # 2026-08-25, ns memex-cloud: two portal pods climbed 2.7 GB → 17.2 and 20.4 GB over four
         # hours of sync/bake recompile waves, pegged ~4 cores in GC, and served hung pages for THREE
-        # AND A HALF HOURS. No OOMKill (the 28Gi limit was never reached), no probe failure (both
-        # post-startup probes watch /alive, a trivial process-up check a GC-thrashing pod still
-        # answers), and no alert — so nothing pulled them from the Service endpoints and nobody knew
-        # until a human ran `kubectl top`. The memory curve was the only witness and it alerted
-        # nobody; this is that witness, wired up.
+        # AND A HALF HOURS. No OOMKill, no probe failure (both post-startup probes watch /alive, and
+        # what /alive measures is a property of the deployed image, not of this chart), and no alert
+        # — so nothing pulled them from the Service endpoints and nobody knew until a human ran
+        # `kubectl top`. The memory curve was the only witness and it alerted nobody; this is that
+        # witness, wired up.
         #
-        # It is DETECTION, not the fix. The fix is convergence (Modules:AutoRecycleOnStaleBuild,
-        # already enabled fleet-wide) plus DLL-only modules. This matters because "a pod degrades
-        # while passing both probes" will have other causes, and the divergence shape — one replica
-        # far above its siblings in the SAME deployment — is what they share.
+        # 🚨 WHY NO OOMKILL IS STRUCTURAL, NOT LUCK (measured 2026-09-04, both namespaces).
+        # Nothing sets DOTNET_GCHeapHardLimit[Percent] — not the inline env:, not memex-portal-config,
+        # not any envFrom Secret — so .NET's container default applies: the GC's heap hard limit is
+        # 75% of the container memory limit. At `limits.memory: 16Gi` that is 12 GiB, FOUR GIBIBYTES
+        # BELOW the limit the kubelet would kill at. The runtime therefore refuses to cross 12 GiB and
+        # pays for it with back-to-back blocking gen2 — working set plateaus under 16 GiB and the
+        # kubelet never has cause to act. The GC converts a memory shortage (which Kubernetes can fix
+        # in one second, by restarting) into CPU starvation inside a process that still answers TCP
+        # (about which Kubernetes has no opinion at all). Measured: pause share 0.66 sustained for
+        # 2 h 15 on 2026-09-03 while /alive answered Healthy. Full derivation:
+        # Doc/Architecture/WhyAGcBoundPodStaysInRotation.
+        #
+        # These are DETECTION, not the fix. This matters because "a pod degrades while passing both
+        # probes" has more than one cause: on 2026-09-04 the 28h-old replicas held a 10 GB managed
+        # heap with ZERO publications, bakes, recompiles or stale-build offers in their entire life,
+        # so convergence (Modules:AutoRecycleOnStaleBuild, enabled fleet-wide) had nothing to converge.
+        # Two shapes are needed because they are loud at opposite ends of the same incident — see the
+        # comment on each rule.
         - name: portal-degraded
           rules:
             - alert: PortalReplicaWorkingSetDiverged
-              # Three conjuncts, and each one is load-bearing:
-              #   • ratio     — the signature is DIVERGENCE, not absolute size. A namespace whose
-              #                 replicas all sit at 12 GB is a sizing question, not this incident.
+              # THE EARLY SHAPE: one replica has run ahead of its siblings. Three conjuncts:
+              #   • ratio     — the signature is DIVERGENCE, not absolute size.
               #   • floor     — below 8 GiB the ratio is noise (a just-started pod is legitimately a
               #                 fraction of a warm one), and nothing was wrong at 2.7 GB.
               #   • replicas  — with one replica max == min, so the ratio is 1 and this can never
               #                 fire; the guard states that rather than relying on it.
+              #
+              # 🚨 THIS RULE GOES BLIND AS THE INCIDENT SPREADS, AND THAT IS NOT FIXABLE HERE.
+              # This comment used to argue that "a namespace whose replicas all sit at 12 GB is a
+              # sizing question, not this incident". Measured on 2026-09-04, that premise is false:
+              # ns memex ran two 28h-old replicas at 9936Mi and 9409Mi — ratio 1.06 against a
+              # threshold of 3 — with BOTH at ~80% of the 12 GiB GC hard limit and both on the curve
+              # that produced the 2026-09-03 outage. Replicas converge on the same ceiling with age,
+              # so the ratio is HIGHEST during the warning and LOWEST during the incident. A detector
+              # built only on divergence is loudest early and silent at the end.
+              #
+              # Do NOT "fix" that by lowering the 3× — a namespace legitimately runs a cold pod beside
+              # warm ones on every rollout, and this rule earns its keep on the asymmetric case (it
+              # read 7.22× on 2026-09-01). The terminal case needs an ABSOLUTE reading, which a ratio
+              # cannot express at all: PortalHeapEnteringGcDefenceBand below covers it.
               expr: >-
                 (
                   max by (namespace) (container_memory_working_set_bytes{container="memex-portal"})
@@ -172,10 +199,92 @@ prometheus:
                   not a global wedge
                 description: >-
                   One replica's working set is more than 3× the lightest in the same namespace and above
-                  8 GB. That is the fingerprint of superseded-NodeType-build (ALC) accumulation on the
-                  silo that hosts the compiling type hubs: it goes GC-bound while still answering /alive,
-                  so it stays in the Service endpoints serving hung and garbled requests. Confirm with
-                  `kubectl top pods -n <ns>`; the immediate remediation is `kubectl delete pod` on the
-                  outliers (they grace-drain and the deployment replaces them). If this fires during a
-                  sync/bake-heavy window, check that Modules:AutoRecycleOnStaleBuild is on for the
-                  namespace — instances staying on stale builds are what roots the old assemblies.
+                  8 GB. That replica is accumulating retained memory faster than its siblings and will go
+                  GC-bound while still answering /alive, so it stays in the Service endpoints serving hung
+                  and garbled requests. Confirm with `kubectl top pods -n <ns>`; the immediate remediation
+                  is `kubectl delete pod` on the outliers (they grace-drain and the deployment replaces
+                  them), which buys hours, not days. To tell the causes apart before acting, grep the
+                  pod's whole life for `Stale-build convergence` and `self-heal recompile` — if both are
+                  zero, no build was ever superseded and Modules:AutoRecycleOnStaleBuild is not the lane;
+                  then read `adopted=N uncovered=M of T` from its boot line, because a replica that booted
+                  with low bundle coverage compiles the uncovered types lazily on first access and pins
+                  each one for the life of the process. See Doc/Architecture/WhyAGcBoundPodStaysInRotation.
+
+            - alert: PortalHeapEnteringGcDefenceBand
+              # THE TERMINAL SHAPE, and the case the divergence rule above structurally cannot see:
+              # every replica heavy at once. No sibling comparison, so a fleet-wide degradation makes
+              # this LOUDER rather than silent.
+              #
+              # The threshold is derived, not chosen. .NET's default GC heap hard limit in a container
+              # is 75% of the memory limit, and it caps the MANAGED HEAP ONLY — the remaining 25% is the
+              # margin the default reserves for native memory. So working set ≥ 0.75 × limit is the point
+              # at which the process as a whole has reached the numeric value the GC is willing to let the
+              # managed heap alone occupy: from there, further managed growth has to come out of a reserve
+              # that is already spent. Measured on the degraded replica: working set 14096Mi − managed
+              # 10065Mi = ~4031Mi native, i.e. the entire 4 GiB margin, while the heap still had ~2 GiB of
+              # its own budget to grow into. container_spec_memory_limit_bytes is the same cAdvisor series
+              # family as the working-set metric, so this needs no kube-state-metrics and no new scrape.
+              #
+              # 🚨 VERIFIED AGAINST THE LIVE PROMETHEUS before commit — an alert that cannot fire is worse
+              # than no alert. `count(container_spec_memory_limit_bytes{container="memex-portal"})` → 9
+              # series, and both rules read as follows on one 2026-09-04 scrape:
+              #
+              #                  divergence (>3)   headroom (>0.75)   actually degraded?
+              #   memex-cloud    8.45  fires       0.851  fires       yes (14 GB, `Platform stalled`)
+              #   memex          1.06  blind       0.605  quiet       not yet (9.4-9.9 GB, ~0.2 cores)
+              #
+              # Four results, not two: both rules fire on the degraded namespace and both stay quiet on
+              # the healthy one, so neither fires on everything and the new one is not a restatement of
+              # the old. The complementarity is the first column — memex's ratio is 1.06 and will FALL,
+              # not rise, because its replicas converge; when they reach the defence band divergence
+              # still reads ~1.0 and this rule fires. 🚨 That is evidence about the EXPRESSION, not about
+              # arming: on 2026-09-01 the
+              # live Prometheus answered `rule groups: 0` with the loki release still on its 31 May
+              # revision, so the rule above had been merged for a week and was watching nothing. The only
+              # evidence a rule is armed is GET /api/v1/rules naming it.
+              #
+              # Edge case, stated so it is not rediscovered mid-incident: if the container's memory
+              # LIMIT is ever removed, cAdvisor reports the denominator as 0 and the ratio becomes
+              # +Inf, so this fires. That is deliberate and it is the fail-LOUD direction — with no
+              # container limit .NET applies no GC heap hard limit either, so the heap grows until it
+              # takes the node down. Do NOT "fix" it with `and container_spec_memory_limit_bytes > 0`:
+              # that silences the rule on exactly the misconfiguration it should shout about, which is
+              # a detector that cannot fail (AGENTS.md). The summary reads oddly in that case; the
+              # condition does not.
+              #
+              # ⚠️ Working set ≥ 0.75 × limit does NOT by itself mean the MANAGED heap has reached the
+              # hard limit — working set also carries native memory, loaded assemblies and stacks, so
+              # this fires EARLIER than the spiral. That is deliberate for a warning. Reading the
+              # managed heap directly would need dotnet_gc_heap_size, which the portal already emits
+              # via AddRuntimeInstrumentation() and which the OTel collector currently exports ONLY to
+              # a node-local JSON file (see manifests/observability/otel-collector-config.yaml) — so
+              # Prometheus cannot see it. Until that pipeline reaches Prometheus, working set over the
+              # container limit is the honest best available proxy.
+              expr: >-
+                max by (namespace) (
+                  container_memory_working_set_bytes{container="memex-portal"}
+                  / container_spec_memory_limit_bytes{container="memex-portal"}
+                ) > 0.75
+              # 30m, not 15m: this rule has no sibling comparison to protect it from a rollout, and a
+              # replica legitimately touches a high working set briefly during a cold bake. The measured
+              # incidents held this band for hours.
+              for: 30m
+              labels:
+                severity: warning
+              annotations:
+                # No Go-template placeholders — see the note on the rule above.
+                summary: >-
+                  A portal replica has crossed its GC hard limit band — it will degrade instead of being
+                  restarted
+                description: >-
+                  Working set has been above 75% of the container memory limit for 30 minutes. That is
+                  where .NET's default container GC heap hard limit sits, and it is BELOW the limit the
+                  kubelet would OOMKill at — so from here the runtime defends memory with back-to-back
+                  blocking gen2 rather than letting the pod restart, and the pod degrades while passing
+                  every probe. Measured on 2026-09-03: GC pause share 0.66 sustained for 2 h 15 with
+                  /alive answering Healthy throughout. Confirm the process is GC-bound rather than merely
+                  large by grepping the pod for `Platform stalled` — pause ÷ stall above ~0.6 sustained,
+                  with gen2 climbing while the reported managed MB does not fall, is retention. Unlike
+                  PortalReplicaWorkingSetDiverged this fires when EVERY replica is heavy, which is the
+                  state the divergence ratio cannot represent. See
+                  Doc/Architecture/WhyAGcBoundPodStaysInRotation.
