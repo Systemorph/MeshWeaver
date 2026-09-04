@@ -196,6 +196,23 @@ writing down: a satellite pins the LANE (`uses: …@<sha>`) and `platform-ref` S
 purpose, so a lane edit alone does NOT move a satellite's key. That is safe here only because this
 edit cannot change what the image arm packs; a future edit to the image arm would need the bump.
 
+## The guards are CONFIG-level — what still cannot fail
+
+Worth stating plainly, because it is the same class of gap this page documents. Both guards assert
+the lane's *text* or the anchor's *location*; **neither can see the outcome fail.** A different
+mechanism that reintroduces a per-module identity — another per-module property reaching that command
+line, a future arm deriving the anchor a third way, a caller passing `--framework-mvid` per module —
+would leave every guard here green, and the failure is silent: the bundle packs, the manifest carries
+a well-formed 32-hex value, and every non-blank assertion passes.
+
+The check that would catch it is one assertion at the only place that sees the whole wave: **every
+bundle a run packs states the SAME identity**, which is true by definition — the identity names the
+platform build, and a run has one platform. The receipt `verify` already collects would carry the
+value, and `All selected bundles built` would refuse a lane whose bundles disagree. That is
+[#3310](https://github.com/Systemorph/MeshWeaver/issues/3310); it is not folded in here because it
+changes the receipt schema and the shared `node-repo-pack-verify.py`, which every satellite consumes
+at its own pin — and an absent field there must not read as "agrees".
+
 ## Still open, deliberately not changed here
 
 On the source arm the anchor states a raw MVID, because the anchor build passes no `-p:CIRun=true`
