@@ -1077,6 +1077,12 @@ public static class PluginBundleEndpoints
         var ledger = Ledger(http);
         // Resolved NOW — see Index: the request scope is gone by the time a late fault lands.
         var lateFaultLogger = Log(http);
+        // The published bundle root this registry mounts (#3244) — read here, in the request scope,
+        // for the same reason the logger is. Null on a deployment that consumes no CI bakes, which
+        // leaves the module section exactly as it was before this existed.
+        var publishedRoot =
+            http.RequestServices.GetService<IConfiguration>()
+                ?[PublishedBundleCatalogue.PublishedRootConfigKey];
         return Servable(rootHub, anchorService, ct)
             .SelectMany(state =>
             {
@@ -1102,7 +1108,7 @@ public static class PluginBundleEndpoints
                 ledger?.Record(decision);
 
                 if (asked is not null && decision.Serves)
-                    return Assemble(rootHub, asked, identity, architecture);
+                    return Assemble(rootHub, asked, identity, architecture, publishedRoot);
 
                 // The refusal is uniform on the wire; the LOG is where it is diagnosable, naming
                 // which instance asked, what the entitlement answer actually was, and whether this
@@ -1150,7 +1156,8 @@ public static class PluginBundleEndpoints
     /// nothing and is COUNTED as a miss.</para>
     /// </summary>
     private static IObservable<IResult> Assemble(
-        IMessageHub rootHub, BundleEntry package, string identity, string architecture)
+        IMessageHub rootHub, BundleEntry package, string identity, string architecture,
+        string? publishedRoot)
     {
         var meshService = rootHub.ServiceProvider.GetRequiredService<IMeshService>();
         var store = rootHub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
@@ -1207,10 +1214,27 @@ public static class PluginBundleEndpoints
                         package.PluginId, misses.Count, identity, architecture,
                         string.Join(" | ", misses.Take(MissesReported)));
 
-                return assemblies.SelectMany(found => ModuleFiles(rootHub, package)
-                    .Select(module =>
-                        BuildResult(package, found, module.Files, module.Assets,
-                            identity, architecture, misses)));
+                return assemblies.SelectMany(found =>
+                {
+                    // What the bytes THIS archive is about to carry were compiled against — the
+                    // evidence that decides which build of the module goes with them (#3244).
+                    // 🚨 The SAME filter BuildResult writes by: a type whose assembly could not be
+                    // located contributes no bytes, so its record must not vote on which module
+                    // rides beside bytes that are not there.
+                    var recorded = ServedModuleBytes.RecordedFor(
+                        found.Where(a => a.Path is not null).Select(a => a.Dependencies),
+                        package.Module ?? "");
+                    return ModuleFiles(rootHub, package, recorded, publishedRoot, identity)
+                        .Select(module =>
+                        {
+                            IReadOnlyList<string> reported = module.Divergence is null
+                                ? misses
+                                : misses.Append(
+                                        $"module '{package.Module}': {module.Divergence}")
+                                    .ToArray();
+                            return BuildResult(package, found, module, identity, architecture, reported);
+                        });
+                });
             });
     }
 
@@ -1289,14 +1313,14 @@ public static class PluginBundleEndpoints
     /// serve — the bundle then simply has no module section, which a consumer reads as "nothing
     /// to land".
     /// </summary>
-    private static IObservable<(IReadOnlyList<string> Files,
-        IReadOnlyList<(string RelativePath, string FullPath)> Assets)> ModuleFiles(
-        IMessageHub rootHub, BundleEntry package)
+    private static IObservable<ServedModule> ModuleFiles(
+        IMessageHub rootHub, BundleEntry package, RecordedModuleId recorded,
+        string? publishedRoot, string identity)
     {
         var landing = rootHub.ServiceProvider.GetService<ModuleLandingService>();
         if (landing is null || string.IsNullOrWhiteSpace(package.Module))
-            return Observable.Return<(IReadOnlyList<string> Files,
-                IReadOnlyList<(string RelativePath, string FullPath)> Assets)>(([], []));
+            return Observable.Return(
+                new ServedModule([], [], "no module section", null));
 
         var logger = rootHub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger(typeof(PluginBundleEndpoints));
@@ -1310,7 +1334,25 @@ public static class PluginBundleEndpoints
                     logger?.LogInformation(
                         "Plugin bundles: {Plugin} declares module '{Module}' but it is not served: {Reason}",
                         package.PluginId, package.Module, decline);
-                return (Files: files, Assets: assets);
+
+                // 🚨 ONE PRODUCER IN TIME (#3244). The shelf is content-versioned and identity-blind
+                // — it serves whatever the module's own lane published last — while the assemblies
+                // above are resolved for the CALLER's identity and record exactly which build of
+                // this module they were compiled against. Hand over the bytes they record, which is
+                // the shelf whenever the shelf IS that build and otherwise the module bundle the
+                // publication sealed for this identity.
+                var served = ServedModuleBytes.Resolve(
+                    package.Module, package.PluginId, files, assets, recorded,
+                    publishedRoot, identity, logger);
+                if (served.Divergence is not null)
+                    logger?.LogWarning(
+                        "Plugin bundles: {Plugin} on framework {Identity} — {Divergence}",
+                        package.PluginId, identity, served.Divergence);
+                else if (files.Count > 0 && recorded.Mvid is not null)
+                    logger?.LogInformation(
+                        "Plugin bundles: {Plugin} serves module '{Module}' {Mvid} from {Provenance}",
+                        package.PluginId, package.Module, recorded.Mvid, served.Provenance);
+                return served;
             });
     }
 
@@ -1337,12 +1379,13 @@ public static class PluginBundleEndpoints
     private static IResult BuildResult(
         BundleEntry package,
         IReadOnlyList<(string NodePath, string? Path, IReadOnlyDictionary<string, string>? Dependencies)> assemblies,
-        IReadOnlyList<string> moduleFiles,
-        IReadOnlyList<(string RelativePath, string FullPath)> moduleAssets,
+        ServedModule module,
         string identity,
         string architecture,
         IReadOnlyList<string> misses)
     {
+        var moduleFiles = module.Files;
+        var moduleAssets = module.Assets;
         var entries = new List<NuGetPackageWriter.Entry>();
         var assemblyRecords = new List<object>();
 
@@ -1366,8 +1409,7 @@ public static class PluginBundleEndpoints
         {
             var local = moduleFile;
             entries.Add(new NuGetPackageWriter.Entry(
-                NuGetPackageWriter.ModuleEntryPathFor(Path.GetFileName(local)),
-                () => File.OpenRead(local)));
+                NuGetPackageWriter.ModuleEntryPathFor(local.FileName), local.Open));
         }
 
         // The module's STATIC WEB ASSETS ride under their own folder, keeping the relative path a
@@ -1375,12 +1417,11 @@ public static class PluginBundleEndpoints
         // defect the publish path was just fixed for (#2221): the shelf would hold a complete pack
         // and hand consumers an assemblies-only bundle, so every downstream portal renders
         // unstyled while the registry's own copy looks fine.
-        foreach (var (relativePath, fullPath) in moduleAssets)
+        foreach (var moduleAsset in moduleAssets)
         {
-            var local = fullPath;
+            var local = moduleAsset;
             entries.Add(new NuGetPackageWriter.Entry(
-                NuGetPackageWriter.ModuleAssetEntryPathFor(relativePath),
-                () => File.OpenRead(local)));
+                NuGetPackageWriter.ModuleAssetEntryPathFor(local.RelativePath), local.Open));
         }
 
         var manifest = new PackagingManifest(
@@ -1416,7 +1457,7 @@ public static class PluginBundleEndpoints
                     : new
                     {
                         assemblyName = package.Module,
-                        assemblies = moduleFiles.Select(Path.GetFileName).ToArray(),
+                        assemblies = moduleFiles.Select(f => f.FileName).ToArray(),
                         minMeshVersion = package.MinMeshVersion,
                         // Declared, never inferred from the archive — BundleReader.ReadModuleAssets
                         // reads THIS list and treats a declared-but-absent entry as an incomplete
@@ -1424,6 +1465,13 @@ public static class PluginBundleEndpoints
                         staticAssets = moduleAssets.Count == 0
                             ? null
                             : moduleAssets.Select(a => a.RelativePath).ToArray(),
+                        // 🚨 Where these bytes came from, and — when the registry could not supply
+                        // the build this bundle's own assemblies record — what disagreed (#3244).
+                        // On the wire, not merely in a log, for the same reason `misses` is: a
+                        // consumer that will decline every NodeType binding this module must be
+                        // able to say WHY without correlating against the registry's logs.
+                        provenance = module.Provenance,
+                        divergence = module.Divergence,
                     },
             },
             new JsonSerializerOptions

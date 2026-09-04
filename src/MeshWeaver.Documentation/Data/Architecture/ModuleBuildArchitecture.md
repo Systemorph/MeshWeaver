@@ -496,11 +496,11 @@ project; a module is landed from the registry and composed into bakes, nowhere e
 The second row is a **second producer in time**: core CD's `plugins-modules` rebuilds
 `MeshWeaver.Markdown.Collaboration` per platform release to feed the Plugins seal (mvid A), while
 the registry's package endpoint serves the Plugins lane's last content-versioned publication (mvid
-B) — the bytes a portal actually installs. This row is NOT closed by this change (core holds no
-registry credential, so its bake cannot compose the registry's bytes); what changed is that the
-availability gate now sees it (below) instead of rolling onto it.
+B) — the bytes a portal actually installs. The availability gate saw it from #3242 on instead of
+rolling onto it; **the serve side now resolves it** (#3244, below), so the two producers can no
+longer disagree in the archive a consumer installs.
 
-### The two controls
+### The three controls
 
 1. **The bake refuses a double by name** (`BakeHost.ShippedByHostProblem`, run by `compile` /
    `--bake-output` under both `--app` and in-process). A module composed with `--module` whose
@@ -533,17 +533,63 @@ availability gate now sees it (below) instead of rolling onto it.
    the identity's module IS. Full reasoning and the measurement:
    [Module-Owned Siblings Ride](../ModuleOwnedSiblingsRide).
 
+### The third control: the download serves the module its own assemblies record (#3244)
+
+The set check above compares two halves of ONE publication — the sealed bundles' dependency records
+against the sealed module set — and passes when they agree. The instance runs neither: it installs
+what `/api/plugins/bundles/<pkg>/<version>` hands it, and that route was **asymmetric**. Its NodeType
+assemblies resolve through each type's `Release` node for exactly the CALLER's framework identity
+(#1751); its module section came off the registry's own `modules/` shelf, which is content-versioned
+(Plugins #931) and identity-blind — whatever the module's own lane published last, under a version
+that does not move when a rebuild changes the bytes. One archive, two producers, and the consumer's
+boot seeder declining every NodeType in it.
+
+**The rule is evidence, not a preference order.** The assemblies about to be written into the archive
+carry, per NodeType, the id they were compiled against; for an installed module that id is `mvid:` +
+its raw MVID. So the archive *states* which build it needs, and `ServedModuleBytes.Resolve` hands over
+the bytes that ARE that build:
+
+| the served assemblies record | what is served |
+|---|---|
+| nothing for this module | the shelf, unchanged — nothing binds it, so nothing constrains it |
+| the build the shelf holds | the shelf (one PE header read; the healthy path costs nothing more) |
+| a build a publication sealed for this identity carries | **those** bytes, off `<root>/<identity>/<source>/modules/<bundle>` |
+| a build nobody holds | the shelf, plus a `divergence` in the manifest's module section and a warning naming both MVIDs |
+| two builds, disagreeing among themselves | the shelf, plus the named disagreement — no single module can satisfy them |
+
+Three properties are load-bearing:
+
+- **Server-side, not client-side.** The other shape — an instance fetching its module bytes from the
+  `prebuilt/{identity}/{source}/modules` route directly — needs a whole-source grant (`<source>/*`)
+  on every installation, and a whole-source grant deliberately bypasses plan tiering (*"a sealed
+  publication carries every plan's bundles"*). Deciding at the registry needs no new grant, no new
+  credential and no client change, so the fleet converges on a registry roll rather than on every
+  install updating.
+- **It is right where a preference order is wrong.** A registry that COMPILED its own NodeTypes
+  records its own live module, and the shelf is then the correct answer. "Prefer the seal" would
+  serve the wrong bytes there; "serve what is recorded" cannot.
+- **The unsatisfiable case is NAMED, not hidden.** When no producer holds the recorded build the bytes
+  are unchanged — the registry cannot conjure a build it does not have — but the archive says so, so
+  "this lane cannot be satisfied" stops being a fact only a consumer's per-type decline could reveal.
+
 ### What the gate still cannot see
 
-The registry's package endpoint (`/api/plugins/bundles/<pkg>/<version>`) is content-versioned
-(Plugins #931): an instance that installed a module from it holds whatever that lane published last,
-and a platform release that rebuilds the module for the seal produces a *consistent* sealed set whose
-module MVID differs from the instance's landed one. The set check passes; the instance still
-declines. Closing that needs ONE producer in time as well — either the seal composes the registry's
-bytes for the root source (`registry-modules` in core CD, which needs a registry credential core
-does not hold today), or the instance adopts module bytes for its identity from the sealed
-publication it already adopts bundles from. Until one of those lands, `ShippedPrebuiltBundles`'
-`dependency record mismatch … live is mvid:` line on a portal is that gap, not a new defect.
+The instance's *already-landed* module is still outside every check here, because nothing above runs
+until the instance decides to DOWNLOAD. `ModuleUpdateDecision` takes that decision from the index's
+advertised **framework** identity against the landed entry's (Plugins#931/#723), never from the
+module MVID — so the re-land happens on the module's next republish (a platform release triggers the
+owning repo's lane, which is exactly when the two builds diverge, so the ordinary path does converge),
+and NOT when a seal for the running identity appears while the shelf sits still. A portal in that
+window keeps the build it has, and `ShippedPrebuiltBundles`' `dependency record mismatch … live is
+mvid:` line is that residue rather than a new defect.
+
+The remaining structural half is core CD's, and it is a credential decision rather than a code one:
+`plugins-modules` REBUILDS the modules it composes instead of taking `registry-modules`, because core
+holds no registry credential (`MW_REGISTRY_KEY` is validated in `node-repo-publish-bake.yml` as the
+*caller's* secret and is not among core's own). Composing the registry's bytes would make the
+publication and the shelf one producer at the source, which is strictly better than resolving them at
+serve time — but it needs that credential provisioned, and the resolution above is correct with or
+without it.
 
 ### Moving a type OUT of an image-shipped assembly into a module (the shadow set's blind spot)
 
