@@ -893,6 +893,68 @@ public class MessageService : IMessageService
         // the culprit. We return Ignored() (NOT Failed) on a drop: a Failed delivery would
         // post a DeliveryFailure back to the sender, which for the storm-prone non-
         // [CanBeIgnored] path would FEED the very loop we are breaking.
+        // 🚨 A hub past Quiescing cannot SERVE a new request, so it must not ACCEPT one.
+        //
+        // Quiescing exists to let the replies this hub is still OWED come in, and the arm above
+        // only refuses from DisposeHostedHubs on. Between the two, a hub whose quiesce has already
+        // finished still admitted brand-new work: measured on #3261's branch
+        // (DanglingNodeTypeUpdateTest, 2026-09-04) a node hub logged
+        //
+        //     [QUIESCE-START] TestData/dnt…: 0 pending callbacks at dispose entry: <none>
+        //     [QUIESCE-OK]    TestData/dnt…: drained 0 callback(s) in 0ms
+        //     Start processing SubscribeRequest (cache/… -> TestData/dnt…)          ← 40 ms later
+        //     Creating new hosted hub for address sync/4wzOafy… in host TestData/dnt…
+        //
+        // — three late SubscribeRequests, and fresh sync/* children built to serve them, on a hub
+        // that was already being torn down. Exactly one of the three was answered; the others died
+        // with the hub and their requesters held a pending callback until THEIR own quiesce budget
+        // expired. That is the 2 s × 72 disposals #3261 measured, and it is silent: the requester
+        // sees a wait, never a verdict.
+        //
+        // So: refuse it HERE, with the same transient ShuttingDown NACK the DisposeHostedHubs arm
+        // mints, and the requester gets an answer in milliseconds instead of a hang. The address
+        // may reactivate, so the verdict is retryable, never terminal.
+        //
+        // 🚨 A RESPONSE is exempt — admitting responses is the whole point of Quiescing. The test
+        // is the RequestId property on the envelope, not the CLR type: a cross-hub delivery arrives
+        // here as RawJson with its payload type erased, so a `is IRequest` test would be dead for
+        // exactly the deliveries that travel furthest. Lifecycle traffic is exempt for the same
+        // reason it is exempt above — disposal itself must still work.
+        //
+        // 🚨 And it is scoped to what is ADDRESSED HERE, by somebody else. This gate is not an
+        // inbox: a hub's own OUTBOUND posts enter it too, on their way to routing. Refusing those
+        // breaks a hub that is legitimately still finishing a conversation as it winds down —
+        // measured, first attempt: SourcesWatcherStopsAtTeardownTest went red because
+        // `Watched/Type` posted a CreateOrUpdateNodeRequest to `portal/nodeops-…` at
+        // `runLevel=Quiescing`, the refusal ate it, NackThroughParent declines to answer a hub's
+        // own delivery (`delivery.Sender.Equals(Address)`), and the callback it had just armed
+        // then held Quiescing for its entire budget. The exact defect this arm exists to remove,
+        // recreated by the fix. So: target is this hub, sender is not.
+        if (hub.RunLevel == MessageHubRunLevel.Quiescing
+            && delivery.Message is not ShutdownRequest and not DisposeRequest
+            && !delivery.Properties.ContainsKey(PostOptions.RequestId)
+            && Address.Equals(delivery.Target)
+            && delivery.Sender is not null && !Address.Equals(delivery.Sender)
+            && delivery.MayAnswer())
+        {
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogDebug(
+                    "Refusing new request {MessageType} (ID: {MessageId}) in {Address} — the hub is "
+                    + "quiescing and cannot serve work it has not already accepted",
+                    typeName, delivery.Id, Address);
+            MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} REFUSED_QUIESCING");
+            fate?.Add("REFUSED_QUIESCING", Address);
+
+            var quiesceReason = ShutdownNack.RejectingNow(
+                Address,
+                $"RunLevel={hub.RunLevel}, {ActivationTag()}",
+                $"cannot accept {typeName} — this hub is quiescing and would never answer it");
+
+            return NackThroughParent(delivery, quiesceReason)
+                ? delivery.FailedAndNacked("Hub is shutting down")
+                : delivery.Failed("Hub is shutting down", ErrorType.ShuttingDown);
+        }
+
         if (stormBreaker.ShouldDrop(delivery))
         {
             MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} DROPPED_STORM");

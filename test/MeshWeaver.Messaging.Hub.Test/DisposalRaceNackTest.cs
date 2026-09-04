@@ -122,9 +122,27 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
             // 2. Accepted while the hub is healthy, so it lands in the MAIN queue behind the
             //    stall — not in the deferred queue the #672 drain answers for.
             IRequest<RaceResponse> request = faulting ? new FaultingRequest() : new RaceRequest();
+            var requestId = Guid.NewGuid().ToString("N");
             var response = host
-                .Observe<RaceResponse>(request, o => o.WithTarget(victimAddress))
+                .Observe<RaceResponse>(request, o => o.WithTarget(victimAddress).WithMessageId(requestId))
                 .FirstAsync()
+                .Await(TestContext.Current.CancellationToken);
+
+            // 🚨 …and "accepted" is OBSERVED, never assumed. `Observe` posts on the HOST, whose own
+            // turn then routes the delivery down to the victim: between the two, the victim can
+            // pass Quiescing and reach DisposeHostedHubs, where the intake gate rejects it —
+            //     "Hub disposal-race/1 is shutting down (RunLevel=DisposeHostedHubs …) — cannot
+            //      process RaceRequest … Rejecting now."
+            // — which is CORRECT behaviour for a request that arrived after the door closed, and
+            // has nothing to do with what this test is about. It failed exactly that way once the
+            // suite grew a class and the scheduling shifted (2026-09-04), i.e. it was a race the
+            // whole time, decided by whether the host's routing turn beat Dispose(). The fate
+            // ledger already records the stage this test needs, so wait for it.
+            await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+                .Select(_ => host.DescribeRequestFate(requestId))
+                .Where(trail => trail.Contains($"ENQUEUED@{victimAddress}", StringComparison.Ordinal))
+                .FirstAsync()
+                .Timeout(TestTimeouts.Convergence)
                 .Await(TestContext.Current.CancellationToken);
 
             // 3. Dispose. The blocker observes the shutdown and returns; the queue behind it —

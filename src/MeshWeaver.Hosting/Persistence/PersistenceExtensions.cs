@@ -831,6 +831,15 @@ public static class PersistenceExtensions
         // waiting" and would restore the bug in a form no test could see.
         services.TryAddSingleton<ILatePatchVerdictSink>(sp =>
             sp.GetRequiredService<LatePatchResponseRegistry>());
+        // 🚨 …and the SAME instance again under the seam the ROUTING layer can see. When a reply
+        // cannot be forwarded at all — a whole-mesh teardown where the parent is already past
+        // DisposeHostedHubs — HierarchicalRouting offers it here instead of dropping it with
+        // nobody told (the shape NackReachesTheWaiterDuringTeardownTest keeps catching:
+        // "cannot route PatchDataResponse to cache/…" while the caller sits armed). A FACTORY over
+        // the same concrete singleton, for the same reason as the line above: a second instance
+        // would take the reply into a registry nobody armed.
+        services.TryAddSingleton<MeshWeaver.Messaging.IUndeliverableReplySink>(sp =>
+            sp.GetRequiredService<LatePatchResponseRegistry>());
         // Post-commit durable-flush hook for the PatchDataRequest handler: chains the
         // owner's ack off the storage write so a cross-hub stream.Update completion
         // guarantees read-after-write (see IPostCommitFlush / StoragePostCommitFlush).
