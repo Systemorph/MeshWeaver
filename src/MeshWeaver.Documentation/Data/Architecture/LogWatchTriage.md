@@ -386,13 +386,14 @@ to the triage thread that wrote it.
 
 Everything red becomes a ticket, so **the level a call site chooses is a ticketing decision**, not a
 verbosity knob (AGENTS.md: never edit a level to dial a debugging session up or down; fix it
-permanently, with the reason, or leave it). Two outcomes are routinely mistaken for faults, and both
-produced steady ticket streams:
+permanently, with the reason, or leave it). Three outcomes are routinely mistaken for faults, and
+each produced a steady ticket stream:
 
 | Outcome | Why it is not a fault | Where |
 |---|---|---|
 | **Cooperative cancellation** — the caller went away, a partition cleanup cascaded, the host is shutting down, the I/O pool drained | Nothing failed and nothing was written. `MeshWeaver.Mesh.CreateNode` logged 491 of these in three days (#2152); `MeshWeaver.Mesh.MeshNode` logged `[DeleteNode] unexpected … partial-deleted=0` (#2182) — a counter that says the node was never touched. | `CancellationClassifier.IsCooperativeCancellation` |
 | **A client that disconnected mid-stream** | gRPC finalises the request and answers the next write with `InvalidOperationException("Can't write the message because the request is complete.")`; the client is already gone (#2138 / #2139). | `MeshGrpcService.WritePumpAsync` |
+| **Hosted-hub creation that raced pod teardown** | A hub activates while its pod is stopping and the Autofac scope dies UNDER the build (`LifetimeScope.ThrowDisposedException`). Nothing failed, nothing was written, and the next access re-activates the node on a live host (#3243). | `HostedHubsCollection.CreateHub` → `HostedHubOutcome.HostShuttingDown` |
 
 🚨 **The rule is narrow on purpose, and the exceptions to it are the point:**
 
@@ -410,8 +411,20 @@ produced steady ticket streams:
   licence to swallow an outcome.
 - **The exception still rides along.** The benign line is `LogDebug(ex, …)`, and it states the token
   state that made it benign rather than asserting it (`CancellationClassifier.Describe`).
+- **A caller cannot classify what it cannot see, so the condition TRAVELS.** `GetHostedHub` answered
+  `null` for a shutdown and for a configuration that threw alike, so `MessageHubGrain` logged one
+  fail-level sentence listing both and committing to neither — a message that was *honest about its
+  own ignorance* and ticketed a pod rollout every time. `HostedHubResult` carries the outcome from
+  the collection that owns the container to the grain that writes the line (#3243); re-deriving it
+  at the caller would have been a guess.
+- **And the benign verdict is MEASURED.** An `ObjectDisposedException` out of hub construction is
+  only a shutdown if the container really is gone, so the container is asked — directly — whether it
+  can still resolve. A live scope that threw that type for its own reasons still reads as a fault,
+  and a probe that cannot answer leaves the outcome LOUD.
 
-`CancellationIsNotAFaultTest` pins both directions, including the timeout impostor.
+`CancellationIsNotAFaultTest` pins the cancellation directions, including the timeout impostor;
+`HubCreationDuringTeardownIsNotAFaultTest` and `HubConstructionOutcomeReportingTest` pin the
+hub-creation ones, including the configuration-throw that must stay red.
 
 ## What this is not
 
