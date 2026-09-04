@@ -55,6 +55,12 @@ public sealed class IoPool : IIoPool, IDisposable
     private int _gateUsers;
 
     private volatile bool _disposed;
+    // 🚨 Drain is TERMINAL from its FIRST line, not from the cancel that comes after the grace.
+    // A leaf issued once the drain has begun is refused outright (Cancelled<T>(), exactly like a
+    // leaf issued after disposal); only work admitted BEFORE the drain gets the grace. Without
+    // this a producer that issues one leaf per completion keeps the admission count moving and
+    // the grace open indefinitely (Copilot review, #3291).
+    private volatile bool _draining;
     // Idempotence for Dispose. A plain `if (_disposed) return` cannot serve: _disposed is now set
     // AFTER the join (so Drain's own guard does not short-circuit it), which leaves a window where
     // two callers would both drain and both dispose the gate.
@@ -92,6 +98,18 @@ public sealed class IoPool : IIoPool, IDisposable
     private readonly TimeSpan _drainTimeout;
 
     /// <summary>
+    /// The GRACE <see cref="Drain"/> gives in-flight work before it cancels anything: how long the
+    /// pool waits for the NEXT leaf to finish on its own. A leaf that is making progress is never
+    /// cancelled — every completion restarts the clock, so a burst of ten short writes drains in
+    /// ten completions, not one budget. A leaf that has not completed within one grace with the
+    /// pool otherwise idle is WEDGED: it is then cancelled, joined under <see cref="DefaultDrainTimeout"/>,
+    /// and named in <see cref="CancelledLeafSites"/>. Matches the hub's disposal stall budget so
+    /// "no progress" means the same thing on both sides of the I/O boundary.
+    /// </summary>
+    internal static readonly TimeSpan DefaultDrainGrace = TimeSpan.FromSeconds(8);
+    private readonly TimeSpan _drainGrace;
+
+    /// <summary>
     /// Creates a pool whose async gate and sync-blocking scheduler are both capped at
     /// <paramref name="maxConcurrency"/>.
     /// </summary>
@@ -109,13 +127,28 @@ public sealed class IoPool : IIoPool, IDisposable
     /// that has to let the budget EXPIRE (the only way to observe a residual) can do so in
     /// milliseconds instead of spending 30 s of shard time per join.
     /// </param>
-    public IoPool(int maxConcurrency, TimeSpan drainTimeout)
+    public IoPool(int maxConcurrency, TimeSpan drainTimeout) : this(maxConcurrency, drainTimeout, DefaultDrainGrace) { }
+
+    /// <summary>
+    /// As <see cref="IoPool(int, TimeSpan)"/>, with an explicit drain grace.
+    /// </summary>
+    /// <param name="maxConcurrency">Maximum number of operations allowed to run concurrently; must be at least 1.</param>
+    /// <param name="drainTimeout">How long <see cref="Drain"/> waits at each of its joins AFTER cancelling.</param>
+    /// <param name="drainGrace">
+    /// How long <see cref="Drain"/> waits for the next in-flight leaf to finish on its own BEFORE
+    /// cancelling — see <see cref="DefaultDrainGrace"/>. 🚨 Production uses the default; this
+    /// overload exists so a test whose leaf can only end by cancellation need not spend the grace.
+    /// </param>
+    public IoPool(int maxConcurrency, TimeSpan drainTimeout, TimeSpan drainGrace)
     {
         if (maxConcurrency < 1)
             throw new ArgumentOutOfRangeException(nameof(maxConcurrency));
         if (drainTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(drainTimeout));
+        if (drainGrace < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(drainGrace));
         _drainTimeout = drainTimeout;
+        _drainGrace = drainGrace;
         _maxConcurrency = maxConcurrency;
         _gate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         _blockingFactory = new TaskFactory(
@@ -265,6 +298,23 @@ public sealed class IoPool : IIoPool, IDisposable
     // consults right after Drain() returns. Never cleared — Drain is terminal.
     private volatile bool _cancelJoinExpired;
 
+    // What Drain()'s GRACE could not wait out: the leaves that were still running when the pool
+    // stopped making progress and had to be cancelled. Distinct from the residual (leaves that
+    // ignored even the cancel): these unwound, but only because they were killed — each one is a
+    // unit of work that did not finish its job, and the report names it so the owner can see why.
+    private int _leavesCancelledAfterGrace;
+    private volatile IReadOnlyList<string> _cancelledLeafSites = [];
+
+    /// <summary>
+    /// Leaves <see cref="Drain"/> had to CANCEL because they outlived the grace with the pool making
+    /// no further progress — the wedged work the drain killed, as opposed to the residual it could
+    /// not even kill. Zero when every leaf finished on its own.
+    /// </summary>
+    public int LeavesCancelledAfterGrace => Volatile.Read(ref _leavesCancelledAfterGrace);
+
+    /// <summary>The call sites of the leaves counted by <see cref="LeavesCancelledAfterGrace"/>.</summary>
+    public IReadOnlyList<string> CancelledLeafSites => _cancelledLeafSites;
+
     /// <summary>
     /// Runs an async I/O leaf off the calling scheduler under the pool's concurrency gate.
     /// </summary>
@@ -272,7 +322,7 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <param name="io">The cancellable async work to run once the gate grants a slot.</param>
     /// <returns>A cold observable that, on subscribe, runs the work and emits its single result.</returns>
     public IObservable<T> Invoke<T>(Func<CancellationToken, Task<T>> io)
-        => _disposed ? Cancelled<T>() : InvokeCore(io);
+        => (_disposed || _draining) ? Cancelled<T>() : InvokeCore(io);
 
     private IObservable<T> InvokeCore<T>(Func<CancellationToken, Task<T>> io)
         // SubscribeOn moves the whole subscribe — including the gate wait and the
@@ -350,7 +400,7 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <param name="source">The cancellable async sequence to enumerate once the gate grants a slot.</param>
     /// <returns>A cold observable that, on subscribe, enumerates the source and emits each element.</returns>
     public IObservable<T> InvokeStream<T>(Func<CancellationToken, IAsyncEnumerable<T>> source)
-        => _disposed ? Cancelled<T>() : InvokeStreamCore(source);
+        => (_disposed || _draining) ? Cancelled<T>() : InvokeStreamCore(source);
 
     private IObservable<T> InvokeStreamCore<T>(Func<CancellationToken, IAsyncEnumerable<T>> source)
         => Observable.Create<T>(async (observer, subscriberCt) =>
@@ -390,7 +440,7 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <param name="work">The cancellable blocking work to run once the scheduler grants a slot.</param>
     /// <returns>A cold observable that, on subscribe, runs the work and emits its single result; unsubscribing cancels it.</returns>
     public IObservable<T> InvokeBlocking<T>(Func<CancellationToken, T> work)
-        => _disposed ? Cancelled<T>() : InvokeBlockingCore(work);
+        => (_disposed || _draining) ? Cancelled<T>() : InvokeBlockingCore(work);
 
     private IObservable<T> InvokeBlockingCore<T>(Func<CancellationToken, T> work)
         => Observable.Create<T>(observer =>
@@ -502,7 +552,7 @@ public sealed class IoPool : IIoPool, IDisposable
 
     /// <inheritdoc />
     public IObservable<T> SubscribeThroughPool<T>(IObservable<T> source) =>
-        _disposed ? Cancelled<T>() : SubscribeThroughPoolCore(source);
+        (_disposed || _draining) ? Cancelled<T>() : SubscribeThroughPoolCore(source);
 
     private IObservable<T> SubscribeThroughPoolCore<T>(IObservable<T> source) =>
         Observable.Create<T>(observer =>
@@ -658,8 +708,9 @@ public sealed class IoPool : IIoPool, IDisposable
         });
 
     /// <summary>
-    /// Cancels every in-flight leaf and JOINS — blocks until they have all unwound — WITHOUT
-    /// disposing the pool. Called before a collectible node <c>AssemblyLoadContext</c> is unloaded
+    /// Lets every in-flight leaf FINISH (the grace — see <see cref="DefaultDrainGrace"/>), then
+    /// cancels whatever stopped making progress and JOINS — blocks until everything has unwound —
+    /// WITHOUT disposing the pool. Called before a collectible node <c>AssemblyLoadContext</c> is unloaded
     /// so no pool thread is still executing (or about to dereference) that ALC's compiled types
     /// when it is torn down (the teardown use-after-unload SIGSEGV). TERMINAL — it cancels the
     /// pool token, so any leaf issued after Drain is cancelled immediately; idempotent (a second
@@ -692,8 +743,50 @@ public sealed class IoPool : IIoPool, IDisposable
         // the flag gave (disposal cancels and reports its own residual through Disposed) — only now
         // it is a claim rather than a guess.
         if (!TryEnterGateRegion()) return 0;
+        // Terminal from here: nothing issued after this line is admitted (see _draining).
+        _draining = true;
         try
         {
+            // 🚨 GRACE FIRST — let the work finish its job. Nothing is cancelled until the pool has
+            // provably stopped making progress. "Work" is every caller admitted to the pool —
+            // running leaves, leaves still QUEUED on the gate, blocking leaves on their scheduler —
+            // which is exactly what the admission counter (_gateUsers) counts, minus this drain's own
+            // region. The wait is progress-based: every time that count drops (a leaf finished, or a
+            // queued one ran and finished) the clock restarts, so a burst of short leaves drains in as
+            // many completions however long that takes in total. Only when a whole grace passes with
+            // NOTHING finishing is what remains wedged — and only then does the cancel below run.
+            //
+            // Not the gate itself: re-acquiring permits here would compete with the queued leaves for
+            // them and steal their turn, then cancel them at the gate — accepted work discarded, which
+            // is the very thing the grace exists to prevent. A change-feed subscription holds neither
+            // a permit nor a region past its subscribe, so it never holds the grace open; the cancel
+            // is what ends it, as it always was — a stream has no job to finish.
+            //
+            // The predecessor cancelled FIRST and joined second, so every in-flight write, read or
+            // compile at teardown was aborted the instant the mesh decided to go down — a flush that
+            // would have landed in 50 ms thrown away and its row handed to the sampler. The grace
+            // costs nothing on an idle pool and one completion's worth on a busy one.
+            var lastSeen = Volatile.Read(ref _gateUsers) - 1;
+            while (lastSeen > 0)
+            {
+                var seen = lastSeen;
+                var progressed = SpinWait.SpinUntil(
+                    () => Volatile.Read(ref _gateUsers) - 1 < seen,
+                    _drainGrace);
+                if (!progressed)
+                    break; // a whole grace with nothing finishing: what remains is wedged
+                lastSeen = Volatile.Read(ref _gateUsers) - 1;
+            }
+            var wedged = Math.Max(0, Volatile.Read(ref _gateUsers) - 1);
+            if (wedged > 0)
+            {
+                // Name them NOW, while they are provably the ones still in flight: after the
+                // cancel a leaf that observed its token has unwound and left no trace. A queued
+                // leaf has entered no site yet, so the list can be shorter than the count.
+                _cancelledLeafSites = PendingLeafSites;
+                Interlocked.Exchange(ref _leavesCancelledAfterGrace, wedged);
+            }
+
             // 🚨 NOT `_poolCts.Cancel()` on this thread — see StartCancelOffCallerThread. The
             // callbacks this token carries run the pooled subscriptions' whole DOWNSTREAM teardown,
             // and this thread is the mesh-teardown thread.

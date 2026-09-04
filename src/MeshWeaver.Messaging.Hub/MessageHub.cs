@@ -438,7 +438,7 @@ public sealed class MessageHub : IMessageHub
         Register<PingRequest>(HandlePingRequest);
         // HandleInitialize already returns IObservable (buildup composed via Observable.Concat,
         // no await) — register it directly now that the rule chain is reactive.
-        Register<InitializeHubRequest>((request, ct) => HandleInitialize(request));
+        Register<InitializeHubRequest>(HandleInitialize);
         lock (messageHandlerRegistrationLock)
         {
             foreach (var messageHandler in configuration.MessageHandlers)
@@ -483,7 +483,8 @@ public sealed class MessageHub : IMessageHub
     /// <c>Doc/Architecture/HubInitializationFailure.md</c>.</para>
     /// Bridged to the Task-based rule chain at the <c>Register</c> edge.
     /// </remarks>
-    private IObservable<IMessageDelivery> HandleInitialize(IMessageDelivery<InitializeHubRequest> request)
+    private IObservable<IMessageDelivery> HandleInitialize(
+        IMessageDelivery<InitializeHubRequest> request, CancellationToken ct)
     {
         logger.LogDebug("Message hub {address} initializing via InitializeHubRequest", Address);
 
@@ -506,6 +507,19 @@ public sealed class MessageHub : IMessageHub
         // run (MeshWeaver CD 33619142646) — a Warning each time, and the one test that asserts a
         // fault-free probe teardown (ProbeHubCostTest) red whenever the late creation landed in its
         // window. Pinned by InitializationStopsAtTeardownStartTest.
+        // 🚨 The bring-up OBSERVES its cancellation. `ct` is the execution token Dispose() cancels
+        // for a hub that never reached Started (see Dispose): a BuildupAction parked on a source
+        // that never emits — a data source's initial load that never answers, a NodeType that never
+        // compiles — used to hold this turn for the whole StartupTimeout (120 s) with the
+        // ShutdownRequest queued behind it, so an owner disposing such a child waited on it too.
+        // Racing the buildup against the token ends the turn the moment the hub is told to go
+        // down: the cancellation errors into the Catch below, whose shutdown arm records no
+        // failure. A ShutdownRequest runs with CancellationToken.None; every other turn's token is
+        // the stall detector's, so nothing else changes here.
+        var cancelled = Observable.Create<IList<Unit>>(observer =>
+            ct.Register(() => observer.OnError(new OperationCanceledException(
+                $"Hub {Address} was told to shut down before its initialization completed", ct))));
+
         var skipLogged = false;
         return Observable
             .Concat(actions.Select(a => Observable.Defer(() =>
@@ -522,6 +536,7 @@ public sealed class MessageHub : IMessageHub
                 return Observable.Empty<Unit>();
             })))
             .ToList()
+            .Amb(cancelled)
             // 🚫 Liveness bound. A BuildupAction that HANGS — never emits and never completes (a
             // dependency that never initialises, a stuck NodeType compile, a subscribe that never
             // fires) — leaves the Concat incomplete, so the gate never opens and EVERY message defers
@@ -1771,7 +1786,27 @@ public sealed class MessageHub : IMessageHub
     private IDisposable? watchdogSubscription;
     private IDisposable? quiescingSubscription;
     private IDisposable? hostedHubsDisposalSubscription;
-    private static readonly TimeSpan DisposalWatchdogTimeout = TimeSpan.FromSeconds(8);
+    /// <summary>
+    /// The STALL budget of the disposal watchdog: how long the subtree may make no
+    /// <see cref="RunLevel"/> progress before the watchdog looks at what is holding the
+    /// teardown. It is not a duration cap and it forces nothing — see
+    /// <see cref="OnDisposalStall"/> for the five verdicts it can reach.
+    /// </summary>
+    internal static readonly TimeSpan DisposalWatchdogTimeout = TimeSpan.FromSeconds(8);
+    // Stall-detector state (see OnDisposalStall). `stallTurnsSeen` is the pump's completed-turn
+    // count at the last stall verdict; `wedgedTurnCancelled` records that the in-flight turn has
+    // already been handed its cancellation, so the next stall verdict on the same turn is the
+    // Error that names a handler ignoring cancellation, not a second cancel.
+    private long stallTurnsSeen = -1;
+    private bool wedgedTurnCancelled;
+    // Event ids for the stall verdicts: the red-log triage keys an incident on the log SITE and
+    // deliberately ignores prose, so each verdict shape files as ONE issue however many hubs
+    // reach it, and the prose is free to carry every detail a reproduction needs.
+    internal static readonly EventId DisposalWedgedTurnCancelled = new(7311, nameof(DisposalWedgedTurnCancelled));
+    internal static readonly EventId DisposalWedgedTurnIgnoresCancellation = new(7312, nameof(DisposalWedgedTurnIgnoresCancellation));
+    internal static readonly EventId DisposalStalledBelowThisHub = new(7313, nameof(DisposalStalledBelowThisHub));
+    internal static readonly EventId DisposalShutDownPhaseBlocked = new(7314, nameof(DisposalShutDownPhaseBlocked));
+    internal static readonly EventId DisposalQuiesceWaitCutOff = new(7315, nameof(DisposalQuiesceWaitCutOff));
     private readonly Stopwatch disposalStopwatch = new();
 
     private bool DisposalSignalled => Volatile.Read(ref disposalSignalled) != 0;
@@ -1798,10 +1833,12 @@ public sealed class MessageHub : IMessageHub
     private readonly Lock locker = new();
 
     /// <summary>
-    /// Begins the hub's reactive, phased teardown (idempotent). Cancels any in-flight handler, posts
+    /// Begins the hub's reactive, phased teardown (idempotent). Freezes hosted-hub creation, posts
     /// the Quiescing shutdown request that drives the Quiescing → DisposeHostedHubs → ShutDown state
-    /// machine, and arms a watchdog that force-completes disposal if that path ever wedges. Returns
-    /// immediately; observe <see cref="DisposalCompleted"/> for completion.
+    /// machine behind whatever work the hub has already accepted, and arms a stall detector that
+    /// reports — and cooperatively cancels — a turn that stops the path from advancing. Nothing is
+    /// forced: a hub that cannot finish stays pending and says why. Returns immediately; observe
+    /// <see cref="DisposalCompleted"/> for completion.
     /// </summary>
     /// <summary>
     /// Freezes creation of NEW hosted hubs beneath this hub, cascading through the
@@ -1864,17 +1901,36 @@ public sealed class MessageHub : IMessageHub
             logger.LogDebug("Hub {address} has no hosted hubs to dispose", Address);
         }
 
-        // Cancel any in-progress message handlers (e.g. stuck initialization) to free the
-        // execution block so that the ShutdownRequest can be processed immediately.
-        // ShutdownRequest uses CancellationToken.None so it won't be affected.
-        messageService.CancelExecution();
+        // The stall detector's baseline: how many turns the pump had completed when the teardown
+        // began. Its first verdict compares against THIS, so a pump that drained 500 accepted turns
+        // in the first budget reads as busy rather than as a wedge with no history.
+        stallTurnsSeen = (messageService as MessageService)?.TurnsCompleted ?? -1;
+
+        // 🚨 The in-flight turn is NOT cancelled here. Work this hub accepted before teardown began
+        // runs to completion — a merge that is half-way through, a handler awaiting pooled I/O.
+        // The ShutdownRequest posted below queues behind it FIFO, so the shutdown proceeds the
+        // moment the turn returns. This used to call messageService.CancelExecution() on entry,
+        // which aborted whatever the hub was doing at the instant an ancestor decided to tear
+        // down — a cooperative handler then unwound with its work undone. Cancellation is now a
+        // VERDICT the stall detector reaches after the turn has provably stopped making progress
+        // (see OnDisposalStall), never a reflex.
+        //
+        // The ONE exception is a hub that never finished STARTING. Its InitializeHubRequest is
+        // the hub's own bring-up, not work anyone handed it — intake is gated behind it, so no
+        // accepted turn can be waiting on its result — and a bring-up that is still running when
+        // the owner tears down produces nothing the owner will keep. Cancelling it now is what
+        // lets a hung initialization (a data source that never answers, a NodeType that never
+        // compiles) release the block at once instead of holding its whole ancestry pending for
+        // a stall budget. Anything parked behind its gates is answered ShuttingDown and reported
+        // by messageService.Dispose (DISPOSE-DISCARD).
+        if (RunLevel < MessageHubRunLevel.Started)
+            messageService.CancelExecution();
 
         logger.LogDebug("POSTING initial ShutdownRequest for hub {Address} with Version={Version} (disposal preparation took {elapsed}ms)",
             Address, Version, totalStopwatch.ElapsedMilliseconds);
         Post(new ShutdownRequest(MessageHubRunLevel.Quiescing, Version));
 
-        // Safety net: if the reactive shutdown path ever wedges, force-complete disposal after
-        // a timeout so callers (tests, grain deactivation) don't hang forever.
+        // The disposal STALL DETECTOR. It watches the teardown; it never performs it.
         //
         // 🚨 Reactive, NOT a Task.Delay. `Observable.Timer` schedules on the DefaultScheduler
         // (OFF the action block), and `TakeUntil(disposalCompleted)` cancels the timer the
@@ -1886,47 +1942,171 @@ public sealed class MessageHub : IMessageHub
         // 🚨 It measures a STALL, not a DURATION (#1701). A fixed-duration watchdog on an owner
         // OUT-RUNS the very mechanism that answers it: the owner arms at its own Dispose(), a
         // child arms strictly later — in the owner's DisposeHostedHubs phase — for the same 8 s.
-        // So whenever a child needs its own watchdog to produce an answer, the OWNER's expires
-        // first and reports "DISPOSAL DEADLOCK DETECTED … RunLevel=DisposeHostedHubs" about a
-        // subtree that was working correctly, then force-tears it down mid-flight. That is the
-        // #1317 inversion ("a join must not out-run the answers it is joining") left in place one
-        // level up, and it is why #1701's captures show TWO force-teardown pairs of which only the
-        // inner one carries information.
-        //
         // Switch() over the progress stream re-arms the timer on every sign of life anywhere in
         // the subtree, so a healthy nested teardown never trips however deep it is, and a hub that
-        // genuinely stops moving still trips 8 s later — with the message finally TRUE: no
-        // progress, rather than "not finished yet".
+        // genuinely stops moving is looked at 8 s later — and again every 8 s while it stays
+        // still, because the periodic Timer keeps ticking until progress resumes or disposal ends.
+        //
+        // 🚨 It FORCES NOTHING. The predecessor ran an out-of-band teardown from this thread —
+        // hosted hubs, callbacks, dispose actions, message service — while the wedged turn was
+        // still executing, then signalled Dead. Measured, that produced a hub that reported itself
+        // disposed while its children were mid-flight, a NACK minted only after the 8 s force had
+        // fired (the waiter's whole budget spent on a verdict that existed), and in production a
+        // pod whose "completed" teardown was still holding work. A hub that cannot finish its
+        // teardown now SAYS SO, names the turn, cancels it once (cooperatively), and stays
+        // Pending: the outer bounds — the test base's dispose deadline, the host's teardown
+        // budget — report a hang with these diagnostics attached instead of a lie about
+        // completion. See OnDisposalStall for the five verdicts.
         watchdogSubscription = DisposalProgress
             .StartWith($"{Address} Dispose() called")
-            .Select(reason => Observable.Timer(DisposalWatchdogTimeout).Select(_ => reason))
+            .Select(reason => Observable.Timer(DisposalWatchdogTimeout, DisposalWatchdogTimeout).Select(_ => reason))
             .Switch()
             .TakeUntil(disposalCompleted)
-            .Take(1)
             // 🚨 OFF the progress path. Switch serialises its downstream delivery under its own
             // gate, and a progress signal originates INSIDE the emitting hub's `locker` (the
-            // RunLevel setter runs under it in HandleShutdownCore). Running the force-teardown
-            // inline would therefore hold Switch's gate while taking a child's `locker`, while
-            // that child holds its `locker` and wants Switch's gate — a lock-order inversion that
+            // RunLevel setter runs under it in HandleShutdownCore). Running the verdict inline
+            // would therefore hold Switch's gate while taking a child's `locker`, while that
+            // child holds its `locker` and wants Switch's gate — a lock-order inversion that
             // wedges the child's action block on its own ShutdownRequest (measured: the child
             // sitting at Executing(ShutdownRequest, 8000ms) with deliveryActionCompleted=False).
-            // The pre-Switch watchdog ran on the bare timer thread; this restores that isolation.
             .ObserveOn(System.Reactive.Concurrency.DefaultScheduler.Instance)
             .Subscribe(
-                lastProgress =>
-                {
-                    if (DisposalSignalled)
-                        return;
-                    logger.LogError(
-                        "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} " +
-                        "(last progress: {LastProgress}). RunLevel={RunLevel}. Forcing out-of-band teardown " +
-                        "so children/subscriptions cannot leak.\n{Diagnostics}",
-                        Address, DisposalWatchdogTimeout, lastProgress, RunLevel, DescribeWedge());
-                    ForceTeardownAfterWatchdog();
-                },
+                OnDisposalStall,
                 // disposalCompleted faulting (SignalDisposalFaulted) propagates through TakeUntil;
                 // the watchdog is no longer needed — swallow so it isn't an unobserved error.
                 _ => { });
+    }
+
+    /// <summary>
+    /// One stall verdict: the subtree has made no <see cref="RunLevel"/> progress for
+    /// <see cref="DisposalWatchdogTimeout"/>. Reached every budget while the stall persists.
+    ///
+    /// <para><b>Busy is not wedged.</b> The RunLevel only moves when a ShutdownRequest is
+    /// processed, and that request queues FIFO behind whatever this hub had already accepted. A
+    /// pump that keeps completing turns is draining accepted work ahead of its shutdown — the
+    /// designed behaviour, reported at Information and left alone.</para>
+    ///
+    /// <para><b>A wedged turn is cancelled once, then named.</b> A turn that has held the block
+    /// for a whole budget without a single completion is handed its cancellation token — the one
+    /// cooperative kill the actor model has. A handler that observes it returns and the shutdown
+    /// proceeds. One that does not is reported at Error on every following budget, with the
+    /// message type and its age, as the defect it is. Nothing is torn down around it.</para>
+    ///
+    /// <para><b>No turn, no progress</b> means the stall is below this hub — a hosted hub that is
+    /// itself wedged, or a join still waiting on one. The recursive diagnostics say which; that
+    /// child's own detector carries the turn-level verdict.</para>
+    /// </summary>
+    /// <param name="lastProgress">The last progress signal seen before the stall.</param>
+    private void OnDisposalStall(string lastProgress)
+    {
+        if (DisposalSignalled)
+            return;
+
+        var pump = messageService as MessageService;
+        var turns = pump?.TurnsCompleted ?? -1;
+        var snapshot = pump?.GetQueueSnapshot();
+
+        if (pump is not null && turns != stallTurnsSeen)
+        {
+            var completed = turns - stallTurnsSeen;
+            stallTurnsSeen = turns;
+            // Turns are completing: the pump is busy, not wedged. A new turn means the previous
+            // one returned, so a cancellation issued for it is spent — start the next one clean.
+            wedgedTurnCancelled = false;
+            TryLog(LogLevel.Information,
+                "[DISPOSE-BUSY] {Address}: no phase transition for {Timeout}, but the pump completed "
+                + "{Turns} turn(s) in that window (queue depth {Depth}) — accepted work is draining ahead "
+                + "of the shutdown request. Not a wedge; waiting.",
+                Address, DisposalWatchdogTimeout, completed, snapshot?.Buffer ?? -1);
+            return;
+        }
+        stallTurnsSeen = turns;
+
+        if (snapshot?.CurrentMessage is { } young
+            && snapshot.Value.CurrentMessageElapsedMs < DisposalWatchdogTimeout.TotalMilliseconds)
+        {
+            // A turn younger than the budget started AFTER the last look — the pump is moving even
+            // if the counter has not caught up with this verdict; nothing here is wedged yet.
+            TryLog(LogLevel.Information,
+                "[DISPOSE-BUSY] {Address}: no phase transition for {Timeout}, but the turn on the block "
+                + "({MessageType}) is only {ElapsedMs}ms old — the pump is moving; waiting.",
+                Address, DisposalWatchdogTimeout, young, snapshot.Value.CurrentMessageElapsedMs);
+            return;
+        }
+
+        if (snapshot?.CurrentMessage is { } current)
+        {
+            if (current == nameof(ShutdownRequest))
+            {
+                // The turn on the block IS the shutdown phase itself. Its handler runs the
+                // registered cleanups synchronously (DisposeImpl → disposables.Dispose, then
+                // messageService.Dispose), so a ShutdownRequest that has held the block for a
+                // whole budget is a registrant that blocks — a subscription's Dispose waiting on
+                // a lock, a stream teardown joining something that needs this very turn. It runs
+                // with CancellationToken.None by design, so there is nothing to cancel; the
+                // finding is the blocking registrant, and the snapshot names the phase it is in.
+                // Measured in production (memex-cloud, 2026-08-29 → 09-03): sync/* hubs reported
+                // `(last progress: sync/… → ShutDown). RunLevel=ShutDown` dozens of times per
+                // shutdown, and the predecessor then tore them down out of band after 8–23 s.
+                logger.LogError(DisposalShutDownPhaseBlocked,
+                    "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
+                    + "(last progress: {LastProgress}). RunLevel={RunLevel}. The ShutDown phase itself has "
+                    + "held the action block for {ElapsedMs}ms — a registered cleanup is BLOCKING inside "
+                    + "DisposeImpl or messageService.Dispose (a Dispose waiting on a lock, a teardown "
+                    + "joining a turn it is itself occupying). Disposal is NOT forced; find the registrant.\n{Diagnostics}",
+                    Address, DisposalWatchdogTimeout, lastProgress, RunLevel,
+                    snapshot.Value.CurrentMessageElapsedMs, DescribeWedge());
+                return;
+            }
+            if (!wedgedTurnCancelled)
+            {
+                wedgedTurnCancelled = true;
+                // 🚨 An ERROR, not a warning: having to cancel a turn means the hub did not finish
+                // the work it accepted, and the red-log pipeline files an Error as an issue. The
+                // line carries what a reproduction needs — the hub, the message type, how long it
+                // has held the block, the queue behind it and the recursive disposal snapshot.
+                logger.LogError(DisposalWedgedTurnCancelled,
+                    "[DISPOSE-WEDGE] Hub {Address}: the turn {MessageType} has held the action block for "
+                    + "{ElapsedMs}ms with no progress (last progress: {LastProgress}); RunLevel={RunLevel}, "
+                    + "queue depth {Depth}, {Turns} turn(s) completed since Dispose(). Cancelling its token so a "
+                    + "cooperative handler returns and the shutdown behind it can proceed — the work of that "
+                    + "turn did NOT finish. Find what it was waiting on; a turn that returns is never cancelled.\n{Diagnostics}",
+                    Address, current, snapshot.Value.CurrentMessageElapsedMs, lastProgress, RunLevel,
+                    snapshot.Value.Buffer, turns, DescribeWedge());
+                messageService.CancelExecution();
+                return;
+            }
+            logger.LogError(DisposalWedgedTurnIgnoresCancellation,
+                "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
+                + "(last progress: {LastProgress}). RunLevel={RunLevel}. The turn {MessageType} "
+                + "({ElapsedMs}ms, queue depth {Depth}) was handed its cancellation and is still running — a "
+                + "handler that ignores cancellation is a defect in that handler. Disposal is NOT forced: it "
+                + "stays pending until the turn returns, and the outer teardown bound reports this hang.\n{Diagnostics}",
+                Address, DisposalWatchdogTimeout, lastProgress, RunLevel, current,
+                snapshot.Value.CurrentMessageElapsedMs, snapshot.Value.Buffer, DescribeWedge());
+            return;
+        }
+
+        if (RunLevel == MessageHubRunLevel.Quiescing)
+        {
+            var owed = SnapshotPendingCallbacks()
+                .Where(c => AReplyIsOwedByAShuttingDownLocalHub(c.Target)).ToArray();
+            if (owed.Length > 0)
+            {
+                TryLog(LogLevel.Information,
+                    "[DISPOSE-BUSY] {Address}: quiescing — {Count} reply(ies) still owed by shutting-down hub(s) "
+                    + "in this mesh ({Pending}); their own teardown answers them. Waiting.",
+                    Address, owed.Length, FormatPendingCallbacks(owed));
+                return;
+            }
+        }
+
+        logger.LogError(DisposalStalledBelowThisHub,
+            "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
+            + "(last progress: {LastProgress}). RunLevel={RunLevel}, queue depth {Depth}. No turn is "
+            + "executing on this hub, so the stall is in a hosted hub or a join it is waiting on — the "
+            + "diagnostics below name it. Disposal is NOT forced.\n{Diagnostics}",
+            Address, DisposalWatchdogTimeout, lastProgress, RunLevel, snapshot?.Buffer ?? -1, DescribeWedge());
     }
 
     /// <summary>
@@ -1958,67 +2138,6 @@ public sealed class MessageHub : IMessageHub
         {
             return $"(disposal diagnostics unavailable: {e.GetType().Name}: {e.Message})";
         }
-    }
-
-    /// <summary>
-    /// Last-resort teardown when the phased shutdown state machine never ran: the posted
-    /// ShutdownRequest is starved behind a message flood (or a handler wedged the action
-    /// block), so Quiescing → DisposeHostedHubs → ShutDown can never advance. Runs the SAME
-    /// teardown those phases would have run — hosted hubs, pending callbacks, dispose
-    /// actions/subscriptions, message service — from the watchdog thread. Every step is
-    /// idempotent, so a rare race with a slow-but-alive phased disposal is harmless.
-    ///
-    /// 🚨 The predecessor only SIGNALLED completion here (unblocking the caller) and leaked
-    /// every child: a dead Blazor circuit's portal hub kept 7k sync-stream hubs alive,
-    /// heartbeating and fanning out DataChangedEvents at ~1.2 cores FOREVER — no
-    /// UnsubscribeRequest ever reached the owner nodes because the client streams were never
-    /// disposed (the 2026-07-01 zombie portal-hub storm; the memory-climbing wedge class).
-    /// </summary>
-    private void ForceTeardownAfterWatchdog()
-    {
-        // Past-Started guards (heartbeat self-dispose, hosted-hub creation refusal) key off
-        // RunLevel — flip it first so periodic emitters stop feeding the storm.
-        lock (locker)
-        {
-            RunLevel = MessageHubRunLevel.ShutDown;
-        }
-        try { hostedHubs.Dispose(); }
-        catch (Exception e)
-        {
-            TryLog(LogLevel.Warning, "[FORCE-TEARDOWN] {Address}: hostedHubs.Dispose faulted: {Type}: {Message}",
-                Address, e.GetType().Name, e.Message);
-        }
-        try { CancelCallbacks(); }
-        catch (Exception e)
-        {
-            TryLog(LogLevel.Warning, "[FORCE-TEARDOWN] {Address}: CancelCallbacks faulted: {Type}: {Message}",
-                Address, e.GetType().Name, e.Message);
-        }
-        try { DisposeImpl(); }
-        catch (Exception e)
-        {
-            TryLog(LogLevel.Warning, "[FORCE-TEARDOWN] {Address}: DisposeImpl faulted: {Type}: {Message}",
-                Address, e.GetType().Name, e.Message);
-        }
-        // Stops intake AND the drain pump — the starved queue can no longer burn CPU.
-        try { messageService.Dispose(); }
-        catch (Exception e)
-        {
-            TryLog(LogLevel.Warning, "[FORCE-TEARDOWN] {Address}: messageService.Dispose faulted: {Type}: {Message}",
-                Address, e.GetType().Name, e.Message);
-        }
-        // Dead BEFORE signalling — callers awaiting DisposalCompleted must observe the
-        // terminal state, never a mid-teardown snapshot.
-        lock (locker)
-        {
-            RunLevel = MessageHubRunLevel.Dead;
-        }
-        SignalDisposalCompleted();
-        disposalStopwatch.Stop();
-        quiescingSubscription?.Dispose();
-        hostedHubsDisposalSubscription?.Dispose();
-        TryLog(LogLevel.Warning, "[FORCE-TEARDOWN] {Address}: out-of-band teardown complete after {Elapsed}ms",
-            Address, disposalStopwatch.ElapsedMilliseconds);
     }
 
     private void DisposeImpl()
@@ -2339,21 +2458,7 @@ public sealed class MessageHub : IMessageHub
                 // separate total-duration timer.) The result funnels into OnQuiesceComplete,
                 // which posts DisposeHostedHubs. No Task.Delay, no await — the handler returns
                 // immediately and the action block stays free.
-                var quiesceSw = Stopwatch.StartNew();
-                var drained = Observable
-                    .Interval(QuiescePollInterval)
-                    .StartWith(-1L)
-                    .Select(_ => { lock (responseSubjects) return responseSubjects.Count == 0; })
-                    .Where(empty => empty)
-                    .Take(1)
-                    .Select(_ => true);
-                var quiesceDeadline = Observable.Timer(QuiesceTimeout).Select(_ => false);
-                quiescingSubscription = drained
-                    .Amb(quiesceDeadline)
-                    .Take(1)
-                    .Subscribe(
-                        drainedOk => OnQuiesceComplete(drainedOk, quiesceSw, initialPendingSnapshot),
-                        _ => OnQuiesceComplete(drainedOk: false, quiesceSw, initialPendingSnapshot));
+                StartQuiesceWait(Stopwatch.StartNew(), initialPendingSnapshot);
                 break;
             case MessageHubRunLevel.DisposeHostedHubs:
                 var disposeHostedHubsStopwatch = Stopwatch.StartNew();
@@ -2378,9 +2483,9 @@ public sealed class MessageHub : IMessageHub
                 // no `await hostedHubs.Disposal`, no Task.Run. Each child hub completes its own
                 // reactive disposal and the collection completes once all have. On completion
                 // OR error, advance to ShutDown. The collection carries NO deadline of its own
-                // (#1317) — this hub's DisposalWatchdogTimeout is the single backstop over the
-                // whole phase, and unlike a give-up it force-tears-down rather than abandoning
-                // children mid-disposal.
+                // (#1317) — this hub's stall detector (OnDisposalStall) watches the whole phase
+                // and names a child that stops moving; nothing here gives up on a child or tears
+                // it down mid-disposal.
                 hostedHubs.Dispose();
                 var hostedSw = disposeHostedHubsStopwatch;
                 hostedHubsDisposalSubscription = hostedHubs.DisposalCompleted
@@ -2439,8 +2544,8 @@ public sealed class MessageHub : IMessageHub
                     // takes. What it costs when NOBODY closes it is in that method's remarks.
 
                     // Dead BEFORE signalling — callers awaiting DisposalCompleted must observe the
-                    // terminal state, never a mid-teardown ShutDown snapshot. The force-teardown
-                    // path already orders it this way; here Dead was only set in the FINALLY, so a
+                    // terminal state, never a mid-teardown ShutDown snapshot. Dead used to be set
+                    // only in the FINALLY here, so a
                     // StopAsync waiter woken by the signal could finish its (fast) IoPool +
                     // AsyncDisposeQueue drains and read RunLevel == ShutDown — the flaky
                     // MeshHostBuilderTeardownOrderingTest failure on loaded CI shards. The finally
@@ -2507,6 +2612,92 @@ public sealed class MessageHub : IMessageHub
     internal bool OwnsServiceProvider => Configuration.OwnsServiceProvider;
 
     /// <summary>
+    /// One Quiescing wait: the reactive drain poll raced against one <see cref="QuiesceTimeout"/>
+    /// deadline, funnelled into <see cref="OnQuiesceComplete"/>. Called once from the Quiescing
+    /// phase and again by <see cref="OnQuiesceComplete"/> when the budget expired on replies that a
+    /// shutting-down sibling still owes (see <see cref="AReplyIsOwedByAShuttingDownLocalHub"/>).
+    /// </summary>
+    private void StartQuiesceWait(
+        Stopwatch quiesceSw,
+        (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[]
+            initialPendingSnapshot)
+    {
+        var drained = Observable
+            .Interval(QuiescePollInterval)
+            .StartWith(-1L)
+            .Select(_ => { lock (responseSubjects) return responseSubjects.Count == 0; })
+            .Where(empty => empty)
+            .Take(1)
+            .Select(_ => true);
+        var quiesceDeadline = Observable.Timer(QuiesceTimeout).Select(_ => false);
+        quiescingSubscription = drained
+            .Amb(quiesceDeadline)
+            .Take(1)
+            .Subscribe(
+                drainedOk => OnQuiesceComplete(drainedOk, quiesceSw, initialPendingSnapshot),
+                _ => OnQuiesceComplete(drainedOk: false, quiesceSw, initialPendingSnapshot));
+    }
+
+    /// <summary>
+    /// How many times the Quiescing budget may be re-armed on replies a shutting-down sibling still
+    /// owes before the wait is cut and the callbacks cancelled. The wait normally ends by
+    /// construction — the sibling answers or leaves the registry — so this is the cycle breaker
+    /// for two hubs each holding a deferred request of the other's, never a duration to tune.
+    /// </summary>
+    private const int MaxQuiesceRearms = 20;
+    private int quiesceRearms;
+
+    /// <summary>
+    /// True when a pending reply for <paramref name="target"/> is guaranteed to arrive from a hub in
+    /// THIS mesh that is itself shutting down. Such a hub answers every delivery it accepted before
+    /// it signals Dead and leaves its owner's registry: served ahead of its own ShutdownRequest, or
+    /// NACKed <c>ShuttingDown</c> by its <c>messageService.Dispose()</c> (DISPOSE-DISCARD). A
+    /// Quiescing hub therefore WAITS for that reply instead of cancelling its callback on a
+    /// duration — the wait ends by construction when the sibling has answered or gone.
+    ///
+    /// <para>Measured on the #3261 detector: every callback the 0.5 s test budget cancelled was a
+    /// request to a sibling disposing concurrently — <c>CreateOrUpdateNodeRequest@portal/nodeops-*</c>,
+    /// <c>SubscribeRequest@cache/*</c> — whose answer was on its way; production shows the same
+    /// <c>[QUIESCE-TIMEOUT] … CreateNodeRequest@portal/nodeops-*</c> at 2 s. Cancelling those was
+    /// discarding accepted work and reporting a leak that was not one.</para>
+    ///
+    /// <para>Resolution mirrors <c>HierarchicalRouting</c> at the root: the address's host chain is
+    /// climbed and the top-level hub is looked up (never created), then shorter prefixes for a hub
+    /// hosting a sub-path. Only hubs directly under the mesh root are recognised; anything else
+    /// — a remote address, a nested hub, a live hub that is not disposing — keeps today's budget.</para>
+    /// </summary>
+    private bool AReplyIsOwedByAShuttingDownLocalHub(Address? target)
+    {
+        if (target is null)
+            return false;
+        try
+        {
+            IMessageHub root = this;
+            while ((root as MessageHub)?.messageService is MessageService ms && ms.ParentHub is { } parent)
+                root = parent;
+            if (ReferenceEquals(root, this))
+                return false;
+            var top = target;
+            while (top.Host is not null)
+                top = top.Host;
+            var segments = top.Segments;
+            for (var k = segments.Length; k >= 1; k--)
+            {
+                var candidate = k == segments.Length ? top : new Address(segments[..k]);
+                if (root.GetHostedHub(candidate, HostedHubCreation.Never) is not MessageHub sibling
+                    || ReferenceEquals(sibling, this))
+                    continue;
+                return sibling.IsShuttingDown && !sibling.DisposalSignalled;
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            // The registry or a scope is already gone — nothing there will answer.
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Terminal step of the reactive Quiescing poll (see the Quiescing branch of
     /// <see cref="HandleShutdownCore"/>). Runs on the poll's scheduler thread when the
     /// response subjects drain (<paramref name="drainedOk"/> = true) or the
@@ -2520,6 +2711,7 @@ public sealed class MessageHub : IMessageHub
         (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[]
             initialPendingSnapshot)
     {
+        var advance = true;
         try
         {
             if (drainedOk)
@@ -2531,6 +2723,32 @@ public sealed class MessageHub : IMessageHub
             else
             {
                 var stuck = SnapshotPendingCallbacks();
+                var owed = stuck.Where(c => AReplyIsOwedByAShuttingDownLocalHub(c.Target)).ToArray();
+                if (owed.Length > 0 && quiesceRearms < MaxQuiesceRearms)
+                {
+                    // Accepted work, still being answered: the sibling that owes each reply is in
+                    // this mesh and shutting down, so it WILL answer before it goes. Re-arm the
+                    // budget instead of cancelling — the wait ends when the reply lands or the
+                    // sibling has left the registry, whichever comes first.
+                    quiesceRearms++;
+                    TryLog(LogLevel.Information,
+                        "[QUIESCE-WAIT] {Address}: {Count} callback(s) still pending after {Elapsed}ms are owed by "
+                        + "hub(s) in this mesh that are themselves shutting down and answer before they go — "
+                        + "waiting (re-arm {Rearm}/{Max}), not cancelling: {Pending}",
+                        Address, owed.Length, quiesceSw.ElapsedMilliseconds, quiesceRearms, MaxQuiesceRearms,
+                        FormatPendingCallbacks(owed));
+                    advance = false;
+                    quiescingSubscription?.Dispose();
+                    StartQuiesceWait(quiesceSw, initialPendingSnapshot);
+                    return;
+                }
+                if (owed.Length > 0)
+                    logger.LogError(DisposalQuiesceWaitCutOff,
+                        "[QUIESCE-CUT] Hub {Address}: {Count} reply(ies) owed by shutting-down hub(s) in this mesh "
+                        + "never arrived across {Rearms} re-armed budgets ({Elapsed}ms) — most likely each side is "
+                        + "holding a deferred request of the other's. Cancelling them now; the sender is answered "
+                        + "with a disposal failure. Pending: {Pending}",
+                        Address, owed.Length, quiesceRearms, quiesceSw.ElapsedMilliseconds, FormatPendingCallbacks(owed));
                 var detail = FormatPendingCallbacks(stuck);
                 // 🚨 The HANDLER side (issue #981). The line above is caller-only — it says a
                 // request was posted and never answered. This one says what happened to the
@@ -2580,10 +2798,12 @@ public sealed class MessageHub : IMessageHub
         }
         finally
         {
-            // Advance to DisposeHostedHubs. Registered subscriptions are disposed
+            // Advance to DisposeHostedHubs — unless the budget was re-armed on replies a
+            // shutting-down sibling still owes. Registered subscriptions are disposed
             // synchronously later, in the ShutDown phase (DisposeImpl →
             // disposables.Dispose) — there is no async dispose-action drain to await.
-            Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+            if (advance)
+                Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
         }
     }
 

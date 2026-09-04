@@ -13,11 +13,11 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// #1317 — <c>HostedHubsCollection</c> must JOIN its children's disposal, not pre-empt it.
 ///
 /// <para><b>The inversion.</b> The collection capped its wait at a flat 5 s literal. What it was
-/// waiting on is bounded elsewhere and bounded LONGER: every hosted hub is a <c>MessageHub</c>, and
-/// <c>MessageHub.Dispose</c> arms a <c>DisposalWatchdogTimeout</c> (8 s) that force-tears-down and
-/// signals <c>DisposalCompleted</c> — so a child's answer is guaranteed terminal, just not within
-/// 5 s. The cap therefore fired 3 s BEFORE the mechanism that would have produced a clean answer,
-/// in exactly the wedged case it was written for. Nesting makes it worse without any wedge at all:
+/// waiting on answers from its own terminal state: every hosted hub is a <c>MessageHub</c>, and it
+/// signals <c>DisposalCompleted</c> as the last act of its own phased teardown once the work it
+/// accepted has drained — so a child's answer is guaranteed to come, just not within 5 s. The cap
+/// therefore fired BEFORE the mechanism that would have produced a clean answer, in exactly the
+/// busy case it was written for. Nesting makes it worse without any wedge at all:
 /// a child's own disposal is quiesce (2 s default) plus its own hosted-subtree wait, so a
 /// legitimately busy two-level tree exceeds a flat 5 s while every individual step is inside its
 /// own budget.</para>
@@ -36,10 +36,10 @@ namespace MeshWeaver.Messaging.Hub.Test;
 public class HostedHubDisposalJoinTest(ITestOutputHelper output) : HubTestBase(output)
 {
     /// <summary>
-    /// Sits between the removed 5 s cap and <c>MessageHub</c>'s 8 s disposal watchdog — the only
+    /// Sits between the removed 5 s cap and <c>MessageHub</c>'s 8 s disposal stall budget — the only
     /// band in which the two bounds disagree, which is precisely the defect's footprint. Long
     /// enough that the cap has certainly fired (it is a fixed timer, so this margin does not
-    /// shrink under CI load), short enough that the owner's watchdog has certainly not.
+    /// shrink under CI load), short enough that the owner's stall detector has certainly not looked.
     /// </summary>
     private static readonly TimeSpan PastTheOldCap = TimeSpan.FromSeconds(6.5);
 
@@ -88,9 +88,9 @@ public class HostedHubDisposalJoinTest(ITestOutputHelper output) : HubTestBase(o
             winner.Should().NotBe(disposalCompleted,
                 "the owner declared its hosted hubs disposed while a construction it started was "
                 + "still running — so it went on to tear down the container underneath that Build. "
-                + "A join must not out-run the answers it is joining: the child's completion is "
-                + "already guaranteed terminal by MessageHub's own disposal watchdog, and a second, "
-                + "SHORTER budget layered above it can only ever pre-empt that guarantee");
+                + "A join must not out-run the answers it is joining: the child's completion comes "
+                + "from its own teardown once the work it started has finished, and a second, "
+                + "SHORTER budget layered above it can only ever pre-empt that");
 
             Volatile.Write(ref releaseConstruction, 1);
 

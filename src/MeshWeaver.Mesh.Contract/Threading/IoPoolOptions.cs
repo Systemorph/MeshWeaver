@@ -146,6 +146,17 @@ public sealed record IoPoolOptions
     public TimeSpan DrainTimeout { get; init; } = IoPool.DefaultDrainTimeout;
 
     /// <summary>
+    /// How long <see cref="IoPool.Drain"/> waits for the NEXT in-flight leaf to finish on its own
+    /// before it cancels anything — the grace that lets accepted work finish its job at teardown.
+    /// Every completion restarts it; a leaf that outlives one grace with nothing else finishing is
+    /// wedged and is cancelled. See <see cref="IoPool.DefaultDrainGrace"/>.
+    ///
+    /// <para>🚨 Leave this at the default in production. It is settable so a TEST whose leaf can
+    /// only end by cancellation need not spend the grace on every drain.</para>
+    /// </summary>
+    public TimeSpan DrainGrace { get; init; } = IoPool.DefaultDrainGrace;
+
+    /// <summary>
     /// Concurrent file-system ops. These are async leaves (the thread is released
     /// during the await), so a generous cap avoids bottlenecking the many concurrent
     /// data-path reads/writes a busy mesh issues, while still preventing pathological
