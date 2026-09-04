@@ -161,7 +161,36 @@ Two things make that an honest answer rather than a shrug.
 
 `Error` rather than `Warning` is deliberate and costs nothing extra: both levels ship to Loki and the path is exceptional, so the only thing that changes is that it trips error-rate alerting. That is the right classification — nothing retries the write, the loss is permanent, and the visible consequence is a cell that tells a human it has never run. "Degraded but self-correcting" is what `Warning` claims, and none of it holds here.
 
-What is still **not** covered: a viewer looking at a cell after a reload cannot tell `NeverRun` from "ran, not recorded". Closing that needs a surface that finds a cell's runs by `ActivityLog.HubPath` rather than by the stamp — a read that does not depend on the stamp, not another write. See [issue #3301](https://github.com/Systemorph/MeshWeaver/issues/3301).
+#### Recovering the run for the READER — follow the edge, do not write another marker
+
+The three candidates above all fail for the same reason: they are **writes**. What the reader needs is a **read**, and the edge to read along already exists. `CodeRunHistory.ResolveOutputCurrency` (`MeshWeaver.Mesh.Contract`, beside the currency rule it extends) walks it:
+
+```csharp
+// The verdict a cell can substantiate when its own stamp cannot supply one.
+// Reactive like every other read — one verdict, then completion.
+code.ResolveOutputCurrency(cellPath, viewerHome, meshService)
+    .Subscribe(verdict => { /* NeverRun · Unverified · Stale · Current */ });
+```
+
+| Step | What happens | Cost |
+|---|---|---|
+| 1 | `OutputCurrency()` — the stamp. Anything but `NeverRun` is returned unchanged. | **no query** |
+| 2 | Only on `NeverRun`: one listing for an Activity naming this cell on `HubPath`. A hit ⇒ `Unverified`. | one row |
+| 3 | No hit ⇒ `NeverRun`, exactly as today. | — |
+
+Three properties are what make this the right shape rather than merely a working one.
+
+**It is a listing by predicate, not a point read.** `Query` is eventually consistent, so it may never decide what a *specific known node* contains — that stays `GetMeshNodeStream`'s job. Here a stale negative is harmless by construction: the worst outcome is the answer the cell already gives today.
+
+**A recovered run is `Unverified`, never `Current`.** The Activity records *that* the cell ran, never *what* it ran — no fingerprint travels with it. That is the same evidence a stamp which landed without its hash leaves, so it gets the same fail-closed verdict, for the same reason.
+
+**It runs only where it can change the outcome.** A notebook of cells that ran normally costs zero queries, because step 1 answers first. This is the whole reason the lookup hangs off `NeverRun` rather than being a general "find this cell's runs" call every view makes.
+
+**Where it looks.** The run lands under `{activityParent}/_Activity`, and `CodeNodeType.ResolveActivityParent` picks that parent in three layers: the Code node's own `CodeConfiguration.ActivityParentPath`, then the partition's `PartitionDefinition.DefaultActivityParentPath`, then the partition root — with the `{viewer}` sentinel at either configured layer expanding to the calling user's home. `CodeRunHistory.ActivityNamespaces` reconstructs the layers it can see from the cell alone — the node's own `ActivityParentPath` with `{viewer}` expanded, the partition root, and the reading viewer's home — deduplicated into a single union query, usually one namespace. A partition-level `DefaultActivityParentPath` pointing somewhere else is **not** covered: that lookup is a live query on the partition registry, which `MeshWeaver.Mesh.Contract` sits below. Where it applies the listing finds nothing and the verdict falls back to `NeverRun` — the answer the cell gives today, so the gap costs nothing that was already working. A caller that has already resolved the parent (the dispatcher has, via `CodeNodeType.ResolveActivityParent`) skips the derivation and calls `CodeRunHistory.RunsQuery` with the namespace it resolved.
+
+🚨 **Two cross-assembly agreements hold this together, and neither is visible to a compiler.** The lookup filters on `nodeType:Activity` and expands the `{viewer}` sentinel — both declared in assemblies it sits *below* (`GraphNodeTypeNames.Activity`, `CodeNodeType.ResolveActivityParent`). A rename on either side would leave the query looking for something nothing writes: zero rows, every recovered cell silently back to `NeverRun`, no compiler error anywhere. `CodeRunHistoryTest` pins both — the node-type name by equality, the sentinel by *driving the dispatcher's own resolver* and requiring the answer the lookup assumes.
+
+**What remains uncovered.** The lookup answers *whether* the cell ran, not *what it produced*: it deliberately does not re-point the output pane at the recovered activity. And an operator still gets the `Error` under event id `3249` — the stamp failing is a real fault, and a reader who can no longer see the consequence is not a reason to stop reporting it.
 
 ### 2. From application code — `SubmitCodeRequest` directly
 
