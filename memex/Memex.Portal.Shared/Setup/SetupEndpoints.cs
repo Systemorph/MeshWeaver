@@ -90,7 +90,7 @@ public static class SetupEndpoints
         // is the state between them — a half-answered one keeping the instance in setup is exactly
         // what InstanceSetupState.AwaitingModules is for, so no session, cookie or in-memory step
         // counter is needed (and none would survive the restart-shaped lifecycle anyway).
-        app.MapGet(Path, (HttpContext ctx) =>
+        app.MapGet(Path, async (HttpContext ctx) =>
         {
             var strings = StringsFor(ctx);
             var identity = IdentityOf(ctx);
@@ -100,7 +100,7 @@ public static class SetupEndpoints
                     token: ctx.Request.Query["token"]), StatusCodes.Status200OK);
 
             return Html(SetupPage.Render(
-                CatalogFor(ctx, identity), strings, token: ctx.Request.Query["token"]),
+                await CatalogFor(ctx, identity), strings, token: ctx.Request.Query["token"]),
                 StatusCodes.Status200OK);
         });
 
@@ -257,7 +257,7 @@ public static class SetupEndpoints
     /// manifest plus a restart, and saying so is what <c>SignInSetupPlan</c> already refuses to lie
     /// about.</para>
     /// </summary>
-    private static IResult Apply(HttpContext ctx, IFormCollection form, SetupAccessToken token)
+    private static async Task<IResult> Apply(HttpContext ctx, IFormCollection form, SetupAccessToken token)
     {
         var strings = StringsFor(ctx);
         var identity = IdentityOf(ctx);
@@ -265,7 +265,7 @@ public static class SetupEndpoints
         // what the registration entitles this instance to.
         if (identity is not { IsRegistered: true })
             return Results.Redirect(Path);
-        var catalog = CatalogFor(ctx, identity);
+        var catalog = await CatalogFor(ctx, identity);
 
         if (!token.Matches(form["token"]))
             // Deliberately NOT re-rendering the submitted answers: a wrong token means this is
@@ -382,7 +382,11 @@ public static class SetupEndpoints
     /// registered but cannot see its plan is a state worth naming — an empty list would read as
     /// "your plan includes nothing".</para>
     /// </summary>
-    private static SetupCatalog CatalogFor(HttpContext ctx, InstanceIdentitySelection identity)
+    // An HTTP endpoint helper, not hub-reachable code: the registry call is awaited on the request's
+    // own continuation, exactly like RegisterIdentity above. It used to block the request thread on
+    // GetAwaiter().GetResult(), which the ObservableToTaskBridgeGuard refuses in production code —
+    // a parked thread on a turn-based scheduler is a self-deadlock, and no timeout aborts it.
+    private static async Task<SetupCatalog> CatalogFor(HttpContext ctx, InstanceIdentitySelection identity)
     {
         var catalog = Catalog(ctx) with { Identity = identity };
         var configuration = ctx.RequestServices.GetRequiredService<IConfiguration>();
@@ -396,9 +400,8 @@ public static class SetupEndpoints
         ImmutableList<PackageManifest> packages;
         try
         {
-            packages = ctx.RequestServices.GetRequiredService<SetupRegistryClient>()
-                .ListPackagesAsync(identity.RegistryUrl, key, ctx.RequestAborted)
-                .GetAwaiter().GetResult();
+            packages = await ctx.RequestServices.GetRequiredService<SetupRegistryClient>()
+                .ListPackagesAsync(identity.RegistryUrl, key, ctx.RequestAborted);
         }
         catch (SetupRegistryException ex)
         {
