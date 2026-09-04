@@ -93,15 +93,76 @@ names of **every** envFrom source, not just the secrets. Enumerating one kind an
 would have left exactly the blind spot MeshWeaver#3201 exposed, one source-kind over: a checker that
 can see half of the class it is named for reports "clean" for a reason its reader cannot guess.
 
-A shadowed secret is the worst version of this: the credential the platform provisioned through Key
-Vault is inert, and the value actually in use sits in plaintext on the Deployment spec, in no
-committed source, readable by anything that can `get deploy`.
+A shadowed secret is the worst version of this: the shadowed copy is inert, and the value actually
+in use sits in plaintext on the Deployment spec, in no committed source, readable by anything that
+can `get deploy`.
 
 That is live on `memex` today (MeshWeaver#3201): `PluginCatalog__RegistryToken` exists both in
 `secret/memex-portal-secrets` and as an inline entry, and **the two values differ** — so the portal
-authenticates to the plugin registry with the plaintext copy while the managed credential goes
-unused. It also means the obvious cleanup is wrong: deleting the inline entry does not restore the
-status quo, it switches the portal onto a different token.
+authenticates to the plugin registry with the plaintext copy while the secret's copy goes unused. It
+also means the obvious cleanup is wrong: deleting the inline entry does not restore the status quo.
+
+### A credential shadow can be two PRINCIPALS, not two values
+
+Re-measured on the live cluster 2026-09-04, that case was worse than "two values of one setting",
+and in a way the checker cannot see — which is why the conclusion belongs here rather than in its
+output:
+
+- **Both sides are valid.** The live inline key and the shadowed copy each authenticate to
+  `https://memex.meshweaver.cloud/api/plugins` — verified out of band from inside the cluster, with
+  an anonymous call and a syntactically-valid bogus key as the two controls (both `401`).
+- **They are different registered instances.** Hashing each credential *inside the cluster* and
+  comparing against the `MeshWeaverInstance.keyHash` the registry stores identifies the inline key
+  as instance `memex` — the portal's own identity, and the correct one. The shadowed copy matches
+  no enumerable instance, and its catalog projection is `Plugins/*` **plus** `Crm/*`, a strict
+  superset of what instance `memex` is granted.
+- **So the reflex cleanup re-identifies the deployment.** Deleting the inline entry would not have
+  "switched onto an unverified token"; it would have made the portal authenticate as a *different
+  instance*, silently widening what it may pull from 44 packages to 45.
+- **There was never a Key Vault copy.** `secret/memex-portal-secrets` is helm-rendered
+  (`app.kubernetes.io/managed-by=Helm`), not CSI-provisioned. The CSI-backed secrets in those
+  namespaces are `memex-kv-secrets` and `memexcloud-portal-ai-secrets`, neither of which carries
+  this key, and the `Systemorph` vault holds no `PluginCatalog-RegistryToken` entry for either
+  portal. `deployments/aks/secretproviderclass.reference.yaml` in `Systemorph/Memex` already
+  templates that wiring; it was never applied to either live SecretProviderClass.
+
+The generalisable rule: **for a credential, "which value is live?" is not the whole question — "which
+identity does each side authenticate as?" is.** A name-only checker can report the shadow and must
+say the two sides are unknown; it cannot say they are the same credential, and it must not narrate a
+provenance it never observed. The comparator asserted a Key Vault origin here until 2026-09-04, and
+the self-test now fails if that claim returns.
+
+Neither namespace sets `PluginCatalog__InstanceId` and neither carries a `PluginCatalog__BootstrapKey`,
+so nothing self-registers: **the token IS the identity**. memex's own ConfigMap asks for
+`PluginCatalog__InstallByDefault__0=Plugins/*`, which is exactly instance `memex`'s grant and not the
+shadowed copy's — the configuration and the live key agree, and only the shadowed copy is the odd one
+out.
+
+### Clearing it, and what a rotation does NOT need
+
+The order is forced by the fact that the live key is the correct one:
+
+1. **Vault the LIVE key of each portal** — `memex-PluginCatalog-RegistryToken` and
+   `memexcloud-PluginCatalog-RegistryToken` in the `Systemorph` vault, then add the object plus its
+   `secretObjects.data` mapping to the namespace's SecretProviderClass (`memex-kv`,
+   `memexcloud-portal-ai-secrets`). Additive and inert: those CSI secrets sit *after*
+   `memex-portal-secrets` in `envFrom`, and the inline entry outranks both until it is deleted.
+2. **Drop the foreign copy from the source that renders it.** `secret/memex-portal-secrets` is
+   helm-rendered, so deleting the live Secret key alone is undone by the next `helm upgrade` — the
+   env's (uncommitted) values file must stop setting `secrets.memex_portal.PluginCatalog__RegistryToken`.
+3. **Then delete the inline `env:` entries** — a Deployment-spec edit, so a rollout on both portals.
+4. **Then rotate**, because both live keys sat in plaintext in a spec readable by anything that can
+   `get deploy`.
+
+🚨 **Rotating an instance key needs no re-granting.** `PluginGrant` nodes are keyed by
+`instanceId` (`Admin/_PluginGrant/memex`, `…/memex-cloud`), and re-issuing a key replaces
+`MeshWeaverInstance.KeyHash` on the *same* instance record — so entitlement, plan and install history
+survive untouched. What must be updated is every **holder of the key value**, and measured on
+2026-09-04 that is a short list: the Key Vault entry from step 1, and nothing else. No GitHub Actions
+secret in `Systemorph/MeshWeaver` or the org holds either portal's instance key (the `ci-*` instances
+used by node repos are separate records with separate keys), and `Plugins__Registry__PublishToken` is
+a different credential entirely. **Re-registering a new instance instead of re-issuing the key is the
+move that would need re-granting** — and would lose the install history keyed to the old id.
 
 The checker reads only the KEY NAMES of every envFrom source other than `memex-portal-config`,
 projected inside the cluster — a drift checker must not become the thing that copies the credentials
@@ -196,7 +257,7 @@ the run's own log; no cluster was touched to produce them.
 | # | group | count | what it is | what clears it |
 |---|---|---|---|---|
 | 1 | **Disagreeing `SHADOWS`** | **8** | the pod runs a value the ConfigMap contradicts — `PreWarm__BatchBake`/`PrebuiltBundleRoot` (both), `PluginCatalog__RegistryUrl` (both), `PreWarm__GateReadiness` + `Features__Ai__Providers__AzureOpenAI` (memex) | chart value first, **then** delete the inline entry |
-| 2 | **The registry credential** | **2** | `PluginCatalog__RegistryToken`: on memex a `SHADOWS` over `secret/memex-portal-secrets` whose two values differ; on memex-cloud the inline entry is the ONLY copy | MeshWeaver#3201 — establish the live token, vault it, delete inline, rotate |
+| 2 | **The registry credential** | **2** | `PluginCatalog__RegistryToken`: on memex a `SHADOWS` over `secret/memex-portal-secrets` whose two values differ **and belong to different registered instances**; on memex-cloud the inline entry is the ONLY copy, and neither portal has a Key Vault entry at all | MeshWeaver#3201 — the live inline key is the CORRECT one for each portal (hash-confirmed); vault *it*, then delete inline, then rotate. Never adopt the shadowed copy |
 | 3 | **Agreeing `SHADOWS`** | **29** | not wrong today; the ConfigMap is simply not what the pod reads, so the next chart change to any of them silently fails — Kestrel endpoints, `PluginCatalog__Sources__*`, `WebhookInbox__Targets__0` | same two steps, no urgency |
 | 4 | **Chart-retired, inert** | **8** | `FrameworkBroadcast__Subscribers__0..3` on both namespaces. The chart stopped rendering these on 2026-09-03 — the subscriber set is mesh data now — so the live keys feed nothing | delete the keys; drop them from the memex-cloud overlay, which still sets them |
 | 5 | **Cluster-only, now expressible** | **22** | live-edited settings the chart had no key for until MeshWeaver#3199 — AI providers, `LogWatch__*`, `Speech__*`, `Commerce__BaseUrl`, `Features__Ai__Clis__*`, `Portal__ReactAppUrl` | put them on the `Hosting/Deployment` record — `Systemorph/Memex#148` |

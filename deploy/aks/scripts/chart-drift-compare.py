@@ -198,13 +198,24 @@ for n in sorted(d_env | l_env):
                 f"a COIN TOSS PER POD START. Delete the inline entry (`kubectl set env deploy/… "
                 f"{n}-`); adding it to the chart does NOT remove the collision")
     elif external_only:
+        # 🚨 "Which value is live?" is the wrong question for a CREDENTIAL, and this message used
+        # to ask only that — while also asserting a Key Vault provenance this script cannot see.
+        # Measured on memex 2026-09-04 (MeshWeaver#3201): the shadowed side was NOT a stale copy of
+        # the same secret. Both sides were VALID registry instance keys, of DIFFERENT registered
+        # instances, with different entitlements — so the cleanup everyone reaches for first would
+        # have re-identified the portal, not merely changed a value. A name is all this script
+        # reads; it must not imply the two sides are the same credential, nor say where either came
+        # from.
         finding("SHADOWS", f"inline env {n}",
                 f"{origin} supplies '{n}' through envFrom, and an inline env OVERRIDES envFrom — so "
                 f"this entry wins and THAT source's value is dead. Whether the two agree is NOT "
-                f"checked here (only key names are read from that source) and must not be assumed: "
-                f"on memex they differed, leaving the pod on a plaintext copy while the Key Vault "
-                f"credential went unused (MeshWeaver#3201). Establish which value is the live one "
-                f"FIRST, then put it in that source and delete the inline entry")
+                f"checked here (only key names are read from that source) and must not be assumed — "
+                f"and for a CREDENTIAL they may not even be the same secret: on memex both sides "
+                f"were valid keys of DIFFERENT registered instances, so deleting the inline entry "
+                f"would have changed which principal the deployment authenticates as, and silently "
+                f"widened what it was entitled to (MeshWeaver#3201, measured 2026-09-04). Establish "
+                f"what EACH side IS — its value, and for a credential the identity it authenticates "
+                f"as — FIRST, then put the intended one in that source and delete the inline entry")
     else:
         in_chart = n in d_data
         # An entry sourced with valueFrom (secretKeyRef/fieldRef) carries no literal to compare —
