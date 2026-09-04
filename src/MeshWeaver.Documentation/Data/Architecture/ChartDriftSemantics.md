@@ -241,9 +241,10 @@ the run's own log; the owned/never-owned split and the value probes are read-onl
 | 6 | **Committed, never deployed** | **5** | memex-cloud's overlay carries `PreWarm__{BatchBake,BuildProtocol,DynamicTypes,GateReadiness}: "true"` and `probes.startup.failureThreshold: 1080`; live runs the shipped defaults | a deploy, not a cleanup — this is `deploy-drift`'s class surfacing here |
 | 7 | **Ruled inert** | **2** | the memex liveness/readiness `initialDelaySeconds` — see above; the chart is authoritative | nothing; do not "fix" it |
 
-Zero `COLLIDES` and zero `CHART-ONLY`, for the ninth consecutive run. The `EMAIL__*` collisions that
-crashed memex at boot on 2026-08-30, and the four blanked `ModelTier__*`, are gone from both
-namespaces.
+Zero `COLLIDES` and zero `CHART-ONLY` — as on 2026-09-03, which is the only other run since #3168
+introduced those two classes, so "consecutive" is a two-run claim and nothing more. The `EMAIL__*`
+collisions that crashed memex at boot on 2026-08-30, and the four blanked `ModelTier__*`, are gone
+from both namespaces.
 
 **76 → 81 in a day, and nothing drifted.** The five new findings are the `Authentication__*` keys in
 group 4: the first-run-setup change made them conditional where they had been emitted unconditionally
