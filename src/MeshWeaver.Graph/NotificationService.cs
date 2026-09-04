@@ -107,6 +107,33 @@ public static class NotificationService
             + $"nodeType:{NotificationNodeType.NodeType} sort:CreatedAt-desc";
 
     /// <summary>
+    /// The RETENTION read of one partition — every notification row in it, oldest first, capped.
+    /// Declared beside <see cref="BellQuery"/> because it is the same layout read a third way, and
+    /// the three must move together if the layout ever moves again.
+    ///
+    /// <para>🚨 <b>The partition, not the delivery namespace, and that is deliberate.</b>
+    /// <see cref="BellQuery"/> reads <c>{addressee}/_Notification</c> — where notifications are
+    /// written since the addressing change. Retention must also reach the rows written BEFORE it,
+    /// which are satellites of whatever entity they were about
+    /// (<c>{partition}/_Thread/{t}/…/_Notification/{id}</c> and friends): that legacy tail is one of
+    /// the two reasons #3250 exists, and a namespace-anchored sweep would never touch it. A
+    /// <c>path:</c> anchor at the partition root covers both, and covers them in ONE statement
+    /// against ONE schema — <c>path:</c> is what the Postgres router pins on, so this is never a
+    /// cross-schema fan-out even though it spans a whole partition.</para>
+    ///
+    /// <para><c>nodeType:</c> keeps the read on the satellite table (a satellite nodeType filter is
+    /// one of the three signals that make a query satellite-targeted), <c>sort:LastModified-asc</c>
+    /// puts the oldest rows in the window so a backlog drains monotonically, and <c>limit:</c> is
+    /// the bound — one run can never ask for more rows than it is allowed to delete.</para>
+    /// </summary>
+    /// <param name="partition">The partition to sweep — a user's own, or <see cref="PlatformAddressee"/>.</param>
+    /// <param name="limit">Maximum rows to consider, which is also the maximum this run can delete.</param>
+    /// <returns>The query text.</returns>
+    public static string RetentionQuery(string partition, int limit)
+        => $"path:{partition} scope:descendants "
+            + $"nodeType:{NotificationNodeType.NodeType} sort:LastModified-asc limit:{limit}";
+
+    /// <summary>
     /// Creates a notification ADDRESSED to <paramref name="recipient"/>: path =
     /// <c>{addressee}/_Notification/{newId}</c>, <c>MainNode</c> = the addressee, and
     /// <paramref name="mainNodePath"/> becomes the ENTITY reference the reader clicks through to
