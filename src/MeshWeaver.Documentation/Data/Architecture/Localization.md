@@ -11,12 +11,57 @@ User.TimeZoneId → AccessContext.TimeZoneId → AccessService.ToDisplayTime
 User.Locale     → AccessContext.Locale     → AccessService.Localize
 ```
 
-> 🚧 **Open question — chrome rendered INSIDE authored content.** "Chrome follows the viewer" is
-> unambiguous for the node menu and settings. It is what puts **Ausführen** on the Run button of an
-> English lesson, and #3203 asks whether that is right. A proposal — the ownership rule, why the
-> content-language alternative was measured and reverted, and what a per-node language field would
-> cost — is at [Chrome and content language](../ChromeAndContentLanguage). **It is not in force.** Until
-> it is decided, this page describes what the platform does.
+## Whose language? The owner's — clause 1 and clause 2
+
+**Every user-visible string has exactly one owner, and the owner decides the language.** This is the
+answer to "the portal renders its chrome in the viewer's language, but the page in front of me is in
+someone else's" — [#3203](https://github.com/Systemorph/MeshWeaver/issues/3203), where a German
+reader of an English lesson met **Ausführen** on the Run button in the middle of an English
+paragraph. Both clauses are **in force**.
+
+> **Clause 1 — ownership decides the language.** Platform- and module-owned text follows the
+> **viewer**. Authored content is rendered **as authored**. A bare literal compiled into a view is
+> **unowned — that is a bug**, not a third category.
+>
+> **Clause 2 — in-flow chrome minimises words.** A platform- or module-owned control rendered
+> *inside* the author's flow carries **no translated visible label** where a glyph, a number or a
+> symbol conveys the same thing. The localized text moves to the **tooltip and the accessible
+> name** — which is where a reader who needs it will look, and where it cannot land in the middle of
+> a sentence.
+
+Clause 1 is decided by **where the string is stored**, which a developer chooses at authoring time
+and a reviewer can see in the diff — never by where it appears on screen, and never by a runtime
+signal:
+
+| Where the string lives | Owner | Renders in |
+|---|---|---|
+| `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json` | platform | the viewer's language |
+| a module's own text table (`EduTexts`, `CourseInviteTexts`) | module | the viewer's language |
+| a `[Translation]` beside a `[Description]` on a declaration | platform / module | the viewer's language |
+| `MeshNode.Name` / `.Description` / `.Category`, or an override in `ILocalizedNodeText.Translations` | author | as authored |
+| the node's body, or any typed content field an author edits | author | as authored |
+| a bare literal in a `.razor` / `.cs` view | **nobody — fix it** | — |
+
+Clause 2 does **not** reach the shell — the node menu, navigation, settings, toasts, dialogs, the
+composer all keep their words; a German application menu around an English document is not an
+inconsistency. It reaches an **enumerated** list of surfaces the markdown pipeline hydrates directly
+into a document body: the code-cell toolbar, the fenced block's copy affordance, the code-cell
+toolbar on a Code node page, the kernel placeholders inside the cell frame, and the Edu lesson frame,
+exercise grid and quiz. The list is short on purpose, and extending it deliberately when a sixth
+in-flow control is built is the process working. For that set, clause 2 makes **binding** the
+glyph-plus-translated-tooltip preference [User Interface](../UserInterface) states everywhere else.
+
+🚨 **A glyph-only control still needs its accessible name.** Removing a visible label is only clause
+2 if the tooltip / `aria-label` remains and is itself localized — a tooltip *is* the control's
+accessible name, so dropping the label without one trades a language bug for an accessibility bug.
+
+> **Why not the other rule?** #3203's option (a) — in-content controls follow the *content's*
+> declared language — is declined. It is the rule the Edu pack shipped, measured and reverted: it
+> served German buttons to every learner on earth, and its worst reader is an English speaker facing
+> a page whose every control is in a language they do not have. The full argument, the measurement,
+> the absence of any per-node content-language signal, and what adding one would cost are in
+> [Chrome and content language](../ChromeAndContentLanguage), which also tracks what is still
+> outstanding under clause 2.
 
 ## The one rule: resolve explicitly, never from ambient culture
 
@@ -279,7 +324,14 @@ section. The rule genuinely bites the moment the string reaches a `Controls.*` l
   attribute lookup, `Locales.Negotiate` over real `Accept-Language` shapes, and **every shipped
   language covers the full English key list with no orphans**.
 - `LocalePreferenceTest` (MeshWeaver.Hosting.Monolith.Test) — the write-once decision.
-- `AnonymousCircuitLocaleSeedTest` (MeshWeaver.Hosting.Blazor.Test) — the anonymous seed, driven over
-  a **real SignalR WebSocket into Blazor's real `ComponentHub`**, because the only question that
-  matters is whether the circuit can still see the request that established it. A unit test of the
-  negotiation would stay green while the browser saw nothing.
+- 🚨 **`AnonymousCircuitLocaleSeedTest` does NOT exist** — it is named here only so nobody reads it
+  as cover. It drove the anonymous seed over a **real SignalR WebSocket into Blazor's real
+  `ComponentHub`**, because the only question that matters is whether the circuit can still see the
+  request that established it, and a unit test of the negotiation stays green while the browser sees
+  nothing. It was lost when `MeshWeaver.Hosting.Blazor` moved to MeshWeaver.Plugins (see the
+  anonymous-visitor section above); restoring it is
+  [MeshWeaver.Plugins#1273](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1273).
+- There is **no guard for clause 1 or clause 2**. A string that never became a key is invisible to
+  every catalog test by construction — `LocalizationTest` can only see keys that exist. The clause-2
+  guard over the enumerated in-flow set is buildable and belongs in MeshWeaver.Plugins, where four of
+  the five surfaces are declared; until it is written, review is the only control.
