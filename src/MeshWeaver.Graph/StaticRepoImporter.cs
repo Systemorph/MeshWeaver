@@ -1253,7 +1253,9 @@ public static class StaticRepoImporter
                                     Log: new LogMessage(
                                         $"🚫 {path}: NodeType '{sourceNode.NodeType}' is not carried by this "
                                         + "source and is absent from the mesh — no write order can create it.",
-                                        Microsoft.Extensions.Logging.LogLevel.Warning)));
+                                        Microsoft.Extensions.Logging.LogLevel.Warning)
+                                        .WithKey("activity.import.nodeTypeCannotLand",
+                                            ("path", path), ("nodeType", sourceNode.NodeType))));
                                 continue;
                             }
 
@@ -1337,7 +1339,8 @@ public static class StaticRepoImporter
                                     Preserved: 1,
                                     Log: new LogMessage(
                                         $"↩ Kept local change to {path} (newer on the server — commit to sync it back).",
-                                        Microsoft.Extensions.Logging.LogLevel.Information)));
+                                        Microsoft.Extensions.Logging.LogLevel.Information)
+                                        .WithKey("activity.import.keptLocalChange", ("path", path))));
                                 continue;
                             }
 
@@ -1404,6 +1407,8 @@ public static class StaticRepoImporter
                                         + "as Unavailable. Import the source that defines it, or retype "
                                         + "the node.",
                                         Microsoft.Extensions.Logging.LogLevel.Warning)
+                                        .WithKey("activity.import.strandedByNodeType",
+                                            ("path", path), ("nodeType", sourceNode.NodeType))
                                     : null));
                         }
 
@@ -1572,10 +1577,12 @@ public static class StaticRepoImporter
                             keptFromPrune
                                 .Select(kept => new LogMessage(
                                     $"↩ Kept {kept.Path} (added on the server — commit to sync it back).",
-                                    Microsoft.Extensions.Logging.LogLevel.Information))
+                                    Microsoft.Extensions.Logging.LogLevel.Information)
+                                    .WithKey("activity.import.keptServerAddition", ("path", kept.Path)))
                                 .Concat(prunedPaths.Select(p => new LogMessage(
                                     $"🗑 Pruned {p} (absent from the repo).",
-                                    Microsoft.Extensions.Logging.LogLevel.Information)))
+                                    Microsoft.Extensions.Logging.LogLevel.Information)
+                                    .WithKey("activity.import.pruned", ("path", p))))
                                 .Concat(strandedReport is null
                                     ? Array.Empty<LogMessage>()
                                     : [new LogMessage(strandedReport, Microsoft.Extensions.Logging.LogLevel.Warning)])
@@ -2809,7 +2816,9 @@ public static class StaticRepoImporter
                     FailedDeterministic: IsContentVerdict(ex) ? 1 : 0,
                     Log: new LogMessage(
                         $"⚠ Failed to import {node.Path}: {ex.Message}",
-                        Microsoft.Extensions.Logging.LogLevel.Warning)));
+                        Microsoft.Extensions.Logging.LogLevel.Warning)
+                        .WithKey("activity.import.itemFailed",
+                            ("path", node.Path), ("error", ex.Message))));
             });
 
     /// <summary>

@@ -70,7 +70,8 @@ public static class WorkspaceOperations
             isValid = false;
             foreach (var validationResult in outcome.Results.Where(r => r != ValidationResult.Success))
             {
-                var message = $"{string.Join(", ", validationResult.MemberNames)} invalid: {validationResult.ErrorMessage}";
+                var members = string.Join(", ", validationResult.MemberNames);
+                var message = $"{members} invalid: {validationResult.ErrorMessage}";
                 messages = messages.Add(new LogMessage(message, LogLevel.Error)
                 {
                     Scopes =
@@ -78,7 +79,8 @@ public static class WorkspaceOperations
                         new("members", validationResult.MemberNames.ToArray()),
                         new("error", validationResult.ErrorMessage!)
                     ]
-                });
+                }.WithKey("activity.validation.memberInvalid",
+                    ("members", members), ("error", validationResult.ErrorMessage)));
                 logger.LogWarning("Validation error on {Address}: {Message}", workspace.Hub.Address, message);
             }
         }
@@ -105,9 +107,14 @@ public static class WorkspaceOperations
             .ToArray();
 
         messages = groups.Where(g => g.Key.DataSource is null)
-            .Aggregate(messages, (acc, g) => acc.Add(new LogMessage(
-                $"Types {string.Join(", ", g.Select(i => i.Instance.GetType().Name).Distinct())} could not be mapped to data source",
-                LogLevel.Warning)));
+            .Aggregate(messages, (acc, g) =>
+            {
+                var types = string.Join(", ", g.Select(i => i.Instance.GetType().Name).Distinct());
+                return acc.Add(new LogMessage(
+                    $"Types {types} could not be mapped to data source",
+                    LogLevel.Warning)
+                    .WithKey("activity.dataUpdate.typesUnmapped", ("types", types)));
+            });
 
         // ToArray() forces the writes NOW — Change is eager by contract; the observables only
         // report when each stream has applied its part.
@@ -172,7 +179,9 @@ public static class WorkspaceOperations
                 logger.LogError(ex, "Update of {Stream} failed", stream.StreamIdentity);
                 applied.OnNext([new LogMessage(
                     $"Update of {stream.StreamIdentity} failed: {ex.Message}",
-                    ex is ObjectDisposedException ? LogLevel.Warning : LogLevel.Error)]);
+                    ex is ObjectDisposedException ? LogLevel.Warning : LogLevel.Error)
+                    .WithKey("activity.dataUpdate.streamUpdateFailed",
+                        ("stream", stream.StreamIdentity), ("error", ex.Message))]);
                 applied.OnCompleted();
             },
             () =>
@@ -259,7 +268,10 @@ public static class WorkspaceOperations
                                     invalidInstances.Count, g.Key.TypeSource!.CollectionName);
                                 messages = messages.Add(new LogMessage(
                                     $"Skipping {invalidInstances.Count} instances with null key in collection {g.Key.TypeSource!.CollectionName}",
-                                    LogLevel.Error));
+                                    LogLevel.Error)
+                                    .WithKey("activity.dataUpdate.nullKeyInstancesSkipped",
+                                        ("count", invalidInstances.Count),
+                                        ("collection", g.Key.TypeSource!.CollectionName)));
                             }
                             var instances =
                                 new InstanceCollection(allInstances
@@ -305,7 +317,9 @@ public static class WorkspaceOperations
             logger.LogError(ex, "Error updating Data Stream {Stream}: {Message}", stream.StreamIdentity, ex.Message);
             stream.OnError(ex);
             return (null, messages.Add(new LogMessage(
-                $"Error updating Data Stream {stream.StreamIdentity}: {ex.Message}", LogLevel.Error)));
+                $"Error updating Data Stream {stream.StreamIdentity}: {ex.Message}", LogLevel.Error)
+                .WithKey("activity.dataUpdate.streamError",
+                    ("stream", stream.StreamIdentity), ("error", ex.Message))));
         }
     }
 
