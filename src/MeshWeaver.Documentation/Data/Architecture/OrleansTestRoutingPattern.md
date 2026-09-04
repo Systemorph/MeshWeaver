@@ -210,3 +210,54 @@ Two decisions carry the whole design:
 > repro that would go green after the refactor — **that test does not exist**; the surviving tests in
 > `OrleansUserOwnedModelTest` are `UserCreatesProvider_ThenResolverFindsKey` and
 > `UserModelAndProvider_VisibleInSyncedQuery`.
+
+---
+
+## 🚨 Reachability is not a claim — wait for the transport you are about to depend on
+
+A test that **isolates one transport in order to assert another** has a precondition the transport
+itself does not announce, and getting this wrong produces an intermittent failure that looks like a
+platform race. This was [#3298](https://github.com/Systemorph/MeshWeaver/issues/3298).
+
+`RegisterStream` establishes **two** things, on different clocks:
+
+| | Established | Used by |
+|---|---|---|
+| the **local route** | synchronously, and it never fails | in-process delivery |
+| the **pod-hub claim** | asynchronously, retried on a capped backoff (100 ms doubling to 2 s) with **no give-up on a silo** | every *directed* cross-silo call — the forward leg and `RoutingGrain.PostFailure`'s NACK |
+
+So a freshly registered address is reachable long before it is *claimed*, and during that window a
+directed `IPodHubGrain` call is placed by `[PreferLocalPlacement]` on the **caller's** silo — which
+has no local route for it — and answers `PodHubNotHere`.
+
+**The trap.** A "prove the address is live" probe that posts a message and waits for it to arrive
+proves only **reachability**, and reachability during that window is satisfied by the **stream**. If
+the test then erases the stream subscription and asserts a directed delivery, it has asserted
+something whose precondition it never checked. Worse, the probe is *adversarial* to the claim it
+appears to prove: it posts from the other silo in a loop, and each failed directed call mints a
+throw-away activation there that the owner's next `Attach` must bounce off — restarting the backoff.
+
+**The rule.** Wait on the claim itself. `OrleansRoutingService.PodHubClaimSettled(address)` is the
+positive signal — it completes when the claim *terminated*: it landed, or it hit the one terminal
+that is impossibility rather than a budget. A claim still retrying never completes it, which is the
+honest answer.
+
+```csharp
+var routingA = Routing(cluster, 0);
+using var registration = routingA.RegisterStream(address, callback);
+
+// Claimed ⇒ a directed cross-silo delivery lands. Reachability would not tell you this.
+await (routingA.PodHubClaimSettled(address) ?? Observable.Return(Unit.Default))
+    .FirstAsync().Timeout(Budget).Await(ct);
+```
+
+The null-coalesce covers an address with no claim at all — a client-hosted one, where the stream is
+the permanent transport and there is nothing to wait for.
+
+**Do not substitute a poll.** "The count stopped changing" measures a *pause*, and the claim's retry
+hops the thread-pool scheduler between attempts, so on a loaded shard the poll reads mid-hop. That
+is why the settled signal exists at all; see its remarks and `PodHubClaimReassertion`.
+
+**Measured.** With one bounce forced and the claim's backoff pinned long, the reachability probe goes
+green in under a second while `PodHubClaimSettled` has demonstrably not completed — 6 runs, 6 times.
+That is the whole defect: probe green, claim unsettled, directed transport not yet available.
