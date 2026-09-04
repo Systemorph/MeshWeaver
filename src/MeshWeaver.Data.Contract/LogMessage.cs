@@ -81,7 +81,8 @@ public record LogMessage(string Message, LogLevel LogLevel)
     /// under the <c>activity.</c> namespace. A blank key leaves the entry unchanged rather than
     /// throwing: an activity transcript must never be the thing that takes down the work it records.</param>
     /// <param name="args">Named arguments for the template's <c>{name}</c> placeholders. A null
-    /// value binds as the empty string.</param>
+    /// value binds as the empty string; anything that is not a JSON scalar is stored as its
+    /// <see cref="object.ToString"/> — see the remarks on <see cref="Scalarize"/>.</param>
     /// <returns>A copy carrying the key and arguments.</returns>
     public LogMessage WithKey(string key, params (string Name, object? Value)[] args)
     {
@@ -94,7 +95,7 @@ public record LogMessage(string Message, LogLevel LogLevel)
         var builder = ImmutableDictionary.CreateBuilder<string, object>(StringComparer.Ordinal);
         foreach (var (name, value) in args)
             if (!string.IsNullOrWhiteSpace(name))
-                builder[name] = value ?? string.Empty;
+                builder[name] = Scalarize(value);
 
         return this with
         {
@@ -102,4 +103,31 @@ public record LogMessage(string Message, LogLevel LogLevel)
             MessageArgs = builder.Count == 0 ? null : builder.ToImmutable(),
         };
     }
+
+    /// <summary>
+    /// 🚨 Reduces an argument to something whose PERSISTED form renders the same text the English
+    /// fallback shows. Null → empty; a JSON scalar (string, bool, number, date/time) is kept AS the
+    /// value, so the renderer can format it in the viewer's culture; <b>anything else is stored as
+    /// its <see cref="object.ToString"/></b>.
+    ///
+    /// <para>That last clause is the load-bearing one. The fallback is built by string
+    /// interpolation, i.e. <c>value.ToString()</c> — but a domain object handed straight to
+    /// <see cref="MessageArgs"/> serialises as a JSON OBJECT and comes back as a
+    /// <see cref="System.Text.Json.JsonElement"/>, which renders as raw JSON. So a viewer in
+    /// English would read <c>Update of Space:acme failed</c> while a German viewer read
+    /// <c>Update of {"Owner":…,"Partition":…} failed</c> — from the same stored row.
+    /// <c>StreamIdentity</c> is exactly that shape (a record whose <c>ToString</c> is
+    /// <c>Owner:Partition</c>), and two sites passed it before the automatic review caught it on
+    /// #3282. Doing the reduction HERE rather than at those two call sites is deliberate: the next
+    /// site cannot reintroduce it.</para>
+    /// </summary>
+    private static object Scalarize(object? value) =>
+        value switch
+        {
+            null => string.Empty,
+            string or bool or byte or sbyte or short or ushort or int or uint or long or ulong
+                or float or double or decimal
+                or DateTime or DateTimeOffset or TimeSpan => value,
+            _ => value.ToString() ?? string.Empty,
+        };
 }

@@ -133,6 +133,62 @@ public class LogMessageLocalizationTest
     }
 
     /// <summary>
+    /// 🚨 An argument that is a DOMAIN OBJECT must persist as the text the English fallback shows,
+    /// not as JSON. The fallback is built by interpolation — <c>value.ToString()</c> — but an object
+    /// handed straight to <c>MessageArgs</c> serialises as a JSON object and comes back as a
+    /// <see cref="JsonElement"/>, which renders as raw JSON. The same stored row would then read
+    /// <c>… Space:acme …</c> in English and <c>… {"Owner":…} …</c> in German.
+    ///
+    /// <para>Caught by the automatic review on #3282: two sites passed <c>StreamIdentity</c>, a
+    /// record whose <c>ToString()</c> is <c>Owner:Partition</c>. <c>WithKey</c> now reduces such a
+    /// value at the SEAM, so the next site cannot reintroduce it — which is what this test pins.</para>
+    /// </summary>
+    [Fact]
+    public void ADomainObjectArgumentPersistsAsItsToString_NotAsJson()
+    {
+        var identity = new StreamIdentityLike("Space", "acme");
+        Assert.Equal("Space:acme", identity.ToString());
+
+        var written = new LogMessage($"Update of {identity} failed: boom", LogLevel.Error)
+            .WithKey("activity.dataUpdate.streamUpdateFailed",
+                ("stream", identity), ("error", "boom"));
+
+        // Reduced at the seam, BEFORE it can reach the serializer.
+        Assert.Equal("Space:acme", written.MessageArgs!["stream"]);
+
+        var read = JsonSerializer.Deserialize<LogMessage>(JsonSerializer.Serialize(written))!;
+        foreach (var locale in new[] { "en", "de" })
+        {
+            Assert.Contains("Space:acme", read.Localize(locale));
+            Assert.DoesNotContain("Owner", read.Localize(locale));
+            Assert.DoesNotContain("{", read.Localize(locale));
+        }
+
+        Assert.Equal(written.Message, written.Localize("en"));
+    }
+
+    /// <summary>
+    /// The other half of the same rule: a JSON scalar is kept AS a value, so the renderer can still
+    /// format it in the viewer's culture rather than being handed a pre-stringified server-culture
+    /// rendering.
+    /// </summary>
+    [Fact]
+    public void JsonScalarArgumentsAreKeptAsValues()
+    {
+        var m = new LogMessage("x", LogLevel.Information)
+            .WithKey("activity.delete.cancelledPartial", ("path", "p"), ("count", 3));
+
+        Assert.IsType<string>(m.MessageArgs!["path"]);
+        Assert.IsType<int>(m.MessageArgs["count"]);
+    }
+
+    /// <summary>A record with a custom <c>ToString</c>, shaped like the real <c>StreamIdentity</c>.</summary>
+    private sealed record StreamIdentityLike(string Owner, string? Partition)
+    {
+        public override string ToString() => Partition is null ? Owner : $"{Owner}:{Partition}";
+    }
+
+    /// <summary>
     /// A blank key is a no-op rather than a throw: an activity transcript must never be the thing
     /// that takes down the work it records.
     /// </summary>
