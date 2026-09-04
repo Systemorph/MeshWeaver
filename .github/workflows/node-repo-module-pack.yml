@@ -1382,6 +1382,67 @@ jobs:
           n=${#dlls[@]}
           [ "$n" -gt 50 ] || { echo "::error::the image's /app yielded $n assemblies — not a platform image"; exit 1; }
           echo "platform refs: $n assemblies from ${IMAGE_NOTAG}@${DIGEST}"
+      # 🚨 THE SDK LEG NEEDS THE SUPERSEDE TOO — it did not have it, and that is a whole class of
+      # red (#3175 wave). `superseded-image-assemblies` reached ONLY the container leg, as
+      # `--superseded-image-assembly` on `build-project`. The SDK leg compiles with
+      # `-p:MeshWeaverRefs=$RUNNER_TEMP/platform-refs`, a raw `docker cp` of the image's /app, and
+      # nothing subtracted the stale copy from it. So a repository that moved a type OUT of an
+      # image-shipped assembly saw its container entries go green and its sdk entries fail CS0436 on
+      # the very same tree — measured on MeshWeaver.Plugins #1268, where the three collaboration
+      # views moved into MeshWeaver.Markdown.Collaboration: "Build the workspace (one global build)"
+      # passed while "Module bundle (MeshWeaver.Blazor.Chat)" failed, because Blazor.Chat reaches the
+      # moved sources through MeshWeaver.AI while the pinned image still defines them in
+      # MeshWeaver.Blazor.Views.
+      #
+      # 🚨 A COPY, NEVER AN IN-PLACE DELETE. `platform-refs` is restored AND SAVED under
+      # `platform-refs-<digest>`, a key that says nothing about superseding. Pruning it in place
+      # would let actions/cache store the pruned set under the unpruned key, and the next run that
+      # declares no supersede — any other repository sharing the digest — would silently compile
+      # against a reference set missing a real platform assembly, failing CS0246 naming innocent
+      # code. The copy keeps the cached directory a faithful image copy.
+      #
+      # The staleness check (an entry whose assembly no longer overlaps this repository's source)
+      # lives in the container leg's tool, which reads type tables this step cannot. It runs
+      # whenever the lane has container entries, which is the same wave that makes an entry
+      # necessary; an sdk-only selection is not the case that goes stale unnoticed.
+      - name: Drop superseded image assemblies from the SDK reference set
+        id: refs
+        if: inputs.platform-image-digest != ''
+        env:
+          SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/platform-refs"
+          # Empty ⇒ the reference set is the image's /app unchanged, and REFS keeps the exact value
+          # it had before this step existed. Byte-identical to before the input existed.
+          if [ -z "${SUPERSEDED// /}" ]; then
+            echo "refs=$src" >> "$GITHUB_OUTPUT"
+            echo "no superseded assemblies declared — SDK reference set is the image's /app unchanged"
+            exit 0
+          fi
+          [ -d "$src" ] || { echo "::error::platform-image-digest is set but $src does not exist — the reference set was never taken from the image."; exit 1; }
+          dst="$RUNNER_TEMP/platform-refs-effective"
+          rm -rf "$dst"
+          cp -a "$src" "$dst"
+          dropped=0
+          for asm in ${SUPERSEDED//,/ }; do
+            [ -n "$asm" ] || continue
+            if [ ! -f "$dst/$asm.dll" ]; then
+              echo "::error::superseded-image-assemblies names '$asm', but the pinned image ships no $asm.dll in /app. An entry that matches nothing cannot be protecting anything: correct the name, or remove it."
+              exit 1
+            fi
+            # The satellites go with it: a lingering .xml or .pdb for a dropped reference is at best
+            # noise and at worst a second opinion about what the assembly contained.
+            rm -f "$dst/$asm.dll" "$dst/$asm.xml" "$dst/$asm.pdb"
+            dropped=$((dropped + 1))
+            echo "superseded: dropped $asm.dll from the SDK reference set (this repository's source now defines types it still contains)"
+          done
+          before=$(find "$src" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ')
+          after=$(find "$dst" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ')
+          [ "$after" -eq "$((before - dropped))" ] || { echo "::error::pruned reference set holds $after assemblies; expected $((before - dropped)) (was $before, dropped $dropped)."; exit 1; }
+          echo "refs=$dst" >> "$GITHUB_OUTPUT"
+          echo "SDK reference set: $after assemblies ($before from the image, $dropped superseded)"
+
       # ══════════ THE COMPILER — the CONTAINER or the SDK, and the log says WHICH ══════════
       # 🚨 "we want to use memex build plugin and not dotnet build" (maintainer, 2026-08-31). A
       # module does not run against a source tree and it does not run against a feed: it is loaded
@@ -1437,7 +1498,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
-          REFS: ${{ inputs.platform-image-digest != '' && format('{0}/platform-refs', runner.temp) || '' }}
+          REFS: ${{ inputs.platform-image-digest != '' && steps.refs.outputs.refs || '' }}
         run: |
           set -euo pipefail
           # The closure arguments are written HERE and read by the pack step, so the compiler that
@@ -1654,7 +1715,7 @@ jobs:
           # different things. When a platform image is pinned, `platform-refs` is a `docker cp` of
           # its /app, which the sdk build passes as `-p:MeshWeaverRefs=$REFS` and the container
           # build compiles inside; when none is, it is empty and the platform came from source.
-          REFS: ${{ inputs.platform-image-digest != '' && format('{0}/platform-refs', runner.temp) || '' }}
+          REFS: ${{ inputs.platform-image-digest != '' && steps.refs.outputs.refs || '' }}
         run: |
           set -euo pipefail
           # 🚨 The closure flags come from the COMPILER THAT RAN, written to a file by the step
