@@ -15,14 +15,15 @@ namespace MeshWeaver.GitSync;
 
 /// <summary>
 /// The progress/cancel surface a command sees while running inside an activity. The command
-/// calls <see cref="Log"/> to append a progress line (visible live on the activity node) and
+/// calls <see cref="Log(LogMessage)"/> (or <see cref="Log(string, LogLevel)"/>) to append a
+/// progress line (visible live on the activity node) and
 /// observes <see cref="CancellationToken"/> to honour a user-requested cancel.
 /// </summary>
 public sealed class ActivityContext
 {
-    private readonly Action<string, LogLevel> append;
+    private readonly Action<LogMessage> append;
 
-    internal ActivityContext(string activityPath, CancellationToken ct, Action<string, LogLevel> append)
+    internal ActivityContext(string activityPath, CancellationToken ct, Action<LogMessage> append)
     {
         ActivityPath = activityPath;
         CancellationToken = ct;
@@ -35,8 +36,24 @@ public sealed class ActivityContext
     /// <summary>Trips when the user requests cancel (<c>RequestedStatus = Cancelled</c> on the activity).</summary>
     public CancellationToken CancellationToken { get; }
 
-    /// <summary>Appends a progress line to the activity's <see cref="ActivityLog.Messages"/> (shown live).</summary>
-    public void Log(string message, LogLevel level = LogLevel.Information) => append(message, level);
+    /// <summary>
+    /// Appends a progress line to the activity's <see cref="ActivityLog.Messages"/> (shown live).
+    ///
+    /// <para>🚨 This overload persists the sentence in ENGLISH and no renderer can translate it
+    /// afterwards (#3236) — the activity transcript is read later by viewers whose languages differ.
+    /// Use it only where the text is not the platform's to own (an upstream tool's output, an
+    /// exception message). Anything the platform composes goes through
+    /// <see cref="Log(LogMessage)"/> with a catalog key.</para>
+    /// </summary>
+    public void Log(string message, LogLevel level = LogLevel.Information) =>
+        append(new LogMessage(message, level));
+
+    /// <summary>
+    /// Appends a progress line built by the caller — the localizable form. Write it as
+    /// <c>new LogMessage($"…", level).WithKey("activity.…", ("name", value))</c>: the constructor
+    /// argument stays the English fallback and the key is what the viewer's language resolves.
+    /// </summary>
+    public void Log(LogMessage message) => append(message);
 }
 
 /// <summary>
@@ -49,13 +66,14 @@ public sealed class ActivityContext
 ///     <see cref="CancellationToken"/> (the standard Activity Control Plane — see
 ///     <c>Doc/Architecture/ActivityControlPlane.md</c>);</item>
 ///   <item>runs the command (its I/O already goes through <c>IIoPool</c>, so the action block stays
-///     responsive), forwarding <see cref="ActivityContext.Log"/> lines onto the node live;</item>
+///     responsive), forwarding <see cref="ActivityContext.Log(LogMessage)"/> lines onto the node
+///     live;</item>
 ///   <item>writes the terminal <c>Status</c> (Succeeded / Failed / Cancelled) + messages in one
 ///     atomic update.</item>
 /// </list>
 ///
 /// <para>🚨 Reactive, no <c>async</c>/<c>await</c>. The public surface is a static
-/// <see cref="IMessageHub"/> extension (<see cref="RunActivity"/>): the GUI calls it from a click,
+/// <see cref="IMessageHub"/> extension (<see cref="RunActivity(IMessageHub, string, string, LogMessage, Func{ActivityContext, IObservable{Unit}}, Action{string})"/>): the GUI calls it from a click,
 /// tests call it in isolation, and both observe progress / drive cancel through the returned
 /// activity path. This is the single entry point — there is no per-operation request type.</para>
 /// </summary>
@@ -74,9 +92,32 @@ public static class ActivityRunner
         string category,
         string title,
         Func<ActivityContext, IObservable<Unit>> command,
+        Action<string>? onActivityCreated = null) =>
+        // The un-keyed spelling: the title persists in English, exactly as it did before #3236.
+        // Kept for a title that is not the platform's to translate (a test's throwaway op, an
+        // upstream name); an operation the platform NAMES uses the LogMessage overload below.
+        hub.RunActivity(partitionPath, category, new LogMessage(title, LogLevel.Information),
+            command, onActivityCreated);
+
+    /// <summary>
+    /// The localizable form of <see cref="RunActivity(IMessageHub, string, string, string, Func{ActivityContext, IObservable{Unit}}, Action{string})"/>:
+    /// <paramref name="title"/> carries the English sentence AND its catalog key, so the activity's
+    /// opening line renders in the viewer's language while the node's <see cref="MeshNode.Name"/>
+    /// keeps the English text.
+    ///
+    /// <para>Write it as <c>new LogMessage($"Commit {space} to GitHub", LogLevel.Information)
+    /// .WithKey("activity.gitsync.commit.title", ("space", space))</c>.</para>
+    /// </summary>
+    public static IObservable<string> RunActivity(
+        this IMessageHub hub,
+        string partitionPath,
+        string category,
+        LogMessage title,
+        Func<ActivityContext, IObservable<Unit>> command,
         Action<string>? onActivityCreated = null)
     {
         ArgumentNullException.ThrowIfNull(hub);
+        ArgumentNullException.ThrowIfNull(title);
         ArgumentNullException.ThrowIfNull(command);
         // 🚨 Explicit owner dependency: the activity is created at {partitionPath}/_Activity/{id} with
         // MainNode = partitionPath, so partitionPath MUST be a real, routable owning node. An empty /
@@ -102,7 +143,10 @@ public static class ActivityRunner
         var node = new MeshNode(id, $"{partitionPath}/_Activity")
         {
             NodeType = "Activity",
-            Name = title,
+            // The node NAME stays the English sentence: it is a stored field a listing sorts and a
+            // path-shaped surface echoes, not a rendered line. The transcript's opening entry below
+            // is what carries the key, and that is what a viewer actually reads.
+            Name = title.Message,
             State = MeshNodeState.Active,
             MainNode = partitionPath,
             Content = new ActivityLog(category)
@@ -110,7 +154,7 @@ public static class ActivityRunner
                 Id = id,
                 HubPath = activityPath,
                 Status = ActivityStatus.Running,
-                Messages = ImmutableList.Create(new LogMessage(title, LogLevel.Information)),
+                Messages = ImmutableList.Create(title),
             },
         };
 
@@ -215,12 +259,12 @@ public static class ActivityRunner
                             activityPath));
 
                 var ctx = new ActivityContext(activityPath, cts.Token,
-                    (msg, level) =>
+                    message =>
                     {
                         // Every appended line is the run saying "still working" — the quiesce's
                         // notion of progress is exactly this, never a heartbeat.
                         runRegistration?.Progress();
-                        Append(workspace, accessService, owner, activityPath, msg, level, logger);
+                        Append(workspace, accessService, owner, activityPath, message, logger);
                     });
 
                 // Run the command; on terminal, write the final Status + dispose watcher/cts.
@@ -248,9 +292,18 @@ public static class ActivityRunner
                             cancelled ? ActivityStatus.Cancelled : ActivityStatus.Failed,
                             cancelled
                                 ? (Volatile.Read(ref killedByTeardown) != 0
-                                    ? "Cancelled by teardown: the run made no progress while the mesh was shutting down."
-                                    : "Cancelled.")
-                                : ex.Message, logger);
+                                    ? new LogMessage(
+                                            "Cancelled by teardown: the run made no progress while the mesh was shutting down.",
+                                            LogLevel.Information)
+                                        .WithKey("activity.run.cancelledByTeardown")
+                                    : new LogMessage("Cancelled.", LogLevel.Information)
+                                        .WithKey("activity.run.cancelled"))
+                                // 🚨 The command's own failure text, verbatim and therefore English:
+                                // it is an upstream exception message (a GitHub API refusal, a parse
+                                // error), not a sentence this platform composes, so no catalog can
+                                // carry it (#3281). The terminal STATUS beside it is what a viewer
+                                // reads language-independently.
+                                : new LogMessage(ex.Message, LogLevel.Error), logger);
                     })
                     .Finally(() =>
                     {
@@ -323,7 +376,7 @@ public static class ActivityRunner
 
     private static void Append(
         IWorkspace workspace, AccessService? accessService, AccessContext? owner,
-        string activityPath, string message, LogLevel level, ILogger? logger)
+        string activityPath, LogMessage message, ILogger? logger)
     {
         // 🚨 Re-establish the owner identity AT THIS write's .Update() invocation.
         // ctx.Log fires from the command's own threads (IIoPool body, reactive
@@ -338,14 +391,14 @@ public static class ActivityRunner
         using (owner is not null && accessService is not null ? accessService.SwitchAccessContext(owner) : null)
         {
             ActivityLogAppender
-                .Append(workspace.Hub, activityPath, [new LogMessage(message, level)], mutate: null, logger)
+                .Append(workspace.Hub, activityPath, [message], mutate: null, logger)
                 .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Activity log append failed for {Path}", activityPath));
         }
     }
 
     private static IObservable<Unit> Finish(
         IWorkspace workspace, AccessService? accessService, AccessContext? owner,
-        string activityPath, ActivityStatus status, string? finalMessage, ILogger? logger)
+        string activityPath, ActivityStatus status, LogMessage? finalMessage, ILogger? logger)
     {
         // 🚨 Same owner re-stamp as Append: the terminal Status write fires on the
         // command's completion hop, past the originating scope. Re-establish the owner
@@ -355,10 +408,7 @@ public static class ActivityRunner
         {
             return ActivityLogAppender.Append(
                     workspace.Hub, activityPath,
-                    string.IsNullOrEmpty(finalMessage)
-                        ? []
-                        : [new LogMessage(finalMessage,
-                            status == ActivityStatus.Failed ? LogLevel.Error : LogLevel.Information)],
+                    finalMessage is null ? [] : [finalMessage],
                     // Honour what the command reported via ctx.Log: ActivityLog.Finish computes
                     // MAX(status, severity roll-up) — an Error line a command appended flips a
                     // would-be Succeeded terminal to Failed, a Warning line to Warning; explicit

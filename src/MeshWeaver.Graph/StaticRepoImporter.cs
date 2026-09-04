@@ -1007,8 +1007,17 @@ public static class StaticRepoImporter
         ImportConflictPolicy? policy = null, IReadOnlySet<string>? changedNodePaths = null)
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        NodeTypeCompilationActivity.AppendLog(
-            hub, activityPath, $"Importing {nodes.Count} node(s) into {source.Partition}…", logger!);
+        // AppendLogs, not AppendLog: the batched overload takes a LogMessage the caller built, which
+        // is what lets this sentence carry its catalog key (#3281). AppendLog's own `string message`
+        // parameter cannot — it never sees a sentence, only text.
+        NodeTypeCompilationActivity.AppendLogs(hub, activityPath,
+            [
+                new LogMessage($"Importing {nodes.Count} node(s) into {source.Partition}…",
+                        Microsoft.Extensions.Logging.LogLevel.Information)
+                    .WithKey("activity.import.importing",
+                        ("count", nodes.Count), ("partition", source.Partition)),
+            ],
+            logger!);
 
         // Read the existing target subtree(s) ONCE. A source's nodes may span MULTIPLE partitions
         // (e.g. the model catalog: the read-only _Policy under "Model", the provider/model content
@@ -1897,8 +1906,8 @@ public static class StaticRepoImporter
                     string.Equals(n.Path, source.Partition, StringComparison.OrdinalIgnoreCase));
                 if (existing is null)
                 {
-                    NodeTypeCompilationActivity.AppendLog(
-                        hub, activityPath, $"Ensuring Space root {source.Partition}…", logger!);
+                    NodeTypeCompilationActivity.AppendLogs(hub, activityPath,
+                        [EnsuringRootLine(source.Partition)], logger!);
                     // Absent → create through the canonical verb — creating a Space triggers eager
                     // schema provisioning + the partition-definition/routing prime + the admin grant.
                     return Upsert(hub, Materialize(root));
@@ -1928,8 +1937,8 @@ public static class StaticRepoImporter
                                 source.Partition, current.SyncBehavior);
                             return Observable.Return(0);
                         }
-                        NodeTypeCompilationActivity.AppendLog(
-                            hub, activityPath, $"Ensuring Space root {source.Partition}…", logger!);
+                        NodeTypeCompilationActivity.AppendLogs(hub, activityPath,
+                            [EnsuringRootLine(source.Partition)], logger!);
                         // Existing (Include) root → overwrite to refresh the welcome, preserving
                         // owner identity. Same canonical path as every other node.
                         return Upsert(hub, Materialize(root));
@@ -2499,9 +2508,17 @@ public static class StaticRepoImporter
 
         var writes = refused
             .Select(r => LedgerNode(r.NodePath, ActivityStatus.Warning,
-                $"📦 CONTENT SYNC REFUSED — this node's assets are NOT in the mesh. {r.Reason}"))
+                new LogMessage(
+                        $"📦 CONTENT SYNC REFUSED — this node's assets are NOT in the mesh. {r.Reason}",
+                        Microsoft.Extensions.Logging.LogLevel.Warning)
+                    // The lead is the platform's; the refusal REASON is the content pipeline's own
+                    // sentence and rides verbatim as {reason}.
+                    .WithKey("activity.contentSync.refused", ("reason", r.Reason))))
             .Concat(synced.Select(p => LedgerNode(p.NodePath, ActivityStatus.Succeeded,
-                $"✔ Content assets in sync — {p.Written} file(s) delivered.")))
+                new LogMessage(
+                        $"✔ Content assets in sync — {p.Written} file(s) delivered.",
+                        Microsoft.Extensions.Logging.LogLevel.Information)
+                    .WithKey("activity.contentSync.inSync", ("count", p.Written)))))
             .Select(node => Upsert(hub, node)
                 .Catch<int, Exception>(ex =>
                 {
@@ -2517,7 +2534,7 @@ public static class StaticRepoImporter
 
         return writes;
 
-        MeshNode LedgerNode(string nodePath, ActivityStatus status, string message) =>
+        MeshNode LedgerNode(string nodePath, ActivityStatus status, LogMessage message) =>
             new(ContentSyncLedgerId, $"{nodePath}/_Activity")
             {
                 Name = $"Content sync ({nodePath})",
@@ -2530,13 +2547,19 @@ public static class StaticRepoImporter
                     HubPath = nodePath,
                     Status = status,
                     End = DateTime.UtcNow,
-                    Messages = ImmutableList.Create(new LogMessage(message,
-                        status == ActivityStatus.Warning
-                            ? Microsoft.Extensions.Logging.LogLevel.Warning
-                            : Microsoft.Extensions.Logging.LogLevel.Information)),
+                    Messages = ImmutableList.Create(message),
                 },
             };
     }
+
+    /// <summary>
+    /// The "ensuring the Space root" progress line, shared by the create and the refresh arm so the
+    /// two cannot drift apart in either language (#3281).
+    /// </summary>
+    private static LogMessage EnsuringRootLine(string partition) =>
+        new LogMessage($"Ensuring Space root {partition}…",
+                Microsoft.Extensions.Logging.LogLevel.Information)
+            .WithKey("activity.import.ensuringRoot", ("partition", partition));
 
     /// <summary>
     /// True when <paramref name="nodePath"/> lives in <paramref name="partition"/> — it IS the
