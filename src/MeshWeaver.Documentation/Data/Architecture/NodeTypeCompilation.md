@@ -920,15 +920,74 @@ Two readings that look right and are not:
   (`NodeTypeReleaseGateTest`, `CodeEditRecompileTest`). **Discriminate on the verdict, never on the
   suite name plus the exit code**; folding a live wedge into a known-upstream defect hides it.
 
-> 🚨 **The core dump the canary asks for cannot be captured this way.** `DOTNET_DbgEnableMiniDump`
-> fires on a *signal*, and this process never crashes — it throws a managed exception and keeps
-> running until CI's per-suite wall-clock cap kills it (`exit=124`, no dump): 8 minutes on core's
-> shards, **15 minutes** on MeshWeaver.Plugins' `Portal hosts` shards, so the cap is a property of
-> the harness and not a fingerprint to grep for. That is why weeks of
+> 🚨 **The core dump the canary used to ask for cannot be captured this way.**
+> `DOTNET_DbgEnableMiniDump` fires on a *signal*, and this process never crashes — it throws a
+> managed exception and keeps running until CI's per-suite wall-clock cap kills it (`exit=124`, no
+> dump): 8 minutes on core's shards, **15 minutes** on MeshWeaver.Plugins' `Portal hosts` shards,
+> so the cap is a property of the harness and not a fingerprint to grep for. That is why weeks of
 > "capture a core dump" produced none. Its SIGSEGV twin,
 > [#613](https://github.com/Systemorph/MeshWeaver/issues/613), *does* dump — see
 > [Debugging Native Crashes](/Doc/Architecture/DebuggingNativeCrashes) for the invariant the two share (a single
 > 8-byte word reading exactly zero while its block stays coherent) and for how to read one.
+> **The verdict no longer asks for one** — see leg 3 below.
+
+#### Leg 3 — DISSECT the null, because the dump route is closed
+
+The verdict's own text called the remaining ambiguity a RESIDUAL: *"both legs still run on the one
+CLR, so this does not separate a corrupted heap from a miscompiled Roslyn method"*, and it resolved
+that by asking for a core dump — **an instruction that cannot be carried out on this defect at all**,
+for the reason in the box above. From 2026-08-28 to 2026-09-04 every occurrence carried it and
+produced **zero** dumps. A remedy nobody can execute is the prose form of a gate that cannot fail:
+it looks like a next step and it is a dead end.
+
+Legs 1 and 2 both ask *can this process EMIT?* Neither asks the far cheaper question the stack
+points straight at — **can it still perform the READ the emit dies on?** Every #890 stack ends in
+`NamedTypeSymbol.Microsoft.Cci.ITypeDefinitionMember.get_ContainingTypeDefinition()`, which in a
+Release Roslyn reduces to `return this.ContainingType.GetCciAdapter();`, called from
+`MetadataWriter.GetConsolidatedTypeParameters` — whose guard (`AsNestedTypeDefinitionImpl`) read
+that *same* `ContainingType` as non-null microseconds earlier. Leg 3 makes both of those reads
+directly, on symbols bound **after** the fault, with no emit, no metadata writer and no PE stream:
+
+| verdict | what it means | where it sends triage |
+|---|---|---|
+| `dissect=SYMBOL-GRAPH-BROKEN` | the ordinary `ContainingType` property reads **null** for a nested source type | the broken read is the property, not emit — every consumer of a nested symbol in the process is affected |
+| `dissect=REPRODUCED-OUTSIDE-EMIT` | the public property reads correctly, the Cci explicit interface implementation on the **same symbol** does not | #890 in ONE property call — the smallest repro it has ever had, and what a `dotnet/runtime` report needs |
+| `dissect=READS-HEALTHY` | **both** reads answer correctly, microseconds after `Emit` threw on this exact shape | a corrupted object graph does not predict that; code that is wrong only when reached from `MetadataWriter`'s call site does — run the split-arm `DOTNET_TieredPGO=0` re-run |
+| `dissect=UNAVAILABLE(…)` | the probe could not run | its **own** verdict, never folded into the others |
+
+🚨 **`UNAVAILABLE` is the branch that has to stay impossible on a healthy process.** Leg 3 reaches
+Roslyn's internal symbol model by reflection (`PublicModel.Symbol.UnderlyingSymbol`, then the
+interface map for `Microsoft.Cci.ITypeDefinitionMember`), because there is no public route to the
+method the stack dies in. A Roslyn rename would turn every future occurrence into a permanent
+non-answer with nothing going red — the same way a file-backed leg 2 silently stopped being a
+control. `EmitCanaryDissectionTest.OnAHealthyProcess_BothReadsResolveAndAnswerCorrectly` is what
+refuses that: it asserts `symbol:OK` **and** `cci:OK`, and renaming the reflected member turns it
+red naming the member (measured — `cci:UNAVAILABLE(no UnderlyingSymbol… on NonErrorNamedTypeSymbol)`).
+
+A local control — our own nested generic plus an explicit interface implementation — was considered
+and deliberately left out. Its *failing* branch would be informative; its *passing* branch is not,
+because a different jitted method reading correctly says nothing about Roslyn's, and a probe whose
+green means nothing is the shape this canary keeps having to remove.
+
+**What the verdict says instead of "capture a dump":** re-run **SPLIT-ARM** with
+`DOTNET_TieredPGO=0` (sharper) or `DOTNET_TieredCompilation=0`, and read it together with the
+`dissect=` line. At ~1 % per run a single clean arm proves nothing — that caveat is part of the
+instruction, because an experiment stated without it gets read as a fix.
+
+#### The rate has not moved — a null here is worth ~half a coin toss
+
+Continuing where the 2026-09-03→04 sweep ended, **2026-09-04T06:34Z → 22:01Z** on MeshWeaver.Plugins
+`Plugin Catalog CI`: **73** completed runs, **287** `Portal hosts (shard N)` jobs, all **93**
+non-success shard logs fetched (**0** unfetchable), detector calibrated first against the known
+occurrence (job `100666643224` → **56** `canary=BELOW-ROSLYN`, **20** `PROCESS CANNOT EMIT`, the
+counts that occurrence's own report published). **0 occurrences.**
+
+🚨 **That null is not evidence of anything.** At the last measured ~1 %/run, P(0 in 73) ≈ 48 % — a
+coin toss. The positive control holds (the exposure suite `MeshWeaver.Hosting.Monolith.Test` really
+did run in the window: runs `33881146362`, `33879617931`, `33879408750`), so the sweep had somewhere
+to look; it simply did not look at enough runs to say anything. The last confirmed occurrence is
+`33760859754`, 2026-09-03. **Read a #890 sweep the way the 2026-08-09 close should have been read:
+state the expected count beside the observed one, or do not state the null.**
 
 ### Framework-version freezing
 

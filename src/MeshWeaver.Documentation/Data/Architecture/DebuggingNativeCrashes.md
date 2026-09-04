@@ -732,15 +732,28 @@ swallows only the *logging* failure.
 
 `#890` is the same "one 8-byte word reads as zero" shape surfacing in **managed** code: Roslyn's
 `Emit` throws `NullReferenceException` from `Cci.MetadataWriter`, reading a `ContainingType` that
-the guard immediately above it had just read as non-null. Its canary's verdict has told triage to
-*"capture a core dump and re-run with tiering disabled"* since 2026-08-28, and **not one has ever
-arrived** — because the advice is unfollowable by construction:
+the guard immediately above it had just read as non-null. Its canary's verdict told triage to
+*"capture a core dump and re-run with tiering disabled"* from 2026-08-28 to 2026-09-04, and **not
+one ever arrived** — because the advice was unfollowable by construction:
 
 `DOTNET_DbgEnableMiniDump` fires on a **signal**. The #890 process never crashes; it throws a
 managed exception, logs it, and keeps running until CI's 8-minute cap kills it — `exit=124`, which
 is `timeout --signal=TERM`, which produces **no dump**. Every occurrence in the 9-event
 2026-08-22→08-29 sweep ends `exit=124` or `TESTFAIL`. **The dump route belongs to this page's family
 (#613), not to #890.**
+
+🚨 **The verdict no longer asks for one.** `EmitPipeline.Verdict`'s `BELOW-ROSLYN` branch now names
+the half of that advice that IS followable — a **split-arm** `DOTNET_TieredPGO=0` /
+`DOTNET_TieredCompilation=0` re-run — and hands over a third canary leg that takes in-process the
+measurement the dump was being asked for: `dissect=`, which performs the failing *read*
+(`ContainingType`, then the `Cci.ITypeDefinitionMember.ContainingTypeDefinition` frame the stack
+dies in) directly on symbols bound after the fault. `READS-HEALTHY` there is positive evidence
+**against** a corrupted object graph and **for** code that is wrong only at `MetadataWriter`'s call
+site; `REPRODUCED-OUTSIDE-EMIT` would collapse #890 to a one-call repro. See
+[NodeTypeCompilation → Leg 3](/Doc/Architecture/NodeTypeCompilation). The general lesson is this
+page's own: **a remedy nobody can execute is not a remedy** — it is a gate that cannot fail, wearing
+prose. Check that the artifact you are telling the next reader to fetch is one this failure mode can
+actually produce.
 
 What #890 *can* contribute that a dump cannot is a measurement #613 has no way to take, because a
 crashed process has no "after": **the fault is total and permanent.** On run `33322993649` shard 1,
