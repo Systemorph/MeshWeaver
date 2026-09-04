@@ -154,6 +154,30 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// </summary>
     IMessageHub? GetHostedHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create);
 
+    /// <summary>
+    /// <see cref="GetHostedHub(Address, Func{MessageHubConfiguration, MessageHubConfiguration}, HostedHubCreation)"/>
+    /// plus the REASON — see <see cref="HostedHubOutcome"/>.
+    ///
+    /// <para>🚨 <b>Use this wherever a null hub gets LOGGED</b> (Systemorph/MeshWeaver#3243). The
+    /// plain overload answers null for conditions that belong at opposite log levels — a host that
+    /// is going down, and a configuration that threw — and a caller holding only the null cannot
+    /// tell them apart, so it either tickets every shutdown race or hides real faults. This
+    /// overload carries the condition from where it is KNOWN (the hub that owns the container) to
+    /// where the decision is made.</para>
+    ///
+    /// <para>Default-implemented so an <see cref="IMessageHub"/> that predates the distinction
+    /// keeps compiling: it reports <see cref="HostedHubOutcome.Unclassified"/>, which callers must
+    /// treat as unknown — never as an expected shutdown.</para>
+    /// </summary>
+    /// <param name="address">The address of the hosted hub.</param>
+    /// <param name="config">Transform applied to the hosted hub's configuration when it is created.</param>
+    /// <param name="create">Whether to create the hub if it does not yet exist.</param>
+    /// <returns>The hub (when there is one) and the outcome that produced this answer.</returns>
+    HostedHubResult TryGetHostedHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
+        => GetHostedHub(address, config, create) is { } hub
+            ? new HostedHubResult(hub, HostedHubOutcome.Available, null)
+            : new HostedHubResult(null, HostedHubOutcome.Unclassified, null);
+
     // Disposal at the hub level is reactive but never a Task — nothing here is async
     // in the await sense. The first two overloads couple a SYNCHRONOUS cleanup to the
     // hub's lifetime (held in a CompositeDisposable, disposed during ShutDown).

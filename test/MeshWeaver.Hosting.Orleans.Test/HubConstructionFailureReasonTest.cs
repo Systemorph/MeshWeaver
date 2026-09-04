@@ -1,4 +1,5 @@
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
@@ -25,6 +26,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <para>Deleting the <c>!</c> is what makes the null check compiler-enforced under this repo's
 /// nullable + warnings-as-errors settings; this test pins the other half — that the message a
 /// caller receives is a diagnosis rather than a null dereference.</para>
+///
+/// <para>🚨 <b>#3243 sharpened it.</b> The reason no longer LISTS the reachable causes, it NAMES
+/// the one that happened — <see cref="HostedHubOutcome"/> carries the condition out of
+/// <c>HostedHubsCollection</c>, where it is known. Which one it was also decides the log LEVEL;
+/// that half is pinned by <see cref="HubConstructionOutcomeReportingTest"/>.</para>
 /// </summary>
 public class HubConstructionFailureReasonTest
 {
@@ -36,7 +42,8 @@ public class HubConstructionFailureReasonTest
     public void TheReason_NamesTheNodeAndItsType()
     {
         var reason = MessageHubGrain.HubConstructionFailureReason(
-            new MeshNode("AdvancedBusinessRules") { NodeType = "Store/Plugin" });
+            new MeshNode("AdvancedBusinessRules") { NodeType = "Store/Plugin" },
+            HostedHubOutcome.ConstructionFaulted);
 
         reason.Should().Contain("AdvancedBusinessRules").And.Contain("Store/Plugin");
         reason.Should().NotContain("Object reference not set",
@@ -53,13 +60,22 @@ public class HubConstructionFailureReasonTest
     public void TheReason_PointsAtTheLogEntryCarryingTheRealException()
     {
         var reason = MessageHubGrain.HubConstructionFailureReason(
-            new MeshNode("AdvancedBusinessRules") { NodeType = "Store/Plugin" });
+            new MeshNode("AdvancedBusinessRules") { NodeType = "Store/Plugin" },
+            HostedHubOutcome.ConstructionFaulted);
 
         reason.Should().Contain("Failed to create hosted hub",
             "that is the verbatim HostedHubsCollection log entry that carries the actual stack");
-        reason.Should().Contain("disposing",
-            "the other reachable cause is a frozen/ disposing hub collection — a reader must be able "
-            + "to tell a broken configuration from a pod that is going away");
+
+        // 🚨 #3243: the reader no longer has to tell the two apart from one sentence — the two
+        // conditions produce two DIFFERENT sentences, and only one of them mentions a shutdown.
+        var shuttingDown = MessageHubGrain.HubConstructionFailureReason(
+            new MeshNode("AdvancedBusinessRules") { NodeType = "Store/Plugin" },
+            HostedHubOutcome.HostShuttingDown);
+
+        shuttingDown.Should().Contain("shutting down",
+            "a reader must be able to tell a broken configuration from a pod that is going away");
+        shuttingDown.Should().NotBe(reason,
+            "reporting both conditions with one sentence is exactly what #3243 removed");
     }
 
     /// <summary>
@@ -69,7 +85,8 @@ public class HubConstructionFailureReasonTest
     [Fact(Timeout = 30000)]
     public void AnUntypedNode_StillReadsAsASentence()
     {
-        var reason = MessageHubGrain.HubConstructionFailureReason(new MeshNode("Orphan"));
+        var reason = MessageHubGrain.HubConstructionFailureReason(
+            new MeshNode("Orphan"), HostedHubOutcome.ConstructionFaulted);
 
         reason.Should().Contain("Orphan").And.Contain("(null)");
     }

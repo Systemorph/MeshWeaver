@@ -545,7 +545,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             // the ACTUAL exception sat in a separate log entry milliseconds earlier. The Monolith
             // twin has always been null-safe here (MonolithRoutingService: `createdHub?.Register…`);
             // this is the same treatment plus a message that says which of the three it was.
-            var hub = meshHub.GetHostedHub(address, config =>
+            //
+            // 🚨 And the three are ASKED FOR, not guessed at (#3243). TryGetHostedHub carries the
+            // condition out of HostedHubsCollection, where it is known, so the two that matter can
+            // be reported honestly: a host going down is a teardown race at Debug, a configuration
+            // that threw stays at fail level with its exception. The previous single fail-level
+            // line named both possibilities and committed to neither, so every pod rollout
+            // fingerprinted and ticketed an expected shutdown.
+            var creation = meshHub.TryGetHostedHub(address, config =>
             {
                 config = config.WithOwnNodeStream(ownNodeStream);
                 return node.HubConfiguration!(config)
@@ -575,16 +582,27 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                             this.GetPrimaryKeyString());
                         TryDeactivateOnIdle();
                     }));
-            });
+            }, HostedHubCreation.Always);
 
+            var hub = creation.Hub;
             if (hub is null)
             {
                 // Not a defect in THIS method — the cause is already logged with its stack by
                 // HostedHubsCollection. Report the fact in terms a caller can act on, and keep the
                 // retry-on-next-access semantics the rest of this method has: the next delivery
                 // re-runs resolution and hub construction from scratch.
-                var reason = HubConstructionFailureReason(node);
-                logger.LogError("[ACTIVATE] Grain {StreamId}: {Reason}", streamId, reason);
+                //
+                // 🚨 The LEVEL is a ticketing decision, not a verbosity knob (#3243, and the same
+                // rule CancellationClassifier follows for #2152/#2182). A host going down is an
+                // expected teardown race — nothing failed, nothing was written — so it goes to
+                // Debug WITH the evidence; anything else stays at fail level WITH the exception.
+                // Downgrading the level is not licence to swallow the outcome: both branches still
+                // record the cause, still fail parked deliveries, and still deactivate for retry.
+                var reason = HubConstructionFailureReason(node, creation.Outcome);
+                logger.Log(
+                    HubConstructionFailureLevel(creation.Outcome),
+                    creation.Error,
+                    "[ACTIVATE] Grain {StreamId}: {Reason}", streamId, reason);
                 activationFailures?.Record(streamId, reason);
                 _hubReadyRaw.OnError(new InvalidOperationException(reason));
                 TryDeactivateOnIdle();
@@ -626,14 +644,55 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// that the REAL exception had already been logged with its stack a moment earlier. Naming the
     /// node, its type, and where the real cause is written is the whole difference between an
     /// unactionable alert and a diagnosis.</para>
+    ///
+    /// <para>🚨 <b>And it now says WHICH condition it was</b> (#3243). The single sentence below
+    /// used to list both possibilities and commit to neither, because the grain genuinely could not
+    /// tell them apart — <c>GetHostedHub</c> answered null for both. It reported both at fail
+    /// level, so every pod rollout fingerprinted and ticketed a teardown race the message itself
+    /// anticipated (incident e2028eb86d6a85a6 and its sibling 8bd7c9c44c12e40b, recurring across
+    /// four deployments since mid-August). <see cref="HostedHubOutcome"/> carries the condition out
+    /// of <c>HostedHubsCollection</c>, where it is known, so each one is now reported as what it
+    /// is.</para>
     /// </summary>
     /// <param name="node">The node whose hub could not be constructed.</param>
+    /// <param name="outcome">Which condition produced the missing hub.</param>
     /// <returns>The failure reason.</returns>
-    internal static string HubConstructionFailureReason(MeshNode node) =>
-        $"Hub construction returned no hub for {node.Path} (NodeType: {node.NodeType ?? "(null)"}). "
-        + "Either the hub configuration threw — see the 'Failed to create hosted hub' entry logged "
-        + "immediately before this one, which carries the real exception — or hosted-hub creation is "
-        + "frozen because this host (or an ancestor) is disposing.";
+    internal static string HubConstructionFailureReason(MeshNode node, HostedHubOutcome outcome) =>
+        outcome switch
+        {
+            HostedHubOutcome.HostShuttingDown =>
+                $"Hub construction for {node.Path} (NodeType: {node.NodeType ?? "(null)"}) was refused "
+                + "because this host (or an ancestor) is shutting down — an expected teardown race, "
+                + "not a fault. Nothing failed and nothing was written; the next access re-activates "
+                + "this node on a live host.",
+            HostedHubOutcome.ConstructionFaulted =>
+                $"Hub construction FAILED for {node.Path} (NodeType: {node.NodeType ?? "(null)"}): the "
+                + "hub configuration threw. See the 'Failed to create hosted hub' entry logged "
+                + "immediately before this one, which carries the real exception and its stack.",
+            _ =>
+                $"Hub construction returned no hub for {node.Path} (NodeType: {node.NodeType ?? "(null)"}). "
+                + "Either the hub configuration threw — see the 'Failed to create hosted hub' entry logged "
+                + "immediately before this one, which carries the real exception — or hosted-hub creation is "
+                + "frozen because this host (or an ancestor) is disposing.",
+        };
+
+    /// <summary>
+    /// The level the missing-hub line is logged at — a TICKETING decision, not a verbosity knob
+    /// (#3243). Everything a portal reports as red becomes an incident and a GitHub issue
+    /// (<c>Doc/Architecture/LogWatchTriage</c>), so a shutdown race logged at <c>fail:</c> is
+    /// indistinguishable from a hub whose configuration is broken. Only
+    /// <see cref="HostedHubOutcome.HostShuttingDown"/> is benign; everything else — including
+    /// <see cref="HostedHubOutcome.Unclassified"/>, which is an unknown and not a shutdown — stays
+    /// at <see cref="LogLevel.Error"/>.
+    ///
+    /// <para>Pure and <c>internal static</c> for the same reason as
+    /// <see cref="HubConstructionFailureReason"/>: the classification IS the fix, so it is pinned
+    /// by a test rather than by reading the call site.</para>
+    /// </summary>
+    /// <param name="outcome">Which condition produced the missing hub.</param>
+    /// <returns>The log level to report it at.</returns>
+    internal static LogLevel HubConstructionFailureLevel(HostedHubOutcome outcome) =>
+        outcome == HostedHubOutcome.HostShuttingDown ? LogLevel.Debug : LogLevel.Error;
 
     /// <summary>
     /// Composes the per-emission "enrich with HubConfiguration" step as an
