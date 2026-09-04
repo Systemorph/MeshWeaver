@@ -28,6 +28,41 @@ internal class HierarchicalRouting
 
 
     /// <summary>
+    /// Offers a correlated reply this router is about to DROP to a local waiter
+    /// (<see cref="IUndeliverableReplySink"/>). Only a delivery carrying
+    /// <see cref="PostOptions.RequestId"/> qualifies — fire-and-forget traffic has nobody waiting,
+    /// and answering it is the storm shape every NACK guard here exists to avoid.
+    /// </summary>
+    /// <returns><c>true</c> when a waiter took it, so the sender HAS its answer.</returns>
+    private bool TryHandOverUndeliverableReply(IMessageDelivery delivery)
+    {
+        if (!delivery.Properties.ContainsKey(PostOptions.RequestId))
+            return false;
+        try
+        {
+            var sink = hub.ServiceProvider.GetService<IUndeliverableReplySink>();
+            if (sink is null || !sink.TryDeliver(delivery))
+                return false;
+            logger.LogDebug(
+                "Undeliverable {MessageType} (ID: {MessageId}) for request {RequestId} was handed to "
+                + "a local waiter instead of being dropped in {Address}",
+                delivery.Message?.GetType().Name, delivery.Id,
+                delivery.Properties[PostOptions.RequestId], hub.Address);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // The hand-over is a last resort; a sink that throws must not turn a classified drop
+            // into an unhandled fault on the routing path.
+            logger.LogWarning(ex,
+                "The undeliverable-reply sink threw for {MessageType} (ID: {MessageId}) in {Address}; "
+                + "the delivery is dropped as before",
+                delivery.Message?.GetType().Name, delivery.Id, hub.Address);
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Loops through forward rules in a sequence. Each forward rule either applies and returns delivery.Forwarded() or doesn't apply and returns delivery.
     /// </summary>
     /// <param name="delivery"></param>
@@ -135,6 +170,9 @@ internal class HierarchicalRouting
                 // and UNANSWERED — MessageService owes the sender a DeliveryFailure (a bare
                 // Failed(...) used to be dropped on the not-on-target path and the caller waited
                 // forever). TRANSIENT (ShuttingDown): the address may reactivate on the next probe.
+                if (isDisposing && TryHandOverUndeliverableReply(delivery))
+                    return delivery.Processed();
+
                 return isDisposing
                     ? delivery.Failed(errorMessage, ErrorType.ShuttingDown)
                     : delivery.NotFound();
@@ -202,6 +240,14 @@ internal class HierarchicalRouting
             // and SynchronizationStream's transient check — still recognise a transient hub reject by
             // that substring, so a NACK phrased any other way would be filed as a PERMANENT owner
             // failure and cached as one.
+            // 🚨 …but if this is a REPLY somebody HERE is waiting for, hand it over before dropping
+            // it. The owner answered correctly and its post was accepted; only the route out died,
+            // and the waiter is in this same process with its registry entry armed. See
+            // IUndeliverableReplySink — offered ONLY here, where no post can reach the caller any
+            // more, never alongside a healthy one.
+            if (TryHandOverUndeliverableReply(delivery))
+                return delivery.Processed();
+
             return delivery.Failed(
                 $"Hub {hub.Address} cannot route {delivery.Message.GetType().Name} to {delivery.Target} — "
                 + $"its parent hub {parentHub.Address} is shutting down (RunLevel={parentHub.RunLevel}). "
