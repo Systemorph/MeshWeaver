@@ -13,6 +13,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Memex.Portal.Shared.Test.Fakes;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -32,7 +33,25 @@ public class SetupSurfaceTest : IDisposable
     private readonly string root =
         Path.Combine(Path.GetTempPath(), "mw-surface-" + Guid.NewGuid().ToString("N"));
 
-    public SetupSurfaceTest() => Directory.CreateDirectory(root);
+    public SetupSurfaceTest()
+    {
+        Directory.CreateDirectory(root);
+        // 🚨 Phase two only exists for a REGISTERED instance: the options it offers are derived from
+        // what the registration entitles the instance to, so /setup renders the hello page until an
+        // identity is on the manifest. These tests are about phase two, so they seed one — phase one
+        // has its own tests in SetupIdentityPhaseTest.
+        new InstanceManifest
+        {
+            State = InstanceSetupState.AwaitingModules,
+            Identity = new InstanceIdentitySelection
+            {
+                Id = "0f8fad5b-d9cb-469f-a165-70867728950e",
+                Name = "Test instance",
+                RegistryUrl = "https://registry.invalid",
+                Plan = "free",
+            },
+        }.Write(root);
+    }
 
     public void Dispose()
     {
@@ -67,6 +86,8 @@ public class SetupSurfaceTest : IDisposable
         builder.Services.AddSingleton<SetupAccessToken>();
         builder.Services.AddSingleton(new StorageBackendCatalog(["Sqlite"]));
         builder.Services.AddSingleton<ISetupCatalogProvider>(new StubCatalog(catalog ?? Catalog));
+        builder.Services.AddHttpClient<SetupRegistryClient>()
+            .ConfigurePrimaryHttpMessageHandler(() => new FakeRegistry());
 
         var app = builder.Build();
         app.MapInstanceSetup();
@@ -100,6 +121,8 @@ public class SetupSurfaceTest : IDisposable
         Assert.Equal(HttpStatusCode.OK, wizard.StatusCode);
         var html = await wizard.Content.ReadAsStringAsync();
         Assert.Contains("Set up this instance", html);
+        // The identity banner names what this instance registered as.
+        Assert.Contains("Test instance", html);
         // The offered choices are the ones the catalog contributed — not a hard-coded menu.
         Assert.Contains("value=\"Sqlite\"", html);
         Assert.Contains("Microsoft", html);
@@ -147,7 +170,9 @@ public class SetupSurfaceTest : IDisposable
             .PostAsync("/setup", new FormUrlEncodedContent(Answers("not-the-token")));
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Null(InstanceManifest.Read(root));
+        // The harness seeds a registered identity (phase two is what these tests drive), so the
+        // assertion is that setup did not COMPLETE — not that nothing is on disk.
+        Assert.NotEqual(InstanceSetupState.Complete, InstanceManifest.Read(root)?.State);
     }
 
     [Fact]
@@ -221,7 +246,7 @@ public class SetupSurfaceTest : IDisposable
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Contains("Cosmos", await response.Content.ReadAsStringAsync());
-        Assert.Null(InstanceManifest.Read(root));
+        Assert.NotEqual(InstanceSetupState.Complete, InstanceManifest.Read(root)?.State);
     }
 
     [Fact]
@@ -386,6 +411,8 @@ public class SetupSurfaceTest : IDisposable
         builder.Services.AddSingleton<SetupAccessToken>();
         builder.Services.AddSingleton(new StorageBackendCatalog(["Sqlite"]));
         builder.Services.AddSingleton<ISetupCatalogProvider>(new StubCatalog(Catalog));
+        builder.Services.AddHttpClient<SetupRegistryClient>()
+            .ConfigurePrimaryHttpMessageHandler(() => new FakeRegistry());
 
         var app = builder.Build();
         foreach (var probe in SetupOnlyHost.ProbePaths)
