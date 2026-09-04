@@ -577,6 +577,24 @@ public record CopyNodeRequest(string SourcePath, string TargetPath) : IRequest<C
 
     /// <summary>If <c>true</c>, copies satellite nodes (e.g. _Comment, _Activity) attached to the source.</summary>
     public bool IncludeSatellites { get; init; }
+
+    /// <summary>
+    /// 🚨 <c>true</c> only for the copy leg of a <see cref="MoveNodeRequest"/>: the node at the
+    /// target IS the node that was at the source, so <see cref="MeshNode.CreatedDate"/>,
+    /// <see cref="MeshNode.CreatedBy"/>, <see cref="MeshNode.LastModified"/> and
+    /// <see cref="MeshNode.LastModifiedBy"/> travel with it VERBATIM. A relocation changes WHERE a
+    /// node lives, never WHO wrote it or WHEN (issue #3263: one subtree move on
+    /// memex.systemorph.com re-stamped ~80 nodes — a commercial proposal among them — as created
+    /// that minute by whoever ran the move, unrecoverably).
+    ///
+    /// <para>A plain COPY leaves this <c>false</c>, and that is deliberate rather than incidental:
+    /// the copy is a NEW node, so the four stamps are cleared here and the create path stamps the
+    /// copier and the moment of the copy. Preserving them on a copy would be actively wrong —
+    /// <c>AccessContextScope</c> derives the identity to impersonate from
+    /// <see cref="MeshNode.CreatedBy"/>, so a copy that kept the original author would run
+    /// owner-scoped work as someone who never touched it.</para>
+    /// </summary>
+    public bool PreserveAuthorship { get; init; }
 }
 
 /// <summary>
