@@ -169,6 +169,19 @@ breaker (`MaxQuiesceRearms`, 20) covers two hubs each holding a deferred request
 past it the callbacks are cancelled as before and the case is logged at **Error** (`[QUIESCE-CUT]`,
 7315). The stall detector treats a Quiescing hub with owed replies as *busy*.
 
+### A refused REPLY is discarded with nobody told
+
+The three shapes above all end with *someone is told*. There is a fourth that did not, and it is an
+asymmetry rather than a phase: a delivery a shutting-down hub refuses is answered by NACKing its
+**sender**, and a reply's sender is the RESPONDER — the party parked on the message is the
+request's originator, and it hears nothing. So an owner's verdict minted on a turn that outlives
+the start of teardown could be posted, accepted, refused one turn later in routing, and dropped,
+while its caller burned a full 31 s `WriteVerdictBound` (#3303 — it dequeued a merge-queue group
+build and reddened five PRs in one afternoon). `HierarchicalRouting` now offers a delivery carrying
+a correlation id to the in-process watch still armed for it, on the two arms where it gives up. The
+asymmetry, the seam and the deterministic reproduction are in
+[Refused Replies During Teardown](/Doc/Architecture/RefusedRepliesDuringTeardown).
+
 ### What a hub still discards, and why that is an Error too
 
 Two things a disposing hub cannot carry across: deliveries **deferred** behind an initialization
