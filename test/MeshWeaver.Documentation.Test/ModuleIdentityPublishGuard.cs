@@ -54,9 +54,9 @@ public class ModuleIdentityPublishGuard
         // The anchor is the SAME reference set the build bound against, and WHERE that is moves
         // with the platform: the pinned image's extracted /app when one is pinned (`platform-refs`
         // — which the sdk build passes as MeshWeaverRefs and the container build compiles inside),
-        // the module's own output when the platform was built from source. It is never a second
-        // opinion, and never left to the packer's default probe, which is exactly the probe that
-        // found nothing on all 34 of the fleet's bundles.
+        // the PACK TOOL's publish output when the platform was built from source. It is never a
+        // second opinion, and never left to the packer's default probe, which is exactly the probe
+        // that found nothing on all 34 of the fleet's bundles.
         Assert.Contains("anchor=\"$REFS/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
         Assert.Contains("--graph-dll \"$anchor\"", pack, StringComparison.Ordinal);
 
@@ -76,6 +76,23 @@ public class ModuleIdentityPublishGuard
         // The ratchet: scavenging the anchor out of the module's own publish output is the exact
         // defect above, and it reads as reasonable every time. It must not come back.
         Assert.DoesNotContain("anchor=\"$PACKDIR/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
+
+        // 🚨 #3176 — AND THE ANCHOR BUILD PASSES NO MODULE VERSION. `$VERSION` is the MODULE's
+        // package version; MSBuild writes it into the assembly's version attributes, which are part
+        // of the metadata the MVID is computed over. Passing it makes every matrix job build its
+        // OWN compiler, so a run states one identity PER MODULE — measured on THIS command, the two
+        // package versions core CD packs: -p:Version=1.3.18 → 34337c31960d47f5b5251d32ef923fc6,
+        // -p:Version=1.0.24 → 7c1c4f70de084da78659e6bda495e1c5, while two runs with NO override are
+        // byte-identical (71cc81badb364c5d8558ac5e7db6a44e twice). Observed in the field on run 33874892203
+        // (MeshWeaver.AI be27d0fb…, MeshWeaver.Markdown.Collaboration d756b82e…, same platform,
+        // same commit). That is the SILENT half of this defect: absent the anchor the pack goes
+        // red, but a per-module anchor packs GREEN and hands #3154's comparison a value no
+        // consumer can match. The identity is the PLATFORM's, so the platform's own properties
+        // build it and nothing per-module may reach that command line.
+        var anchorBuild = pack[pack.IndexOf(
+            "dotnet build \"$anchordir/MeshWeaver.Compiler.csproj\"", StringComparison.Ordinal)..];
+        anchorBuild = anchorBuild[..anchorBuild.IndexOf("anchor=\"$anchordir", StringComparison.Ordinal)];
+        Assert.DoesNotContain("-p:Version", anchorBuild, StringComparison.Ordinal);
 
         // 🚨 BOTH arms end RED when there is no anchor — the branch picks WHERE to look, never
         // whether to check. A bundle whose identity is a guess is worse than a pack that stops.
