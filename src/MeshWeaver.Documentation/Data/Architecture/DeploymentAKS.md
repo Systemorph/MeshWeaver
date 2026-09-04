@@ -150,17 +150,30 @@ deploy/aks/scripts/check-chart-drift.sh -n <NS> -r <release> \
 ```
 
 It renders the chart, reads the live `memex-portal-config` and `memex-portal-deployment` plus the
-namespace's `PodDisruptionBudget` and `ScaledObject`, and classifies every difference into the five
-classes below — **COLLIDES** and **SHADOWS** (an inline `env:` entry that overrides `envFrom`, so
-the value the chart supplies is dead or resolved at random per pod start), then **CLUSTER-ONLY**
-(hand-applied, and in no committed source), **CHART-ONLY** (described but never applied — nobody is
-getting it), and **DIFFERS**.
+namespace's `PodDisruptionBudget` and `ScaledObject`, **and reads the last-deployed release manifest
+(`helm get manifest`)**, then classifies every difference into the five classes below —
+**COLLIDES** and **SHADOWS** (an inline `env:` entry that overrides `envFrom`, so the value the
+chart supplies is dead or resolved at random per pod start), then **CLUSTER-ONLY** (hand-applied,
+and in no committed source), **CHART-ONLY** (described but never applied — nobody is getting it),
+and **DIFFERS**.
 
 🚨 **CLUSTER-ONLY does NOT mean "the next `helm upgrade` deletes it".** This page said that until
 2026-09-03 and it is false — measured, and contradicted four paragraphs below by this same page.
 Helm's three-way merge removes only what Helm previously owned, so drift applied out of band
 survives every deploy. Ranking the backlog by "what a deploy would destroy" ranked it by a hazard
 that does not exist and buried the two classes that are wrong *now*.
+
+**Except for one narrow half of it, which the check now computes.** There are three sides here, not
+two: **D** the chart as CI renders it, **L** the live objects, **M** the release manifest. A key
+that is in `L` and in `M` but no longer in `D` is a chart **retirement** — helm owned it, so the
+merge removes it, and the next `helm upgrade` genuinely does delete it. Such a finding stays in the
+`CLUSTER-ONLY` class and reads **`PENDING DELETION`**, with a count in the summary line, and it
+states whether the live value is empty (the removal is a no-op) or not (a real removal) — the value
+decides that, not the key name. The other half now says *helm never owned it* rather than asking
+you to take "a `helm upgrade` PRESERVES it" on trust. **The manifest is a required input**: if it
+cannot be read the check fails RED, because with `M` missing every live-only key would read as the
+surviving half and the report would answer "nothing is about to be deleted" at the moment it could
+not tell.
 
 Secret values are never printed, and neither are inline `env` values — but both are **compared**:
 an entry present on both the chart and the pod with a different value is reported as `DIFFERS`
@@ -184,8 +197,9 @@ Two things to know before you trust a green run:
   `portal-patch.json` after `helm upgrade` (the CSI `envFrom`, extra volumes); pass it so those
   additions read as intentional. Anything cluster-only and *not* in that file is undeclared drift.
 
-It fails RED when it cannot compare — an unreachable cluster, a failed render, or a rendered
-ConfigMap with no keys — rather than reporting "no drift" on no evidence.
+It fails RED when it cannot compare — an unreachable cluster, a failed render, a rendered
+ConfigMap with no keys, or an unreadable release manifest — rather than reporting "no drift" on no
+evidence.
 
 **Two callers, and neither may skip.** The script's inputs are cluster credentials and the
 per-env values, so it cannot be a pull-request gate: a gate that skips when a credential is

@@ -64,6 +64,16 @@ its own, and `--test-receipts` / `--tests-result` make the pairing checkable: a 
 with no test receipt, a test receipt for a module that delegated nothing, and a tests lane that
 did not succeed are each RED, under this job's own unchanged context name. `bundles-built` is
 deliberately untouched by all of it.
+
+🚨 AND ONE RUN STATES ONE FRAMEWORK IDENTITY (#3310). Every guard on the identity anchor is
+CONFIG-level — it asserts the lane's text or the anchor's location — so none of them can see a run
+END UP stating a different identity per module, which is what any per-module property reaching the
+anchor build produces, silently and green. The identity names the PLATFORM build and a lane pins
+ONE platform, so this job — the only one that sees the whole wave — reads the value each receipt
+carries and refuses a lane whose bundles disagree. A receipt that states NO identity was written by
+a lane older than this script (a caller pins the LANE and `platform-ref` separately, on purpose)
+and is a DISTINCT, NAMED refusal carrying the remedy: "absent" must never read as "agrees", which is
+the same mistake as a skipped gate reading as a passed one.
 """
 from __future__ import annotations
 
@@ -348,6 +358,84 @@ def test_lane(receipts: dict[str, dict], test_receipts: dict[str, dict], broken:
         notes.append(f"suites: {len(delegated)} ran in the tests lane beside the pack matrix, "
                      f"{len(inline)} inline in the pack job (this call publishes, so a red suite "
                      f"cannot publish), {len(none)} not owed a run by the selection")
+    return errors, notes
+
+
+IDENTITY_FIELD = "frameworkIdentity"
+"""The framework identity the receipt's bundle STATES, read off the packed manifest's
+`frameworkMvid` by the leg that produced the bytes (build or reuse alike)."""
+
+
+def identity_agreement(receipts: dict[str, dict]) -> tuple[list[str], list[str]]:
+    """(errors, notes) — does every bundle this lane packed state the SAME framework identity?
+
+    🚨 THIS IS THE ONLY OUTCOME-LEVEL CHECK ON THE IDENTITY, and the failure it catches is SILENT
+    (#3310). The identity names the PLATFORM build, and a lane pins ONE platform — so a lane whose
+    bundles state two identities has produced bundles no consumer can compare against a single
+    platform, and it did so while every existing guard stayed green. Those guards are CONFIG-level:
+    `ModuleIdentityPublishGuard` asserts the lane's TEXT (the anchor is built from the pinned
+    platform source and that command line carries no `-p:Version`) and `ModulePackCommand` asserts
+    the anchor's LOCATION. Neither can see the run END UP stating more than one value — a second
+    per-module property reaching the anchor build (`-p:InformationalVersion`, `-p:SourceRevisionId`,
+    a `Directory.Build.props` edit keyed on the module), a future arm deriving the anchor a third
+    way, or a caller passing `--framework-mvid` per module would leave them all passing while the
+    bundles pack, the manifests carry well-formed 32-hex values, and every non-blank assertion
+    downstream succeeds. Measured twice already: #3211's `(unrecorded)` fleet, then run 33874892203
+    packing TWO identities for one platform.
+
+    🚨 AND AN ABSENT IDENTITY IS A NAMED REFUSAL, NEVER "AGREES". A receipt carrying no identity
+    was written by a module-pack lane older than this verifier — a caller may pin the LANE
+    (`uses: …/node-repo-module-pack.yml@<sha>`) and `platform-ref` (which is where this script is
+    read from) separately and on purpose. Reading that silence as agreement would make this gate
+    answer "one identity" from a set that stated none, which is exactly the class of mistake the
+    gate exists to remove, so it is refused and NAMED with the remedy.
+
+    Scoped to THIS call's receipts (lane stamp + declared matrix, applied by `own_receipts`): a repo
+    calling the lane twice pins one platform PER CALL, so two calls may legitimately differ."""
+    errors: list[str] = []
+    notes: list[str] = []
+    if not receipts:
+        return errors, notes
+
+    stated: dict[str, str] = {}
+    silent: list[str] = []
+    for module in sorted(receipts):
+        value = receipts[module].get(IDENTITY_FIELD)
+        value = value.strip() if isinstance(value, str) else ""
+        if value:
+            stated[module] = value
+        else:
+            silent.append(module)
+
+    if silent:
+        errors.append(
+            f"{len(silent)} receipt(s) state NO framework identity, so this lane cannot say whether "
+            f"its bundles agree — and an unstated identity must never read as agreement (#3310): "
+            + ", ".join(silent)
+            + ". The receipts were written by a module-pack lane older than this verifier: move the "
+              "caller's `uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-pack.yml@<sha>` "
+              "to a commit that records `frameworkIdentity` (the same commit as its `platform-ref` "
+              "is the safe choice — the two are pinned separately).")
+
+    distinct = sorted(set(stated.values()))
+    if len(distinct) > 1:
+        by_identity = {
+            identity: sorted(m for m, v in stated.items() if v == identity)
+            for identity in distinct
+        }
+        errors.append(
+            f"this lane's bundles state {len(distinct)} DIFFERENT framework identities, and a lane "
+            f"pins ONE platform — so at least one of them names a platform build that does not "
+            f"exist, which every consumer then fails to match on every reconcile, forever (#3310, "
+            f"#3154): "
+            + "; ".join(f"{identity} ← " + ", ".join(by_identity[identity]) for identity in distinct)
+            + ". Something per-module is reaching the identity anchor (a `-p:Version`-shaped "
+              "property on the anchor build, an arm deriving the anchor from the module's own "
+              "output, or a caller passing --framework-mvid per module).")
+
+    if not errors:
+        notes.append(f"all {len(stated)} bundle(s) this call packed state ONE framework identity: "
+                     f"{distinct[0]}")
     return errors, notes
 
 
@@ -653,6 +741,93 @@ def self_test() -> int:
         check("test receipts whose pack legs produced NO receipt are the COUNT gate's finding, "
               "not this one's — it must not misname the cause", not errs, f"{errs}")
 
+        # ── ONE RUN, ONE PLATFORM, ONE IDENTITY ───────────────────────────────────────────
+        # 🚨 The mutations here are the ONLY place the identity defect can be made to fail. Every
+        # other guard on it reads the lane's TEXT, and the failure they cannot see is silent: the
+        # bundles pack, the manifests carry well-formed 32-hex values, and a run states one
+        # identity PER MODULE. Reinstating `-p:Version="$VERSION"` on the anchor build produces
+        # EXACTLY the first mutation below (measured on that command: -p:Version=1.3.18 →
+        # 34337c31…, -p:Version=1.0.24 → 7c1c4f70…, no override → 71cc81ba… twice).
+        print("one run, one platform, ONE identity — the outcome the config-level guards cannot "
+              "see (#3310):")
+        ONE = "71cc81badb364c5d8558ac5e7db6a44e"
+        OTHER = "34337c31960d47f5b5251d32ef923fc6"
+
+        def idr(identity: str) -> dict[str, dict]:
+            return {m: {"lane": "floor-abc123", "module": m, IDENTITY_FIELD: identity}
+                    for m in three}
+
+        agreed = idr(ONE)
+        errs, nts = identity_agreement(agreed)
+        check("every bundle states the same identity ⇒ pass, and the note SAYS which",
+              not errs and any(ONE in n for n in nts), f"{errs} {nts}")
+
+        disagreeing = dict(agreed)
+        disagreeing["MeshWeaver.Mcp"] = {"lane": "floor-abc123", "module": "MeshWeaver.Mcp",
+                                         IDENTITY_FIELD: OTHER}
+        errs, _ = identity_agreement(disagreeing)
+        check("a per-module identity (what reinstating -p:Version on the anchor build produces) "
+              "⇒ RED, naming the modules AND their identities",
+              any("DIFFERENT framework identities" in e and ONE in e and OTHER in e
+                  and "MeshWeaver.Mcp" in e and "MeshWeaver.AI" in e for e in errs), f"{errs}")
+
+        for value, label in ((None, "an absent"), ("", "an empty"), ("   ", "a whitespace")):
+            silent = dict(agreed)
+            silent["MeshWeaver.Teams"] = {"lane": "floor-abc123", "module": "MeshWeaver.Teams"}
+            if value is not None:
+                silent["MeshWeaver.Teams"][IDENTITY_FIELD] = value
+            errs, nts = identity_agreement(silent)
+            check(f"{label} identity is a NAMED refusal, never a silent 'agrees' — and the "
+                  f"remedy is in the message",
+                  any("state NO framework identity" in e and "MeshWeaver.Teams" in e
+                      and "node-repo-module-pack.yml@" in e for e in errs)
+                  and not nts, f"{errs} {nts}")
+
+        # Both findings at once: a lane may be BOTH stale and disagreeing, and reporting only the
+        # first would send the reader after the wrong one.
+        both = dict(disagreeing)
+        both["MeshWeaver.Teams"] = {"lane": "floor-abc123", "module": "MeshWeaver.Teams"}
+        errs, _ = identity_agreement(both)
+        check("a lane that is BOTH stale and disagreeing reports both findings",
+              len(errs) == 2, f"{errs}")
+
+        # 🚨 PER LANE, because a repo calling this workflow twice pins one platform PER CALL. The
+        # filter is `own_receipts` — the same one the count gate and the tests lane apply — so a
+        # sibling call's identity can neither red this one nor satisfy it.
+        with_sibling = dict(agreed)
+        with_sibling["MeshWeaver.Ghost"] = {"lane": "rest-def456", "module": "MeshWeaver.Ghost",
+                                            IDENTITY_FIELD: OTHER}
+        errs, _ = identity_agreement(own_receipts(with_sibling, "floor-abc123", set(three)))
+        check("a SIBLING call's differing identity is not this call's to judge (two calls, two "
+              "pins) ⇒ pass", not errs, f"{errs}")
+        errs, _ = identity_agreement(own_receipts(with_sibling, "", None))
+        check("…and without the lane filter that same set IS the disagreement — the scope is what "
+              "makes the pass legitimate, not the absence of a finding",
+              any("DIFFERENT framework identities" in e for e in errs), f"{errs}")
+
+        check("an empty selection has nothing to disagree about ⇒ pass, silently",
+              identity_agreement({}) == ([], []))
+
+        # And end-to-end, off files on disk, through the same reader the gate uses — a check that
+        # only ever ran on hand-built dicts would not prove the FIELD NAME the lane writes.
+        idd = Path(tmp) / "identity"
+        idd.mkdir()
+        for m in three:
+            (idd / f"{m}.json").write_text(json.dumps(
+                {"lane": "floor-abc123", "package": m.split(".")[-1], "module": m,
+                 "version": "1.2.3", IDENTITY_FIELD: ONE}), encoding="utf-8")
+        parsed, _ = read_receipts(idd)
+        errs, nts = identity_agreement(own_receipts(parsed, "floor-abc123", set(three)))
+        check("read off real receipt FILES, the field the lane writes is the field this reads",
+              not errs and any(ONE in n for n in nts), f"{errs} {nts}")
+        (idd / "MeshWeaver.Teams.json").write_text(json.dumps(
+            {"lane": "floor-abc123", "package": "Teams", "module": "MeshWeaver.Teams",
+             "version": "1.2.3", IDENTITY_FIELD: OTHER}), encoding="utf-8")
+        parsed, _ = read_receipts(idd)
+        errs, _ = identity_agreement(own_receipts(parsed, "floor-abc123", set(three)))
+        check("…and one file mutated to a second identity turns it RED",
+              any("DIFFERENT framework identities" in e for e in errs), f"{errs}")
+
     if failures:
         print(f"\n::error title=node-repo-pack-verify self-test failed::{len(failures)} case(s) — "
               "this gate is the only thing standing between a narrowed matrix and a silently "
@@ -663,11 +838,15 @@ def self_test() -> int:
           "receipt LANE cases (own stamp counts, a sibling lane's does not — even for a module "
           "both calls declared), 12 built-marker cases (foreign lane, unstamped, no closure, no "
           "bundle, corrupt, zero markers — every one fail-closed — plus #2710's red-suite "
-          "survival), 5 empty-selection cases including the scope=full contradiction lock, and 11 "
+          "survival), 5 empty-selection cases including the scope=full contradiction lock, 11 "
           "TESTS-LANE cases (a failed or cancelled lane is red, a skipped lane with delegated "
           "suites is red because the suite then ran NOWHERE, a missing or corrupt test receipt is "
           "red, the inline/lane halves disagreeing is red — and the publishing, nothing-owed, "
-          "older-caller and pack-failed shapes must stay green) — all green.")
+          "older-caller and pack-failed shapes must stay green), and 10 IDENTITY cases (two "
+          "identities in one lane is red naming both, an absent/empty/whitespace identity is a "
+          "distinct NAMED refusal rather than 'agrees', both findings are reported together, the "
+          "check is scoped per LANE, and the field is read end-to-end off real receipt files) — "
+          "all green.")
     return 0
 
 
@@ -730,8 +909,8 @@ def main() -> int:
     # 🚨 AFTER the bundles-built answer and deliberately unable to change it: a red suite must red
     # THIS context and must NOT read as "bundle missing" to a gate that only composes the bundle
     # (#2710, Plugins#937). Those are two different questions and this is the second one.
+    declared_set = parse_declared(args.declared)
     if args.test_receipts or args.tests_result:
-        declared_set = parse_declared(args.declared)
         t_receipts, t_broken = (read_receipts(Path(args.test_receipts))
                                 if args.test_receipts else ({}, []))
         t_errors, t_notes = test_lane(own_receipts(receipts, args.lane, declared_set),
@@ -741,6 +920,17 @@ def main() -> int:
         errors.extend(t_errors)
         if t_errors:
             code = 1
+
+    # 🚨 THE THIRD QUESTION, and the only one asked of the OUTCOME: did this lane's bundles end up
+    # stating ONE framework identity? Unconditional — there is no flag to forget and no input to
+    # test, because the evidence is the receipts this job already downloaded. Like the tests-lane
+    # accounting it runs after `bundles_built` and cannot change it: bundles that disagree are
+    # complete and composable, and mis-stating them as missing would misname the cause (#2710).
+    i_errors, i_notes = identity_agreement(own_receipts(receipts, args.lane, declared_set))
+    notes.extend(i_notes)
+    errors.extend(i_errors)
+    if i_errors:
+        code = 1
     for note in notes:
         print(f"✓ {note}")
     for error in errors:

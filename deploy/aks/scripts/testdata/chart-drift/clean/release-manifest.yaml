@@ -1,0 +1,61 @@
+# M — the last-deployed release manifest (`helm get manifest <release> -n <ns>`), the `original`
+# side of helm's three-way merge: exactly what helm previously owned.
+#
+# In the CLEAN case it agrees with desired.yaml, because that is what a namespace looks like when
+# the last deploy rendered this chart and nothing has been touched since. It has to agree, or the
+# control breaks: the clean case must report "No drift", and a manifest carrying a key the chart no
+# longer renders would put a PENDING DELETION into it.
+#
+# Only the memex-portal-config `data` keys and the portal container's `env` NAMES are read from
+# here — the values on this side are never compared against anything.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: memex-portal-config
+data:
+  Email__ClientId: ""
+  Grpc__TrustedPort: "8082"
+  Pad__01: "v1"
+  Pad__02: "v2"
+  Pad__03: "v3"
+  Pad__04: "v4"
+  Pad__05: "v5"
+  Pad__06: "v6"
+  Pad__07: "v7"
+  Pad__08: "v8"
+  Pad__09: "v9"
+  Pad__10: "v10"
+  Pad__11: "v11"
+  Pad__12: "v12"
+  Pad__13: "v13"
+  Pad__14: "v14"
+  Pad__15: "v15"
+  Pad__16: "v16"
+  Pad__17: "v17"
+  Pad__18: "v18"
+  PluginCatalog__RegistryUrl: "https://registry.example"
+  PreWarm__BatchBake: ""
+  PreWarm__GateReadiness: "false"
+  Retention__Days: "30"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memex-portal-deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: memex-portal
+          envFrom:
+            - configMapRef:
+                name: memex-portal-config
+            - configMapRef:
+                name: portal-extra
+          env:
+            - name: DOTNET_DbgMiniDumpType
+              value: "2"
+            - name: DOTNET_DbgMiniDumpName
+              value: "/data/dumps/coredump.%p.%t"
+            - name: AZURE_CLIENT_ID
+              value: "00000000-0000-0000-0000-000000000001"

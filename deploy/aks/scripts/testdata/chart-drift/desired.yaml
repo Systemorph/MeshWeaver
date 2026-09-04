@@ -26,6 +26,10 @@ data:
   PluginCatalog__RegistryUrl: "https://registry.example"
   PreWarm__BatchBake: ""
   PreWarm__GateReadiness: "false"
+  # The NEGATIVE CONTROL for the pending-deletion check: live, in the release manifest, and STILL
+  # rendered here. It must not be reported at all — without it the check could pass by flagging
+  # every key the manifest happens to carry.
+  Retention__Days: "30"
 ---
 apiVersion: apps/v1
 kind: Deployment

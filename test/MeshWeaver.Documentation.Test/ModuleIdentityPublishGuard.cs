@@ -40,11 +40,20 @@ namespace MeshWeaver.Documentation.Test;
 /// on the step that actually publishes — the inspection runs on the BUILD leg only, while the reuse
 /// leg hands over an artifact an earlier run packed, so a guard bound to the inspection alone would
 /// pass while pre-#3211 bytes went to the registry.</para>
+///
+/// <para>🚨 <b>And every one of those is CONFIG-level</b> — the lane's text, the anchor's location.
+/// None can see the run END UP stating a different identity per module, which is the SILENT half
+/// (#3310): the bundle packs, the manifest carries a well-formed 32-hex value, and every non-blank
+/// assertion downstream passes. That is asserted on the OUTCOME instead, in
+/// <c>node-repo-pack-verify.py</c>'s <c>identity_agreement</c> over the receipts <c>verify</c>
+/// already collects; the last test here is the ratchet on the evidence trail that check depends on,
+/// not the check itself.</para>
 /// </summary>
 public class ModuleIdentityPublishGuard
 {
     private const string Lane = ".github/workflows/node-repo-module-pack.yml";
     private const string KeyScript = ".github/scripts/module-build-key.py";
+    private const string Verifier = ".github/scripts/node-repo-pack-verify.py";
 
     [Fact]
     public void ThePackStep_NamesTheIdentityAnchor_AndFailsRedWhenThereIsNone()
@@ -137,6 +146,57 @@ public class ModuleIdentityPublishGuard
 
         // An unreadable manifest is a refusal too — "could not check" must never render as "checked".
         Assert.Contains("refusing to publish bytes whose manifest this lane could not check", pack, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 THE OUTCOME-LEVEL HALF (#3310). Every assertion above reads the lane's TEXT or the
+    /// anchor's LOCATION, so none of them can see a run END UP stating a different identity per
+    /// module — the silent shape: the bundle packs, the manifest carries a well-formed 32-hex
+    /// value, and every non-blank assertion downstream passes. The one check that sees it is an
+    /// agreement assertion over the whole wave, and it needs the value on the RECEIPT.
+    ///
+    /// <para>This test is the ratchet on that evidence trail, not the check itself — the check is
+    /// <c>identity_agreement</c> in the verifier, whose <c>--self-test</c> runs on every lane run
+    /// and mutates a green run into both failures. What is asserted here is that the trail cannot
+    /// be quietly cut: the receipt step reads the identity off the BYTES (so a reuse leg is
+    /// accounted for exactly like a build leg — the inspection above runs on the build leg alone),
+    /// refuses to write a receipt that states none, and the verifier still refuses BOTH a
+    /// disagreement AND an absent value. An absent identity reading as "agrees" would be the same
+    /// mistake as a skipped gate reading as a passed one.</para>
+    /// </summary>
+    [Fact]
+    public void TheReceiptCarriesTheStatedIdentity_AndVerifyRefusesBothDisagreementAndSilence()
+    {
+        var pack = JobBody("pack");
+
+        // Off the BYTES this leg produced — the build leg's packed bundle or the artifact the
+        // reuse leg downloaded and sha256-verified — never from a step output. The packer's exit
+        // code, the inspection's tick and the value in the artifact are three different claims,
+        // and only the third is what a consumer compares against.
+        var receipt = pack[pack.IndexOf("name: Drop the receipt", StringComparison.Ordinal)..];
+        Assert.Contains("BUNDLE: ${{ steps.bundle.outputs.path || steps.reused.outputs.path }}",
+            receipt, StringComparison.Ordinal);
+        Assert.Contains("unzip -p \"$BUNDLE\" meshweaver/manifest.json", receipt, StringComparison.Ordinal);
+        Assert.Contains("jq -r '.frameworkMvid // \"\"' | tr -d '[:space:]'", receipt, StringComparison.Ordinal);
+        // A receipt that cannot state the identity is REFUSED, not written blank: a blank field
+        // would make "this lane's bundles agree" vacuously true for that module, which is the very
+        // reading this whole change removes.
+        Assert.Contains("states no framework identity", receipt, StringComparison.Ordinal);
+        Assert.Contains("frameworkIdentity:$fi", receipt, StringComparison.Ordinal);
+
+        // And the verifier that reads it still asks BOTH questions. `verify` is the lane's one
+        // stable context (`All selected bundles built`) — the context a repo's branch protection
+        // requires — so this is where the outcome becomes falsifiable.
+        var verifier = File.ReadAllText(Path.Combine(FindRepoRoot(), Verifier));
+        Assert.Contains("def identity_agreement(", verifier, StringComparison.Ordinal);
+        Assert.Contains("IDENTITY_FIELD = \"frameworkIdentity\"", verifier, StringComparison.Ordinal);
+        Assert.Contains("DIFFERENT framework identities", verifier, StringComparison.Ordinal);
+        Assert.Contains("state NO framework identity", verifier, StringComparison.Ordinal);
+        // 🚨 UNCONDITIONAL in main(): no flag to forget, no input to test. A check reached only
+        // when a caller remembers to pass something is the skip-trapdoor in another costume.
+        Assert.Contains("i_errors, i_notes = identity_agreement(own_receipts(receipts, args.lane, declared_set))",
+            verifier, StringComparison.Ordinal);
+        Assert.Contains("if i_errors:", verifier, StringComparison.Ordinal);
     }
 
     /// <summary>
