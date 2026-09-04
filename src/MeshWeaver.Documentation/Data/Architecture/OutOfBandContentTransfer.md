@@ -95,8 +95,13 @@ public record StagedContentFile(string Path, string Handle, long Length);
   inline file.
 - `Handle` — the lowercase hex **SHA-256 of the bytes**. The staged blob lives at
   `_staging/{Handle}` within the collection.
-- `Length` — the raw byte count. The receiver **verifies it** against the staged stream before
-  writing, so a truncated or half-written blob is a loud failure rather than a corrupt asset.
+- `Length` — the raw byte count. The receiver **verifies it** against the staged blob before writing,
+  so a truncated or half-written blob is a loud failure rather than a corrupt asset. 🚨 One case the
+  check cannot cover, and it is said out loud rather than left implied: a store that HAS the blob but
+  cannot report its size (a provider whose stream is not seekable) answers `-1`. Refusing there would
+  reject content that is almost certainly intact, on every such store, for ever — so the write
+  proceeds and **logs that it went out unverified**. Every file-system-backed collection reports a
+  size, which is every store a content sync writes to today.
 
 `SyncContentFilesRequest` carries them in a new `StagedFiles` list beside `Files`. A sync with no
 over-budget file produces a request byte-for-byte identical to what it produced before — `StagedFiles`

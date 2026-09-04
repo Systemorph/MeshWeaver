@@ -125,7 +125,9 @@ public static class ContentImportExtensions
 
         // The hub action block only subscribes + returns; every I/O leaf runs on the
         // collection's own pool — this layer is pure reactive composition.
-        SyncFiles(contentService, request)
+        SyncFiles(contentService, request,
+                hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(ContentImportExtensions).FullName!))
             .Subscribe(
                 count => hub.Post(ImportContentResponse.Ok(count), o => o.ResponseFor(delivery)),
                 ex => hub.Post(FailureFor(delivery, ex), o => o.ResponseFor(delivery)));
@@ -162,7 +164,8 @@ public static class ContentImportExtensions
     /// <c>TargetPath</c> that the incoming set does not carry, so the folder mirrors the supplied set
     /// exactly. Returns the number of files written.
     /// </summary>
-    private static IObservable<int> SyncFiles(IContentService contentService, SyncContentFilesRequest request)
+    private static IObservable<int> SyncFiles(
+        IContentService contentService, SyncContentFilesRequest request, ILogger? logger)
         => contentService.GetCollection(request.CollectionName)
             .Select(target => target
                 ?? throw new InvalidOperationException($"Target content collection '{request.CollectionName}' not found"))
@@ -231,7 +234,7 @@ public static class ContentImportExtensions
                 foreach (var s in stagedFiles)
                 {
                     var (dir, name) = Split(s.Path);
-                    writeOps.Add(WriteStaged(target, s, dir, name));
+                    writeOps.Add(WriteStaged(target, s, dir, name, logger));
                 }
 
                 var writes = writeOps.Count == 0
@@ -293,9 +296,17 @@ public static class ContentImportExtensions
     /// missing blob and a length mismatch each throw, naming the handle and the destination path,
     /// and the failure travels to the caller's <c>ImportContentResponse</c> and on to the Space's
     /// <c>_Activity/content-sync</c> ledger.</para>
+    ///
+    /// <para>🚨 <b>The one case the length check cannot cover, said out loud.</b>
+    /// <c>GetContentSize</c> answers <c>-1</c> for a store that HAS the blob but cannot report its
+    /// size (a provider whose stream is not seekable). Refusing there would reject content that is
+    /// almost certainly intact, on every such store, for ever — so the write proceeds, and the fact
+    /// that it went out UNVERIFIED is logged rather than left to be inferred from a contract that
+    /// quietly did not hold. Every file-system-backed collection reports a size, which is every
+    /// store a content sync writes to today.</para>
     /// </summary>
     private static IObservable<int> WriteStaged(
-        ContentCollection target, StagedContentFile staged, string dir, string name)
+        ContentCollection target, StagedContentFile staged, string dir, string name, ILogger? logger)
     {
         var blob = ContentStaging.BlobPath(staged.Handle);
         // Probe first — GetContentSize never reads the content and, like every other leaf here,
@@ -310,13 +321,27 @@ public static class ContentImportExtensions
                 >= 0 when size != staged.Length => Observable.Throw<int>(new InvalidOperationException(
                     $"Staged content '{staged.Handle}' for '{staged.Path}' is {size:N0} bytes but "
                     + $"the handle declares {staged.Length:N0} — refusing to write a truncated asset.")),
-                _ => target.GetContent(blob)
-                    .SelectMany(stream => stream is null
-                        ? Observable.Throw<int>(new InvalidOperationException(
-                            $"Staged content '{staged.Handle}' for '{staged.Path}' disappeared from "
-                            + $"'{blob}' between the probe and the read, so the file was NOT written."))
-                        : target.SaveFile(dir, name, () => stream).Select(_ => 1))
+                _ => CopyStaged(target, staged, dir, name, blob, verified: size >= 0, logger)
             });
+    }
+
+    /// <summary>Streams the staged blob into its destination path, saying so when it could not be verified.</summary>
+    private static IObservable<int> CopyStaged(
+        ContentCollection target, StagedContentFile staged, string dir, string name, string blob,
+        bool verified, ILogger? logger)
+    {
+        if (!verified)
+            logger?.LogWarning(
+                "Staged content {Handle} for {Path} in collection {Collection} was written WITHOUT a "
+                + "length check: the backing store reports the blob exists but cannot report its size, "
+                + "so the declared {Length} bytes could not be confirmed",
+                staged.Handle, staged.Path, target.Collection, staged.Length);
+        return target.GetContent(blob)
+            .SelectMany(stream => stream is null
+                ? Observable.Throw<int>(new InvalidOperationException(
+                    $"Staged content '{staged.Handle}' for '{staged.Path}' disappeared from "
+                    + $"'{blob}' between the probe and the read, so the file was NOT written."))
+                : target.SaveFile(dir, name, () => stream).Select(_ => 1));
     }
 
     /// <summary>

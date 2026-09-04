@@ -119,7 +119,10 @@ public record InlineContentFile(string Path, byte[] Content);
 /// </summary>
 /// <param name="Path">The file's path RELATIVE to <see cref="SyncContentFilesRequest.TargetPath"/>, exactly as an inline file's is.</param>
 /// <param name="Handle">The staged blob's name within the collection's staging folder — the lowercase hex SHA-256 of the bytes.</param>
-/// <param name="Length">The raw byte count, VERIFIED by the receiver against the staged stream before it is written.</param>
+/// <param name="Length">The raw byte count. The receiver VERIFIES it against the staged blob before
+/// writing and refuses a mismatch — except on a store that has the blob but cannot report its size,
+/// where the write proceeds and says in the log that it went out unverified rather than claiming a
+/// guarantee it did not give. Every file-system-backed collection reports a size.</param>
 public record StagedContentFile(string Path, string Handle, long Length);
 
 /// <summary>
