@@ -428,9 +428,12 @@ the 11 occurrences fired inside one of those two suites. The last one is 2 h 35 
 Be precise about what left, because "the suite moved" and "the repo is now immune" are different
 claims. Core still emits NodeType assemblies in `Compiler.Pipeline.Test` and `Graph.Test` — but those
 run in **9 s** and **100 s**, against the **13 m 38 s** of compile-heavy integration work that walked
-out, and the onset in every measured occurrence was ~2 minutes into such an assembly. What the
-removal took was not the possibility, it was **the exposure that made the rate measurable** — which
-is enough to make a post-removal null uninformative either way.
+out. What the removal took was not the possibility, it was **the exposure that made the rate
+measurable** — which is enough to make a post-removal null uninformative either way. (An earlier
+version of this paragraph justified that with *"the onset in every measured occurrence was ~2 minutes
+into such an assembly"*. **That is now falsified** — the 2026-09-03 Plugins occurrence fired **33 s**
+in — so the argument rests on suite RUNTIME, which is what the 9 s / 100 s vs 13 m 38 s comparison
+actually measures, not on a warm-up threshold.)
 
 **The rule:** before believing a null, ask *"does the code that produces this signal still run in
 this repository, in this window?"* Confirm it positively — name a run and the suite verdict line it
@@ -452,6 +455,33 @@ suffix) therefore returns a clean, fast, entirely vacuous zero. **Grep the signa
 packaging around it**, and prove the sink is alive in the target repo with a positive control before
 reporting the null (17 of 43 Plugins trace artifacts carried real `Compile failure for …` records,
 which is what made that null worth stating).
+
+#### Two sinks per repo, and only one of them is complete
+
+**Read both, and know which is authoritative.** A post-hoc `dotnet test` job log carries only the
+output of tests that **FAILED** — and the fault you are hunting is often captured by a test that
+*passed*. In the calibrated core occurrence the very first canary record is printed under
+`CreateLayoutAreaIntegrationTest.CreateArea_WithoutTypeParam_ShowsTypeSelection`, which is **not** one
+of that shard's five failures: on a `dotnet test`-driven harness that record would never have reached
+the job log at all. The complete sink is the phase trace — `_meshweaver-test-trace.log` inside
+`teardown-stragglers-<run>-<attempt>-shard<N>` — which takes an unconditional `[FAULT]` record for
+every `ILogger` call carrying an exception at Warning or worse, whatever test was running and whether
+or not it failed. (It is collected only when a suite failed, which is why it covers this defect: the
+poisoned process always reds its suite.)
+
+**Measured 2026-09-04 over 2026-09-03T06:04Z → 2026-09-04T06:34Z**: 122 non-cancelled
+`Plugin Catalog CI` runs, all 58 non-success `Portal hosts (shard N)` job logs fetched (0
+unfetchable, 50 of them running the exposure suite) plus 57 trace-log artifacts carrying 13,460
+`[FAULT]` records — **one occurrence**, run `33760859754` shard 3, on `main`, and it surfaced in
+**both** sinks (56 `canary=BELOW-ROSLYN` and 20 `PROCESS CANNOT EMIT` in the job log; 119 signature
+lines and 39 `Compile failure for …` records in the trace). That closes the blind spot the previous
+sweep recorded as open — *"I have not proved the canary's log line reaches job-log stdout in a
+Plugins shard"* — with a real occurrence rather than an argument.
+
+**Calibrate before believing a null.** The four patterns above, run over the known core occurrence
+(job `99288463497`), return **77** signature lines and **38** `canary=BELOW-ROSLYN` — the counts that
+occurrence's own report published. A detector that cannot reproduce those numbers is not entitled to
+report a zero.
 
 ### A grep hit is not a binder
 
