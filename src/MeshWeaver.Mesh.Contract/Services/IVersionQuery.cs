@@ -21,11 +21,21 @@ public record MeshNodeVersion(
 /// inside hub-reachable code without bridging to a Task. See
 /// <c>Doc/Architecture/AsynchronousCalls.md</c> ("Return type MUST be IObservable&lt;T&gt;").
 ///
-/// <para>Implementations: <c>FileSystemVersionStore</c>, <c>RoutingVersionQuery</c>,
-/// <c>NoOpVersionQuery</c>. 🚨 There is deliberately NO database implementation — this doc
-/// named a <c>PostgreSqlVersionQuery</c> for months and no such type has ever existed
-/// (MeshWeaver#3264). Every database-backed deployment therefore resolves
-/// <c>NoOpVersionQuery</c> and retains no history at all.</para>
+/// <para>Implementations in THIS repository: <c>FileSystemVersionStore</c>,
+/// <c>RoutingVersionQuery</c>, <c>NoOpVersionQuery</c> — the last of which is registered
+/// unconditionally (<c>TryAddSingleton</c>), so this service is never null and a null check can
+/// never stand in for "is there history here". Ask <see cref="RetainsHistory"/> instead.</para>
+///
+/// <para>🚨 <b>"There is no database implementation" is FALSE, and this doc said it.</b> It was
+/// written when MeshWeaver#3264 searched core alone — but the storage backends had already left
+/// for MeshWeaver.Plugins, and every one of them implements this interface AND overrides
+/// <see cref="WriteVersion"/>: <c>PostgreSqlVersionQuery</c> and
+/// <c>PostgreSqlPartitionedVersionQuery</c> (both registered by <c>PostgreSqlExtensions</c> with a
+/// plain <c>AddSingleton</c> that deliberately precedes — and therefore beats — the no-op's
+/// <c>TryAdd</c>), <c>CosmosVersionQuery</c> and <c>SnowflakeVersionQuery</c>. Measured 2026-09-04
+/// against memex.meshweaver.cloud, a Postgres deployment: 32 recorded versions on one node. A
+/// grep that stops at this repository's boundary answers a question about core, never about a
+/// deployment (MeshWeaver#3288).</para>
 /// </summary>
 public interface IVersionQuery
 {
@@ -74,8 +84,9 @@ public interface IVersionQuery
     /// pre-save Version writes the new content into an OLDER version's
     /// snapshot, overwriting history).
     /// <para>Default implementation is a no-op observable (single emission of
-    /// the input + completion); overridden by <c>FileSystemVersionStore</c>. No database
-    /// backend overrides it — see the note on <see cref="RetainsHistory"/>.</para>
+    /// the input + completion); overridden by <c>FileSystemVersionStore</c> here, and by every
+    /// database backend in MeshWeaver.Plugins (Postgres, Cosmos, Snowflake) — the claim that none
+    /// of them did was the same core-only grep corrected in the interface remarks above.</para>
     /// </summary>
     IObservable<MeshNode> WriteVersion(MeshNode node, JsonSerializerOptions options)
         => System.Reactive.Linq.Observable.Return(node);
