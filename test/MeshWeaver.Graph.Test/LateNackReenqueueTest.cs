@@ -34,10 +34,16 @@ namespace MeshWeaver.Graph.Test;
 /// activation (bounded re-enqueue budget, re-diffed against the freshest state).</para>
 ///
 /// <para>The scripted interleaving: park the owner's merge turn behind a gated no-op turn
-/// (so no response can arrive inside the 2s window), THEN dispose the owner — the disposal
-/// NACK is necessarily LATE. The write must still reach durable storage via the re-enqueue.
-/// Without Part 2 the late NACK is dropped and the storage poll times out at the pre-write
-/// state.</para>
+/// (so no response can arrive inside the 2s window), THEN dispose the owner — whatever verdict
+/// the owner produces is necessarily LATE, and the write must still reach durable storage and
+/// the caller must still see it as its own success. Since the teardown lets accepted work finish
+/// (Doc/Architecture/TeardownLayers), the parked turn releases itself when the owner starts
+/// shutting down and the queued merge then RUNS — so the late verdict here is normally the
+/// commit's own ack, dispatched to the armed watch; the OwnerDisposing NACK and its re-enqueue
+/// remain the safety net for a merge the owner could not run at all (a post refused by an
+/// already-closing sync hub, a store that completes before the echo). Both paths end in the same
+/// ground truth this test asserts. Without the late watch either verdict is dropped and the
+/// storage poll times out at the pre-write state.</para>
 ///
 /// <para>🚨 Since #2661 the caller is NOT completed at the 2 s bound — a bound expiring is not
 /// a commit, so the write's terminal is the owner's verdict wherever it arrives. Here that
@@ -76,13 +82,21 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
         // 🚨 No hand-woven gate. The turn → test signal is an AsyncSubject the parked turn
         // completes; the release travels back INTO that deliberately parked executor turn, so it
         // is a volatile flag polled under a bounded SpinUntil and written in the `finally` below.
+        // The parked turn ALSO observes the owner's shutdown: accepted work finishes its job when
+        // the owner goes down, it does not sit on the block waiting to be killed. The owner's
+        // teardown no longer force-tears a parked sync hub down (Doc/Architecture/TeardownLayers),
+        // so a turn blind to the shutdown would hold the owner at DisposeHostedHubs — honestly
+        // pending — until the test's own `finally`, and the caller would burn its verdict budget.
         var gateEntered = new AsyncSubject<Unit>();
         var releaseGate = 0;
+        var owner = nodeHub!;
         primary.Update((Func<EntityStore?, ChangeItem<EntityStore>?>)(_ =>
         {
             gateEntered.OnNext(Unit.Default);
             gateEntered.OnCompleted();
-            SpinWait.SpinUntil(() => Volatile.Read(ref releaseGate) == 1, TimeSpan.FromSeconds(60));
+            SpinWait.SpinUntil(
+                () => Volatile.Read(ref releaseGate) == 1 || owner.IsShuttingDown,
+                TimeSpan.FromSeconds(60));
             return null;
         }), _ => { });
         try

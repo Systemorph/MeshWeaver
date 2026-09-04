@@ -49,6 +49,13 @@ internal static class MessageTrace
 /// </summary>
 public class MessageService : IMessageService
 {
+    /// <summary>
+    /// Event ids for the shutdown-time discards, so the red-log triage keys the incident on the log
+    /// SITE (it deliberately ignores prose): one issue per discard shape, however many hubs hit it.
+    /// </summary>
+    internal static readonly EventId DisposalDiscardedDeferredDelivery = new(7301, nameof(DisposalDiscardedDeferredDelivery));
+    internal static readonly EventId DisposalDiscardedQueuedDelivery = new(7302, nameof(DisposalDiscardedQueuedDelivery));
+
     private readonly ILogger<MessageService> logger;
     private readonly IMessageHub hub;
 
@@ -738,6 +745,18 @@ public class MessageService : IMessageService
     // invocation in ScheduleExecution. Null means the action block is idle.
     private volatile string? currentlyExecutingMessageType;
     private long currentlyExecutingStartedTicks;
+    // Turns the pump has finished since this service was built. The disposal stall detector reads
+    // it to tell a BUSY pump (accepted work still draining ahead of the shutdown request) from a
+    // WEDGED one (a single turn that never returns): the two produce the same RunLevel and the same
+    // queue depths, and only this counter separates them.
+    private long turnsCompleted;
+
+    /// <summary>
+    /// Number of handler turns the pump has completed so far. Monotonic; read by the hub's
+    /// disposal stall detector to distinguish a pump that is draining accepted work from one whose
+    /// current turn never returns.
+    /// </summary>
+    internal long TurnsCompleted => Interlocked.Read(ref turnsCompleted);
 
     /// <summary>
     /// Snapshot counts of the dataflow buffers — used by
@@ -1684,6 +1703,7 @@ public class MessageService : IMessageService
                 // Clear the currently-executing tracker — the turn is now idle.
                 currentlyExecutingMessageType = null;
                 Interlocked.Exchange(ref currentlyExecutingStartedTicks, 0);
+                Interlocked.Increment(ref turnsCompleted);
                 if (delivery.Message is not ExecutionRequest && logger.IsEnabled(LogLevel.Debug))
                     logger.LogDebug("Finished processing {Delivery} in {Address} after {Duration}ms",
                         delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
@@ -1969,9 +1989,9 @@ public class MessageService : IMessageService
     /// </summary>
     public void Dispose()
     {
-        // 🚨 IDEMPOTENT — a second call must be a no-op, not a second teardown. MessageHub reaches
-        // here from TWO places: the ShutDown phase of HandleShutdownCore and the watchdog's
-        // force-teardown, which can both run for one hub. The second pass re-cancelled an already
+        // 🚨 IDEMPOTENT — a second call must be a no-op, not a second teardown. MessageHub reached
+        // here from TWO places (the ShutDown phase of HandleShutdownCore and, historically, the
+        // watchdog's out-of-band teardown), and both could run for one hub. The second pass re-cancelled an already
         // disposed hangDetectionCts and re-disposed the storm breaker; both throw
         // ObjectDisposedException and were only invisible because they sit inside catch-and-log
         // blocks — i.e. the .NET IDisposable contract was being met by a swallow.
@@ -2032,17 +2052,46 @@ public class MessageService : IMessageService
         // timeout continuation (or a gate drain) dispose the same CancellationTokenSource
         // concurrently, and this Cancel() then threw ObjectDisposedException out of Dispose itself
         // — logged as "Error during shutdown of hub …" (issue #2176).
+        // 🚨 An ERROR for every delivery this discards. A message that was ACCEPTED and is now
+        // thrown away — answered with a transient NACK at best — is work the hub did not finish:
+        // exactly the "we could not drain the queue" the teardown contract forbids, and the
+        // red-log pipeline files an Error as an issue. The line carries what a reader needs to
+        // reproduce it: the hub, the message type and id, its sender, the gates it was parked
+        // behind and this hub's run level.
+        var discarded = 0;
         DrainDeferredDeliveries(delivery =>
+        {
+            discarded++;
+            logger.LogError(DisposalDiscardedDeferredDelivery,
+                "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
+                + "still deferred behind its initialization gates [{Gates}] — the message is NOT processed; "
+                + "the sender is answered ShuttingDown. RunLevel={RunLevel}. Accepted work must be drained "
+                + "before a hub goes down; find why this hub disposed with its gates still shut.",
+                Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
+                string.Join(",", gates.Keys), hub.RunLevel);
             NackThroughParent(delivery,
                 $"Hub {Address} was disposed while {delivery.Message.GetType().Name} "
                 + $"(id={delivery.Id}) was still deferred behind its initialization gates "
                 + $"[{string.Join(",", gates.Keys)}] — the message was never processed. The address "
-                + "may reactivate (recycle / restart); retry to get the authoritative answer."));
+                + "may reactivate (recycle / restart); retry to get the authoritative answer.");
+        });
 
         // No buffers to Complete — ScheduleNotify drops post-shutdown messages and the
         // pump drains whatever is already queued.
         logger.LogDebug("[DISPOSE-TRACE] {address}: turn queues (mainCount={bufferCount}, deferredCount={deferredCount})",
             Address, mainQueue.Count, deferredQueue.Count);
+        // The ShutDown request is FIFO behind everything accepted before it, so by the time this
+        // runs the main queue holds only what arrived in the shutdown window and is about to be
+        // left unprocessed once the pump stops. Anything at all here is the same discard as above.
+        int leftBehind;
+        lock (turnGate) leftBehind = mainQueue.Count;
+        if (leftBehind > 0)
+            logger.LogError(DisposalDiscardedQueuedDelivery,
+                "[DISPOSE-DISCARD] Hub {Address} is disposing with {Count} turn(s) still queued and "
+                + "unprocessed (the pump stops with this call). RunLevel={RunLevel}; {Discarded} deferred "
+                + "delivery(ies) already answered ShuttingDown; last turn executing: {Executing}. Accepted work "
+                + "must be drained before a hub goes down — find what posted into the shutdown window.",
+                Address, leftBehind, hub.RunLevel, discarded, currentlyExecutingMessageType ?? "(idle)");
 
         // Don't wait on deliveryAction.Completion. Handler execution now runs INLINE
         // on this same block (executionBuffer/executionBlock were collapsed away), so

@@ -2829,8 +2829,8 @@ public static class MeshNodeStreamExtensions
             // number of times. ErrorType.ShuttingDown's own contract (Events.cs) is "retry-worthy,
             // never terminal … the sender must read this as 'ask again', not 'gone'" — and the
             // previous one-immediate-re-probe cap violated it under any recycle longer than a few
-            // milliseconds: a package-root hub whose dispose wedges for the 8s force-teardown
-            // watchdog window (MeshWeaver#1701) NACKed BOTH probes within ~1s, and a 15s-budget
+            // milliseconds: a package-root hub whose dispose sat behind accepted work for the
+            // 8s stall-detector window (MeshWeaver#1701) NACKed BOTH probes within ~1s, and a 15s-budget
             // compile-path read settled terminally failed with 14s of its budget unused — every
             // NodeType compile reading the root in that window went CompilationStatus=Error and
             // the satellite gate reported phantom, module-varying "compile failures". The first
@@ -3116,7 +3116,7 @@ public static class MeshNodeStreamExtensions
                                 // live-stream path, where "is shutting down" is classified transient for this
                                 // same reason. The first NACK re-probes immediately (zero latency for the
                                 // sub-second recycle); later NACKs ride the pacing timer so a wedged dispose
-                                // (the 8s force-teardown window, MeshWeaver#1701) is polled, not hammered.
+                                // (the 8s stall-detector window, MeshWeaver#1701) is polled, not hammered.
                                 if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
                                 {
                                     lastRecyclingNack = ex;
@@ -3200,8 +3200,8 @@ public static class MeshNodeStreamExtensions
     /// <summary>
     /// How long a recycling (ShuttingDown-NACKing) address rests between re-probes after the
     /// first immediate one. Short enough that a read resumes well within a normal read budget
-    /// once the address reactivates; long enough that a wedged dispose (the 8s force-teardown
-    /// watchdog window) is polled a handful of times, not hammered. The caller's own budget —
+    /// once the address reactivates; long enough that a slow dispose (the 8s stall-detector
+    /// window) is polled a handful of times, not hammered. The caller's own budget —
     /// never this constant — bounds the loop.
     /// </summary>
     private static readonly TimeSpan RecyclingReProbePace = TimeSpan.FromMilliseconds(500);

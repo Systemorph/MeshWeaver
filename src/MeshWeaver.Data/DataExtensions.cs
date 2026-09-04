@@ -1063,8 +1063,9 @@ public static class DataExtensions
         // from inside the disposal action below. MessageHub's own ShutDown phase states the rule
         // ("Never call DI from a disposal path") because a hub's lifetime scope, or an ancestor of
         // it, can already be closed by the time disposal actions run: HostedHubsCollection closes a
-        // hosted hub's scope on DisposalCompleted, and the watchdog's out-of-band
-        // ForceTeardownAfterWatchdog runs hostedHubs.Dispose() BEFORE DisposeImpl(). A resolve then
+        // hosted hub's scope on DisposalCompleted, so an ancestor's scope can be closed by the time
+        // a late registrant runs — and the ShutDown phase runs DisposeImpl() AFTER the hosted hubs
+        // have gone (their scopes with them). A resolve then
         // throws ObjectDisposedException ("Instances cannot be resolved … from this LifetimeScope"),
         // and the verdict is then never dispatched — so the writer burns the full 31 s
         // WriteVerdictBound and reports OwnerUnreachable, the exact acked-write-loss this

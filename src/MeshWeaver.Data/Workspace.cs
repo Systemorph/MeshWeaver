@@ -214,8 +214,9 @@ public class Workspace : IWorkspace
         }
 
         // Event-driven, not timed: DisposalCompleted is a ReplaySubject(1) that the hub signals as
-        // the last act of its teardown (the disposal watchdog force-completes it if the phased path
-        // ever wedges), so this leg is already guaranteed terminal and needs no deadline of its own.
+        // the last act of its teardown, so this leg is terminal once the hub's accepted work has
+        // drained and needs no deadline of its own; a teardown that never finishes is reported by
+        // the hub's stall detector and bounded by the caller's teardown budget, not here.
         Hub.DisposalCompleted
             .Take(1)
             .Subscribe(
