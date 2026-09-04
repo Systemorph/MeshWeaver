@@ -1837,6 +1837,79 @@ jobs:
     - name: "Every job is capped at 45 minutes"
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
 
+    # 🚨 THE GAP actionlint CLOSES (MeshWeaver#3228): every check above reads a workflow with
+    # `yaml.safe_load`, and **PyYAML accepts a duplicate mapping key and silently keeps the last
+    # one**. So a STRUCTURAL defect — the kind GitHub itself refuses — parses cleanly here, every
+    # assertion built on the parsed document passes, and the verification that "passed" could not
+    # have failed.
+    #
+    # What that cost, measured on 2026-09-03. #3225 inserted an input between the previous input's
+    # `required:` line and its `default:` line; the orphaned `default` attached to the NEW input,
+    # producing a duplicate `default` key in `node-repo-module-pack.yml`, and the input above
+    # silently lost its default. GitHub refuses the whole workflow. Because these are
+    # `workflow_call` lanes that five satellite repos pin, the break was invisible in core — core
+    # does not call them — and landed TWO REPOS AWAY as MeshWeaver.Plugins#1268 run 33777768374:
+    # `failure`, with ZERO jobs and ZERO check contexts. A `startup_failure` renders as an ordinary
+    # red and names nothing: no job to open, no log to read, no annotation on the commit.
+    # Attributing it took comparing job counts across two heads in two repos (29 jobs, then 0).
+    # actionlint names it in one line, at the source, on the PR that writes it:
+    #
+    #   node-repo-module-pack.yml:289:9: key "default" is duplicated in input of workflow_call
+    #   event. previously defined at line:288,col:9 [syntax-check]
+    #
+    # 🛡️ NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). The binary is an
+    # INPUT to this gate, so its acquisition may not be `continue-on-error:` and may not be
+    # conditional: a download failure fails the job RED naming the URL, rather than reducing the
+    # gate to the checks it happened to be able to run. The version is PINNED (never `latest`) and
+    # the tarball is checked against its published sha256 — an unverified binary is not evidence —
+    # and installation is proven by a POSITIVE signal: actionlint must RUN and print exactly the
+    # version pinned here. "The command returned" is not a success signal.
+    #
+    # ⚖️ `-shellcheck= -pyflakes=` disables actionlint's EMBEDDED shell/python linters, so this
+    # arrives about workflow STRUCTURE only. It is not a softening: `run:` blocks are already
+    # shellchecked by check-workflow-shell.py below, at severity `warning`, over a corpus with a
+    # ratchet allow-file — two tools linting the same shell with two different bars would put this
+    # repo in the position that gate exists to avoid. Enabling either integration later is a
+    # DELIBERATE follow-up (its own PR, triaging whatever backlog it surfaces), not a flag to flip
+    # in passing. Measured on this tree at the time of writing: zero findings across all 30
+    # workflows structurally, against 37 findings if shellcheck were left on — which is the
+    # measurement behind the flags, not a guess.
+    - name: "Install actionlint (pinned; a failed or unverified download fails this job RED)"
+      run: |
+        set -euo pipefail
+        ver=1.7.12
+        sha=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        url="https://github.com/rhysd/actionlint/releases/download/v${ver}/actionlint_${ver}_linux_amd64.tar.gz"
+        curl -fsSL --retry 3 --retry-delay 5 -o "${RUNNER_TEMP}/actionlint.tar.gz" "${url}" \
+          || { echo "::error::could not download actionlint ${ver} from ${url} — this gate has no evidence without it, so it fails rather than skipping"; exit 1; }
+        echo "${sha}  ${RUNNER_TEMP}/actionlint.tar.gz" | sha256sum -c - \
+          || { echo "::error::actionlint ${ver} tarball does not match its pinned sha256 (${sha}) — refusing to run an unverified binary"; exit 1; }
+        tar -xzf "${RUNNER_TEMP}/actionlint.tar.gz" -C "${RUNNER_TEMP}" actionlint \
+          || { echo "::error::actionlint ${ver} tarball did not contain an 'actionlint' binary"; exit 1; }
+        # The POSITIVE success signal: it runs, and it is the version pinned above.
+        installed=$("${RUNNER_TEMP}/actionlint" --version | head -1)
+        if [ "${installed}" != "${ver}" ]; then
+          echo "::error::actionlint reported version '${installed}' but this gate pinned '${ver}'"
+          exit 1
+        fi
+        echo "actionlint ${installed} installed and verified"
+    # The file list is ENUMERATED and asserted non-empty rather than passed as a bare glob. Two
+    # reasons, both the same rule: `actionlint` with no file arguments auto-discovers, and would
+    # exit 0 having checked nothing if discovery ever came up empty; and a `*.yml` glob silently
+    # excludes a future `.yaml` workflow (check-workflow-shell.py already scans both extensions).
+    - name: "Every workflow is structurally valid (actionlint)"
+      run: |
+        set -euo pipefail
+        workflows=()
+        while IFS= read -r f; do workflows+=("$f"); done \
+          < <(find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) | sort)
+        if [ "${#workflows[@]}" -eq 0 ]; then
+          echo "::error::no workflow files found under .github/workflows — this gate would otherwise report green having checked nothing"
+          exit 1
+        fi
+        echo "actionlint ${#workflows[@]} workflow file(s)"
+        "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= -no-color -oneline "${workflows[@]}"
+
     # The merge-queue steward (merge-queue-steward.yml) decides whether a DEQUEUED pull request is
     # re-queued or left out; a wrong row in its table re-queues on nothing or rejects a flake. The
     # steward runs this same self-test before every real decision, but that lane only fires on a
@@ -2528,7 +2601,7 @@ jobs:
       # produced no verdict, and "no verdict" must never read as "passed".
       if: needs.workflow-shell.result != 'success'
       run: |
-        echo "::error::The 'CI's own shell' gate concluded '${{ needs.workflow-shell.result }}' — see that job. It shellchecks every workflow \`run:\` block, refuses a captured command substitution that swallows BOTH stderr and its exit status (the #2642 shape: a failed call becomes an empty answer that is then read as authoritative), refuses an az \`--query\` that throws on a null field, and EXECUTES main-cd's release-version recovery against a fixture. main-cd.yml is exercised by no other check on this PR."
+        echo "::error::The 'CI's own shell' gate concluded '${{ needs.workflow-shell.result }}' — see that job. It shellchecks every workflow \`run:\` block, refuses a captured command substitution that swallows BOTH stderr and its exit status (the #2642 shape: a failed call becomes an empty answer that is then read as authoritative), refuses an az \`--query\` that throws on a null field, runs actionlint over every workflow so a STRUCTURAL defect (#3228: a duplicate key PyYAML silently accepts and GitHub refuses) is named here instead of landing as a job-less \`startup_failure\` on a satellite that pins these lanes, and EXECUTES main-cd's release-version recovery against a fixture. main-cd.yml is exercised by no other check on this PR."
         exit 1
 
     # `!= 'success'` rather than `== 'failure'`, for the same reason as the gate above: a job
