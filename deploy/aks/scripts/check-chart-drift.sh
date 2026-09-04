@@ -36,7 +36,7 @@
 #                                        AVAILABILITY shape below
 #   PodDisruptionBudget / ScaledObject   existence and shape
 #
-# 🚨 THREE SIDES, not two — added 2026-09-05. D = the chart as CI renders it, L = the live objects,
+# 🚨 THREE SIDES, not two — added 2026-09-04. D = the chart as CI renders it, L = the live objects,
 # M = the LAST-DEPLOYED release manifest (`helm get manifest`). Everything above is D vs L. The
 # deletion hazard is not in that comparison: it is D vs M. A key that is live and helm-owned but no
 # longer rendered is a chart retirement the next `helm upgrade` will land — see CLUSTER-ONLY below.
@@ -85,7 +85,7 @@
 #
 # There IS one deploy-destroys shape, and it is narrow: a key the LAST deploy rendered and this
 # chart does not is still in the release's own manifest, so helm owned it and the merge deletes it.
-# That is a chart RETIREMENT landing, not out-of-band drift surviving — and since 2026-09-05 this
+# That is a chart RETIREMENT landing, not out-of-band drift surviving — and since 2026-09-04 this
 # script computes it instead of leaving it to be re-derived by hand. See CLUSTER-ONLY below.
 #
 # FIVE CLASSES OF FINDING, worst first, and they mean different things:
@@ -238,7 +238,7 @@ fetch() { # $1 = resource
   case "$VIA" in
     kubectl)    kubectl -n "$NS" get "$1" -o json 2>"$WORK/kubectl.err" ;;
     aks-invoke) az aks command invoke -g "$RG" -n "$AKS" -o tsv --query logs \
-                   --command "kubectl -n $NS get $1 -o json" 2>"$WORK/kubectl.err" ;;
+                   --command "kubectl -n '$NS' get '$1' -o json" 2>"$WORK/kubectl.err" ;;
   esac
 }
 # The availability objects are fetched as LISTS, not by name, and that is deliberate. A named GET
@@ -257,18 +257,22 @@ fetch_data_keys() { # $1 = resource, e.g. secret/foo or configmap/bar
   case "$VIA" in
     kubectl)    kubectl -n "$NS" get "$1" -o go-template="$tmpl" 2>"$WORK/kubectl.err" ;;
     aks-invoke) az aks command invoke -g "$RG" -n "$AKS" -o tsv --query logs \
-                   --command "kubectl -n $NS get $1 -o go-template='$tmpl'" 2>"$WORK/kubectl.err" ;;
+                   --command "kubectl -n '$NS' get '$1' -o go-template='$tmpl'" 2>"$WORK/kubectl.err" ;;
   esac
 }
 # The THIRD side: what the LAST deploy rendered — the `original` half of helm's three-way merge, and
 # the only thing that says which live-only settings helm still OWNS. helm is available on both
-# transports (it is a preflight-asserted binary here, and it is the same v3 binary `az aks command
-# invoke` runs inside the cluster).
+# transports, MEASURED rather than assumed before this shipped: locally it is a preflight-asserted
+# binary, and `helm version --short` inside `az aks command invoke` answers v3.21.1+gc56dd00
+# (2026-09-04). `helm get manifest` returns both required objects on both production releases, so
+# the comparator's "manifest parses but lacks an object" failure paths cannot fire there — a new
+# REQUIRED input that turns out to be unreadable in prod reddens the gate for a reason that looks
+# exactly like finding drift.
 fetch_manifest() {
   case "$VIA" in
     kubectl)    helm get manifest "$RELEASE" -n "$NS" 2>"$WORK/helm-manifest.err" ;;
     aks-invoke) az aks command invoke -g "$RG" -n "$AKS" -o tsv --query logs \
-                   --command "helm get manifest $RELEASE -n $NS" 2>"$WORK/helm-manifest.err" ;;
+                   --command "helm get manifest '$RELEASE' -n '$NS'" 2>"$WORK/helm-manifest.err" ;;
   esac
 }
 

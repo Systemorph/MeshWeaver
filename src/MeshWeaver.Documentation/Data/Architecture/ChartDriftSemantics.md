@@ -280,7 +280,7 @@ distinguishable halves, and `M` is the discriminator:
 | **owned-but-retired** | the key IS in `helm get manifest` | **deletes it** — helm owned it |
 | **never-owned** | the key is NOT in `helm get manifest` | **leaves it** — the migration backlog |
 
-**Since 2026-09-05 the gate computes this itself.** `check-chart-drift.sh` fetches `M` on both
+**Since 2026-09-04 the gate computes this itself.** `check-chart-drift.sh` fetches `M` on both
 transports and hands it to the comparator, which reports an owned-but-retired finding as a
 **`PENDING DELETION`** — still inside the `CLUSTER-ONLY` class, because the class is "live and not
 rendered" and both halves are that, but with the verdict written into the finding and a count in the
@@ -293,6 +293,21 @@ key reads as never-owned — the harmless half — so the report would answer "n
 be deleted" at exactly the moment it could not tell. That is the skip-trapdoor shape
 [AGENTS.md](https://github.com/Systemorph/MeshWeaver/blob/main/AGENTS.md) forbids, expressed as a
 default value rather than as an `if:`.
+
+**Measured before shipping it, read-only, on the live cluster (2026-09-04).** A gate whose new
+required input turns out to be unreadable in production goes red for a missing-input reason on its
+first scheduled run, which is indistinguishable from finding drift. So the input was measured rather
+than assumed: `helm version --short` inside `az aks command invoke` answers **v3.21.1+gc56dd00** —
+the binary is there, on the transport that matters — and `helm get manifest` returns a manifest for
+both production releases (`memex` in `memex`, 76 386 bytes; `memexcloud` in `memex-cloud`, 79 884
+bytes). Every object the comparator hard-requires is in both: the `memex-portal-config` ConfigMap,
+the `memex-portal-deployment` Deployment, and the `memex-portal` container inside it. None of the
+three "the manifest parses but lacks an object" failure paths can fire on either namespace.
+
+🚨 **Reading a release manifest by eye needs a parser, not `grep`.** `helm get manifest` emits
+**quoted** scalars — `kind: "ConfigMap"`, `name: "memex-portal-config"` — so `grep '^kind: ConfigMap'`
+returns nothing and reads as *"the object is absent"*. `yaml.safe_load_all` unquotes them, which is
+why the comparator's `doc.get("kind") == "ConfigMap"` is correct and a quick shell check is not.
 
 🚨 **The finding reports the VALUE's emptiness, never the value.** A pending deletion of a
 zero-length value is a no-op; of a non-empty value it is a real removal. The report says which, and
