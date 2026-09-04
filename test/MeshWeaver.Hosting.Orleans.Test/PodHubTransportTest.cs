@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
@@ -89,11 +90,20 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
 
         // The hub lives on silo A. RegisterStream writes the local route synchronously, claims the
         // address for this silo through the pod-hub grain, and subscribes the Orleans stream.
-        using var registration = Routing(cluster, 0).RegisterStream(address, (d, _) =>
+        var routingA = Routing(cluster, 0);
+        using var registration = routingA.RegisterStream(address, (d, _) =>
         {
             received.TrySetResult(d);
             return Observable.Return(d);
         });
+
+        // 🚨 WAIT FOR THE CLAIM, not just for the subscription — issue #3298, whose failure landed on
+        // this test's sibling but whose cause is here too. RegisterStream writes the local route
+        // synchronously and attaches the cluster-wide pod-hub claim ASYNCHRONOUSLY. Until that claim
+        // lands, [PreferLocalPlacement] puts a directed IPodHubGrain call on the CALLER's silo, which
+        // has no local route for this address, and it answers PodHubNotHere. Waiting on the stream
+        // subscription below is a DIFFERENT condition that merely happens to take similar time.
+        await ClaimSettled(routingA, address, ct);
 
         // Wait until the stream subscription exists — so removing it below is a real removal and
         // not a race with an attach that had not happened yet.
@@ -252,21 +262,41 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
         // The SENDER: a pod-process hub on silo A.
         var sender = new Address("client", $"nack-sender-{Guid.NewGuid():N}");
         var inbox = new ConcurrentQueue<IMessageDelivery>();
-        using var registration = Routing(cluster, 0).RegisterStream(sender, (d, _) =>
+        var routingA = Routing(cluster, 0);
+        using var registration = routingA.RegisterStream(sender, (d, _) =>
         {
             inbox.Enqueue(d);
             return Observable.Return(d);
         });
 
-        // Prove the pod-hub claim is LIVE before erasing anything — by a cross-silo delivery
-        // ARRIVING, never by asking the grain (whose `false` cannot tell "someone else owns it"
-        // from "nobody does"). Without this the test could pass by never having had a claim.
+        // 🚨 THE CLAIM IS THE PRECONDITION, AND IT NEEDS ITS OWN POSITIVE SIGNAL — issue #3298.
+        //
+        // The reachability probe below cannot stand in for it, and that is exactly what made this
+        // test intermittent. At that point the sender's stream subscription is STILL INTACT, so a
+        // ping that arrives may have arrived over the STREAM — the transport this test erases a few
+        // lines later. The probe was therefore green whether or not the claim had landed, and when
+        // it had not, the doomed request's PostFailure found no pod-hub activation, fell back to the
+        // now subscriber-less stream, and the NACK was silently discarded — a 30 s timeout on the
+        // final wait with both controls having passed, which is the failure exactly as reported.
+        //
+        // The claim retries on a capped backoff (250 ms doubling to 4 s) with no give-up on a silo,
+        // so the window is a scheduling race, not a bounded delay: it widens under CI load, which is
+        // why this reproduced by luck rather than by tree. PodHubClaimSettled is the positive signal
+        // for "the claim stopped attempting" — the same one OrleansCrossSiloReplyTest already waits
+        // on before ITS directed cross-silo delivery, and a settle-by-silence poll is explicitly not
+        // an acceptable substitute (see its remarks).
+        await ClaimSettled(routingA, sender, ct);
+
+        // Reachability, which is a genuinely separate fact: the address is live and addressable
+        // across silos. Proven by a delivery ARRIVING rather than by asking the grain (whose `false`
+        // cannot tell "someone else owns it" from "nobody does"). This may legitimately be served by
+        // either transport — that is why it is not, and cannot be, the claim check above.
         await WaitUntil(async () =>
         {
             SiloMeshHub(cluster, 1).Post(new PingRequest(), o => o.WithTarget(sender));
             await Task.Yield();
             return inbox.Any(d => Describes(d, nameof(PingRequest)));
-        }, "the sender's pod-hub activation must be claimed and reachable across silos first", ct);
+        }, "the sender must be reachable across silos before the transport under test is isolated", ct);
 
         // ERASE the sender's stream subscription. Its consumer handle stays valid and reports
         // nothing; the registry now answers "nobody is subscribed" — the state a departed
@@ -317,6 +347,24 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     }
 
     // ---- helpers -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Waits until the pod-hub CLAIM for <paramref name="address"/> has settled — it landed, or it
+    /// hit the one terminal that is impossibility rather than a budget (a process that cannot host a
+    /// grain). A claim still retrying never completes this, which is the honest answer: there is no
+    /// give-up on that path.
+    ///
+    /// <para>🚨 Every test here that erases a stream subscription and then asserts a DIRECTED
+    /// delivery depends on this having happened, and on nothing else standing in for it (#3298). The
+    /// null-coalesce covers a routing service that registered no claim at all — a client-hosted
+    /// address — where there is nothing to wait for and the stream is the permanent transport.</para>
+    /// </summary>
+    private static Task<Unit> ClaimSettled(
+        OrleansRoutingService routing, Address address, CancellationToken ct) =>
+        (routing.PodHubClaimSettled(address) ?? Observable.Return(Unit.Default))
+            .FirstAsync()
+            .Timeout(Budget)
+            .Await(ct);
 
     private static (IStreamSubscriptionManager Manager, global::Orleans.Runtime.StreamId StreamId) Registry(
         TestCluster cluster, Address address)
