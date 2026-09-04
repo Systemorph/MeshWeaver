@@ -136,6 +136,49 @@ This is what makes a NodeType "just work" the first time an instance is created,
 after a `Source/*.cs` edit, or after a framework redeploy — no operator action
 required.
 
+### 🚨 ONE driver runs Roslyn — a resolve request joins the queue, it never starts a second compile
+
+`GetCompilationPathRequest` (`NodeTypeContractHandler`) is how an activating instance hub, a
+cross-process probe or a bake consumer asks "where are this type's bytes?". It must **never** run
+Roslyn beside the watcher's compile. Two concurrent compiles on one NodeType produce two assemblies
+under two `IAssemblyStore` keys, each terminal write-back names its own, and whichever lands second
+decides what the record says — the loser's bytes are addressed by nothing, activation resolves a
+store key with no content, and the instance silently falls back to the default configuration
+(issue #1368).
+
+The handler therefore does not compile. It **dispatches** — `EnsureCompileDispatched` makes one
+status-guarded flip to `Pending`, which the watcher turns into the one activity compile — and then
+**waits** for that compile to settle before hydrating the answer. The status field is the
+single-flight lock.
+
+> 🚨 **The wait must be ORDERED AGAINST THE DISPATCH.** `CompilationStatus == null` reads as
+> *settled*, and correctly so: for a static-only type, or one that already has a usable build,
+> "never compiled" is a final answer and `EnsureCompileDispatched` deliberately leaves those alone.
+> But a subscriber that attaches to the own-node stream *after* the dispatch is not guaranteed to be
+> replayed the dispatch's commit — the reduced own-node pipeline seeds a new subscriber from a
+> source that can lag a write the same hub has already applied. So the settle question could be
+> answered by the **pre-dispatch snapshot**, whose status is still null, and the handler would
+> compile inline anyway (issue #3265).
+>
+> The remedy is the same one `MeshNodeStreamHandle.UpdateOwn` uses for its own echo detection, and
+> for the same reason: **accept only a state of the node at-or-past the version this caller
+> established** — `NodeTypeContractHandler.SettledAtOrAfter`, gated on the version
+> `EnsureCompileDispatched` reached. Never make the predicate stricter instead: refusing a null
+> status would hold every static-only and already-built type for the whole 60 s settle budget.
+
+Measured while this was broken (monolith, `DOTNET_PROCESSOR_COUNT=2`, 8 runs of 8): the dispatch
+committed `v3 = Pending`, the settle wait was handed `v1` with a null status, two Roslyn runs went
+off, and **two terminal success writes landed 16 ms apart** — the handler's first (store key `v1`,
+no release path), publishing `CompilationStatus = Ok`; `RunCompile`'s second (store key `v4`, with
+the release), re-stamping `CompiledFrameworkVersion`, `LastCompiledVersion` and the assembly
+coordinates.
+
+That second write is why **`Status = Ok` alone is not a completion signal** for anything that
+intends to *write* to the node. With one driver there is exactly one terminal write and `Ok` is the
+last word; with two, the first `Ok` opens a window in which a concurrent writer's field is
+overwritten by the tail. Readers are safe either way (both writes describe a real build); writers
+must not treat the first `Ok` as "the pipeline is finished".
+
 ### Explicit — Create Release
 
 **The one entry point is `hub.RequestNodeTypeRelease(nodeTypePath, …)`** (`MeshWeaver.Graph/NodeTypeReleaseExtensions.cs`) — GUI, agents, and tests all call it. It writes the trigger onto the NodeType node via `stream.Update`: `RequestedReleaseAt` (a timestamp, so repeated requests are distinct), plus `RequestedReleaseForce` to bypass the "sources match the last compile" short-circuit and `RequestedReleaseBy` to attribute the release to the caller. The per-NodeType release watcher dispatches only while `RequestedReleaseAt > LastReleaseRequestHandledAt` — an idempotent CAS — and lands on the same `RunCompile`.
