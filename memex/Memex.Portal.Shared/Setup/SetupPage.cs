@@ -50,8 +50,11 @@ public static class SetupPage
         html.Append($"<h1>{Escape(strings.Title)}</h1>");
         html.Append($"<p class=lead>{Escape(strings.Intro)}</p>");
 
+        AppendIdentity(html, catalog, strings);
         AppendMessages(html, "problems", strings.ProblemsHeading, problems);
         AppendMessages(html, "warnings", strings.WarningsHeading, warnings);
+        if (catalog.RegistryProblem is { } registryProblem)
+            AppendMessages(html, "warnings", strings.WarningsHeading, [registryProblem]);
 
         html.Append("<form method=post action=\"/setup\" autocomplete=off>");
 
@@ -63,11 +66,83 @@ public static class SetupPage
         html.Append("</div></section>");
 
         AppendStorage(html, catalog, strings, submitted);
+        AppendPackages(html, catalog, strings, submitted);
         AppendSignIn(html, catalog, strings, submitted);
         AppendAi(html, catalog, strings, submitted);
         AppendModules(html, catalog, strings, submitted);
 
         html.Append($"<button type=submit>{Escape(strings.Submit)}</button>");
+        html.Append("</form>");
+        Close(html);
+        return html.ToString();
+    }
+
+    /// <summary>
+    /// PHASE ONE — the only question that must be answered before any other can be offered.
+    ///
+    /// <para>The operator types a NAME. The id is a guid the instance mints for itself, shown but
+    /// not editable: it is claimed globally on the registry and can never be re-registered, so it
+    /// must not be something a person picks and might re-pick.</para>
+    /// </summary>
+    /// <param name="strings">The viewer's locale.</param>
+    /// <param name="instanceId">The guid this instance minted for itself.</param>
+    /// <param name="defaultRegistry">The registry to pre-fill.</param>
+    /// <param name="submitted">Values to re-fill after a failed submit.</param>
+    /// <param name="problems">Blocking refusals.</param>
+    /// <param name="token">The setup token, pre-filled from the query string.</param>
+    public static string RenderIdentity(
+        SetupStrings strings,
+        string instanceId,
+        string defaultRegistry,
+        IdentityAnswers? submitted = null,
+        ImmutableList<string>? problems = null,
+        string? token = null)
+    {
+        ArgumentNullException.ThrowIfNull(strings);
+
+        var html = new StringBuilder(8 * 1024);
+        Open(html, strings, strings.HelloTitle);
+        html.Append($"<h1>{Escape(strings.HelloTitle)}</h1>");
+        html.Append($"<p class=lead>{Escape(strings.HelloIntro)}</p>");
+        AppendMessages(html, "problems", strings.ProblemsHeading, problems);
+
+        html.Append("<form method=post action=\"/setup/identity\" autocomplete=off>");
+        html.Append("<section><div class=field>");
+        html.Append($"<label for=token>{Escape(strings.TokenLabel)}</label>");
+        html.Append($"<input id=token name=token type=text required value=\"{Escape(token)}\" spellcheck=false>");
+        html.Append($"<p class=help>{Escape(strings.TokenHelp)}</p>");
+        html.Append("</div></section>");
+
+        html.Append($"<section><h2>{Escape(strings.IdentityHeading)}</h2>");
+        html.Append($"<p class=help>{Escape(strings.IdentityHelp)}</p>");
+        html.Append("<div class=field>");
+        html.Append($"<label for=name>{Escape(strings.InstanceNameLabel)}</label>");
+        html.Append(
+            $"<input id=name name=\"identity.name\" type=text required autofocus "
+            + $"value=\"{Escape(submitted?.Name)}\" placeholder=\"{Escape(strings.InstanceNamePlaceholder)}\">");
+        html.Append("</div>");
+        // The id is shown, not asked. Rendered read-only so the operator can see and copy what is
+        // about to be claimed on their behalf — an id that appears from nowhere after the fact is
+        // worse than one they watched being minted.
+        html.Append("<div class=field>");
+        html.Append($"<label for=iid>{Escape(strings.InstanceIdLabel)}</label>");
+        html.Append(
+            $"<input id=iid name=\"identity.id\" type=text readonly value=\"{Escape(instanceId)}\" spellcheck=false>");
+        html.Append($"<p class=help>{Escape(strings.InstanceIdHelp)}</p>");
+        html.Append("</div>");
+        html.Append("<div class=field>");
+        html.Append($"<label for=reg>{Escape(strings.RegistryLabel)}</label>");
+        html.Append(
+            $"<input id=reg name=\"identity.registry\" type=text value=\"{Escape(submitted?.RegistryUrl ?? defaultRegistry)}\" spellcheck=false>");
+        html.Append($"<p class=help>{Escape(strings.RegistryHelp)}</p>");
+        html.Append("</div>");
+        html.Append("<div class=field>");
+        html.Append($"<label for=bkey>{Escape(strings.BootstrapKeyLabel)}</label>");
+        html.Append($"<input id=bkey name=\"identity.key\" type=password value=\"\" spellcheck=false>");
+        html.Append($"<p class=help>{Escape(strings.BootstrapKeyHelp)}</p>");
+        html.Append("</div></section>");
+
+        html.Append($"<button type=submit>{Escape(strings.RegisterAndContinue)}</button>");
         html.Append("</form>");
         Close(html);
         return html.ToString();
@@ -84,6 +159,54 @@ public static class SetupPage
         html.Append($"<p class=lead>{Escape(strings.DoneDetail)}</p>");
         Close(html);
         return html.ToString();
+    }
+
+    /// <summary>The registered identity, stated at the top of phase two so the operator can see
+    /// what this instance IS before answering anything else.</summary>
+    private static void AppendIdentity(StringBuilder html, SetupCatalog catalog, SetupStrings strings)
+    {
+        if (catalog.Identity is not { } identity)
+            return;
+        html.Append("<div class=\"notice identity\">");
+        html.Append($"<strong>{Escape(identity.Name)}</strong>");
+        html.Append($"<div class=badge>{Escape(strings.RegisteredAs(identity.Id, identity.RegistryUrl))}</div>");
+        if (!string.IsNullOrWhiteSpace(identity.Plan))
+            html.Append($"<div class=badge>{Escape(strings.PlanIs(identity.Plan!))}</div>");
+        html.Append("</div>");
+    }
+
+    /// <summary>
+    /// What this instance's plan entitles it to. Rendered even when EMPTY, with a note saying so —
+    /// an empty catalog is a legitimate answer, and silently showing nothing would read as a bug.
+    /// </summary>
+    private static void AppendPackages(
+        StringBuilder html, SetupCatalog catalog, SetupStrings strings, SetupAnswers? submitted)
+    {
+        if (catalog.Identity is null)
+            return;
+        html.Append($"<section><h2>{Escape(strings.PackagesHeading)}</h2>");
+        html.Append($"<p class=help>{Escape(strings.PackagesHelp)}</p>");
+        if (catalog.Packages.IsEmpty)
+        {
+            html.Append($"<p class=help><em>{Escape(strings.NoPackages)}</em></p></section>");
+            return;
+        }
+        foreach (var package in catalog.Packages)
+        {
+            var on = submitted is null
+                ? package.PreSelected
+                : submitted.ProvisionPackages.Any(id => OrdinalEquals(id, package.Id));
+            html.Append("<label class=choice>");
+            html.Append(
+                $"<input type=checkbox name=packages value=\"{Escape(package.Id)}\"{(on ? " checked" : "")}>");
+            html.Append($"<span>{Escape(package.Name)}");
+            if (package.StorageType is { } storage)
+                html.Append($" <span class=badge>{Escape(strings.ProvidesDatabase(storage))}</span>");
+            if (package.Description is { } description)
+                html.Append($" <em>{Escape(description)}</em>");
+            html.Append("</span></label>");
+        }
+        html.Append("</section>");
     }
 
     private static void AppendStorage(
@@ -238,14 +361,7 @@ public static class SetupPage
             html.Append("</span></label>");
         }
 
-        var packages = submitted is null || submitted.ProvisionPackages.IsEmpty
-            ? string.Join("\n", MeshWeaver.Mesh.InstanceSetupDefaults.ProvisionPackages)
-            : string.Join("\n", submitted.ProvisionPackages);
-        html.Append("<div class=field>");
-        html.Append($"<label for=packages>{Escape(strings.PackagesLabel)}</label>");
-        html.Append($"<textarea id=packages name=packages rows=3 spellcheck=false>{Escape(packages)}</textarea>");
-        html.Append($"<p class=help>{Escape(strings.PackagesHelp)}</p>");
-        html.Append("</div></section>");
+        html.Append("</section>");
     }
 
     private static void Field(
@@ -336,6 +452,9 @@ public static class SetupPage
         fieldset{border:1px solid var(--line);border-radius:8px;padding:.9rem;margin:0 0 .9rem}
         legend{font-weight:600;font-size:.875rem;padding:0 .35rem}
         .badge{font-weight:400;color:var(--muted);font-size:.8rem}
+        .identity{background:var(--card);border-color:var(--line);color:var(--fg)}
+        .identity .badge{display:block;margin-top:.2rem;font-family:ui-monospace,SFMono-Regular,monospace}
+        input[readonly]{color:var(--muted);font-family:ui-monospace,SFMono-Regular,monospace}
         .notice{border-radius:8px;padding:.9rem 1.1rem;margin:0 0 1.25rem;border:1px solid}
         .notice ul{margin:.4rem 0 0;padding-left:1.1rem}
         .problems{background:var(--errbg);border-color:var(--err);color:var(--err)}

@@ -55,6 +55,52 @@ public sealed class SetupStrings(string? locale)
     /// <summary>Refusal when the token is absent or wrong.</summary>
     public string TokenInvalid => Get("setup.token.invalid");
 
+    // ── Phase one: identity ────────────────────────────────────────────────────────────────────
+    /// <summary>The hello page's title.</summary>
+    public string HelloTitle => Get("setup.hello.title");
+    /// <summary>Why the name is asked first.</summary>
+    public string HelloIntro => Get("setup.hello.intro");
+    /// <summary>The identity section heading.</summary>
+    public string IdentityHeading => Get("setup.identity.heading");
+    /// <summary>What the name and id are for.</summary>
+    public string IdentityHelp => Get("setup.identity.help");
+    /// <summary>The instance-name field label.</summary>
+    public string InstanceNameLabel => Get("setup.identity.name");
+    /// <summary>The instance-name placeholder.</summary>
+    public string InstanceNamePlaceholder => Get("setup.identity.name.placeholder");
+    /// <summary>The generated-id field label.</summary>
+    public string InstanceIdLabel => Get("setup.identity.id");
+    /// <summary>Why the id cannot be edited.</summary>
+    public string InstanceIdHelp => Get("setup.identity.id.help");
+    /// <summary>The registry field label.</summary>
+    public string RegistryLabel => Get("setup.identity.registry");
+    /// <summary>What the registry is for.</summary>
+    public string RegistryHelp => Get("setup.identity.registry.help");
+    /// <summary>The optional registration-key field label.</summary>
+    public string BootstrapKeyLabel => Get("setup.identity.key");
+    /// <summary>When a registration key is needed.</summary>
+    public string BootstrapKeyHelp => Get("setup.identity.key.help");
+    /// <summary>The phase-one submit button.</summary>
+    public string RegisterAndContinue => Get("setup.identity.submit");
+    /// <summary>The registered identity, shown in phase two.</summary>
+    /// <param name="id">The claimed instance id.</param>
+    /// <param name="registry">The registry it registered with.</param>
+    public string RegisteredAs(string id, string registry) => Get("setup.registeredAs", id, registry);
+    /// <summary>The plan the registry enrolled this instance on.</summary>
+    /// <param name="plan">The plan name.</param>
+    public string PlanIs(string plan) => Get("setup.planIs", plan);
+
+    // ── Step: plugins ──────────────────────────────────────────────────────────────────────────
+    /// <summary>The plugins section heading.</summary>
+    public string PackagesHeading => Get("setup.packages.heading");
+    /// <summary>What the plugin list is.</summary>
+    public string PackagesHelp => Get("setup.packages.help");
+    /// <summary>Shown when the plan lists nothing — a legitimate answer, said out loud.</summary>
+    public string NoPackages => Get("setup.packages.none");
+    /// <summary>Marks a package that provides a database backend.</summary>
+    /// <param name="storageType">The <c>Graph:Storage:Type</c> it provides.</param>
+    public string ProvidesDatabase(string storageType) => Get("setup.packages.providesDatabase", storageType);
+
     // ── Step: database ─────────────────────────────────────────────────────────────────────────
     /// <summary>The database step heading.</summary>
     public string StorageHeading => Get("setup.storage.heading");
@@ -108,8 +154,6 @@ public sealed class SetupStrings(string? locale)
     public string ModulesHelp => Get("setup.modules.help");
     /// <summary>The provisioned-packages field label.</summary>
     public string PackagesLabel => Get("setup.modules.packages");
-    /// <summary>Why the packages field takes patterns.</summary>
-    public string PackagesHelp => Get("setup.modules.packages.help");
 
     // ── Refusals ───────────────────────────────────────────────────────────────────────────────
     /// <summary>No backend was chosen.</summary>
@@ -148,6 +192,18 @@ public sealed class SetupStrings(string? locale)
     /// <summary>A secret could not be encrypted because the install has no master key.</summary>
     /// <param name="what">What the secret belongs to.</param>
     public string ProblemNoMasterKey(string what) => Get("setup.problem.noMasterKey", what);
+
+    /// <summary>No instance name was given.</summary>
+    public string ProblemNoInstanceName => Get("setup.problem.noInstanceName");
+    /// <summary>The instance id does not fit the registry's alphabet.</summary>
+    /// <param name="id">What was submitted.</param>
+    public string ProblemBadInstanceId(string id) => Get("setup.problem.badInstanceId", id);
+    /// <summary>The registry address is not a URL.</summary>
+    /// <param name="url">What was submitted.</param>
+    public string ProblemBadRegistry(string url) => Get("setup.problem.badRegistry", url);
+    /// <summary>Registered, but the issued key could not be persisted — and the id is now claimed.</summary>
+    /// <param name="id">The id that was claimed.</param>
+    public string ProblemKeyUnstorable(string id) => Get("setup.problem.keyUnstorable", id);
 
     // ── Warnings ───────────────────────────────────────────────────────────────────────────────
     /// <summary>The developer login is on with no platform admin named.</summary>

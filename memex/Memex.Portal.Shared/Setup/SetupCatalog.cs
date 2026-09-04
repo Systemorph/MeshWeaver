@@ -19,17 +19,58 @@ namespace Memex.Portal.Shared.Setup;
 /// <param name="SignIn">The login routes this image can actually serve.</param>
 /// <param name="Ai">The model providers this image can actually call.</param>
 /// <param name="Modules">The module assemblies this image ships and can boot.</param>
+///
+/// <para>🚨 <see cref="Packages"/>, <see cref="Identity"/> and <see cref="RegistryProblem"/> are
+/// INIT PROPERTIES, deliberately not primary-constructor parameters. Adding a parameter to a
+/// record's primary constructor — even with a default — replaces the emitted constructor, so every
+/// assembly already compiled against the old arity calls a method that no longer exists. A module
+/// and the platform it loads into must agree on that signature EXACTLY and no image can serve a
+/// mixed set, which is what the `Public surface (binary compatibility)` gate refuses. An init
+/// property is binary-ADDITIVE: old callers keep working, new callers use an object initialiser or
+/// `with { … }`. Same reasoning, same shape as <c>InstanceRegistrationPayloads.Response.Plan</c>.</para>
 public sealed record SetupCatalog(
     ImmutableList<SetupStorageOption> Storage,
     ImmutableList<SetupSignInOption> SignIn,
     ImmutableList<SetupAiOption> Ai,
     ImmutableList<SetupModuleOption> Modules)
 {
+    /// <summary>What the REGISTRY says this instance is entitled to, once it has registered. Empty
+    /// before registration, and empty is a legitimate answer afterwards — a plan may grant nothing.
+    /// Never null.</summary>
+    public ImmutableList<SetupPackageOption> Packages { get; init; } = [];
+
+    /// <summary>Who this instance registered as, or null before it has.</summary>
+    public MeshWeaver.Mesh.InstanceIdentitySelection? Identity { get; init; }
+
+    /// <summary>Why the catalog could not be listed, when it could not be. Shown to the operator
+    /// rather than swallowed: an instance that registered but cannot see its plan is a state worth
+    /// naming, not a silently empty list.</summary>
+    public string? RegistryProblem { get; init; }
+
     /// <summary>An image that offers nothing — the shape a host with no contributor answers with,
     /// which the surface renders as an explicit "this image ships no options" rather than as an
     /// empty form somebody could submit.</summary>
     public static SetupCatalog Empty { get; } = new([], [], [], []);
 }
+
+/// <summary>
+/// One package the registry says this instance may install.
+///
+/// <para>🚨 <see cref="StorageType"/> is what lets a package answer the DATABASE question. It is
+/// the <c>Graph:Storage:Type</c> the package's boot pack registers, and it is only offerable when
+/// the image can already load that backend — see <see cref="SetupStorageOption"/>.</para>
+/// </summary>
+/// <param name="Id">The package id, as the catalog serves it.</param>
+/// <param name="Name">Its display name.</param>
+/// <param name="Description">What it is.</param>
+/// <param name="StorageType">The storage backend it provides, or null.</param>
+/// <param name="PreSelected">Whether a "next, next, finish" install provisions it.</param>
+public sealed record SetupPackageOption(
+    string Id,
+    string Name,
+    string? Description = null,
+    string? StorageType = null,
+    bool PreSelected = false);
 
 /// <summary>One storage backend the image can open, as a keyed
 /// <c>IStorageAdapterFactory</c> registration named it.</summary>
@@ -44,7 +85,22 @@ public sealed record SetupStorageOption(
     string DisplayName,
     bool NeedsConnectionString = false,
     bool NeedsBasePath = false,
-    string? ConnectionStringHint = null);
+    string? ConnectionStringHint = null)
+{
+    /// <summary>The registry package that provides this backend, when one does. Null for a backend
+    /// compiled into the image.
+    ///
+    /// <para>🚨 A package is only listed here when the IMAGE can already open the backend — i.e. its
+    /// keyed factory is registered. A storage module the image lacks cannot be offered, because
+    /// landing it would have to happen BEFORE persistence selection reads <c>Graph:Storage</c>, and
+    /// package provisioning runs after the mesh is up. Offering one anyway would record a backend
+    /// that never resolves and fail at the NEXT boot, with the wizard gone.</para>
+    ///
+    /// <para>🚨 An INIT property, not a sixth constructor parameter — see the note on
+    /// <see cref="SetupCatalog"/>: adding a positional parameter would be a binary break for every
+    /// assembly compiled against the 5-arity constructor.</para></summary>
+    public string? PackageId { get; init; }
+}
 
 /// <summary>One sign-in route the image can serve.</summary>
 /// <param name="Name">The scheme name — the value <c>/auth/login?provider=</c> takes.</param>

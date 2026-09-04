@@ -97,6 +97,14 @@ public static class SetupOnlyHost
         registerBackends(builder.Services);
         builder.Services.TryAddSingleton(sp => StorageBackendCatalog.Discover(builder.Services));
         builder.Services.TryAddSingleton<SetupAccessToken>();
+        // The registry client: plain HTTP, no mesh. A named client so a host that configures
+        // resilience can attribute a boot-time registry timeout to this call path rather than to an
+        // anonymous shared pipeline.
+        builder.Services.AddHttpClient<SetupRegistryClient>(client =>
+            // A setup form is a PAGE. A multi-minute budget here is not resilience, it is a hang
+            // with nobody to tell — the operator is watching a spinner on the only surface the
+            // instance serves.
+            client.Timeout = TimeSpan.FromSeconds(30));
         builder.Services.TryAddSingleton(catalog);
         // The status the surface itself gates on. Constant here — this host exists only in the
         // awaiting-setup state, and re-deriving the answer a second time is how two code paths

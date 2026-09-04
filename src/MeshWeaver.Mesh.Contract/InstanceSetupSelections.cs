@@ -188,3 +188,54 @@ public sealed record InstanceEmbeddingsSelection
     [JsonIgnore]
     public bool IsConfigured => !string.IsNullOrWhiteSpace(Endpoint);
 }
+
+/// <summary>
+/// WHO this instance is — the first thing the setup wizard asks, and the only answer that must
+/// exist before any other question can be offered.
+///
+/// <para>🚨 <b>The id is a GUID the instance mints for itself, and the NAME is what a human types.</b>
+/// They are different things on purpose: the id is claimed GLOBALLY on the registry, keys the grant
+/// node in its Admin partition, and must never be re-registered after deletion — so it cannot be
+/// something a person picks and might re-pick. The name is free text nobody has to coordinate. A
+/// guid satisfies the partition-id alphabet (3–48 chars of <c>[a-z0-9-]</c>), so it needs no
+/// mangling.</para>
+///
+/// <para><b>Recorded before the rest of setup, not after.</b> Registration is what entitles this
+/// instance to a plugin catalog, and the catalog is where the remaining questions — the database
+/// most of all — get their options. So the wizard writes a PARTIAL manifest at this point
+/// (<see cref="InstanceSetupState.AwaitingModules"/>) carrying the identity and the issued key, and
+/// the second phase reads it back. A half-answered manifest keeping the instance in setup is
+/// exactly what that state is for.</para>
+/// </summary>
+public sealed record InstanceIdentitySelection
+{
+    /// <summary>The instance id — a guid, minted once, claimed globally on the registry.</summary>
+    public string Id { get; init; } = "";
+
+    /// <summary>The human-readable name the operator typed. Never used as an identifier.</summary>
+    public string Name { get; init; } = "";
+
+    /// <summary>The registry this instance registered with (e.g. <c>https://memex.meshweaver.cloud</c>).</summary>
+    public string RegistryUrl { get; init; } = "";
+
+    /// <summary>
+    /// The <c>mwi_</c> instance key the registry issued, <c>enc:v1:</c>-encrypted under the
+    /// install's master key.
+    ///
+    /// <para>🚨 The registry returns it EXACTLY ONCE and never again — "the caller must persist it
+    /// now or lose it". Losing it means the instance cannot fetch anything it is entitled to and
+    /// cannot re-register, because its id is already claimed.</para>
+    /// </summary>
+    public string? InstanceKey { get; init; }
+
+    /// <summary>The plan the registry enrolled this instance on — <c>free</c> for an open
+    /// registration. Echoed by the registration response so the wizard can say what the instance is
+    /// entitled to without a second call.</summary>
+    public string? Plan { get; init; }
+
+    /// <summary>Whether this identity has been registered — the gate the wizard's second phase
+    /// checks before it tries to list anything.</summary>
+    [JsonIgnore]
+    public bool IsRegistered =>
+        !string.IsNullOrWhiteSpace(Id) && !string.IsNullOrWhiteSpace(RegistryUrl);
+}
