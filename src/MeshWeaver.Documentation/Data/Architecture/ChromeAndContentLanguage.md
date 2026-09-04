@@ -190,6 +190,10 @@ a German application menu around an English PDF, and nobody reads that as an inc
 
 ### The code cell, concretely
 
+> **Shipped 2026-09-04** (MeshWeaver.Plugins#1318). This section is kept in the present tense of the
+> change because it is the worked example of clause 2, not a plan. What follows described the state
+> before; the paragraph after the code block records what the button looks like now.
+
 The change clause 2 asks for is one line in each of two files. The button **already** has everything
 it needs:
 
@@ -209,18 +213,31 @@ translated word. `code.staleCell` (*"Code changed — re-run"*) cannot become a 
 its meaning; it stays, and it is already inside the toolbar's own visually distinct band
 (`--neutral-layer-2` with a top border), which is where clause 2 puts a word that cannot be removed.
 
-**And the two Run buttons currently disagree with each other**, which is worth fixing in the same
-change because it shows the defect is not really about language policy. `CodeViews.BuildCellToolbar`
-takes `string? locale = null` and its only call site passes nothing, so
-`LocalizationCatalog.Get("common.run", locale)` falls through to English: a **Code node page renders
-"Run" for a German viewer** while a code cell in a markdown body renders "Ausführen" for the same
-viewer on the same portal. The same file passes `locale: host.ViewerLocale()` correctly for its nav
-menu, so this is an omission, not a decision. Under clause 2 both labels go and the disagreement goes
-with them.
+**And the two Run buttons disagreed with each other**, which was worth fixing in the same change
+because it shows the defect is not really about language policy. `CodeViews.BuildCellToolbar` took
+`string? locale = null` and its only call site passed nothing, so
+`LocalizationCatalog.Get("common.run", locale)` fell through to English: a **Code node page rendered
+"Run" for a German viewer** while a code cell in a markdown body rendered "Ausführen" for the same
+viewer on the same portal. The same file passed `locale: host.ViewerLocale()` correctly for its nav
+menu, so it was an omission, not a decision. Under clause 2 both labels went and the disagreement
+went with them — along with `Cancel`, `Edit`, *Code changed — re-run* and *Running…*, English-pinned
+on that path for the same reason.
 
-Both files are declared in MeshWeaver.Plugins, so this change lands there, not here — it is
-outstanding as
-[MeshWeaver.Plugins#1308](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1308).
+Both files are declared in MeshWeaver.Plugins, so the change landed there, not here
+(MeshWeaver.Plugins#1318). The name did not become English and it did not disappear: the component
+was rendered through the real Blazor renderer in both shipped languages and in all three states, and
+both `title` and `aria-label` carry the localized text while the button's own content is empty.
+
+| state | en | de |
+|---|---|---|
+| run | Run this code block | Diesen Codeblock ausführen |
+| re-run (stale) | The code changed since this output was produced — run it again | Der Code hat sich seit dieser Ausgabe geändert — erneut ausführen |
+| kernel unavailable (disabled) | Interactive kernel is not available here | Der interaktive Kernel ist hier nicht verfügbar |
+
+🚨 **One lever that turned out not to move it, recorded rather than hidden:** FluentUI 4.14.4's
+`FluentButton` mirrors `Title` into `aria-label` itself, so deleting the explicit `aria-label` alone
+changes no byte of the DOM. A guard written only against that deletion would have been a guard that
+cannot fail.
 
 ## What identifies content language today
 
@@ -316,45 +333,73 @@ live — core owns the rule and one unowned pair.
 - **The copy-to-home dialog title** reads its catalog key (`ui.copyToHomeTitle`, added to the core
   catalog by [#3219](https://github.com/Systemorph/MeshWeaver/pull/3219)), as does *Read-only
   content* (`ui.readOnlyContent`).
+- **The two code-cell toolbars dropped their translated label** (clause 2, MeshWeaver.Plugins#1318),
+  and `CodeViews.BuildCellToolbar`'s call site now passes the locale, so the two Run buttons no
+  longer disagree. This was the symptom #3203 reported. *Copy code* is announced in the viewer's
+  language too — the fenced block's copy affordance had a translated tooltip over an English
+  `aria-label`, so a German reader hovered *Code kopieren* while their screen reader said *Copy
+  code*. Details and the rendered-in-both-languages evidence are in
+  [The code cell, concretely](#the-code-cell-concretely) above.
+- **The kernel placeholders follow the viewer.** `MarkdownViewLogic.DisableKernelPlaceholder` and
+  `PendingKernelPlaceholder` render `code.kernelDisabledNotice` and `code.kernelStarting` in the
+  language the caller passes, reached through a locale-carrying **overload** of each (and of
+  `RenderKernelResultAreas`, which is what the two Blazor views actually call). Overloads rather
+  than an added parameter: adding a parameter to an existing public method is a binary break, and an
+  already-compiled module bound to the old signature would stop loading.
+- **The guard exists**, in two halves — see Enforcement below.
 
-**Outstanding — all of it in MeshWeaver.Plugins, tracked as
-[MeshWeaver.Plugins#1308](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1308):**
+**Outstanding.**
 
-1. **Drop the redundant label from the two code-cell toolbars** (clause 2), and pass the locale at
-   `CodeViews.BuildCellToolbar`'s call site so the English-pinned path stops disagreeing with the
-   other one. The glyph and the localized tooltip are already there. This is the symptom #3203
-   reported and it is the whole of clause 2's first application.
-2. **Give the remaining unowned strings an owner** — clause 1:
+1. **Five `CodeViews` literals still render English for a German viewer** — the dialog title *"Save
+   Failed"* (5 sites), `"Code Files"`, `"Loading code…"`, `"Enter display name…"` and *"never
+   executed"*, all in `MeshWeaver.Plugins/src/MeshWeaver.Graph.Views/CodeViews.cs`. Their **core
+   catalog keys now exist** (`code.saveFailed`, `code.codeFiles`, `code.loadingCode`,
+   `code.enterDisplayName`, `code.neverExecuted`) — none had one before, which is why this could not
+   ship from Plugins alone. What remains is consuming them there. Tracked as
+   [MeshWeaver.Plugins#1308](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1308).
+2. **Mirror the seven new core keys** into `MeshWeaver.Plugins/clients/react/src/i18n/`
+   (`npm run sync:i18n -- --ref <merged core sha>`). 🚨 Adding a key in core reddens **nothing**:
+   the drift guard compares against a **pinned** core commit (`catalog-source.json`), not core's
+   `main`, so an unsynced mirror is silently stale rather than loudly broken. Core is the source of
+   truth and merges first; the sync is a hand-over, not a repair.
 
-   | Unowned string | Where |
-   |---|---|
-   | `aria-label="Copy code"`, sitting beside an already-localized `title` | `MeshWeaver.Plugins/src/MeshWeaver.Blazor/Components/CodeBlock.razor` |
-   | dialog title *"Save Failed"* (5 sites); `"Code Files"`, `"Loading code..."`, `"Enter display name..."`, `"never executed"` | `MeshWeaver.Plugins/src/MeshWeaver.Graph.Views/CodeViews.cs` |
-   | *"Interactive code execution is unavailable here…"*, *"Starting interactive kernel…"* — both rendered **inside the cell frame** | `src/MeshWeaver.Markdown/MarkdownViewLogic.cs` (**this repo**; the three helpers are pure and take no locale, so the key and the parameter land here and the call sites that pass `ViewerLocale()` land in Plugins — one change, two repos, core first) |
-
-   The owner for a module's strings is the module's own text table, following `EduTexts`, which makes
-   EN/DE parity a **compile** error because every member is `required`; the owner for a platform
-   string is the core catalog.
-3. **Mirror any new core catalog key** into `MeshWeaver.Plugins/clients/react/src/i18n/`, core first —
-   its drift guard compares **values**, not just keys, and stays red until the core change merges.
-4. **Add the guard** below. It belongs in MeshWeaver.Plugins, because four of the five in-flow
-   surfaces are declared there and a core test cannot see them.
+The owner for a module's strings is the module's own text table, following `EduTexts`, which makes
+EN/DE parity a **compile** error because every member is `required`; the owner for a platform string
+is the core catalog. The kernel placeholders took the catalog because `MeshWeaver.Markdown` is
+platform code, not a module.
 
 ## Enforcement — and what cannot be enforced
 
 Be precise about which half is mechanical.
 
-**Mechanical, and NOT YET BUILT — do not read this paragraph as a guard that exists.** Clause 2 over
-the enumerated in-flow set is testable: assert that each in-flow control renders no localized
-*visible* label, and that its tooltip/accessible name *is* a catalog lookup. For the code cell that
-is a direct assertion on `MarkdownCodeCellToolbar` and on `CodeViews`'s run-button area — both
-declared in MeshWeaver.Plugins, which is where the guard has to live, because a core test cannot see
-a Plugins component. It is outstanding with the label removal it protects. The set is enumerated
-deliberately — a guard over "every control everywhere" would be a guard nobody can keep green, and
-[CI](/Doc/Architecture/ReadingCiSignals) green on a guard that cannot fail is worse than no guard.
+**Mechanical, and BUILT — in two halves, because no single project can see the whole set.** Clause 2
+over the enumerated in-flow set is testable: assert that each in-flow control renders no localized
+*visible* label, and that its tooltip/accessible name *is* a catalog lookup.
+
+- **`InFlowChromeClause2Guard`** (MeshWeaver.Plugins, MeshWeaver.Plugins#1318) covers the three
+  surfaces declared there — `MarkdownCodeCellToolbar`, `CodeViews`'s run-button area, and
+  `CodeBlock.razor` — in a rendered half (a real `HtmlRenderer`, `en` and `de`) and a pure half. It
+  was made to fail on purpose four ways: restore the label (*found "Ausführen"*), delete the
+  accessible name (*no element carries that accessible name at all*), un-localize the name, and
+  restore the label on the Code-node twin.
+- **`KernelPlaceholdersFollowTheViewerGuard`** (`test/MeshWeaver.Documentation.Test/`, this repo)
+  covers the two declared here. Its subject is clause **1** rather than clause 2 — a sentence
+  explaining why execution is unavailable has no glyph equivalent, so nothing is dropped; what is
+  pinned is that the text comes out of the catalog in the language the caller passed. Also made to
+  fail on purpose: a hard-coded English literal (fails `de`, passes `en`), a locale dropped at
+  `RenderKernelResultAreas` while both leaf helpers stay correct, and a **typo'd key name** — which
+  every value-comparing assertion survives, because both sides resolve to the same wrong string, and
+  which is caught instead by two languages resolving to identical text.
+
+A core test cannot see a Plugins component, which is why the split exists rather than one guard. The
+set is enumerated deliberately — a guard over "every control everywhere" would be a guard nobody can
+keep green, and [CI](/Doc/Architecture/ReadingCiSignals) green on a guard that cannot fail is worse
+than no guard.
 
 **Already mechanical.** `LocalizationTest.EveryShippedLanguage_CoversEveryEnglishKey` asserts full
-en/de key parity — 1104 keys each, currently zero missing. #3203's option (b) asks for "a
+en/de key parity over **every** English key, currently zero missing. (No count is written here on
+purpose: a number in prose goes stale on the next key added, and the test derives its own.)
+#3203's option (b) asks for "a
 completeness check so a missing key cannot fall back to English mid-page"; **that check already
 exists and already passes.** The plugins mirror's `localize.test.ts` goes further and compares
 values.
