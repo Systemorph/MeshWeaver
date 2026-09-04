@@ -144,11 +144,14 @@ data:
          that runs per signing-in user over that user's own partition — plus Admin for a global
          admin — removing notifications whose node has gone MaxAge without being written.
 
-         ARMED by default, and the `default "true"` matters: this ConfigMap lists keys explicitly,
-         so a values file predating these keys renders "" for them, and "" does not parse as a
-         bool — which would silently DISARM the pass on exactly the deployments that never opted
-         out. The defaults here mirror NotificationRetention.Default so an un-set key and an
-         un-rendered key mean the same thing.
+         ARMED by default, in the CODE: NotificationRetention.FromConfiguration starts from
+         NotificationRetention.Default and overrides a field only when its key PARSES. So an empty
+         or absent value here changes nothing — a values file predating these keys renders "" for
+         them and the portal still runs 90 days / 200 per run, armed. The Helm `default`s are NOT
+         what arms the pass; they exist so the RENDERED ConfigMap states the effective policy an
+         operator is running instead of three empty strings, and they mirror
+         NotificationRetention.Default so the two can never disagree. Turning the pass off is an
+         explicit "false", never an omission.
 
          The window is clamped to a 7-day floor in code, so a "0.00:00:00" typo here cannot empty
          a bell; an unparseable value keeps the 90-day default. MaxDeletionsPerRun is the bound on

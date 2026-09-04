@@ -30,7 +30,14 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class NotificationRetentionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// Every wait in this class. <see cref="TestTimeouts.Convergence"/> rather than a hand-written
+    /// half-minute: a literal is a guess about how fast a machine is, CI is ~1.7x slower than the
+    /// laptop it would have been guessed on, and that particular literal is ALSO the framework's own
+    /// late-response bound — so a test that gives up there reports "nothing emitted" instead of the
+    /// verdict the mesh was about to hand it. <c>TestTimeoutLiteralRatchetGuard</c> enforces this.
+    /// </summary>
+    private static TimeSpan Bound => TestTimeouts.Convergence;
 
     private static MeshNode Notification(string path, DateTimeOffset lastModified) =>
         MeshNode.FromPath(path) with

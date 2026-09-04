@@ -207,6 +207,10 @@ config:
     Notifications__Retention__MaxDeletionsPerRun: "200"
 ```
 
-🚨 The `| default "true"` on the first line is load-bearing. This ConfigMap lists keys explicitly, so
-a values file predating them renders `""` — and `""` does not parse as a bool, which would silently
-disarm the pass on exactly the deployments that never opted out.
+🚨 **The Helm `default`s are not what arms the pass — the code is.** `FromConfiguration` starts from
+`NotificationRetention.Default` and overrides a field only when its key *parses*, so an absent or
+empty key changes nothing: a values file predating these keys renders `""` for all three and the
+portal still runs 90 days / 200 per run, armed. What the `default`s buy is that the **rendered
+ConfigMap states the policy an operator is actually running** instead of three empty strings, and
+that it can never disagree with the code. Turning retention off is an explicit `"false"`, never an
+omission.
