@@ -360,6 +360,42 @@ only one of them was an API change:
 core's tree, at a version it does not control."** Prose, package data, CI infrastructure and image
 timing all belong to it.
 
+### 🚨 A red with ZERO jobs and ZERO contexts is a `startup_failure` — the workflow file is invalid
+
+Every other red on this page names something: a job to open, a log to read, an annotation on the
+commit. **A `startup_failure` names nothing.** GitHub rejected the workflow file before it created a
+single job, so the run's job list is empty, it posts no check contexts, and the commit shows an
+ordinary red tick with nothing behind it. The run's `conclusion` is `failure` like any other; only
+`gh run view <id> --json jobs` distinguishes it, by answering `[]`.
+
+Measured 2026-09-03. MeshWeaver#3225 inserted an input into `node-repo-module-pack.yml` between the
+previous input's `required:` line and its `default:` line. The orphaned `default` attached to the
+**new** input — a duplicate `default` key — and the input above silently lost its default. GitHub
+refuses such a workflow outright. But these are `workflow_call` lanes that five satellite repos pin,
+so the break was invisible in core (core does not call them) and surfaced **two repos away**, as
+MeshWeaver.Plugins#1268 run `33777768374`: `failure`, zero jobs, zero contexts, on a change that
+repo did not make. Attributing it took comparing job counts across two heads in two repos — the
+prior head ran 29 jobs, this one ran 0 — and then linting the lane by hand.
+
+**The diagnostic, in order:**
+
+```bash
+gh run view <run-id> --repo Systemorph/<repo> --json conclusion,jobs --jq '{conclusion, jobs: (.jobs|length)}'
+# {"conclusion":"failure","jobs":0}   ⇒ startup_failure: the WORKFLOW FILE is invalid, not the code
+# then, in that repo's tree — actionlint takes FILES, not a directory:
+actionlint -shellcheck= -pyflakes= -oneline .github/workflows/*.yml   # names the defect at its line
+```
+
+🚨 **And the reason nothing caught it upstream: `yaml.safe_load` accepts a duplicate mapping key and
+silently keeps the last one.** #3225 validated the edited lane by parsing it with PyYAML and
+asserting the required inputs were unchanged; the parse succeeded, the spec read back correctly, and
+the assertion passed. **Any workflow validation built on a permissive YAML load is blind to this
+class by construction** — the same shape as every other gate on this page that passes on evidence it
+could not produce. Core's `CI's own shell` job now runs `actionlint` over every workflow for exactly
+this reason (MeshWeaver#3228), with the embedded shellcheck/pyflakes integrations disabled so the
+gate is about structure only; `check-workflow-timeouts.py` and `check-workflow-shell.py` both stay
+green on the defect, which is the measurement that says the new check is not redundant.
+
 ### A verdict about an unpinned checkout is a function of wall-clock time
 
 The cross-repo gates check core out with **no `ref:`**. Two people therefore measured the same
