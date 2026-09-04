@@ -159,9 +159,9 @@ public static class MarkdownViewLogic
     /// (subscribing) embed on the per-view Activity being created + routable. This is the single
     /// decision the Blazor views call at render time; it has three states:
     /// <list type="bullet">
-    ///   <item><b>No owner</b> → <see cref="DisableKernelPlaceholder"/>: a static notice, never a
+    ///   <item><b>No owner</b> → <see cref="DisableKernelPlaceholder(string,string?)"/>: a static notice, never a
     ///   subscription (there is no per-node hub to host the kernel).</item>
-    ///   <item><b>Owned but <paramref name="kernelReady"/> = false</b> → <see cref="PendingKernelPlaceholder"/>:
+    ///   <item><b>Owned but <paramref name="kernelReady"/> = false</b> → <see cref="PendingKernelPlaceholder(string,string?)"/>:
     ///   a static, NON-subscribing "starting" notice.</item>
     ///   <item><b>Owned and <paramref name="kernelReady"/> = true</b> → <see cref="ReplaceKernelPlaceholder"/>:
     ///   the live <c>data-address</c> the Blazor renderer turns into a LayoutAreaControl that
@@ -180,19 +180,41 @@ public static class MarkdownViewLogic
     /// live area is embedded ONLY once the activity is routable — the view flips
     /// <paramref name="kernelReady"/> from <see cref="CreateActivityAndSubmit"/>'s <c>onReady</c>
     /// callback and re-renders. Until then the user SEES a non-subscribing placeholder.</para>
+    ///
+    /// <para>🌍 <b>The locale-less overload renders its two notices in English.</b> It is kept so
+    /// already-compiled callers keep binding (adding a parameter to an existing method is a binary
+    /// break, an overload is not), but every RENDER path should call
+    /// <see cref="RenderKernelResultAreas(string,string,bool,Address,string)"/> with
+    /// <c>ViewerLocale()</c>: these notices sit INSIDE the cell frame, which makes them
+    /// platform-owned text under clause 1 of
+    /// <see href="/Doc/Architecture/ChromeAndContentLanguage">Chrome and content language</see> —
+    /// they follow the VIEWER, not the author.</para>
     /// </summary>
     public static string RenderKernelResultAreas(
         string? html, string? ownerPath, bool kernelReady, Address kernelAddress)
+        => RenderKernelResultAreas(html, ownerPath, kernelReady, kernelAddress, locale: null);
+
+    /// <summary>
+    /// <see cref="RenderKernelResultAreas(string,string,bool,Address)"/> with the VIEWER's language,
+    /// threaded down to whichever of the two static notices this render resolves to.
+    ///
+    /// <para><paramref name="locale"/> is the viewer's language tag read EXPLICITLY off their
+    /// <c>AccessContext</c> (<c>accessService.ViewerLocale()</c>) — never an ambient
+    /// <c>CultureInfo.CurrentUICulture</c>, which on Blazor Server is the container's culture and
+    /// therefore shared by every simultaneous viewer. <c>null</c> falls back to English.</para>
+    /// </summary>
+    public static string RenderKernelResultAreas(
+        string? html, string? ownerPath, bool kernelReady, Address kernelAddress, string? locale)
     {
         if (string.IsNullOrEmpty(html))
             return html ?? string.Empty;
 
         if (string.IsNullOrEmpty(ownerPath))
-            return DisableKernelPlaceholder(html);
+            return DisableKernelPlaceholder(html, locale);
 
         return kernelReady
             ? ReplaceKernelPlaceholder(html, kernelAddress)
-            : PendingKernelPlaceholder(html);
+            : PendingKernelPlaceholder(html, locale);
     }
 
     /// <summary>
@@ -206,17 +228,30 @@ public static class MarkdownViewLogic
     /// notice so the user SEES that execution is unavailable here, and the renderer never opens a
     /// subscription to a phantom address (an empty <c>data-address</c> is skipped by
     /// <c>MarkdownHtmlRenderer.RenderLayoutArea</c>; the regex below removes the whole div).
+    ///
+    /// <para>Renders the notice in English. Prefer
+    /// <see cref="DisableKernelPlaceholder(string,string?)"/> — see the note there.</para>
     /// </summary>
     public static string DisableKernelPlaceholder(string html)
-    {
-        const string notice =
-            "<div class=\"markdown-kernel-disabled\" style=\"border:1px solid var(--neutral-stroke-rest,#d0d0d0);" +
-            "background:var(--neutral-layer-2,#f5f5f5);color:var(--neutral-foreground-hint,#666);" +
-            "padding:8px 12px;border-radius:4px;margin:8px 0;font-size:13px;\">" +
-            "Interactive code execution is unavailable here — this view has no owning node to host the kernel." +
-            "</div>";
-        return ReplaceKernelAreaDivs(html, notice);
-    }
+        => DisableKernelPlaceholder(html, locale: null);
+
+    /// <summary>
+    /// <see cref="DisableKernelPlaceholder(string)"/> in the VIEWER's language
+    /// (<c>code.kernelDisabledNotice</c>).
+    ///
+    /// <para>🌍 This notice replaces the result area INSIDE the cell frame, in the middle of an
+    /// author's page. It is platform-owned text, so under clause 1 of
+    /// <see href="/Doc/Architecture/ChromeAndContentLanguage">Chrome and content language</see> it
+    /// follows the VIEWER — it is not "as authored", and a bare English literal here is the
+    /// "unowned string" that clause calls a bug. <paramref name="locale"/> is read explicitly off
+    /// the viewer's <c>AccessContext</c> (<c>accessService.ViewerLocale()</c>); <c>null</c> falls
+    /// back to English.</para>
+    ///
+    /// <para>Clause 2 does not apply: this is a sentence explaining an absence, not a control with
+    /// a label, so there is no glyph that says the same thing.</para>
+    /// </summary>
+    public static string DisableKernelPlaceholder(string html, string? locale)
+        => ReplaceKernelAreaDivs(html, Notice("markdown-kernel-disabled", "code.kernelDisabledNotice", locale));
 
     /// <summary>
     /// Replaces the executable-code-block result areas with a static, NON-subscribing "starting"
@@ -227,17 +262,40 @@ public static class MarkdownViewLogic
     /// <c>LayoutAreaView</c> and opens no subscription to the not-yet-created
     /// <c>{owner}/_Activity/markdown-{id}</c>. The notice keeps the absent case VISIBLE rather than
     /// blank, and once the activity is routable the view re-renders with the live area embedded.
+    ///
+    /// <para>Renders the notice in English. Prefer
+    /// <see cref="PendingKernelPlaceholder(string,string?)"/> — see the note there.</para>
     /// </summary>
     public static string PendingKernelPlaceholder(string html)
-    {
-        const string notice =
-            "<div class=\"markdown-kernel-pending\" style=\"border:1px solid var(--neutral-stroke-rest,#d0d0d0);" +
-            "background:var(--neutral-layer-2,#f5f5f5);color:var(--neutral-foreground-hint,#666);" +
-            "padding:8px 12px;border-radius:4px;margin:8px 0;font-size:13px;\">" +
-            "Starting interactive kernel…" +
-            "</div>";
-        return ReplaceKernelAreaDivs(html, notice);
-    }
+        => PendingKernelPlaceholder(html, locale: null);
+
+    /// <summary>
+    /// <see cref="PendingKernelPlaceholder(string)"/> in the VIEWER's language
+    /// (<c>code.kernelStarting</c>). Same ownership argument as
+    /// <see cref="DisableKernelPlaceholder(string,string?)"/>: the notice renders inside the cell
+    /// frame, it is the platform's own words, and it follows the viewer.
+    /// <paramref name="locale"/> is read explicitly off the viewer's <c>AccessContext</c>;
+    /// <c>null</c> falls back to English.
+    /// </summary>
+    public static string PendingKernelPlaceholder(string html, string? locale)
+        => ReplaceKernelAreaDivs(html, Notice("markdown-kernel-pending", "code.kernelStarting", locale));
+
+    /// <summary>
+    /// The shared markup for the two static kernel notices: one styled div carrying
+    /// <paramref name="cssClass"/> (which the Blazor tests and the stylesheet key off) around the
+    /// catalog text for <paramref name="key"/> in <paramref name="locale"/>.
+    ///
+    /// <para>The text is HTML-ENCODED on the way in. A catalog value is data — a translator may
+    /// legitimately write <c>&amp;</c> or an angle bracket — and this string is spliced straight
+    /// into a rendered document, so encoding is what keeps a translation from being able to alter
+    /// the markup around it.</para>
+    /// </summary>
+    private static string Notice(string cssClass, string key, string? locale) =>
+        $"<div class=\"{cssClass}\" style=\"border:1px solid var(--neutral-stroke-rest,#d0d0d0);"
+        + "background:var(--neutral-layer-2,#f5f5f5);color:var(--neutral-foreground-hint,#666);"
+        + "padding:8px 12px;border-radius:4px;margin:8px 0;font-size:13px;\">"
+        + System.Net.WebUtility.HtmlEncode(LocalizationCatalog.Get(key, locale))
+        + "</div>";
 
     /// <summary>
     /// Replaces every kernel result-area div (identified by the placeholder address) with
@@ -377,7 +435,8 @@ public static class MarkdownViewLogic
     /// the live kernel area and subscribe. The Blazor views pass a callback that flips their
     /// <c>kernelReady</c> flag and re-renders, so the <c>LayoutAreaView</c> subscription is opened
     /// only AFTER the activity exists (closing the subscribe-before-create race — see
-    /// <see cref="RenderKernelResultAreas"/>). Never fires if the activity fails to become routable;
+    /// <see cref="RenderKernelResultAreas(string,string,bool,Address,string)"/>). Never fires if the
+    /// activity fails to become routable;
     /// the view then keeps showing the non-subscribing "starting" placeholder.</param>
     /// <param name="onError">Invoked (on the subscribe thread) if the Activity never becomes routable
     /// — i.e. create or routing failed and the submissions were NOT posted. A view that has shown a
