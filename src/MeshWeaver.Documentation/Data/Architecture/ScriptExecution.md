@@ -139,7 +139,29 @@ So the verdict is not a boolean. `CodeConfiguration.OutputCurrency()` (`MeshWeav
 
 The **fingerprint is tested first**, before the other three. It is both evidence of a run and the only field that can decide currency, so a node carrying the hash and nothing else is fully determinable; checking the run markers first would answer `NeverRun` there and silence a verdict we can actually substantiate — the same fail-open shape, mirrored.
 
-**The residual, stated rather than hidden:** a cell whose *very first* run failed to stamp anything at all records nothing, and is therefore indistinguishable from a cell nobody has run. No rule over the node's content can recover that; making it observable needs the run's failure to be written somewhere — see [issue #3249](https://github.com/Systemorph/MeshWeaver/issues/3249).
+**The residual, stated rather than hidden:** a cell whose *very first* run failed to stamp anything at all records nothing, and is therefore indistinguishable from a cell nobody has run. No rule over the node's content can recover that. What happens instead is below.
+
+#### When the stamp does not land
+
+The stamp is one write to one node. It lands whole or not at all — there is no partial outcome to read a warning out of — so a cell whose stamp failed reads exactly as `NeverRun`. Recovering that on the cell is **not possible from the dispatching hub**, and the reasons are worth writing down because all three candidate shapes look plausible until you follow them:
+
+| Candidate | Why not |
+|---|---|
+| Put a `LastStampFailedAt` marker on the cell | It records the failure of a node write **by performing another node write to the same node through the same handle**. In every failure mode that actually occurs — the workspace not ready, the partition write refused, the content unreadable — the second write fails for the reason the first one did. Recovery in the same failure domain is not recovery. |
+| Append the failure to the run's Activity | The Activity *is* a different failure domain, and it is where `FailActivity` already writes. But for the in-process C# path the activity's transcript has a **single writer that re-asserts it wholesale**: `ActivityLogLogger.PublishSnapshotLocked` writes `Messages`, `MessageCount`, `MaxSeverity`, `Status` and `End` from its own private list on every flush and on `Complete`. An append issued from the dispatcher — which runs immediately after the submit, i.e. before the kernel has published anything — is overwritten by the next snapshot. Worse if it survived: an `Error`-level line rolls `MaxSeverity` up, and a terminal write that folds severity would report a **successful run as failed**. |
+| Have `ExecuteScriptResponse` carry the verdict | The response is posted before the stamp resolves. Waiting for it undoes MeshWeaver.Plugins#1266, whose whole point is that a Run click is acknowledged immediately and never silently. A stamp write that stalls would then hold the acknowledgement of a run that is already executing. |
+
+So the failure is **reported, not recovered**: `CodeNodeType.ReportStampNotRecorded` logs one line at **`Error`**, under event id `3249`, naming the cell, the activity and the fact that the run itself succeeded.
+
+Two things make that an honest answer rather than a shrug.
+
+**The run's durable record is not lost.** The Activity node was created *before* the dispatch and it carries the originating cell on `ActivityLog.HubPath`. A failed stamp loses the cell's **pointer** to its run, not the run. A listing over `_Activity` can still find it.
+
+**Every way the stamp can fail now reaches that one line.** It previously had two log calls and a third path with none: the update lambda tested `curr.Content is CodeConfiguration`, so content arriving as untyped JSON — the polymorphic converter degrading an unresolvable `$type`, the as-written `JsonObject` DOM, a same-named record from another collectible assembly — simply did not match, the write short-circuited as a no-op, and the stamp vanished with no exception and no log at all. The stamp now goes through the typed `Update<CodeConfiguration>` overload, which **refuses to write** unreadable content and faults with the runtime type and a JSON excerpt instead of silently writing a default-valued record over the cell.
+
+`Error` rather than `Warning` is deliberate and costs nothing extra: both levels ship to Loki and the path is exceptional, so the only thing that changes is that it trips error-rate alerting. That is the right classification — nothing retries the write, the loss is permanent, and the visible consequence is a cell that tells a human it has never run. "Degraded but self-correcting" is what `Warning` claims, and none of it holds here.
+
+What is still **not** covered: a viewer looking at a cell after a reload cannot tell `NeverRun` from "ran, not recorded". Closing that needs a surface that finds a cell's runs by `ActivityLog.HubPath` rather than by the stamp — a read that does not depend on the stamp, not another write. See [issue #3301](https://github.com/Systemorph/MeshWeaver/issues/3301).
 
 ### 2. From application code — `SubmitCodeRequest` directly
 
