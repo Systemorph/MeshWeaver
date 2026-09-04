@@ -52,7 +52,7 @@ namespace MeshWeaver.Mesh;
 /// write the owner had refused. <see cref="DispatchFailure"/> is that missing seam, and it obeys
 /// the identical exactly-once rule.</para>
 /// </summary>
-public sealed class LatePatchResponseRegistry : ILatePatchVerdictSink
+public sealed class LatePatchResponseRegistry : ILatePatchVerdictSink, IUndeliverableReplySink
 {
     /// <summary>
     /// 🚨 How long after the patch post a late owner response is still acted upon. A response
@@ -285,6 +285,37 @@ public sealed class LatePatchResponseRegistry : ILatePatchVerdictSink
            && entry.ExpiresAt >= clock.GetUtcNow();
 
     /// <summary>Number of armed watches — test seam.</summary>
+    /// <summary>
+    /// <see cref="IUndeliverableReplySink"/>: take a reply the routing layer is about to DROP,
+    /// when a caller here is armed for that correlation.
+    ///
+    /// <para>🚨 The last resort, never a second transport. Routing offers a delivery here only
+    /// where it cannot forward it at all — a whole-mesh teardown past <c>DisposeHostedHubs</c> —
+    /// so there is no post left for this to race. Serving an armed caller ALONGSIDE a healthy post
+    /// was tried twice at the patch-verdict seam and reverted both times: the sink dispatches
+    /// synchronously on the owner's turn, ahead of the state the ack is about
+    /// (<c>ComboGateRollTest</c>, <c>ImportTypeBeforeInstanceTest</c>).</para>
+    ///
+    /// <para>The two shapes a dropped reply takes are the two this registry already knows —
+    /// the verdict itself and a <see cref="DeliveryFailure"/> standing in for one. Anything else
+    /// is declined, so the drop stands and is logged as before.</para>
+    /// </summary>
+    public bool TryDeliver(IMessageDelivery delivery)
+    {
+        if (delivery.Properties.TryGetValue(PostOptions.RequestId, out var raw)
+            && raw?.ToString() is { Length: > 0 } requestId)
+        {
+            return delivery.Message switch
+            {
+                PatchDataResponse response => Dispatch(requestId, response),
+                DeliveryFailure failure => DispatchFailure(requestId, failure),
+                _ => false,
+            };
+        }
+
+        return false;
+    }
+
     public int ArmedCount => entries.Count;
 
     /// <summary>
