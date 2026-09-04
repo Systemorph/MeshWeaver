@@ -273,6 +273,14 @@ internal static class PackageUpdateReconciler
     /// poll, forever — measured on memex-cloud as 124 of the newest 200 notifications, two
     /// packages accounting for over half of everything the mesh had written in four days. Both
     /// guards are needed, and each one alone still duplicates:</para>
+    ///
+    /// <para>🚨 <b>Addressed to the PLATFORM</b> (<see cref="NotificationService.PlatformAddressee"/>),
+    /// not to the install record's partition. Only a platform admin can apply a plugin update — the
+    /// refusal this same method raises says so in as many words ("Update needs a Global Admin") — so
+    /// an ordinary reader of the catalog can do nothing with it. Before the addressed model it landed
+    /// at <c>Plugins/{package}/_Notification/{id}</c>, visible to everyone who could read the plugin
+    /// record (Systemorph/MeshWeaver#3156 §2). The install record stays the CLICK TARGET, which is
+    /// what <c>targetNodePath</c> carries.</para>
     /// <list type="number">
     ///   <item><b>A satisfiable silence gate.</b> The content-identity gate in
     ///     <see cref="Decide"/> asks "is the candidate installed?" — self-silencing on the
@@ -321,6 +329,10 @@ internal static class PackageUpdateReconciler
                 .CreateNotification(
                     meshService, recordPath, title, body,
                     NotificationType.System, targetNodePath: recordPath,
+                    // Addressed to the PLATFORM: only a platform admin can apply a plugin
+                    // update, so an ordinary catalog reader can do nothing with this. The
+                    // install record stays the click target (targetNodePath above).
+                    recipient: NotificationService.PlatformAddressee,
                     identity: $"package-update|{kind}|{candidate}")
                 // Mark AFTER the bell, never before: a marker written first and a notification
                 // that then failed would silence the reminder permanently, whereas a bell written

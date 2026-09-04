@@ -57,7 +57,7 @@ schema(s)".
 
 | # | Caller | Query shape | Table | Status |
 |---|---|---|---|---|
-| 1 | **Notification bell + panel** — `NotificationCenter.razor` / `NotificationCenterPanel.razor` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Portal`) | `nodeType:Notification sort:CreatedAt-desc` — unanchored, unbounded, LIVE (re-queries on matching change) | `notifications` | **To eliminate** — see plan 1 |
+| 1 | **Notification bell + panel** — `NotificationCenter.razor` / `NotificationCenterPanel.razor` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Portal`) | was `nodeType:Notification sort:CreatedAt-desc` — unanchored, unbounded, LIVE | `notifications` | **DONE** — [Addressed Notifications](/Doc/Architecture/AddressedNotifications) (#3156/#3216/#3238). Two pinned legs, `namespace:{viewer}/_Notification` and (global admins only) `namespace:Admin/_Notification`; the grace-list line is deleted |
 | 2 | **Security fold globals** — `SecurityQueries.Roles` / `.Memberships` / `.GatedNodes(type)` (per gated type!) via `PermissionEvaluator` | `nodeType:Role scope:subtree … complete`, `nodeType:GroupMembership …`, `nodeType:{gated} …` | `mesh_nodes` | **To eliminate** — see plan 2 |
 | 3 | **Root-scope grants/policies** — `SecurityQueries.RootAssignments` / `.RootPolicy` | `namespace:_Access nodeType:AccessAssignment …` / `path:_Policy nodeType:PartitionAccessPolicy …` | `system_access.access` / — | **Done** 2026-09-02 (#2194) — the grants leg never fanned out (the router pins `_Access` to its registered schema); the policy leg was `namespace: id:_Policy`, path-less, and DID fan out 179×/5 min for a row that cannot exist on Postgres — now read by path, see below |
 | 4 | `node_type ILIKE $1` wildcard (seen live; caller not yet named) | suffix/wildcard nodeType | `mesh_nodes` | **Identify via the shape log** (Plugins #1035), then anchor or fold into plan 2 |
@@ -91,7 +91,7 @@ to its reader:
 
 | Lines / 5 min | Shape | Reader | Verdict |
 |---|---|---|---|
-| 444 | `Notification path:- scope:Exact` | the bell — `NotificationCenter.razor:45` + `NotificationCenterPanel.razor:247` (MeshWeaver.Plugins, per CIRCUIT, live), plus `NotificationTriageService.cs:75` | **Plan 1** (recipient delivery) — a Plugins change; nothing in core issues this shape |
+| 444 | `Notification path:- scope:Exact` | the bell — `NotificationCenter.razor:45` + `NotificationCenterPanel.razor:247` (MeshWeaver.Plugins, per CIRCUIT, live), plus `NotificationTriageService.cs:75` | **DONE** (plan 1). Re-measured on 2026-09-03 at **4 476 rows across 201 of 201 schemas, 9–10 s per render on an IDLE replica**, ~60 lines/min × 7 replicas, Postgres 87–91 % avg (#3238). Both readers now served: the bell is ANCHORED (two pinned legs), the triage watch DECLARES its fan-out. See [Addressed Notifications](/Doc/Architecture/AddressedNotifications) |
 | 313 | `AccessAssignment path:- scope:Subtree` | **unattributed.** Not the fold: `SecurityQueryShapesTest.TheFoldNeverIssuesAMeasuredFanOutShape` pins that no fold shape describes to it. No `.cs`/`.razor` in this repo or in MeshWeaver.Plugins builds it (the two `scope:subtree nodeType:AccessAssignment` builders — `PackageInstaller.ContradictingDenies`, `Store/Licensing/Source/PluginGate.SnapshotQueries` — both carry `path:{partition}`); a `search_chunks` sweep of the live mesh answered `"searched": false` (no embedding provider on that MCP endpoint), i.e. the in-mesh sweep FAILED and is still owed | **Open** — find the caller (Plugins #1035's shape log names it per line; correlate with `select:`/`limit:` on the same line) |
 | 278 | `Email path:- scope:Exact` | **unattributed** — no source in either repo spells a path-less `nodeType:Email` (`EmailInboundProcessor.cs:339` is `namespace:`-anchored); the in-mesh sweep failed as above | **Open** |
 | 179 | `PartitionAccessPolicy path:- scope:Children` | the fold's ROOT policy leg — `PermissionEvaluator.ObserveScopePolicies`, spelled `namespace: id:_Policy` | **Fixed here** — see "What moved" |
@@ -198,8 +198,11 @@ not optional hygiene.
 
 1. ~~Plugins #1035 — the shape on the log line~~ (landed; identifies population #4 and any stragglers).
 2. Plan 2 (fold materialization) — core; removes the per-render `access` + `mesh_nodes` globals.
-3. Plan 1 (recipient delivery) — core `NotificationService` + Plugins bell/panel; removes the
-   `notifications` fan-out and its thousands-of-rows reads.
+3. ~~Plan 1 (addressee delivery) — core `NotificationService` + Plugins bell/panel~~ **(landed
+   2026-09-03, #3156/#3216/#3238)**: a notification is delivered to its ADDRESSEE's partition, so
+   the bell is two pinned reads instead of a 201-schema UNION — and the platform bell, which the
+   fan-out could never reach because `Admin` is excluded from `searchable_schemas`, is finally
+   readable by an operator. [Addressed Notifications](/Doc/Architecture/AddressedNotifications).
 4. The ratchet (plan 3).
 
 🚨 **Read [Unanchored Security Reads](../UnanchoredSecurityReads) before touching plan 2.** It is
@@ -240,7 +243,7 @@ measured on 2026-09-01 (Plugins `Hosting/NodeTypeInstanceLocations`) live in per
 satellite containers — `{any}/_Access`, `{owner}/_Thread`, `{mainNode}/_Notification`, per-user
 `_Email` — or ARE the fold (refused outright). No honest declaration narrows them: `namespace:*/_X`
 correctly resolves to "cannot narrow". What removes them is still this page's own plan, in its order:
-the fold materialization (plan 2), recipient-side notification delivery (plan 1), then anchoring
+the fold materialization (plan 2), ~~addressee-side notification delivery (plan 1, landed)~~, then anchoring
 `Thread`/`UiContribution`/`Email` at their call sites. The declaration serves the types that DO have
 a home — an `Admin/Menu` entry, a package's own dimension types — and any future type whose author
 can say where it lives.
