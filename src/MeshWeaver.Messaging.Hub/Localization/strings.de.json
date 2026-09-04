@@ -15,6 +15,8 @@
   "common.run": "Ausführen",
   "common.stop": "Stoppen",
   "code.staleCell": "Code geändert — erneut ausführen",
+  "code.unverifiedCell": "Ausgabe nicht bestätigt",
+  "code.unverifiedCellHint": "Dieser Lauf wurde nicht vollständig erfasst — ob die Ausgabe zum Code oben gehört, lässt sich nicht feststellen. Zur Sicherheit erneut ausführen",
   "code.runCell": "Diesen Codeblock ausführen",
   "code.rerunCell": "Der Code hat sich seit dieser Ausgabe geändert — erneut ausführen",
   "code.kernelUnavailable": "Der interaktive Kernel ist hier nicht verfügbar",
