@@ -374,53 +374,13 @@ public static class CodeNodeType
                                 hub.Post(submit, o => o.WithTarget(submitTarget));
                             }
 
-                            // Stamp Last{ExecutedAt,ExecutedBy,ActivityPath} onto
+                            // Stamp Last{ExecutedAt,ExecutedBy,ActivityPath,ExecutedCodeHash} onto
                             // the Code MeshNode so the Content area can show
                             // "Last executed: <when> by <who>" and embed the last
                             // activity's Progress area for the Output pane —
                             // without separately querying activity children.
-                            try
-                            {
-                                var workspace = hub.GetWorkspace();
-                                var stampLogger = logger;
-                                // .Subscribe is mandatory: Update is Observable.Create —
-                                // the partition write only runs on Subscribe. Discarding
-                                // the observable silently drops the stamp.
-                                workspace.GetMeshNodeStream().Update(curr =>
-                                    curr.Content is CodeConfiguration cfg
-                                        ? curr with
-                                        {
-                                            Content = cfg with
-                                            {
-                                                LastExecutedAt = DateTimeOffset.UtcNow,
-                                                LastExecutedBy = viewerHome,
-                                                LastActivityPath = activityPath,
-                                                // Fingerprint what was ACTUALLY submitted (submit.Code /
-                                                // submit.Language), not `cfg` — the two agree today, but
-                                                // stamping the node's current content would silently
-                                                // record "up to date" for a run of something else the
-                                                // moment any future path submits a transformed source.
-                                                LastExecutedCodeHash =
-                                                    CodeFingerprint.Of(submit.Code, submit.Language)
-                                            }
-                                        }
-                                        : curr)
-                                    .Subscribe(
-                                        _ => { },
-                                        ex => stampLogger?.LogWarning(ex,
-                                            "CodeNodeType: stamp UpdateMeshNode failed for {Hub}",
-                                            hub.Address));
-                            }
-                            catch (Exception stampEx)
-                            {
-                                // The workspace might not be ready (cold-start race) — the
-                                // missing stamp is a UI nicety, not a correctness invariant,
-                                // and the Activity log IS written. But a bare `catch {}` here
-                                // hid whatever went wrong; name it, with type + stack.
-                                logger?.LogWarning(stampEx,
-                                    "CodeNodeType: could not stamp last-execution fields on {Hub} "
-                                    + "(run {Activity} is unaffected)", hub.Address, activityPath);
-                            }
+                            StampLastExecution(
+                                hub, logger, activityPath, viewerHome, submit.Code, submit.Language);
 
                             hub.Post(
                                 new ExecuteScriptResponse
@@ -446,6 +406,135 @@ public static class CodeNodeType
             readError => FaultDispatch(readError, "Could not read the Code node to execute"));
         return request.Processed();
     }
+
+    /// <summary>
+    /// The ONE event id an operator can alert on for "a run happened and the cell does not know it".
+    /// 3249 is the issue that made this observable; keeping the number means a Loki/Grafana rule
+    /// written against it survives every future edit to the message text.
+    /// </summary>
+    internal static readonly EventId LastExecutionStampNotRecorded =
+        new(3249, nameof(LastExecutionStampNotRecorded));
+
+    /// <summary>
+    /// The last-execution stamp, as a cold write — subscribe to run it.
+    ///
+    /// <para>🚨 <b>Typed <c>Update&lt;CodeConfiguration&gt;</c>, never <c>curr.Content is CodeConfiguration</c>.</b>
+    /// The type test is the trap-door AGENTS.md rules out, and here it was the WORST of the stamp's
+    /// failure paths: content that arrives as untyped JSON (the polymorphic converter degrading an
+    /// unresolvable <c>$type</c>, the as-written <c>JsonObject</c> DOM, a same-named record from
+    /// another collectible assembly) does not match, the lambda returns <c>curr</c>, <c>Update</c>
+    /// short-circuits the no-op — and the stamp is dropped with <b>no exception and no log at all</b>.
+    /// The two paths the issue names at least logged. The typed overload turns that silence into a
+    /// terminal: it refuses to write and faults with a <c>MeshNodeStreamException</c> naming the
+    /// runtime type and a JSON excerpt, which lands in the same sink as every other failure.</para>
+    ///
+    /// <para>It cannot write defaults over real content either — that is the overload's contract:
+    /// unconvertible content FAILS the write rather than materialising a blank record
+    /// (<c>MeshNodeStreamHandle.ResolveContent</c>), so recovering the degraded case costs nothing
+    /// in the case where the node genuinely is not a cell.</para>
+    /// </summary>
+    /// <param name="stream">Handle to the Code node — the dispatching hub's OWN node.</param>
+    /// <param name="activityPath">Path of the Activity node this run writes its transcript to.</param>
+    /// <param name="executedBy">The viewer who triggered the run, if known.</param>
+    /// <param name="code">The source that was ACTUALLY submitted.</param>
+    /// <param name="language">The language it was submitted as.</param>
+    // internal, not private: CodeNodeStampFailureTest drives this directly. A stamp failure cannot
+    // be provoked through the dispatch — the handler refuses to dispatch at all unless the node
+    // reads as an executable CodeConfiguration — so the seam is the only place the contract is
+    // assertable.
+    internal static IObservable<MeshNode> LastExecutionStamp(
+        MeshNodeStreamHandle stream,
+        string activityPath,
+        string? executedBy,
+        string? code,
+        string? language)
+        => stream.Update<CodeConfiguration>(cfg => cfg with
+        {
+            LastExecutedAt = DateTimeOffset.UtcNow,
+            LastExecutedBy = executedBy,
+            LastActivityPath = activityPath,
+            // Fingerprint what was ACTUALLY submitted (submit.Code / submit.Language), not `cfg` —
+            // the two agree today, but stamping the node's current content would silently record
+            // "up to date" for a run of something else the moment any future path submits a
+            // transformed source.
+            LastExecutedCodeHash = CodeFingerprint.Of(code, language),
+        });
+
+    /// <summary>
+    /// Runs the stamp and reports it when it does not land. Fire-and-forget by DESIGN: the run has
+    /// already been dispatched and the caller has already been acknowledged
+    /// (MeshWeaver.Plugins#1266 — a Run click is never silent), so this must not gate anything.
+    ///
+    /// <para>🚨 <b>Every way this can fail ends in <see cref="ReportStampNotRecorded"/>.</b> The
+    /// synchronous throw (no workspace yet — the cold-start race), the write's <c>OnError</c> (a
+    /// refused/failed partition write), and content that cannot be read as a
+    /// <see cref="CodeConfiguration"/> at all all arrive at one sink. Two copies of a log call is
+    /// how the third path came to have none.</para>
+    ///
+    /// <para><b>Why the failure is reported and not recovered</b> — the decision is written up in
+    /// <c>Doc/Architecture/ScriptExecution</c> → "When the stamp does not land". In short: every
+    /// scheme that puts a marker on the CELL is a second write to the node whose first write just
+    /// failed, i.e. recovery in the same failure domain; the Activity is a different domain but its
+    /// message list is re-asserted wholesale by <c>ActivityLogLogger</c>, so an append from here is
+    /// clobbered by the next snapshot; and making the response carry the verdict means waiting for
+    /// the stamp before acknowledging the click. The run's own durable record — the Activity node,
+    /// which carries the cell's path on <c>ActivityLog.HubPath</c> — is NOT lost when the stamp
+    /// fails. What is lost is the cell's pointer to it, and this line is where that fact lives.</para>
+    /// </summary>
+    private static void StampLastExecution(
+        IMessageHub hub,
+        ILogger? logger,
+        string activityPath,
+        string? executedBy,
+        string? code,
+        string? language)
+    {
+        try
+        {
+            // .Subscribe is mandatory: Update is Observable.Create — the partition write only runs
+            // on Subscribe. Discarding the observable silently drops the stamp.
+            LastExecutionStamp(
+                    hub.GetWorkspace().GetMeshNodeStream(), activityPath, executedBy, code, language)
+                .Subscribe(
+                    _ => { },
+                    ex => ReportStampNotRecorded(logger, hub.Address, activityPath, ex));
+        }
+        catch (Exception ex)
+        {
+            // Thrown before the write could even be composed — the workspace is not ready
+            // (cold-start race), or its MeshNode reducer/data source is absent.
+            ReportStampNotRecorded(logger, hub.Address, activityPath, ex);
+        }
+    }
+
+    /// <summary>
+    /// The ONE sink for a stamp that did not land, and — deliberately — the only place in the
+    /// system where that fact exists.
+    ///
+    /// <para>🚨 <b>Error, not Warning, and the trade-off stated rather than assumed.</b> Both levels
+    /// ship to Loki, so the storage cost is identical and the path is exceptional (the happy path
+    /// logs nothing at all) — what changes is that this now trips error-rate alerting. That is the
+    /// correct classification: the write is not retried by anything, the loss is permanent, and the
+    /// consequence is a cell that will report itself to a human as never run. "Degraded but
+    /// self-correcting" is what Warning claims, and none of it is true here.</para>
+    ///
+    /// <para>Operator-facing, therefore NOT localized — nothing here reaches a screen.</para>
+    /// </summary>
+    /// <param name="logger">The dispatch logger; a null logger degrades to no report, as everywhere.</param>
+    /// <param name="hubAddress">The Code node whose record was lost.</param>
+    /// <param name="activityPath">Where the run's transcript actually is.</param>
+    /// <param name="exception">What went wrong — type and stack, never just <c>.Message</c>.</param>
+    internal static void ReportStampNotRecorded(
+        ILogger? logger, Address hubAddress, string activityPath, Exception exception) =>
+        logger?.LogError(
+            LastExecutionStampNotRecorded, exception,
+            "CodeNodeType: the last-execution stamp for {Hub} did NOT land. The run itself is "
+            + "unaffected and its transcript is at {Activity} (which records this cell on "
+            + "ActivityLog.HubPath) — what is lost is the cell's own record of it, permanently: "
+            + "nothing retries this write, so the cell reads as never run and cannot prove its "
+            + "output is current until a later run stamps it. This line is the only place that "
+            + "fact exists — see Doc/Architecture/ScriptExecution.",
+            hubAddress, activityPath);
 
     /// <summary>
     /// Reconcile a foreign-language run's ActivityLog to a terminal <see cref="ActivityStatus.Failed"/>
