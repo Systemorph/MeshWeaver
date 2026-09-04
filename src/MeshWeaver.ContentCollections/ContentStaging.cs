@@ -181,24 +181,33 @@ internal static class OutOfBandContentTransfer
             });
 
     /// <summary>
-    /// Deletes the staged blobs named by <paramref name="handles"/>. Best-effort per blob — a
-    /// delete that fails leaves reclaimable state, never a wrong result, and must not turn a
-    /// successful sync into a failure.
+    /// Deletes the staged blobs named by <paramref name="handles"/>. Per blob a failure is
+    /// CONTINUED PAST — one blob that will not delete must not strand the rest, and it must not turn
+    /// a successful sync into a failure — but it is never swallowed silently: it is logged, because
+    /// what it leaves behind is a blob on the content share that only the age sweep will now
+    /// collect.
     /// </summary>
     /// <param name="destination">The destination collection.</param>
     /// <param name="handles">The handles to reclaim.</param>
-    internal static IObservable<Unit> Discard(ContentCollection destination, IEnumerable<string> handles)
+    /// <param name="logger">Where a blob that would not delete is reported.</param>
+    internal static IObservable<Unit> Discard(
+        ContentCollection destination, IEnumerable<string> handles, ILogger? logger)
     {
         var blobs = handles.Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(h => ContentStaging.BlobPath(h))
+            .Select(ContentStaging.BlobPath)
             .ToArray();
         return blobs.Length == 0
             ? Observable.Return(Unit.Default)
             : blobs
                 .Select(blob => destination.DeleteFile(blob)
-                    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default)))
+                    .Catch<Unit, Exception>(ex =>
+                    {
+                        logger?.LogWarning(ex,
+                            "Could not reclaim staged content blob {Blob} in collection {Collection}; "
+                            + "it stays until the age sweep collects it", blob, destination.Collection);
+                        return Observable.Return(Unit.Default);
+                    }))
                 .Concat()
-                .DefaultIfEmpty(Unit.Default)
                 .LastAsync();
     }
 
@@ -210,12 +219,36 @@ internal static class OutOfBandContentTransfer
     /// </summary>
     /// <param name="destination">The destination collection.</param>
     /// <param name="nowUtc">The current time (injected so a test can age the folder deterministically).</param>
-    internal static IObservable<Unit> SweepStale(ContentCollection destination, DateTime nowUtc)
+    /// <param name="logger">Where an entry that would not delete is reported.</param>
+    internal static IObservable<Unit> SweepStale(
+        ContentCollection destination, DateTime nowUtc, ILogger? logger)
         => destination.GetFiles(ContentStaging.Folder)
-            .Catch<FileItem, Exception>(_ => Observable.Empty<FileItem>())
+            // A staging folder that has never existed is "nothing to reclaim", not a fault — and a
+            // sweep must never be the thing that fails a sync it is only tidying up before.
+            .Catch<FileItem, Exception>(ex =>
+            {
+                logger?.LogDebug(ex,
+                    "Staging folder of collection {Collection} could not be enumerated for the age "
+                    + "sweep; treating it as empty", destination.Collection);
+                return Observable.Empty<FileItem>();
+            })
             .Where(f => nowUtc - f.LastModified.ToUniversalTime() > ContentStaging.StaleAfter)
-            .Select(f => destination.DeleteFile(f.Path.Replace('\\', '/').TrimStart('/'))
-                .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default)))
+            .Select(f =>
+            {
+                var blob = f.Path.Replace('\\', '/').TrimStart('/');
+                return destination.DeleteFile(blob)
+                    .Do(_ => logger?.LogInformation(
+                        "Reclaimed stale staged content blob {Blob} in collection {Collection} "
+                        + "(left by a producer that did not finish its sync)",
+                        blob, destination.Collection))
+                    .Catch<Unit, Exception>(ex =>
+                    {
+                        logger?.LogWarning(ex,
+                            "Could not reclaim stale staged content blob {Blob} in collection "
+                            + "{Collection}", blob, destination.Collection);
+                        return Observable.Return(Unit.Default);
+                    });
+            })
             .Concat()
             .DefaultIfEmpty(Unit.Default)
             .LastAsync();

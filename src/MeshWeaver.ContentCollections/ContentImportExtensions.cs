@@ -802,6 +802,7 @@ public sealed class SyncContentFilesBuilder
     {
         var pool = _hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
                    ?? IoPool.Unbounded;
+        var logger = Logger();
         return OutOfBandContentTransfer.ResolveDestination(
                 _hub, address, _targetCollection,
                 o => ContentImportExtensions.ConfigurePost(o, address, captured))
@@ -811,7 +812,7 @@ public sealed class SyncContentFilesBuilder
                     + "staging folder cannot be reached from the posting hub"))
                 // Reclaim a dead producer's residue before adding to the folder, never after: the
                 // sweep must not be able to see this run's own blobs.
-                : OutOfBandContentTransfer.SweepStale(destination, DateTime.UtcNow)
+                : OutOfBandContentTransfer.SweepStale(destination, DateTime.UtcNow, logger)
                     .SelectMany(_ => oversized
                         .Select(entry => OutOfBandContentTransfer.Stage(destination, pool, entry.File)
                             .Select(staged => (entry.Index, Staged: staged)))
@@ -826,6 +827,11 @@ public sealed class SyncContentFilesBuilder
             .Catch<StagingPlan, Exception>(ex => Observable.Return(
                 StagingPlan.Unavailable($"{ex.GetType().Name}: {ex.Message}")));
     }
+
+    /// <summary>The logger this builder reports staging and reclaim outcomes on, when one exists.</summary>
+    private ILogger? Logger()
+        => _hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(SyncContentFilesBuilder).FullName!);
 
     /// <summary>
     /// Reclaims the blobs <paramref name="plan"/> staged once <paramref name="source"/> has
@@ -845,12 +851,11 @@ public sealed class SyncContentFilesBuilder
     {
         if (plan.Destination is null || plan.Staged.Count == 0)
             return source;
-        var logger = _hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger(typeof(SyncContentFilesBuilder).FullName!);
+        var logger = Logger();
         // Never faults: Discard swallows per blob, because a failed reclaim leaves reclaimable
         // state, never a wrong result, and must not turn a successful sync into a failure.
         var reclaim = Observable.Defer(() =>
-            OutOfBandContentTransfer.Discard(plan.Destination, plan.Staged.Values.Select(s => s.Handle))
+            OutOfBandContentTransfer.Discard(plan.Destination, plan.Staged.Values.Select(s => s.Handle), logger)
                 .Catch<Unit, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
