@@ -85,6 +85,15 @@ the refusal it exists to complain about. Fixed in #3309 (tests and docs only; th
 **Rule:** a detector must be run against a subject you broke *on purpose*, or you have only measured
 that it runs.
 
+🚨 **The same rule decides when a ZERO may be banked.** "No occurrences in 73 runs" and "the detector
+is dead" are the *same reading* until you have seen the detector fire — this instance wearing an
+absence for a hat. So a null is publishable only with its calibration attached: for #890 the counts
+were matched against a known occurrence's own published figures (56 `BELOW-ROSLYN` / 20
+`PROCESS CANNOT EMIT`) and the exposure suite was confirmed to have run in the window, *before* the
+zero was believed. Even then the arithmetic has to clear: at ~1 % per run, P(0 in 73) ≈ 48 %, so that
+null is a coin toss and #890 stays open on it. **Refusing to bank a null is only a virtue if the
+detector was known to work; otherwise it is the same mistake as banking one.**
+
 ### 3. A fix for a red that replaced it with a silent one, in the same edit
 
 This is the entry that explains why the family deserves a page, so read it as one story rather than
@@ -273,6 +282,11 @@ it is a guess wearing a measurement's clothes.
 > 🚨 **Ask it of remedies too, not just checks:** *if I followed this instruction right now, could it
 > possibly produce what it promises?* Nine people did not, and the instruction was in the tooling the
 > whole time.
+
+If this page needs one line to justify existing, it is that the cure for a check that cannot fail is
+not a better check but a **habit** — *ask what this would print if the subject were broken, then go
+break it* — and that the habit applies to instructions exactly as much as to assertions. A remedy that
+carries its own control arm is that thesis applied to itself.
 
 ## What to do about it
 
