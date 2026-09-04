@@ -60,11 +60,20 @@ public static class VersionLayoutArea
         IMessageHub hub,
         IMessageDelivery<RollbackNodeRequest> request)
     {
+        // 🚨 Ask whether history is RETAINED, not whether the service resolved. The null check
+        // alone was unreachable: `NoOpVersionQuery` is registered unconditionally
+        // (`PersistenceExtensions`, TryAddSingleton), so this service is never null on any
+        // deployment — and on every DATABASE-backed one it is the no-op, which answers "no
+        // version found" to a question it never records an answer to. So this honest refusal
+        // existed and could not fire, and the caller was told a data-shaped miss about a
+        // configuration fact (MeshWeaver#3264).
         var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-        if (versionQuery == null)
+        if (versionQuery is null or { RetainsHistory: false })
         {
             hub.Post(new DataChangeResponse(hub.Version,
-                new ActivityLog("Rollback").Fail("Version history not available")),
+                new ActivityLog("Rollback").Fail(
+                    "Version history is not retained on this deployment, so there is nothing to "
+                    + "restore from. This is a configuration fact, not a property of this node.")),
                 o => o.ResponseFor(request));
             return request.Processed();
         }
@@ -127,11 +136,20 @@ public static class VersionLayoutArea
         IMessageHub hub,
         IMessageDelivery<UndoActivityRequest> request)
     {
+        // 🚨 Ask whether history is RETAINED, not whether the service resolved. The null check
+        // alone was unreachable: `NoOpVersionQuery` is registered unconditionally
+        // (`PersistenceExtensions`, TryAddSingleton), so this service is never null on any
+        // deployment — and on every DATABASE-backed one it is the no-op, which answers "no
+        // version found" to a question it never records an answer to. So this honest refusal
+        // existed and could not fire, and the caller was told a data-shaped miss about a
+        // configuration fact (MeshWeaver#3264).
         var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-        if (versionQuery == null)
+        if (versionQuery is null or { RetainsHistory: false })
         {
             hub.Post(new DataChangeResponse(hub.Version,
-                new ActivityLog("Undo").Fail("Version history not available")),
+                new ActivityLog("Undo").Fail(
+                    "Version history is not retained on this deployment, so there is nothing to "
+                    + "restore from. This is a configuration fact, not a property of this node.")),
                 o => o.ResponseFor(request));
             return request.Processed();
         }
