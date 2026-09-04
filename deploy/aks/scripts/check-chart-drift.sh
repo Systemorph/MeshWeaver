@@ -89,7 +89,9 @@
 #                  the values files and the ConfigMap is reading a value no pod uses. This is the
 #                  #2235 shape: the ConfigMap said Hosting/PlatformBuilds, the pod ran
 #                  Store/Payments, every signal was green and the endpoint 404'd for 11 days.
-#   CLUSTER-ONLY   live, not rendered   → survives a deploy, but exists in NO committed source, so
+#   CLUSTER-ONLY   live, not rendered   → survives a deploy UNLESS the release manifest still owns the
+#                  key (a chart RETIREMENT — then the merge deletes it; check `helm get manifest`),
+#                  and it exists in NO committed source, so
 #                  it is lost the moment the namespace is rebuilt or restored from the chart, and
 #                  it is invisible to review. Fleet rule: nothing may live only on the cluster.
 #   CHART-ONLY     rendered, not live   → described but never applied; nobody is getting it
