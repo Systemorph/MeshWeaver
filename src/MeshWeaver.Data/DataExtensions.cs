@@ -937,16 +937,24 @@ public static class DataExtensions
     /// <c>MessageService.PostImplGeneric</c> stamps <c>POST_REFUSED_SHUTTING_DOWN</c> and returns
     /// exactly that when the owner AND its parent are past <c>DisposeHostedHubs</c>, and its own
     /// comment says "This site does NOT answer the sender itself".</para>
-    /// <para>🚨 <b>Except when the caller is ARMED on the late watch</b> (<paramref name="isArmed"/>):
-    /// the caller's <c>Observe</c> callback has then already expired and handed its wait to the
-    /// registry, so a post can only reach it the long way round — routed through the parent to the
-    /// cache hub, whose handler dispatches into the same registry. On a whole-mesh teardown that
-    /// route closes asynchronously: the owner's <c>Post</c> ACCEPTS the response (its own run level
-    /// is still open) and the PARENT's routing then drops it ("cannot route … its parent hub is
-    /// shutting down (RunLevel=DisposeHostedHubs)"), which this seam cannot see — measured on a
+    /// <para>🚨 <b>While the owner is SHUTTING DOWN, the accepted post is not proof of delivery</b>
+    /// (<paramref name="ownerIsShuttingDown"/>). The owner's <c>Post</c> is accepted — its own run
+    /// level is still open, so <c>PostImplGeneric</c> does not refuse — and the PARENT's routing
+    /// then drops it one turn later ("cannot route … its parent hub is shutting down
+    /// (RunLevel=DisposeHostedHubs)"), asynchronously, where this seam cannot see it. Measured on a
     /// 2-core runner as the merge's own ack never reaching the armed watch
-    /// (NackReachesTheWaiterDuringTeardownTest, run 33861078925). An armed caller is served through
-    /// the sink FIRST; the transport for writes whose callback is still pending is unchanged.</para>
+    /// (NackReachesTheWaiterDuringTeardownTest, run 33861078925). So during teardown the armed sink
+    /// is served TOO, right after the post. the registry's dispatch removes
+    /// the entry before it calls back, and the posted response — if it survives the route — reaches
+    /// the same registry through the cache hub's handler, so the caller is answered exactly once
+    /// whichever arrives first.</para>
+    ///
+    /// <para>🚨 It is <b>only</b> during teardown. A late watch is armed for EVERY patch at post
+    /// time, not just an expired one, so serving the sink whenever it is armed would move every
+    /// ordinary ack off its designed transport — and forward of it, because the sink dispatches
+    /// synchronously on the owner's turn while the posted response arrives after the state change it
+    /// acknowledges. Measured: that reordering reddened <c>ComboGateRollTest</c> under load (run
+    /// 33863349195) — the caller's write completed before the change it wrote was readable.</para>
     /// </summary>
     /// <returns><c>true</c> when the post was accepted or the sink found an armed caller.</returns>
     internal static bool RoutePatchVerdict(
@@ -954,14 +962,17 @@ public static class DataExtensions
         string requestId,
         Func<PatchDataResponse, IMessageDelivery?> post,
         Func<string, PatchDataResponse, bool>? dispatchLate,
-        Func<string, bool>? isArmed = null)
+        Func<bool>? ownerIsShuttingDown = null)
     {
-        if (dispatchLate is not null && isArmed is not null && isArmed(requestId)
-            && dispatchLate(requestId, response))
-            return true;
         var delivery = post(response);
         if (delivery is not null && delivery.State != MessageDeliveryState.Failed)
+        {
+            // Accepted — and that is the whole answer on the live path. In teardown it is not:
+            // the parent drops the response after this returns, so serve the armed sink as well.
+            if (ownerIsShuttingDown?.Invoke() == true && dispatchLate is not null)
+                dispatchLate(requestId, response);
             return true;
+        }
         return dispatchLate is not null && dispatchLate(requestId, response);
     }
 
@@ -1034,7 +1045,7 @@ public static class DataExtensions
                 request.Id,
                 resp => hub.Post(resp, o => o.ResponseFor(request)),
                 lateVerdicts is null ? null : lateVerdicts.Dispatch,
-                lateVerdicts is null ? null : lateVerdicts.IsAdmissible))
+                () => hub.IsShuttingDown))
             return;
 
         logger?.LogWarning(

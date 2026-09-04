@@ -106,6 +106,52 @@ public class PatchVerdictRoutingTest
             .Should().BeFalse();
     }
 
+    /// <summary>
+    /// 🚨 During TEARDOWN an accepted post is not proof of delivery: the owner accepts it (its own
+    /// run level is still open) and the parent's routing drops it a turn later, where
+    /// <c>RoutePatchVerdict</c> cannot see it. So the armed sink is served too. The registry removes
+    /// the entry before it calls back and the posted response reaches the same registry through the
+    /// cache hub, so the caller is answered exactly once whichever arrives first.
+    /// </summary>
+    [Fact]
+    public void AnAcceptedPost_WhileTheOwnerIsShuttingDown_AlsoServesTheSink()
+    {
+        var dispatched = new List<string>();
+
+        var routed = DataExtensions.RoutePatchVerdict(
+            Verdict, RequestId,
+            _ => Delivered(MessageDeliveryState.Submitted),
+            (id, _) => { dispatched.Add(id); return true; },
+            () => true);
+
+        routed.Should().BeTrue();
+        dispatched.Should().ContainSingle(
+            "the parent drops the accepted response after this returns — the sink is the only "
+            + "route left, and it is single-shot so it cannot double-answer");
+    }
+
+    /// <summary>
+    /// 🚨 …and ONLY during teardown. A late watch is armed for every patch at post time, not just
+    /// an expired one, so serving the sink whenever it is armed moves every ordinary ack off its
+    /// designed transport — and FORWARD of the state it acknowledges, because the sink dispatches
+    /// synchronously on the owner's turn. Measured: that reordering reddened ComboGateRollTest
+    /// under load (run 33863349195) — the write completed before what it wrote was readable.
+    /// </summary>
+    [Fact]
+    public void AnAcceptedPost_WhileTheOwnerIsLive_LeavesTheSinkAlone()
+    {
+        var dispatched = 0;
+
+        var routed = DataExtensions.RoutePatchVerdict(
+            Verdict, RequestId,
+            _ => Delivered(MessageDeliveryState.Submitted),
+            (_, _) => { dispatched++; return true; },
+            () => false);
+
+        routed.Should().BeTrue();
+        dispatched.Should().Be(0, "the live path keeps the post as its only transport");
+    }
+
     /// <summary>No sink registered at all (a minimal fixture) degrades the same way — no throw.</summary>
     [Fact]
     public void RefusedPost_WithNoSinkRegistered_ReportsThatNoRouteTookIt()
