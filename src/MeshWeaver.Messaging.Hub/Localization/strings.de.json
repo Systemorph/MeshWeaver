@@ -1294,10 +1294,11 @@
   "ui.providerColInput": "Eingabe / 1 Mio. Tokens",
   "ui.providerColOutput": "Ausgabe / 1 Mio. Tokens",
   "ui.providerColTier": "Stufe",
-  "ui.providerColSetup": "Ohne Preis / ohne Währung",
+  "ui.providerColSetup": "Preise",
   "ui.providerModelUnreadable": "nicht lesbar",
   "ui.providerNoModels": "Keine Modelle konfiguriert. Fügen Sie im Modell-Katalog eines hinzu — ein Modell braucht einen Preis pro Million Tokens und eine Währung, bevor eine Runde darauf abgerechnet werden kann.",
   "ui.providerModelsUnreadable": "Die Modelle dieses Providers konnten gerade nicht gelesen werden; daher wird keines angezeigt statt eines leeren Katalogs.",
-  "ui.providerModelsUnpriced": "{0} {1}: kein Preis pro Million Tokens — Runden auf diesen Modellen werden daher NICHT abgerechnet; die Plattform bezahlt sie und das Hauptbuch hält nichts fest.",
-  "ui.providerModelsNoCurrency": "{0} {1}: mit Preis, aber ohne deklarierte Währung — der Zähler fällt auf einen Standard zurück, sodass die Abrechnung eine Währung nennt, die das Modell nie angegeben hat."
+  "ui.providerModelsUnpriced": "{0} {1}: kein Preis am Modell und keiner in der eingebauten Preistabelle der Plattform — Runden auf diesen Modellen werden daher NICHT abgerechnet; die Plattform bezahlt sie und das Hauptbuch hält nichts fest.",
+  "ui.providerModelsNoCurrency": "{0} {1}: mit Preis, aber ohne deklarierte Währung — der Zähler fällt auf einen Standard zurück, sodass die Abrechnung eine Währung nennt, die das Modell nie angegeben hat.",
+  "ui.providerModelsFallback": "{0} {1}: am Modell ist kein Preis gesetzt, daher wird die eingebaute Preistabelle der Plattform verwendet — der angezeigte Satz ist dieser Rückfallwert, und Runden WERDEN abgerechnet. Setzen Sie einen Preis am Modell, um ihn zu überschreiben."
 }
