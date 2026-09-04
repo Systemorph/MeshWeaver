@@ -78,6 +78,45 @@
 
   "blocks": [
     {
+      "id": "rest-not-graphql",
+      "hub": "Systemorph/MeshWeaver",
+      "required-in": [
+        "Systemorph/MeshWeaver",
+        "Systemorph/MeshWeaver.Plugins",
+        "Systemorph/MeshWeaver.Education",
+        "Systemorph/MeshWeaver.Reinsurance",
+        "Systemorph/MeshWeaver.SocialMedia",
+        "Systemorph/MeshWeaver.Manufacturing",
+        "Systemorph/Memex"
+      ],
+      "slots": [],
+      "why": [
+        "Maintainer directive, 2026-09-04: 'everyone should use rest'. The occasion was an agent",
+        "polling `gh pr view` every 5 s, which exhausted GitHub's SECONDARY rate limit for the",
+        "whole session — every concurrent agent lost GitHub access, not just the one polling.",
+        "",
+        "The rule is in a shared block rather than each repo's own prose because the failure is",
+        "FLEET-WIDE by construction: the limit is per USER, so one repo's watcher takes down every",
+        "other repo's session running as the same identity. A per-repo rule cannot express that,",
+        "and a repo that never adopted it would keep taking the others down.",
+        "",
+        "Why the diagnosis is in the text and not just the prohibition: `gh api /rate_limit` reads",
+        "a pristine 5000/5000 remaining, 0 used while GraphQL is refused. Anyone who checks the",
+        "quota concludes they are NOT rate-limited and looks elsewhere — two agents did exactly",
+        "that on the day this landed. The pairing IS the signature, so it is stated.",
+        "",
+        "No slots: the rule is identical everywhere, including the REST endpoints, because the",
+        "GitHub API is the same API from every repo. Core carries one extra sentence OUTSIDE the",
+        "block (its merge-queue paragraph keeps `dequeuePullRequest`, which REST cannot express) —",
+        "that is why the block names the merge queue as the reserved exception rather than",
+        "forbidding GraphQL outright, which would have been false guidance.",
+        "",
+        "Adopted text-first: the six satellites landed the block before this manifest entry, so",
+        "the gate was never red on a half-finished rollout (Plugins#1317, Education#268,",
+        "Reinsurance#161, SocialMedia#137, Manufacturing#51, Memex#179)."
+      ]
+    },
+    {
       "id": "conserve-work-products",
       "hub": "Systemorph/MeshWeaver",
       "required-in": [
