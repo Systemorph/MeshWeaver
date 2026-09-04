@@ -2,6 +2,15 @@ namespace MeshWeaver.Layout;
 
 /// <summary>
 /// A control that wraps the Monaco diff editor for side-by-side comparison.
+///
+/// <para>🚨 <see cref="Height"/> sizes the view's HOST box, and that is not the same thing as sizing
+/// the editor. The renderer delegates to BlazorMonaco, which emits its editor container as
+/// <c>&lt;div id="…" class="…"&gt;</c> with no style attribute — so the container needs a stylesheet
+/// rule of its own, or it collapses to zero pixels inside a perfectly correct 600px host and the
+/// comparison is invisible with no error anywhere. That is MeshWeaver#3288, and the guard that pins
+/// it is <c>MonacoEditorContainerSizingGuard</c> beside the view in MeshWeaver.Plugins. A renderer
+/// added for this control elsewhere (React, MAUI) inherits the same obligation: give the editor's
+/// own element a box.</para>
 /// </summary>
 public record DiffEditorControl() : UiControl<DiffEditorControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
