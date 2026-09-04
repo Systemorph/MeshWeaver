@@ -53,6 +53,11 @@ them"* — that inventory was right and the detector's legend was wrong.
 > urgency the old legend created was false, *and* the reassurance "it will sort itself out on the
 > next deploy" is equally false. Drift is only ever cleared deliberately.
 
+One exception, and it follows from the same mechanism rather than qualifying it: a key the LAST
+deploy rendered and the CURRENT chart does not is in the release's own manifest, so helm owned it
+and the merge deletes it. That is not a cluster-only setting surviving; it is a chart retirement
+landing. The discriminator, and today's count, are under *"`CLUSTER-ONLY` splits in two"* below.
+
 ## The hazard that is real, and was invisible
 
 An inline `env:` entry **overrides `envFrom`**. So an inline entry whose name matches a key the
@@ -80,7 +85,7 @@ owned.
 |---|---|---|
 | `COLLIDES` | inline `env:` + a ConfigMap key differing **only in case** | **already**, at random, every pod start |
 | `SHADOWS` | inline `env:` + the **same** key from **any** envFrom source | **already** — the shadowed value is dead |
-| `CLUSTER-ONLY` | live, in no committed source | on a rebuild or restore, and at every review |
+| `CLUSTER-ONLY` | live, in no committed source | on a rebuild or restore, and at every review — **unless the release manifest still owns the key**, when the next upgrade deletes it |
 | `CHART-ONLY` | rendered, never applied | nobody is getting it today |
 | `DIFFERS` | both sides, values disagree | never resolves itself; needs a decision — except an `inline env`, which helm owns and an upgrade resets |
 
@@ -93,15 +98,76 @@ names of **every** envFrom source, not just the secrets. Enumerating one kind an
 would have left exactly the blind spot MeshWeaver#3201 exposed, one source-kind over: a checker that
 can see half of the class it is named for reports "clean" for a reason its reader cannot guess.
 
-A shadowed secret is the worst version of this: the credential the platform provisioned through Key
-Vault is inert, and the value actually in use sits in plaintext on the Deployment spec, in no
-committed source, readable by anything that can `get deploy`.
+A shadowed secret is the worst version of this: the shadowed copy is inert, and the value actually
+in use sits in plaintext on the Deployment spec, in no committed source, readable by anything that
+can `get deploy`.
 
 That is live on `memex` today (MeshWeaver#3201): `PluginCatalog__RegistryToken` exists both in
 `secret/memex-portal-secrets` and as an inline entry, and **the two values differ** — so the portal
-authenticates to the plugin registry with the plaintext copy while the managed credential goes
-unused. It also means the obvious cleanup is wrong: deleting the inline entry does not restore the
-status quo, it switches the portal onto a different token.
+authenticates to the plugin registry with the plaintext copy while the secret's copy goes unused. It
+also means the obvious cleanup is wrong: deleting the inline entry does not restore the status quo.
+
+### A credential shadow can be two PRINCIPALS, not two values
+
+Re-measured on the live cluster 2026-09-04, that case was worse than "two values of one setting",
+and in a way the checker cannot see — which is why the conclusion belongs here rather than in its
+output:
+
+- **Both sides are valid.** The live inline key and the shadowed copy each authenticate to
+  `https://memex.meshweaver.cloud/api/plugins` — verified out of band from inside the cluster, with
+  an anonymous call and a syntactically-valid bogus key as the two controls (both `401`).
+- **They are different registered instances.** Hashing each credential *inside the cluster* and
+  comparing against the `MeshWeaverInstance.keyHash` the registry stores identifies the inline key
+  as instance `memex` — the portal's own identity, and the correct one. The shadowed copy matches
+  no enumerable instance, and its catalog projection is `Plugins/*` **plus** `Crm/*`, a strict
+  superset of what instance `memex` is granted.
+- **So the reflex cleanup re-identifies the deployment.** Deleting the inline entry would not have
+  "switched onto an unverified token"; it would have made the portal authenticate as a *different
+  instance*, silently widening what it may pull from 44 packages to 45.
+- **There was never a Key Vault copy.** `secret/memex-portal-secrets` is helm-rendered
+  (`app.kubernetes.io/managed-by=Helm`), not CSI-provisioned. The CSI-backed secrets in those
+  namespaces are `memex-kv-secrets` and `memexcloud-portal-ai-secrets`, neither of which carries
+  this key, and the `Systemorph` vault holds no `PluginCatalog-RegistryToken` entry for either
+  portal. `deployments/aks/secretproviderclass.reference.yaml` in `Systemorph/Memex` already
+  templates that wiring; it was never applied to either live SecretProviderClass.
+
+The generalisable rule: **for a credential, "which value is live?" is not the whole question — "which
+identity does each side authenticate as?" is.** A name-only checker can report the shadow and must
+say the two sides are unknown; it cannot say they are the same credential, and it must not narrate a
+provenance it never observed. The comparator asserted a Key Vault origin here until 2026-09-04, and
+the self-test now fails if that claim returns.
+
+Neither namespace sets `PluginCatalog__InstanceId` and neither carries a `PluginCatalog__BootstrapKey`,
+so nothing self-registers: **the token IS the identity**. memex's own ConfigMap asks for
+`PluginCatalog__InstallByDefault__0=Plugins/*`, which is exactly instance `memex`'s grant and not the
+shadowed copy's — the configuration and the live key agree, and only the shadowed copy is the odd one
+out.
+
+### Clearing it, and what a rotation does NOT need
+
+The order is forced by the fact that the live key is the correct one:
+
+1. **Vault the LIVE key of each portal** — `memex-PluginCatalog-RegistryToken` and
+   `memexcloud-PluginCatalog-RegistryToken` in the `Systemorph` vault, then add the object plus its
+   `secretObjects.data` mapping to the namespace's SecretProviderClass (`memex-kv`,
+   `memexcloud-portal-ai-secrets`). Additive and inert: those CSI secrets sit *after*
+   `memex-portal-secrets` in `envFrom`, and the inline entry outranks both until it is deleted.
+2. **Drop the foreign copy from the source that renders it.** `secret/memex-portal-secrets` is
+   helm-rendered, so deleting the live Secret key alone is undone by the next `helm upgrade` — the
+   env's (uncommitted) values file must stop setting `secrets.memex_portal.PluginCatalog__RegistryToken`.
+3. **Then delete the inline `env:` entries** — a Deployment-spec edit, so a rollout on both portals.
+4. **Then rotate**, because both live keys sat in plaintext in a spec readable by anything that can
+   `get deploy`.
+
+🚨 **Rotating an instance key needs no re-granting.** `PluginGrant` nodes are keyed by
+`instanceId` (`Admin/_PluginGrant/memex`, `…/memex-cloud`), and re-issuing a key replaces
+`MeshWeaverInstance.KeyHash` on the *same* instance record — so entitlement, plan and install history
+survive untouched. What must be updated is every **holder of the key value**, and measured on
+2026-09-04 that is a short list: the Key Vault entry from step 1, and nothing else. No GitHub Actions
+secret in `Systemorph/MeshWeaver` or the org holds either portal's instance key (the `ci-*` instances
+used by node repos are separate records with separate keys), and `Plugins__Registry__PublishToken` is
+a different credential entirely. **Re-registering a new instance instead of re-issuing the key is the
+move that would need re-granting** — and would lose the install history keyed to the old id.
 
 The checker reads only the KEY NAMES of every envFrom source other than `memex-portal-config`,
 projected inside the cluster — a drift checker must not become the thing that copies the credentials
@@ -187,29 +253,84 @@ Findings are printed worst-first and the summary counts each class. Rank the wor
 `Systemorph/Memex#148` (*nothing may live only on the cluster* — every value belongs on the
 `Hosting/Deployment` record, rendered by the chart); `DIFFERS` is a decision, not a deploy.
 
-## The backlog, classified — run 33755512452, 2026-09-03
+## `CLUSTER-ONLY` splits in two, and only one half survives a deploy
 
-"91 divergences" is not a worklist. **76 today** (`memex` 32 across 188 compared fields,
-`memex-cloud` 44 across 204), and they are seven groups, not seventy-six decisions. Counts are from
-the run's own log; no cluster was touched to produce them.
+"A `helm upgrade` does not delete cluster-only settings" is the measured rule, and it is right about
+the *mechanism* — helm removes only what it **previously owned**. But a key can be cluster-only
+*today* precisely **because the chart stopped rendering a key the last deploy did render**, and that
+key IS in the release's own manifest. The three-way merge then deletes it, correctly.
+
+So the class has two mechanically distinguishable halves, and the discriminator is one command —
+`helm get manifest <release> -n <ns>`, the `original` side of the merge:
+
+| sub-class | test | next `helm upgrade` |
+|---|---|---|
+| **owned-but-retired** | the key IS in `helm get manifest` | **deletes it** — helm owned it |
+| **never-owned** | the key is NOT in `helm get manifest` | **leaves it** — the migration backlog |
+
+Measured 2026-09-04 over all 36 `CLUSTER-ONLY` findings: **13 owned-but-retired** (`memex` 7,
+`memex-cloud` 6) and **23 never-owned** (`memex` 12, `memex-cloud` 11). Every one of the 13 is
+zero-length live, so all thirteen deletions are no-ops — but that is a property of *these* keys on
+*this* day, not of the sub-class. `Systemorph/Memex#152` asked for exactly this check in the
+opposite direction ("a key that is live and rendered by neither chart nor overlay is about to be
+deleted, which is information no current gate reports"); the manifest probe above is that check, and
+running it before a deploy is what turns a silent deletion into a reviewed one.
+
+🚨 **And read the VALUE, not the key name, before calling such a deletion harmless.**
+`FrameworkBroadcast__Subscribers__0..3` was reported here on 2026-09-03 as "the live keys feed
+nothing", and separately as a subscriber list that a deploy would take "from 4 to 0". Both readings
+assumed a value. Measured on 2026-09-04 by three methods — live ConfigMap `jsonpath`, live ConfigMap
+YAML, and the deployed release manifest — **all four slots are `""` on BOTH namespaces**, and the
+deployed release (`helm get values`) sets no value for any of them. The release wave has been
+resolving to an empty subscriber set on both portals all along; the pending deletion removes four
+empty strings and changes nothing. The hazard is real and already realised, which is a different
+piece of work from the one "a deploy will break it" describes.
+
+## The backlog, classified — run 33843264982, 2026-09-04
+
+"91 divergences" is not a worklist. **81 today** (`memex` 35 across 188 compared fields,
+`memex-cloud` 46 across 204), and they are seven groups, not eighty-one decisions. Counts are from
+the run's own log; the owned/never-owned split and the value probes are read-only cluster reads.
 
 | # | group | count | what it is | what clears it |
 |---|---|---|---|---|
-| 1 | **Disagreeing `SHADOWS`** | **8** | the pod runs a value the ConfigMap contradicts — `PreWarm__BatchBake`/`PrebuiltBundleRoot` (both), `PluginCatalog__RegistryUrl` (both), `PreWarm__GateReadiness` + `Features__Ai__Providers__AzureOpenAI` (memex) | chart value first, **then** delete the inline entry |
-| 2 | **The registry credential** | **2** | `PluginCatalog__RegistryToken`: on memex a `SHADOWS` over `secret/memex-portal-secrets` whose two values differ; on memex-cloud the inline entry is the ONLY copy | MeshWeaver#3201 — establish the live token, vault it, delete inline, rotate |
+| 1 | **Disagreeing `SHADOWS`** | **8** | the pod runs a value the ConfigMap contradicts — `PreWarm__BatchBake`/`PrebuiltBundleRoot` and `PluginCatalog__RegistryUrl` (both namespaces), `PreWarm__GateReadiness` + `Features__Ai__Providers__AzureOpenAI` (memex) | chart value first, **then** delete the inline entry |
+| 2 | **The registry credential** | **2** | `PluginCatalog__RegistryToken`: on memex a `SHADOWS` over `secret/memex-portal-secrets` whose two values differ **and belong to different registered instances**; on memex-cloud the inline entry is the ONLY copy, and neither portal has a Key Vault entry at all | MeshWeaver#3201 — the live inline key is the CORRECT one for each portal (hash-confirmed); vault *it*, then delete inline, then rotate. Never adopt the shadowed copy |
 | 3 | **Agreeing `SHADOWS`** | **29** | not wrong today; the ConfigMap is simply not what the pod reads, so the next chart change to any of them silently fails — Kestrel endpoints, `PluginCatalog__Sources__*`, `WebhookInbox__Targets__0` | same two steps, no urgency |
-| 4 | **Chart-retired, inert** | **8** | `FrameworkBroadcast__Subscribers__0..3` on both namespaces. The chart stopped rendering these on 2026-09-03 — the subscriber set is mesh data now — so the live keys feed nothing | delete the keys; drop them from the memex-cloud overlay, which still sets them |
-| 5 | **Cluster-only, now expressible** | **22** | live-edited settings the chart had no key for until MeshWeaver#3199 — AI providers, `LogWatch__*`, `Speech__*`, `Commerce__BaseUrl`, `Features__Ai__Clis__*`, `Portal__ReactAppUrl` | put them on the `Hosting/Deployment` record — `Systemorph/Memex#148` |
+| 4 | **Chart-retired, helm-owned** | **13** | `FrameworkBroadcast__Subscribers__0..3` (both) plus `Authentication__DevAdminUsers`/`__Google__ClientId` (both) and `__LinkedIn__ClientId` (memex). All 13 are in the release manifest and zero-length live | the next `helm upgrade` deletes them; verify each is still empty first |
+| 5 | **Cluster-only, never owned** | **22** | live-edited settings the chart had no key for until MeshWeaver#3199 — AI providers, `LogWatch__*`, `Speech__*`, `Commerce__BaseUrl`, `Features__Ai__Clis__*`, `Portal__ReactAppUrl` | put them on the `Hosting/Deployment` record — `Systemorph/Memex#148` |
 | 6 | **Committed, never deployed** | **5** | memex-cloud's overlay carries `PreWarm__{BatchBake,BuildProtocol,DynamicTypes,GateReadiness}: "true"` and `probes.startup.failureThreshold: 1080`; live runs the shipped defaults | a deploy, not a cleanup — this is `deploy-drift`'s class surfacing here |
 | 7 | **Ruled inert** | **2** | the memex liveness/readiness `initialDelaySeconds` — see above; the chart is authoritative | nothing; do not "fix" it |
 
-Zero `COLLIDES` and zero `CHART-ONLY`. The `EMAIL__*` collisions that crashed memex at boot on
-2026-08-30, and the four blanked `ModelTier__*`, are gone from both namespaces.
+Zero `COLLIDES` and zero `CHART-ONLY` — as on 2026-09-03, which is the only other run since #3168
+introduced those two classes, so "consecutive" is a two-run claim and nothing more. The `EMAIL__*`
+collisions that crashed memex at boot on 2026-08-30, and the four blanked `ModelTier__*`, are gone
+from both namespaces.
 
-**Groups 1–5 all need a Deployment-spec edit, and that is blocked**: MeshWeaver#3207 — the portal
-image is ahead of its schema, so any pod-template change spawns a ReplicaSet that lands on
-`DbVersionGate` and crash-loops, and both portals are pinned under a freeze. The classification is
-the deliverable until the schema is current; nothing here is urgent enough to lift a freeze for.
+**76 → 81 in a day, and nothing drifted.** The five new findings are the `Authentication__*` keys in
+group 4: the first-run-setup change made them conditional where they had been emitted unconditionally
+with `| default ""`, so the render stopped carrying a key the cluster still holds. The live
+ConfigMaps have not been written since 2026-08-30 / 2026-08-29 (`managedFields`; helm revisions 28
+and 21). **A count that moves is not automatically drift** — check the chart's own history before
+reading a rise as a regression.
+
+**Group 6 carries the one coupled hazard on the list.** `PreWarm__GateReadiness` reaches the pod
+through an inline `env:` that shadows the ConfigMap, so a `helm upgrade` of `memex-cloud` would raise
+`probes.startup.failureThreshold` to 1080 — a pod-template field helm owns — while the gate it is
+paired with stays off, because the inline entry still wins. `progressDeadlineSeconds` is derived as
+`periodSeconds × failureThreshold + 600`, so a genuinely failed rollout would take **3 h 10 m** to be
+declared failed instead of ~16 minutes. Deleting the inline entry and deploying are one change, not
+two.
+
+## What is NOT in these 81
+
+The checker compares `memex-portal-config`, `memex-portal-deployment`, the PodDisruptionBudget and
+the ScaledObject. Every other object in these namespaces is outside its scope, and two of them are
+drifted right now: `portal-next-deployment` (both namespaces — `kubectl-client-side-apply` 2026-07-05
+then `kubectl set` 2026-08-07, no helm annotations, 0/1 ready on an image tag ACR does not have;
+`Systemorph/Memex#172`) and the `k8s-dashboard`/`memex-website`/`whisper-swiss-german` workloads. A
+green Chart Drift would say nothing about any of them, which is worth knowing before this report is
+read as "the namespace matches the chart".
 
 See also [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) and
 [Deployment.md](/Doc/Architecture/Deployment).

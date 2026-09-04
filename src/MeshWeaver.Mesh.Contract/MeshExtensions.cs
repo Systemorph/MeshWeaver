@@ -2471,7 +2471,8 @@ public static class MeshExtensions
                     PostFailed(
                         $"Node not found at path: {path}",
                         NodeDeletionRejectionReason.NodeNotFound,
-                        [new LogMessage($"Node not found at path: {path}", LogLevel.Error)]);
+                        [new LogMessage($"Node not found at path: {path}", LogLevel.Error)
+                            .WithKey("activity.delete.notFound", ("path", path))]);
                     return Observable.Empty<System.Reactive.Unit>();
                 }
 
@@ -2503,7 +2504,8 @@ public static class MeshExtensions
                             PostFailed(
                                 $"Delete permission denied for '{path}'",
                                 NodeDeletionRejectionReason.Unauthorized,
-                                [new LogMessage($"Delete permission denied for '{path}'", LogLevel.Error)],
+                                [new LogMessage($"Delete permission denied for '{path}'", LogLevel.Error)
+                                    .WithKey("activity.delete.permissionDenied", ("path", path))],
                                 ImmutableList.Create(path));
                             return Observable.Empty<System.Reactive.Unit>();
                         }
@@ -2524,7 +2526,9 @@ public static class MeshExtensions
                             PostFailed(
                                 unestablished,
                                 NodeDeletionRejectionReason.Unavailable,
-                                [new LogMessage(unestablished, LogLevel.Error)],
+                                [new LogMessage(unestablished, LogLevel.Error)
+                                    .WithKey("activity.delete.permissionUnestablished",
+                                        ("path", path), ("detail", preflight.Detail))],
                                 ImmutableList.Create(path));
                             return Observable.Empty<System.Reactive.Unit>();
                         }
@@ -2569,7 +2573,9 @@ public static class MeshExtensions
                                         "[DeleteNode] read-only-provider path={Path} provider={Provider}",
                                         path, blockingProvider);
                                     PostFailed(msg, NodeDeletionRejectionReason.ValidationFailed,
-                                        [new LogMessage(msg, LogLevel.Error)],
+                                        [new LogMessage(msg, LogLevel.Error)
+                                            .WithKey("activity.delete.readOnlyProvider",
+                                                ("path", path), ("provider", blockingProvider))],
                                         ImmutableList.Create(path));
                                     return Observable.Empty<System.Reactive.Unit>();
                                 }
@@ -2587,7 +2593,9 @@ public static class MeshExtensions
                                     PostFailed(
                                         $"Cannot delete '{path}': {err}",
                                         NodeDeletionRejectionReason.ValidationFailed,
-                                        [new LogMessage($"Cannot delete '{path}': {err}", LogLevel.Error)],
+                                        [new LogMessage($"Cannot delete '{path}': {err}", LogLevel.Error)
+                                            .WithKey("activity.delete.validatorRejected",
+                                                ("path", path), ("error", err))],
                                         ImmutableList.Create(path));
                                     return Observable.Empty<System.Reactive.Unit>();
                                 }
@@ -2598,7 +2606,9 @@ public static class MeshExtensions
                                         "[DeleteNode] warnings-require-confirmation path={Path} warnings={Count}",
                                         path, vresult.Warnings.Count);
                                     var msgs = vresult.Warnings
-                                        .Select(w => new LogMessage($"'{path}': {w}", LogLevel.Warning))
+                                        .Select(w => new LogMessage($"'{path}': {w}", LogLevel.Warning)
+                                            .WithKey("activity.delete.validationWarning",
+                                                ("path", path), ("warning", w)))
                                         .ToImmutableList();
                                     PostFailed(
                                         $"Delete of '{path}' has {vresult.Warnings.Count} warning(s) (first: {vresult.Warnings[0]}). Set ConfirmWarnings=true to proceed.",
@@ -2609,7 +2619,9 @@ public static class MeshExtensions
                                 }
 
                                 var warningMsgs = vresult.Warnings
-                                    .Select(w => new LogMessage($"'{path}': {w}", LogLevel.Warning))
+                                    .Select(w => new LogMessage($"'{path}': {w}", LogLevel.Warning)
+                                        .WithKey("activity.delete.validationWarning",
+                                            ("path", path), ("warning", w)))
                                     .ToImmutableList();
                                 lock (collectedMessages) collectedMessages.AddRange(warningMsgs);
 
@@ -2634,7 +2646,8 @@ public static class MeshExtensions
                                             logger.LogDebug("[DeleteNode] has-children path={Path}", path);
                                             var msg = $"Node at '{path}' has children. Use recursive delete to remove it.";
                                             PostFailed(msg, NodeDeletionRejectionReason.HasChildren,
-                                                [new LogMessage(msg, LogLevel.Error)]);
+                                                [new LogMessage(msg, LogLevel.Error)
+                                                    .WithKey("activity.delete.hasChildren", ("path", path))]);
                                             return Observable.Empty<System.Reactive.Unit>();
                                         }
 
@@ -2687,7 +2700,9 @@ public static class MeshExtensions
                                                     // "retry, something is starving" and "your
                                                     // content is not deletable".
                                                     f.Reason,
-                                                    [new LogMessage(msg, LogLevel.Error)],
+                                                    [new LogMessage(msg, LogLevel.Error)
+                                                        .WithKey("activity.delete.blockedByDescendant",
+                                                            ("path", f.Path), ("error", f.Error))],
                                                     collected.ToDelete.ToImmutableList());
                                                 return Observable.Empty<System.Reactive.Unit>();
                                             }
@@ -2948,12 +2963,25 @@ public static class MeshExtensions
                         ? $"Delete of '{path}' was cancelled after removing {partial.Count} node(s) — "
                           + "the subtree is left partially deleted."
                         : $"Delete of '{path}' was cancelled before any node was removed.";
-                    var failMsgs = collectedMessages.ToImmutable()
-                        .Add(new LogMessage(
-                            isNotFound
-                                ? $"Node not found at path '{path}'"
-                                : (isCancelled ? cancelledMessage : ex.Message),
-                            LogLevel.Error));
+                    // Keyed per BRANCH, not once over the ternary: "not found" and "cancelled" are
+                    // sentences this code OWNS and can translate, while `ex.Message` is upstream text
+                    // no catalog can carry — so that arm stays unkeyed and renders its English exactly
+                    // as before (#3236). notFoundAtPath is its own key rather than
+                    // activity.delete.notFound because this arm deliberately carries the RESPONSE's
+                    // wording (the quoted path, just below), and a key's English must match the
+                    // fallback stored beside it.
+                    var failMsg = isNotFound
+                        ? new LogMessage($"Node not found at path '{path}'", LogLevel.Error)
+                            .WithKey("activity.delete.notFoundAtPath", ("path", path))
+                        : isCancelled
+                            ? new LogMessage(cancelledMessage, LogLevel.Error)
+                                .WithKey(
+                                    partial.Count > 0
+                                        ? "activity.delete.cancelledPartial"
+                                        : "activity.delete.cancelled",
+                                    ("path", path), ("count", partial.Count))
+                            : new LogMessage(ex.Message, LogLevel.Error);
+                    var failMsgs = collectedMessages.ToImmutable().Add(failMsg);
                     PostFailed(
                         isTimeout
                             // The stage detail rides along so the CALLER sees it too — the response
@@ -4097,7 +4125,10 @@ public static class MeshExtensions
                     lock (collectedMessages)
                         collectedMessages.Add(new LogMessage(
                             $"Post-deletion cleanup ({handler.GetType().Name}) failed for '{node.Path}': {ex.Message}",
-                            LogLevel.Warning));
+                            LogLevel.Warning)
+                            .WithKey("activity.delete.cleanupFailed",
+                                ("handler", handler.GetType().Name), ("path", node.Path),
+                                ("error", ex.Message)));
                     return Observable.Return(System.Reactive.Unit.Default);
                 }))
             .Concat()
@@ -4439,7 +4470,8 @@ public static class MeshExtensions
                     d =>
                     {
                         if (d.Message is CreateNodeResponse cr && cr.Success && cr.Node is not null)
-                            PostOk(cr.Node, isCreate: true, $"Created node at '{node.Path}'");
+                            PostOk(cr.Node, isCreate: true, $"Created node at '{node.Path}'",
+                                "activity.node.created");
                         // Upsert semantics must be RACE-FREE: the read-then-branch above is a
                         // TOCTOU — the node can materialise between the persistence read (null)
                         // and the inner create's own existence check (e.g. an earlier write of
@@ -4510,7 +4542,8 @@ public static class MeshExtensions
                                 "[CreateOrUpdate] no-op upsert for {Path}: identical to persisted state; skipped",
                                 node.Path);
                             PostOk(existing, isCreate: false,
-                                $"Node at '{node.Path}' unchanged — no-op upsert skipped");
+                                $"Node at '{node.Path}' unchanged — no-op upsert skipped",
+                                "activity.node.unchanged");
                         }
                         else
                             // Not (provably) authorized → the normal owner path stays the single
@@ -4657,7 +4690,8 @@ public static class MeshExtensions
                         },
                         upsertMeshConfig))
                     .Subscribe(
-                        saved => PostOk(saved, isCreate: false, $"Updated node at '{node.Path}'"),
+                        saved => PostOk(saved, isCreate: false, $"Updated node at '{node.Path}'",
+                            "activity.node.updated"),
                         ex =>
                         {
                             logger.LogWarning(ex,
@@ -4670,10 +4704,13 @@ public static class MeshExtensions
             }
         }
 
-        void PostOk(MeshNode result, bool isCreate, string logLine)
+        // `logKey` is the catalog key whose ENGLISH is `logLine`; the transcript resolves it in the
+        // viewer's language at render time while `logLine` stays the fallback (#3236).
+        void PostOk(MeshNode result, bool isCreate, string logLine, string logKey)
         {
             var okLog = baseActivity.Append(
-                new LogMessage(logLine, Microsoft.Extensions.Logging.LogLevel.Information)) with
+                new LogMessage(logLine, Microsoft.Extensions.Logging.LogLevel.Information)
+                    .WithKey(logKey, ("path", node.Path))) with
             {
                 End = DateTime.UtcNow,
                 Status = ActivityStatus.Succeeded,
@@ -5046,18 +5083,49 @@ public static class MeshExtensions
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("MeshWeaver.Mesh.Services.IMeshCatalog");
         var moveRequest = request.Message;
-        var meshService = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
         var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
         var sourcePath = moveRequest.SourcePath;
         var targetPath = moveRequest.TargetPath;
+
+        // 🚨 PreserveAuthorship — the copy leg of a MOVE re-creates the SAME node at a new path, so
+        // its creation and modification stamps travel with it verbatim (issue #3263). This is why
+        // the request is posted here rather than through IMeshService.CopyNode: that surface says
+        // nothing about authorship, and a move is the one caller for which it is not free to invent
+        // it. Same seam MeshService uses — the issuing hub posts to the node-operation target and
+        // stamps the caller's AccessContext, so the per-node creates inside the copy authorise as
+        // the mover, exactly as before.
+        //
+        // 🚨 RequireComplete — the copy leg must carry EVERY node storage holds under the source,
+        // and refuse before creating anything when it cannot (issue #3272). The same argument as
+        // above applies to posting the request directly: IMeshService.CopyNode cannot say it, and a
+        // MOVE is the one caller for which "carried less than everything" means the delete leg
+        // below destroys the remainder.
+        var copyRequest = new CopyNodeRequest(sourcePath, targetPath)
+        {
+            IncludeDescendants = true,
+            IncludeSatellites = true,
+            PreserveAuthorship = true,
+            RequireComplete = true,
+        };
+        var callerContext = request.AccessContext
+            ?? accessService?.Context ?? accessService?.CircuitContext;
 
         // Move = Copy (with satellites + descendants) → reactive delete of every source path.
         // Delete only fires after Copy succeeds (SelectMany short-circuits on copy error).
         // Source-subtree enumeration is AUTHORITATIVE from storage (ListDescendantPaths),
         // never the eventually-consistent catalog query — the same stale-plan defect that
         // left recursive-delete survivors (issue #839) would leave source rows behind here.
-        meshService.CopyNode(sourcePath, targetPath, includeDescendants: true, includeSatellites: true)
+        Observable.Defer(() => hub.NodeOperationIssuingHub().Observe(copyRequest, o =>
+            {
+                o = o.WithTarget(hub.NodeOperationTarget());
+                return callerContext != null ? o.WithAccessContext(callerContext) : o;
+            }))
+            .SelectMany(d => d.Message is { Success: true, Node: { } copiedRoot }
+                ? Observable.Return(copiedRoot)
+                : Observable.Throw<MeshNode>(
+                    new InvalidOperationException(d.Message.Error ?? "Node copy failed")))
             .SelectMany(copied =>
                 storage.ListDescendantPaths(sourcePath)
                     .Take(1)
@@ -5098,11 +5166,13 @@ public static class MeshExtensions
                 ex =>
                 {
                     var msg = ex.Message ?? "Unknown error";
-                    var reason = msg.Contains("already exists", StringComparison.OrdinalIgnoreCase)
-                        ? NodeMoveRejectionReason.TargetAlreadyExists
-                        : msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
-                            ? NodeMoveRejectionReason.SourceNotFound
-                            : NodeMoveRejectionReason.Unknown;
+                    var reason = msg.StartsWith(CopyNodeRequest.IncompleteCopyRefusal, StringComparison.Ordinal)
+                        ? NodeMoveRejectionReason.ValidationFailed
+                        : msg.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                            ? NodeMoveRejectionReason.TargetAlreadyExists
+                            : msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
+                                ? NodeMoveRejectionReason.SourceNotFound
+                                : NodeMoveRejectionReason.Unknown;
                     logger.LogError(ex, "Move {Source} -> {Target} failed", sourcePath, targetPath);
                     hub.Post(MoveNodeResponse.Fail(msg, reason), o => o.ResponseFor(request));
                 });
@@ -5124,6 +5194,7 @@ public static class MeshExtensions
         var copyRequest = request.Message;
         var meshService = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         var sourcePath = copyRequest.SourcePath;
         var targetPath = copyRequest.TargetPath;
 
@@ -5140,24 +5211,204 @@ public static class MeshExtensions
             ?? accessService?.Context ?? accessService?.CircuitContext;
 
         // Wraps a per-node CreateNode so its eager AccessContext capture (MeshService.CaptureContext)
-        // sees the caller's identity even though this runs on a scheduler thread. Observable.Using
-        // opens the SwitchAccessContext scope on Subscribe — exactly when the cold CreateNode's Defer
-        // reads the AsyncLocal and posts — and disposes it as the create completes.
+        // sees the caller's identity even though this runs on a scheduler thread. The scope opens on
+        // Subscribe — exactly when the cold CreateNode's Defer reads the AsyncLocal and posts.
+        //
+        // 🚨 RunAs, not Observable.Using (#1790, and Copilot flagged it on this PR). Rx disposes a
+        // Using resource on whichever thread the INNER observable terminates on — for a routed
+        // CreateNodeRequest that is the owning hub's response thread, so the subscribing thread was
+        // left latched to the impersonated identity. RunAs owns both ends of one synchronous
+        // Subscribe frame. This site was the single entry MeshExtensions.cs held in
+        // ImpersonationScopeSites.allow; the satellite sweep above widens the window (more creates
+        // per copy), so it is closed here rather than left for the ledger.
         IObservable<MeshNode> CreateUnderCaller(MeshNode node) =>
-            callerAccessContext is null || accessService is null
-                ? meshService.CreateNode(node)
-                : Observable.Using(
-                    () => accessService.SwitchAccessContext(callerAccessContext),
-                    _ => meshService.CreateNode(node));
+            accessService.RunAs(callerAccessContext, () => meshService.CreateNode(node));
 
-        logger.LogDebug("[CopyNode] start source={Source} target={Target} (descendants={Desc} satellites={Sat})",
-            sourcePath, targetPath, copyRequest.IncludeDescendants, copyRequest.IncludeSatellites);
+        // 🚨 A completeness check with nothing to check against would PASS — the one shape a guard
+        // must never have. RequireComplete asserts the copy covers what STORAGE holds; with no
+        // storage adapter there is no inventory, the difference is empty for want of a left-hand
+        // side, and the move's delete leg would run on an assurance nobody established. Refuse
+        // instead. (Unreachable on a real mesh: HandleMoveNodeRequest resolves the same adapter with
+        // GetRequiredService, so a mesh without one cannot issue this request at all.)
+        if (copyRequest.RequireComplete && persistence is null)
+        {
+            logger.LogError("[CopyNode] refusing {Source} -> {Target}: no IStorageAdapter to enumerate the stored subtree",
+                sourcePath, targetPath);
+            hub.Post(CopyNodeResponse.Fail(
+                    $"{CopyNodeRequest.IncompleteCopyRefusal} a subtree it cannot enumerate: no "
+                    + "IStorageAdapter is registered, so completeness cannot be established.",
+                    NodeCopyRejectionReason.ValidationFailed),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
 
-        // Subtree query covers source + descendants + satellites (anything under sourcePath).
+        // 🚨 A QUERY RESULT IS A PROJECTION, NOT THE NODE. The subtree query below decides WHICH
+        // paths this caller may copy — that part is authoritative, because it is the read the
+        // row-level security filter runs through. What comes back is NOT the stored node: a
+        // provider is free to omit columns, and the production one does. PostgreSqlSqlGenerator's
+        // SELECT list carries id/namespace/name/node_type/description/category/icon/display_order/
+        // last_modified/version/state/content/desired_id/main_node/sync_behavior/
+        // exclude_from_context and NOTHING ELSE — `created_by`, `created_date` and
+        // `last_modified_by` exist as real columns (PostgreSqlStorageAdapter.AuthorCols reads them,
+        // the INSERT writes them) but no query projects them. So on PG every node this handler saw
+        // arrived with CreatedBy null and CreatedDate default, the create path filled the blanks
+        // with "now, by the caller", and a MOVE — copy + delete of the source — destroyed the real
+        // authorship of the whole subtree with nothing left to recover it from (issue #3263).
+        //
+        // Re-creating a node is a lifecycle operation, so it reads the node from STORAGE, exactly
+        // as the move's delete leg enumerates from storage rather than the catalog (#839). The
+        // query stays in charge of WHICH nodes; storage is in charge of WHAT they are.
+        //
+        // 🚨 DefaultIfEmpty, not just Take(1): an adapter whose Read COMPLETES EMPTY for a path it
+        // cannot serve would otherwise end this node's sequence without an emission — the copy
+        // would produce no root, post no response, and the move that awaits it would sit out the
+        // hub's request timeout.
+        //
+        // 🚨 And the empty case is NOT the same question for the two operations. For a plain copy
+        // the stamps are cleared anyway, so falling back to the projection loses nothing and keeps
+        // a copy possible on a store that cannot answer a point read. For a PRESERVING copy the
+        // projection is precisely the thing that destroyed the authorship, so falling back to it
+        // would re-open this bug behind the fix — quietly, on exactly the store that cannot answer.
+        // It REFUSES instead, and because the delete leg only runs after the copy succeeds, a
+        // refused read leaves the source and its stamps untouched rather than moving them away.
+        IObservable<MeshNode> ProjectionFallback(MeshNode projected) =>
+            copyRequest.PreserveAuthorship
+                ? Observable.Throw<MeshNode>(new InvalidOperationException(
+                    $"Authoritative read of '{projected.Path}' returned nothing — refusing to relocate it "
+                    + "from a query projection, which does not carry createdBy/createdDate/lastModifiedBy."))
+                : Observable.Return(projected);
+
+        IObservable<MeshNode> Authoritative(MeshNode projected) =>
+            persistence is null
+                ? ProjectionFallback(projected)
+                : persistence.Read(projected.Path, hub.JsonSerializerOptions)
+                    .Take(1)
+                    .DefaultIfEmpty()
+                    .SelectMany(stored => stored is not null
+                        ? Observable.Return(stored)
+                        : ProjectionFallback(projected));
+
+        // 🚨 PRESERVED AUTHORSHIP IS NOT FREE FOR THE ASKING. CopyNodeRequest is a wire message, so
+        // the flag is caller-settable, and a node whose CreatedBy names someone else is not inert:
+        // AccessContextScope.FromNode impersonates exactly that identity, so an unguarded flag would
+        // let anyone who can read a node mint one, in a place they control, that owner-scoped work
+        // then runs AS its author.
+        //
+        // The flag exists for one operation, so it is gated on that operation's own entitlement:
+        // Delete on the source's namespace, which is what MoveNodePermissionAttribute already
+        // requires of a mover. A caller who holds it could have MOVED the node and preserved the
+        // stamps that way, so the flag grants nothing the platform did not already grant them; a
+        // caller who does not is refused. UNDETERMINED is a refusal too, reported as unavailability
+        // rather than as a denial (#974/#2742) — a fold that reached no answer must never read as
+        // one, in either direction.
+        IObservable<(string Message, bool Undetermined)?> AuthorshipPreservationRefusal() =>
+            !copyRequest.PreserveAuthorship
+                ? Observable.Return<(string, bool)?>(null)
+                : hub.CheckPermissionOutcome(NamespaceOf(sourcePath), Permission.Delete)
+                    .Select(outcome => outcome.IsGranted
+                        ? ((string, bool)?)null
+                        : outcome.IsUndetermined
+                            ? ($"Cannot determine whether '{sourcePath}' may be relocated with its authorship: "
+                                + $"{outcome.UndeterminedReason}", true)
+                            : ($"Preserving authorship on a copy of '{sourcePath}' requires Delete on its "
+                                + "namespace — the same entitlement a move of it requires.", false));
+
+        // 🚨 EVERY path storage holds under the source — the AUTHORITATIVE inventory, and the SAME
+        // enumeration the move's delete leg is planned from (IStorageAdapter.ListDescendantPaths,
+        // "a native prefix enumeration across every table of the partition"). Two things are read
+        // off it below: WHICH satellite containers exist (the content query cannot tell us — see
+        // SatellitesUnder), and, under RequireComplete, whether this copy is about to leave
+        // something behind that the delete leg would then destroy (issue #3272).
+        IObservable<IReadOnlyCollection<string>> StoredSubtreePaths() =>
+            persistence is null || !(copyRequest.IncludeSatellites || copyRequest.RequireComplete)
+                ? Observable.Return<IReadOnlyCollection<string>>(Array.Empty<string>())
+                // Null-persistence is only reachable here for a NON-RequireComplete copy — the
+                // refusal above already ended the other case.
+                : persistence.ListDescendantPaths(sourcePath)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(15));
+
+        // 🚨 THE SUBTREE QUERY RETURNS NO METADATA SATELLITES, ON ANY BACKEND — which is why this
+        // exists. A content query resolves to ONE storage table: on Postgres from the query path's
+        // satellite segment (PostgreSqlPartitionedMeshQuery.NeedsFanOut → ResolveTable), and in the
+        // in-repo StorageAdapterMeshQueryProvider from the same signal
+        // (IsSatelliteTargetedQuery → IsExcludedFromResults, which mirrors PG's table separation so
+        // the two agree). `path:{main} scope:subtree` is a mesh_nodes read, so a _Comment/_Thread/
+        // _Access row is not in it. The delete leg meanwhile enumerates STORAGE, which holds every
+        // table — so a move copied none of them and deleted all of them, and reported success.
+        //
+        // 🚨 The cure is NOT to enumerate the copy from storage as well: the query is the read that
+        // ROW-LEVEL SECURITY filters, and copying straight out of the store would let a caller
+        // duplicate rows they cannot read into a location they control. Storage says only WHICH
+        // CONTAINERS EXIST (a path set, never content); each container is then READ BACK THROUGH THE
+        // SAME RLS-FILTERED QUERY, in the one shape every backend resolves to the satellite table:
+        // `path:{owner}/_Segment scope:subtree`. Containers are the unit rather than individual
+        // satellites so the sweep is one query per container that actually exists — typically none
+        // — instead of one per satellite row; `scope:subtree` from the container carries nesting
+        // (a _Thread's _ThreadMessage children) with it.
+        IObservable<IReadOnlyList<MeshNode>> SatellitesUnder(
+            IReadOnlyCollection<string> storedPaths,
+            ImmutableHashSet<string> owners,
+            ImmutableHashSet<string> alreadyCarried)
+        {
+            if (!copyRequest.IncludeSatellites)
+                return Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
+            var containers = storedPaths
+                .Select(SatelliteTableMapping.SatelliteContainerOf)
+                .Where(c => !string.IsNullOrEmpty(c))
+                .Select(c => c!)
+                // Only containers hanging off a main node this copy is actually carrying — so
+                // IncludeDescendants=false keeps the root's satellites and not a child's, and a
+                // main node the caller may not read never has its satellites swept in behind it.
+                .Where(c => owners.Contains(SatelliteTableMapping.OwnerOfSatellitePath(c)))
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+            if (containers.IsEmpty)
+                return Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
+            logger.LogDebug("[CopyNode] sweeping {Count} satellite container(s) under {Source}",
+                containers.Count, sourcePath);
+            return containers
+                .ToObservable()
+                // No .Catch here on purpose: a container query that fails must FAIL THE COPY, so the
+                // move's delete leg never runs. Swallowing it would rebuild the very defect this
+                // sweep exists to close, one level down.
+                .SelectMany(container => meshService
+                    .Query<MeshNode>(MeshQueryRequest
+                        .FromQuery($"path:{container} scope:subtree").Complete())
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(15))
+                    .SelectMany(change =>
+                        change?.Items ?? (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()))
+                .Where(n => n is not null && !alreadyCarried.Contains(n.Path))
+                .Distinct(n => n.Path, StringComparer.OrdinalIgnoreCase)
+                .ToList()
+                .Select(list => (IReadOnlyList<MeshNode>)list);
+        }
+
+        logger.LogDebug("[CopyNode] start source={Source} target={Target} (descendants={Desc} satellites={Sat} preserveAuthorship={Preserve} requireComplete={Complete})",
+            sourcePath, targetPath, copyRequest.IncludeDescendants, copyRequest.IncludeSatellites,
+            copyRequest.PreserveAuthorship, copyRequest.RequireComplete);
+
+        // Subtree query covers source + descendants (satellites come from the sweep above).
         // Query's first emission is the initial result set; we Take(1) and project each
         // node into a CreateNode call at the new target path.
-        meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{sourcePath} scope:subtree"))
+        AuthorshipPreservationRefusal()
+            .SelectMany(refusal =>
+            {
+                if (refusal is { } denied)
+                {
+                    logger.LogWarning("[CopyNode] REFUSED preserveAuthorship {Source} -> {Target}: {Reason}",
+                        sourcePath, targetPath, denied.Message);
+                    hub.Post(CopyNodeResponse.Fail(denied.Message,
+                            denied.Undetermined
+                                ? NodeCopyRejectionReason.Unknown
+                                : NodeCopyRejectionReason.Unauthorized),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
+                }
+
+                return StoredSubtreePaths().SelectMany(storedPaths =>
+                    meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{sourcePath} scope:subtree").Complete())
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))
             .Catch<QueryResultChange<MeshNode>, Exception>(ex =>
@@ -5181,7 +5432,9 @@ public static class MeshExtensions
                     return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
                 }
 
-                // Filter subtree by include flags (descendants vs satellites).
+                // Filter subtree by include flags (descendants vs satellites). A backend that DOES
+                // return satellite rows here (they are all one store in memory) keeps working — the
+                // sweep below de-duplicates against what this already carries.
                 var others = nodes
                     .Where(n => !string.Equals(n.Path, sourcePath, StringComparison.Ordinal))
                     .Where(n =>
@@ -5190,24 +5443,84 @@ public static class MeshExtensions
                         return isSatellite ? copyRequest.IncludeSatellites : copyRequest.IncludeDescendants;
                     })
                     .ToList();
-                var descCount = others.Count(n => string.Equals(n.MainNode, n.Path, StringComparison.Ordinal));
-                var satCount = others.Count - descCount;
 
-                // Create root, then create all children in parallel via Merge — Move semantics
-                // require all inserts to complete before the source is deleted. Every create runs
-                // under the caller's identity (CreateUnderCaller) so the routed per-descendant
-                // CreateNodeRequest carries a valid AccessContext across the scheduler hop.
-                return CreateUnderCaller(RetargetNode(sourceNode, sourcePath, targetPath))
-                    .SelectMany(rootCreated =>
+                var mainPaths = others
+                    .Where(n => string.Equals(n.MainNode, n.Path, StringComparison.Ordinal))
+                    .Select(n => n.Path)
+                    .Append(sourcePath)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                var carriedByQuery = others
+                    .Select(n => n.Path)
+                    .Append(sourcePath)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+                return SatellitesUnder(storedPaths, mainPaths, carriedByQuery)
+                    .SelectMany(satellites =>
                     {
-                        if (others.Count == 0)
-                            return Observable.Return<(MeshNode Root, int Desc, int Sat)>((rootCreated, descCount, satCount));
-                        return others.ToObservable()
-                            .Select(n => RetargetNode(n, sourcePath, targetPath))
-                            .SelectMany(retargeted => CreateUnderCaller(retargeted))
-                            .ToList()
-                            .Select(_ => ((MeshNode Root, int Desc, int Sat))(rootCreated, descCount, satCount));
+                        var toCopy = others.Concat(satellites).ToList();
+                        var descCount = toCopy.Count(n =>
+                            string.Equals(n.MainNode, n.Path, StringComparison.Ordinal));
+                        var satCount = toCopy.Count - descCount;
+
+                        // 🚨 The refusal (#3272). A MOVE deletes the source, so a copy that carries
+                        // less than everything storage holds is silent data loss the moment the
+                        // delete leg runs. Assert coverage BEFORE creating anything: nothing is
+                        // written at the target, nothing is removed at the source, and the caller
+                        // is told which paths could not be carried. A plain copy never sets this —
+                        // it deletes nothing, so carrying less loses nothing.
+                        if (copyRequest.RequireComplete)
+                        {
+                            var carried = toCopy.Select(n => n.Path)
+                                .Append(sourcePath)
+                                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                            var orphaned = storedPaths
+                                .Where(p => !string.IsNullOrEmpty(p) && !carried.Contains(p))
+                                .OrderBy(p => p, StringComparer.Ordinal)
+                                .ToImmutableList();
+                            if (!orphaned.IsEmpty)
+                            {
+                                var named = string.Join(", ", orphaned.Take(10));
+                                logger.LogError(
+                                    "[CopyNode] refusing {Source} -> {Target}: {Count} path(s) would be left behind: {Paths}",
+                                    sourcePath, targetPath, orphaned.Count, named);
+                                hub.Post(CopyNodeResponse.Fail(
+                                        $"{CopyNodeRequest.IncompleteCopyRefusal} {orphaned.Count} "
+                                        + $"node(s) stored under {sourcePath}: {named}"
+                                        + (orphaned.Count > 10 ? ", …" : ""),
+                                        NodeCopyRejectionReason.ValidationFailed),
+                                    o => o.ResponseFor(request));
+                                return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
+                            }
+                        }
+
+                        // Create root, then create all children in parallel via Merge — Move
+                        // semantics require all inserts to complete before the source is deleted.
+                        // Every create runs under the caller's identity (CreateUnderCaller) so the
+                        // routed per-descendant CreateNodeRequest carries a valid AccessContext
+                        // across the scheduler hop.
+                        //
+                        // 🚨 Authoritative(...) on EVERY node, satellites included (#3263): a query
+                        // row is a PROJECTION and does not carry created_by/created_date/
+                        // last_modified_by on Postgres, so a preserving copy that re-created from it
+                        // would rewrite the authorship it exists to keep. The satellites the sweep
+                        // found arrived through the same query surface, so they go through the same
+                        // storage read.
+                        return Authoritative(sourceNode)
+                            .Select(stored => RetargetNode(stored, sourcePath, targetPath, copyRequest.PreserveAuthorship))
+                            .SelectMany(CreateUnderCaller)
+                            .SelectMany(rootCreated =>
+                            {
+                                if (toCopy.Count == 0)
+                                    return Observable.Return<(MeshNode Root, int Desc, int Sat)>((rootCreated, descCount, satCount));
+                                return toCopy.ToObservable()
+                                    .SelectMany(Authoritative)
+                                    .Select(n => RetargetNode(n, sourcePath, targetPath, copyRequest.PreserveAuthorship))
+                                    .SelectMany(retargeted => CreateUnderCaller(retargeted))
+                                    .ToList()
+                                    .Select(_ => ((MeshNode Root, int Desc, int Sat))(rootCreated, descCount, satCount));
+                            });
                     });
+            }));
             })
             .Subscribe(
                 t =>
@@ -5232,11 +5545,44 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// The namespace a path lives in — everything before its last segment, or the path itself when
+    /// it has none. Deliberately the SAME computation
+    /// <see cref="MoveNodePermissionAttribute"/> uses to decide which namespace a move must hold
+    /// Delete on, because the copy handler's preserve-authorship gate asks that same question and
+    /// the two answers must not be able to drift apart.
+    /// </summary>
+    private static string NamespaceOf(string path)
+    {
+        var lastSlash = path.LastIndexOf('/');
+        return lastSlash > 0 ? path[..lastSlash] : path;
+    }
+
+    /// <summary>
     /// Builds a new MeshNode by relocating <paramref name="node"/> from <paramref name="oldRoot"/>
     /// to <paramref name="newRoot"/>. Path is derived from Namespace + Id; MainNode is rewritten
     /// when it pointed inside the old subtree.
+    ///
+    /// <para>🚨 <paramref name="preserveAuthorship"/> decides the four stamps, and it is the ONLY
+    /// thing that decides them — the create at the target keeps whatever this method leaves set
+    /// (<c>CreatedDate == default ? now : …</c>) and fills in whatever it clears.</para>
+    /// <list type="bullet">
+    /// <item><b>A MOVE preserves them.</b> The node at the target IS the node that was at the
+    /// source. <c>CreatedDate</c> and <c>CreatedBy</c> are documented on <see cref="MeshNode"/> as
+    /// "set once at creation time; never updated thereafter" / "never changed", and
+    /// <c>LastModified</c>/<c>LastModifiedBy</c> answer "who last wrote this content" — a
+    /// relocation writes no content. This method used to stamp <c>LastModified = UtcNow</c>
+    /// unconditionally, which is half of issue #3263; the other half is the projection the copy
+    /// used to read its nodes from (see <c>Authoritative</c> in
+    /// <see cref="HandleCopyNodeRequest"/>). A move that should be recorded belongs in the
+    /// activity log, not on top of who wrote the thing.</item>
+    /// <item><b>A COPY clears them</b> so the create path stamps the copier and the moment of the
+    /// copy. Clearing is deliberate: inheriting the original's <c>CreatedBy</c> would hand the
+    /// copy an owner who never touched it, and <c>AccessContextScope</c> impersonates exactly that
+    /// identity. It also makes a copy's stamps identical on every backend instead of depending on
+    /// which fields the store's query happens to project.</item>
+    /// </list>
     /// </summary>
-    private static MeshNode RetargetNode(MeshNode node, string oldRoot, string newRoot)
+    private static MeshNode RetargetNode(MeshNode node, string oldRoot, string newRoot, bool preserveAuthorship)
     {
         var newPath = string.Equals(node.Path, oldRoot, StringComparison.Ordinal)
             ? newRoot
@@ -5251,13 +5597,21 @@ public static class MeshExtensions
             : node.MainNode.StartsWith(oldRoot + "/", StringComparison.Ordinal)
                 ? newRoot + node.MainNode[oldRoot.Length..]
                 : node.MainNode;
-        return node with
+        var relocated = node with
         {
             Id = id,
             Namespace = ns,
             MainNode = newMainNode,
-            LastModified = DateTimeOffset.UtcNow
         };
+        return preserveAuthorship
+            ? relocated
+            : relocated with
+            {
+                CreatedDate = default,
+                CreatedBy = null,
+                LastModified = default,
+                LastModifiedBy = null,
+            };
     }
 
     /// <summary>

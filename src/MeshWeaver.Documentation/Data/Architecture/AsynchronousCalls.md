@@ -1227,6 +1227,12 @@ meshService.CopyNode(source, target, includeDescendants: true, includeSatellites
         ex        => hub.Post(MoveNodeResponse.Fail(ex.Message), o => o.ResponseFor(request)));
 ```
 
+> 🚨 Both blocks above are **sketches of the reactive SHAPE, not the move's contract** — copy either
+> verbatim and you get issue #3272 back. `IncludeSatellites` is not a filter over a set the subtree
+> query returned (it returns no metadata satellites on any backend), the delete leg enumerates
+> storage rather than one path, and a move must refuse rather than delete what the copy could not
+> carry. [Moving Nodes](/Doc/Architecture/MovingNodes) is the contract.
+
 ---
 
 ## 🚨 Reading the OWN node — `GetStream(new MeshNodeReference())`, never `GetStream<MeshNode>().FirstOrDefault`

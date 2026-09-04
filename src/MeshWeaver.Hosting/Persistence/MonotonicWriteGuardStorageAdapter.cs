@@ -284,7 +284,9 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
             .Add(new LogMessage(
                 $"A write at Version={staleVersion} lost the race against the durable Version={latestVersion} "
                 + $"on '{path}' and was merged into it.",
-                LogLevel.Information));
+                LogLevel.Information)
+                .WithKey("activity.writeConflict.merged",
+                    ("staleVersion", staleVersion), ("latestVersion", latestVersion), ("path", path)));
         // The durable row's PROVENANCE — the same identification the warning above carries, kept on
         // the durable trace because a portal's logs are gone long before someone opens this node
         // (#2403). A MainNode outside this path's own partition names a cross-partition mirror.
@@ -292,13 +294,18 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
             $"The durable row: nodeType='{latest.NodeType}' name='{latest.Name}' "
             + $"category='{latest.Category}' mainNode='{latest.MainNode}' "
             + $"lastModifiedBy='{latest.LastModifiedBy}'.",
-            LogLevel.Information));
+            LogLevel.Information)
+            .WithKey("activity.writeConflict.durableRow",
+                ("nodeType", latest.NodeType), ("name", latest.Name), ("category", latest.Category),
+                ("mainNode", latest.MainNode), ("lastModifiedBy", latest.LastModifiedBy)));
         messages = resolution.OverwrittenMembers.Aggregate(messages, (acc, member) => acc.Add(
             new LogMessage(
                 $"'{member}' was not auto-resolvable — the newer value was kept and the losing write's value dropped.",
-                LogLevel.Warning)));
+                LogLevel.Warning)
+                .WithKey("activity.writeConflict.memberOverwritten", ("member", member))));
         messages = resolution.MergedMembers.Aggregate(messages, (acc, member) => acc.Add(
-            new LogMessage($"'{member}' was merged — both writes' content survives.", LogLevel.Information)));
+            new LogMessage($"'{member}' was merged — both writes' content survives.", LogLevel.Information)
+                .WithKey("activity.writeConflict.memberMerged", ("member", member))));
 
         // 🚨 The id is keyed on the DURABLE version alone, never on the losing writer's. One record
         // per durable revision is the right granularity ("this revision had a conflict") AND it is

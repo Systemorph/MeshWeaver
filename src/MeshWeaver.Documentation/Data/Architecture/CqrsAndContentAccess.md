@@ -344,6 +344,32 @@ The `DeleteNodeRequest` / `MoveNodeRequest` / `CopyNodeRequest` types are define
 
 > **Summary in one line:** `Query` gives you paths and shells; `GetMeshNodeStream` gives you live content. There is no third channel.
 
+#### 🚨 A query result is a PROJECTION — never re-create a node from one
+
+The rule above is usually stated as "the query row is stale". It is also **incomplete**: a query row is not the node. A provider is free to omit fields, and the production provider does — `PostgreSqlSqlGenerator.GenerateSelectQuery` projects `id, namespace, name, node_type, description, category, icon, display_order, last_modified, version, state, content, desired_id, main_node, sync_behavior, exclude_from_context` and nothing else. `created_by`, `created_date` and `last_modified_by` are real columns — the storage adapter reads them on a point read and writes them on INSERT — but **no query projects them**, so every node a query hands back on Postgres carries `CreatedBy = null` and `CreatedDate = default`.
+
+That is harmless for a listing and destructive for a re-create, because `CreateNodeRequest` fills a blank stamp with "now, by the caller" (`CreatedDate == default ? now : node.CreatedDate`). `Move` is implemented as copy-to-target + delete-the-source, so a move that fed the create path a query row **rewrote the authorship of the whole subtree** and, with no version history behind it, destroyed the originals (issue #3263: one subtree move on memex re-stamped ~80 nodes).
+
+So a lifecycle operation that re-creates a node reads it from **storage**, exactly as the move's delete leg enumerates its paths from storage rather than the catalog (#839):
+
+- the **query** decides WHICH nodes — it is the read that row-level security filters, and bypassing it would copy nodes the caller may not read;
+- **storage** decides WHAT they are — `IStorageAdapter.Read(path, options)` per selected path, before anything is re-created.
+
+And the four stamps carry an operation-specific answer, never an incidental one:
+
+| Operation | `CreatedDate` / `CreatedBy` | `LastModified` / `LastModifiedBy` |
+|---|---|---|
+| **Move** (`CopyNodeRequest.PreserveAuthorship = true`) | preserved verbatim — the node at the target IS the node that was at the source | preserved verbatim — a relocation writes no content |
+| **Copy** | cleared, so the create stamps the copier | cleared, so the create stamps the copier |
+
+A copy must NOT inherit the original's `CreatedBy`: `AccessContextScope` derives the identity it impersonates from exactly that field, so an inherited creator makes owner-scoped work run as someone who never touched the node. If a move should be recorded at all it belongs in the activity log — never on top of who wrote the thing.
+
+That same sentence is why `PreserveAuthorship` is **gated, not merely defaulted off**. `CopyNodeRequest` is a wire message, so the flag is caller-settable, and a caller who can read a node could otherwise mint one — in a place they control — that owner-scoped work then runs AS its author. The handler therefore honours the flag only for a caller holding `Permission.Delete` on the source's namespace: exactly what `MoveNodePermissionAttribute` requires of a mover, so the flag confers nothing the platform did not already grant that caller. An UNDETERMINED permission fold is a refusal too, reported as unavailability rather than as a denial. Measured with the gate removed: an **Editor** (`Read | Create | Update | …`, no `Delete`) succeeded in copying an admin's node with its authorship intact — row-level security does not close this, because reading the source is precisely what an Editor may do.
+
+Two facts pin it — `PreserveAuthorshipIsGatedTest`: the Editor is refused with `Unauthorized`, and the same Editor's *plain* copy still succeeds and is stamped for them. Without the second, the first is satisfied by a subject who could not copy at all, and the gate would be indistinguishable from RLS refusing the whole operation.
+
+> The same asymmetry had a second consequence, fixed separately: the copy leg's content query also **excludes satellite paths** (`IsExcludedFromResults` mirrors PG's per-prefix satellite tables) while the delete leg's `ListDescendantPaths` enumerates every table of the partition — so a move deleted the `_Comment` / `_Thread` / `_Access` satellites it never copied, and reported success (#3272). Reading from storage does not cure that one: the *enumeration* is what has to change, and the query is the read row-level security filters. The cure splits the two — storage names which satellite CONTAINERS exist, the RLS-filtered query says what may be carried out of them, and a move that still cannot carry everything REFUSES rather than deleting the remainder. See [Moving Nodes](/Doc/Architecture/MovingNodes).
+
 ---
 
 ## 🚨 No "pedestrian queries" — use synced queries

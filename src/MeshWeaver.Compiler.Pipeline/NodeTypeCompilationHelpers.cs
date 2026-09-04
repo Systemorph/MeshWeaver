@@ -3144,8 +3144,10 @@ internal static class NodeTypeCompilationHelpers
                         HubPath = hubPath,
                         Status = ActivityStatus.Running,
                         Messages = System.Collections.Immutable.ImmutableList.Create(
-                            new LogMessage($"Compile started for {hubPath}", LogLevel.Information),
-                            new LogMessage("Invoking compiler…", LogLevel.Information))
+                            new LogMessage($"Compile started for {hubPath}", LogLevel.Information)
+                                .WithKey("activity.compile.started", ("path", hubPath)),
+                            new LogMessage("Invoking compiler…", LogLevel.Information)
+                                .WithKey("activity.compile.invoking"))
                     }
                 }))
                 .Take(1)
@@ -3406,25 +3408,37 @@ internal static class NodeTypeCompilationHelpers
                     if (ok)
                         activityMessages.Add(new LogMessage(
                             $"Roslyn produced assembly at: {outcome.Result!.AssemblyLocation}",
-                            LogLevel.Information));
+                            LogLevel.Information)
+                            .WithKey("activity.compile.assemblyProduced",
+                                ("location", outcome.Result!.AssemblyLocation)));
                     else
                     {
                         // 🚨 Say WHICH failure this is. "Roslyn failed" in front of a source
                         // snapshot that never answered is the log-line version of the #1218 bug:
                         // Roslyn was never invoked, so a reader (or an operator reading a stalled
                         // rollout's activity log) must not be told it rejected anything.
-                        var failureLead = outcome.Error switch
+                        // The LEAD is the sentence this code owns, so it carries the catalog key;
+                        // the detail after the colon is Roslyn's own text, which no catalog can hold
+                        // and which therefore rides as an ARGUMENT (#3236).
+                        var (failureLead, failureLeadKey) = outcome.Error switch
                         {
                             SourceDiscoveryUnavailableException =>
-                                "Compile NOT ATTEMPTED — source set could not be established",
+                                ("Compile NOT ATTEMPTED — source set could not be established",
+                                    "activity.compile.notAttempted"),
                             AddressRecyclingException =>
-                                "Compile NOT SETTLED — a mesh address it reads was recycling "
-                                + "for the reader's whole budget",
-                            _ => "Roslyn failed"
+                                ("Compile NOT SETTLED — a mesh address it reads was recycling "
+                                 + "for the reader's whole budget",
+                                    "activity.compile.notSettled"),
+                            _ => ("Roslyn failed", "activity.compile.roslynFailed")
                         };
+                        var failureDetail = outcome.Error?.Message
+                            ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
+                                ? string.Join("; ", errs.Select(m => m.Message))
+                                : "Compilation produced no assembly");
                         activityMessages.Add(new LogMessage(
-                            $"{failureLead}: {outcome.Error?.Message ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs ? string.Join("; ", errs.Select(m => m.Message)) : "Compilation produced no assembly")}",
-                            LogLevel.Error));
+                            $"{failureLead}: {failureDetail}",
+                            LogLevel.Error)
+                            .WithKey(failureLeadKey, ("detail", failureDetail)));
                         // 🚨 Non-Roslyn abort (an infrastructure exception escaping the compile
                         // pipeline — NOT a CompilationException, whose message already carries the
                         // full diagnostics): record the exception TYPE + STACK on the activity log.
@@ -3436,11 +3450,15 @@ internal static class NodeTypeCompilationHelpers
                         if (outcome.Error is not null and not CompilationException)
                             activityMessages.Add(new LogMessage(
                                 $"Compile aborted by {outcome.Error.GetType().FullName}:\n{outcome.Error}",
-                                LogLevel.Error));
+                                LogLevel.Error)
+                                .WithKey("activity.compile.aborted",
+                                    ("exceptionType", outcome.Error.GetType().FullName),
+                                    ("detail", outcome.Error.ToString())));
                     }
                     if (newReleasePath is not null)
                         activityMessages.Add(new LogMessage(
-                            $"Release created: {newReleasePath}", LogLevel.Information));
+                            $"Release created: {newReleasePath}", LogLevel.Information)
+                            .WithKey("activity.compile.releaseCreated", ("path", newReleasePath)));
                     // The post-condition's verdict belongs on the OFFICIAL diagnosis surface, not
                     // only in a log sink — a stale release is invisible everywhere else (#781).
                     if (settle.Diagnosis is { } diagnosis)

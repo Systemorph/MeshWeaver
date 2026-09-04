@@ -664,7 +664,11 @@ public static class LayoutClientExtensions
             return Observable.Return(new ActivityLog(ActivityCategory.DataUpdate)
             {
                 End = DateTime.UtcNow,
-                Messages = [new("Failed to post DataChangeRequest (no route).", LogLevel.Error)]
+                Messages =
+                [
+                    new LogMessage("Failed to post DataChangeRequest (no route).", LogLevel.Error)
+                        .WithKey("activity.dataUpdate.noRoute")
+                ]
             });
         }
 
@@ -677,7 +681,14 @@ public static class LayoutClientExtensions
                     return new ActivityLog(ActivityCategory.DataUpdate)
                     {
                         End = DateTime.UtcNow,
-                        Messages = [new($"Unexpected response shape '{callbackResponse.Message?.GetType().Name ?? "null"}'.", LogLevel.Error)]
+                        Messages =
+                        [
+                            new LogMessage(
+                                $"Unexpected response shape '{callbackResponse.Message?.GetType().Name ?? "null"}'.",
+                                LogLevel.Error)
+                                .WithKey("activity.dataUpdate.unexpectedResponse",
+                                    ("shape", callbackResponse.Message?.GetType().Name ?? "null"))
+                        ]
                     };
                 }
 
@@ -689,7 +700,11 @@ public static class LayoutClientExtensions
             .Catch<ActivityLog, Exception>(e => Observable.Return(new ActivityLog(ActivityCategory.DataUpdate)
             {
                 End = DateTime.UtcNow,
-                Messages = [new(e.Message, LogLevel.Error)]
+                // Spelled `new LogMessage(...)` rather than target-typed `new(...)` on purpose: the
+                // #3236 ratchet counts the spelled form, and a target-typed one is invisible to it —
+                // which is how this file's three entries stayed out of the issue's own census.
+                // Deliberately UNKEYED: `e.Message` is upstream text no catalog can carry.
+                Messages = [new LogMessage(e.Message, LogLevel.Error)]
             }));
     }
 }
