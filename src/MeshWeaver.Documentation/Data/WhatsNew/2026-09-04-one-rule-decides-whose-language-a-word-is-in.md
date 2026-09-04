@@ -1,7 +1,7 @@
 ---
 Name: One rule decides whose language each word on a page is in
 Category: Fix
-Description: A German reader of an English lesson met a lone German button label in the middle of an English sentence. The platform now has one settled rule for whose language a word renders in — the owner's — and a second that keeps the application's words out of the middle of an author's sentence.
+Description: A German reader of an English lesson met a lone German button label in the middle of an English sentence. The platform now has one settled rule for whose language a word renders in — the owner's — and a second that requires the application's words to stay out of the middle of an author's sentence. The controls follow the rule one at a time from here.
 Icon: Globe
 Order: -20260904
 ---
@@ -20,12 +20,13 @@ that belongs to nobody — text typed straight into a view and never translated 
 gets an owner rather than a special case.
 
 The second half of the rule is restraint. Where the application has to place a control *inside*
-something an author wrote — the Run button on a code cell, for instance — it now uses a symbol
-wherever a symbol says the same thing, and moves the translated words into the tooltip, which is
-also what a screen reader announces. Nothing is lost, and no translated word lands in the middle of
+something an author wrote — the Run button on a code cell, for instance — it must use a symbol
+wherever a symbol says the same thing, and move the translated words into the tooltip, which is also
+what a screen reader announces. Nothing is lost, and no translated word lands in the middle of
 somebody else's sentence.
 
-This arrives control by control rather than all at once, and the code cell's Run button is the
-first. The obvious alternative — making the buttons follow the *course's* language instead of yours
-— was considered and declined: it was tried once before, and it hands an English reader of a German
-course a page whose every control is in a language they cannot read.
+**What changes today is the rule, not yet the controls.** They follow it one at a time, and the code
+cell's Run button — the one that prompted this — is first in line; it loses its redundant label in a
+later release. The obvious alternative — making the buttons follow the *course's* language instead
+of yours — was considered and declined: it was tried once before, and it hands an English reader of
+a German course a page whose every control is in a language they cannot read.
