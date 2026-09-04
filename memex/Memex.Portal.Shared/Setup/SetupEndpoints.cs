@@ -418,7 +418,7 @@ public static class SetupEndpoints
             .Where(p => p.StorageType is { } t && openable.Offers(t))
             .Where(p => !catalog.Storage.Any(o => string.Equals(o.Type, p.StorageType, StringComparison.OrdinalIgnoreCase)))
             .Select(p => new SetupStorageOption(
-                p.StorageType!, p.Name, NeedsConnectionString: true, PackageId: p.Id))
+                p.StorageType!, p.Name, NeedsConnectionString: true) { PackageId = p.Id })
             .ToImmutableList();
 
         return catalog with
