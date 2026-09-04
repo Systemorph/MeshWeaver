@@ -1132,6 +1132,24 @@ the prod enablement. The structural end state is stronger still: DLL-only module
 ("never ship uncompiled state") removes in-portal recompilation altogether, so a publication
 wave costs an assembly load instead of a Roslyn generation.
 
+> 🚨 **Convergence is the missing piece for the mechanism above, and it is not the whole story —
+> measured 2026-09-04.** The spiral recurred on 09-03 with `Modules:AutoRecycleOnStaleBuild` live
+> on both production namespaces. Counted over one replica's entire 28-hour life (186 137 lines,
+> with `info:` confirmed shipping): **zero** `Stale-build offer:`, **zero** `Stale-build
+> convergence:`, **zero** `self-heal recompile`, **zero** `BatchBake:` — no build was ever
+> superseded, so convergence had nothing to converge, while the managed heap still grew from
+> 6 856 to 10 065 MB across **267 gen2 collections**. Two things the paragraph above does not
+> cover were doing it instead: **no hub or grain deactivates at all** (`deactivating: reason=` is
+> 0 across five replicas and 514 687 lines), so the *lifetime* ALC lease an instance hub takes is
+> never released; and replicas boot having adopted as few as **8 of 377** dynamic NodeTypes, so
+> the other 369 each pay a Roslyn compile on **first access** and pin it — the same accumulation
+> as a publication wave, arriving as a drip and driven by bundle coverage rather than
+> supersession. Note also that "no OOMKill (the pod limit was never reached)" above understates
+> why: the GC's own hard limit is 75 % of the container limit, so the runtime defends memory with
+> a sustained 0.66 GC pause share rather than letting the kubelet restart the pod.
+> [Why a GC-bound pod stays in rotation](../WhyAGcBoundPodStaysInRotation) has the full
+> derivation.
+
 **Triage fingerprint** — intermittent hangs while most requests succeed, on a portal that
 recently synced or baked: suspect a degraded-but-Ready replica, not a global wedge. One or two
 pods far above their siblings in BOTH memory and CPU in `kubectl top pods` is this incident;
