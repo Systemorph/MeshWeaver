@@ -864,6 +864,16 @@ Two readings that look right and are not:
   written. The retry's own error is the `NullReferenceException`. Compare timestamps, not adjacency.
 - **"That one is just a slow shard."** `ReleaseRequestWatcherHighWaterTest`'s compile threw **174 ms**
   after `TEST START`; the 50 s wait that followed was waiting for an `Ok` that could never arrive.
+- 🚨 **"It's a compile suite and it hit the cap, so it's this."** The 2026-08-13 sweep found that
+  `exit=124` on `MeshWeaver.Hosting.Monolith.Test` was *almost entirely* this defect. **That has
+  stopped being true.** Measured 2026-09-03→04 on MeshWeaver.Plugins: **3** such timeouts in 122
+  runs, of which **1** carries the signature and **2 carry none** — read on the authoritative sink
+  (467 and 560 `[FAULT]` records each, zero `canary=`), so the nulls are not the job log's
+  failing-tests-only blind spot. Both nulls wedged **inside one compile test that never ended** (one
+  unclosed `TEST_START` for the whole 15-minute cap, `methodTimeout` never firing) — a hang, not
+  this defect's fast many-failure cascade, and both were in this issue's own blame set
+  (`NodeTypeReleaseGateTest`, `CodeEditRecompileTest`). **Discriminate on the verdict, never on the
+  suite name plus the exit code**; folding a live wedge into a known-upstream defect hides it.
 
 > 🚨 **The core dump the canary asks for cannot be captured this way.** `DOTNET_DbgEnableMiniDump`
 > fires on a *signal*, and this process never crashes — it throws a managed exception and keeps
