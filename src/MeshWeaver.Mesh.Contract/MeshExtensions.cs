@@ -5163,15 +5163,18 @@ public static class MeshExtensions
             ?? accessService?.Context ?? accessService?.CircuitContext;
 
         // Wraps a per-node CreateNode so its eager AccessContext capture (MeshService.CaptureContext)
-        // sees the caller's identity even though this runs on a scheduler thread. Observable.Using
-        // opens the SwitchAccessContext scope on Subscribe — exactly when the cold CreateNode's Defer
-        // reads the AsyncLocal and posts — and disposes it as the create completes.
+        // sees the caller's identity even though this runs on a scheduler thread. The scope opens on
+        // Subscribe — exactly when the cold CreateNode's Defer reads the AsyncLocal and posts.
+        //
+        // 🚨 RunAs, not Observable.Using (#1790, and Copilot flagged it on this PR). Rx disposes a
+        // Using resource on whichever thread the INNER observable terminates on — for a routed
+        // CreateNodeRequest that is the owning hub's response thread, so the subscribing thread was
+        // left latched to the impersonated identity. RunAs owns both ends of one synchronous
+        // Subscribe frame. This site was the single entry MeshExtensions.cs held in
+        // ImpersonationScopeSites.allow; the satellite sweep above widens the window (more creates
+        // per copy), so it is closed here rather than left for the ledger.
         IObservable<MeshNode> CreateUnderCaller(MeshNode node) =>
-            callerAccessContext is null || accessService is null
-                ? meshService.CreateNode(node)
-                : Observable.Using(
-                    () => accessService.SwitchAccessContext(callerAccessContext),
-                    _ => meshService.CreateNode(node));
+            accessService.RunAs(callerAccessContext, () => meshService.CreateNode(node));
 
         // 🚨 A completeness check with nothing to check against would PASS — the one shape a guard
         // must never have. RequireComplete asserts the copy covers what STORAGE holds; with no

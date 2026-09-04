@@ -18,7 +18,7 @@ That went for the whole folder, too: everything attached to anything underneath 
 was destroyed the same way.
 
 Moving something now takes all of it. A page arrives at its new location with its comments still on
-it, its threads still readable, and the people it was shared with still able to open it — and so does
+it, its discussions still readable, and still open to the people it was shared with — and so does
 everything filed under it.
 
 And when a move genuinely cannot carry the whole thing — a folder holding something you are not
