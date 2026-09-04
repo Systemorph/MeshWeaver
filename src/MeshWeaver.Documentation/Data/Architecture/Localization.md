@@ -2,6 +2,11 @@
 
 The portal renders its chrome in the **viewer's** language. English and German ship today.
 
+🚨 **Ownership does not expire when a string is PERSISTED.** Platform-owned text the platform wrote
+into a node months ago — an activity transcript — still follows the viewer who opens it, which takes
+a third lookup shape because the writer had no viewer to resolve against. See *Key + args on a
+persisted record* below.
+
 This is the direct twin of the per-viewer *timestamp* seam, because it is the same problem shape:
 a display preference that must reach BOTH the Blazor circuit AND server-side hub layout areas that
 have no browser.
@@ -38,6 +43,7 @@ signal:
 | `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json` | platform | the viewer's language |
 | a module's own text table (`EduTexts`, `CourseInviteTexts`) | module | the viewer's language |
 | a `[Translation]` beside a `[Description]` on a declaration | platform / module | the viewer's language |
+| a `LogMessage.MessageKey` persisted on an activity node | platform | the viewer's language — resolved at READ time (shape 3) |
 | `MeshNode.Name` / `.Description` / `.Category`, or an override in `ILocalizedNodeText.Translations` | author | as authored |
 | the node's body, or any typed content field an author edits | author | as authored |
 | a bare literal in a `.razor` / `.cs` view | **nobody — fix it** | — |
@@ -72,9 +78,9 @@ ambient design would silently render one user's UI in another user's language.
 Instead, `LayoutAreaHost` captures the subscriber's `AccessContext` at construction and restores it
 for the render scope — which is exactly what makes an explicit read correct.
 
-## Two lookup shapes, one resolution rule
+## Three lookup shapes, one resolution rule
 
-Both resolve the viewer's language through `Locales.Resolve`, so they can
+All three resolve the viewer's language through `Locales.Resolve`, so they can
 never disagree.
 
 ### 1. `[Translation]` — for text attached to a declaration
@@ -131,6 +137,78 @@ public static StackControl BuildLog(ActivityLog log, string? locale = null)
 // caller
 BuildLog(log, locale: host.ViewerLocale())
 ```
+
+### 3. Key + args on a persisted record — for text written with no viewer in scope
+
+Shapes 1 and 2 both assume the string is chosen while somebody is *looking*. An **activity
+transcript** breaks that assumption, and it is the reason this third shape exists (#3236).
+
+Clause 1 already answers *whose* language it is: the platform wrote these lines, so they follow the
+**viewer**. What was missing was a way to honour that answer — the writer has no viewer to resolve
+against, and the stored row outlives whoever might have been watching.
+
+An `ActivityLog` line is written **server-side, at the moment the work happens**: the static-repo
+import runs as System at boot, a compile runs on a node hub, a write-conflict record is raised inside
+a storage adapter. There is no viewer — and the row that lands is later read by several viewers whose
+languages differ. Resolving a locale at write time would be wrong even where it is possible: it
+freezes one reader's language into a shared record.
+
+So the writer stores the **key and its arguments**, and the **reader** resolves:
+
+```csharp
+// write site — no viewer, no locale, no Localize call
+new LogMessage($"Node not found at path: {path}", LogLevel.Error)
+    .WithKey("activity.delete.notFound", ("path", path))
+
+// render site — LayoutAreaHost has restored the subscriber's AccessContext
+Controls.Body(host.Localize(message))          // or message.Localize(host.ViewerLocale())
+```
+
+`LogMessage.Message` stays the **English fallback**. That is what makes the shape safe to adopt one
+site at a time: an un-migrated writer, every row already in the database, and a row naming a key that
+has since been renamed away all render exactly as they did before.
+
+Three properties, each load-bearing:
+
+- **Arguments are NAMED (`{path}`, `{count}`), not positional.** These arguments are *persisted*, so a
+  row written months ago must still bind correctly to a template someone has since rewritten;
+  positional `{0}` would silently rebind when a translator reorders. The two conventions cannot
+  collide — `{0}` is not a valid name — so `LocalizationCatalog.GetNamed` leaves the ~1,170 positional
+  keys untouched and `Get`'s `string.Format` leaves the named ones untouched.
+- **Values come back from JSON, so the renderer never casts.** `MessageArgs` is
+  `ImmutableDictionary<string, object>`; after a round trip its values are `JsonElement`. `GetNamed`
+  switches on `ValueKind` rather than casting (the silent-null trap), and formats numbers in the
+  **viewer's** culture derived from their locale — never `CultureInfo.CurrentCulture`.
+- **Not everything gets a key, and that is a decision.** The *sentence the platform owns* is keyed;
+  **verbatim upstream text is not** — a Roslyn diagnostic, an `ex.Message`, a descendant hub's own
+  refusal. Where the two are spliced, the lead is keyed and the detail rides as an argument
+  (`"Roslyn failed: {detail}"`). This is the same boundary as *viewer message vs. owner diagnostic*
+  below, applied inside a single line.
+
+Keys live under the **`activity.`** namespace. `UnkeyedActivityLogMessageRatchetGuard` holds the line
+in three directions: no NEW unkeyed `new LogMessage("…")` site, no `activity.*` key that is in no
+catalog (`LocalizationTest` compares the catalogs to each other and structurally cannot see a key
+missing from both), and no target-typed `Messages = [new(…)]`, which constructs a `LogMessage` while
+naming no type and is therefore invisible to any textual census — three such sites were missing from
+the issue's own count for exactly that reason.
+
+### The catalog has a second home, and it goes stale SILENTLY
+
+The web clients carry their own copy at `MeshWeaver.Plugins/clients/react/src/i18n/strings.{en,de}.json`
+so they can resolve synchronously. Core is the source of truth and its change merges first.
+
+🚨 **Adding a key here does not turn the plugins repo red.** Its drift guard
+(`src/i18n/localize.test.ts`, in the `RN app + web clients (typecheck + test)` job) compares the
+client catalog against a **pinned core commit** recorded in `src/i18n/catalog-source.json`, not
+against core's `main`. The pin is deliberate — core merges faster than a Plugins CI cycle, so an
+unpinned guard could not converge and reddened every unrelated PR on a subsystem its diff could not
+reach — but the consequence is that **a core catalog change makes the mirror stale with nothing
+anywhere going red.** Measured 2026-09-04: the pin sat at 1,104 keys while core carried 1,174, both
+repos fully green.
+
+So a core PR that adds keys hands the sync over explicitly. The mirror moves by
+`npm run sync:i18n -- --ref <the merged core sha>`, which rewrites both catalogs, the `ref` and the
+recorded key counts together.
 
 ## Language resolution
 
@@ -285,6 +363,14 @@ squeamishness about effort — localizing there makes the product *worse*.
 | vocabulary | the user's domain | partitions, paths, stream ids, providers, node types |
 | **localize?** | **yes, always** | **no** |
 
+🚨 **An activity transcript sits on the viewer side of that table, and it is the case that proves the
+row is about the READER rather than about the writing code.** Its lines are written by the same
+server-side machinery that emits the diagnostics above, in the same vocabulary — but a user opens the
+activity node and reads them. So the sentences the platform owns are keyed (shape 3 above), while the
+verbatim upstream fragments spliced into them stay English, exactly as reason 1 of this section
+argues. "It was written where no viewer existed" is a statement about the *mechanism*, never a reason
+to leave it English: that is what `LogMessage.MessageKey` exists to decouple.
+
 The `Describe*` family is the canonical diagnostic shape — `MessageSizeGuard.Describe` /
 `DescribeGrainDispatch` / `DescribeRouterDispatch`, `CancellationClassifier.Describe`,
 `QueryIdentity.DescribeUnresolved`, `StoreReachability.DescribeNotAttempted` /
@@ -322,7 +408,17 @@ section. The rule genuinely bites the moment the string reaches a `Controls.*` l
 
 - `LocalizationTest` (MeshWeaver.Messaging.Hub.Test) — catalog loads, fallback chain, plurals,
   attribute lookup, `Locales.Negotiate` over real `Accept-Language` shapes, and **every shipped
-  language covers the full English key list with no orphans**.
+  language covers the full English key list with no orphans**. 🚨 It compares the catalogs to *each
+  other*, so a key missing from **both** — a typo, a rename that never reached the JSON — passes here
+  and renders a raw token. That direction is `UnkeyedActivityLogMessageRatchetGuard`'s job, below.
+- `LogMessageLocalizationTest` (MeshWeaver.Data.Test) — the persisted key + args seam: resolution in
+  the viewer's language, the JSON round trip (arguments come back as `JsonElement` and must still
+  bind), and the three fallback populations that must keep rendering as before — an unkeyed row, an
+  un-migrated writer, and a key the catalog no longer has.
+- `UnkeyedActivityLogMessageRatchetGuard` (MeshWeaver.Documentation.Test) — the governance ratchet
+  over `test/UnkeyedActivityLogMessages.allow`: no NEW unkeyed `new LogMessage("…")` site, every
+  `activity.*` key named in `src/` exists in the English catalog and vice versa, and no target-typed
+  `Messages = [new(…)]` that would hide from the census.
 - `LocalePreferenceTest` (MeshWeaver.Hosting.Monolith.Test) — the write-once decision.
 - 🚨 **`AnonymousCircuitLocaleSeedTest` does NOT exist** — it is named here only so nobody reads it
   as cover. It drove the anonymous seed over a **real SignalR WebSocket into Blazor's real

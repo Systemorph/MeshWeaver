@@ -1,0 +1,48 @@
+# UnkeyedActivityLogMessageRatchetGuard — the seeded inventory of `new LogMessage("…", level)`
+# sites under src/ that carry NO `.WithKey(…)`, i.e. that persist rendered ENGLISH onto the node
+# and can never be translated for the viewer who reads them (#3236).
+#
+# Format: <repo-relative path><TAB><count>.  The ratchet may only SHRINK: a new file, a raised
+# count, or a raised TotalBudget is a failure.  Adding a line here is not a fix.
+#
+# 🚨 These twenty-one are NOT a to-do list that nobody got to. They are the two populations that
+# genuinely cannot carry a key, and they are expected to stay:
+#
+#   GENERIC PLUMBING — an ILogger adapter, or a helper whose entire input is a `string message`
+#   parameter. The site does not know a SENTENCE, so there is nothing to key. A caller that wants a
+#   key builds the LogMessage itself and hands it to the batched overload
+#   (NodeTypeCompilationActivity.AppendLogs / ActivityLogAppender.Append) — which is why migrating
+#   one of these callers needs no signature change here.
+#
+#   VERBATIM UPSTREAM TEXT — ex.Message, a Roslyn diagnostic, a descendant hub's own refusal, a
+#   composed multi-clause import summary. No catalog can carry these; a template reduced to a lone
+#   {detail} placeholder would be a translation of nothing.
+#
+# The lines below say which is which. Where a site is genuinely migratable it is named as such and
+# tracked on the follow-up issue, not blessed here.
+
+# ILogger → activity adapter: the text arrives already formatted by an ILogger formatter.
+src/MeshWeaver.Kernel.Hub/ActivityLogLogger.cs	1
+# Same, plus the `string message` convenience on Activity itself.
+src/MeshWeaver.Data/Activity.cs	2
+# ActivityLog.Fail(string error) — the error is the caller's sentence, not this method's.
+src/MeshWeaver.Data.Contract/ActivityLog.cs	1
+# AppendLog(…, string message, …) and Update(…, string? error, …): `string message` plumbing.
+src/MeshWeaver.Compiler.Pipeline/NodeTypeCompilationActivity.cs	2
+# AppendInfo / AppendWarning / AppendError(log, string message): `string message` plumbing.
+src/MeshWeaver.Compiler.Pipeline/MeshNodeCompilationService.cs	3
+# settle.Diagnosis — a post-condition verdict composed elsewhere.
+src/MeshWeaver.Compiler.Pipeline/NodeTypeCompilationHelpers.cs	1
+# The activity TITLE, per-step `message` and terminal `finalMessage` all arrive as string parameters
+# of RunActivity/Log/Finish. MIGRATABLE — the eight call sites in GitHubActivityExtensions compose
+# real sentences — but it needs a key parameter threaded through the public runner. Follow-up.
+src/MeshWeaver.GitSync/ActivityRunner.cs	3
+# f.Error (a descendant hub's own refusal), PostFail's `error` (which is also the response text) and
+# the ex.Message arm of the terminal delete failure. All upstream text.
+src/MeshWeaver.Mesh.Contract/MeshExtensions.cs	3
+# Two composed multi-clause run summaries (each folds 6+ conditional notes carrying #604/#3101
+# incident wording), the stranded-instances report built by NodeTypeInstanceProbe, and the
+# content-sync ledger's `string message` parameter.
+src/MeshWeaver.Graph/StaticRepoImporter.cs	4
+# e.Message from a faulted submit.
+src/MeshWeaver.Layout/Client/LayoutClientExtensions.cs	1

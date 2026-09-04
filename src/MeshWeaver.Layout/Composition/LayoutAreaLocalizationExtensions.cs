@@ -1,3 +1,4 @@
+using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -24,6 +25,21 @@ public static class LayoutAreaLocalizationExtensions
     /// </summary>
     public static string Localize(this LayoutAreaHost host, string key, params object?[] args)
         => host.Hub.ServiceProvider.GetService<AccessService>().Localize(key, args);
+
+    /// <summary>
+    /// An ACTIVITY TRANSCRIPT entry in the viewer's language (#3236): the entry's catalog key bound
+    /// to its stored arguments when it carries one, otherwise its stored English text.
+    ///
+    /// <para>Safe on every entry, keyed or not — a row persisted before #3236, or one whose text is
+    /// verbatim tool output, renders exactly as it did before. So a view that renders
+    /// <c>message.Message</c> today can move to this unconditionally; keeping the raw property is
+    /// what leaves a German viewer reading English.</para>
+    /// </summary>
+    /// <param name="host">The rendering host, whose AccessContext carries the viewer's language.</param>
+    /// <param name="message">The activity log entry to render.</param>
+    /// <returns>The text to render; never null.</returns>
+    public static string Localize(this LayoutAreaHost host, LogMessage message)
+        => message.Localize(host.ViewerLocale());
 
     /// <summary>Plural-aware overload — resolves <c>{key}.one</c> / <c>{key}.other</c>.</summary>
     public static string LocalizePlural(this LayoutAreaHost host, string key, int count)

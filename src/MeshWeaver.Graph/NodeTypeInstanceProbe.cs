@@ -85,19 +85,26 @@ public static class NodeTypeInstanceProbe
     {
         if (stranded.Count == 0)
             return null;
-        var parts = stranded.Select(s =>
+        return $"⚠ Pruned {stranded.Count} NodeType(s) that still have instances — those instances "
+               + "are now STRANDED: they have no per-node hub, so they read as Unavailable and "
+               + "render empty. Retype or delete them, or restore the NodeType: "
+               + DetailOf(stranded)
+               + ".";
+    }
+
+    /// <summary>
+    /// The per-NodeType enumeration that goes after the colon in <see cref="Describe"/> — paths and
+    /// counts, no prose. Split out so the localizable activity line can bind it as ONE argument
+    /// (<c>{detail}</c>) while the sentence around it comes from the catalog (#3236).
+    /// </summary>
+    private static string DetailOf(IReadOnlyCollection<StrandedInstances> stranded) =>
+        string.Join("; ", stranded.Select(s =>
         {
             var named = string.Join(", ", s.InstancePaths);
             var rest = s.Count - s.InstancePaths.Count;
             var overflow = rest > 0 ? $", … (+{rest}{(s.Truncated ? " or more" : "")} more)" : "";
             return $"'{s.NodeTypePath}' ({s.Count}{(s.Truncated ? "+" : "")}): {named}{overflow}";
-        });
-        return $"⚠ Pruned {stranded.Count} NodeType(s) that still have instances — those instances "
-               + "are now STRANDED: they have no per-node hub, so they read as Unavailable and "
-               + "render empty. Retype or delete them, or restore the NodeType: "
-               + string.Join("; ", parts)
-               + ".";
-    }
+        }));
 
     /// <summary>
     /// Probes, for every NodeType definition among <paramref name="pruning"/>, whether the mesh
@@ -179,6 +186,8 @@ public static class NodeTypeInstanceProbe
                 if (text is null)
                     return null;
                 logger?.LogWarning("[NodeTypeInstanceProbe] {Report}", text);
-                return new LogMessage(text, LogLevel.Warning);
+                return new LogMessage(text, LogLevel.Warning)
+                    .WithKey("activity.prune.strandedInstances",
+                        ("count", stranded.Count), ("detail", DetailOf(stranded)));
             });
 }
