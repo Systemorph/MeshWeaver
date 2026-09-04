@@ -1,0 +1,74 @@
+# M — the last-deployed release manifest (`helm get manifest <release> -n <ns>`), the `original`
+# side of helm's three-way merge: exactly what helm previously owned.
+#
+# This one is deliberately NOT desired.yaml. It is what the chart rendered at the LAST deploy, and
+# the difference between the two is a chart retirement that has not landed yet. Every seeded case
+# for the pending-deletion check lives in that difference:
+#
+#   key / entry                       in M?  rendered now?  live?   what it proves
+#   LogWatch__DefaultRepository       yes    no             yes     PENDING DELETION, value NON-EMPTY
+#   Authentication__DevAdminUsers     yes    no             yes     PENDING DELETION, value EMPTY → no-op
+#   Ops__Contact                      NO     no             yes     never-owned → survives a deploy
+#   Retention__Days                   yes    YES            yes     NEGATIVE CONTROL — never reported
+#   inline env Features__Ai__Clis__Copilot  yes  no  yes            PENDING DELETION, value NON-EMPTY
+#   inline env Legacy__Flag           yes    no             yes     PENDING DELETION, value EMPTY → no-op
+#   inline env Tok                    NO     no             yes     never-owned → survives a deploy
+#
+# PluginCatalog__RegistryUrl is absent here on purpose: it is the CHART-ONLY case (rendered now,
+# not live), which is what a key the chart gained SINCE the last deploy looks like.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: memex-portal-config
+data:
+  Authentication__DevAdminUsers: ""
+  Email__ClientId: ""
+  Grpc__TrustedPort: "8082"
+  LogWatch__DefaultRepository: "Systemorph/MeshWeaver"
+  Pad__01: "v1"
+  Pad__02: "v2"
+  Pad__03: "v3"
+  Pad__04: "v4"
+  Pad__05: "v5"
+  Pad__06: "v6"
+  Pad__07: "v7"
+  Pad__08: "v8"
+  Pad__09: "v9"
+  Pad__10: "v10"
+  Pad__11: "v11"
+  Pad__12: "v12"
+  Pad__13: "v13"
+  Pad__14: "v14"
+  Pad__15: "v15"
+  Pad__16: "v16"
+  Pad__17: "v17"
+  Pad__18: "v18"
+  PreWarm__BatchBake: ""
+  PreWarm__GateReadiness: "false"
+  Retention__Days: "30"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memex-portal-deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: memex-portal
+          envFrom:
+            - configMapRef:
+                name: memex-portal-config
+            - configMapRef:
+                name: portal-extra
+          env:
+            - name: DOTNET_DbgMiniDumpType
+              value: "2"
+            - name: DOTNET_DbgMiniDumpName
+              value: "/data/dumps/coredump.%p.%t"
+            - name: AZURE_CLIENT_ID
+              value: "00000000-0000-0000-0000-000000000001"
+            - name: Features__Ai__Clis__Copilot
+              value: "true"
+            - name: Legacy__Flag
+              value: ""

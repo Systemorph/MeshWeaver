@@ -1,22 +1,38 @@
 #!/usr/bin/env python3
 """
-The COMPARISON half of check-chart-drift.sh — rendered chart vs live objects.
+The COMPARISON half of check-chart-drift.sh — rendered chart vs live objects vs release manifest.
 
 Split out of that script so it can be exercised WITHOUT a cluster: the classification below is
 real logic (which divergences are live-wrong, which are hygiene) and a gate whose logic is only
 ever run against a private production cluster is a gate nobody can regression-test. Its self-test
 is test-chart-drift-compare.sh, which chart-gate.yml runs on every pull request.
 
+🚨 THREE SIDES, not two. D = the chart as CI renders it (`helm template`). L = the live cluster
+objects. M = the last-deployed release manifest (`helm get manifest <release> -n <ns>`), which is
+the `original` side of helm's three-way merge — exactly what helm PREVIOUSLY OWNED. D vs L is the
+drift everybody talks about, and it is the comparison this file used to make alone. The deletion
+hazard is not in it: it lives in D vs M. A key that is in L and in M but NOT in D is a chart
+RETIREMENT that has not landed yet — helm owned it, the current chart no longer renders it, so the
+next `helm upgrade` WILL remove it. That is the ONE cluster-only shape a deploy actually destroys;
+everything else survives a deploy (measured 2026-09-03 on helm v3.21.1 and v4.2.4, with a positive
+control). Until this comparison existed the two halves were reported identically, and the split had
+to be re-derived by hand every run — 13 owned-but-retired out of 36 cluster-only findings on
+2026-09-04, which nothing recomputed on the next one. `Systemorph/Memex#152` asked for this check.
+
 Arguments, in order:
   desired.yaml  live-configmap.json  live-deployment.json  expect-patch.json
   live-poddisruptionbudgets.json  live-scaledobjects.json  live-envfrom-source-keys.txt
+  release-manifest.yaml
 
-The last file is `secret/<name><TAB>key` and `configmap/<name><TAB>key` lines — the NAMES of the
+The envFrom file is `secret/<name><TAB>key` and `configmap/<name><TAB>key` lines — the NAMES of the
 keys every OTHER envFrom source supplies (memex-portal-config is fetched in full separately), and
 nothing else. No secret VALUE is read by this script, and none may be added to it.
+The release manifest is REQUIRED, and its absence is a FAILURE rather than a silent "no pending
+deletions": a checker that answers "everything cluster-only survives" because it could not read the
+manifest is a gate that passed on missing input.
 Exit 0 = no drift, 1 = drift or the comparison could not be made.
 """
-import json, sys, yaml
+import json, os, sys, yaml
 
 desired_path, live_cm_path, live_dep_path, expect_patch = sys.argv[1:5]
 live_pdb_path, live_so_path = sys.argv[5:7]
@@ -29,6 +45,24 @@ if len(sys.argv) > 7 and sys.argv[7]:
         if "\t" in _line:
             _src, _key = _line.rstrip("\n").split("\t", 1)
             envfrom_keys.setdefault(_key, []).append(_src)
+
+# 🚨 FAIL CLOSED on the manifest. It is the `original` side of the merge and the ONLY thing that
+# distinguishes a cluster-only key helm still owns (a deploy DELETES it) from one nobody owns (a
+# deploy leaves it). Without it every finding would read as the harmless half, which is the exact
+# shape of a gate that passes because it could not read its input.
+MANIFEST_HINT = "`helm get manifest <release> -n <namespace>`"
+manifest_path = sys.argv[8] if len(sys.argv) > 8 else ""
+if not manifest_path:
+    print(f"::error::no release manifest was passed ({MANIFEST_HINT}). Without it the CLUSTER-ONLY "
+          f"class cannot be split into 'helm still OWNS this, so the next upgrade DELETES it' and "
+          f"'nobody owns it, so it survives' — and reporting every cluster-only key as surviving "
+          f"would hide the one shape a deploy does destroy. Treating as FAILURE.")
+    sys.exit(1)
+if not os.path.exists(manifest_path):
+    print(f"::error::the release manifest '{manifest_path}' does not exist. It is the output of "
+          f"{MANIFEST_HINT} and it is a required input, not an optional one — see above. Treating "
+          f"as FAILURE.")
+    sys.exit(1)
 
 findings, comparisons = [], 0
 def finding(kind, what, detail=""):
@@ -66,6 +100,64 @@ if d_c is None or l_c is None:
           "nothing could be compared. Treating as FAILURE.")
     sys.exit(1)
 
+# ---- owned: what the LAST deploy rendered ----------------------------------
+# Parsed exactly like desired.yaml, because it IS the same shape — `helm get manifest` returns the
+# release's stored render. Missing objects are a FAILURE for the same reason an unreadable manifest
+# is: an empty M makes every live-only key look never-owned, i.e. harmless, which is the answer this
+# comparison exists to stop being given by default.
+m_cm = m_dep = None
+for doc in yaml.safe_load_all(open(manifest_path)):
+    if not doc:
+        continue
+    name = (doc.get("metadata") or {}).get("name")
+    if doc.get("kind") == "ConfigMap" and name == "memex-portal-config":
+        m_cm = doc
+    if doc.get("kind") == "Deployment" and name == "memex-portal-deployment":
+        m_dep = doc
+
+if m_cm is None or m_dep is None:
+    print(f"::error::the release manifest '{manifest_path}' ({MANIFEST_HINT}) contains no "
+          f"memex-portal-config ConfigMap and/or no memex-portal-deployment Deployment. helm's "
+          f"ownership of the live keys could not be determined, so 'this key survives a deploy' "
+          f"could not be established for a single finding. Treating as FAILURE.")
+    sys.exit(1)
+
+m_c = portal_container(m_dep)
+if m_c is None:
+    print(f"::error::no container named 'memex-portal' in the Deployment of the release manifest "
+          f"'{manifest_path}' — helm's ownership of the live inline env entries could not be "
+          f"determined. Treating as FAILURE.")
+    sys.exit(1)
+
+m_data = m_cm.get("data") or {}
+m_env = {e["name"] for e in (m_c.get("env") or []) if "name" in e}
+
+# Findings whose subject helm OWNS and the chart no longer renders. Tracked as a list rather than
+# sniffed back out of the message text, so the summary count cannot drift from the findings.
+pending_deletions = []
+
+def deletion_weight(value):
+    """How much a pending deletion actually removes. The VALUE decides that, not the key name —
+    all 13 owned-but-retired keys found on 2026-09-04 were zero-length, and reading only the names
+    would have raised an alarm about deleting nothing. The value itself is never printed here."""
+    if value is None:
+        return ("Its live value comes from a valueFrom ref, so what the removal takes away cannot "
+                "be read here — resolve the ref before deciding.")
+    if value == "":
+        return ("Its live value is EMPTY (zero-length), so the removal itself is a NO-OP: nothing "
+                "the pod reads changes.")
+    return (f"Its live value is NON-EMPTY ({len(value)} characters), so the removal is a REAL "
+            f"change to what the pod reads.")
+
+def pending_deletion(what, weight, subject):
+    """The one cluster-only shape a `helm upgrade` destroys — D vs M, not D vs L."""
+    pending_deletions.append(what)
+    return (f"🚨 PENDING DELETION: {subject} is in the release manifest ({MANIFEST_HINT}), so helm "
+            f"OWNS it, and the current chart no longer renders it. helm's three-way merge removes "
+            f"exactly what it previously owned, so the next `helm upgrade` WILL remove this — the "
+            f"ONE cluster-only shape a deploy does destroy. {weight} Decide before the next deploy: "
+            f"put it back in the chart, or retire it on purpose.")
+
 # ---- 1. ConfigMap: every key, every value ----------------------------------
 d_data, l_data = d_cm.get("data") or {}, l_cm.get("data") or {}
 if not d_data:
@@ -79,10 +171,18 @@ for k in sorted(set(d_data) | set(l_data)):
         finding("CHART-ONLY", f"ConfigMap {k}",
                 f"rendered '{d_data[k]}' — described but NOT running; nobody is getting it")
     elif k not in d_data:
-        finding("CLUSTER-ONLY", f"ConfigMap {k}",
-                f"live '{l_data[k]}' — edited on the cluster; a `helm upgrade` PRESERVES it "
-                f"(measured), but it exists in no committed source, so it is lost on any rebuild "
-                f"or restore and is invisible to review")
+        # The class splits HERE, on manifest membership — see the module docstring. Both halves are
+        # "live and not rendered"; only one of them is one deploy away from being gone.
+        if k in m_data:
+            finding("CLUSTER-ONLY", f"ConfigMap {k}",
+                    pending_deletion(f"ConfigMap {k}", deletion_weight(l_data[k]),
+                                     "this ConfigMap key"))
+        else:
+            finding("CLUSTER-ONLY", f"ConfigMap {k}",
+                    f"live '{l_data[k]}' — edited on the cluster; helm never owned it (it is NOT "
+                    f"in the release manifest), so a `helm upgrade` PRESERVES it (measured), but "
+                    f"it exists in no committed source, so it is lost on any rebuild or restore "
+                    f"and is invisible to review")
     elif d_data[k] != l_data[k]:
         finding("DIFFERS", f"ConfigMap {k}",
                 f"chart '{d_data[k]}' vs live '{l_data[k]}' — a deploy does NOT resolve this "
@@ -162,10 +262,19 @@ for n in sorted(d_env | l_env):
     s_twins = ext_by_lower.get(n.lower(), [])
     twins = sorted(set(d_twins) | set(l_twins) | set(s_twins))
     if not twins:
-        finding("CLUSTER-ONLY", f"inline env {n}",
-                "set on the Deployment (`kubectl set env`?) and NOT in the chart. A `helm upgrade` "
-                "PRESERVES it (measured), but it exists in no committed source — so it is lost on "
-                "any rebuild and no reviewer can see it")
+        # Same split as the ConfigMap branch above, over the manifest's OWN inline env entries: an
+        # entry the last deploy rendered and this chart does not is helm's to delete. The literal is
+        # consulted only for its emptiness — an inline env can hold a token and none is printed.
+        if n in m_env:
+            finding("CLUSTER-ONLY", f"inline env {n}",
+                    pending_deletion(f"inline env {n}",
+                                     deletion_weight(l_env_lit.get(n)), "this inline env entry"))
+        else:
+            finding("CLUSTER-ONLY", f"inline env {n}",
+                    "set on the Deployment (`kubectl set env`?) and NOT in the chart. helm never "
+                    "owned it (it is NOT in the release manifest), so a `helm upgrade` PRESERVES "
+                    "it (measured), but it exists in no committed source — so it is lost on any "
+                    "rebuild and no reviewer can see it")
         continue
     # Where the twins come from, for the messages below. A twin from another envFrom source is NOT
     # a lesser case: its key reaches the container exactly like a memex-portal-config key, so it
@@ -443,13 +552,27 @@ for kind, _, _ in findings:
     by_kind[kind] = by_kind.get(kind, 0) + 1
 print(f"\n{len(findings)} divergence(s) across {comparisons} compared fields: "
       + ", ".join(f"{by_kind[k]} {k}" for k in sorted(by_kind, key=lambda k: order[k])))
+# The count that used to be a hand measurement. 13 of 36 on 2026-09-04, re-derived by nobody on the
+# next run — a number a report does not carry is a number that goes stale the day it is written.
+if pending_deletions:
+    print(f"🚨 {len(pending_deletions)} of the CLUSTER-ONLY finding(s) are PENDING DELETIONS — helm "
+          f"owns them and this chart no longer renders them, so the next `helm upgrade` removes "
+          f"them: " + ", ".join(sorted(pending_deletions)))
+else:
+    print("0 pending deletions: no live-and-unrendered key is in the release manifest, so nothing "
+          "here is removed by the next `helm upgrade`.")
 print("")
 print("🚨 COLLIDES     → LIVE NON-DETERMINISM, fix first. Delete the inline entry; the chart already")
 print("                 feeds the key through envFrom. Adding it to the chart does NOT clear it.")
 print("🚨 SHADOWS      → the chart's value is dead. Put the intended value in the chart, THEN delete")
 print("                 the inline entry — either step alone leaves the pod on the inline value.")
-print("CLUSTER-ONLY  → a `helm upgrade` does NOT drop it (measured); the risk is that it lives in no")
-print("                 committed source. Move it onto the Deployment record + chart, then delete it.")
+print("CLUSTER-ONLY  → TWO halves, and the finding says which. NEVER-OWNED (not in the release")
+print("                 manifest): a `helm upgrade` does NOT drop it (measured); the risk is that it")
+print("                 lives in no committed source. Move it onto the Deployment record + chart,")
+print("                 then delete it. 🚨 PENDING DELETION (in the manifest, so helm owns it, and")
+print("                 this chart no longer renders it): the next `helm upgrade` REMOVES it — the")
+print("                 one cluster-only shape a deploy destroys. The finding says whether the live")
+print("                 value is empty (the removal is a no-op) or not (it is a real removal).")
 print("CHART-ONLY    → apply it: `helm upgrade` for chart-managed fields; nobody is getting it today.")
 print("DIFFERS       → a deploy does NOT resolve it (measured) for a ConfigMap key or a probe field:")
 print("                 decide which side is authoritative, then make the other match. The ONE")
