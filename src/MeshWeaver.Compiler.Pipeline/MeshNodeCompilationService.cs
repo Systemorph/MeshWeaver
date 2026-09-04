@@ -340,7 +340,8 @@ internal class MeshNodeCompilationService(
         {
             logger.LogDebug("Node {NodePath} has no NodeType, skipping assembly compilation", node.Path);
             return Observable.Return(new CompileAttempt(null, null,
-                AppendInfo(log, $"Skipped — node '{node.Path}' has no NodeType.")
+                AppendInfo(log, $"Skipped — node '{node.Path}' has no NodeType.",
+                        "activity.compile.skippedNoNodeType", ("path", node.Path))
                     .FinishByOutcome((int)hub.Version),
                 Array.Empty<MeshNode>()));
         }
@@ -399,11 +400,21 @@ internal class MeshNodeCompilationService(
                     var maxSourceLastModified = sources.Aggregate(
                         DateTimeOffset.MinValue,
                         (acc, n) => n.LastModified > acc ? n.LastModified : acc);
-                    log = AppendInfo(log,
-                        $"⏱ NodeType definition resolved in {resolveMs}ms "
-                        + $"({(ntDef is null ? "NULL — the read stalled or the node is absent" : "ok")}); "
-                        + $"source snapshot {snapshotClock.ElapsedMilliseconds}ms "
-                        + $"({sources.Count} node(s), taken ONCE and reused by every stage).");
+                    var snapshotMs = snapshotClock.ElapsedMilliseconds;
+                    log = ntDef is null
+                        ? AppendInfo(log,
+                            $"⏱ NodeType definition resolved in {resolveMs}ms "
+                            + "(NULL — the read stalled or the node is absent); "
+                            + $"source snapshot {snapshotMs}ms "
+                            + $"({sources.Count} node(s), taken ONCE and reused by every stage).",
+                            "activity.compile.timingsUnresolved",
+                            ("resolveMs", resolveMs), ("snapshotMs", snapshotMs), ("count", sources.Count))
+                        : AppendInfo(log,
+                            $"⏱ NodeType definition resolved in {resolveMs}ms (ok); "
+                            + $"source snapshot {snapshotMs}ms "
+                            + $"({sources.Count} node(s), taken ONCE and reused by every stage).",
+                            "activity.compile.timings",
+                            ("resolveMs", resolveMs), ("snapshotMs", snapshotMs), ("count", sources.Count));
 
                     var effectiveLastModified = node.LastModified > maxSourceLastModified
                         ? node.LastModified
@@ -422,7 +433,10 @@ internal class MeshNodeCompilationService(
                                 // No compile ran, so there is no generated input to key on.
                                 null,
                                 AppendInfo(log,
-                                    $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).")
+                                        $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).",
+                                        "activity.compile.cacheHit",
+                                        ("path", cachedDllPath),
+                                        ("lastModified", effectiveLastModified.ToString("O")))
                                     .FinishByOutcome((int)hub.Version),
                                 sources));
                         }
@@ -436,14 +450,38 @@ internal class MeshNodeCompilationService(
         });
     }
 
-    private static ActivityLog AppendInfo(ActivityLog log, string message)
-        => log.Append(new LogMessage(message, LogLevel.Information));
+    /// <summary>
+    /// 🚨 The <paramref name="key"/> is REQUIRED, not optional, and that is the whole point (#3281).
+    /// A compile's activity log is a RENDERED surface — the Tests / Overview areas and the compile
+    /// runner all show it — so a sentence appended here without a catalog key persists as ENGLISH
+    /// and no renderer can translate it afterwards (#3236). Making the parameter optional would let
+    /// the next caller re-open the hole silently; the ratchet cannot see past a helper.
+    ///
+    /// <para>Text this platform does NOT compose — a Roslyn diagnostic, an upstream loader message —
+    /// goes through <see cref="AppendVerbatimWarning"/>, which says so at the call site.</para>
+    /// </summary>
+    private static ActivityLog AppendInfo(
+        ActivityLog log, string message, string key, params (string Name, object? Value)[] args)
+        => log.Append(new LogMessage(message, LogLevel.Information).WithKey(key, args));
 
-    private static ActivityLog AppendWarning(ActivityLog log, string message)
+    /// <inheritdoc cref="AppendInfo"/>
+    private static ActivityLog AppendWarning(
+        ActivityLog log, string message, string key, params (string Name, object? Value)[] args)
+        => log.Append(new LogMessage(message, LogLevel.Warning).WithKey(key, args));
+
+    /// <inheritdoc cref="AppendInfo"/>
+    private static ActivityLog AppendError(
+        ActivityLog log, string message, string key, params (string Name, object? Value)[] args)
+        => log.Append(new LogMessage(message, LogLevel.Error).WithKey(key, args));
+
+    /// <summary>
+    /// A warning whose text is VERBATIM UPSTREAM — a Roslyn diagnostic, formatted by the compiler
+    /// with its own CS id, span and wording. No catalog can carry it (a template reduced to a lone
+    /// <c>{detail}</c> is a translation of nothing), so it persists in English by design and the
+    /// separate name is what keeps that a decision rather than an omission.
+    /// </summary>
+    private static ActivityLog AppendVerbatimWarning(ActivityLog log, string message)
         => log.Append(new LogMessage(message, LogLevel.Warning));
-
-    private static ActivityLog AppendError(ActivityLog log, string message)
-        => log.Append(new LogMessage(message, LogLevel.Error));
 
     /// <summary>
     /// Source-set discovery via the workspace SyncedQuery registry — one
@@ -886,24 +924,35 @@ internal class MeshNodeCompilationService(
                 // Snapshot the discovery into the activity log: every executed query +
                 // every matched Code path. Lets the response carry "compile saw N
                 // source files from queries [Q1, Q2…]" without re-running the pipeline.
-                var discoveryLog = AppendInfo(log,
-                    $"⏱ Source discovery took {discoveryClock.ElapsedMilliseconds}ms "
-                    + $"({(sourcesOverride is not null ? "reused source snapshot" : "synced query")}) — "
-                    + "everything below this line is Roslyn.");
+                var discoveryMs = discoveryClock.ElapsedMilliseconds;
+                var discoveryLog = sourcesOverride is not null
+                    ? AppendInfo(log,
+                        $"⏱ Source discovery took {discoveryMs}ms (reused source snapshot) — "
+                        + "everything below this line is Roslyn.",
+                        "activity.compile.discoveryReused", ("ms", discoveryMs))
+                    : AppendInfo(log,
+                        $"⏱ Source discovery took {discoveryMs}ms (synced query) — "
+                        + "everything below this line is Roslyn.",
+                        "activity.compile.discoveryQueried", ("ms", discoveryMs));
                 foreach (var q in executedQueries)
-                    discoveryLog = AppendInfo(discoveryLog, $"Source query: {q}");
+                    // The query string is the mesh query LANGUAGE, not prose — it rides as written.
+                    discoveryLog = AppendInfo(discoveryLog, $"Source query: {q}",
+                        "activity.compile.sourceQuery", ("query", q));
                 if (matchedCodePaths.Count == 0)
                 {
                     discoveryLog = AppendWarning(discoveryLog,
                         $"Source discovery for '{node.Path}' matched 0 Code nodes — " +
                         "check that the Source Code nodes exist and the NodeType's " +
-                        "`Sources` list points at them.");
+                        "`Sources` list points at them.",
+                        "activity.compile.discoveryMatchedNone", ("path", node.Path));
                 }
                 else
                 {
                     discoveryLog = AppendInfo(discoveryLog,
                         $"Source discovery matched {matchedCodePaths.Count} Code node(s): " +
-                        string.Join(", ", matchedCodePaths));
+                        string.Join(", ", matchedCodePaths),
+                        "activity.compile.discoveryMatched",
+                        ("count", matchedCodePaths.Count), ("paths", string.Join(", ", matchedCodePaths)));
                 }
 
                 // 🚨 Compile on the ThreadPool via Task.Run, never inline and never the IoPool.
@@ -939,7 +988,7 @@ internal class MeshNodeCompilationService(
                         // outcome line so the log reads in the order it happened; Warning severity
                         // never flips ActivityLog.Finish's terminal status, so surfacing them
                         // cannot turn a green compile red on its own.
-                        discoveryLog = emit.Warnings.Aggregate(discoveryLog, AppendWarning);
+                        discoveryLog = emit.Warnings.Aggregate(discoveryLog, AppendVerbatimWarning);
                         if (cacheService.IsDiskCacheEnabled)
                         {
                             if (actualPath != null && File.Exists(actualPath))
@@ -949,7 +998,8 @@ internal class MeshNodeCompilationService(
                                     node.Path, actualPath);
                                 finalPath = actualPath;
                                 finalLog = AppendInfo(discoveryLog,
-                                    $"Compiled assembly written to {actualPath}.");
+                                    $"Compiled assembly written to {actualPath}.",
+                                    "activity.compile.assemblyWritten", ("path", actualPath));
                             }
                             else
                             {
@@ -957,7 +1007,8 @@ internal class MeshNodeCompilationService(
                                     "Assembly compilation succeeded but DLL not found at {DllPath}", actualPath);
                                 finalPath = null;
                                 finalLog = AppendError(discoveryLog,
-                                    $"Compilation succeeded but DLL not found at {actualPath}.");
+                                    $"Compilation succeeded but DLL not found at {actualPath}.",
+                                    "activity.compile.dllMissing", ("path", actualPath));
                             }
                         }
                         else
@@ -965,7 +1016,8 @@ internal class MeshNodeCompilationService(
                             logger.LogDebug("Compiled assembly for node {NodePath} (in-memory)", node.Path);
                             finalPath = actualPath;
                             finalLog = AppendInfo(discoveryLog,
-                                $"Compiled assembly loaded in-memory ({actualPath}).");
+                                $"Compiled assembly loaded in-memory ({actualPath}).",
+                                "activity.compile.assemblyInMemory", ("path", actualPath));
                         }
                         return (finalPath, emit.InputDigest,
                             finalLog.FinishByOutcome((int)hub.Version));
@@ -1004,7 +1056,11 @@ internal class MeshNodeCompilationService(
                         // AND the complete matched-node list — this is where the bounded sample
                         // above tells the reader to look.
                         var failedLog = AppendError(discoveryLog,
-                                $"Compilation failed: {ex.Message}\n--- Source discovery ---\n{diag}")
+                                $"Compilation failed: {ex.Message}\n--- Source discovery ---\n{diag}",
+                                // The LEAD is the platform's and translates; the Roslyn diagnostics
+                                // and the discovery report ride verbatim as {detail} / {report}.
+                                "activity.compile.failedWithDiscovery",
+                                ("detail", ex.Message), ("report", diag))
                             .Finish((int)hub.Version, ActivityStatus.Failed);
                         return Observable.Return<(string?, string?, ActivityLog)>(
                             (null, null, failedLog));
@@ -1263,11 +1319,25 @@ internal class MeshNodeCompilationService(
                     return Observable.Return(result);
                 return Observable.Return<NodeCompilationResult?>(result with
                 {
-                    Log = AppendWarning(log,
-                        $"Compile leg 'assembly-store-upload' for '{node.Path}'@v{version} {reason}. "
-                        + "The compile SUCCEEDED locally and settles Ok, but the assembly was not "
-                        + "published to the store — cross-silo activation of this NodeType will not "
-                        + "find it until a later compile uploads successfully.")
+                    // 🚨 Two keys, not one with a {reason} argument: `reason` is a CLAUSE this
+                    // platform composes, so splicing it into a translated sentence would hand a
+                    // German reader half a German line. Each branch is a whole sentence instead.
+                    Log = ex is TimeoutException
+                        ? AppendWarning(log,
+                            $"Compile leg 'assembly-store-upload' for '{node.Path}'@v{version} {reason}. "
+                            + "The compile SUCCEEDED locally and settles Ok, but the assembly was not "
+                            + "published to the store — cross-silo activation of this NodeType will not "
+                            + "find it until a later compile uploads successfully.",
+                            "activity.compile.storeUploadTimedOut",
+                            ("path", node.Path), ("version", version),
+                            ("seconds", uploadBound.TotalSeconds.ToString("0")))
+                        : AppendWarning(log,
+                            $"Compile leg 'assembly-store-upload' for '{node.Path}'@v{version} {reason}. "
+                            + "The compile SUCCEEDED locally and settles Ok, but the assembly was not "
+                            + "published to the store — cross-silo activation of this NodeType will not "
+                            + "find it until a later compile uploads successfully.",
+                            "activity.compile.storeUploadFailed",
+                            ("path", node.Path), ("version", version), ("detail", ex.Message))
                 });
             });
     }
@@ -1513,7 +1583,8 @@ internal class MeshNodeCompilationService(
                     return new NodeCompilationResult(null, [],
                         AppendError(log,
                             $"Failed to load assembly at {assemblyLocation} — the build is not usable " +
-                            "(corrupt cached .dll or a missing dependency)."),
+                            "(corrupt cached .dll or a missing dependency).",
+                            "activity.compile.assemblyUnloadable", ("path", assemblyLocation)),
                         compiledSources);
                 }
 
@@ -1580,7 +1651,9 @@ internal class MeshNodeCompilationService(
                     "Failed to extract NodeTypeConfigurations from {AssemblyLocation}: {Detail}",
                     assemblyLocation, detail);
                 return new NodeCompilationResult(null, [],
-                    AppendError(log, $"Failed to load the compiled assembly — {detail}"),
+                    AppendError(log, $"Failed to load the compiled assembly — {detail}",
+                        // The loader's own exception text rides verbatim behind a translated lead.
+                        "activity.compile.assemblyLoadFailed", ("detail", detail)),
                     compiledSources);
             }
     }

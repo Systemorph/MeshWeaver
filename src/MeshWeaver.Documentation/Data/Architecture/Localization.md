@@ -192,6 +192,45 @@ missing from both), and no target-typed `Messages = [new(…)]`, which construct
 naming no type and is therefore invisible to any textual census — three such sites were missing from
 the issue's own count for exactly that reason.
 
+#### What is migrated, and what is deliberately not
+
+The write sites came over in two passes — #3236 landed the seam plus 37 of them, #3281 the rest of
+what was migratable — and the allow file is now **18 sites, all of them intended to stay**. What
+changed in the second pass is worth knowing because it is the shape any future migration takes:
+
+- **A helper whose whole input is a `string message` cannot key anything**, so the key is threaded
+  through it or the caller stops using it. `ActivityRunner` grew a `RunActivity(…, LogMessage title, …)`
+  overload and an `ActivityContext.Log(LogMessage)`, which is what let all eight GitHub operations
+  key their titles and progress lines. `MeshNodeCompilationService`'s `AppendInfo`/`AppendWarning`/
+  `AppendError` went the other way: the key became a **required** parameter, and the one caller that
+  genuinely cannot supply one (Roslyn's own diagnostics) calls a separately-named
+  `AppendVerbatimWarning`. `NodeTypeCompilationActivity.AppendLog` needed no change at all — its
+  callers moved to the batched `AppendLogs`, which already takes a `LogMessage` the caller built.
+- 🚨 **An optional key parameter would have been the wrong shape.** It leaves the helper looking
+  migrated while the next caller silently re-opens the hole, and the ratchet cannot see past a helper
+  to the callers behind it. Required-key plus a named verbatim escape hatch makes the un-keyed case a
+  decision somebody wrote down.
+- **A conditional clause gets its own key, never a `{suffix}` argument.** `", repository created"`
+  spliced into a translated sentence is untranslated English inside German word order, so the two
+  outcomes are two whole sentences (`commit.done` / `commit.doneRepoCreated`). Same reason the
+  compile's store-upload warning is `storeUploadTimedOut` / `storeUploadFailed` rather than one key
+  taking a composed `{reason}`.
+- 🚨 **Chain `.WithKey` onto the constructor.** The ratchet's lookahead is anchored to the
+  constructor's own closing paren, so `var m = new LogMessage(text, level);` followed later by
+  `m.WithKey(…)` reads as UNKEYED — correctly, because the English and its key are then free to
+  drift apart, which is the whole thing the fallback exists to prevent.
+- **What stays English** is the two populations the allow file names: generic plumbing (an `ILogger`
+  adapter; the `string title` / `Log(string, level)` spellings kept for a caller whose text is not
+  the platform's) and verbatim upstream text (`ex.Message`, a Roslyn diagnostic, a descendant hub's
+  refusal, the composed multi-clause import summaries).
+
+🚨 **Adding an overload to a public helper for this is a cross-repo break.** A dependent's
+`<see cref="ActivityRunner.RunActivity"/>` becomes `CS0419` the moment a second overload exists, and
+under `-warnaserror` that is an error, not a warning — break shape 3 in
+[CrossRepoPairGate](../CrossRepoPairGate), which no gate detects. Land the dependent's
+signature-qualified cref FIRST: it resolves against one overload as well as two, so it is correct
+before and after (MeshWeaver.Plugins#1338 did this for #3281).
+
 ### The catalog has a second home, and it goes stale SILENTLY
 
 The web clients carry their own copy at `MeshWeaver.Plugins/clients/react/src/i18n/strings.{en,de}.json`

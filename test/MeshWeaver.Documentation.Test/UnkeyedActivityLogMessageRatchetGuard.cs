@@ -26,7 +26,7 @@ namespace MeshWeaver.Documentation.Test;
 /// <c>AccessContext.Locale</c>. <c>Message</c> stays the English fallback, which is why every
 /// un-migrated site and every row already in the database keeps rendering exactly as before.</para>
 ///
-/// <para><b>Why the file is SEEDED rather than empty.</b> Twenty sites are legitimately unkeyable and
+/// <para><b>Why the file is SEEDED rather than empty.</b> Eighteen sites are legitimately unkeyable and
 /// are expected to stay that way, so an empty allow file would be a lie that someone would have to
 /// re-litigate at every one of them. They fall in two groups:</para>
 /// <list type="bullet">
@@ -61,7 +61,7 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     /// carries some; this stops the list as a WHOLE from growing — including by the trick of adding
     /// a new file's line. Lower it whenever you delete or lower an entry.
     /// </summary>
-    private const int TotalBudget = 21;
+    private const int TotalBudget = 18;
 
     /// <summary>Production roots. <c>test/</c> is deliberately out of scope: a test's activity log is
     /// never rendered to a viewer, so keying one would be ceremony.</summary>
