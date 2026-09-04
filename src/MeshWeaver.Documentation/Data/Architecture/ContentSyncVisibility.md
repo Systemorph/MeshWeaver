@@ -1,7 +1,7 @@
 ---
 Name: Content Sync Visibility
 Category: Architecture
-Description: A Space whose assets the transport refuses says so — on the Space itself, naming the file, its packaged size and the limit it exceeds. Why "refused" and "has no content" reported identically for months, why the durable signal belongs on the node and not only on the partition's import log, and what still needs an out-of-band content store.
+Description: A Space whose assets the transport refuses says so — on the Space itself, naming the file, its packaged size and the limit it exceeds. Why "refused" and "has no content" reported identically for months, why the durable signal belongs on the node and not only on the partition's import log, and how it stays honest now that out-of-band transfer carries the files it could only report on.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9"/><circle cx="9" cy="10" r="2"/><path d="m5 18 4-4 3 3"/><path d="M18 16v3"/><path d="M18 22h.01"/></svg>
 ---
 
@@ -132,11 +132,19 @@ smallest Spaces there — and carries the second-largest single file. Sorting Sp
 does not identify the affected set.
 
 The durable cure is **out-of-band asset transfer**: a file that size belongs behind a content-store
-handle (upload the bytes once, ship a reference), not inline on a message. That is a design change
-with its own delivery, tracked as issue **#3233** — which carries the table above, the reproduction,
-and the read-back that says when it is fixed. What this page describes is the change that makes the
-gap **observable in the meantime** — the difference between a learner reporting a missing video and
-the sync reporting its own state.
+handle (write the bytes once, ship a reference), not inline on a message. That landed as issue
+**#3233** — the bytes go into the destination collection's reserved staging folder and the delivery
+carries a content-addressed handle, so those 25 files now arrive. See
+[Out-of-Band Content Transfer](../OutOfBandContentTransfer) for the design, the lifetime rules and
+the idempotence argument.
+
+**What this page describes remains load-bearing after that fix, and the fix depends on it.** An
+out-of-band transfer can itself be impossible — a Space whose store the producer cannot reach — and
+the rule is that it then falls back to the inline road and the failure names BOTH halves: the
+over-budget file with its packaged size and the limit (this page), and why the out-of-band road was
+unavailable. A handle the receiver cannot resolve is likewise reported as the failure it is, never
+as a file quietly written empty. Trading a loud refusal for a quiet success would be this page's own
+defect one layer down.
 
 🚨 **Measure it on a repo-backed install.** `memex.meshweaver.cloud` serves the Education assets from
 its own store — they were uploaded there by hand on 2026-07-17/18 — so that portal cannot answer
@@ -144,6 +152,8 @@ whether a sync would deliver them.
 
 ## Related
 
+- [Out-of-Band Content Transfer](../OutOfBandContentTransfer) — the transfer that carries the 25
+  files this page could only report on, and the failure rules that keep it honest.
 - [Oversized Delivery Refusal](../OversizedDeliveryRefusal) — the producer-side bounds, why neither
   is ours to raise, and why an oversized grain frame destroys a shared connection.
 - [Static Repo Import](../StaticRepoImport) — the import pipeline these passes belong to.

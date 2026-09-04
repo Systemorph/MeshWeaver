@@ -67,10 +67,18 @@ public static class ContentDeliveryBudget
     /// That negative is the case that could falsify this: an unrelated failure (a missing collection,
     /// an unsafe path) still reports its own reason and nothing more.</para>
     ///
-    /// <para>Measured 2026-09-03 against <c>MeshWeaver.Education@61cbbac</c>: 25 files across 7
-    /// Spaces are individually over this budget, the largest packaging to 12.6 MB — twelve times the
-    /// ceiling. The axis is "has a video", not "is large": the third-SMALLEST Space in that repo
-    /// carries the second-largest single file.</para>
+    /// <para>Measured 2026-09-03 against <c>MeshWeaver.Education@61cbbac</c> and again 2026-09-04
+    /// against <c>@f7ae723</c>, unchanged: 25 files across 7 Spaces are individually over this
+    /// budget, the largest packaging to 12.6 MB — twelve times the ceiling. The axis is "has a
+    /// video", not "is large": the third-SMALLEST Space in that repo carries the second-largest
+    /// single file.</para>
+    ///
+    /// <para>🚨 <b>#3233 — pass this the files that ACTUALLY TRAVELLED INLINE.</b> A file over the
+    /// budget now goes out of band (its bytes into the destination collection's staging folder, a
+    /// handle on the delivery), so it is no longer an over-budget payload and describing it as one
+    /// would be a sentence about a delivery nobody built. The caller therefore measures the inline
+    /// remainder, which is empty of over-budget files whenever staging ran — and is exactly the
+    /// original set whenever it could not.</para>
     /// </summary>
     /// <param name="files">The files the delivery (or set of deliveries) carries.</param>
     /// <returns>A one-line description of the over-budget files, or <c>null</c> when there are none.</returns>
@@ -94,7 +102,8 @@ public static class ContentDeliveryBudget
             + $"carrying one is over the budget however the set is partitioned. Largest: "
             + $"'{largest.Path}' at {largest.Cost:N0} packaged bytes "
             + $"({(double)largest.Cost / BudgetBytes:0.0}× the budget). "
-            + $"{total:N0} packaged bytes of content in total. Assets this size need a content-store "
-            + "handle rather than an inline payload — see Doc/Architecture/ContentSyncVisibility.";
+            + $"{total:N0} packaged bytes of content in total. Assets this size travel behind a "
+            + "content-store handle rather than as an inline payload — see "
+            + "Doc/Architecture/OutOfBandContentTransfer.";
     }
 }

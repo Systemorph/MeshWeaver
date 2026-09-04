@@ -102,6 +102,10 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(ImportContentResponse), nameof(ImportContentResponse));
         config.TypeRegistry.WithType(typeof(SyncContentFilesRequest), nameof(SyncContentFilesRequest));
         config.TypeRegistry.WithType(typeof(InlineContentFile), nameof(InlineContentFile));
+        // #3233 — the out-of-band handle rides the same request as the inline files, so it needs the
+        // same short name on every hub that carries one; unregistered, a receiving hub resolves it
+        // as an untyped JsonElement and the staged write silently reads nothing.
+        config.TypeRegistry.WithType(typeof(StagedContentFile), nameof(StagedContentFile));
         config.TypeRegistry.WithType(typeof(DeleteContentRequest), nameof(DeleteContentRequest));
         config.TypeRegistry.WithType(typeof(DeleteContentResponse), nameof(DeleteContentResponse));
 
