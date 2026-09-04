@@ -53,6 +53,11 @@ them"* — that inventory was right and the detector's legend was wrong.
 > urgency the old legend created was false, *and* the reassurance "it will sort itself out on the
 > next deploy" is equally false. Drift is only ever cleared deliberately.
 
+One exception, and it follows from the same mechanism rather than qualifying it: a key the LAST
+deploy rendered and the CURRENT chart does not is in the release's own manifest, so helm owned it
+and the merge deletes it. That is not a cluster-only setting surviving; it is a chart retirement
+landing. The discriminator, and today's count, are under *"`CLUSTER-ONLY` splits in two"* below.
+
 ## The hazard that is real, and was invisible
 
 An inline `env:` entry **overrides `envFrom`**. So an inline entry whose name matches a key the
@@ -80,7 +85,7 @@ owned.
 |---|---|---|
 | `COLLIDES` | inline `env:` + a ConfigMap key differing **only in case** | **already**, at random, every pod start |
 | `SHADOWS` | inline `env:` + the **same** key from **any** envFrom source | **already** — the shadowed value is dead |
-| `CLUSTER-ONLY` | live, in no committed source | on a rebuild or restore, and at every review |
+| `CLUSTER-ONLY` | live, in no committed source | on a rebuild or restore, and at every review — **unless the release manifest still owns the key**, when the next upgrade deletes it |
 | `CHART-ONLY` | rendered, never applied | nobody is getting it today |
 | `DIFFERS` | both sides, values disagree | never resolves itself; needs a decision — except an `inline env`, which helm owns and an upgrade resets |
 
@@ -187,29 +192,84 @@ Findings are printed worst-first and the summary counts each class. Rank the wor
 `Systemorph/Memex#148` (*nothing may live only on the cluster* — every value belongs on the
 `Hosting/Deployment` record, rendered by the chart); `DIFFERS` is a decision, not a deploy.
 
-## The backlog, classified — run 33755512452, 2026-09-03
+## `CLUSTER-ONLY` splits in two, and only one half survives a deploy
 
-"91 divergences" is not a worklist. **76 today** (`memex` 32 across 188 compared fields,
-`memex-cloud` 44 across 204), and they are seven groups, not seventy-six decisions. Counts are from
-the run's own log; no cluster was touched to produce them.
+"A `helm upgrade` does not delete cluster-only settings" is the measured rule, and it is right about
+the *mechanism* — helm removes only what it **previously owned**. But a key can be cluster-only
+*today* precisely **because the chart stopped rendering a key the last deploy did render**, and that
+key IS in the release's own manifest. The three-way merge then deletes it, correctly.
+
+So the class has two mechanically distinguishable halves, and the discriminator is one command —
+`helm get manifest <release> -n <ns>`, the `original` side of the merge:
+
+| sub-class | test | next `helm upgrade` |
+|---|---|---|
+| **owned-but-retired** | the key IS in `helm get manifest` | **deletes it** — helm owned it |
+| **never-owned** | the key is NOT in `helm get manifest` | **leaves it** — the migration backlog |
+
+Measured 2026-09-04 over all 36 `CLUSTER-ONLY` findings: **13 owned-but-retired** (`memex` 7,
+`memex-cloud` 6) and **23 never-owned** (`memex` 12, `memex-cloud` 11). Every one of the 13 is
+zero-length live, so all thirteen deletions are no-ops — but that is a property of *these* keys on
+*this* day, not of the sub-class. `Systemorph/Memex#152` asked for exactly this check in the
+opposite direction ("a key that is live and rendered by neither chart nor overlay is about to be
+deleted, which is information no current gate reports"); the manifest probe above is that check, and
+running it before a deploy is what turns a silent deletion into a reviewed one.
+
+🚨 **And read the VALUE, not the key name, before calling such a deletion harmless.**
+`FrameworkBroadcast__Subscribers__0..3` was reported here on 2026-09-03 as "the live keys feed
+nothing", and separately as a subscriber list that a deploy would take "from 4 to 0". Both readings
+assumed a value. Measured on 2026-09-04 by three methods — live ConfigMap `jsonpath`, live ConfigMap
+YAML, and the deployed release manifest — **all four slots are `""` on BOTH namespaces**, and the
+deployed release (`helm get values`) sets no value for any of them. The release wave has been
+resolving to an empty subscriber set on both portals all along; the pending deletion removes four
+empty strings and changes nothing. The hazard is real and already realised, which is a different
+piece of work from the one "a deploy will break it" describes.
+
+## The backlog, classified — run 33843264982, 2026-09-04
+
+"91 divergences" is not a worklist. **81 today** (`memex` 35 across 188 compared fields,
+`memex-cloud` 46 across 204), and they are seven groups, not eighty-one decisions. Counts are from
+the run's own log; the owned/never-owned split and the value probes are read-only cluster reads.
 
 | # | group | count | what it is | what clears it |
 |---|---|---|---|---|
-| 1 | **Disagreeing `SHADOWS`** | **8** | the pod runs a value the ConfigMap contradicts — `PreWarm__BatchBake`/`PrebuiltBundleRoot` (both), `PluginCatalog__RegistryUrl` (both), `PreWarm__GateReadiness` + `Features__Ai__Providers__AzureOpenAI` (memex) | chart value first, **then** delete the inline entry |
+| 1 | **Disagreeing `SHADOWS`** | **8** | the pod runs a value the ConfigMap contradicts — `PreWarm__BatchBake`/`PrebuiltBundleRoot` and `PluginCatalog__RegistryUrl` (both namespaces), `PreWarm__GateReadiness` + `Features__Ai__Providers__AzureOpenAI` (memex) | chart value first, **then** delete the inline entry |
 | 2 | **The registry credential** | **2** | `PluginCatalog__RegistryToken`: on memex a `SHADOWS` over `secret/memex-portal-secrets` whose two values differ; on memex-cloud the inline entry is the ONLY copy | MeshWeaver#3201 — establish the live token, vault it, delete inline, rotate |
 | 3 | **Agreeing `SHADOWS`** | **29** | not wrong today; the ConfigMap is simply not what the pod reads, so the next chart change to any of them silently fails — Kestrel endpoints, `PluginCatalog__Sources__*`, `WebhookInbox__Targets__0` | same two steps, no urgency |
-| 4 | **Chart-retired, inert** | **8** | `FrameworkBroadcast__Subscribers__0..3` on both namespaces. The chart stopped rendering these on 2026-09-03 — the subscriber set is mesh data now — so the live keys feed nothing | delete the keys; drop them from the memex-cloud overlay, which still sets them |
-| 5 | **Cluster-only, now expressible** | **22** | live-edited settings the chart had no key for until MeshWeaver#3199 — AI providers, `LogWatch__*`, `Speech__*`, `Commerce__BaseUrl`, `Features__Ai__Clis__*`, `Portal__ReactAppUrl` | put them on the `Hosting/Deployment` record — `Systemorph/Memex#148` |
+| 4 | **Chart-retired, helm-owned** | **13** | `FrameworkBroadcast__Subscribers__0..3` (both) plus `Authentication__DevAdminUsers`/`__Google__ClientId` (both) and `__LinkedIn__ClientId` (memex). All 13 are in the release manifest and zero-length live | the next `helm upgrade` deletes them; verify each is still empty first |
+| 5 | **Cluster-only, never owned** | **22** | live-edited settings the chart had no key for until MeshWeaver#3199 — AI providers, `LogWatch__*`, `Speech__*`, `Commerce__BaseUrl`, `Features__Ai__Clis__*`, `Portal__ReactAppUrl` | put them on the `Hosting/Deployment` record — `Systemorph/Memex#148` |
 | 6 | **Committed, never deployed** | **5** | memex-cloud's overlay carries `PreWarm__{BatchBake,BuildProtocol,DynamicTypes,GateReadiness}: "true"` and `probes.startup.failureThreshold: 1080`; live runs the shipped defaults | a deploy, not a cleanup — this is `deploy-drift`'s class surfacing here |
 | 7 | **Ruled inert** | **2** | the memex liveness/readiness `initialDelaySeconds` — see above; the chart is authoritative | nothing; do not "fix" it |
 
-Zero `COLLIDES` and zero `CHART-ONLY`. The `EMAIL__*` collisions that crashed memex at boot on
-2026-08-30, and the four blanked `ModelTier__*`, are gone from both namespaces.
+Zero `COLLIDES` and zero `CHART-ONLY` — as on 2026-09-03, which is the only other run since #3168
+introduced those two classes, so "consecutive" is a two-run claim and nothing more. The `EMAIL__*`
+collisions that crashed memex at boot on 2026-08-30, and the four blanked `ModelTier__*`, are gone
+from both namespaces.
 
-**Groups 1–5 all need a Deployment-spec edit, and that is blocked**: MeshWeaver#3207 — the portal
-image is ahead of its schema, so any pod-template change spawns a ReplicaSet that lands on
-`DbVersionGate` and crash-loops, and both portals are pinned under a freeze. The classification is
-the deliverable until the schema is current; nothing here is urgent enough to lift a freeze for.
+**76 → 81 in a day, and nothing drifted.** The five new findings are the `Authentication__*` keys in
+group 4: the first-run-setup change made them conditional where they had been emitted unconditionally
+with `| default ""`, so the render stopped carrying a key the cluster still holds. The live
+ConfigMaps have not been written since 2026-08-30 / 2026-08-29 (`managedFields`; helm revisions 28
+and 21). **A count that moves is not automatically drift** — check the chart's own history before
+reading a rise as a regression.
+
+**Group 6 carries the one coupled hazard on the list.** `PreWarm__GateReadiness` reaches the pod
+through an inline `env:` that shadows the ConfigMap, so a `helm upgrade` of `memex-cloud` would raise
+`probes.startup.failureThreshold` to 1080 — a pod-template field helm owns — while the gate it is
+paired with stays off, because the inline entry still wins. `progressDeadlineSeconds` is derived as
+`periodSeconds × failureThreshold + 600`, so a genuinely failed rollout would take **3 h 10 m** to be
+declared failed instead of ~16 minutes. Deleting the inline entry and deploying are one change, not
+two.
+
+## What is NOT in these 81
+
+The checker compares `memex-portal-config`, `memex-portal-deployment`, the PodDisruptionBudget and
+the ScaledObject. Every other object in these namespaces is outside its scope, and two of them are
+drifted right now: `portal-next-deployment` (both namespaces — `kubectl-client-side-apply` 2026-07-05
+then `kubectl set` 2026-08-07, no helm annotations, 0/1 ready on an image tag ACR does not have;
+`Systemorph/Memex#172`) and the `k8s-dashboard`/`memex-website`/`whisper-swiss-german` workloads. A
+green Chart Drift would say nothing about any of them, which is worth knowing before this report is
+read as "the namespace matches the chart".
 
 See also [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) and
 [Deployment.md](/Doc/Architecture/Deployment).

@@ -86,11 +86,27 @@ name: Chart Drift
 # read: "ConfigMap Authentication__Microsoft__ClientId is still `CHANGE_ME_aad_application_client_id`
 # in the chart, so a `helm upgrade` today would overwrite working auth with the placeholder." Both
 # halves are false and each was falsifiable from the day it was written:
-#   * NO run has EVER reported an `Authentication__` finding (2026-08-26, 09-02, 09-03). Every
-#     environment sets a real client id in its own overlay, which is layered over the chart default,
-#     so nothing renders the placeholder in the first place.
+#   * `Authentication__Microsoft__ClientId` is COMPARED and it AGREES. Verified 2026-09-04 on the
+#     live ConfigMaps: both namespaces carry a 36-character GUID, not the 35-character placeholder,
+#     and each overlay states its own real client id, which layers over the chart default — so
+#     nothing renders the placeholder in the first place. The claim is "compared and equal", not
+#     "not compared": the same run emitted four `DIFFERS ConfigMap` findings, so the comparison
+#     could have failed on this key and did not.
 #   * A `helm upgrade` does not overwrite a live value with a rendered one anyway — measured, see
 #     check-chart-drift.sh's header. The whole "a deploy would destroy this" model was wrong.
+#
+# 🚨 AND THE CORRECTION ITSELF WENT STALE IN ONE DAY. This paragraph used to say "NO run has EVER
+# reported an `Authentication__` finding (2026-08-26, 09-02, 09-03)". The 2026-09-04 run reports
+# FIVE — `CLUSTER-ONLY ConfigMap Authentication__DevAdminUsers` and `Authentication__Google__ClientId`
+# on both namespaces, plus `Authentication__LinkedIn__ClientId` on memex. Nothing drifted: the
+# first-run-setup change made those keys conditional (`if`) where they had been emitted
+# unconditionally with `| default ""`, so the render stopped carrying a key the live ConfigMap still
+# holds at zero length. Measured cause, not a hypothesis: the live ConfigMaps have not been written
+# since 2026-08-30 (memex) / 2026-08-29 (memex-cloud) — `managedFields`, and helm revisions 28/21.
+# The finding is real and correctly classified; the value being empty is what makes it harmless.
+# A "no run has ever" clause in a gate's header is a standing claim about future runs, so it dates
+# the moment the chart changes — prefer the mechanism to the tally.
+#
 # Left in place as a correction rather than deleted: this file's own warning is what #2355 was
 # triaged against for a week, and an un-measured hazard in a gate's header propagates as fact.
 
