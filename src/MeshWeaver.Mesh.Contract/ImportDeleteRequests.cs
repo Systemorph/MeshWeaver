@@ -100,6 +100,32 @@ public record ImportContentResponse
 public record InlineContentFile(string Path, byte[] Content);
 
 /// <summary>
+/// 🚨 <b>Issue #3233 — one content file transferred OUT OF BAND.</b> The bytes are NOT here: they
+/// were written into the destination collection's reserved staging folder before this request was
+/// posted, and this record is the handle that names them.
+///
+/// <para><b>Why a file needs one.</b> An <see cref="InlineContentFile"/> is the atom the receiving
+/// handler writes and is never split, so a file whose packaged (base64) cost alone exceeds the
+/// per-delivery budget travels whole however the set is partitioned — and is refused wherever the
+/// Orleans transport is in the path. Measured on <c>MeshWeaver.Education</c>: 25 files across all 7
+/// Spaces, the largest packaging to 12.6 MB against a 1,048,576-byte budget. The budget is Orleans'
+/// memory-stream block size and is not a number to raise, so the bytes take a different road.</para>
+///
+/// <para><b>The handle is content-addressed, and that is what makes the transfer idempotent.</b>
+/// Two files with identical bytes stage once; a sync that runs twice writes the same blob at the
+/// same key and the same file at the same destination path, so nothing is ever duplicated.</para>
+///
+/// <para>See <c>Doc/Architecture/OutOfBandContentTransfer</c>.</para>
+/// </summary>
+/// <param name="Path">The file's path RELATIVE to <see cref="SyncContentFilesRequest.TargetPath"/>, exactly as an inline file's is.</param>
+/// <param name="Handle">The staged blob's name within the collection's staging folder — the lowercase hex SHA-256 of the bytes.</param>
+/// <param name="Length">The raw byte count. The receiver VERIFIES it against the staged blob before
+/// writing and refuses a mismatch — except on a store that has the blob but cannot report its size,
+/// where the write proceeds and says in the log that it went out unverified rather than claiming a
+/// guarantee it did not give. Every file-system-backed collection reports a size.</param>
+public record StagedContentFile(string Path, string Handle, long Length);
+
+/// <summary>
 /// Writes a set of files (carried INLINE as raw bytes) into a content collection folder and, when
 /// <see cref="Mirror"/> is set, PRUNES any file already under that folder that is not in
 /// <see cref="Files"/> — so the folder ends up mirroring exactly the supplied set (add / update /
@@ -169,6 +195,23 @@ public record SyncContentFilesRequest(
     /// <see cref="SourceOwnedPaths"/> uses and the mirror compares against.</para>
     /// </summary>
     public IReadOnlyList<string>? MirrorKeepPaths { get; init; }
+
+    /// <summary>
+    /// Files whose bytes were transferred OUT OF BAND (issue #3233): they are already in the
+    /// destination collection's reserved staging folder and this list names them, so the delivery
+    /// carries a handle per file instead of a payload. The receiver streams each staged blob into
+    /// its destination path exactly as it writes an inline file, verifying
+    /// <see cref="StagedContentFile.Length"/> first.
+    ///
+    /// <para><c>null</c> (the ordinary case) means every file this request carries is in
+    /// <see cref="Files"/> — a sync with no over-budget file is byte-for-byte what it always was.
+    /// A staged file counts towards <see cref="MirrorKeepPaths"/> like any other, and the staging
+    /// folder itself is NEVER pruned by the mirror: it is framework state, not content, and the
+    /// blobs the following deliveries still have to read live there.</para>
+    ///
+    /// <para>See <c>Doc/Architecture/OutOfBandContentTransfer</c>.</para>
+    /// </summary>
+    public IReadOnlyList<StagedContentFile>? StagedFiles { get; init; }
 }
 
 /// <summary>
