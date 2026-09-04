@@ -46,7 +46,7 @@ way" — each track creating its own node — and both the old and new test shap
 said so, and named the remaining exposure as timing-dependent and therefore not demonstrable without
 rigging the clock. A negative control that comes out neutral is a result, not a failure to report.
 
-## Three tests that proved nothing
+## Four tests that proved nothing
 
 Each of these was written in good faith, passed, and was believed. What broke them is not
 carelessness — it is that the assertion measured something adjacent to the property.
@@ -151,6 +151,60 @@ the negative-control table for the two live sites.
 not a proof. Sampling probes belong in discovery, never in the regression suite as the guard for a
 specific defect.
 
+### 4. The control was served by the transport the test then destroyed
+
+The first three measured something *adjacent* to the property. This one is worse, and it is the shape
+to learn: the control was **guaranteed green by construction**, and it was **actively preventing** the
+state the test went on to assert.
+
+`PodHubTransportTest.CrossSiloNack_ReachesASenderWhoseStreamSubscriptionIsGone` erases a sender's
+Orleans stream subscription and asserts that a router's NACK still reaches it — over the *directed*
+pod-hub transport, which is the whole point. Before erasing, it proved the address was live:
+
+```csharp
+// "Prove the pod-hub claim is LIVE before erasing anything — by a cross-silo delivery ARRIVING"
+await WaitUntil(async () => {
+    SiloMeshHub(cluster, 1).Post(new PingRequest(), o => o.WithTarget(sender));
+    return inbox.Any(d => Describes(d, nameof(PingRequest)));
+}, …);
+```
+
+That comment states the intent exactly. The code does not do it. `RegisterStream` establishes **two**
+things on different clocks — the local route synchronously, and the cluster-wide **pod-hub claim**
+asynchronously, on a capped backoff with no give-up. The probe asserts **reachability**, and during
+the window that matters reachability is served by the **stream** — the transport erased three lines
+later. So the probe was green whether or not the claim had landed.
+
+**And it fought the claim it appeared to prove.** The probe posts from the *other* silo in a loop.
+Each post whose directed call finds no claim mints a throw-away `IPodHubGrain` activation on that
+silo — `[PreferLocalPlacement]` places an unactivated grain on the **caller** — and the owner's next
+`Attach` lands on that activation, answers `false`, and restarts its backoff. The louder the control
+ran, the longer the condition took to become true.
+
+The failure was therefore intermittent and **independent of the diff**: two heads of one pull request
+differing only in a string-assertion test in another assembly disagreed on it, which is what got it
+filed as a platform race ([#3298](https://github.com/Systemorph/MeshWeaver/issues/3298)).
+
+**Measured.** With one bounce forced and the claim's backoff pinned long, the probe goes green in
+under a second while `PodHubClaimSettled` has demonstrably not completed — six runs, six times. That
+experiment was deliberately **not** committed: its setup depends on an activation-lifetime ordering
+that cannot be *enforced*, so as a permanent test it would have become the next flake. An experiment
+that pins a cause and a test that guards it are different artifacts, and the first does not have to
+become the second.
+
+The cure is to wait on the condition itself — `PodHubClaimSettled`, the positive signal for "the claim
+stopped attempting" — which a sibling test already did. See
+[Orleans Test Routing Pattern](/Doc/Architecture/OrleansTestRoutingPattern) → *"Reachability is not a
+claim"*.
+
+**The lesson to carry:** when a test *isolates* one mechanism in order to assert another, ask what
+serves the precondition probe **while the isolation is not yet in place**. If the answer is "the thing
+I am about to remove", the probe cannot fail, and its greenness is not evidence of anything. The
+generalisation is broader than tests: any control whose green is guaranteed by construction — a
+detector that still passes with the fix removed, a gate that skips when its input is missing, a
+watcher that renders "I cannot see" as "nothing is wrong" — is the same defect wearing a control's
+clothes.
+
 ## What a good control looks like in a PR
 
 Name the test, show the reverted state, show the message.
@@ -193,4 +247,5 @@ test.
 - [Reactive Test Assertions](/Doc/Architecture/ReactiveTestAssertions) — the assertion API these controls are expressed in.
 - [Subscription Ownership](/Doc/Architecture/SubscriptionOwnership) — the leak case in full, with its control table.
 - [Silent Completion](/Doc/Architecture/SilentCompletion) — the failure shape whose only symptom is a timeout, so its pin *is* a timeout.
+- [Orleans Test Routing Pattern](/Doc/Architecture/OrleansTestRoutingPattern) — the pod-hub claim, and why a reachability probe cannot stand in for it.
 - [Change-Feed Isolation](/Doc/Architecture/ChangeFeedIsolation) — a control that ruled out two competing hypotheses for free.
