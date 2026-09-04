@@ -1790,7 +1790,7 @@ public sealed class MessageHub : IMessageHub
     /// The STALL budget of the disposal watchdog: how long the subtree may make no
     /// <see cref="RunLevel"/> progress before the watchdog looks at what is holding the
     /// teardown. It is not a duration cap and it forces nothing — see
-    /// <see cref="OnDisposalStall"/> for the three verdicts it can reach.
+    /// <see cref="OnDisposalStall"/> for the five verdicts it can reach.
     /// </summary>
     internal static readonly TimeSpan DisposalWatchdogTimeout = TimeSpan.FromSeconds(8);
     // Stall-detector state (see OnDisposalStall). `stallTurnsSeen` is the pump's completed-turn
@@ -1955,7 +1955,7 @@ public sealed class MessageHub : IMessageHub
         // teardown now SAYS SO, names the turn, cancels it once (cooperatively), and stays
         // Pending: the outer bounds — the test base's dispose deadline, the host's teardown
         // budget — report a hang with these diagnostics attached instead of a lie about
-        // completion. See OnDisposalStall for the three verdicts.
+        // completion. See OnDisposalStall for the five verdicts.
         watchdogSubscription = DisposalProgress
             .StartWith($"{Address} Dispose() called")
             .Select(reason => Observable.Timer(DisposalWatchdogTimeout, DisposalWatchdogTimeout).Select(_ => reason))

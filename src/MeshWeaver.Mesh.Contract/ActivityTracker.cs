@@ -119,15 +119,27 @@ public sealed class ActivityTracker : IDisposable
     {
         var handle = new ActivityRunHandle(this, Interlocked.Increment(ref ticketSeq), label, cancel);
         runs[handle.Ticket] = handle;
-        deltas.OnNext(1);
+        Emit(1);
         return handle;
     }
 
     internal void Complete(ActivityRunHandle handle)
     {
         if (runs.TryRemove(handle.Ticket, out _))
-            deltas.OnNext(-1);
+            Emit(-1);
     }
+
+    // 🚨 Every delta is QUEUED onto the tracker's own event loop before it reaches the subject, so
+    // OnNext is only ever called from that one thread — the Rx grammar's serialisation, without a
+    // lock. Runs start and finish on arbitrary threads (pool leaves, response hops); calling the
+    // subject from them directly would interleave two OnNexts, which Subject<T> does not guard.
+    private void Emit(int delta) =>
+        scheduler.Schedule(delta, (_, d) =>
+        {
+            try { deltas.OnNext(d); }
+            catch (ObjectDisposedException) { /* the tracker died with its mesh; nothing to count */ }
+            return Disposable.Empty;
+        });
 
     /// <summary>
     /// Waits for the in-flight runs to finish, cancelling any that stop making progress, and

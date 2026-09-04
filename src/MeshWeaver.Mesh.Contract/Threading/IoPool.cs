@@ -55,6 +55,12 @@ public sealed class IoPool : IIoPool, IDisposable
     private int _gateUsers;
 
     private volatile bool _disposed;
+    // 🚨 Drain is TERMINAL from its FIRST line, not from the cancel that comes after the grace.
+    // A leaf issued once the drain has begun is refused outright (Cancelled<T>(), exactly like a
+    // leaf issued after disposal); only work admitted BEFORE the drain gets the grace. Without
+    // this a producer that issues one leaf per completion keeps the admission count moving and
+    // the grace open indefinitely (Copilot review, #3291).
+    private volatile bool _draining;
     // Idempotence for Dispose. A plain `if (_disposed) return` cannot serve: _disposed is now set
     // AFTER the join (so Drain's own guard does not short-circuit it), which leaves a window where
     // two callers would both drain and both dispose the gate.
@@ -316,7 +322,7 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <param name="io">The cancellable async work to run once the gate grants a slot.</param>
     /// <returns>A cold observable that, on subscribe, runs the work and emits its single result.</returns>
     public IObservable<T> Invoke<T>(Func<CancellationToken, Task<T>> io)
-        => _disposed ? Cancelled<T>() : InvokeCore(io);
+        => (_disposed || _draining) ? Cancelled<T>() : InvokeCore(io);
 
     private IObservable<T> InvokeCore<T>(Func<CancellationToken, Task<T>> io)
         // SubscribeOn moves the whole subscribe — including the gate wait and the
@@ -394,7 +400,7 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <param name="source">The cancellable async sequence to enumerate once the gate grants a slot.</param>
     /// <returns>A cold observable that, on subscribe, enumerates the source and emits each element.</returns>
     public IObservable<T> InvokeStream<T>(Func<CancellationToken, IAsyncEnumerable<T>> source)
-        => _disposed ? Cancelled<T>() : InvokeStreamCore(source);
+        => (_disposed || _draining) ? Cancelled<T>() : InvokeStreamCore(source);
 
     private IObservable<T> InvokeStreamCore<T>(Func<CancellationToken, IAsyncEnumerable<T>> source)
         => Observable.Create<T>(async (observer, subscriberCt) =>
@@ -434,7 +440,7 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <param name="work">The cancellable blocking work to run once the scheduler grants a slot.</param>
     /// <returns>A cold observable that, on subscribe, runs the work and emits its single result; unsubscribing cancels it.</returns>
     public IObservable<T> InvokeBlocking<T>(Func<CancellationToken, T> work)
-        => _disposed ? Cancelled<T>() : InvokeBlockingCore(work);
+        => (_disposed || _draining) ? Cancelled<T>() : InvokeBlockingCore(work);
 
     private IObservable<T> InvokeBlockingCore<T>(Func<CancellationToken, T> work)
         => Observable.Create<T>(observer =>
@@ -546,7 +552,7 @@ public sealed class IoPool : IIoPool, IDisposable
 
     /// <inheritdoc />
     public IObservable<T> SubscribeThroughPool<T>(IObservable<T> source) =>
-        _disposed ? Cancelled<T>() : SubscribeThroughPoolCore(source);
+        (_disposed || _draining) ? Cancelled<T>() : SubscribeThroughPoolCore(source);
 
     private IObservable<T> SubscribeThroughPoolCore<T>(IObservable<T> source) =>
         Observable.Create<T>(observer =>
@@ -737,6 +743,8 @@ public sealed class IoPool : IIoPool, IDisposable
         // the flag gave (disposal cancels and reports its own residual through Disposed) — only now
         // it is a claim rather than a guess.
         if (!TryEnterGateRegion()) return 0;
+        // Terminal from here: nothing issued after this line is admitted (see _draining).
+        _draining = true;
         try
         {
             // 🚨 GRACE FIRST — let the work finish its job. Nothing is cancelled until the pool has
