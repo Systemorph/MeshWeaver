@@ -56,6 +56,62 @@ A plugin that receives webhooks:
    events replay naturally on the next start, so every action taken from an event must be
    idempotent.
 
+## 🚨 What a 2xx does NOT prove — the mismatched-secret hole (open, #3312)
+
+**A 2xx from this endpoint means "I stored bytes", never "a consumer accepted them".** That is an
+honest answer — the inbox verifies nothing by design — but two callers currently read it as
+acceptance, and one of them is the platform's own release path:
+
+- `main-cd.yml` → `notify-platform-update` signs the platform-build fact with
+  `secrets.PLATFORM_WEBHOOK_SECRET`;
+- `node-repo-publish-bake.yml` → `register-publication` signs the publication record with the
+  caller's `webhook-secret`.
+
+Both verify against the control instance's `Hosting:PlatformWebhookSecret`, in the Hosting plugin's
+watcher — **after** the POST has already answered. So from CI three states exist and only two are
+distinguishable:
+
+| state | what CI sees | what actually happens |
+|---|---|---|
+| secret correct | 2xx, job green | record stored, dependents notified |
+| secret **mismatched** | **2xx, job green** | the watcher drops every delivery as unverifiable; nobody is notified |
+| secret empty | RED, named | caught at the caller — fixed in #3311 |
+
+The empty case was found precisely because it fails **closed**. The mismatch fails **open** and is
+byte-identical to success, so it can persist indefinitely while every dependent quietly falls back
+to its schedule poll — the same consequence #3311 fixed, with nothing anywhere going red. The
+property that would close it: **a run that publishes must be able to fail because the record was not
+ACCEPTED, not merely because it was not sent.**
+
+### Why it is still open, and what it costs
+
+The verdict has to come from something holding the shared secret, and the only thing that holds it
+is the consuming plugin — after the response. Three shapes were considered; each is blocked, and the
+blocker is worth writing down so the next attempt does not re-derive it:
+
+1. **Teach the inbox an optional per-target signature requirement.** The generic shape — a target
+   may declare that deliveries must carry a verifying `X-Hub-Signature-256`, with the secret named
+   by CONFIGURATION KEY (`Hosting:PlatformWebhookSecret`, the key already provisioned) so no secret
+   value is duplicated and the two ends cannot drift. A mismatch then answers 401, an accepted
+   delivery answers a body stating `signature: verified`, and the lanes assert **the verdict**
+   rather than the status code — so an instance that declares no requirement is refused by name too,
+   never read as "verified". This is the right fix, and it is blocked on **delivery, not design**:
+   the declaration is instance configuration, the portal host ships no `appsettings.json` in this
+   repo (it lives in MeshWeaver.Plugins), and a chart value reaches a running portal only through
+   `helm upgrade` from the private `Systemorph/Memex` env folders — never through the self-update,
+   which is a `set image`. Landing the lane half before the instance half would red core CD on every
+   publish, indefinitely.
+2. **Read the record back.** The lane cannot: the inbox is anonymous to WRITE only, and reading a
+   registration needs a mesh credential in CI plus a surface that does not exist.
+3. **Wait for the consequence** — poll the satellites for the `repository_dispatch` the broadcast
+   produces. Rejected on two counts: it is a timeout-bounded poll (the bound, not the fact, would
+   decide the verdict), and it makes core's CD verdict depend on other repositories' state, which is
+   the CI-to-CI coupling `main-cd.yml` has already deleted twice.
+
+Until (1) lands, the residual is tracked by #3312 and #2235, and the honest statement in both lanes'
+step summaries stands: *the mesh STORED the delivery; whether the wave ran is read on the instance
+and on the dependents, never here.*
+
 ## Where the code lives
 
 - `memex/Memex.Portal.Shared/Api/WebhookInboxEndpoints.cs` — the anonymous `POST /api/hooks/{target}`
