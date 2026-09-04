@@ -149,19 +149,43 @@ public class CascadeTest
             (_, _) =>
             {
                 var now = Interlocked.Increment(ref inFlight);
-                int seen;
-                do
+                try
                 {
-                    seen = Volatile.Read(ref peak);
-                } while (now > seen && Interlocked.CompareExchange(ref peak, now, seen) != seen);
-                Thread.Sleep(80);
-                Interlocked.Decrement(ref inFlight);
-                return (0, true);
+                    int seen;
+                    do
+                    {
+                        seen = Volatile.Read(ref peak);
+                    } while (now > seen && Interlocked.CompareExchange(ref peak, now, seen) != seen);
+                    // 🚨 OBSERVE the overlap; do not infer it from a sleep. This body used to
+                    // `Thread.Sleep(80)` and trust that two of the three slots would land inside it
+                    // at once. On a starved runner they need not: the scheduler can admit, run and
+                    // release one node before the next is dispatched, `peak` stays 1, and
+                    // "nodes with no edge between them run at the same time" fails having measured
+                    // the RUNNER's load rather than the cascade's parallelism (core CI run
+                    // 33878671896, shard 3 — green on three sibling PRs and on main's previous
+                    // three runs, and 10/10 locally, i.e. exactly the load-sensitivity signature).
+                    //
+                    // Now the first node in waits until a SECOND is inside with it. If the cascade
+                    // really does admit more than one, both see it immediately and neither waits;
+                    // if it serialises, the wait expires and the assertion below fails for the
+                    // reason it is written for. The bound is per node and generous, so a genuinely
+                    // serial scheduler costs the test a few seconds rather than hanging it.
+                    SpinWait.SpinUntil(() => Volatile.Read(ref inFlight) > 1, TimeSpan.FromSeconds(2));
+                    return (0, true);
+                }
+                finally
+                {
+                    // In the finally so a body that throws cannot strand the count and turn this
+                    // into a different, harder question.
+                    Interlocked.Decrement(ref inFlight);
+                }
             },
             maxParallel: slots).Await(TestContext.Current.CancellationToken);
 
         Assert.Equal(nodes, results.Length); Assert.All(results, r => Assert.True(r.IsGreen));
-        Assert.True(peak > 1, "nodes with no edge between them run at the same time");
+        Assert.True(peak > 1,
+            "nodes with no edge between them run at the same time — each body waits (bounded) for a "
+            + "second node to join it, so this fails only when the cascade actually serialises");
         Assert.True(peak <= slots, $"peak {peak} exceeded the slot cap {slots}");
         Assert.Contains(results, r => r.Queued > TimeSpan.Zero); // six nodes on three slots: somebody waited
     }
