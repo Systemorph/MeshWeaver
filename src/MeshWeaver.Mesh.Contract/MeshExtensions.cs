@@ -2467,7 +2467,8 @@ public static class MeshExtensions
                     PostFailed(
                         $"Node not found at path: {path}",
                         NodeDeletionRejectionReason.NodeNotFound,
-                        [new LogMessage($"Node not found at path: {path}", LogLevel.Error)]);
+                        [new LogMessage($"Node not found at path: {path}", LogLevel.Error)
+                            .WithKey("activity.delete.notFound", ("path", path))]);
                     return Observable.Empty<System.Reactive.Unit>();
                 }
 
@@ -2499,7 +2500,8 @@ public static class MeshExtensions
                             PostFailed(
                                 $"Delete permission denied for '{path}'",
                                 NodeDeletionRejectionReason.Unauthorized,
-                                [new LogMessage($"Delete permission denied for '{path}'", LogLevel.Error)],
+                                [new LogMessage($"Delete permission denied for '{path}'", LogLevel.Error)
+                                    .WithKey("activity.delete.permissionDenied", ("path", path))],
                                 ImmutableList.Create(path));
                             return Observable.Empty<System.Reactive.Unit>();
                         }
@@ -2520,7 +2522,9 @@ public static class MeshExtensions
                             PostFailed(
                                 unestablished,
                                 NodeDeletionRejectionReason.Unavailable,
-                                [new LogMessage(unestablished, LogLevel.Error)],
+                                [new LogMessage(unestablished, LogLevel.Error)
+                                    .WithKey("activity.delete.permissionUnestablished",
+                                        ("path", path), ("detail", preflight.Detail))],
                                 ImmutableList.Create(path));
                             return Observable.Empty<System.Reactive.Unit>();
                         }
@@ -2565,7 +2569,9 @@ public static class MeshExtensions
                                         "[DeleteNode] read-only-provider path={Path} provider={Provider}",
                                         path, blockingProvider);
                                     PostFailed(msg, NodeDeletionRejectionReason.ValidationFailed,
-                                        [new LogMessage(msg, LogLevel.Error)],
+                                        [new LogMessage(msg, LogLevel.Error)
+                                            .WithKey("activity.delete.readOnlyProvider",
+                                                ("path", path), ("provider", blockingProvider))],
                                         ImmutableList.Create(path));
                                     return Observable.Empty<System.Reactive.Unit>();
                                 }
@@ -2583,7 +2589,9 @@ public static class MeshExtensions
                                     PostFailed(
                                         $"Cannot delete '{path}': {err}",
                                         NodeDeletionRejectionReason.ValidationFailed,
-                                        [new LogMessage($"Cannot delete '{path}': {err}", LogLevel.Error)],
+                                        [new LogMessage($"Cannot delete '{path}': {err}", LogLevel.Error)
+                                            .WithKey("activity.delete.validatorRejected",
+                                                ("path", path), ("error", err))],
                                         ImmutableList.Create(path));
                                     return Observable.Empty<System.Reactive.Unit>();
                                 }
@@ -2594,7 +2602,9 @@ public static class MeshExtensions
                                         "[DeleteNode] warnings-require-confirmation path={Path} warnings={Count}",
                                         path, vresult.Warnings.Count);
                                     var msgs = vresult.Warnings
-                                        .Select(w => new LogMessage($"'{path}': {w}", LogLevel.Warning))
+                                        .Select(w => new LogMessage($"'{path}': {w}", LogLevel.Warning)
+                                            .WithKey("activity.delete.validationWarning",
+                                                ("path", path), ("warning", w)))
                                         .ToImmutableList();
                                     PostFailed(
                                         $"Delete of '{path}' has {vresult.Warnings.Count} warning(s) (first: {vresult.Warnings[0]}). Set ConfirmWarnings=true to proceed.",
@@ -2605,7 +2615,9 @@ public static class MeshExtensions
                                 }
 
                                 var warningMsgs = vresult.Warnings
-                                    .Select(w => new LogMessage($"'{path}': {w}", LogLevel.Warning))
+                                    .Select(w => new LogMessage($"'{path}': {w}", LogLevel.Warning)
+                                        .WithKey("activity.delete.validationWarning",
+                                            ("path", path), ("warning", w)))
                                     .ToImmutableList();
                                 lock (collectedMessages) collectedMessages.AddRange(warningMsgs);
 
@@ -2630,7 +2642,8 @@ public static class MeshExtensions
                                             logger.LogDebug("[DeleteNode] has-children path={Path}", path);
                                             var msg = $"Node at '{path}' has children. Use recursive delete to remove it.";
                                             PostFailed(msg, NodeDeletionRejectionReason.HasChildren,
-                                                [new LogMessage(msg, LogLevel.Error)]);
+                                                [new LogMessage(msg, LogLevel.Error)
+                                                    .WithKey("activity.delete.hasChildren", ("path", path))]);
                                             return Observable.Empty<System.Reactive.Unit>();
                                         }
 
@@ -2683,7 +2696,9 @@ public static class MeshExtensions
                                                     // "retry, something is starving" and "your
                                                     // content is not deletable".
                                                     f.Reason,
-                                                    [new LogMessage(msg, LogLevel.Error)],
+                                                    [new LogMessage(msg, LogLevel.Error)
+                                                        .WithKey("activity.delete.blockedByDescendant",
+                                                            ("path", f.Path), ("error", f.Error))],
                                                     collected.ToDelete.ToImmutableList());
                                                 return Observable.Empty<System.Reactive.Unit>();
                                             }
@@ -2944,12 +2959,25 @@ public static class MeshExtensions
                         ? $"Delete of '{path}' was cancelled after removing {partial.Count} node(s) — "
                           + "the subtree is left partially deleted."
                         : $"Delete of '{path}' was cancelled before any node was removed.";
-                    var failMsgs = collectedMessages.ToImmutable()
-                        .Add(new LogMessage(
-                            isNotFound
-                                ? $"Node not found at path '{path}'"
-                                : (isCancelled ? cancelledMessage : ex.Message),
-                            LogLevel.Error));
+                    // Keyed per BRANCH, not once over the ternary: "not found" and "cancelled" are
+                    // sentences this code OWNS and can translate, while `ex.Message` is upstream text
+                    // no catalog can carry — so that arm stays unkeyed and renders its English exactly
+                    // as before (#3236). notFoundAtPath is its own key rather than
+                    // activity.delete.notFound because this arm deliberately carries the RESPONSE's
+                    // wording (the quoted path, just below), and a key's English must match the
+                    // fallback stored beside it.
+                    var failMsg = isNotFound
+                        ? new LogMessage($"Node not found at path '{path}'", LogLevel.Error)
+                            .WithKey("activity.delete.notFoundAtPath", ("path", path))
+                        : isCancelled
+                            ? new LogMessage(cancelledMessage, LogLevel.Error)
+                                .WithKey(
+                                    partial.Count > 0
+                                        ? "activity.delete.cancelledPartial"
+                                        : "activity.delete.cancelled",
+                                    ("path", path), ("count", partial.Count))
+                            : new LogMessage(ex.Message, LogLevel.Error);
+                    var failMsgs = collectedMessages.ToImmutable().Add(failMsg);
                     PostFailed(
                         isTimeout
                             // The stage detail rides along so the CALLER sees it too — the response
@@ -4093,7 +4121,10 @@ public static class MeshExtensions
                     lock (collectedMessages)
                         collectedMessages.Add(new LogMessage(
                             $"Post-deletion cleanup ({handler.GetType().Name}) failed for '{node.Path}': {ex.Message}",
-                            LogLevel.Warning));
+                            LogLevel.Warning)
+                            .WithKey("activity.delete.cleanupFailed",
+                                ("handler", handler.GetType().Name), ("path", node.Path),
+                                ("error", ex.Message)));
                     return Observable.Return(System.Reactive.Unit.Default);
                 }))
             .Concat()
@@ -4435,7 +4466,8 @@ public static class MeshExtensions
                     d =>
                     {
                         if (d.Message is CreateNodeResponse cr && cr.Success && cr.Node is not null)
-                            PostOk(cr.Node, isCreate: true, $"Created node at '{node.Path}'");
+                            PostOk(cr.Node, isCreate: true, $"Created node at '{node.Path}'",
+                                "activity.node.created");
                         // Upsert semantics must be RACE-FREE: the read-then-branch above is a
                         // TOCTOU — the node can materialise between the persistence read (null)
                         // and the inner create's own existence check (e.g. an earlier write of
@@ -4506,7 +4538,8 @@ public static class MeshExtensions
                                 "[CreateOrUpdate] no-op upsert for {Path}: identical to persisted state; skipped",
                                 node.Path);
                             PostOk(existing, isCreate: false,
-                                $"Node at '{node.Path}' unchanged — no-op upsert skipped");
+                                $"Node at '{node.Path}' unchanged — no-op upsert skipped",
+                                "activity.node.unchanged");
                         }
                         else
                             // Not (provably) authorized → the normal owner path stays the single
@@ -4653,7 +4686,8 @@ public static class MeshExtensions
                         },
                         upsertMeshConfig))
                     .Subscribe(
-                        saved => PostOk(saved, isCreate: false, $"Updated node at '{node.Path}'"),
+                        saved => PostOk(saved, isCreate: false, $"Updated node at '{node.Path}'",
+                            "activity.node.updated"),
                         ex =>
                         {
                             logger.LogWarning(ex,
@@ -4666,10 +4700,13 @@ public static class MeshExtensions
             }
         }
 
-        void PostOk(MeshNode result, bool isCreate, string logLine)
+        // `logKey` is the catalog key whose ENGLISH is `logLine`; the transcript resolves it in the
+        // viewer's language at render time while `logLine` stays the fallback (#3236).
+        void PostOk(MeshNode result, bool isCreate, string logLine, string logKey)
         {
             var okLog = baseActivity.Append(
-                new LogMessage(logLine, Microsoft.Extensions.Logging.LogLevel.Information)) with
+                new LogMessage(logLine, Microsoft.Extensions.Logging.LogLevel.Information)
+                    .WithKey(logKey, ("path", node.Path))) with
             {
                 End = DateTime.UtcNow,
                 Status = ActivityStatus.Succeeded,

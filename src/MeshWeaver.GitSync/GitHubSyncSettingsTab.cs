@@ -452,8 +452,12 @@ public static class GitHubSyncSettingsTab
             return stack;
 
         // Live Messages + Status, bound to the activity node (re-renders on every progress tick).
+        // 🚨 The transcript renders in the VIEWER's language (#3236): the locale is read here, on the
+        // render path where LayoutAreaHost has restored the subscriber's AccessContext — never at the
+        // write site, which has no viewer, and never from an ambient CultureInfo.
+        var locale = host.ViewerLocale();
         stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(activityPath)
-            .Select(node => (UiControl?)Controls.Html(ActivityHtml(node.ContentAs<MeshWeaver.Data.ActivityLog>(host.Hub.JsonSerializerOptions))))
+            .Select(node => (UiControl?)Controls.Html(ActivityHtml(node.ContentAs<MeshWeaver.Data.ActivityLog>(host.Hub.JsonSerializerOptions), locale)))
             .StartWith((UiControl?)Controls.Html("")));
 
         // Cancel — flips RequestedStatus = Cancelled; the runner's watcher trips the command's token.
@@ -468,7 +472,7 @@ public static class GitHubSyncSettingsTab
         return stack;
     }
 
-    private static string ActivityHtml(MeshWeaver.Data.ActivityLog? log)
+    private static string ActivityHtml(MeshWeaver.Data.ActivityLog? log, string? locale)
     {
         if (log is null) return "";
         var colour = log.Status switch
@@ -480,7 +484,7 @@ public static class GitHubSyncSettingsTab
             _ => "var(--neutral-foreground-hint)",
         };
         var lines = string.Join("", log.Messages.TakeLast(8).Select(m =>
-            $"<div style=\"font-family:monospace;font-size:0.8rem;\">{Esc(m.Message)}</div>"));
+            $"<div style=\"font-family:monospace;font-size:0.8rem;\">{Esc(m.Localize(locale))}</div>"));
         return $"<div style=\"padding:8px 12px;background:var(--neutral-layer-2);border-radius:6px;\">" +
                $"<div style=\"font-weight:600;color:{colour};margin-bottom:4px;\">{Esc(log.Status.ToString())}</div>" +
                $"{lines}</div>";
