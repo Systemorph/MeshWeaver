@@ -142,7 +142,7 @@ public class RefusedReplyReachesTheWaiterTest(ITestOutputHelper output)
                 .Where(_ => arrived.Any(r => r.Error == RouteProbe))
                 .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
             Output.WriteLine("[probe] owner → waiter route is live while nothing is shutting down");
-            registry.ArmedCount.Should().Be(1,
+            registry.ArmedRequestIds.Should().Contain(requestId,
                 "the probe carries a correlation id NOBODY armed, so it must travel as ordinary "
                 + "traffic and leave the real watch alone");
 
@@ -180,7 +180,9 @@ public class RefusedReplyReachesTheWaiterTest(ITestOutputHelper output)
                 + "caller then burns its whole WriteVerdictBound for an answer that was already "
                 + "minted and posted");
 
-            registry.ArmedCount.Should().Be(0,
+            // Keyed on THIS request rather than on the count: the registry is mesh-wide, so a
+            // total is a claim about every writer in the process and not about this one.
+            registry.ArmedRequestIds.Should().NotContain(requestId,
                 "the dispatch REMOVES the entry, so a consumed watch is the observable fact that "
                 + "the verdict reached its waiter rather than merely being logged");
 
