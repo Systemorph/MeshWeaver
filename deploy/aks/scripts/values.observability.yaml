@@ -227,10 +227,18 @@ prometheus:
               #
               # 🚨 VERIFIED AGAINST THE LIVE PROMETHEUS before commit — an alert that cannot fire is worse
               # than no alert. `count(container_spec_memory_limit_bytes{container="memex-portal"})` → 9
-              # series, and this exact expression evaluated to memex-cloud 0.851 / memex 0.605 on
-              # 2026-09-04. It DISCRIMINATES: memex-cloud (14 GB replicas, `Platform stalled` in its log)
-              # is above the threshold and memex is below it, so this is not a rule that fires on
-              # everything. 🚨 That is evidence about the EXPRESSION, not about arming: on 2026-09-01 the
+              # series, and both rules read as follows on one 2026-09-04 scrape:
+              #
+              #                  divergence (>3)   headroom (>0.75)   actually degraded?
+              #   memex-cloud    8.45  fires       0.851  fires       yes (14 GB, `Platform stalled`)
+              #   memex          1.06  blind       0.605  quiet       not yet (9.4-9.9 GB, ~0.2 cores)
+              #
+              # Four results, not two: both rules fire on the degraded namespace and both stay quiet on
+              # the healthy one, so neither fires on everything and the new one is not a restatement of
+              # the old. The complementarity is the first column — memex's ratio is 1.06 and will FALL,
+              # not rise, because its replicas converge; when they reach the defence band divergence
+              # still reads ~1.0 and this rule fires. 🚨 That is evidence about the EXPRESSION, not about
+              # arming: on 2026-09-01 the
               # live Prometheus answered `rule groups: 0` with the loki release still on its 31 May
               # revision, so the rule above had been merged for a week and was watching nothing. The only
               # evidence a rule is armed is GET /api/v1/rules naming it.

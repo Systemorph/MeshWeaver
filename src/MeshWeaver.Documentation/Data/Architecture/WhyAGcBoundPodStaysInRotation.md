@@ -197,20 +197,22 @@ no sibling comparison, thresholded at 75 % of the container limit, which is the 
 working set has reached the *numeric value* of the GC's hard limit and any further managed growth
 must come out of the margin the default reserved for native memory.
 
-The expression was checked against the live Prometheus before it was committed, because an alert
-that cannot fire is worse than no alert:
+Both expressions were evaluated against the live Prometheus before the new one was committed,
+because an alert that cannot fire is worse than no alert. `count(container_spec_memory_limit_bytes
+{container="memex-portal"})` returns **9 series**, and the two rules read as follows on the same
+scrape:
 
-```
-count(container_spec_memory_limit_bytes{container="memex-portal"})                    → 9 series
-max by (namespace) (container_memory_working_set_bytes{container="memex-portal"}
-                    / container_spec_memory_limit_bytes{container="memex-portal"})
-                                            → memex-cloud 0.851 · memex 0.605
-```
+| namespace | divergence `max / min` (fires > 3) | headroom `working set / limit` (fires > 0.75) | actually degraded? |
+|---|---|---|---|
+| `memex-cloud` | **8.45** — fires | **0.851** — fires | yes: 14 GB replicas, `Platform stalled` in the log |
+| `memex` | 1.06 — blind | 0.605 — quiet | not yet: 9.4–9.9 GB, ~0.2 cores, no stalls |
 
-Both halves matter. `memex-cloud` — the namespace with 14 GB replicas and `Platform stalled` lines
-in its log — is **above** the 0.75 threshold. `memex` is **below** it. The rule discriminates
-between the two namespaces rather than firing on both, which is the control arm that a threshold
-picked from a curve usually lacks.
+Read the table as four results, not two. Both rules **fire** on the namespace that is degraded and
+both stay **quiet** on the one that is not — so neither is a rule that fires on everything, and the
+new one is not merely a restatement of the old. The complementarity is in the first column:
+`memex`'s ratio is **1.06 today and will not rise**, because its two replicas are converging rather
+than diverging. When they reach the defence band the divergence rule will still read ~1.0 and the
+headroom rule will fire. That is the case that was uncovered.
 
 🚨 **Neither rule is armed until `values.observability.yaml` is applied.** On 2026-09-01 the live
 Prometheus answered `rule groups: 0` and the `loki` release was still on its 31 May revision — the
