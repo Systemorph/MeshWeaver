@@ -161,6 +161,29 @@ reader than one that looks like instinct.
 **Rule:** report *read failure* and *no matches* as distinct states, and give every watcher its own
 control arm. A monitor that greps only for the success marker stays silent through a crash.
 
+🚨 **This entry was repeated by the author of this page, against this page, under an hour after
+writing it.** A watcher built to follow three pull requests computed `pending = count(status !=
+completed)` over the check list and called zero-pending green. On a freshly pushed head the list is
+**empty** — no checks created yet — so it reported *ALL CHECKS GREEN* for a pull request whose
+required contexts did not exist. Same shape as the four above: an absence rendered as health.
+
+The cure is the one this page already gives for CI verdicts, applied one level in — **evaluate the
+required contexts BY NAME**, so a context that is missing reports *not created yet* and can never
+read as a passing one:
+
+| state | reported as |
+|---|---|
+| context absent from the list | `not created yet` |
+| context present, not completed | `running` |
+| context present, `success` / `skipped` / `neutral` | satisfied |
+| the read itself failed | `READ-FAILED` |
+
+**The generalisation is the uncomfortable one:** *the author of an entry is not immune to it, and the
+interval between writing it and repeating it can be under an hour.* This defect is not carelessness
+and cannot be fixed by care. A control is reasoned about by the person who built it, in the model
+they built it from — which is why the second half of this page's diagnostic asks you to go and break
+the subject rather than to think harder about it.
+
 ### 6. One verdict covering three different outcomes
 
 A green `CD delivered` sat over a **skipped** `bake + seal`, and four consecutive green scheduled CD
