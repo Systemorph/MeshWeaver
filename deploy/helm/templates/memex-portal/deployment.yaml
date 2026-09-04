@@ -294,12 +294,24 @@ spec:
             # (so no 502 to a booting pod); once up, /alive keeps a serving pod in rotation and never
             # flaps it out. (Fixed live 2026-07-21; it regressed because the fix wasn't in this chart.)
             # ⚠️ The trade's blind spot (2026-08-25, MeshWeaver#2194): a pod that degrades AFTER
-            # startup — e.g. GC-bound at 20 GB from superseded-NodeType-build (ALC) accumulation —
-            # still answers /alive, so it stays in rotation serving hung requests until a human
-            # reads `kubectl top`. Accepted here: the fix is convergence
-            # (Modules:AutoRecycleOnStaleBuild, MeshWeaver#2192), not a heavier probe; a cheap
-            # progress-aware check is an open design item on #2194. Do NOT "fix" this by pointing
+            # startup — GC-bound at 10-14 GB — still answers /alive, so it stays in rotation serving
+            # hung requests until a human reads `kubectl top`. Do NOT "fix" this by pointing
             # readiness back at /health — that re-creates the death-spiral above.
+            #
+            # 🚨 READINESS AND LIVENESS SHARE THIS PATH, AND THAT BOUNDS WHAT #2194 ITEM 4 MAY DO.
+            # Both probes below are `/alive`, and what /alive MEASURES is a property of the deployed
+            # image, not of this chart: core registers only the trivial "self" check (tag `live`,
+            # unconditionally Healthy), while a progress-aware handler is registered by the HOST
+            # (Memex.Portal.Distributed, in MeshWeaver.Plugins) under the same tag. So the moment a
+            # progress-aware /alive ships, READINESS becomes progress-aware too — and it trips FIRST:
+            # 10s x 3 = 30s here, against liveness's 15s x 6 = 90s. A GC-bound replica is therefore
+            # pulled from the Service three times sooner than it is restarted, and its traffic lands
+            # on siblings that converge on the SAME memory ceiling with age (measured 2026-09-04: ns
+            # memex, two 28h replicas at 9936Mi and 9409Mi, ratio 1.06). That is the 2026-07-21
+            # death-spiral rebuilt out of the item-4 fix.
+            # ⇒ A progress-aware liveness signal needs its OWN path, or readiness must move off this
+            #   one. Do not make /alive progress-aware while both probes point at it.
+            #   Full derivation: Doc/Architecture/WhyAGcBoundPodStaysInRotation.
             httpGet: { path: /alive, port: 8080 }
             periodSeconds: 10
             timeoutSeconds: 5
@@ -308,23 +320,38 @@ spec:
             # Self-heal a genuinely wedged pod (the connection-exhaustion wedge we hit). Conservative
             # — only a sustained /alive failure restarts it, so a transient blip never loops.
             #
-            # 🚨 /alive MEASURES PROGRESS; it is not a synonym for /healthz (MeshWeaver#2194 item 4).
-            # It answers 503 once GC pause share has stayed above 60% for five consecutive checks —
-            # the shape of a silo whose superseded NodeType assemblies (ALCs) have accumulated until
-            # it is GC-bound. On 2026-08-25 two replicas held exactly that state for THREE AND A HALF
-            # HOURS while passing every probe, because /alive had no handler at all and was answered
-            # by the renderer; they stayed in the Service endpoints serving hung pages.
+            # 🚨 WHAT /alive MEASURES IS NOT DECIDED HERE, AND THIS CHART MUST NOT CLAIM IT IS.
+            # An earlier revision of this comment asserted that "/alive answers 503 once GC pause
+            # share has stayed above 60% for five consecutive checks", while the readinessProbe
+            # comment ten lines above called a progress-aware check an open design item. Both were
+            # committed at once and a status report quoted the stale half as current. The truth is
+            # image-dependent: core registers ONLY the trivial "self" check on tag `live`; any
+            # progress-aware handler comes from the host (Memex.Portal.Distributed, in
+            # MeshWeaver.Plugins). Measured 2026-09-04: /alive answered `Healthy` on a replica
+            # holding a 10 065 MiB managed heap — which is consistent with either handler, since its
+            # pause share was low at that moment, so it is not evidence about the image.
             #
-            # 🚨 Do NOT point readinessProbe here. Readiness must stay on the trivial /healthz: a
-            # readiness check that fails under load removes the pod, and the survivors inherit its
-            # traffic — the 2026-07-21 death-spiral. Liveness restarting ONE pegged replica has no
-            # such feedback loop.
+            # 🚨 readinessProbe IS pointed here — see the hazard block on it above. A readiness check
+            # that fails under load removes the pod, and the survivors inherit its traffic (the
+            # 2026-07-21 death-spiral). Liveness restarting ONE pegged replica has no such feedback
+            # loop, but liveness and readiness cannot be given different SEMANTICS while they share
+            # a PATH. That is the open half of #2194 item 4.
             #
-            # Ready-but-degraded triage: one replica far heavier than its siblings is the fingerprint
-            # (`kubectl top pods -n <ns>`); the PortalReplicaWorkingSetDiverged alert in
-            # values.observability.yaml watches for it, and the fix is convergence
-            # (Modules:AutoRecycleOnStaleBuild, on fleet-wide) plus prebuilt-only modules
-            # (Modules:RequirePrebuilt).
+            # Ready-but-degraded triage: `kubectl top pods -n <ns>`. Two alerts in
+            # values.observability.yaml watch for it and they are loud at opposite ends of the
+            # incident — PortalReplicaWorkingSetDiverged (one replica ahead of its siblings; goes
+            # blind once they converge) and PortalHeapEnteringGcDefenceBand (working set past 75% of
+            # the container limit, i.e. the GC's own hard limit; no sibling comparison, so it gets
+            # LOUDER as the incident spreads). 🚨 Neither is armed until values.observability.yaml is
+            # applied — on 2026-09-01 the live Prometheus held ZERO rule groups.
+            #
+            # The lane that removes the cause rather than detecting it is prebuilt-only modules
+            # (Modules:RequirePrebuilt): a replica that boots having adopted 9 of 377 dynamic
+            # NodeTypes compiles the other 368 lazily on first access and pins each result for the
+            # life of the process. Convergence (Modules:AutoRecycleOnStaleBuild, on fleet-wide) is a
+            # different lane — it moves instances OFF superseded builds, and on 2026-09-04 the 28h
+            # replicas had logged ZERO stale-build offers in their entire life, so it had nothing to
+            # converge. Doc/Architecture/WhyAGcBoundPodStaysInRotation has the measurement.
             #
             # 🚨 NO initialDelaySeconds HERE, AND NONE ON readinessProbe ABOVE — DELIBERATE, and it
             # keeps being "corrected" by people reading Chart Drift. Kubernetes SUSPENDS liveness and
