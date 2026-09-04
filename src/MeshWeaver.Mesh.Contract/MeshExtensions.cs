@@ -5191,24 +5191,80 @@ public static class MeshExtensions
         // 🚨 DefaultIfEmpty, not just Take(1): an adapter whose Read COMPLETES EMPTY for a path it
         // cannot serve would otherwise end this node's sequence without an emission — the copy
         // would produce no root, post no response, and the move that awaits it would sit out the
-        // hub's request timeout. Falling back to the projection keeps a copy possible on a store
-        // that cannot answer a point read, rather than hanging it.
+        // hub's request timeout.
+        //
+        // 🚨 And the empty case is NOT the same question for the two operations. For a plain copy
+        // the stamps are cleared anyway, so falling back to the projection loses nothing and keeps
+        // a copy possible on a store that cannot answer a point read. For a PRESERVING copy the
+        // projection is precisely the thing that destroyed the authorship, so falling back to it
+        // would re-open this bug behind the fix — quietly, on exactly the store that cannot answer.
+        // It REFUSES instead, and because the delete leg only runs after the copy succeeds, a
+        // refused read leaves the source and its stamps untouched rather than moving them away.
+        IObservable<MeshNode> ProjectionFallback(MeshNode projected) =>
+            copyRequest.PreserveAuthorship
+                ? Observable.Throw<MeshNode>(new InvalidOperationException(
+                    $"Authoritative read of '{projected.Path}' returned nothing — refusing to relocate it "
+                    + "from a query projection, which does not carry createdBy/createdDate/lastModifiedBy."))
+                : Observable.Return(projected);
+
         IObservable<MeshNode> Authoritative(MeshNode projected) =>
             persistence is null
-                ? Observable.Return(projected)
+                ? ProjectionFallback(projected)
                 : persistence.Read(projected.Path, hub.JsonSerializerOptions)
                     .Take(1)
                     .DefaultIfEmpty()
-                    .Select(stored => stored ?? projected);
+                    .SelectMany(stored => stored is not null
+                        ? Observable.Return(stored)
+                        : ProjectionFallback(projected));
 
         logger.LogDebug("[CopyNode] start source={Source} target={Target} (descendants={Desc} satellites={Sat} preserveAuthorship={Preserve})",
             sourcePath, targetPath, copyRequest.IncludeDescendants, copyRequest.IncludeSatellites,
             copyRequest.PreserveAuthorship);
 
+        // 🚨 PRESERVED AUTHORSHIP IS NOT FREE FOR THE ASKING. CopyNodeRequest is a wire message, so
+        // the flag is caller-settable, and a node whose CreatedBy names someone else is not inert:
+        // AccessContextScope.FromNode impersonates exactly that identity, so an unguarded flag would
+        // let anyone who can read a node mint one, in a place they control, that owner-scoped work
+        // then runs AS its author.
+        //
+        // The flag exists for one operation, so it is gated on that operation's own entitlement:
+        // Delete on the source's namespace, which is what MoveNodePermissionAttribute already
+        // requires of a mover. A caller who holds it could have MOVED the node and preserved the
+        // stamps that way, so the flag grants nothing the platform did not already grant them; a
+        // caller who does not is refused. UNDETERMINED is a refusal too, reported as unavailability
+        // rather than as a denial (#974/#2742) — a fold that reached no answer must never read as
+        // one, in either direction.
+        IObservable<(string Message, bool Undetermined)?> AuthorshipPreservationRefusal() =>
+            !copyRequest.PreserveAuthorship
+                ? Observable.Return<(string, bool)?>(null)
+                : hub.CheckPermissionOutcome(NamespaceOf(sourcePath), Permission.Delete)
+                    .Select(outcome => outcome.IsGranted
+                        ? ((string, bool)?)null
+                        : outcome.IsUndetermined
+                            ? ($"Cannot determine whether '{sourcePath}' may be relocated with its authorship: "
+                                + $"{outcome.UndeterminedReason}", true)
+                            : ($"Preserving authorship on a copy of '{sourcePath}' requires Delete on its "
+                                + "namespace — the same entitlement a move of it requires.", false));
+
         // Subtree query covers source + descendants + satellites (anything under sourcePath).
         // Query's first emission is the initial result set; we Take(1) and project each
         // node into a CreateNode call at the new target path.
-        meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        AuthorshipPreservationRefusal()
+            .SelectMany(refusal =>
+            {
+                if (refusal is { } denied)
+                {
+                    logger.LogWarning("[CopyNode] REFUSED preserveAuthorship {Source} -> {Target}: {Reason}",
+                        sourcePath, targetPath, denied.Message);
+                    hub.Post(CopyNodeResponse.Fail(denied.Message,
+                            denied.Undetermined
+                                ? NodeCopyRejectionReason.Unknown
+                                : NodeCopyRejectionReason.Unauthorized),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
+                }
+
+                return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{sourcePath} scope:subtree").Complete())
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))
@@ -5263,6 +5319,7 @@ public static class MeshExtensions
                             .ToList()
                             .Select(_ => ((MeshNode Root, int Desc, int Sat))(rootCreated, descCount, satCount));
                     });
+            });
             })
             .Subscribe(
                 t =>
@@ -5284,6 +5341,19 @@ public static class MeshExtensions
                 });
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// The namespace a path lives in — everything before its last segment, or the path itself when
+    /// it has none. Deliberately the SAME computation
+    /// <see cref="MoveNodePermissionAttribute"/> uses to decide which namespace a move must hold
+    /// Delete on, because the copy handler's preserve-authorship gate asks that same question and
+    /// the two answers must not be able to drift apart.
+    /// </summary>
+    private static string NamespaceOf(string path)
+    {
+        var lastSlash = path.LastIndexOf('/');
+        return lastSlash > 0 ? path[..lastSlash] : path;
     }
 
     /// <summary>
