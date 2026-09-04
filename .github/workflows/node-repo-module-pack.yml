@@ -761,6 +761,9 @@ jobs:
       - name: Publish the module-pack tool (once for every pack job)
         if: steps.tool-cache.outputs.cache-hit != 'true'
         run: dotnet publish meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o "$RUNNER_TEMP/pack-tool"
+      # Lane-scoped like every other artifact this workflow drops: two calls in one run publish
+      # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
+      # with the other call's builder.
       - name: Hand the tool to the matrix
         uses: actions/upload-artifact@v7
         with:
@@ -1765,13 +1768,17 @@ jobs:
             # this "the assembly publish would have copied" — but that is the one global property
             # that must NOT reach here, because $VERSION is the MODULE's package version and the
             # identity must be the PLATFORM's. MSBuild writes Version into the assembly's version
-            # attributes, so it lands in the metadata the MVID is computed over: measured locally,
-            # one project published twice changing nothing else, 914d015cd9c04427be1f1f9e9eca0f1e
-            # (no override) vs 9b9fa23435b44398ae91244d3ddd02e8 (-p:Version=1.3.18). With it, each
-            # matrix job builds its OWN compiler and the run states one identity PER MODULE — seen
-            # on run 33874892203, where the identity still came from the module's output: AI stated
-            # be27d0fb9ad54ae6a862bfa7aeb97c9b while Markdown.Collaboration stated
-            # d756b82e09804a11b0ea44d26233af6c for the same platform and the same commit. A
+            # attributes, so it lands in the metadata the MVID is computed over. Measured on THIS
+            # command, with the two package versions core CD packs, plus a control:
+            #     -p:Version=1.3.18 (AI)         -> 34337c31960d47f5b5251d32ef923fc6
+            #     -p:Version=1.0.24 (Essentials) -> 7c1c4f70de084da78659e6bda495e1c5
+            #     no override, run A             -> 71cc81badb364c5d8558ac5e7db6a44e
+            #     no override, run B             -> 71cc81badb364c5d8558ac5e7db6a44e   (identical)
+            # With it, each matrix job builds its OWN compiler and the run states one identity PER
+            # MODULE — already seen in the field on run 33874892203, by the earlier route to the
+            # same pollution: AI stated be27d0fb9ad54ae6a862bfa7aeb97c9b while
+            # Markdown.Collaboration stated d756b82e09804a11b0ea44d26233af6c for the same platform
+            # and the same commit. A
             # per-module identity names no platform build a consumer can have landed, so #3154's
             # (version, identity) comparison gets a value that means nothing — GREEN, and useless.
             # Without it every job builds byte-identical bytes from one commit, so the whole run
