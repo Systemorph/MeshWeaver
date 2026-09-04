@@ -73,12 +73,15 @@ the refusal it exists to complain about. Fixed in #3309 (tests and docs only; th
 **Rule:** a detector must be run against a subject you broke *on purpose*, or you have only measured
 that it runs.
 
-### 3. An identity anchor that went green stating four identities for one platform
+### 3. A fix for a red that replaced it with a silent one, in the same edit
 
-#3293 fixed a genuine RED — the identity anchor was read from the module's own publish output, which
-is absent for any module not transitively referencing `MeshWeaver.Compiler` — and introduced a
-**silent** failure by passing `-p:Version="$VERSION"` to the replacement build. MSBuild writes
-`Version` into the assembly, so the anchor became per-module:
+This is the entry that explains why the family deserves a page, so read it as one story rather than
+two issues.
+
+#3293 fixed a genuine **RED**: the identity anchor was read from the module's own publish output,
+which is absent for any module not transitively referencing `MeshWeaver.Compiler`, so the pack
+stopped. The same edit passed `-p:Version="$VERSION"` to the replacement build, "to match the module
+build's flags". MSBuild writes `Version` into the assembly, so the anchor became per-module:
 
 ```
 -p:Version=1.3.18 (AI)         → 34337c31960d47f5b5251d32ef923fc6
@@ -91,7 +94,19 @@ Four bundles, four identities, one platform. All non-blank, all green, **none ma
 consumer**. Fixed in #3306; the class was filed as
 [#3308](https://github.com/Systemorph/MeshWeaver/issues/3308).
 
-**Rule:** green-and-wrong is worse than red. The red stopped the pack; this stopped nothing.
+Three things make this the sharpest instance on the page, and its author states all three plainly:
+
+- **The fix caused it.** This was not a weak check somebody inherited — a correct repair for a red
+  introduced a silent failure in the same edit.
+- **It was written by someone hunting exactly this defect class that day**, who *noticed* the
+  per-module-MVID risk while writing it, reasoned it was pre-existing and out of scope, and shipped
+  anyway. Another session measured it hours later.
+- **Nothing told anyone.** The red had stopped the pack, so its absence was felt immediately. The
+  replacement stopped nothing.
+
+**Rule:** green-and-wrong is worse than red, and that asymmetry is the whole subject of this page — a
+red is self-reporting, a plausible wrong value is not. Stated as its author put it: *the fix removed
+the symptom and left a better-disguised version of the defect.*
 
 ### 4. A preflight that asserts a credential exists and never passes it on
 
@@ -115,8 +130,12 @@ Four successive revisions of a PR watcher, each silent on a state its author had
 - `gh api --jq` silently rejects `--arg` (`accepts 1 arg(s), received 4`) and returns nothing — which
   reads exactly like "no matching runs".
 
-Only the last was caught quickly, and only because an explicit **blind-detector** had been added that
-refuses to interpret an empty result.
+Only the last was caught quickly, and only because an explicit **blind-detector** — one that refuses
+to interpret an empty result — had been added by then. Its author asks that this not read as
+foresight: the detector arrived on **revision four**, after three earlier watchers had already misled
+both them and their user, one of which reported a pull request as merging while it sat
+`queue-rejected` for about fifteen minutes. A remedy that took four attempts is more useful to a
+reader than one that looks like instinct.
 
 **Rule:** report *read failure* and *no matches* as distinct states, and give every watcher its own
 control arm. A monitor that greps only for the success marker stays silent through a crash.
@@ -124,8 +143,18 @@ control arm. A monitor that greps only for the success marker stays silent throu
 ### 6. One verdict covering three different outcomes
 
 A green `CD delivered` sat over a **skipped** `bake + seal`, and four consecutive green scheduled CD
-runs published nothing. `completed/success` covered all of: *checked and passed*, *never ran*, and
-*ran and deliberately did nothing* — indistinguishable without opening the job list.
+runs published nothing. The job list is the undeniable artifact:
+
+```
+event=schedule → completed/success
+  Promote                            skipped
+  pack                               skipped
+  bake + seal                        skipped
+  Notify platform-update registry    skipped
+```
+
+`completed/success` covered all of: *checked and passed*, *never ran*, and *ran and deliberately did
+nothing* — indistinguishable without opening that list.
 
 **Rule:** a run's conclusion is not the outcome. Read the job that does the work; see
 [Reading CI Signals](/Doc/Architecture/ReadingCiSignals) and
