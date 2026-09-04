@@ -937,6 +937,22 @@ public static class DataExtensions
     /// <c>MessageService.PostImplGeneric</c> stamps <c>POST_REFUSED_SHUTTING_DOWN</c> and returns
     /// exactly that when the owner AND its parent are past <c>DisposeHostedHubs</c>, and its own
     /// comment says "This site does NOT answer the sender itself".</para>
+    /// <para>🚨 <b>Do not serve the armed sink alongside an accepted post.</b> It was tried twice
+    /// here, to close a teardown hole — the owner's <c>Post</c> is accepted (its own run level is
+    /// still open, so <c>PostImplGeneric</c> does not refuse) and the PARENT's routing then drops it
+    /// a turn later, asynchronously, where this seam cannot see it. Both attempts reddened LIVE
+    /// tests, because a late watch is armed for EVERY patch at post time, not just an expired one:
+    /// serving it dispatches the ack synchronously on the OWNER's turn, ahead of the state change
+    /// the ack is about, so the caller's write completes before what it wrote is readable. Measured
+    /// — dispatch-first reddened <c>ComboGateRollTest</c> (run 33863349195) and, gated on
+    /// <c>IsShuttingDown</c>, <c>ImportTypeBeforeInstanceTest</c> (run 33865385033), which recycles
+    /// node hubs throughout its import and so meets that gate on the live path.</para>
+    ///
+    /// <para>The teardown hole is real and belongs one layer down: a correlated reply that
+    /// <c>HierarchicalRouting</c> cannot forward is DROPPED with nobody told, and the process still
+    /// holds the registry that could take it. Answering it here cannot be right — this seam is
+    /// called before routing has run. The owner's <c>ShutDown</c>-phase NACK
+    /// (<c>RegisterOwnerDisposingNack</c>) is the designed answer for that case.</para>
     /// </summary>
     /// <returns><c>true</c> when the post was accepted or the sink found an armed caller.</returns>
     internal static bool RoutePatchVerdict(
@@ -1063,8 +1079,9 @@ public static class DataExtensions
         // from inside the disposal action below. MessageHub's own ShutDown phase states the rule
         // ("Never call DI from a disposal path") because a hub's lifetime scope, or an ancestor of
         // it, can already be closed by the time disposal actions run: HostedHubsCollection closes a
-        // hosted hub's scope on DisposalCompleted, and the watchdog's out-of-band
-        // ForceTeardownAfterWatchdog runs hostedHubs.Dispose() BEFORE DisposeImpl(). A resolve then
+        // hosted hub's scope on DisposalCompleted, so an ancestor's scope can be closed by the time
+        // a late registrant runs — and the ShutDown phase runs DisposeImpl() AFTER the hosted hubs
+        // have gone (their scopes with them). A resolve then
         // throws ObjectDisposedException ("Instances cannot be resolved … from this LifetimeScope"),
         // and the verdict is then never dispatched — so the writer burns the full 31 s
         // WriteVerdictBound and reports OwnerUnreachable, the exact acked-write-loss this

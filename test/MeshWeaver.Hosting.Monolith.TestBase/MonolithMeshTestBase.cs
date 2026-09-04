@@ -1492,6 +1492,34 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             }
             TestPhaseTrace(testName, "DISPOSE_HOSTED_SERVICES_STOPPED", sw.ElapsedMilliseconds);
 
+            // Phase 0 — QUIESCE ACTIVITIES before anything is disposed, exactly as the production
+            // TeardownAsync does: a run that is reporting progress is waited for; one that has made
+            // no progress for the stall budget is cancelled; one that ignores that is abandoned.
+            // Both kills are recorded on the report below and FAIL the class — a run teardown had
+            // to kill did not finish its job, and that is a defect in the test's arrangement or in
+            // the run, never a teardown detail to tolerate.
+            var activityQuiesce = new ActivityQuiesceReport([], []);
+            var activitiesQuiesced = true;
+            if (Mesh.ServiceProvider.GetService<ActivityTracker>() is { } activities)
+            {
+                using var quiesceCts = new CancellationTokenSource(DisposeTimeout);
+                try
+                {
+                    activityQuiesce = await activities.Quiesce(MeshTeardownExtensions.ActivityStallBudget)
+                        .ObserveCompletion(
+                            ex => FileOutput.WriteLine($"[DISPOSE] {testName}: activity quiesce faulted late: {ex}"),
+                            quiesceCts.Token) ?? activityQuiesce;
+                }
+                catch (OperationCanceledException)
+                {
+                    activitiesQuiesced = false;
+                    TestPhaseTrace(testName, "DISPOSE_ACTIVITIES_STILL_RUNNING", sw.ElapsedMilliseconds,
+                        string.Join(" | ", activities.InFlight.Select(r =>
+                            $"{r.Label} (last progress {r.SinceLastProgress.TotalSeconds:F1}s ago)")));
+                }
+            }
+            TestPhaseTrace(testName, "DISPOSE_ACTIVITIES_QUIESCED", sw.ElapsedMilliseconds, activityQuiesce.ToString());
+
             FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Dispose() invoking on {Mesh.Address}");
             // Capture the mesh-scoped teardown services BEFORE disposal — once Dispose()
             // begins, resolving DI races the scope teardown. We drain them after
@@ -1531,10 +1559,13 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // residual reads as an anonymous "1" — which is how #2578 and #2616 both ended with
             // nothing to act on. (Query=1 and Compile=1 are different bugs.)
             IReadOnlyList<IoPoolRegistry.PoolResidual> residualByPool = [];
-            var leakedIoLeaves = ioPools is null ? 0 : ioPools.DrainAll(out residualByPool);
+            IReadOnlyList<IoPoolRegistry.PoolResidual> cancelledByPool = [];
+            var leakedIoLeaves = ioPools is null ? 0 : ioPools.DrainAll(out residualByPool, out cancelledByPool);
+            var cancelledIoLeaves = cancelledByPool.Sum(p => p.Residual);
             TestPhaseTrace(testName, "DISPOSE_IOPOOL_DRAIN_DONE", sw.ElapsedMilliseconds,
                 $"leakedIoLeaves={leakedIoLeaves}"
-                + (residualByPool.Count > 0 ? $" pools=[{string.Join(", ", residualByPool)}]" : ""));
+                + (residualByPool.Count > 0 ? $" pools=[{string.Join(", ", residualByPool)}]" : "")
+                + (cancelledIoLeaves > 0 ? $" cancelledAfterGrace=[{string.Join(", ", cancelledByPool)}]" : ""));
             // After all the sync stuff is disposed (and everyone has enqueued their async
             // cleanup), quiesce the async dispose queue before the scope closes below.
             var asyncDisposeClean = asyncDisposeQueue is null
@@ -1545,7 +1576,15 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // The terminal signal — DISPOSE_DONE is only true when this report is CLEAN. Fire it
             // before the scope disposes below so any subscriber ordering on "all is done" (ALC
             // unload hooks, diagnostics) observes the truthful terminal state, dirty or not.
-            var teardownReport = new TeardownReport(leakedIoLeaves, asyncDisposeClean);
+            var teardownReport = new TeardownReport(leakedIoLeaves, asyncDisposeClean)
+            {
+                ResidualByPool = residualByPool,
+                ActivitiesQuiesced = activitiesQuiesced,
+                CancelledActivities = activityQuiesce.Cancelled,
+                AbandonedActivities = activityQuiesce.Abandoned,
+                CancelledIoLeaves = cancelledIoLeaves,
+                CancelledIoByPool = cancelledByPool,
+            };
             teardownSignal?.SignalCompleted(teardownReport);
             FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms — {teardownReport}");
             TestPhaseTrace(testName, "DISPOSE_DONE", sw.ElapsedMilliseconds, teardownReport.ToString());
@@ -1564,6 +1603,21 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                     "A pooled I/O leaf or async cleanup ignored its cancellation token; the service " +
                     "scope (and any collectible node ALC) is about to be torn down over live code — " +
                     "the use-after-unload SIGSEGV. Fix the leaf that will not cancel; do not widen the drain budget.");
+            }
+
+            // Work the teardown had to KILL is LOGGED here, not failed: a cancelled activity or a
+            // pooled leaf cancelled after the drain grace unwound, so the scope is safe, and the
+            // src-side Error lines (the ones production's red-log triage files as issues) have
+            // already named the run or leaf. In a test that is the whole signal — the trace and the
+            // output carry it — and turning it into a class failure would take the suite down for
+            // a wedge the test under it never asserted on. (Maintainer, 2026-09-04: "in testing we
+            // must have some way to just log out".)
+            if (teardownReport.WorkWasKilled)
+            {
+                TestPhaseTrace(testName, "DISPOSE_WEDGED_WORK", sw.ElapsedMilliseconds, teardownReport.ToString());
+                FileOutput.WriteLine(
+                    $"[DISPOSE] {testName}: teardown had to KILL work that made no progress — {teardownReport}. "
+                    + "A run or pooled leaf that reports progress is never cancelled; find what it was waiting on.");
             }
 
             // Fail the test class' dispose if any hub hit Quiescing timeout. A leaked

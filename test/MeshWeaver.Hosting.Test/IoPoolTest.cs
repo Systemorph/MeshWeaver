@@ -31,6 +31,89 @@ public class IoPoolTest
 {
     private static readonly TimeSpan Timeout5 = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan Timeout10 = TimeSpan.FromSeconds(10);
+    /// <summary>A drain grace for tests whose leaf can only end by cancellation.</summary>
+    private static readonly TimeSpan ShortGrace = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// 🚨 The grace: a leaf that is going to finish is NOT cancelled. The drain waits for it,
+    /// joins it, and reports nothing — the write it was doing landed. The predecessor cancelled
+    /// first and joined second, so every in-flight write at teardown was aborted the instant the
+    /// mesh decided to go down.
+    /// </summary>
+    [Fact]
+    public async Task Drain_letsALeafThatFinishesWithinTheGrace_Complete_WithoutCancellingIt()
+    {
+        using var pool = new IoPool(2, IoPool.DefaultDrainTimeout, TimeSpan.FromSeconds(3));
+        var entered = new AsyncSubject<Unit>();
+        var cancelled = false;
+        var completed = false;
+
+        pool.Invoke(async ct =>
+        {
+            entered.OnNext(Unit.Default);
+            entered.OnCompleted();
+            try { await Task.Delay(400, ct); }
+            catch (OperationCanceledException) { cancelled = true; throw; }
+            completed = true;
+            return 0;
+        }).Subscribe(_ => { }, _ => { });
+
+        await entered.Should().Within(Timeout5).Emit();
+        pool.CurrentInFlight.Should().Be(1);
+
+        var residual = pool.Drain();
+
+        residual.Should().Be(0);
+        completed.Should().BeTrue("the leaf finished on its own inside the grace");
+        cancelled.Should().BeFalse("a leaf that finishes is never cancelled — its work landed");
+        pool.LeavesCancelledAfterGrace.Should().Be(0);
+        pool.CancelledLeafSites.Should().BeEmpty();
+        pool.CurrentInFlight.Should().Be(0);
+    }
+
+    /// <summary>
+    /// The grace is a STALL bound, not a duration: every completion restarts it. Three leaves on a
+    /// pool of one run back to back for longer than one grace in total, and none is cancelled,
+    /// because each finished within one grace of the previous one.
+    /// </summary>
+    [Fact]
+    public async Task Drain_restartsTheGraceOnEveryCompletion_SoABurstOfShortLeavesIsNeverCancelled()
+    {
+        var grace = TimeSpan.FromMilliseconds(500);
+        using var pool = new IoPool(1, IoPool.DefaultDrainTimeout, grace);
+        // Completed by WHICHEVER leaf the pool admits first — the ThreadPool decides the order, not
+        // the order of subscription, so "the first leaf" is the first one running, never leaf 0.
+        var firstAdmitted = new AsyncSubject<Unit>();
+        var cancelledLeaves = 0;
+        var completedLeaves = 0;
+
+        for (var i = 0; i < 3; i++)
+        {
+            pool.Invoke(async ct =>
+            {
+                firstAdmitted.OnNext(Unit.Default);
+                firstAdmitted.OnCompleted();
+                try { await Task.Delay(300, ct); }
+                catch (OperationCanceledException) { Interlocked.Increment(ref cancelledLeaves); throw; }
+                Interlocked.Increment(ref completedLeaves);
+                return 0;
+            }).Subscribe(_ => { }, _ => { });
+        }
+
+        await firstAdmitted.Should().Within(Timeout5).Emit();
+        var sw = Stopwatch.StartNew();
+        var residual = pool.Drain();
+        sw.Stop();
+
+        residual.Should().Be(0);
+        Volatile.Read(ref completedLeaves).Should().Be(3, "every leaf finished on its own");
+        Volatile.Read(ref cancelledLeaves).Should().Be(0,
+            "the drain waited ~900 ms across three completions on a 500 ms grace — the clock restarts "
+            + "on every completion, so work that keeps finishing is never cancelled");
+        pool.LeavesCancelledAfterGrace.Should().Be(0);
+        sw.Elapsed.Should().BeGreaterThan(grace,
+            "the total wait must exceed one grace, or this test never exercised the restart");
+    }
 
     // 🚨 PIN for the endemic teardown SIGSEGV (Hosting.Monolith.Test exit=139). Root cause: a
     // MeshQuery straggler whose SUBSCRIBE (initial emission → route → CreateHub → Autofac
@@ -594,7 +677,10 @@ public class IoPoolTest
     [Fact]
     public async Task Drain_cancels_in_flight_leaves_and_joins_synchronously()
     {
-        using var pool = new IoPool(2);
+        // A leaf that can only end by cancellation is WEDGED by definition, so this test spends the
+        // grace deliberately short: the subject is the cancel + join, not the wait for a completion
+        // that will never come.
+        using var pool = new IoPool(2, IoPool.DefaultDrainTimeout, ShortGrace);
         var entered = new AsyncSubject<Unit>();
         var cancelled = false;
 
@@ -610,11 +696,15 @@ public class IoPoolTest
         await entered.Should().Within(Timeout5).Emit();
         pool.CurrentInFlight.Should().Be(1);
 
-        pool.Drain(); // cancel the leaf + JOIN — returns only once it has unwound
+        pool.Drain(); // grace expires (no progress) → cancel the leaf + JOIN — returns only once it has unwound
 
         pool.CurrentInFlight.Should().Be(0,
             "Drain joins synchronously — no spin: when it returns every in-flight leaf has unwound");
         cancelled.Should().BeTrue("Drain cancels in-flight leaves so a never-completing one actually stops");
+        pool.LeavesCancelledAfterGrace.Should().Be(1,
+            "the leaf outlived the grace with the pool making no progress — the drain must SAY it killed it");
+        string.Join(" | ", pool.CancelledLeafSites).Should().Contain(nameof(Drain_cancels_in_flight_leaves_and_joins_synchronously),
+            "the killed leaf is named by its site, so the report points at the work that did not finish");
 
         // Drain is TERMINAL (it cancels the pool token) — new work issued after Drain is
         // cancelled immediately; there is no in-flight leaf left to reference an unloading ALC.
@@ -650,7 +740,9 @@ public class IoPoolTest
     [Fact(Timeout = 30_000)]
     public async Task Drain_terminates_a_SubscribeThroughPool_leg_it_cancels()
     {
-        using var pool = new IoPool(1);
+        // Leg A holds the only permit inside a subscribe that never returns on its own — wedged by
+        // construction — so the grace is spent short; the subject is what the cancel does to leg B.
+        using var pool = new IoPool(1, IoPool.DefaultDrainTimeout, ShortGrace);
         var legAEntered = new AsyncSubject<Unit>();
         var releaseLegA = 0;
         // Whether leg A was RELEASED rather than timing out. If the wait ever timed out, leg A would

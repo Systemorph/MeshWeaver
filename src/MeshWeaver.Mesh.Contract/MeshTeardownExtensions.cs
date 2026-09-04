@@ -81,26 +81,51 @@ public static class MeshTeardownExtensions
         // ObserveCompletion completes with RunContinuationsAsynchronously (no hub thread carries
         // us onward), cancelling the WAIT leaves the observation attached (a late fault is still
         // reported), and the expiry is DATA now (ActivitiesQuiesced on the report), not a silence.
+        //
+        // 🚨 LET THE WORK FINISH; KILL ONLY WHAT HAS STOPPED. `Quiesce` waits for every run that is
+        // reporting progress, however long that takes inside `timeout`, and cancels only a run that
+        // has made no progress for ActivityStallBudget — then abandons one that ignores even that.
+        // Both are reported at ERROR (the red-log pipeline files an issue), with the activity path:
+        // a run teardown had to kill did not finish its job, and that is a defect to find, never a
+        // teardown detail to tolerate.
         var activitiesQuiesced = true;
+        ActivityQuiesceReport quiesce = new([], []);
         if (activities is not null)
         {
             using var quiesceBudget = new CancellationTokenSource(timeout);
             try
             {
-                await activities.WhenIdle.ObserveCompletion(
+                quiesce = await activities.Quiesce(ActivityStallBudget).ObserveCompletion(
                     ex => logger?.LogError(ex,
                         "Mesh {Address}: the activity quiesce signal faulted AFTER teardown stopped "
                         + "waiting on it. Reported rather than orphaned; investigate the activity that "
                         + "faulted on its way to idle.", mesh.Address),
-                    quiesceBudget.Token).ConfigureAwait(false);
+                    quiesceBudget.Token).ConfigureAwait(false) ?? quiesce;
+                foreach (var path in quiesce.Cancelled)
+                    logger?.LogError(ActivityCancelledByTeardown,
+                        "Mesh {Address}: activity {ActivityPath} made no progress for {StallBudget} while the "
+                        + "mesh was quiescing and was CANCELLED — its work did not finish. Find what it was "
+                        + "waiting on; a run that reports progress is never cancelled.",
+                        mesh.Address, path, ActivityStallBudget);
+                foreach (var path in quiesce.Abandoned)
+                    logger?.LogError(ActivityAbandonedByTeardown,
+                        "Mesh {Address}: activity {ActivityPath} ignored the cancellation teardown handed it "
+                        + "for another {StallBudget} and was ABANDONED — teardown proceeds over a run that "
+                        + "observes neither progress nor cancellation. That run is the defect.",
+                        mesh.Address, path, ActivityStallBudget);
             }
             catch (OperationCanceledException)
             {
                 activitiesQuiesced = false;
-                logger?.LogError(
+                var inFlight = activities.InFlight;
+                logger?.LogError(ActivitiesDidNotQuiesce,
                     "Mesh {Address}: activities did not reach idle within {Timeout} — teardown is "
-                    + "proceeding over a run that is still writing. Find the activity that will not "
-                    + "settle; do not widen the budget.", mesh.Address, timeout);
+                    + "proceeding over {Count} run(s) still in flight: [{Runs}]. A run still working at "
+                    + "the host's teardown bound is reported, not killed; find why it takes this long.",
+                    mesh.Address, timeout, inFlight.Count,
+                    string.Join(" | ", inFlight.Select(r =>
+                        $"{r.Label} (last progress {r.SinceLastProgress.TotalSeconds:F1}s ago"
+                        + $"{(r.CancelRequested ? ", cancel requested" : string.Empty)})")));
             }
         }
 
@@ -109,10 +134,27 @@ public static class MeshTeardownExtensions
         // Hand the PRE-DISPOSE logger down: DrainAsync runs after mesh.Dispose(), where resolving
         // one is exactly the "never resolve DI once disposal has begun" mistake this method's own
         // header warns about. (Copilot review, #2527.)
-        return await DrainAsync(
-            mesh, ioPools, asyncDisposeQueue, timeout, teardownSignal, activitiesQuiesced, logger)
+        var report = await DrainAsync(
+            mesh, ioPools, asyncDisposeQueue, timeout, teardownSignal, activitiesQuiesced, logger,
+            quiesce)
             .ConfigureAwait(false);
+        return report;
     }
+
+    /// <summary>
+    /// How long an activity may go without reporting progress during the pre-dispose quiesce
+    /// before it is cancelled. A STALL budget, not a duration: a run that keeps logging is waited
+    /// for up to the caller's whole teardown timeout. Matches the hub disposal stall budget and the
+    /// I/O pool drain grace, so "no progress" means the same thing at every layer.
+    /// </summary>
+    public static readonly TimeSpan ActivityStallBudget = TimeSpan.FromSeconds(8);
+
+    // Event ids so the red-log triage keys each shape on the log SITE (it ignores prose) — one
+    // issue per shape, the prose free to carry the activity paths a reproduction needs.
+    internal static readonly EventId ActivityCancelledByTeardown = new(7321, nameof(ActivityCancelledByTeardown));
+    internal static readonly EventId ActivityAbandonedByTeardown = new(7322, nameof(ActivityAbandonedByTeardown));
+    internal static readonly EventId ActivitiesDidNotQuiesce = new(7323, nameof(ActivitiesDidNotQuiesce));
+    internal static readonly EventId IoLeavesCancelledAfterGrace = new(7324, nameof(IoLeavesCancelledAfterGrace));
 
     /// <summary>
     /// The wait half of <see cref="TeardownAsync"/>, exposed for callers that
@@ -153,7 +195,8 @@ public static class MeshTeardownExtensions
             // No pre-dispose capture to inherit: this overload is entered AFTER the caller drove
             // Dispose() itself, so TeardownLogger's defensive resolve is the best available and a
             // dead scope degrades to "no logger" rather than throwing out of teardown.
-            logger: TeardownLogger(mesh));
+            logger: TeardownLogger(mesh),
+            quiesce: new ActivityQuiesceReport([], []));
 
     // 🚨 The public signature above is UNCHANGED on purpose. Threading the quiesce outcome through
     // as an extra optional parameter would have been source-compatible and BINARY-BREAKING — a
@@ -163,7 +206,7 @@ public static class MeshTeardownExtensions
     private static async Task<TeardownReport> DrainAsync(
         IMessageHub mesh, IoPoolRegistry? ioPools, AsyncDisposeQueue? asyncDisposeQueue,
         TimeSpan timeout, MeshTeardownSignal? teardownSignal, bool activitiesQuiesced,
-        ILogger? logger)
+        ILogger? logger, ActivityQuiesceReport quiesce)
     {
         // (1) Action blocks + message round-trips.
         //
@@ -200,9 +243,13 @@ public static class MeshTeardownExtensions
             {
                 // Preserve the shape callers already branch on: HubTestBase and MonolithMeshTestBase
                 // both treat a TimeoutException here as HANG DETECTED and dump hub diagnostics.
+                string diagnostics;
+                try { diagnostics = mesh.GetDisposalDiagnostics(); }
+                catch (Exception diagEx) { diagnostics = $"(disposal diagnostics unavailable: {diagEx.GetType().Name}: {diagEx.Message})"; }
                 throw new TimeoutException(
                     $"Mesh {mesh.Address}: disposal did not complete within {timeout}. "
-                    + "Something on the action block is not finishing — find it; do not widen the budget.");
+                    + "Something on the action block is not finishing — find it; do not widen the budget."
+                    + Environment.NewLine + diagnostics);
             }
             catch (Exception ex)
             {
@@ -221,8 +268,21 @@ public static class MeshTeardownExtensions
         //     leaf still runs → its ThreadPool thread dereferences a collectible node ALC's freed
         //     metadata after unload → native use-after-unload SIGSEGV. DrainAll() cancels every leaf
         //     so it stops, then joins — no ToTask, no wait-without-cancel.
+        //
+        //     🚨 The drain gives every leaf a GRACE to finish on its own before it cancels anything
+        //     (IoPool.Drain): only a leaf that outlives the grace with its pool making no further
+        //     progress is cancelled — and that is a KILL, reported at Error with the leaf's site,
+        //     because the work it was doing did not finish.
         IReadOnlyList<IoPoolRegistry.PoolResidual> residualByPool = [];
-        var leakedIoLeaves = ioPools is null ? 0 : ioPools.DrainAll(out residualByPool);
+        IReadOnlyList<IoPoolRegistry.PoolResidual> cancelledByPool = [];
+        var leakedIoLeaves = ioPools is null ? 0 : ioPools.DrainAll(out residualByPool, out cancelledByPool);
+        var cancelledIoLeaves = cancelledByPool.Sum(p => p.Residual);
+        if (cancelledIoLeaves > 0)
+            logger?.LogError(IoLeavesCancelledAfterGrace,
+                "Mesh {Address}: the I/O drain had to CANCEL {Count} pooled leaf(es) that made no progress "
+                + "within the drain grace — that work did not finish: [{Leaves}]. Find why each stalled; "
+                + "a leaf that completes is never cancelled.",
+                mesh.Address, cancelledIoLeaves, string.Join(", ", cancelledByPool));
 
         // (3) After all the sync stuff is disposed (and everyone has enqueued their
         //     async cleanup), quiesce the async dispose queue before the scope closes.
@@ -237,7 +297,11 @@ public static class MeshTeardownExtensions
         {
             ResidualByPool = residualByPool,
             DisposalFault = disposalFault,
-            ActivitiesQuiesced = activitiesQuiesced
+            ActivitiesQuiesced = activitiesQuiesced,
+            CancelledActivities = quiesce.Cancelled,
+            AbandonedActivities = quiesce.Abandoned,
+            CancelledIoLeaves = cancelledIoLeaves,
+            CancelledIoByPool = cancelledByPool,
         };
         teardownSignal?.SignalCompleted(report);
         return report;

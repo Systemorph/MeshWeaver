@@ -30,6 +30,8 @@ Tags:
 >
 > For *debugging* a disposal that hangs or leaks, see
 > [Debugging Disposal, Storms and Leaks](/Doc/Architecture/DebuggingDisposalAndLeaks).
+> For the policy the phases implement — accepted work finishes, wedged work is reported
+> and cancelled, nothing is forced — see [Teardown Layers](/Doc/Architecture/TeardownLayers).
 > This page is the **model** — how shutdown is built and how to add to it.
 
 ---
@@ -169,7 +171,13 @@ quiescingSubscription = drained
 > trips (the gap is always 50 ms, never 2 s). The deadline must be a **separate
 > total-duration `Observable.Timer`**, raced against the drain signal with `Amb`.
 
-If the budget elapses with callbacks still pending, the hub sets the sticky
+If the budget elapses with callbacks still pending, the hub first asks whether any of
+them is **owed by a sibling hub in this mesh that is itself shutting down** — resolved at
+the mesh root like `HierarchicalRouting` does — and if so **re-arms the budget** rather
+than cancelling (`[QUIESCE-WAIT]`): that sibling answers every delivery it accepted before
+it leaves the registry, so the wait ends by construction (a cycle breaker,
+`MaxQuiesceRearms`, covers two hubs holding each other's deferred requests; see
+[Teardown Layers](/Doc/Architecture/TeardownLayers)). Otherwise the hub sets the sticky
 `QuiescingTimedOut` flag, records `QuiescingTimeoutDetail` and force-cancels them.
 **Tests treat `AnyHubQuiescingTimedOut()` as a dispose failure** — a leaked `Observe`
 subscription that never got its reply is a real bug, not a teardown oddity. Either
@@ -223,37 +231,56 @@ registered sync dispose actions), `messageService.Dispose()` (**sync** —
 `RunLevel = Dead`. The disposal-phase subscriptions are disposed in the `finally`
 (each has already self-completed).
 
-### The watchdog — `Observable.Timer`, and it tears down for real
+### The stall detector — `Observable.Timer`, and it reports instead of tearing down
 
-A safety net runs the teardown if the state machine ever wedges. It is a reactive
-timer that **cancels itself the instant disposal completes**:
+A reactive timer watches the teardown and **cancels itself the instant disposal
+completes**. It measures a **stall**, not a duration: it is re-armed by every
+`RunLevel` transition anywhere in the hosted subtree, so a slow nested teardown never
+trips it (#1701), and it fires every `DisposalWatchdogTimeout` (8 s) that goes by with
+no such signal:
 
 ```csharp
-watchdogSubscription = Observable
-    .Timer(DisposalWatchdogTimeout)            // 8 s, default scheduler (off action block)
-    .TakeUntil(disposalCompleted)              // cancel the moment disposal finishes
-    .Subscribe(
-        _ => { if (!DisposalSignalled) ForceTeardownAfterWatchdog(); },
-        _ => { });                             // a faulted disposalCompleted needs no watchdog
+watchdogSubscription = DisposalProgress
+    .StartWith($"{Address} Dispose() called")
+    .Select(reason => Observable.Timer(DisposalWatchdogTimeout, DisposalWatchdogTimeout).Select(_ => reason))
+    .Switch()                                   // re-arm on every progress signal in the subtree
+    .TakeUntil(disposalCompleted)               // stop the moment disposal finishes
+    .ObserveOn(DefaultScheduler.Instance)       // never on the progress path (lock-order inversion)
+    .Subscribe(OnDisposalStall, _ => { });
 ```
 
-Two things matter here, and both were once wrong:
+`OnDisposalStall` reaches one of five verdicts and **performs no teardown** — see
+[Teardown Layers](/Doc/Architecture/TeardownLayers) for the table. In short: a pump that
+keeps completing turns is *busy* (Information; accepted work is draining ahead of the
+`ShutdownRequest`, which queues FIFO behind it); a turn that has held the block for a
+whole budget is handed its cancellation token once and reported at **Error** by name;
+one that ignores that is reported again every budget; a `ShutdownRequest` that is itself
+on the block means a registered cleanup is blocking inside `DisposeImpl` (reported, not
+cancelled — it runs with `CancellationToken.None`); and no turn at all means the stall
+is in a child or a join, which the recursive diagnostics name.
 
-- **It force-*tears down*, it does not merely signal.** `ForceTeardownAfterWatchdog`
-  flips `RunLevel` to `ShutDown` first (so heartbeats and hosted-hub creation stop
-  feeding the storm), then runs the SAME teardown the phases would have —
-  `hostedHubs.Dispose()`, `CancelCallbacks()`, `DisposeImpl()`,
-  `messageService.Dispose()` — each in its own `try/catch`, then sets `Dead` and
-  signals. The predecessor only **signalled** completion here: the caller unblocked
-  and every child leaked, which is how one dead Blazor circuit's portal hub kept
-  ~7k sync-stream hubs alive heartbeating at ~1.2 cores forever (the 2026-07-01
-  zombie portal-hub storm).
+Two things about its history matter, because both were once wrong the other way:
+
+- **It no longer tears anything down out of band.** The predecessor ran
+  `hostedHubs.Dispose()`, `CancelCallbacks()`, `DisposeImpl()` and
+  `messageService.Dispose()` from the timer thread and signalled `Dead` while the
+  wedged turn was still executing. A parent then advanced against a subtree that was
+  mid-flight; production (`memex-cloud`, 2026-08-29 → 09-03) showed it firing dozens of
+  times per shutdown and on pods that were not shutting down. Its own predecessor
+  merely **signalled** completion and leaked every child (the 2026-07-01 zombie
+  portal-hub storm). Now a hub either finishes its phases or stays *pending* and says
+  why; the bound that ends a wedged teardown is the caller's, and it reports the
+  snapshot rather than forcing.
 - **`TakeUntil(disposalCompleted)` is what fixed the TimerQueue leak.** The old
   uncancelled `Task.Delay(25 s)` rooted the entire hub graph (cache, data sources,
   action block, subscriptions) for 25 s after *every* dispose, even a fast one. The
-  reactive timer releases its scheduler entry as soon as the subject fires. (The
-  current budget is `DisposalWatchdogTimeout` = **8 s**; the 25 s figure is the
-  deleted `Task.Delay`, not today's bound.)
+  reactive timer releases its scheduler entry as soon as the subject fires.
+
+`Dispose()` also **no longer cancels the in-flight turn on entry**. Work the hub accepted
+before teardown began runs to completion; cancellation is the stall verdict above, never
+a reflex. The one exception is a hub still in `Starting`: its `InitializeHubRequest` is
+its own bring-up, not accepted work, and is cancelled at once so a hung initialization
+cannot hold its ancestry pending for a whole stall budget.
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 Name: Mesh Lifecycle — Build Up & Tear Down
 Category: Architecture
-Description: The exact, symmetric order for standing a mesh up and taking it down — including the activity quiesce and the three-phase drain (DisposalCompleted + IoPool cancel-and-join + async dispose queue) that every teardown MUST complete before the service scope dies. Applies to tests, the Orleans silo, and host shutdown.
+Description: The exact, symmetric order for standing a mesh up and taking it down — including the activity quiesce (progress-based; a stalled run is cancelled and named) and the three-phase drain (DisposalCompleted + IoPool grace-then-cancel join + async dispose queue) that every teardown MUST complete before the service scope dies. Applies to tests, the Orleans silo, and host shutdown.
 Icon: ArrowSync
 ---
 
@@ -60,7 +60,7 @@ scope is disposed:
 | # | In-flight work | Drained by | Why it's separate |
 |---|---|---|---|
 | 1 | Hub **action blocks** + in-flight **message round-trips** (`hub.Observe`, `GetMeshNode`, …) | `IMessageHub.DisposalCompleted` | Runs on the hub's single-threaded action block; the disposal state machine waits for the response subjects to drain. |
-| 2 | **Offloaded I/O** — anything sent through `IIoPool` (DB, blob, HTTP, compile) | `IoPoolRegistry.DrainAll()` — **cancel + join**, synchronous, returns the count of leaves that did not stop | Runs on the **ThreadPool**, independent of the action block. `DisposalCompleted` does **not** know about it. |
+| 2 | **Offloaded I/O** — anything sent through `IIoPool` (DB, blob, HTTP, compile) | `IoPoolRegistry.DrainAll()` — **grace, then cancel, then join**, synchronous; returns the count of leaves that did not stop and names the ones it had to cancel | Runs on the **ThreadPool**, independent of the action block. `DisposalCompleted` does **not** know about it. |
 | 3 | **Async cleanup** a resource cannot finish inside its synchronous `Dispose()` (flush a write queue, await a stream) | `AsyncDisposeQueue.DrainAsync(quiesce)` | `Dispose()` may not block; resources `Enqueue` their async cleanup onto the queue and a TPL `ActionBlock` drains it. |
 
 The async dispose queue is the key to phase 3: **`Dispose()` is synchronous and must
@@ -79,10 +79,14 @@ drains it in the background; tear-down gives it a bounded quiesce budget to fini
 There is also a **phase 0** that is easy to miss: an in-flight *activity* falls through all
 three phases above — its trigger returned as soon as the activity existed, its command runs
 off-turn so it holds no grain turn, and the subscribe-window pool permit is long released, so
-`DrainAll()` joins nothing. So teardown **waits for `ActivityTracker.WhenIdle` first**, before
-anything is disposed: those runs still write their terminal `ActivityLog` status through hubs
-that must still be alive. (Measured before this existed: a 5 s activity, and teardown returned
-after 2028 ms with the command still running.)
+`DrainAll()` joins nothing. So teardown **quiesces the activities first**, before anything is
+disposed — `ActivityTracker.Quiesce(ActivityStallBudget)`: a run that keeps reporting progress
+(every `ctx.Log` line) is waited for; one that has made no progress for the stall budget (8 s) is
+cancelled once, through the same token a user's cancel would trip, and named on the report; one
+that ignores that is named as abandoned a budget later so the teardown can proceed. Those runs
+still write their terminal `ActivityLog` status through hubs that must still be alive. (Measured
+before any of this existed: a 5 s activity, and teardown returned after 2028 ms with the command
+still running.) Policy and evidence: [Teardown Layers](/Doc/Architecture/TeardownLayers).
 
 The canonical helper does all of it:
 
@@ -98,20 +102,25 @@ await ((IAsyncDisposable)mesh.ServiceProvider).DisposeAsync();
 1. captures the `IoPoolRegistry`, `AsyncDisposeQueue`, `ActivityTracker` and
    `MeshTeardownSignal` **while the scope is still alive** (never resolve DI once disposal has
    begun — see the note in `MessageHub`'s ShutDown `finally`),
-2. waits (bounded) on `ActivityTracker.WhenIdle` — phase 0,
+2. runs `ActivityTracker.Quiesce` (bounded by the caller's timeout) — phase 0 — and logs every
+   run it had to cancel or abandon at **Error**,
 3. calls `mesh.Dispose()` (resources enqueue their async cleanup during this reactive disposal),
 4. awaits `DisposalCompleted` (phase 1),
 5. calls `IoPoolRegistry.DrainAll()` (phase 2), then
 6. awaits `AsyncDisposeQueue.DrainAsync(timeout)` (phase 3), and finally
 7. fires `MeshTeardownSignal` with the `TeardownReport`.
 
-> 🚨 **Phase 2 CANCELS, it does not merely wait.** The predecessor was the wait-only, polled
-> `WhenDrained(timeout)`, which **still exists on `IoPoolRegistry`** — it is simply the wrong
-> primitive here, so do not reach for it in a teardown path. A live change-feed leaf never completes on its
-> own, so a wait-without-cancel timed out and let the scope dispose *while the leaf still ran*;
+> 🚨 **Phase 2 gives a GRACE, then CANCELS, then joins — it never merely waits.** `DrainAll()`
+> first lets every in-flight leaf finish on its own: it re-acquires the gate permits one at a
+> time under `IoPoolOptions.DrainGrace` (8 s per completion — a stall bound, so a burst of short
+> writes drains in as many completions), names the leaves that outlived it, and only then
+> cancels. The cancel is still required: a live change-feed leaf never completes on its own, and
+> the wait-only, polled `WhenDrained(timeout)` — which **still exists on `IoPoolRegistry`** and
+> is the wrong primitive here — timed out and let the scope dispose *while the leaf still ran*;
 > its ThreadPool thread then dereferenced a collectible node ALC's freed metadata after unload
-> → a native use-after-unload SIGSEGV. `DrainAll()` cancels every leaf so it stops, then joins,
-> and returns how many did not.
+> → a native use-after-unload SIGSEGV. After the cancel `DrainAll()` joins, and returns how many
+> leaves did not unwind. A leaf it had to cancel after the grace is a unit of work that did not
+> finish — reported at **Error** with its call site (`TeardownReport.CancelledIoByPool`).
 
 `TeardownAsync` returns a **`TeardownReport`** (leaked I/O leaves + whether the async dispose
 queue drained clean). **Surface a dirty report** — fail the test class, error-log the shutdown.

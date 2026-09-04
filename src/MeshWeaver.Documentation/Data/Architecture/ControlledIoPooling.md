@@ -416,12 +416,20 @@ So the mesh teardown awaits **all three**, in order, before the scope is dispose
 1. `IMessageHub.DisposalCompleted` — action blocks + message round-trips. (Resources enqueue their
    async cleanup onto the `AsyncDisposeQueue` during this synchronous-`Dispose()` phase — `Dispose()`
    must never block, so async cleanup is *queued*, not run inline.)
-2. `IoPoolRegistry.DrainAll()` — offloaded ThreadPool I/O. **CANCEL + JOIN, not wait.** 🚨 Do *not*
-   use the wait-only `WhenDrained(timeout)` here: a live change-feed leaf never completes on its own,
-   so a polled wait times out and lets the scope dispose *while the leaf is still running* — its
-   ThreadPool thread then dereferences a collectible node ALC's freed metadata after unload, a
-   native use-after-unload **SIGSEGV**. `DrainAll()` cancels every leaf so it stops, then joins, and
-   returns the count it had to leak.
+2. `IoPoolRegistry.DrainAll()` — offloaded ThreadPool I/O. **GRACE, then CANCEL + JOIN — never wait
+   alone, never cancel first.** The drain first lets every in-flight leaf finish on its own: it
+   re-acquires the gate permits one at a time, each under `IoPoolOptions.DrainGrace` (8 s), so every
+   completion restarts the clock and a leaf that is going to finish is never cancelled (a write that
+   would have landed in 50 ms lands). Only a leaf that outlives a whole grace with the pool making
+   no further progress is *wedged*: its call site is captured, and then the pool cancels. 🚨 Do *not*
+   use the wait-only `WhenDrained(timeout)` in place of that cancel: a live change-feed leaf never
+   completes on its own, so a polled wait times out and lets the scope dispose *while the leaf is
+   still running* — its ThreadPool thread then dereferences a collectible node ALC's freed metadata
+   after unload, a native use-after-unload **SIGSEGV**. `DrainAll()` cancels so the stream leaves and
+   the wedged leaves stop, then joins, and returns the count it had to leak — and, separately, the
+   leaves it had to cancel (`IoPool.LeavesCancelledAfterGrace` / `CancelledLeafSites`), which the
+   teardown logs at **Error** because that work did not finish
+   ([Teardown Layers](/Doc/Architecture/TeardownLayers)).
    🚨 **The cancel runs on its own thread, never on the joining one.**
    `CancellationTokenSource.Cancel()` executes every registered callback *synchronously on the
    caller*, and this token's callbacks are not bookkeeping: `SubscribeThroughPool` registers one per

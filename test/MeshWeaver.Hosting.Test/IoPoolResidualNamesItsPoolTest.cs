@@ -52,7 +52,7 @@ public class IoPoolResidualNamesItsPoolTest
         // A millisecond budget: the SAME code path through the SAME DrainAll, three orders of
         // magnitude less waiting. The subject is the residual naming its pool, not the 30 s value.
         using var registry = new IoPoolRegistry(
-            new IoPoolOptions { DrainTimeout = TimeSpan.FromMilliseconds(250) });
+            new IoPoolOptions { DrainTimeout = TimeSpan.FromMilliseconds(250), DrainGrace = TimeSpan.FromMilliseconds(100) });
         var pool = registry.Get(IoPoolNames.Query);
 
         // 🚨 NO HAND-WOVEN GATE AND NO BLOCKING BRIDGE. The first version of this used
@@ -110,6 +110,12 @@ public class IoPoolResidualNamesItsPoolTest
     /// cannot quietly change the teardown contract (#2578/#2616 both turn on 30 s being the
     /// window in which a leaf must unwind).
     /// </summary>
+    [Fact]
+    public void TheDefaultDrainGrace_IsTheProductionContract()
+        => new IoPoolOptions().DrainGrace.Should().Be(TimeSpan.FromSeconds(8),
+            "the grace a leaf gets to finish on its own before teardown cancels it matches the hub "
+            + "disposal stall budget, so 'no progress' means the same thing at every layer");
+
     [Fact]
     public void TheDefaultDrainBudget_IsTheProductionContract()
         => new IoPoolOptions().DrainTimeout.Should().Be(TimeSpan.FromSeconds(30),
