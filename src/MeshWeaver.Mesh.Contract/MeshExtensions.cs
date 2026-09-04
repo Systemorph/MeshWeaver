@@ -5092,11 +5092,18 @@ public static class MeshExtensions
         // it. Same seam MeshService uses — the issuing hub posts to the node-operation target and
         // stamps the caller's AccessContext, so the per-node creates inside the copy authorise as
         // the mover, exactly as before.
+        //
+        // 🚨 RequireComplete — the copy leg must carry EVERY node storage holds under the source,
+        // and refuse before creating anything when it cannot (issue #3272). The same argument as
+        // above applies to posting the request directly: IMeshService.CopyNode cannot say it, and a
+        // MOVE is the one caller for which "carried less than everything" means the delete leg
+        // below destroys the remainder.
         var copyRequest = new CopyNodeRequest(sourcePath, targetPath)
         {
             IncludeDescendants = true,
             IncludeSatellites = true,
             PreserveAuthorship = true,
+            RequireComplete = true,
         };
         var callerContext = request.AccessContext
             ?? accessService?.Context ?? accessService?.CircuitContext;
@@ -5155,11 +5162,13 @@ public static class MeshExtensions
                 ex =>
                 {
                     var msg = ex.Message ?? "Unknown error";
-                    var reason = msg.Contains("already exists", StringComparison.OrdinalIgnoreCase)
-                        ? NodeMoveRejectionReason.TargetAlreadyExists
-                        : msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
-                            ? NodeMoveRejectionReason.SourceNotFound
-                            : NodeMoveRejectionReason.Unknown;
+                    var reason = msg.StartsWith(CopyNodeRequest.IncompleteCopyRefusal, StringComparison.Ordinal)
+                        ? NodeMoveRejectionReason.ValidationFailed
+                        : msg.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                            ? NodeMoveRejectionReason.TargetAlreadyExists
+                            : msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
+                                ? NodeMoveRejectionReason.SourceNotFound
+                                : NodeMoveRejectionReason.Unknown;
                     logger.LogError(ex, "Move {Source} -> {Target} failed", sourcePath, targetPath);
                     hub.Post(MoveNodeResponse.Fail(msg, reason), o => o.ResponseFor(request));
                 });
@@ -5198,15 +5207,36 @@ public static class MeshExtensions
             ?? accessService?.Context ?? accessService?.CircuitContext;
 
         // Wraps a per-node CreateNode so its eager AccessContext capture (MeshService.CaptureContext)
-        // sees the caller's identity even though this runs on a scheduler thread. Observable.Using
-        // opens the SwitchAccessContext scope on Subscribe — exactly when the cold CreateNode's Defer
-        // reads the AsyncLocal and posts — and disposes it as the create completes.
+        // sees the caller's identity even though this runs on a scheduler thread. The scope opens on
+        // Subscribe — exactly when the cold CreateNode's Defer reads the AsyncLocal and posts.
+        //
+        // 🚨 RunAs, not Observable.Using (#1790, and Copilot flagged it on this PR). Rx disposes a
+        // Using resource on whichever thread the INNER observable terminates on — for a routed
+        // CreateNodeRequest that is the owning hub's response thread, so the subscribing thread was
+        // left latched to the impersonated identity. RunAs owns both ends of one synchronous
+        // Subscribe frame. This site was the single entry MeshExtensions.cs held in
+        // ImpersonationScopeSites.allow; the satellite sweep above widens the window (more creates
+        // per copy), so it is closed here rather than left for the ledger.
         IObservable<MeshNode> CreateUnderCaller(MeshNode node) =>
-            callerAccessContext is null || accessService is null
-                ? meshService.CreateNode(node)
-                : Observable.Using(
-                    () => accessService.SwitchAccessContext(callerAccessContext),
-                    _ => meshService.CreateNode(node));
+            accessService.RunAs(callerAccessContext, () => meshService.CreateNode(node));
+
+        // 🚨 A completeness check with nothing to check against would PASS — the one shape a guard
+        // must never have. RequireComplete asserts the copy covers what STORAGE holds; with no
+        // storage adapter there is no inventory, the difference is empty for want of a left-hand
+        // side, and the move's delete leg would run on an assurance nobody established. Refuse
+        // instead. (Unreachable on a real mesh: HandleMoveNodeRequest resolves the same adapter with
+        // GetRequiredService, so a mesh without one cannot issue this request at all.)
+        if (copyRequest.RequireComplete && persistence is null)
+        {
+            logger.LogError("[CopyNode] refusing {Source} -> {Target}: no IStorageAdapter to enumerate the stored subtree",
+                sourcePath, targetPath);
+            hub.Post(CopyNodeResponse.Fail(
+                    $"{CopyNodeRequest.IncompleteCopyRefusal} a subtree it cannot enumerate: no "
+                    + "IStorageAdapter is registered, so completeness cannot be established.",
+                    NodeCopyRejectionReason.ValidationFailed),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
 
         // 🚨 A QUERY RESULT IS A PROJECTION, NOT THE NODE. The subtree query below decides WHICH
         // paths this caller may copy — that part is authoritative, because it is the read the
@@ -5254,10 +5284,6 @@ public static class MeshExtensions
                         ? Observable.Return(stored)
                         : ProjectionFallback(projected));
 
-        logger.LogDebug("[CopyNode] start source={Source} target={Target} (descendants={Desc} satellites={Sat} preserveAuthorship={Preserve})",
-            sourcePath, targetPath, copyRequest.IncludeDescendants, copyRequest.IncludeSatellites,
-            copyRequest.PreserveAuthorship);
-
         // 🚨 PRESERVED AUTHORSHIP IS NOT FREE FOR THE ASKING. CopyNodeRequest is a wire message, so
         // the flag is caller-settable, and a node whose CreatedBy names someone else is not inert:
         // AccessContextScope.FromNode impersonates exactly that identity, so an unguarded flag would
@@ -5283,7 +5309,82 @@ public static class MeshExtensions
                             : ($"Preserving authorship on a copy of '{sourcePath}' requires Delete on its "
                                 + "namespace — the same entitlement a move of it requires.", false));
 
-        // Subtree query covers source + descendants + satellites (anything under sourcePath).
+        // 🚨 EVERY path storage holds under the source — the AUTHORITATIVE inventory, and the SAME
+        // enumeration the move's delete leg is planned from (IStorageAdapter.ListDescendantPaths,
+        // "a native prefix enumeration across every table of the partition"). Two things are read
+        // off it below: WHICH satellite containers exist (the content query cannot tell us — see
+        // SatellitesUnder), and, under RequireComplete, whether this copy is about to leave
+        // something behind that the delete leg would then destroy (issue #3272).
+        IObservable<IReadOnlyCollection<string>> StoredSubtreePaths() =>
+            persistence is null || !(copyRequest.IncludeSatellites || copyRequest.RequireComplete)
+                ? Observable.Return<IReadOnlyCollection<string>>(Array.Empty<string>())
+                // Null-persistence is only reachable here for a NON-RequireComplete copy — the
+                // refusal above already ended the other case.
+                : persistence.ListDescendantPaths(sourcePath)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(15));
+
+        // 🚨 THE SUBTREE QUERY RETURNS NO METADATA SATELLITES, ON ANY BACKEND — which is why this
+        // exists. A content query resolves to ONE storage table: on Postgres from the query path's
+        // satellite segment (PostgreSqlPartitionedMeshQuery.NeedsFanOut → ResolveTable), and in the
+        // in-repo StorageAdapterMeshQueryProvider from the same signal
+        // (IsSatelliteTargetedQuery → IsExcludedFromResults, which mirrors PG's table separation so
+        // the two agree). `path:{main} scope:subtree` is a mesh_nodes read, so a _Comment/_Thread/
+        // _Access row is not in it. The delete leg meanwhile enumerates STORAGE, which holds every
+        // table — so a move copied none of them and deleted all of them, and reported success.
+        //
+        // 🚨 The cure is NOT to enumerate the copy from storage as well: the query is the read that
+        // ROW-LEVEL SECURITY filters, and copying straight out of the store would let a caller
+        // duplicate rows they cannot read into a location they control. Storage says only WHICH
+        // CONTAINERS EXIST (a path set, never content); each container is then READ BACK THROUGH THE
+        // SAME RLS-FILTERED QUERY, in the one shape every backend resolves to the satellite table:
+        // `path:{owner}/_Segment scope:subtree`. Containers are the unit rather than individual
+        // satellites so the sweep is one query per container that actually exists — typically none
+        // — instead of one per satellite row; `scope:subtree` from the container carries nesting
+        // (a _Thread's _ThreadMessage children) with it.
+        IObservable<IReadOnlyList<MeshNode>> SatellitesUnder(
+            IReadOnlyCollection<string> storedPaths,
+            ImmutableHashSet<string> owners,
+            ImmutableHashSet<string> alreadyCarried)
+        {
+            if (!copyRequest.IncludeSatellites)
+                return Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
+            var containers = storedPaths
+                .Select(SatelliteTableMapping.SatelliteContainerOf)
+                .Where(c => !string.IsNullOrEmpty(c))
+                .Select(c => c!)
+                // Only containers hanging off a main node this copy is actually carrying — so
+                // IncludeDescendants=false keeps the root's satellites and not a child's, and a
+                // main node the caller may not read never has its satellites swept in behind it.
+                .Where(c => owners.Contains(SatelliteTableMapping.OwnerOfSatellitePath(c)))
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+            if (containers.IsEmpty)
+                return Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
+            logger.LogDebug("[CopyNode] sweeping {Count} satellite container(s) under {Source}",
+                containers.Count, sourcePath);
+            return containers
+                .ToObservable()
+                // No .Catch here on purpose: a container query that fails must FAIL THE COPY, so the
+                // move's delete leg never runs. Swallowing it would rebuild the very defect this
+                // sweep exists to close, one level down.
+                .SelectMany(container => meshService
+                    .Query<MeshNode>(MeshQueryRequest
+                        .FromQuery($"path:{container} scope:subtree").Complete())
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(15))
+                    .SelectMany(change =>
+                        change?.Items ?? (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()))
+                .Where(n => n is not null && !alreadyCarried.Contains(n.Path))
+                .Distinct(n => n.Path, StringComparer.OrdinalIgnoreCase)
+                .ToList()
+                .Select(list => (IReadOnlyList<MeshNode>)list);
+        }
+
+        logger.LogDebug("[CopyNode] start source={Source} target={Target} (descendants={Desc} satellites={Sat} preserveAuthorship={Preserve} requireComplete={Complete})",
+            sourcePath, targetPath, copyRequest.IncludeDescendants, copyRequest.IncludeSatellites,
+            copyRequest.PreserveAuthorship, copyRequest.RequireComplete);
+
+        // Subtree query covers source + descendants (satellites come from the sweep above).
         // Query's first emission is the initial result set; we Take(1) and project each
         // node into a CreateNode call at the new target path.
         AuthorshipPreservationRefusal()
@@ -5301,7 +5402,8 @@ public static class MeshExtensions
                     return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
                 }
 
-                return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                return StoredSubtreePaths().SelectMany(storedPaths =>
+                    meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{sourcePath} scope:subtree").Complete())
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))
@@ -5326,7 +5428,9 @@ public static class MeshExtensions
                     return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
                 }
 
-                // Filter subtree by include flags (descendants vs satellites).
+                // Filter subtree by include flags (descendants vs satellites). A backend that DOES
+                // return satellite rows here (they are all one store in memory) keeps working — the
+                // sweep below de-duplicates against what this already carries.
                 var others = nodes
                     .Where(n => !string.Equals(n.Path, sourcePath, StringComparison.Ordinal))
                     .Where(n =>
@@ -5335,28 +5439,84 @@ public static class MeshExtensions
                         return isSatellite ? copyRequest.IncludeSatellites : copyRequest.IncludeDescendants;
                     })
                     .ToList();
-                var descCount = others.Count(n => string.Equals(n.MainNode, n.Path, StringComparison.Ordinal));
-                var satCount = others.Count - descCount;
 
-                // Create root, then create all children in parallel via Merge — Move semantics
-                // require all inserts to complete before the source is deleted. Every create runs
-                // under the caller's identity (CreateUnderCaller) so the routed per-descendant
-                // CreateNodeRequest carries a valid AccessContext across the scheduler hop.
-                return Authoritative(sourceNode)
-                    .Select(stored => RetargetNode(stored, sourcePath, targetPath, copyRequest.PreserveAuthorship))
-                    .SelectMany(CreateUnderCaller)
-                    .SelectMany(rootCreated =>
+                var mainPaths = others
+                    .Where(n => string.Equals(n.MainNode, n.Path, StringComparison.Ordinal))
+                    .Select(n => n.Path)
+                    .Append(sourcePath)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                var carriedByQuery = others
+                    .Select(n => n.Path)
+                    .Append(sourcePath)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+                return SatellitesUnder(storedPaths, mainPaths, carriedByQuery)
+                    .SelectMany(satellites =>
                     {
-                        if (others.Count == 0)
-                            return Observable.Return<(MeshNode Root, int Desc, int Sat)>((rootCreated, descCount, satCount));
-                        return others.ToObservable()
-                            .SelectMany(Authoritative)
-                            .Select(n => RetargetNode(n, sourcePath, targetPath, copyRequest.PreserveAuthorship))
-                            .SelectMany(retargeted => CreateUnderCaller(retargeted))
-                            .ToList()
-                            .Select(_ => ((MeshNode Root, int Desc, int Sat))(rootCreated, descCount, satCount));
+                        var toCopy = others.Concat(satellites).ToList();
+                        var descCount = toCopy.Count(n =>
+                            string.Equals(n.MainNode, n.Path, StringComparison.Ordinal));
+                        var satCount = toCopy.Count - descCount;
+
+                        // 🚨 The refusal (#3272). A MOVE deletes the source, so a copy that carries
+                        // less than everything storage holds is silent data loss the moment the
+                        // delete leg runs. Assert coverage BEFORE creating anything: nothing is
+                        // written at the target, nothing is removed at the source, and the caller
+                        // is told which paths could not be carried. A plain copy never sets this —
+                        // it deletes nothing, so carrying less loses nothing.
+                        if (copyRequest.RequireComplete)
+                        {
+                            var carried = toCopy.Select(n => n.Path)
+                                .Append(sourcePath)
+                                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                            var orphaned = storedPaths
+                                .Where(p => !string.IsNullOrEmpty(p) && !carried.Contains(p))
+                                .OrderBy(p => p, StringComparer.Ordinal)
+                                .ToImmutableList();
+                            if (!orphaned.IsEmpty)
+                            {
+                                var named = string.Join(", ", orphaned.Take(10));
+                                logger.LogError(
+                                    "[CopyNode] refusing {Source} -> {Target}: {Count} path(s) would be left behind: {Paths}",
+                                    sourcePath, targetPath, orphaned.Count, named);
+                                hub.Post(CopyNodeResponse.Fail(
+                                        $"{CopyNodeRequest.IncompleteCopyRefusal} {orphaned.Count} "
+                                        + $"node(s) stored under {sourcePath}: {named}"
+                                        + (orphaned.Count > 10 ? ", …" : ""),
+                                        NodeCopyRejectionReason.ValidationFailed),
+                                    o => o.ResponseFor(request));
+                                return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
+                            }
+                        }
+
+                        // Create root, then create all children in parallel via Merge — Move
+                        // semantics require all inserts to complete before the source is deleted.
+                        // Every create runs under the caller's identity (CreateUnderCaller) so the
+                        // routed per-descendant CreateNodeRequest carries a valid AccessContext
+                        // across the scheduler hop.
+                        //
+                        // 🚨 Authoritative(...) on EVERY node, satellites included (#3263): a query
+                        // row is a PROJECTION and does not carry created_by/created_date/
+                        // last_modified_by on Postgres, so a preserving copy that re-created from it
+                        // would rewrite the authorship it exists to keep. The satellites the sweep
+                        // found arrived through the same query surface, so they go through the same
+                        // storage read.
+                        return Authoritative(sourceNode)
+                            .Select(stored => RetargetNode(stored, sourcePath, targetPath, copyRequest.PreserveAuthorship))
+                            .SelectMany(CreateUnderCaller)
+                            .SelectMany(rootCreated =>
+                            {
+                                if (toCopy.Count == 0)
+                                    return Observable.Return<(MeshNode Root, int Desc, int Sat)>((rootCreated, descCount, satCount));
+                                return toCopy.ToObservable()
+                                    .SelectMany(Authoritative)
+                                    .Select(n => RetargetNode(n, sourcePath, targetPath, copyRequest.PreserveAuthorship))
+                                    .SelectMany(retargeted => CreateUnderCaller(retargeted))
+                                    .ToList()
+                                    .Select(_ => ((MeshNode Root, int Desc, int Sat))(rootCreated, descCount, satCount));
+                            });
                     });
-            });
+            }));
             })
             .Subscribe(
                 t =>
