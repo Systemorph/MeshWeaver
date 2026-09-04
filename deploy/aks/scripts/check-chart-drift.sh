@@ -257,9 +257,16 @@ done
 # ---------------------------------------------------------------------------
 # Every key an envFrom source supplies reaches the portal exactly like a memex-portal-config key —
 # so an inline env of the same name shadows it just as silently. memex proves it is not theoretical:
-# the Key-Vault-provisioned PluginCatalog__RegistryToken sits under an inline entry carrying a
-# DIFFERENT token, so the managed credential is dead and the pod authenticates with a plaintext
-# copy (MeshWeaver#3201). Reading only the names is enough to see that, and is all we read.
+# PluginCatalog__RegistryToken sits in secret/memex-portal-secrets AND as an inline entry carrying a
+# DIFFERENT value, so the secret's copy is dead and the pod authenticates with a plaintext one
+# (MeshWeaver#3201). Reading only the names is enough to see that, and is all we read.
+#
+# 🚨 And reading only the names is also all we may CLAIM. Re-measured 2026-09-04, the two sides were
+# not one credential in two places: they were valid instance keys of DIFFERENT registered instances,
+# and the secret's copy was never Key Vault-provisioned at all (that namespace's CSI-backed secret is
+# memex-kv-secrets, which does not carry this key, and the vault holds no such entry). A name-only
+# checker cannot see provenance or identity — so it reports the shadow and says the two are unknown,
+# rather than narrating a story about where either side came from.
 #
 # 🚨 BOTH source kinds, not just Secrets. `.Values.extraEnvFrom` takes verbatim EnvFromSource
 # objects and the chart documents `{configMapRef: {name: …}}` as one of the two shapes, so
