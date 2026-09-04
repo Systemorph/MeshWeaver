@@ -241,6 +241,39 @@ independent reader — the tool's own check mode, or the gate that consumes the 
 reports success while doing nothing is the purest form of this page's subject: there is no error to
 notice, no red to chase, and the only signal is one you have to go and ask for.
 
+## The family's edge: a control that fires correctly and hands you an impossible next step
+
+The eight above are all one defect — a control whose green is guaranteed. This last one is
+deliberately kept separate, because it is that defect **one step downstream**, in the ACTION rather
+than in the verdict, and collapsing the two would blunt both.
+
+`EmitPipeline`'s canary detects its condition correctly. On a `BELOW-ROSLYN` verdict it then told the
+reader to **capture a core dump** — and `DOTNET_DbgEnableMiniDump` fires on a **signal**, while this
+particular death is the wall-clock cap killing the process as `exit=124`/SIGTERM. No signal, no dump,
+ever.
+
+**Nine occurrences carried that instruction and produced zero dumps** (#890, fixed in #3317).
+
+Nothing looked wrong at any point, and that is the whole lesson. A missing dump reads as *"nobody got
+round to it"*, never as *"the instruction is impossible"*. The verdict fired, named the right
+condition, and routed every investigation into a wall — which is arguably **worse** than staying
+silent, because it consumed nine investigations before anyone questioned the advice rather than the
+defect.
+
+The repair is the shape to copy: name the followable remedy instead — a split-arm re-run — and put
+*"one clean arm proves nothing"* **inside** the instruction, so the remedy carries its own control arm
+and the next reader cannot take a single green arm as an answer.
+
+**The sibling finding, same PR:** the verdict also *named a residual it never measured*. Two legs both
+asked "can this process emit?"; neither asked whether it could still perform the READ the emit dies
+on. A third leg now dissects that directly, so the verdict discriminates between two hypotheses it
+previously conflated. **A verdict may only name what one of its legs actually measured** — otherwise
+it is a guess wearing a measurement's clothes.
+
+> 🚨 **Ask it of remedies too, not just checks:** *if I followed this instruction right now, could it
+> possibly produce what it promises?* Nine people did not, and the instruction was in the tooling the
+> whole time.
+
 ## What to do about it
 
 1. **Break the subject on purpose, once — this is the whole discipline.** Revert only the fixing
@@ -256,7 +289,12 @@ notice, no red to chase, and the only signal is one you have to go and ask for.
    consumer — pass it and have the consumer confirm.
 5. **Prefer a red that stops the line to a value that travels.** A refusal is recoverable; a
    plausible-looking wrong value is not.
-6. **Do not promote an experiment into a guard by default.** An experiment that pins a cause and a test
+6. 🚨 **Never trust a `--no-build` result after a build you did not just watch succeed — in EITHER
+   direction.** The familiar warning is that `--no-build` on an unbuilt project exits 0 having run
+   nothing, a false PASS. It also produces false FAILS: a stale mutation binary left in the output
+   directory failed a full suite that was actually fine. The rule is about the staleness, not about
+   the polarity of the answer.
+7. **Do not promote an experiment into a guard by default.** An experiment that pins a cause and a test
    that guards against regression are different artifacts. If the experiment's setup depends on an
    ordering you cannot *enforce*, committing it manufactures the next flake — record it in the change
    instead.
