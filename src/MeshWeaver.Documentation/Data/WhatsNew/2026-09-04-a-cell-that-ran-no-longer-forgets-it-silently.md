@@ -37,3 +37,6 @@ is that "this cell has never been run" is now a statement the cell has actually 
 One thing is still open: opening a cell after a page reload, you cannot tell "never run" apart from
 "ran, and the note did not save". The run is not lost — its activity records which cell produced it
 — but the cell has no pointer back to it. Reconnecting the two is tracked separately.
+
+If you have ever pressed Run on a cell and come back to find it claiming it had never been run,
+that is what this was.

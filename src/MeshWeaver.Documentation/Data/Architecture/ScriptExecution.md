@@ -161,7 +161,7 @@ Two things make that an honest answer rather than a shrug.
 
 `Error` rather than `Warning` is deliberate and costs nothing extra: both levels ship to Loki and the path is exceptional, so the only thing that changes is that it trips error-rate alerting. That is the right classification — nothing retries the write, the loss is permanent, and the visible consequence is a cell that tells a human it has never run. "Degraded but self-correcting" is what `Warning` claims, and none of it holds here.
 
-What is still **not** covered: a viewer looking at a cell after a reload cannot tell `NeverRun` from "ran, not recorded". Closing that needs a surface that finds a cell's runs by `ActivityLog.HubPath` rather than by the stamp — a client-side concern, not a dispatch one. See [issue #3249](https://github.com/Systemorph/MeshWeaver/issues/3249).
+What is still **not** covered: a viewer looking at a cell after a reload cannot tell `NeverRun` from "ran, not recorded". Closing that needs a surface that finds a cell's runs by `ActivityLog.HubPath` rather than by the stamp — a read that does not depend on the stamp, not another write. See [issue #3301](https://github.com/Systemorph/MeshWeaver/issues/3301).
 
 ### 2. From application code — `SubmitCodeRequest` directly
 
