@@ -86,13 +86,26 @@ public static class SetupEndpoints
             return Task.CompletedTask;
         });
 
-        app.MapGet(Path, (HttpContext ctx) =>
+        // PHASE ONE while the manifest carries no identity, PHASE TWO once it does. The manifest
+        // is the state between them — a half-answered one keeping the instance in setup is exactly
+        // what InstanceSetupState.AwaitingModules is for, so no session, cookie or in-memory step
+        // counter is needed (and none would survive the restart-shaped lifecycle anyway).
+        app.MapGet(Path, async (HttpContext ctx) =>
         {
             var strings = StringsFor(ctx);
-            return Results.Content(
-                SetupPage.Render(Catalog(ctx), strings, token: ctx.Request.Query["token"]),
-                "text/html; charset=utf-8");
+            var identity = IdentityOf(ctx);
+            if (identity is not { IsRegistered: true })
+                return Html(SetupPage.RenderIdentity(
+                    strings, MintInstanceId(), DefaultRegistry(ctx),
+                    token: ctx.Request.Query["token"]), StatusCodes.Status200OK);
+
+            return Html(SetupPage.Render(
+                await CatalogFor(ctx, identity), strings, token: ctx.Request.Query["token"]),
+                StatusCodes.Status200OK);
         });
+
+        app.MapPost(Path + "/identity", (HttpContext ctx, IFormCollection form) =>
+            RegisterIdentity(ctx, form, token)).DisableAntiforgery();
 
         // 🚨 DisableAntiforgery is deliberate, and the setup token is what replaces it. Binding
         // IFormCollection makes ASP.NET demand the antiforgery middleware; adding a SECOND
@@ -109,6 +122,131 @@ public static class SetupEndpoints
     }
 
     /// <summary>
+    /// PHASE ONE — claim the id, register with the registry, and record the result so phase two can
+    /// list what this instance is entitled to.
+    ///
+    /// <para>🚨 <b>The issued key is persisted BEFORE anything else can fail.</b> The registry
+    /// returns it exactly once and never re-issues it, and the id cannot be re-registered after
+    /// deletion — so a crash between "registered" and "wrote it down" permanently burns that id.
+    /// The manifest write is therefore the very next thing after a successful response, ahead of
+    /// listing packages or rendering anything.</para>
+    /// </summary>
+    private static async Task<IResult> RegisterIdentity(
+        HttpContext ctx, IFormCollection form, SetupAccessToken token)
+    {
+        var strings = StringsFor(ctx);
+        var answers = new IdentityAnswers(
+            Blank(form["identity.name"]), Blank(form["identity.id"]),
+            Blank(form["identity.registry"]), Blank(form["identity.key"]));
+
+        if (!token.Matches(form["token"]))
+            return Html(SetupPage.RenderIdentity(
+                strings, answers.Id ?? MintInstanceId(), DefaultRegistry(ctx), answers,
+                [strings.TokenInvalid]), StatusCodes.Status403Forbidden);
+
+        var problems = ImmutableList.CreateBuilder<string>();
+        if (string.IsNullOrWhiteSpace(answers.Name))
+            problems.Add(strings.ProblemNoInstanceName);
+        // The id is minted by us and rendered read-only, so a malformed one means the form was
+        // hand-crafted. Refuse rather than claim something the registry's alphabet rejects.
+        var id = string.IsNullOrWhiteSpace(answers.Id) ? MintInstanceId() : answers.Id.Trim();
+        if (!InstanceIdRules.IsWellFormed(id))
+            problems.Add(strings.ProblemBadInstanceId(id));
+        var registry = string.IsNullOrWhiteSpace(answers.RegistryUrl)
+            ? DefaultRegistry(ctx) : answers.RegistryUrl.Trim();
+        if (!Uri.TryCreate(registry, UriKind.Absolute, out _))
+            problems.Add(strings.ProblemBadRegistry(registry));
+
+        if (problems.Count > 0)
+            return Html(SetupPage.RenderIdentity(
+                strings, id, DefaultRegistry(ctx), answers, problems.ToImmutable(), form["token"]),
+                StatusCodes.Status400BadRequest);
+
+        var configuration = ctx.RequestServices.GetRequiredService<IConfiguration>();
+        var root = ModuleRoot.Resolve(configuration);
+        var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(SetupEndpoints));
+
+        InstanceRegistrationPayloads.Response registration;
+        try
+        {
+            var client = ctx.RequestServices.GetRequiredService<SetupRegistryClient>();
+            registration = await client.RegisterAsync(
+                registry, id, answers.Name!.Trim(), answers.BootstrapKey,
+                homeUrl: $"{ctx.Request.Scheme}://{ctx.Request.Host}", ctx.RequestAborted);
+        }
+        catch (SetupRegistryException ex)
+        {
+            logger.LogWarning("[InstanceSetup] registration refused: {Reason}", ex.Message);
+            return Html(SetupPage.RenderIdentity(
+                strings, id, DefaultRegistry(ctx), answers, [ex.Message], form["token"]),
+                StatusCodes.Status400BadRequest);
+        }
+
+        // Encrypt before persisting, and provision a master key if this install has none — the same
+        // rule the rest of the wizard obeys: a secret that cannot be encrypted is refused, never
+        // written in the clear.
+        string? protectedKey = null;
+        try
+        {
+            var masterKey = InstanceMasterKey.EnsureCreated(
+                root, configuration[ConfigMasterKeyProvider.ConfigKey]);
+            protectedKey = new ProviderKeyProtector(new LiteralMasterKeyProvider(masterKey))
+                .Protect(registration.InstanceKey);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // 🚨 The id is ALREADY CLAIMED at this point. Say so loudly: the operator must not
+            // simply retry with a fresh id and leak another one, they must make the root writable.
+            logger.LogError(ex,
+                "[InstanceSetup] registered as {Id} but could NOT protect the issued key under {Root}",
+                id, root);
+            return Html(SetupPage.RenderIdentity(
+                strings, id, DefaultRegistry(ctx), answers,
+                [strings.ProblemKeyUnstorable(id)], form["token"]),
+                StatusCodes.Status500InternalServerError);
+        }
+
+        var manifest = (InstanceManifest.Read(root) ?? InstanceSetupDefaults.Manifest()) with
+        {
+            State = InstanceSetupState.AwaitingModules,
+            Identity = new InstanceIdentitySelection
+            {
+                Id = id,
+                Name = answers.Name!.Trim(),
+                RegistryUrl = registry,
+                InstanceKey = protectedKey,
+                Plan = registration.Plan,
+            },
+        };
+        manifest.Write(root);
+        logger.LogInformation(
+            "[InstanceSetup] registered as {Id} ({Name}) at {Registry} on plan {Plan}",
+            id, manifest.Identity!.Name, registry, registration.Plan ?? "(unstated)");
+
+        return Results.Redirect($"{Path}?token={Uri.EscapeDataString(form["token"].ToString())}");
+    }
+
+    /// <summary>The identity this instance has already registered, or null.</summary>
+    private static InstanceIdentitySelection? IdentityOf(HttpContext ctx)
+    {
+        var configuration = ctx.RequestServices.GetRequiredService<IConfiguration>();
+        return InstanceManifest.Read(ModuleRoot.Resolve(configuration))?.Identity;
+    }
+
+    /// <summary>
+    /// A fresh instance id. A guid, because the id is claimed GLOBALLY and never re-issued — it
+    /// must not be something a person picks and might re-pick, and it must not collide with another
+    /// installation set up the same afternoon. Lowercase, which the registry's alphabet requires.
+    /// </summary>
+    private static string MintInstanceId() => Guid.NewGuid().ToString("d").ToLowerInvariant();
+
+    /// <summary>The registry to pre-fill, from configuration when the deployment states one.</summary>
+    private static string DefaultRegistry(HttpContext ctx) =>
+        Blank(ctx.RequestServices.GetRequiredService<IConfiguration>()["PluginCatalog:RegistryUrl"])
+        ?? "https://memex.meshweaver.cloud";
+
+    /// <summary>
     /// Validates the submission, writes the manifest, and stops the process so it restarts
     /// configured.
     ///
@@ -119,10 +257,15 @@ public static class SetupEndpoints
     /// manifest plus a restart, and saying so is what <c>SignInSetupPlan</c> already refuses to lie
     /// about.</para>
     /// </summary>
-    private static IResult Apply(HttpContext ctx, IFormCollection form, SetupAccessToken token)
+    private static async Task<IResult> Apply(HttpContext ctx, IFormCollection form, SetupAccessToken token)
     {
         var strings = StringsFor(ctx);
-        var catalog = Catalog(ctx);
+        var identity = IdentityOf(ctx);
+        // Phase two cannot be submitted before phase one: the options it offers are derived from
+        // what the registration entitles this instance to.
+        if (identity is not { IsRegistered: true })
+            return Results.Redirect(Path);
+        var catalog = await CatalogFor(ctx, identity);
 
         if (!token.Matches(form["token"]))
             // Deliberately NOT re-rendering the submitted answers: a wrong token means this is
@@ -160,15 +303,18 @@ public static class SetupEndpoints
                 SetupPage.Render(catalog, strings, answers, plan.Problems, plan.Warnings, form["token"]),
                 StatusCodes.Status400BadRequest);
 
-        plan.Manifest.Write(root);
+        // The identity was written in phase one and must survive completion — losing it would
+        // strand the issued key, which the registry never re-issues.
+        var completed = plan.Manifest with { Identity = identity };
+        completed.Write(root);
         logger.LogInformation(
             "[InstanceSetup] manifest written to {Path}: storage {Storage}, {SignIn} sign-in route(s), "
             + "{Ai} model provider(s), embeddings {Embeddings}. Restarting.",
             InstanceManifest.PathFor(root),
-            plan.Manifest.Storage?.Type,
-            plan.Manifest.SignIn?.Providers.Count ?? 0,
-            plan.Manifest.Ai?.Providers.Count ?? 0,
-            plan.Manifest.Ai?.Embeddings is { IsConfigured: true } ? "configured" : "none");
+            completed.Storage?.Type,
+            completed.SignIn?.Providers.Count ?? 0,
+            completed.Ai?.Providers.Count ?? 0,
+            completed.Ai?.Embeddings is { IsConfigured: true } ? "configured" : "none");
 
         // Stop only AFTER the response is on the wire, or the operator's browser reports a
         // connection reset and they cannot tell a successful install from a crash.
@@ -214,13 +360,76 @@ public static class SetupEndpoints
             BootModules = [.. form["modules"].Select(v => v?.Trim()).OfType<string>().Where(v => v.Length > 0)],
             ProvisionPackages =
             [
-                .. (form["packages"].ToString() ?? "")
-                    .Split(['\n', '\r', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                .. form["packages"].Select(v => v?.Trim()).OfType<string>().Where(v => v.Length > 0),
             ],
         };
 
     private static SetupCatalog Catalog(HttpContext ctx) =>
         ctx.RequestServices.GetService<ISetupCatalogProvider>()?.Describe() ?? SetupCatalog.Empty;
+
+    /// <summary>
+    /// Phase two's catalog: what the IMAGE offers, plus what the REGISTRY says this instance is
+    /// entitled to.
+    ///
+    /// <para>🚨 A package that declares a <c>StorageType</c> becomes a database option ONLY when the
+    /// image can already open that backend. Landing a storage module the image lacks would have to
+    /// happen before persistence selection reads <c>Graph:Storage</c>, and package provisioning runs
+    /// after the mesh is up — so offering one would record a backend that never resolves and fail at
+    /// the NEXT boot, with the wizard gone. The package still appears in the plugin list; it just
+    /// does not pretend to answer the database question.</para>
+    ///
+    /// <para>A registry that cannot be reached is REPORTED, not swallowed. An instance that
+    /// registered but cannot see its plan is a state worth naming — an empty list would read as
+    /// "your plan includes nothing".</para>
+    /// </summary>
+    // An HTTP endpoint helper, not hub-reachable code: the registry call is awaited on the request's
+    // own continuation, exactly like RegisterIdentity above. It used to block the request thread on
+    // GetAwaiter().GetResult(), which the ObservableToTaskBridgeGuard refuses in production code —
+    // a parked thread on a turn-based scheduler is a self-deadlock, and no timeout aborts it.
+    private static async Task<SetupCatalog> CatalogFor(HttpContext ctx, InstanceIdentitySelection identity)
+    {
+        var catalog = Catalog(ctx) with { Identity = identity };
+        var configuration = ctx.RequestServices.GetRequiredService<IConfiguration>();
+        var root = ModuleRoot.Resolve(configuration);
+
+        var masterKey = InstanceMasterKey.Resolve(root, configuration[ConfigMasterKeyProvider.ConfigKey]);
+        var key = masterKey is null || identity.InstanceKey is null
+            ? null
+            : new ProviderKeyProtector(new LiteralMasterKeyProvider(masterKey)).Unprotect(identity.InstanceKey);
+
+        ImmutableList<PackageManifest> packages;
+        try
+        {
+            packages = await ctx.RequestServices.GetRequiredService<SetupRegistryClient>()
+                .ListPackagesAsync(identity.RegistryUrl, key, ctx.RequestAborted);
+        }
+        catch (SetupRegistryException ex)
+        {
+            return catalog with { RegistryProblem = ex.Message };
+        }
+
+        var offered = packages
+            .Where(p => !string.IsNullOrWhiteSpace(p.Id))
+            .Select(p => new SetupPackageOption(
+                p.Id, string.IsNullOrWhiteSpace(p.Name) ? p.Id : p.Name!, p.Description,
+                p.StorageType, PreSelected: false))
+            .ToImmutableList();
+
+        // Only backends the image can actually open — see the remarks.
+        var openable = ctx.RequestServices.GetService<StorageBackendCatalog>() ?? StorageBackendCatalog.Empty;
+        var fromPackages = offered
+            .Where(p => p.StorageType is { } t && openable.Offers(t))
+            .Where(p => !catalog.Storage.Any(o => string.Equals(o.Type, p.StorageType, StringComparison.OrdinalIgnoreCase)))
+            .Select(p => new SetupStorageOption(
+                p.StorageType!, p.Name, NeedsConnectionString: true) { PackageId = p.Id })
+            .ToImmutableList();
+
+        return catalog with
+        {
+            Packages = offered,
+            Storage = catalog.Storage.AddRange(fromPackages),
+        };
+    }
 
     /// <summary>
     /// The viewer's locale, read EXPLICITLY from <c>Accept-Language</c>.

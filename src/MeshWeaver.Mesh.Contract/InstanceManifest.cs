@@ -35,6 +35,13 @@ public sealed record InstanceManifest
     /// </summary>
     public InstanceSetupState State { get; init; } = InstanceSetupState.AwaitingStorage;
 
+    /// <summary>
+    /// Who this instance is, and the registry it registered with. Written by the wizard's FIRST
+    /// phase, before any other question is asked — registration is what entitles the instance to a
+    /// plugin catalog, and the catalog is where the remaining options come from.
+    /// </summary>
+    public InstanceIdentitySelection? Identity { get; init; }
+
     /// <summary>The storage the operator chose. Null until the wizard's first step is answered.</summary>
     public InstanceStorageSelection? Storage { get; init; }
 

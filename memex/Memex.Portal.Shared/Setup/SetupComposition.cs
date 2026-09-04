@@ -48,6 +48,16 @@ public sealed record SetupAnswers
     public string? SetUpBy { get; init; }
 }
 
+/// <summary>
+/// PHASE ONE's answers — what the operator types before anything else is offered.
+/// </summary>
+/// <param name="Name">The human-readable instance name.</param>
+/// <param name="Id">The guid the instance minted for itself. Not operator-editable.</param>
+/// <param name="RegistryUrl">The registry to register with.</param>
+/// <param name="BootstrapKey">A registration key, or blank for an open (free-plan) registration.</param>
+public sealed record IdentityAnswers(
+    string? Name, string? Id, string? RegistryUrl, string? BootstrapKey);
+
 /// <summary>One external sign-in provider's answers.</summary>
 /// <param name="Name">The scheme name.</param>
 /// <param name="ClientId">The OAuth client id. Blank turns the provider off.</param>
@@ -274,9 +284,10 @@ public static class SetupComposition
                 BasePath = Blank(answers.BasePath),
             },
             BootModules = answers.BootModules,
-            ProvisionPackages = answers.ProvisionPackages.IsEmpty
-                ? InstanceSetupDefaults.ProvisionPackages
-                : answers.ProvisionPackages,
+            // 🚨 The chosen backend's package rides along automatically. An operator who picks a
+            // database from the plugin list has chosen that plugin, and a manifest that recorded
+            // the backend without its package would configure a store whose plugin never installs.
+            ProvisionPackages = ResolvePackages(answers, catalog, storageOption),
             UserPreInstallPackages = InstanceSetupDefaults.UserPreInstallPackages,
             SignIn = new InstanceSignInSelection
             {
@@ -294,6 +305,35 @@ public static class SetupComposition
         };
 
         return new SetupPlan(manifest, [], warnings.ToImmutable());
+    }
+
+    /// <summary>
+    /// What this instance provisions at first boot.
+    ///
+    /// <para>Three rules, in order:</para>
+    /// <list type="number">
+    /// <item>The chosen backend's package rides along automatically — an operator who picks a
+    /// database from the plugin list has chosen that plugin, and a manifest naming the backend
+    /// without its package would configure a store whose plugin never installs.</item>
+    /// <item>Whatever else the operator ticked.</item>
+    /// <item>🚨 …and when the registry OFFERED NOTHING — an unreachable registry, or a plan that
+    /// lists nothing — fall back to the first-party pattern, so "next, next, finish" still produces
+    /// a working instance. When packages WERE offered and none were ticked, that is an answer:
+    /// install nothing. The distinction matters because the fallback is a default, not a policy;
+    /// applying it over an explicit empty choice would install packages the operator declined.</item>
+    /// </list>
+    /// </summary>
+    private static ImmutableList<string> ResolvePackages(
+        SetupAnswers answers, SetupCatalog catalog, SetupStorageOption? storageOption)
+    {
+        var chosen = answers.ProvisionPackages;
+        if (storageOption?.PackageId is { } storagePackage
+            && !chosen.Any(p => string.Equals(p, storagePackage, StringComparison.OrdinalIgnoreCase)))
+            chosen = chosen.Add(storagePackage);
+
+        return chosen.IsEmpty && catalog.Packages.IsEmpty
+            ? InstanceSetupDefaults.ProvisionPackages
+            : chosen;
     }
 
     /// <summary>
