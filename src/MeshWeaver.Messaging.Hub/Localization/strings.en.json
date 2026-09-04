@@ -1294,10 +1294,11 @@
   "ui.providerColInput": "Input / 1M tokens",
   "ui.providerColOutput": "Output / 1M tokens",
   "ui.providerColTier": "Tier",
-  "ui.providerColSetup": "Unpriced / no currency",
+  "ui.providerColSetup": "Pricing",
   "ui.providerModelUnreadable": "unreadable",
-  "ui.providerNoModels": "No models configured. Add one from the Models catalog — a model needs a price per million tokens and a currency before a round on it can be billed.",
+  "ui.providerNoModels": "No models configured. Add one from the Models catalog — give it a price per million tokens and a currency, so what a round costs is decided here rather than by the platform's built-in price table.",
   "ui.providerModelsUnreadable": "This provider's models could not be read just now, so none are shown rather than an empty catalog.",
-  "ui.providerModelsUnpriced": "{0} {1}: no price per million tokens, so rounds on these models are NOT billed — the platform pays for them and the ledger records nothing.",
-  "ui.providerModelsNoCurrency": "{0} {1}: priced, but in no declared currency — the meter falls back to a default, so the bill states a currency the model never named."
+  "ui.providerModelsUnpriced": "{0} {1}: no price on the model and none in the platform's built-in table, so rounds on these models are NOT billed — the platform pays for them and the ledger records nothing.",
+  "ui.providerModelsNoCurrency": "{0} {1}: priced, but in no declared currency — the meter falls back to a default, so the bill states a currency the model never named.",
+  "ui.providerModelsFallback": "{0} {1}: no price is set on the model, so the platform's built-in price table is used — the rate shown is that fallback, and rounds ARE billed. Set a price on the model to override it."
 }
