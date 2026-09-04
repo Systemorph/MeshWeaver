@@ -73,8 +73,8 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
         node.NodeType.Should().Be(NotificationNodeType.NodeType);
         node.State.Should().Be(MeshNodeState.Active);
         node.Name.Should().Be("Chat ready");
-        ((Notification)node.Content!).Recipient.Should().Be(addressee);
-        ((Notification)node.Content!).TargetNodePath.Should().Be(main,
+        node.ContentAs<Notification>(Mesh.JsonSerializerOptions)!.Recipient.Should().Be(addressee);
+        node.ContentAs<Notification>(Mesh.JsonSerializerOptions)!.TargetNodePath.Should().Be(main,
             "the entity survives as a reference, so grouping and the click-through are unchanged");
     }
 
@@ -97,7 +97,7 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
 
         node.MainNode.Should().Be(TestPartition);
         node.Namespace.Should().Be($"{TestPartition}/{NotificationService.SatelliteSegment}");
-        ((Notification)node.Content!).Recipient.Should().Be(TestPartition);
+        node.ContentAs<Notification>(Mesh.JsonSerializerOptions)!.Recipient.Should().Be(TestPartition);
     }
 
     [Fact(Timeout = 30000)]
@@ -118,7 +118,7 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
             icon: "bell.svg");
         var after = DateTimeOffset.UtcNow;
 
-        var content = (Notification)node.Content!;
+        var content = node.ContentAs<Notification>(Mesh.JsonSerializerOptions)!;
         content.Title.Should().Be("Approval needed");
         content.Message.Should().Be("Carol asked for sign-off.");
         content.NotificationType.Should().Be(NotificationType.ApprovalRequired);
@@ -141,7 +141,7 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
             message: "",
             type: NotificationType.General);
 
-        ((Notification)node.Content!).TargetNodePath.Should().Be(main,
+        node.ContentAs<Notification>(Mesh.JsonSerializerOptions)!.TargetNodePath.Should().Be(main,
             "the bell click should land on the main entity when no other target is set");
     }
 
