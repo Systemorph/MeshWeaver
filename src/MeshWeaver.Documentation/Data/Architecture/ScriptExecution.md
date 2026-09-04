@@ -118,6 +118,27 @@ Each call to `ExecuteScriptRequest` creates a **new** Activity node in the **use
 
 Historical runs accumulate as siblings under `{partitionRoot}/_Activity/*`, and the Code node's `LastExecutedAt` field is stamped on each run. A **Run** button rendered on Code views (visible when the caller has `Permission.Execute`) wires this exact request.
 
+#### What a cell may claim about its own output — the currency rule
+
+The stamp writes four fields together — `LastExecutedAt`, `LastExecutedBy`, `LastActivityPath` and `LastExecutedCodeHash` — and the last of them is the *proof* the other three lack: the `CodeFingerprint` of what that run actually submitted. A view re-computes the fingerprint from the node's current `Code`/`Language` and compares, which is how a cell knows the output pane below it belongs to source the reader has since edited.
+
+🚨 **The stamp is a write, and a write can fail.** It is dispatched fire-and-forget after the run has already been acknowledged (the Run click must never be silent), so a failure reaches a log and nothing else. That leaves a node that ran while recording only part of what it ran — and a boolean "is it stale?" has nowhere honest to put that. Answering *not stale* asserts a currency nothing substantiates: **a wrong claim, not a missing one.**
+
+So the verdict is not a boolean. `CodeConfiguration.OutputCurrency()` (`MeshWeaver.Mesh.Contract`) is the one rule every surface must use, and it fails **closed**:
+
+| State | When | What the cell may show |
+|---|---|---|
+| `NeverRun` | no run recorded at all — no timestamp, no activity path, no runner | nothing; a cell nobody has run has no output to be wrong about |
+| `Current` | a run is recorded **and** its fingerprint reproduces from the code on screen | "up to date" — the only state that may say so |
+| `Stale` | a run is recorded, its fingerprint was recorded, and the code has moved since | "code changed — re-run" |
+| `Unverified` | a run is recorded but **its fingerprint is not** | "output unverified — re-run to be sure" |
+
+`Unverified` is the fail-closed state, and it is deliberately neither of the two it sits between. It is not `Current`, because nothing proves the output belongs to the code above it. It is not `Stale` either: every node last executed by a build that predates the fingerprint field would light up amber at once, which trains readers to ignore the indicator — the failure mode the fingerprint's own normalization rules exist to avoid.
+
+"A run is recorded" is deliberately generous — *any* of the three run fields present, not `LastExecutedAt` specifically — so a stamp that landed only in part cannot fall back into `NeverRun` and go silent on a cell that ran.
+
+**The residual, stated rather than hidden:** a cell whose *very first* run failed to stamp anything at all records nothing, and is therefore indistinguishable from a cell nobody has run. No rule over the node's content can recover that; making it observable needs the run's failure to be written somewhere — see [issue #3249](https://github.com/Systemorph/MeshWeaver/issues/3249).
+
 ### 2. From application code — `SubmitCodeRequest` directly
 
 For one-off submissions — interactive markdown cells, REPL-style flows — where you already own an Activity hub address:

@@ -9,6 +9,11 @@ namespace MeshWeaver.Mesh;
 /// Stamped onto <see cref="CodeConfiguration.LastExecutedCodeHash"/> at submit time and re-computed
 /// from the node's current content at render time; a mismatch means the visible output belongs to
 /// code the reader is no longer looking at.
+///
+/// <para>🚨 The comparison is one INPUT to that question, not the answer: a cell can also carry no
+/// fingerprint at all, which is neither a match nor a mismatch. Ask
+/// <see cref="CodeOutputCurrencyExtensions.OutputCurrency"/> instead of comparing here — it is the
+/// one rule, and it fails closed on the unprovable case.</para>
 /// </summary>
 /// <remarks>
 /// 🚨 Cryptographic, deliberately — NOT <c>string.GetHashCode()</c>. String hash codes are randomized
