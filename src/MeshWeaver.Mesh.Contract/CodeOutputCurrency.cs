@@ -65,14 +65,20 @@ public static class CodeOutputCurrencyExtensions
     /// it. Anything less is <see cref="CodeOutputCurrency.Unverified"/>, never
     /// <see cref="CodeOutputCurrency.Current"/>.</para>
     ///
-    /// <para><b>Why "a run is recorded" is deliberately generous.</b> The last-execution stamp
-    /// writes <see cref="CodeConfiguration.LastExecutedAt"/>,
-    /// <see cref="CodeConfiguration.LastExecutedBy"/>,
+    /// <para><b>Why every field is treated as evidence of a run.</b> The last-execution stamp writes
+    /// <see cref="CodeConfiguration.LastExecutedAt"/>, <see cref="CodeConfiguration.LastExecutedBy"/>,
     /// <see cref="CodeConfiguration.LastActivityPath"/> and
-    /// <see cref="CodeConfiguration.LastExecutedCodeHash"/> together, and any of them arriving
-    /// without the hash means a run happened whose source we did not record. Requiring
-    /// <c>LastExecutedAt</c> specifically would let a partial stamp that dropped only the timestamp
-    /// fall back into <see cref="CodeOutputCurrency.NeverRun"/> — silence, on a cell that ran.</para>
+    /// <see cref="CodeConfiguration.LastExecutedCodeHash"/> together, so ANY of them present means a
+    /// run happened. Requiring <c>LastExecutedAt</c> specifically would let a partial stamp that
+    /// dropped only the timestamp fall back into <see cref="CodeOutputCurrency.NeverRun"/> —
+    /// silence, on a cell that ran.</para>
+    ///
+    /// <para><b>And why the fingerprint is tested FIRST.</b> It is both evidence of a run and the
+    /// only field that can decide currency, so a node carrying the hash and nothing else is fully
+    /// determinable. Checking the other three first would answer
+    /// <see cref="CodeOutputCurrency.NeverRun"/> there and silence a verdict we can actually
+    /// substantiate — the same fail-open shape as the defect this rule exists to remove, mirrored.
+    /// (Found by review on the PR that introduced this rule.)</para>
     ///
     /// <para><b>And why an absent run is silent.</b> <see cref="CodeOutputCurrency.NeverRun"/> is
     /// not a weaker <see cref="CodeOutputCurrency.Unverified"/>: a cell nobody has run has no
@@ -86,20 +92,25 @@ public static class CodeOutputCurrencyExtensions
         if (code is null)
             return CodeOutputCurrency.NeverRun;
 
+        // The fingerprint is BOTH evidence that a run happened and the only field that can decide
+        // currency, so whenever it is present the verdict is the comparison — whatever else the
+        // stamp failed to land. Testing the run markers first would answer NeverRun for a node
+        // carrying only the hash and silence an indicator that is fully determinable: the same
+        // fail-open shape, mirrored.
+        if (!string.IsNullOrEmpty(code.LastExecutedCodeHash))
+            return CodeFingerprint.Of(code.Code, code.Language) == code.LastExecutedCodeHash
+                ? CodeOutputCurrency.Current
+                : CodeOutputCurrency.Stale;
+
+        // No fingerprint: nothing here can prove what ran. If anything else says a run happened,
+        // fail CLOSED rather than claim currency; otherwise the cell genuinely has nothing to show.
         var ranAtLeastOnce = code.LastExecutedAt is not null
                              || !string.IsNullOrEmpty(code.LastActivityPath)
                              || !string.IsNullOrEmpty(code.LastExecutedBy);
 
-        if (!ranAtLeastOnce)
-            return CodeOutputCurrency.NeverRun;
-
-        // A run without its fingerprint proves nothing about what it ran. Fail CLOSED.
-        if (string.IsNullOrEmpty(code.LastExecutedCodeHash))
-            return CodeOutputCurrency.Unverified;
-
-        return CodeFingerprint.Of(code.Code, code.Language) == code.LastExecutedCodeHash
-            ? CodeOutputCurrency.Current
-            : CodeOutputCurrency.Stale;
+        return ranAtLeastOnce
+            ? CodeOutputCurrency.Unverified
+            : CodeOutputCurrency.NeverRun;
     }
 
     /// <summary>

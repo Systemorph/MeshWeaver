@@ -153,6 +153,32 @@ public class CodeOutputCurrencyTest
     }
 
     /// <summary>
+    /// 🚨 The MIRROR hole, found by review on this PR's first push: a node carrying the fingerprint
+    /// and none of the three run markers. The verdict there is fully determinable — the hash is
+    /// right in front of us — so answering <see cref="CodeOutputCurrency.NeverRun"/> would silence
+    /// an indicator we can actually substantiate. That is the same fail-open shape as the defect
+    /// this rule exists to remove, and it is why the fingerprint is tested FIRST.
+    /// </summary>
+    [Theory]
+    [InlineData(Source, CodeOutputCurrency.Current)]
+    [InlineData(Source + "\n// edited", CodeOutputCurrency.Stale)]
+    public void AFingerprintWithNoRunMarkers_IsStillDecided_NotSilenced(
+        string currentCode, CodeOutputCurrency expected)
+    {
+        var cell = new CodeConfiguration
+        {
+            Code = currentCode,
+            // No LastExecutedAt, no LastActivityPath, no LastExecutedBy — only the proof itself.
+            LastExecutedCodeHash = FingerprintOf(Source),
+        };
+
+        cell.OutputCurrency().Should().Be(expected,
+            "the fingerprint is both evidence that a run happened and the only field that can "
+            + "decide currency, so a node carrying it alone is decidable — reading it as NeverRun "
+            + "would silence a verdict we can substantiate");
+    }
+
+    /// <summary>
     /// The other half of fail-closed: the rule must not be closed so hard that it never says
     /// <see cref="CodeOutputCurrency.Current"/>. An indicator that always warns is an indicator
     /// nobody reads, which is the same failure as one that never warns.

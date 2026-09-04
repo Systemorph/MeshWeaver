@@ -128,14 +128,16 @@ So the verdict is not a boolean. `CodeConfiguration.OutputCurrency()` (`MeshWeav
 
 | State | When | What the cell may show |
 |---|---|---|
-| `NeverRun` | no run recorded at all — no timestamp, no activity path, no runner | nothing; a cell nobody has run has no output to be wrong about |
+| `NeverRun` | no run recorded at all — no fingerprint, no timestamp, no activity path, no runner | nothing; a cell nobody has run has no output to be wrong about |
 | `Current` | a run is recorded **and** its fingerprint reproduces from the code on screen | "up to date" — the only state that may say so |
 | `Stale` | a run is recorded, its fingerprint was recorded, and the code has moved since | "code changed — re-run" |
 | `Unverified` | a run is recorded but **its fingerprint is not** | "output unverified — re-run to be sure" |
 
 `Unverified` is the fail-closed state, and it is deliberately neither of the two it sits between. It is not `Current`, because nothing proves the output belongs to the code above it. It is not `Stale` either: every node last executed by a build that predates the fingerprint field would light up amber at once, which trains readers to ignore the indicator — the failure mode the fingerprint's own normalization rules exist to avoid.
 
-"A run is recorded" is deliberately generous — *any* of the three run fields present, not `LastExecutedAt` specifically — so a stamp that landed only in part cannot fall back into `NeverRun` and go silent on a cell that ran.
+"A run is recorded" is deliberately generous — *any* of the four stamped fields present, not `LastExecutedAt` specifically — so a stamp that landed only in part cannot fall back into `NeverRun` and go silent on a cell that ran.
+
+The **fingerprint is tested first**, before the other three. It is both evidence of a run and the only field that can decide currency, so a node carrying the hash and nothing else is fully determinable; checking the run markers first would answer `NeverRun` there and silence a verdict we can actually substantiate — the same fail-open shape, mirrored.
 
 **The residual, stated rather than hidden:** a cell whose *very first* run failed to stamp anything at all records nothing, and is therefore indistinguishable from a cell nobody has run. No rule over the node's content can recover that; making it observable needs the run's failure to be written somewhere — see [issue #3249](https://github.com/Systemorph/MeshWeaver/issues/3249).
 
