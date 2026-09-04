@@ -749,10 +749,12 @@ identically over 6 m 15 s and **none** succeeded — while every compile that ne
 kept returning correct `CS####` codes. **Replicated in the other repository** on MeshWeaver.Plugins
 run [`33760859754`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/33760859754) shard
 3 (2026-09-03, a `push` to `main`): **39 of 39** compile faults over 13 m 21 s were the same NRE,
-**zero** were a `CompilationException`, and `BrokenNodeTypeAccessTest` — which asserts that a
-deliberately non-compiling NodeType answers a terminal error — **passed at +13 min**, with
-`CS1040`/`CS0246`/`CS0103` still correct. Two repos, two harnesses, two shard layouts, same split:
-parse and bind healthy, emit 100 % dead, no recovery.
+**zero** were a `CompilationException`. Two separate facts pin the other half there: correct
+`CS0103`/`CS1591` diagnostics were still being produced at **+7 m 32 s** (13:41:55, on
+`type/RedriveRecovers…`'s deliberately broken source), and `BrokenNodeTypeAccessTest` — which
+asserts that a non-compiling NodeType answers a terminal error rather than silence — **passed at
++13 min**. Two repos, two harnesses, two shard layouts, same split: parse and bind healthy, emit
+100 % dead, no recovery.
 
 A one-off zeroed word cannot produce a 100 % failure rate over freshly allocated symbols; a
 **tier-1 / dynamic-PGO miscompilation** of one method can, and also explains the fixed frame and the

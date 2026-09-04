@@ -810,8 +810,10 @@ into `CodeEditRecompileTest.CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSour
 into the process; it is the **first** `NullReferenceException` in the whole trace, so it is not
 downstream of an earlier fault. Then **39 of 39** compile faults over the next 13 m 21 s were that
 same NRE with `canary=BELOW-ROSLYN` — **zero** `CompilationException` — across 12 unrelated node
-paths and partitions, and `BrokenNodeTypeAccessTest` still **passed** at +13 min with correct
-`CS####` diagnostics. Memory was flat (managed 147 MiB / RSS 961 MiB) through the final wedge, and
+paths and partitions. Parse and bind stayed healthy throughout, on two independent readings:
+correct `CS0103`/`CS1591` diagnostics were still returned at **13:41:55, +7 m 32 s** after onset,
+and `BrokenNodeTypeAccessTest` **passed at +13 min**.
+Memory was flat (managed 147 MiB / RSS 961 MiB) through the final wedge, and
 the ten test hosts that ran after it **on the same runner were clean**, so the condition is
 process-scoped, not machine-scoped. Two repos, two harnesses, two shard layouts, one shape.
 
