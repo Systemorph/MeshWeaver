@@ -761,6 +761,25 @@ jobs:
       - name: Publish the module-pack tool (once for every pack job)
         if: steps.tool-cache.outputs.cache-hit != 'true'
         run: dotnet publish meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o "$RUNNER_TEMP/pack-tool"
+      # 🚨 NO `if:` — this must hold on a CACHE HIT too. The tool artifact is also the SOURCE-ARM
+      # IDENTITY ANCHOR (#3176): it is published out of the `meshweaver` checkout at `platform-ref`
+      # with no module version override, and it ProjectReferences MeshWeaver.Graph →
+      # MeshWeaver.Compiler, so its output carries the platform's own identity assembly and every
+      # pack job reads the SAME bytes. That is a load-bearing side effect of a reference graph this
+      # workflow does not own, so it is asserted rather than assumed — if MeshWeaver.Plugin.Build
+      # ever stops reaching MeshWeaver.Compiler, this fails here, naming the anchor, instead of
+      # surfacing later as a per-module "no identity anchor" on whichever modules happen to reach it.
+      # Guarding it behind the cache-miss condition would let a warm cache restore a tool without the
+      # anchor and skip the check that would have caught it — a gate that tests its own input.
+      - name: The tool output carries the platform identity anchor
+        run: |
+          set -euo pipefail
+          anchor="$RUNNER_TEMP/pack-tool/MeshWeaver.Compiler.dll"
+          [ -f "$anchor" ] || {
+            echo "::error::the module-pack tool published no MeshWeaver.Compiler.dll at '$anchor', so the source-built arm has no identity anchor to name (#3176). It is there because MeshWeaver.Plugin.Build references MeshWeaver.Graph, which references MeshWeaver.Compiler; if that path was cut, publish the identity assembly alongside the tool rather than letting the pack fall back to a module-local copy — a module's own output carries it only by accident and rebuilds it under the module's -p:Version."
+            exit 1
+          }
+          echo "identity anchor: $anchor ($(wc -c < "$anchor" | tr -d ' ') bytes) — one platform identity for every module this run packs"
       # Lane-scoped like every other artifact this workflow drops: two calls in one run publish
       # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
       # with the other call's builder.
@@ -1734,19 +1753,42 @@ jobs:
           #     passes as MeshWeaverRefs and the container build compiles inside) — the anchor is in
           #     there, and the module's own output deliberately carries no platform assembly. This
           #     is every satellite call, and it is the case the packer's default probe cannot see.
-          #   * platform built from SOURCE (`REFS` empty — core's own main-cd call) — the platform
-          #     ProjectReferences are real, so MeshWeaver.Compiler.dll IS beside the module in the
-          #     publish output. Measured green on CD run 33779812466:
-          #     "built-against MVID ce81fd4e3f5146c7a6ebaa6dc72da3f2".
+          #   * platform built from SOURCE (`REFS` empty — core's own main-cd call) — the anchor is
+          #     the PACK TOOL's publish output. The tool is published ONCE per `platform-ref`, in
+          #     `prepare`, out of the `meshweaver` checkout and with NO module version override, and
+          #     it ProjectReferences MeshWeaver.Graph → MeshWeaver.Compiler, so its output carries
+          #     the platform's own identity assembly. Every pack job downloads that one artifact,
+          #     so every bundle of a run states ONE identity.
+          #
+          # 🚨 IT USED TO READ `$PACKDIR/MeshWeaver.Compiler.dll` — the MODULE's own publish output —
+          # and that was wrong in BOTH directions (#3176):
+          #   * ABSENT. A module's output carries the identity assembly only if its reference closure
+          #     reaches it, and in core only MeshWeaver.Graph and MeshWeaver.Compiler.Pipeline do.
+          #     MeshWeaver.Maps (→ MeshWeaver.Layout) and MeshWeaver.Payments.Stripe
+          #     (→ MeshWeaver.Mesh.Contract) do not, so both packed RED — "no identity anchor" — on
+          #     EVERY core CD run of 2026-09-04 (33867513503, 33873443795, 33873909869, 33874892203),
+          #     skipping `Plugins: bake + seal` and stopping the fleet's module publication. They
+          #     became visible the moment Plugins#1268 cleared the one-producer FATAL that had been
+          #     masking everything downstream of it.
+          #   * WRONG WHERE PRESENT. That copy is REBUILT inside the module's own build, which passes
+          #     -p:Version=<the module's package version>; the property flows to every transitively
+          #     built platform project and moves the identity assembly's MVID. Run 33874892203: one
+          #     platform, one commit, two green bundles, TWO identities — MeshWeaver.AI stated
+          #     be27d0fb9ad54ae6a862bfa7aeb97c9b, MeshWeaver.Markdown.Collaboration stated
+          #     d756b82e09804a11b0ea44d26233af6c. Reproduced locally by publishing one project twice
+          #     changing nothing but -p:Version (914d015c… → 9b9fa234…). A per-module identity names
+          #     no platform build any consumer can have landed, so #3154's (version, identity)
+          #     comparison had a value that means nothing — the failure mode #3211 exists to close.
           #
           # Both arms end in a RED with no anchor — neither is a quiet fallback, and the packer
-          # refuses again behind them, so a bundle whose identity is a guess cannot exist.
+          # refuses again behind them (including a module-local anchor, refused by name), so a
+          # bundle whose identity is a guess cannot exist.
           if [ -n "$REFS" ]; then
             anchor="$REFS/MeshWeaver.Compiler.dll"
             where="the pinned platform image's extracted /app"
           else
-            anchor="$PACKDIR/MeshWeaver.Compiler.dll"
-            where="the module's own build output (no platform image is pinned, so the platform was built from source)"
+            anchor="$RUNNER_TEMP/pack-tool/MeshWeaver.Compiler.dll"
+            where="the platform build the module-pack tool was published from (no platform image is pinned, so the platform was built from source at platform-ref)"
           fi
           if [ ! -f "$anchor" ]; then
             echo "::error::no identity anchor for $MODULE — expected MeshWeaver.Compiler.dll at '$anchor', i.e. in $where. Every bundle must state the framework build its bytes were compiled against (#3211): a consumer compares it against what it has landed, and an unstated one makes every reconcile answer 'up to date, identity could not be checked' forever. Nothing here may guess it, so the pack stops."

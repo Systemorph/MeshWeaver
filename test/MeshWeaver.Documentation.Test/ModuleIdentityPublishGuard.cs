@@ -44,12 +44,22 @@ public class ModuleIdentityPublishGuard
         // The anchor is the SAME reference set the build bound against, and WHERE that is moves
         // with the platform: the pinned image's extracted /app when one is pinned (`platform-refs`
         // — which the sdk build passes as MeshWeaverRefs and the container build compiles inside),
-        // the module's own output when the platform was built from source. It is never a second
-        // opinion, and never left to the packer's default probe, which is exactly the probe that
-        // found nothing on all 34 of the fleet's bundles.
+        // the PACK TOOL's publish output when the platform was built from source. It is never a
+        // second opinion, and never left to the packer's default probe, which is exactly the probe
+        // that found nothing on all 34 of the fleet's bundles.
         Assert.Contains("anchor=\"$REFS/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
-        Assert.Contains("anchor=\"$PACKDIR/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
+        Assert.Contains(
+            "anchor=\"$RUNNER_TEMP/pack-tool/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
         Assert.Contains("--graph-dll \"$anchor\"", pack, StringComparison.Ordinal);
+
+        // 🚨 #3176 — NEVER the module's own publish output. `$PACKDIR` is the directory being
+        // packed, and a MeshWeaver.Compiler.dll in there is either absent (the module's closure does
+        // not reach it: MeshWeaver.Maps and MeshWeaver.Payments.Stripe packed RED on every core CD
+        // run of 2026-09-04) or a rebuild under that module's -p:Version (so one platform produced
+        // two identities in run 33874892203). The identity is a property of the PLATFORM, so it may
+        // not be read out of a per-module directory.
+        Assert.DoesNotContain(
+            "anchor=\"$PACKDIR/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
 
         // 🚨 BOTH arms end RED when there is no anchor — the branch picks WHERE to look, never
         // whether to check. A bundle whose identity is a guess is worse than a pack that stops.
@@ -94,6 +104,37 @@ public class ModuleIdentityPublishGuard
 
         // An unreadable manifest is a refusal too — "could not check" must never render as "checked".
         Assert.Contains("refusing to publish bytes whose manifest this lane could not check", pack, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 #3176 — the source-built arm's anchor is the pack tool's publish output, which carries
+    /// MeshWeaver.Compiler.dll only because MeshWeaver.Plugin.Build references MeshWeaver.Graph.
+    /// That is a load-bearing property of a reference graph this lane does not own, so `prepare`
+    /// ASSERTS it — and asserts it UNCONDITIONALLY, because the tool is restored from a cache keyed
+    /// on `platform-ref`: a check guarded by the cache-miss condition would let a warm cache restore
+    /// a tool without the anchor and skip the very check that would have caught it. That is a gate
+    /// testing its own input, and GitHub paints the skip the same colour as a pass.
+    /// </summary>
+    [Fact]
+    public void ThePrepareJob_AssertsTheAnchorInTheToolOutput_OnACacheHitToo()
+    {
+        var prepare = JobBody("prepare");
+
+        var stepIndex = prepare.IndexOf(
+            "- name: The tool output carries the platform identity anchor", StringComparison.Ordinal);
+        Assert.True(stepIndex >= 0,
+            "prepare must assert that the published module-pack tool carries MeshWeaver.Compiler.dll "
+            + "— the source-built arm names it as the identity anchor");
+
+        // Everything from that step's `- name:` up to the next step at the same indentation.
+        var rest = prepare[stepIndex..];
+        var next = rest.IndexOf("\n      - name:", StringComparison.Ordinal);
+        var step = next >= 0 ? rest[..next] : rest;
+
+        Assert.Contains("$RUNNER_TEMP/pack-tool/MeshWeaver.Compiler.dll", step, StringComparison.Ordinal);
+        Assert.Contains("::error::the module-pack tool published no MeshWeaver.Compiler.dll", step, StringComparison.Ordinal);
+        Assert.DoesNotContain("if:", step);
+        Assert.DoesNotContain("continue-on-error", step);
     }
 
     /// <summary>

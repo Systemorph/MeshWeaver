@@ -302,16 +302,62 @@ public static class ModulePackCommand
         // be healed downstream. So the blind spot is closed where it is created — a bundle that
         // cannot say what it was built against is not written at all.
         //
-        // Two ways to state it, because the anchor is not always beside the module: on the
-        // container / MeshWeaverRefs lanes the platform IS the image, so MeshWeaver.Compiler.dll
-        // lives in the extracted /app rather than in the module's output (measured on every one of
-        // MeshWeaver.Plugins' 34 bundles, 2026-09-03: "built-against MVID (unrecorded)", both the
-        // sdk and the container path). ReadIdentity (not ReadMvid) so a CI-built anchor records its
-        // stamped commit identity — the value the runtime actually compares (#1660 WS3).
+        // Two ways to state it, and the anchor is NEVER the module's own output: on the container /
+        // MeshWeaverRefs lanes the platform IS the image, so MeshWeaver.Compiler.dll lives in the
+        // extracted /app (measured on every one of MeshWeaver.Plugins' 34 bundles, 2026-09-03:
+        // "built-against MVID (unrecorded)", both the sdk and the container path); where the
+        // platform is built from source it is the platform build the pack tool was published from.
+        // The guard below refuses a module-local anchor outright — see #3176 for why a copy beside
+        // the module is both optional and wrong. ReadIdentity (not ReadMvid) so a CI-built anchor
+        // records its stamped commit identity — the value the runtime actually compares (#1660 WS3).
         graphDll ??= Path.Combine(moduleDirectory, FrameworkIdentity.IdentityAssembly + ".dll");
         var frameworkMvid = statedFrameworkMvid;
         if (string.IsNullOrWhiteSpace(frameworkMvid) && File.Exists(graphDll))
+        {
+            // 🚨 THE ANCHOR IS A PROPERTY OF THE PLATFORM, NEVER OF THE MODULE'S OWN OUTPUT (#3176).
+            // A copy of MeshWeaver.Compiler.dll sitting in the directory being packed is there for
+            // one of two reasons, and BOTH make it the wrong assembly to read:
+            //
+            //   * the module's reference closure happens to reach it — in core it is reachable only
+            //     through MeshWeaver.Graph or MeshWeaver.Compiler.Pipeline, so whether the anchor
+            //     exists at all is an accident of what the module imports. MeshWeaver.AI and
+            //     MeshWeaver.Markdown.Collaboration reach it; MeshWeaver.Maps (→ MeshWeaver.Layout)
+            //     and MeshWeaver.Payments.Stripe (→ MeshWeaver.Mesh.Contract) do not, and packed RED
+            //     on every core CD run of 2026-09-04 while the other two packed green.
+            //   * and where it IS reached, it was REBUILT inside that module's own build, which
+            //     carries -p:Version=<the module's package version>. That version flows to every
+            //     transitively built platform project, so the identity assembly's MVID changes with
+            //     it: measured on run 33874892203, one platform, one commit, two bundles, two
+            //     identities — MeshWeaver.AI stated be27d0fb9ad54ae6a862bfa7aeb97c9b and
+            //     MeshWeaver.Markdown.Collaboration stated d756b82e09804a11b0ea44d26233af6c.
+            //
+            // Reproduced locally: publishing one project twice, changing nothing but -p:Version,
+            // moves MeshWeaver.Compiler.dll's MVID (914d015c… → 9b9fa234…). So a module-local anchor
+            // states an identity that names no platform build any consumer can ever have landed —
+            // #3154's (version, identity) comparison against a value that means nothing. Refused
+            // where it is created; the caller names the platform's own copy instead.
+            var anchorDirectory = Path.GetDirectoryName(Path.GetFullPath(graphDll));
+            if (anchorDirectory is not null
+                && string.Equals(
+                    Path.TrimEndingDirectorySeparator(anchorDirectory),
+                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(moduleDirectory)),
+                    OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase))
+            {
+                Console.Error.WriteLine(
+                    $"error: the identity anchor '{graphDll}' is inside the module directory being "
+                    + "packed, so it is the module's OWN build output rather than the platform's. "
+                    + "The framework identity is a property of the platform build — one value for "
+                    + "every module packed against it — but a copy beside the module exists only "
+                    + "when that module's reference closure happens to reach "
+                    + $"{FrameworkIdentity.IdentityAssembly}, and when it does it was rebuilt under "
+                    + "that module's -p:Version, which changes its MVID. Either way the bundle would "
+                    + "state an identity no consumer can match (#3176). Name the platform's own copy "
+                    + $"with --graph-dll (the pinned image's extracted /app, or the platform build the "
+                    + "pack tool was published from), or state it directly with --framework-mvid.");
+                return 2;
+            }
             frameworkMvid = FrameworkIdentity.ReadIdentity(graphDll);
+        }
         if (string.IsNullOrWhiteSpace(frameworkMvid))
         {
             Console.Error.WriteLine(
