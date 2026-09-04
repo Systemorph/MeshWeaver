@@ -24,6 +24,16 @@ namespace MeshWeaver.Documentation.Test;
 /// <c>MeshWeaver.Compiler.dll</c> BESIDE the module and on both paths the platform is the pinned
 /// IMAGE. So the comparison had nothing to compare, everywhere.</para>
 ///
+/// <para><b>And the first cure repeated the mistake one level in.</b> #3211 named the anchor
+/// explicitly per arm, but the from-source arm still READ it out of the module's publish output,
+/// on the ground that "the platform ProjectReferences are real, so MeshWeaver.Compiler.dll IS
+/// beside the module". That was measured green — against the two modules the lane then built,
+/// both of which reach the compiler through MeshWeaver.Graph. It is a property of the reference
+/// graph, not of the arm. The hour core's compose set grew to four (#3290, 2026-09-04),
+/// MeshWeaver.Maps and MeshWeaver.Payments.Stripe were red on their first run and core CD stopped
+/// delivering. n=2 with 100% agreement is not evidence when the population is chosen by whoever
+/// edits a list. The arm now BUILDS the anchor from the platform source the call pins (#3293).</para>
+///
 /// <para><b>Why these assertions and not a green run.</b> The three properties below are invisible
 /// in a green log: a pack that omits the anchor still packs, an inspection that does not read the
 /// field still passes, and a publish step that does not check still POSTs. The refusal must also sit
@@ -48,18 +58,41 @@ public class ModuleIdentityPublishGuard
         // second opinion, and never left to the packer's default probe, which is exactly the probe
         // that found nothing on all 34 of the fleet's bundles.
         Assert.Contains("anchor=\"$REFS/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
-        Assert.Contains(
-            "anchor=\"$RUNNER_TEMP/pack-tool/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
         Assert.Contains("--graph-dll \"$anchor\"", pack, StringComparison.Ordinal);
 
-        // 🚨 #3176 — NEVER the module's own publish output. `$PACKDIR` is the directory being
-        // packed, and a MeshWeaver.Compiler.dll in there is either absent (the module's closure does
-        // not reach it: MeshWeaver.Maps and MeshWeaver.Payments.Stripe packed RED on every core CD
-        // run of 2026-09-04) or a rebuild under that module's -p:Version (so one platform produced
-        // two identities in run 33874892203). The identity is a property of the PLATFORM, so it may
-        // not be read out of a per-module directory.
-        Assert.DoesNotContain(
-            "anchor=\"$PACKDIR/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
+        // 🚨 THE FROM-SOURCE ARM BUILDS ITS ANCHOR — it does not read one out of $PACKDIR.
+        // `dotnet publish` drops MeshWeaver.Compiler.dll beside a module only when that module
+        // transitively ProjectReferences it. MeshWeaver.AI and MeshWeaver.Markdown.Collaboration
+        // both do, through MeshWeaver.Graph, and they were the ONLY two entries this lane built
+        // when the anchor landed — so a property of two reference graphs was written down as a
+        // property of the arm, and 100% of the population agreed. Core's compose set grew to four
+        // on 2026-09-04 (#3290): MeshWeaver.Maps stops at MeshWeaver.Layout and
+        // MeshWeaver.Payments.Stripe is a leaf, so both were RED on their first run and took
+        // `CD delivered, or had a good reason not to` with them.
+        Assert.Contains("anchordir=\"$GITHUB_WORKSPACE/meshweaver/src/MeshWeaver.Compiler\"", pack, StringComparison.Ordinal);
+        Assert.Contains("dotnet build \"$anchordir/MeshWeaver.Compiler.csproj\" -c Release -warnaserror", pack, StringComparison.Ordinal);
+        Assert.Contains("anchor=\"$anchordir/bin/Release/net10.0/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
+
+        // The ratchet: scavenging the anchor out of the module's own publish output is the exact
+        // defect above, and it reads as reasonable every time. It must not come back.
+        Assert.DoesNotContain("anchor=\"$PACKDIR/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
+
+        // 🚨 #3176 — AND THE ANCHOR BUILD PASSES NO MODULE VERSION. `$VERSION` is the MODULE's
+        // package version; MSBuild writes it into the assembly's version attributes, which are part
+        // of the metadata the MVID is computed over. Passing it makes every matrix job build its
+        // OWN compiler, so a run states one identity PER MODULE — measured on THIS command, the two
+        // package versions core CD packs: -p:Version=1.3.18 → 34337c31960d47f5b5251d32ef923fc6,
+        // -p:Version=1.0.24 → 7c1c4f70de084da78659e6bda495e1c5, while two runs with NO override are
+        // byte-identical (71cc81badb364c5d8558ac5e7db6a44e twice). Observed in the field on run 33874892203
+        // (MeshWeaver.AI be27d0fb…, MeshWeaver.Markdown.Collaboration d756b82e…, same platform,
+        // same commit). That is the SILENT half of this defect: absent the anchor the pack goes
+        // red, but a per-module anchor packs GREEN and hands #3154's comparison a value no
+        // consumer can match. The identity is the PLATFORM's, so the platform's own properties
+        // build it and nothing per-module may reach that command line.
+        var anchorBuild = pack[pack.IndexOf(
+            "dotnet build \"$anchordir/MeshWeaver.Compiler.csproj\"", StringComparison.Ordinal)..];
+        anchorBuild = anchorBuild[..anchorBuild.IndexOf("anchor=\"$anchordir", StringComparison.Ordinal)];
+        Assert.DoesNotContain("-p:Version", anchorBuild, StringComparison.Ordinal);
 
         // 🚨 BOTH arms end RED when there is no anchor — the branch picks WHERE to look, never
         // whether to check. A bundle whose identity is a guess is worse than a pack that stops.
@@ -104,37 +137,6 @@ public class ModuleIdentityPublishGuard
 
         // An unreadable manifest is a refusal too — "could not check" must never render as "checked".
         Assert.Contains("refusing to publish bytes whose manifest this lane could not check", pack, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// 🚨 #3176 — the source-built arm's anchor is the pack tool's publish output, which carries
-    /// MeshWeaver.Compiler.dll only because MeshWeaver.Plugin.Build references MeshWeaver.Graph.
-    /// That is a load-bearing property of a reference graph this lane does not own, so `prepare`
-    /// ASSERTS it — and asserts it UNCONDITIONALLY, because the tool is restored from a cache keyed
-    /// on `platform-ref`: a check guarded by the cache-miss condition would let a warm cache restore
-    /// a tool without the anchor and skip the very check that would have caught it. That is a gate
-    /// testing its own input, and GitHub paints the skip the same colour as a pass.
-    /// </summary>
-    [Fact]
-    public void ThePrepareJob_AssertsTheAnchorInTheToolOutput_OnACacheHitToo()
-    {
-        var prepare = JobBody("prepare");
-
-        var stepIndex = prepare.IndexOf(
-            "- name: The tool output carries the platform identity anchor", StringComparison.Ordinal);
-        Assert.True(stepIndex >= 0,
-            "prepare must assert that the published module-pack tool carries MeshWeaver.Compiler.dll "
-            + "— the source-built arm names it as the identity anchor");
-
-        // Everything from that step's `- name:` up to the next step at the same indentation.
-        var rest = prepare[stepIndex..];
-        var next = rest.IndexOf("\n      - name:", StringComparison.Ordinal);
-        var step = next >= 0 ? rest[..next] : rest;
-
-        Assert.Contains("$RUNNER_TEMP/pack-tool/MeshWeaver.Compiler.dll", step, StringComparison.Ordinal);
-        Assert.Contains("::error::the module-pack tool published no MeshWeaver.Compiler.dll", step, StringComparison.Ordinal);
-        Assert.DoesNotContain("if:", step);
-        Assert.DoesNotContain("continue-on-error", step);
     }
 
     /// <summary>

@@ -761,28 +761,6 @@ jobs:
       - name: Publish the module-pack tool (once for every pack job)
         if: steps.tool-cache.outputs.cache-hit != 'true'
         run: dotnet publish meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o "$RUNNER_TEMP/pack-tool"
-      # 🚨 NO `if:` — this must hold on a CACHE HIT too. The tool artifact is also the SOURCE-ARM
-      # IDENTITY ANCHOR (#3176): it is published out of the `meshweaver` checkout at `platform-ref`
-      # with no module version override, and it ProjectReferences MeshWeaver.Graph →
-      # MeshWeaver.Compiler, so its output carries the platform's own identity assembly and every
-      # pack job reads the SAME bytes. That is a load-bearing side effect of a reference graph this
-      # workflow does not own, so it is asserted rather than assumed — if MeshWeaver.Plugin.Build
-      # ever stops reaching MeshWeaver.Compiler, this fails here, naming the anchor, instead of
-      # surfacing later as a per-module "no identity anchor" on whichever modules happen to reach it.
-      # Guarding it behind the cache-miss condition would let a warm cache restore a tool without the
-      # anchor and skip the check that would have caught it — a gate that tests its own input.
-      - name: The tool output carries the platform identity anchor
-        run: |
-          set -euo pipefail
-          anchor="$RUNNER_TEMP/pack-tool/MeshWeaver.Compiler.dll"
-          [ -f "$anchor" ] || {
-            echo "::error::the module-pack tool published no MeshWeaver.Compiler.dll at '$anchor', so the source-built arm has no identity anchor to name (#3176). It is there because MeshWeaver.Plugin.Build references MeshWeaver.Graph, which references MeshWeaver.Compiler; if that path was cut, publish the identity assembly alongside the tool rather than letting the pack fall back to a module-local copy — a module's own output carries it only by accident and rebuilds it under the module's -p:Version."
-            exit 1
-          }
-          echo "identity anchor: $anchor ($(wc -c < "$anchor" | tr -d ' ') bytes) — one platform identity for every module this run packs"
-      # Lane-scoped like every other artifact this workflow drops: two calls in one run publish
-      # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
-      # with the other call's builder.
       - name: Hand the tool to the matrix
         uses: actions/upload-artifact@v7
         with:
@@ -1753,32 +1731,11 @@ jobs:
           #     passes as MeshWeaverRefs and the container build compiles inside) — the anchor is in
           #     there, and the module's own output deliberately carries no platform assembly. This
           #     is every satellite call, and it is the case the packer's default probe cannot see.
-          #   * platform built from SOURCE (`REFS` empty — core's own main-cd call) — the anchor is
-          #     the PACK TOOL's publish output. The tool is published ONCE per `platform-ref`, in
-          #     `prepare`, out of the `meshweaver` checkout and with NO module version override, and
-          #     it ProjectReferences MeshWeaver.Graph → MeshWeaver.Compiler, so its output carries
-          #     the platform's own identity assembly. Every pack job downloads that one artifact,
-          #     so every bundle of a run states ONE identity.
-          #
-          # 🚨 IT USED TO READ `$PACKDIR/MeshWeaver.Compiler.dll` — the MODULE's own publish output —
-          # and that was wrong in BOTH directions (#3176):
-          #   * ABSENT. A module's output carries the identity assembly only if its reference closure
-          #     reaches it, and in core only MeshWeaver.Graph and MeshWeaver.Compiler.Pipeline do.
-          #     MeshWeaver.Maps (→ MeshWeaver.Layout) and MeshWeaver.Payments.Stripe
-          #     (→ MeshWeaver.Mesh.Contract) do not, so both packed RED — "no identity anchor" — on
-          #     EVERY core CD run of 2026-09-04 (33867513503, 33873443795, 33873909869, 33874892203),
-          #     skipping `Plugins: bake + seal` and stopping the fleet's module publication. They
-          #     became visible the moment Plugins#1268 cleared the one-producer FATAL that had been
-          #     masking everything downstream of it.
-          #   * WRONG WHERE PRESENT. That copy is REBUILT inside the module's own build, which passes
-          #     -p:Version=<the module's package version>; the property flows to every transitively
-          #     built platform project and moves the identity assembly's MVID. Run 33874892203: one
-          #     platform, one commit, two green bundles, TWO identities — MeshWeaver.AI stated
-          #     be27d0fb9ad54ae6a862bfa7aeb97c9b, MeshWeaver.Markdown.Collaboration stated
-          #     d756b82e09804a11b0ea44d26233af6c. Reproduced locally by publishing one project twice
-          #     changing nothing but -p:Version (914d015c… → 9b9fa234…). A per-module identity names
-          #     no platform build any consumer can have landed, so #3154's (version, identity)
-          #     comparison had a value that means nothing — the failure mode #3211 exists to close.
+          #   * platform built from SOURCE (`REFS` empty — core's own main-cd call) — the platform
+          #     ProjectReferences are real, so the compiler CAN be built from them. It is built
+          #     below, deliberately, rather than read out of the module's publish output: publish
+          #     copies it only for a module whose reference graph happens to reach it, which two
+          #     of core's four compose entries do not (see the build step's comment).
           #
           # Both arms end in a RED with no anchor — neither is a quiet fallback, and the packer
           # refuses again behind them (including a module-local anchor, refused by name), so a
@@ -1787,8 +1744,42 @@ jobs:
             anchor="$REFS/MeshWeaver.Compiler.dll"
             where="the pinned platform image's extracted /app"
           else
-            anchor="$RUNNER_TEMP/pack-tool/MeshWeaver.Compiler.dll"
-            where="the platform build the module-pack tool was published from (no platform image is pinned, so the platform was built from source at platform-ref)"
+            # 🚨 BUILT from the platform source, never scavenged out of $PACKDIR. Publish drops
+            # MeshWeaver.Compiler.dll beside the module ONLY when the module transitively
+            # ProjectReferences it — MeshWeaver.AI and MeshWeaver.Markdown.Collaboration both do,
+            # through MeshWeaver.Graph, and they were the ONLY two entries this lane built when
+            # the anchor landed, so "the platform ProjectReferences are real, so it IS beside the
+            # module" was measured on a population of two and read as a property of the arm.
+            # It is a property of the REFERENCE GRAPH: core's compose set grew to four on
+            # 2026-09-04 (#3290) and both new entries reach no compiler — MeshWeaver.Maps stops at
+            # MeshWeaver.Layout, MeshWeaver.Payments.Stripe is a leaf — so both were RED on their
+            # first run and took `CD delivered, or had a good reason not to` down with them for
+            # two hours (#3293).
+            anchordir="$GITHUB_WORKSPACE/meshweaver/src/MeshWeaver.Compiler"
+            # -warnaserror to match the module build above: when a module DOES reach the
+            # compiler transitively, that build is what compiles it, so omitting the flag here
+            # would let MeshWeaver.Maps accept a compiler build MeshWeaver.AI rejects — the same
+            # per-module asymmetry this change exists to remove.
+            #
+            # 🚨 AND DELIBERATELY **NO** `-p:Version="$VERSION"` (#3176). #3293 passed it, to make
+            # this "the assembly publish would have copied" — but that is the one global property
+            # that must NOT reach here, because $VERSION is the MODULE's package version and the
+            # identity must be the PLATFORM's. MSBuild writes Version into the assembly's version
+            # attributes, so it lands in the metadata the MVID is computed over: measured locally,
+            # one project published twice changing nothing else, 914d015cd9c04427be1f1f9e9eca0f1e
+            # (no override) vs 9b9fa23435b44398ae91244d3ddd02e8 (-p:Version=1.3.18). With it, each
+            # matrix job builds its OWN compiler and the run states one identity PER MODULE — seen
+            # on run 33874892203, where the identity still came from the module's output: AI stated
+            # be27d0fb9ad54ae6a862bfa7aeb97c9b while Markdown.Collaboration stated
+            # d756b82e09804a11b0ea44d26233af6c for the same platform and the same commit. A
+            # per-module identity names no platform build a consumer can have landed, so #3154's
+            # (version, identity) comparison gets a value that means nothing — GREEN, and useless.
+            # Without it every job builds byte-identical bytes from one commit, so the whole run
+            # states ONE identity, which is what the field is for.
+            dotnet build "$anchordir/MeshWeaver.Compiler.csproj" -c Release -warnaserror \
+              -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver"
+            anchor="$anchordir/bin/Release/net10.0/MeshWeaver.Compiler.dll"
+            where="the platform's own build output (no platform image is pinned, so the platform was built from source)"
           fi
           if [ ! -f "$anchor" ]; then
             echo "::error::no identity anchor for $MODULE — expected MeshWeaver.Compiler.dll at '$anchor', i.e. in $where. Every bundle must state the framework build its bytes were compiled against (#3211): a consumer compares it against what it has landed, and an unstated one makes every reconcile answer 'up to date, identity could not be checked' forever. Nothing here may guess it, so the pack stops."

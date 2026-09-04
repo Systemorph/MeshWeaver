@@ -205,6 +205,66 @@ public class ModulePackCommandTest : IDisposable
             + "the identity it would state names no platform build a consumer can have landed");
     }
 
+    /// <summary>
+    /// 🚨 Containment, not directory equality (Copilot review on #3306). The real CD path was
+    /// NESTED — `…/src/MeshWeaver.Maps/bin/Release/net10.0/publish/MeshWeaver.Compiler.dll` — so an
+    /// anchor deeper inside the module tree is the shape this guard most needs to catch. A check
+    /// that compared the anchor's immediate directory against the module directory accepted this
+    /// case, which would have let a per-module rebuilt identity through exactly where it lives.
+    /// </summary>
+    [Fact]
+    public void AnAnchorNestedDeeperInsideTheModuleTree_IsAlsoRefused()
+    {
+        var moduleDirectory = Path.Combine(root, "closure");
+        var nested = Path.Combine(moduleDirectory, "bin", "Release", "net10.0", "publish");
+        Directory.CreateDirectory(nested);
+        var nestedAnchor = Path.Combine(nested, FrameworkIdentity.IdentityAssembly + ".dll");
+        File.Copy(typeof(ModulePackCommand).Assembly.Location, nestedAnchor);
+
+        var outDir = Path.Combine(root, "out-nested-anchor");
+        var exit = ModulePackCommand.Run(
+        [
+            moduleDirectory,
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.7.0",
+            "--graph-dll", nestedAnchor,
+            "--out", outDir,
+        ]);
+
+        Assert.Equal(2, exit);
+        Assert.False(Directory.Exists(outDir));
+    }
+
+    /// <summary>A SIBLING directory whose name merely starts with the module directory's name is
+    /// NOT inside it, and must still pack — the containment check above is a path-prefix test, and
+    /// without the trailing separator "…/closure-refs" would read as inside "…/closure".</summary>
+    [Fact]
+    public void AnAnchorInASiblingDirectoryWithAPrefixName_IsAccepted()
+    {
+        var siblingRefs = Path.Combine(root, "closure-refs");
+        Directory.CreateDirectory(siblingRefs);
+        var anchor = Path.Combine(siblingRefs, FrameworkIdentity.IdentityAssembly + ".dll");
+        File.Copy(typeof(ModulePackCommand).Assembly.Location, anchor);
+        var expected = FrameworkIdentity.ReadIdentity(anchor);
+
+        var outDir = Path.Combine(root, "out-sibling-anchor");
+        var exit = ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.7.0",
+            "--graph-dll", anchor,
+            "--out", outDir,
+        ]);
+
+        Assert.Equal(0, exit);
+        var (manifest, _) = BundleReader.ReadModule(File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.7.0.module.nupkg")));
+        Assert.Equal(expected, manifest!.FrameworkMvid);
+    }
+
     /// <summary>The same refusal when the anchor is not named at all and the packer's DEFAULT probe
     /// finds a module-local copy. This is the silent arm: without the guard the probe reads it and
     /// the bundle packs GREEN stating a per-module identity, which is how two identities for one

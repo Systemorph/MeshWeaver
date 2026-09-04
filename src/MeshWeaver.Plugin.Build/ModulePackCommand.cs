@@ -336,12 +336,18 @@ public static class ModulePackCommand
             // states an identity that names no platform build any consumer can ever have landed —
             // #3154's (version, identity) comparison against a value that means nothing. Refused
             // where it is created; the caller names the platform's own copy instead.
-            var anchorDirectory = Path.GetDirectoryName(Path.GetFullPath(graphDll));
-            if (anchorDirectory is not null
-                && string.Equals(
-                    Path.TrimEndingDirectorySeparator(anchorDirectory),
-                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(moduleDirectory)),
-                    OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase))
+            // CONTAINMENT, not directory equality: the shape this refuses is literally a nested one
+            // — the CD error named '…/src/MeshWeaver.Maps/bin/Release/net10.0/publish/…' — so a
+            // caller passing a deeper path under the module directory must be refused too, or the
+            // guard would only catch the anchor sitting directly beside the entry DLL. The trailing
+            // separator is what stops a sibling whose name merely starts the same ('/a/mod2' is not
+            // inside '/a/mod'). Case-insensitive off Linux, where the filesystem is.
+            var comparison = OperatingSystem.IsLinux()
+                ? StringComparison.Ordinal
+                : StringComparison.OrdinalIgnoreCase;
+            var moduleRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(moduleDirectory))
+                             + Path.DirectorySeparatorChar;
+            if (Path.GetFullPath(graphDll).StartsWith(moduleRoot, comparison))
             {
                 Console.Error.WriteLine(
                     $"error: the identity anchor '{graphDll}' is inside the module directory being "

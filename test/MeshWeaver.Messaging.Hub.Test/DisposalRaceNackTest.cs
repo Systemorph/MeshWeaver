@@ -122,9 +122,31 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
             // 2. Accepted while the hub is healthy, so it lands in the MAIN queue behind the
             //    stall — not in the deferred queue the #672 drain answers for.
             IRequest<RaceResponse> request = faulting ? new FaultingRequest() : new RaceRequest();
+            // 🚨 The messageId OVERLOAD, not `o.WithMessageId(...)`: `Observe<TResponse>` mints the
+            // correlation id itself, so an id set through the options never becomes the ledger key —
+            // the first version of this wait polled a key that did not exist and timed out at 36 s
+            // having proved nothing.
+            var requestId = Guid.NewGuid().ToString("N");
             var response = host
-                .Observe<RaceResponse>(request, o => o.WithTarget(victimAddress))
+                .Observe((object)request, o => o.WithTarget(victimAddress), requestId)!
                 .FirstAsync()
+                .Await(TestContext.Current.CancellationToken);
+
+            // 🚨 …and "accepted" is OBSERVED, never assumed. `Observe` posts on the HOST, whose own
+            // turn then routes the delivery down to the victim: between the two, the victim can
+            // pass Quiescing and reach DisposeHostedHubs, where the intake gate rejects it —
+            //     "Hub disposal-race/1 is shutting down (RunLevel=DisposeHostedHubs …) — cannot
+            //      process RaceRequest … Rejecting now."
+            // — which is CORRECT behaviour for a request that arrived after the door closed, and
+            // has nothing to do with what this test is about. It failed exactly that way once the
+            // suite grew a class and the scheduling shifted (2026-09-04), i.e. it was a race the
+            // whole time, decided by whether the host's routing turn beat Dispose(). The fate
+            // ledger already records the stage this test needs, so wait for it.
+            await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+                .Select(_ => host.DescribeRequestFate(requestId))
+                .Where(trail => trail.Contains($"ENQUEUED@{victimAddress}", StringComparison.Ordinal))
+                .FirstAsync()
+                .Timeout(TestTimeouts.Convergence)
                 .Await(TestContext.Current.CancellationToken);
 
             // 3. Dispose. The blocker observes the shutdown and returns; the queue behind it —
@@ -138,8 +160,9 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
                 // one would leave this task pending for the [Fact] timeout with no explanation —
                 // exactly the production symptom (an install that spins for 60 s).
                 var served = await response;
-                served.Should().NotBeNull("the request was accepted, so it runs and is answered "
-                    + "before the hub goes down — the shutdown waits its turn behind accepted work");
+                served.Message.Should().BeOfType<RaceResponse>(
+                    "the request was accepted, so it runs and is answered before the hub goes down "
+                    + "— the shutdown waits its turn behind accepted work");
                 await victim.DisposalCompleted.FirstOrDefaultAsync().Await()
                     .WaitAsync(TestTimeouts.Convergence);
                 victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
