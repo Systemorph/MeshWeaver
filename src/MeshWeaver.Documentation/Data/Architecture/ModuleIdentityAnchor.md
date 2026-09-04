@@ -157,6 +157,25 @@ or a platform publish made once per run. The moment it is read from a per-module
 becomes a per-module value, and a per-module value for a platform-wide property is wrong even when
 it is present, well-formed and green.
 
+## Why the ledger's `RECIPE_VERSION` did NOT move with this
+
+`module-build-key.py` documents the rule as *"bump on a byte-changing lane edit"*, and #3211 bumped
+it to `"2"` when it ADDED `frameworkMvid` to the manifest. This change moves that field's VALUE on
+the source arm, so the question is fair — and the answer is that the key already covers it, on both
+arms, without a bump:
+
+- **Source arm (the only arm whose bytes change).** The key includes `platformRef`, and on core's
+  `main-cd` call `platform-ref` IS the commit being built. Any run after this change carries a
+  `platformRef` no pre-change run had, so its key differs and no pre-change bundle can be reused.
+- **Image arm.** Untouched — satellites read the anchor from the pinned image's `/app` exactly as
+  before, so their bundles' identity does not change and there is nothing to invalidate.
+
+A bump would therefore invalidate every cached bundle in the fleet — a full rebuild wave in every
+repo — to protect against a reuse that cannot happen. Note the asymmetry that makes this worth
+writing down: a satellite pins the LANE (`uses: …@<sha>`) and `platform-ref` SEPARATELY and on
+purpose, so a lane edit alone does NOT move a satellite's key. That is safe here only because this
+edit cannot change what the image arm packs; a future edit to the image arm would need the bump.
+
 ## Still open, deliberately not changed here
 
 On the source arm the anchor states a raw MVID, because the pack tool is published without
