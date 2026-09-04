@@ -1,7 +1,7 @@
 ---
 Name: The Portal Heap Is Hubs
 Category: Architecture
-Description: Heap-dump evidence that the memex-cloud retention leak is 9,386 undisposed MessageHub instances — 89.6% of them sync/ stream hubs — that 45% of the live heap is per-hub Autofac and TypeRegistry metadata duplicated once per hub, and that the ALC, lazy-compile and GC-fragmentation candidates are all falsified by measurement.
+Description: Five heap dumps from a live memex-cloud replica: the retention is 9,386 MessageHub instances (89.6% sync/ stream hubs), 1,496 of them fully disposed corpses held by SynchronizationStream.Hub after the parent killed the hub under a stream that was never told; 45% of the live heap is per-hub Autofac and TypeRegistry metadata; the ALC, lazy-compile and GC-fragmentation candidates are all falsified.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M10 10L6.5 6.5"/><path d="M14 10l3.5-3.5"/><path d="M10 14l-3.5 3.5"/><path d="M14 14l3.5 3.5"/></svg>
 ---
 
@@ -10,13 +10,14 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 A `memex-cloud` portal replica grows ~215 MB/h, monotonically, through hundreds of full
 collections, and never returns to an earlier floor. This page is the heap-dump evidence for
 **what is actually in that memory**, taken read-only from a live production pod on
-2026-09-04. It exists because the answer contradicts the two hypotheses the investigation was
+2026-09-04. It exists because the answer contradicts every hypothesis the investigation was
 carrying, and because the measurement was expensive to assemble.
 
-**One sentence:** the heap is 9 386 `MessageHub` instances that were never disposed — 89.6 % of
-them `sync/{clientId}` stream hubs — and it is large because each one carries its own copy of the
-framework's dependency-injection and type-registry metadata; not because of assembly load
-contexts, not because of Roslyn, and not because of GC fragmentation.
+**One sentence:** the heap is 9 386 `MessageHub` instances — 89.6 % of them `sync/{clientId}`
+stream hubs, of which **1 496 are fully disposed corpses held by the very streams that created
+them** — and it is large because each hub carries its own copy of the framework's
+dependency-injection and type-registry metadata; not because of assembly load contexts, not
+because of Roslyn, and not because of GC fragmentation.
 
 ## The specimen
 
@@ -112,7 +113,7 @@ The rest of the live heap is the same shape one level up: `LayoutAreaDefinition`
 (7.9 MB) and `ObservableRenderer` 65,279 (4.2 MB) against 2,473 `LayoutDefinition` — the layout
 catalogue, re-materialised per hub.
 
-## The retaining root
+## Why the LIVE ones are never released
 
 `HostedHubsCollection.messageHubs` — `src/MeshWeaver.Messaging.Hub/HostedHubsCollection.cs:29`:
 
@@ -155,6 +156,88 @@ streams that outlive it are not.
 
 🚨 **The heartbeat is evidence that a transport is alive, not that anyone wants the data.** It is
 today the only input to the lifetime decision, and it can only ever vote "keep".
+
+## …but that is only three quarters of the population
+
+A third dump (23:03Z, same replica) read `MessageHub.runLevel` alongside the address. The
+population is not homogeneous:
+
+```
+TOTAL MessageHub: 9398
+    6925  sync  RunLevel=1Started
+    1495  sync  RunLevel=6Dead
+     974  <node-or-other>  RunLevel=1Started
+       4  sync  RunLevel=0Starting
+```
+
+`Dead` is the enum's terminal state — *"the hub is fully disposed and inert"*
+(`MessageHubRunLevel.cs:22`). **1 495 `sync/` hubs have completed their entire shutdown and are
+still reachable**: ≈580 MB of corpses at ≈390 KB each. Unlike the `Started` population, that
+admits no benign reading at all.
+
+## Who holds a corpse
+
+A fourth dump (23:06Z) and one full pass over all **51 562 911** objects, recording every referrer
+of a `Dead` hub:
+
+```
+dead hubs = 1496
+--- referrers of DEAD sync hubs ---
+   19448  MessageHub+<>c__DisplayClass188_0          ⎫
+   13464  MessageHub+<>c__DisplayClass59_0           ⎪ the hub's OWN internals —
+    1496  MessageHubConfiguration                    ⎬ exactly 1496 of each,
+    1496  MessageService                             ⎪ they die with it
+    1496  HierarchicalRouting / RouteConfiguration   ⎭
+    1485  MeshWeaver.Data.Serialization.SynchronizationStream<MeshWeaver.Mesh.MeshNode>
+      11  MeshWeaver.Data.Serialization.SynchronizationStream<System.Text.Json.JsonElement>
+       1  ConcurrentDictionary<Address, IMessageHub>+Node
+--- GC roots pointing directly at a dead hub ---
+direct-root hits = 0
+```
+
+Two readings, both decisive, and the first one corrects this page's own earlier section:
+
+🚨 **`HostedHubsCollection.messageHubs` is not what holds the dead ones — it did its job.**
+Exactly **one** of the 1 496 is still in a `ConcurrentDictionary<Address, IMessageHub>`. The
+`RegisterForDisposal` removal at `:203` fired for the other 1 495. The registry is where the
+**live** hubs sit (6 925 `sync` + 974 node, none of which anything ever asked to dispose); it is
+not the corpse-holder.
+
+🚨 **The corpse-holder is `SynchronizationStream<T>.Hub`.** 1 485 + 11 = **1 496 — one stream per
+dead hub, exactly.** No GC root points at a dead hub directly (`direct-root hits = 0`); every one
+is alive purely transitively, through the stream that created it.
+
+## And the stream was never told
+
+A fifth dump (23:11Z) read `isDisposed` off every stream:
+
+```
+SynchronizationStream total=8461 disposed=11
+    4219  <MeshWeaver.Mesh.MeshNode>          live
+    3193  <MeshWeaver.Data.EntityStore>       live
+     992  <MeshWeaver.Data.InstanceCollection> live
+      11  <System.Text.Json.JsonElement>      DISPOSED
+```
+
+**Only 11 of 8 461 streams are disposed.** `SynchronizationStream.Dispose()` sets `isDisposed`
+*before* it disposes the hub, so a stream reading `false` never ran `Dispose()`. Put the two
+measurements together:
+
+> 🚨 **≈1 485 `SynchronizationStream<MeshNode>` instances are NOT disposed, and their `Hub` is
+> `Dead`.** The hub was destroyed out from under a stream that still believes it is alive.
+
+That is a defect with a name. A `sync/` hub is a *hosted* hub: its parent disposes it during
+`DisposeHubsReactive` when the parent goes down — a Blazor circuit ending, a `DisposeRequest`, a
+recycle — while the stream that created it is owned by a workspace somewhere else entirely and is
+never notified. The stream keeps `isDisposed == false`, keeps a strong reference to the corpse and
+everything the corpse roots (its Autofac `ILifetimeScope`, its `TypeRegistry`), and keeps being
+handed out as usable.
+
+The codebase already knows the *creation-time* half of this hazard — `SynchronizationStream.cs`
+refuses to hand out a stream whose host is winding down, because *"a consumer cannot even detect
+the corpse: `ISynchronizationStream` exposes no liveness/disposal member"*, and that cost a
+production NRE. **The post-creation half — the hub dying under a stream already handed out — has
+the same root and is not covered.**
 
 ## What this falsifies
 
@@ -200,72 +283,65 @@ over 28 h against a GC pause share of 0.66 sustained for 2 h 15, with `/alive` a
 `Healthy` throughout. A memory shortage is something Kubernetes fixes in one second; CPU
 starvation inside a process that still answers TCP is something it has no opinion about.
 
-## Two defects, not one
+## Three defects, not one
 
 They are independent, and conflating them is how this stayed open.
 
-1. **`sync/` hubs are never released** — 8 419 of 9 393, ~8.6 per node hub. Unbounded growth, and
-   the same objects supply the 45 s heartbeat that pins their owning grain, so this one defect is
-   *both* the memory and the reason nothing deactivates. The lifetime decision has exactly one
-   input — a heartbeat that can only ever vote "keep". This is what makes the curve monotone.
+1. **A hosted hub can die under a stream that is never told.** 1 496 `Dead` hubs, each held by an
+   undisposed `SynchronizationStream<T>.Hub` — ≈580 MB of pure corpse, and the only one of the
+   three that is unambiguous. `ISynchronizationStream` exposes no liveness member, so neither the
+   stream nor its consumers can even detect the state.
 
-2. **A hub costs ~390 KB of retained heap, ~173 KB of it duplicated framework metadata.** A
+2. **`sync/` hubs that are still `Started` are never released** — 6 925 of them, ~7 per node hub.
+   The same objects supply the 45 s heartbeat that pins their owning grain, so this defect is
+   *both* memory and the reason nothing deactivates: the lifetime decision has exactly one input,
+   and it can only ever vote "keep". Whether all 6 925 are garbage is the open question below.
+
+3. **A hub costs ~390 KB of retained heap, ~173 KB of it duplicated framework metadata.** A
    constant factor, but a large one: even a *legitimate* 962-node working set costs
    962 × 9.75 × 390 KB ≈ 3.5 GB, which does not
    fit a 12 GiB ceiling with room to serve. Each child `ILifetimeScope` wraps 262 parent
    registrations in `ExternalComponentRegistration`, each with its own ~4-stage resolve pipeline.
-   Fixing (1) alone leaves a portal whose working set is set by its DI cost per actor.
+   Fixing (1) and (2) alone leaves a portal whose working set is set by its DI cost per actor.
 
-🚨 **Neither is fixed by raising the memory limit, lowering the GC hard limit, recycling pods on a
+🚨 **None of the three is fixed by raising the memory limit, lowering the GC hard limit, recycling pods on a
 timer, or deleting pods by hand.** The pod-deletion stopgap has been applied at least four times
 and is recorded as a stopgap.
 
-## What is NOT yet answered, and the next measurement
+## What is still open, and the next measurement
 
-The address histogram settles *which* hubs (`sync/`, 89.6 %). It does not settle **why each one
-outlives its subscriber**, and that is the whole remaining question — because the disposal code is
-correct. `SynchronizationStream.Dispose()` completes the store, walks its own composite
-synchronously and then disposes its hub
-(`src/MeshWeaver.Data/Serialization/SynchronizationStream.cs:2198-2251`):
+Five dumps settle *what* is retained, *which* hubs, and *who* holds the dead ones. Two things are
+still inference rather than measurement, and both are named here so the next reader does not have
+to re-derive the whole chain.
 
-```csharp
-if (Hub is not null && Hub.RunLevel <= MessageHubRunLevel.Started)
-    Hub.Dispose();
-```
+**1. What kills the 1 496 sync hubs.** Measured: they are `Dead` while their stream is not
+disposed, so the kill did not come through `SynchronizationStream.Dispose()`. Inferred: it came
+from the parent, via `HostedHubsCollection.DisposeHubsReactive` — a circuit ending, a
+`DisposeRequest`, a recycle. **The confirming measurement is a log correlation, not a dump**: count
+`[DISPOSE-CONTAINER] {Address}: lifetime scope closed` (`HostedHubsCollection.cs:338`, Debug) for
+`sync/` addresses over a window and compare it with the growth in the `Dead` population. If they
+match, the parent-teardown path is confirmed and the fix belongs where a hosted hub's death is
+announced to whoever created it.
 
-So a sync hub survives only if (a) its stream is still referenced by something that never lets go,
-or (b) `Dispose()` ran but the hub's *shutdown never completed* — `MessageHub.Dispose()` posts
-`ShutdownRequest(Quiescing)` and returns, and the `RegisterForDisposal` callback that removes the
-entry from `messageHubs` runs in the ShutDown phase, several action-block turns later, bounded by
-nothing. **These are different defects with different fixes, and the dump cannot tell them apart**
-— a hub in state (b) and a hub in state (a) look identical in a type histogram.
+**2. Whether the 6 925 `Started` sync hubs are garbage at all.** They are in the registry, nothing
+asked them to dispose, and their streams are live. That is *consistent with correct behaviour* —
+8 450 undisposed streams for subscribers that really are attached. It is also consistent with
+streams abandoned without `Dispose()`. **The discriminator is a referrer walk on the `Started`
+population's streams** (the same one-pass ClrMD technique used above, retargeted): if they are
+held by `Workspace._localStreamCache` / `_remoteStreamCache` entries whose subscribers are gone,
+they are garbage; if they are held by live circuits, the portal's working set is simply larger
+than its ceiling and the per-hub cost below is the whole story.
 
-**The next measurement discriminates them in one pass, and it is a small extension of the same
-ClrMD walk:** for every `sync/` hub, read `MessageHub.RunLevel` (and `isDisposed` on its stream)
-and histogram *that*.
+🚨 **Do not skip to a fix on the strength of the corpse count alone.** 1 496 dead hubs is ≈580 MB
+— real, unambiguous, and worth fixing — but it is **one sixth** of the 9 398. Fixing only that
+leaves ~2.7 GB in the `Started` population untouched, and (2) is what decides whether that
+remainder is a leak or a sizing problem.
 
-- A large population at `RunLevel >= ShutDown`/`Disposing` ⇒ **(b)**: disposal was requested and
-  never finished. That is a teardown-completion defect in `MessageHub`, and it is bounded — the
-  fix is that the registry entry is released on the *request*, not on the completion.
-- A large population at `RunLevel == Started` with a live stream ⇒ **(a)**: nothing asked. The
-  question then moves to who still holds the stream, and the answer is a `gcroot`-equivalent walk
-  from one such stream back to a GC root — also ClrMD, since SOS `gcroot` will crash the same way
-  `dumpobj` does.
-
-🚨 **Do not skip to a fix on the strength of the histogram alone.** "89.6 % are `sync/`" names the
-population; it does not name the defect, and the two candidates above call for opposite changes.
-The counted, uncomfortable possibility is that a large share is *neither* — legitimately live
-streams for subscribers that really are still attached, in which case the portal's working set is
-simply larger than its ceiling and defect (2) is the whole story.
-
-A second, independent reading worth having alongside it: the growth *rate* of `MessageHub` count
-against replica age, taken on three replicas of different ages. #3321 observed that working set
-tracks uptime rather than load — the near-idle `fxbhd` holds 11 443 MiB on 512 log lines per
-30 min while the busiest replica holds 4 134 MiB. The +7-in-22-minutes reading above refines that
-rather than contradicting it: hubs are created by load and simply never removed, so an idle pod
-*holds* its history without adding to it. A per-replica hub count against age would confirm that
-directly, and it is the cheapest way to tell a genuine leak from a working set that is merely
-larger than its ceiling.
+A third reading worth having: the growth *rate* of `MessageHub` count against replica age, on three
+replicas of different ages. #3321 observed that working set tracks uptime rather than load — the
+near-idle `fxbhd` holds 11 443 MiB on 512 log lines per 30 min while the busiest replica holds
+4 134 MiB. The +7-in-22-minutes reading above refines that rather than contradicting it: hubs
+arrive with load and never leave, so an idle pod *holds* its history without adding to it.
 
 ## Reading the counters yourself
 
