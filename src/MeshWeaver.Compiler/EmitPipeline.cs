@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Emit;
@@ -370,7 +371,9 @@ public static class EmitPipeline
                 + "— the shared reference set cannot emit, but the pristine control could not be "
                 + "BUILT, so this says nothing about whether the reference set is the cause";
 
-        return Verdict(shared, EmitCanary(() => pristineRefs));
+        // Leg 3 runs only on the two verdicts that mean "the control could not emit either", and
+        // it is passed as a FACTORY so Verdict stays pure and unit-testable.
+        return Verdict(shared, EmitCanary(() => pristineRefs), () => DissectTheNull(() => faulted.References));
     }
 
     /// <summary>
@@ -421,6 +424,191 @@ public static class EmitPipeline
         }
     }
 
+    /// <summary>The internal Roslyn symbol behind a public <c>ISymbol</c> wrapper. Reached by
+    /// reflection because Roslyn exposes no public route to it — <c>EmitCanaryDissectionTest</c>
+    /// is what stops a Roslyn rename from retiring leg 3 in silence.</summary>
+    private const string UnderlyingSymbolProperty = "UnderlyingSymbol";
+
+    /// <summary>The interface whose explicit implementation on <c>NamedTypeSymbol</c> is the exact
+    /// frame every #890 stack dies in.</summary>
+    private const string CciTypeDefinitionMember = "Microsoft.Cci.ITypeDefinitionMember";
+
+    /// <summary>The getter on <see cref="CciTypeDefinitionMember"/> that reads null.</summary>
+    private const string ContainingTypeDefinitionGetter = "get_ContainingTypeDefinition";
+
+    /// <summary>
+    /// Leg 3 — DISSECT the null, instead of asking for a core dump nobody can produce.
+    ///
+    /// <para>Every #890 stack dies in the same two frames:
+    /// <c>NamedTypeSymbol.Microsoft.Cci.ITypeDefinitionMember.get_ContainingTypeDefinition()</c>,
+    /// which in a Release Roslyn reduces to <c>return this.ContainingType.GetCciAdapter();</c>,
+    /// called from <c>MetadataWriter.GetConsolidatedTypeParameters</c> — whose guard
+    /// (<c>AsNestedTypeDefinitionImpl</c>) read that same <c>ContainingType</c> as NON-null
+    /// microseconds earlier. Legs 1 and 2 establish that the process can no longer EMIT. Neither
+    /// asks the far cheaper question: <b>can it still perform the READ that the emit dies on?</b>
+    /// This leg does, on symbols bound after the fault, and its answer is the discriminator the
+    /// <c>BELOW-ROSLYN</c> verdict itself flags as residual.</para>
+    ///
+    /// <list type="bullet">
+    ///   <item><c>dissect=SYMBOL-GRAPH-BROKEN</c> — the ordinary <c>ContainingType</c> property
+    ///     reads null for a nested SOURCE type of a compilation created AFTER the fault. The
+    ///     broken read is then the property itself, not anything about emit, and every consumer of
+    ///     a nested symbol in this process is affected — not only <c>Emit</c>.</item>
+    ///   <item><c>dissect=REPRODUCED-OUTSIDE-EMIT</c> — the public property reads correctly but the
+    ///     Cci explicit interface implementation does not, called DIRECTLY. #890 then reproduces in
+    ///     one property call with no emit, no metadata writer and no PE stream: the smallest repro
+    ///     this defect has ever had, and the one a <c>dotnet/runtime</c> report needs.</item>
+    ///   <item><c>dissect=READS-HEALTHY</c> — BOTH reads return the right answer, on freshly bound
+    ///     symbols, microseconds after <c>Emit</c> threw on exactly this shape. A corrupted object
+    ///     graph does not predict that; code that is only wrong when reached from
+    ///     <c>MetadataWriter</c>'s own call site does — which is what the split-arm
+    ///     <c>DOTNET_TieredPGO=0</c> re-run tests.</item>
+    ///   <item><c>dissect=UNAVAILABLE(…)</c> — the probe could not run (a Roslyn shape change, an
+    ///     unbindable canary). Its OWN verdict, never folded into the others: the
+    ///     <c>INCONCLUSIVE</c> lesson one layer further in.</item>
+    /// </list>
+    ///
+    /// <para>🚨 A local control (our own nested generic + explicit interface implementation) was
+    /// considered and deliberately left out. Its failing branch would be informative, but its
+    /// passing branch is not — a different jitted method reading correctly says nothing about
+    /// Roslyn's — and a probe whose green means nothing is exactly the shape this file keeps
+    /// removing.</para>
+    ///
+    /// <para>Never throws, like every other leg. Cost is one parse and two property reads, only
+    /// ever on a path that has already failed.</para>
+    /// </summary>
+    /// <param name="references">The reference set to bind the canary source against — the FAULTED
+    /// compilation's own, so the read runs under the conditions the failed emit ran under.</param>
+    internal static string DissectTheNull(Func<IEnumerable<MetadataReference>> references)
+    {
+        INamedTypeSymbol? leaf;
+        string symbolLeg;
+        try
+        {
+            var dissection = CSharpCompilation.Create(
+                "MeshWeaverEmitCanaryDissection",
+                syntaxTrees: [CSharpSyntaxTree.ParseText(EmitCanarySource)],
+                references: references(),
+                options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+            leaf = dissection.GetTypeByMetadataName("MwEmitCanary`1+Inner`1+Leaf`1");
+            if (leaf is null)
+                return "dissect=UNAVAILABLE(the canary source did not bind "
+                    + "MwEmitCanary<T>.Inner<U>.Leaf<V>, so no read was attempted)";
+
+            // The ordinary, public route to the very property the NRE is thrown from.
+            var inner = leaf.ContainingType;
+            var outer = inner?.ContainingType;
+            symbolLeg = inner is null ? "symbol:NULL@Leaf.ContainingType"
+                : outer is null ? "symbol:NULL@Inner.ContainingType"
+                : "symbol:OK";
+        }
+        catch (Exception bindError)
+        {
+            return $"dissect=UNAVAILABLE({bindError.GetType().Name} at {ThrowSite(bindError)} while "
+                + "binding the canary source, so no read was attempted)";
+        }
+
+        var cciLeg = ProbeCciContainingTypeDefinition(leaf);
+
+        if (symbolLeg != "symbol:OK")
+            return $"dissect=SYMBOL-GRAPH-BROKEN {symbolLeg} {cciLeg} — ContainingType reads NULL "
+                + "for a nested SOURCE type on a compilation created AFTER the fault, through the "
+                + "ordinary property and with no emit involved. The broken read is the property, "
+                + "not the metadata writer; every consumer of a nested symbol in this process is "
+                + "affected";
+
+        if (cciLeg.StartsWith("cci:UNAVAILABLE", StringComparison.Ordinal))
+            return $"dissect=UNAVAILABLE {symbolLeg} {cciLeg} — the public read succeeded but the "
+                + "Cci leg could not be reached, so the discriminator did not run";
+
+        if (cciLeg.StartsWith("cci:OK", StringComparison.Ordinal))
+            return $"dissect=READS-HEALTHY {symbolLeg} {cciLeg} — BOTH reads, including the exact "
+                + "ITypeDefinitionMember.ContainingTypeDefinition frame every #890 stack dies in, "
+                + "return the right answer when called DIRECTLY on symbols bound after the fault. "
+                + "A corrupted object graph does not predict that; code that is wrong only when "
+                + "reached from MetadataWriter's call site does — run the split-arm "
+                + "DOTNET_TieredPGO=0 re-run";
+
+        return $"dissect=REPRODUCED-OUTSIDE-EMIT {symbolLeg} {cciLeg} — the public ContainingType "
+            + "reads correctly while the Cci explicit interface implementation on the SAME symbol "
+            + "does not, called directly. #890 reproduces here in ONE property call, with no emit, "
+            + "no metadata writer and no PE stream: take these two readings to dotnet/runtime";
+    }
+
+    /// <summary>
+    /// Calls <c>NamedTypeSymbol.Microsoft.Cci.ITypeDefinitionMember.get_ContainingTypeDefinition()</c>
+    /// on the internal symbol behind <paramref name="publicSymbol"/> — the exact method on every
+    /// #890 stack — and reports what it answered.
+    ///
+    /// <para>Reflection is unavoidable: <c>Microsoft.Cci</c> and the internal symbol model are both
+    /// internal to Roslyn, and the public <c>ISymbol</c> wrapper does not implement the interface.
+    /// Every step that can fail to RESOLVE reports <c>cci:UNAVAILABLE(why)</c> — distinct from
+    /// <c>cci:NULL</c> (it resolved and answered null) and <c>cci:THREW</c> (it resolved and threw),
+    /// because "I could not look" and "I looked and it was broken" must never share a token.</para>
+    ///
+    /// <para>The base-type walk matters: <c>UnderlyingSymbol</c> is declared on a base of the
+    /// public wrapper, and <c>Type.GetProperty</c> does not return non-public members of base
+    /// classes.</para>
+    /// </summary>
+    private static string ProbeCciContainingTypeDefinition(INamedTypeSymbol publicSymbol)
+    {
+        object? underlying = null;
+        try
+        {
+            for (var declaring = publicSymbol.GetType(); declaring is not null && underlying is null;
+                 declaring = declaring.BaseType)
+            {
+                underlying = declaring
+                    .GetProperty(UnderlyingSymbolProperty,
+                        BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+                    ?.GetValue(publicSymbol);
+            }
+        }
+        catch (Exception reflectionError)
+        {
+            return $"cci:UNAVAILABLE({reflectionError.GetType().Name} reaching {UnderlyingSymbolProperty})";
+        }
+
+        if (underlying is null)
+            return $"cci:UNAVAILABLE(no {UnderlyingSymbolProperty} on {publicSymbol.GetType().Name})";
+
+        MethodInfo target;
+        try
+        {
+            var implementation = underlying.GetType();
+            var cci = implementation.GetInterfaces()
+                .FirstOrDefault(i => i.FullName == CciTypeDefinitionMember);
+            if (cci is null)
+                return $"cci:UNAVAILABLE({implementation.Name} does not implement {CciTypeDefinitionMember})";
+
+            var map = implementation.GetInterfaceMap(cci);
+            var index = Array.FindIndex(map.InterfaceMethods,
+                m => m.Name == ContainingTypeDefinitionGetter);
+            if (index < 0)
+                return $"cci:UNAVAILABLE({CciTypeDefinitionMember} has no {ContainingTypeDefinitionGetter})";
+            target = map.TargetMethods[index];
+        }
+        catch (Exception mapError)
+        {
+            return $"cci:UNAVAILABLE({mapError.GetType().Name} mapping {CciTypeDefinitionMember})";
+        }
+
+        try
+        {
+            return target.Invoke(underlying, null) is null ? "cci:NULL" : "cci:OK";
+        }
+        catch (TargetInvocationException wrapped) when (wrapped.InnerException is not null)
+        {
+            var actual = wrapped.InnerException;
+            return $"cci:THREW {actual.GetType().Name} at {ThrowSite(actual)}";
+        }
+        catch (Exception probeError)
+        {
+            return $"cci:THREW {probeError.GetType().Name} at {ThrowSite(probeError)}";
+        }
+    }
+
     /// <summary>
     /// Reduces the two canary legs to the one-line verdict. Pure — no Roslyn, no process state —
     /// so every branch is unit-testable (<c>EmitCanaryVerdictTest</c>).
@@ -437,10 +625,28 @@ public static class EmitPipeline
     /// When the sites differ the verdict is <c>DIVERGENT</c>: both sites are named and the strong
     /// claim is withheld, exactly as <c>INCONCLUSIVE</c> withholds it when the control never
     /// ran.</para>
+    ///
+    /// <para>🚨 <b>A remedy nobody can execute is not a remedy.</b> The <c>BELOW-ROSLYN</c> branch
+    /// told triage to *"capture a core dump and re-run with tiering disabled"* from 2026-08-28, and
+    /// the dump half is <b>unfollowable by construction</b>: <c>DOTNET_DbgEnableMiniDump</c> fires
+    /// on a SIGNAL, and this process never signals — it throws, logs, keeps running, and is killed
+    /// by the harness wall-clock cap as <c>exit=124</c> (SIGTERM), which writes no dump. Nine
+    /// occurrences carried that advice and produced exactly zero dumps. The branch now names the
+    /// half that IS followable (a split-arm tiering re-run) and hands over leg 3's
+    /// <c>dissect=</c> reading, which takes in-process the measurement the dump was being asked
+    /// for. This is the same defect as a gate that cannot fail, worn as prose.</para>
     /// </summary>
     /// <param name="shared">Leg 1's outcome token — the same reference set as the failed compile.</param>
     /// <param name="pristine">Leg 2's outcome token — brand-new references.</param>
-    internal static string Verdict(string shared, string pristine)
+    /// <param name="dissect">
+    /// Leg 3 (<see cref="DissectTheNull"/>), as a FACTORY so this method stays pure and every
+    /// branch stays unit-testable. Invoked ONLY on the two verdicts that mean "the control could
+    /// not emit either" — <c>BELOW-ROSLYN</c> and <c>DIVERGENT</c> — never on <c>REFERENCES</c>,
+    /// where the pristine leg emitted and the symbol graph is demonstrably intact. <c>null</c>
+    /// (the unit-test shape) reports <c>dissect=NOT-RUN</c> rather than silently omitting it: an
+    /// absent reading must be visible as absent.
+    /// </param>
+    internal static string Verdict(string shared, string pristine, Func<string>? dissect = null)
     {
         if (pristine.StartsWith("OK", StringComparison.Ordinal))
             return $"canary=REFERENCES shared:{shared} pristine:{pristine} — the same source emits fine "
@@ -462,7 +668,7 @@ public static class EmitPipeline
                 + "one process-wide fault, so the below-Roslyn verdict is withheld — COMPARE THE "
                 + "TWO SITES: one corruption can surface a frame apart, but two unrelated faults "
                 + "look exactly like this as well, and only the sites tell them apart. Start with "
-                + "whichever site is not the emit itself";
+                + "whichever site is not the emit itself. " + Dissection(dissect);
 
         return $"canary=BELOW-ROSLYN shared:{shared} pristine:{pristine} — a trivial compilation "
             + "with freshly parsed source and an IMAGE-BACKED CoreLib (fresh managed bytes, "
@@ -470,9 +676,35 @@ public static class EmitPipeline
             + $"shared set) cannot emit either, and BOTH legs died in the same frame ({sharedSite}) "
             + "⇒ nothing about the reference set OR its file mappings explains this; the "
             + "broken state is below Roslyn (CLR heap / JIT / GC), so no reference-set change can "
-            + "fix it — capture a core dump and re-run with tiering disabled. RESIDUAL: both legs "
-            + "still run on the one CLR, so this does not separate a corrupted heap from a "
-            + "miscompiled Roslyn method — compare the dump's faulting address against #613";
+            + "fix it. 🚨 DO NOT go looking for a core dump: DOTNET_DbgEnableMiniDump fires on a "
+            + "SIGNAL and this process never signals — it throws, logs, keeps running, and is "
+            + "killed by the harness wall-clock cap (exit=124 = SIGTERM), which writes none. The "
+            + "followable measurement is a SPLIT-ARM re-run with DOTNET_TieredPGO=0 (sharper) or "
+            + "DOTNET_TieredCompilation=0 — at ~1% per run one clean arm proves nothing — read "
+            + "together with the dissect= reading below. RESIDUAL: both legs still run on the one "
+            + "CLR, so this does not separate a corrupted heap from a miscompiled Roslyn method; "
+            + "#613 is the SIGNALLING twin and is where a faulting address actually comes from. "
+            + Dissection(dissect);
+    }
+
+    /// <summary>
+    /// Runs leg 3 and reduces it to the token appended to the verdict, or says it did not run.
+    /// Never throws: <paramref name="dissect"/> is already total, and a diagnostic that can fault
+    /// while reporting a fault destroys the evidence it exists to preserve.
+    /// </summary>
+    private static string Dissection(Func<string>? dissect)
+    {
+        if (dissect is null)
+            return "dissect=NOT-RUN (no probe supplied)";
+        try
+        {
+            return dissect();
+        }
+        catch (Exception probeError)
+        {
+            return $"dissect=UNAVAILABLE({probeError.GetType().Name} — the probe itself faulted, "
+                + "so it says nothing either way)";
+        }
     }
 
     /// <summary>
