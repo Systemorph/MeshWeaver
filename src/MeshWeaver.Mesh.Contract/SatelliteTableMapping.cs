@@ -111,6 +111,37 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
     }
 
     /// <summary>
+    /// The satellite CONTAINER of <paramref name="path"/>: everything up to AND INCLUDING its FIRST
+    /// satellite segment — <c>Doc/_Thread/t1/_ThreadMessage/m1</c> → <c>Doc/_Thread</c>,
+    /// <c>Doc/_Comment/c1</c> → <c>Doc/_Comment</c>. <c>null</c> when the path holds no satellite
+    /// segment (it is a main-node path, served by the primary table).
+    ///
+    /// <para>🚨 This is the only path shape a satellite READ can be expressed as on EVERY backend,
+    /// which is why it exists. A content query is resolved to ONE storage table: on Postgres from
+    /// the query path's satellite segment (or a satellite <c>nodeType</c> filter), and in the
+    /// in-repo <c>StorageAdapterMeshQueryProvider</c> from the same signals via
+    /// <c>IsSatelliteTargetedQuery</c>. So <c>path:{main} scope:subtree</c> reads <c>mesh_nodes</c>
+    /// and returns NO metadata satellites on either backend, while <c>path:{container}
+    /// scope:subtree</c> reads the satellite's own table and returns all of them — the container
+    /// and everything nested under it, other satellite kinds included.</para>
+    ///
+    /// <para>Pair it with <see cref="OwnerOfSatellitePath"/>, which returns the main node this
+    /// container hangs off: the two split one path at the same seam. Content satellites
+    /// (<c>Source</c>/<c>Test</c> → <c>code</c>, no leading underscore) are deliberately NOT
+    /// containers here — they are primary CONTENT and every backend's primary-table query already
+    /// unions their table in.</para>
+    /// </summary>
+    public static string? SatelliteContainerOf(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < segments.Length; i++)
+            if (IsSatelliteSegment(segments[i]))
+                return string.Join('/', segments[..(i + 1)]);
+        return null;
+    }
+
+    /// <summary>
     /// True if <paramref name="segment"/> is exactly one of the underscore-prefixed
     /// <see cref="Defaults"/> satellite segments — the shared test behind
     /// <see cref="IsSatellitePath"/> and <see cref="OwnerOfSatellitePath"/>.
