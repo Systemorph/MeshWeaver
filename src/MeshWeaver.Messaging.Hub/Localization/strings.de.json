@@ -1296,7 +1296,7 @@
   "ui.providerColTier": "Stufe",
   "ui.providerColSetup": "Preise",
   "ui.providerModelUnreadable": "nicht lesbar",
-  "ui.providerNoModels": "Keine Modelle konfiguriert. Fügen Sie im Modell-Katalog eines hinzu — ein Modell braucht einen Preis pro Million Tokens und eine Währung, bevor eine Runde darauf abgerechnet werden kann.",
+  "ui.providerNoModels": "Keine Modelle konfiguriert. Fügen Sie im Modell-Katalog eines hinzu — geben Sie ihm einen Preis pro Million Tokens und eine Währung, damit hier entschieden wird, was eine Runde kostet, und nicht in der eingebauten Preistabelle der Plattform.",
   "ui.providerModelsUnreadable": "Die Modelle dieses Providers konnten gerade nicht gelesen werden; daher wird keines angezeigt statt eines leeren Katalogs.",
   "ui.providerModelsUnpriced": "{0} {1}: kein Preis am Modell und keiner in der eingebauten Preistabelle der Plattform — Runden auf diesen Modellen werden daher NICHT abgerechnet; die Plattform bezahlt sie und das Hauptbuch hält nichts fest.",
   "ui.providerModelsNoCurrency": "{0} {1}: mit Preis, aber ohne deklarierte Währung — der Zähler fällt auf einen Standard zurück, sodass die Abrechnung eine Währung nennt, die das Modell nie angegeben hat.",
