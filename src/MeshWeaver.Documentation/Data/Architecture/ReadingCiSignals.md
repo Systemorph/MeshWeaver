@@ -483,6 +483,15 @@ Plugins shard"* — with a real occurrence rather than an argument.
 occurrence's own report published. A detector that cannot reproduce those numbers is not entitled to
 report a zero.
 
+🚨 **And know which questions the sinks cannot answer.** *Neither* Plugins sink carries a compile
+**success**: `Compile success for …` is `LogInformation`, so the trace log (faults only) never sees
+it and the post-hoc job log never sees it either unless the test that logged it failed. Core's live
+`[OUTPUT]` stream does carry it — which is why the "**none** succeeded" half of the
+[total-and-permanent measurement](/Doc/Architecture/NodeTypeCompilation) is stated for the core
+occurrence and **not** for the Plugins one. Asserting it there would be inferring an absence from a
+sink that never records the presence. Before writing "and X never happened", check that the sink you
+read would have shown X happening.
+
 ### A grep hit is not a binder
 
 Twice in one day, prose was mistaken for the thing it described. A quoted phrase in a `//` comment
