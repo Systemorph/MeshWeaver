@@ -1760,7 +1760,11 @@ jobs:
             # from that platform: the same global properties the module build above passed, which
             # is what makes this assembly the one publish would have copied.
             anchordir="$GITHUB_WORKSPACE/meshweaver/src/MeshWeaver.Compiler"
-            dotnet build "$anchordir/MeshWeaver.Compiler.csproj" -c Release \
+            # -warnaserror to match the module build above: when a module DOES reach the
+            # compiler transitively, that build is what compiles it, so omitting the flag here
+            # would let MeshWeaver.Maps accept a compiler build MeshWeaver.AI rejects — the same
+            # per-module asymmetry this change exists to remove.
+            dotnet build "$anchordir/MeshWeaver.Compiler.csproj" -c Release -warnaserror \
               -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" \
               -p:Version="$VERSION"
             anchor="$anchordir/bin/Release/net10.0/MeshWeaver.Compiler.dll"
