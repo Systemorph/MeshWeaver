@@ -357,6 +357,27 @@ live — core owns the rule and one unowned pair.
    `code.enterDisplayName`, `code.neverExecuted`) — none had one before, which is why this could not
    ship from Plugins alone. What remains is consuming them there. Tracked as
    [MeshWeaver.Plugins#1308](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1308).
+
+   🚨 **`code.neverExecuted` does not finish its own line, and that is worth knowing before the fix
+   is called done.** Measured at MeshWeaver.Plugins `d3b5ae01`, the provenance text is a ternary
+   whose *other* branch is unowned too:
+
+   ```csharp
+   var lastRunText = codeConfig?.LastExecutedAt is { } lastRun
+       ? $"last run {lastRun.Humanize()}"
+         + (string.IsNullOrEmpty(codeConfig.LastExecutedBy) ? "" : $" by {codeConfig.LastExecutedBy}")
+       : "never executed";
+   ```
+
+   So *"last run"* and *"by"* need keys as well — and `Humanize()` is worse than an unowned string:
+   `CodeViews.cs` has `using Humanizer;`, and Humanizer's culture-less `DateTime.Humanize()` resolves
+   through **`CultureInfo.CurrentUICulture`**, which this repo bans outright *"this covers date and
+   number FORMATTING too"*. On Blazor Server that is the container's culture, shared by every
+   simultaneous viewer, so it is the ambient-resolution defect
+   [Localization](../Localization) exists to prevent, not merely an untranslated word. The fix takes
+   the viewer's culture explicitly — derived from `AccessContext.Locale` the way
+   `LocalizationCatalog.GetNamed` already derives its own — or moves the whole sentence into one
+   `{0}`-parameterised key so a translator controls the word order.
 2. **Mirror the seven new core keys** into `MeshWeaver.Plugins/clients/react/src/i18n/`
    (`npm run sync:i18n -- --ref <merged core sha>`). 🚨 Adding a key in core reddens **nothing**:
    the drift guard compares against a **pinned** core commit (`catalog-source.json`), not core's
