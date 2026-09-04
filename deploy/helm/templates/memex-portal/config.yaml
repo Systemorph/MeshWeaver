@@ -140,6 +140,22 @@ data:
   # 7 days old. Nothing outside the per-NodeType directories is ever touched, and any error
   # reading the cache aborts the sweep with nothing collected.
   AssemblyCache__Retention__Delete: "{{ .Values.config.memex_portal.AssemblyCache__Retention__Delete | default "false" }}"
+  {{- /* Notification retention (Doc/Architecture/NotificationRetention, MeshWeaver#3250). A pass
+         that runs per signing-in user over that user's own partition — plus Admin for a global
+         admin — removing notifications whose node has gone MaxAge without being written.
+
+         ARMED by default, and the `default "true"` matters: this ConfigMap lists keys explicitly,
+         so a values file predating these keys renders "" for them, and "" does not parse as a
+         bool — which would silently DISARM the pass on exactly the deployments that never opted
+         out. The defaults here mirror NotificationRetention.Default so an un-set key and an
+         un-rendered key mean the same thing.
+
+         The window is clamped to a 7-day floor in code, so a "0.00:00:00" typo here cannot empty
+         a bell; an unparseable value keeps the 90-day default. MaxDeletionsPerRun is the bound on
+         ONE logon's housekeeping — a partition with a backlog drains over successive logons. */}}
+  Notifications__Retention__Enabled: "{{ .Values.config.memex_portal.Notifications__Retention__Enabled | default "true" }}"
+  Notifications__Retention__MaxAge: "{{ .Values.config.memex_portal.Notifications__Retention__MaxAge | default "90.00:00:00" }}"
+  Notifications__Retention__MaxDeletionsPerRun: "{{ .Values.config.memex_portal.Notifications__Retention__MaxDeletionsPerRun | default "200" }}"
   {{- /* Commit-pinned source replica (GitModuleReplica). Point Root at a DEDICATED persistent mount —
          see .Values.persistence for the volume. Empty means "unset": the option then falls back to a
          temp subdir, which on a pod is ephemeral and re-clones the repo on every restart. This key

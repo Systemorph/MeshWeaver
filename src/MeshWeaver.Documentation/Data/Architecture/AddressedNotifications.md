@@ -368,6 +368,25 @@ faster, when the query has already stopped reading it, is cost with no benefit.
 reads. They are small, they are already paid for, and a general retention pass — which notifications
 want on their own merits, addressed or not — reclaims them later without a schema migration.
 
+✅ **That condition is now met** ([Notification Retention](/Doc/Architecture/NotificationRetention),
+[#3250](https://github.com/Systemorph/MeshWeaver/issues/3250)). This ruling was explicitly
+conditional: without a retention pass, "they age out" means "never", and §6 would have been a
+decision to keep every legacy row forever. The pass that closes it is a per-user `EveryLogon`
+[logon action](/Doc/Architecture/LogonActions), and it reaches these rows precisely because it
+anchors on the **partition** rather than on `{addressee}/_Notification` — one capped, ordered,
+single-schema query per partition, run under the signing-in person's own identity:
+
+```text
+path:{partition} scope:descendants nodeType:Notification sort:LastModified-asc limit:{cap}
+```
+
+so a pre-addressing notification filed under an entity in someone's own partition
+(`{user}/_Thread/{t}/…/_Notification/{id}`) is swept by the same pass that sweeps their bell. Every
+legacy row is older than any sane window by construction, so the first sweep that reaches one takes
+it. The stated limit is unchanged in kind and smaller in size: rows in partitions **nobody signs
+into** — spaces, plugin partitions, `Doc` — are still neither read nor removed, because the
+alternative is the cross-partition pass this section already rejected.
+
 🚨 **This is not the #2011 truncation.** That shape is a read that silently returns FEWER rows than
 the caller's question implies. Going forward, no notification is dropped: every notification is
 delivered INTO its addressee's partition, so a notification *about* an entity anywhere in the mesh
