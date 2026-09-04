@@ -115,17 +115,23 @@ public class RegistryReconcileDeferralTest(ITestOutputHelper output) : MonolithM
         Assert.Equal(RegistryReconcileEntry.ViaFeedRead, drained.Single(e => e.Url == RegistryUrl).LastReconciledVia);
 
         // The reconcile's own witness: the install record opted OUT of unattended updates, so a
-        // changed module raises the "Update available" reminder on it — carrying the provenance
-        // that names THIS registry.
-        var reminder = await Mesh.GetWorkspace()
-            .GetQuery("notif|pkg|reconcile",
-                $"path:{PackageInstaller.InstalledPartition}/{PackageId}/_Notification scope:children nodeType:Notification")
-            .Select(ns => (ns ?? [])
-                .Select(n => n.ContentAs<Notification>(Json))
-                .FirstOrDefault(n => n?.Title.StartsWith("Update available", StringComparison.Ordinal) == true))
+        // changed module raises the "Update available" reminder — carrying the provenance that
+        // names THIS registry.
+        //
+        // 🚨 It is read from the PLATFORM bell, not from the install record. Since
+        // MeshWeaver#3156 a notification is delivered to its ADDRESSEE, and only a platform admin
+        // can apply an update (the sibling refusal this same emitter raises says so in as many
+        // words), so it is addressed to `Admin` instead of being filed under
+        // `Plugins/{package}/_Notification` where every catalog reader saw it. The install record
+        // stays the click target, which is what `TargetNodePath` is asserted on below.
+        var reminder = await AdminNotifications()
+            .Select(ns => ns.FirstOrDefault(n =>
+                n.Title.StartsWith("Update available", StringComparison.Ordinal)))
             .Where(n => n is not null)
             .FirstAsync().Timeout(TestTimeouts.Convergence);
         Assert.Contains($"Served by registry '{RegistryName}'", reminder!.Message);
+        Assert.Equal($"{PackageInstaller.InstalledPartition}/{PackageId}", reminder.TargetNodePath);
+        Assert.Equal(StartupErrorNotifier.AdminPartition, reminder.Recipient);
 
         // The drain reconciled from the packages the catalog read returned: the boot's attempts
         // plus that ONE read, and not a single extra round-trip to the registry.
