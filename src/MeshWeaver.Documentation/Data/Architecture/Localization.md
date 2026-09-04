@@ -141,6 +141,24 @@ missing from both), and no target-typed `Messages = [new(…)]`, which construct
 naming no type and is therefore invisible to any textual census — three such sites were missing from
 the issue's own count for exactly that reason.
 
+### The catalog has a second home, and it goes stale SILENTLY
+
+The web clients carry their own copy at `MeshWeaver.Plugins/clients/react/src/i18n/strings.{en,de}.json`
+so they can resolve synchronously. Core is the source of truth and its change merges first.
+
+🚨 **Adding a key here does not turn the plugins repo red.** Its drift guard
+(`src/i18n/localize.test.ts`, in the `RN app + web clients (typecheck + test)` job) compares the
+client catalog against a **pinned core commit** recorded in `src/i18n/catalog-source.json`, not
+against core's `main`. The pin is deliberate — core merges faster than a Plugins CI cycle, so an
+unpinned guard could not converge and reddened every unrelated PR on a subsystem its diff could not
+reach — but the consequence is that **a core catalog change makes the mirror stale with nothing
+anywhere going red.** Measured 2026-09-04: the pin sat at 1,104 keys while core carried 1,174, both
+repos fully green.
+
+So a core PR that adds keys hands the sync over explicitly. The mirror moves by
+`npm run sync:i18n -- --ref <the merged core sha>`, which rewrites both catalogs, the `ref` and the
+recorded key counts together.
+
 ## Language resolution
 
 `Locales.Resolve` falls back in three steps: exact match → primary subtag → English. So `de-CH`,
