@@ -464,14 +464,19 @@ measured against its own `Files`.
 
 ### What this still does not cover
 
-- **A single file larger than the budget travels whole.** The largest asset in the Education repo is
-  a 9.9 MB video → ~13 MB base64 → ~40 MB rent, which is survivable but is not *bounded* by
-  anything. A file that large belongs behind a content-store handle rather than inline. That is a
-  different defect from "the producer built the tree whole" and is deliberately not conflated with it.
-  🚨 Measured 2026-09-03: **every** Space in that repo has at least one such file — 25 in total,
-  the largest packaging to 12.6 MB — so this residual is the whole of what is left for that
-  catalogue, not an edge case. Since #3101 it is at least *observable*: see
-  [Content Sync Visibility](/Doc/Architecture/ContentSyncVisibility).
+- **A single file larger than the budget no longer travels at all — it goes AROUND the message
+  (#3233, closed).** The largest asset in the Education repo is a 9.9 MB video → ~13 MB base64 →
+  ~40 MB rent, which was survivable but bounded by nothing; measured 2026-09-03 and again
+  2026-09-04, **every** Space in that repo has at least one such file — 25 in total. A file that
+  large now goes behind a content-store handle: its bytes are written into the destination
+  collection's reserved staging folder and the delivery carries a content-addressed reference, so
+  what is inline is bounded by the budget in both directions rather than by "budget plus the largest
+  file". #3101 made the gap *observable*; #3233 carries the files. See
+  [Out-of-Band Content Transfer](/Doc/Architecture/OutOfBandContentTransfer) and
+  [Content Sync Visibility](/Doc/Architecture/ContentSyncVisibility). The residual under that is
+  narrow and deliberate: where staging cannot run (a store the producer cannot reach), the file
+  falls back to the inline road and the refusal names both the over-budget file and why the
+  out-of-band road was unavailable — a loud refusal is never traded for a quiet success.
 - **`DeliveryFailure`'s strip does not fire on a typed payload.** `DeliveryPayloadBounds.IsOversized`
   returns false for anything that is not `RawJson` — by design, since guessing at the size of a CLR
   object would mean serialising it on the hot path. But a NACK is very often built on the

@@ -1,9 +1,12 @@
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -122,7 +125,9 @@ public static class ContentImportExtensions
 
         // The hub action block only subscribes + returns; every I/O leaf runs on the
         // collection's own pool — this layer is pure reactive composition.
-        SyncFiles(contentService, request)
+        SyncFiles(contentService, request,
+                hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(ContentImportExtensions).FullName!))
             .Subscribe(
                 count => hub.Post(ImportContentResponse.Ok(count), o => o.ResponseFor(delivery)),
                 ex => hub.Post(FailureFor(delivery, ex), o => o.ResponseFor(delivery)));
@@ -153,17 +158,21 @@ public static class ContentImportExtensions
 
     /// <summary>
     /// Writes each inline file under <c>TargetPath</c> (binary-safe — the bytes are streamed straight
-    /// into the collection, never through the text API), then — when <c>Mirror</c> — deletes any file
-    /// already under <c>TargetPath</c> that the incoming set does not carry, so the folder mirrors the
-    /// supplied set exactly. Returns the number of files written.
+    /// into the collection, never through the text API) AND each file transferred out of band
+    /// (issue #3233 — its bytes are already in the collection's staging folder and the request
+    /// carries only a handle), then — when <c>Mirror</c> — deletes any file already under
+    /// <c>TargetPath</c> that the incoming set does not carry, so the folder mirrors the supplied set
+    /// exactly. Returns the number of files written.
     /// </summary>
-    private static IObservable<int> SyncFiles(IContentService contentService, SyncContentFilesRequest request)
+    private static IObservable<int> SyncFiles(
+        IContentService contentService, SyncContentFilesRequest request, ILogger? logger)
         => contentService.GetCollection(request.CollectionName)
             .Select(target => target
                 ?? throw new InvalidOperationException($"Target content collection '{request.CollectionName}' not found"))
             .SelectMany(target =>
             {
                 var baseDir = (request.TargetPath ?? string.Empty).Trim('/');
+                var stagedFiles = request.StagedFiles ?? [];
                 // 🚨 Never let a caller-supplied path escape the collection root. The file-system
                 // provider joins baseDir/path onto its BasePath, so a "../" (or a rooted / segment)
                 // would write/delete OUTSIDE the collection. Reject the whole request up front rather
@@ -175,6 +184,19 @@ public static class ContentImportExtensions
                     if (string.IsNullOrWhiteSpace(f.Path) || !IsSafeCollectionPath(f.Path))
                         return Observable.Throw<int>(new InvalidOperationException(
                             $"Unsafe content file path '{f.Path}' (empty, rooted, or contains '.'/'..')."));
+                foreach (var s in stagedFiles)
+                {
+                    if (string.IsNullOrWhiteSpace(s.Path) || !IsSafeCollectionPath(s.Path))
+                        return Observable.Throw<int>(new InvalidOperationException(
+                            $"Unsafe content file path '{s.Path}' (empty, rooted, or contains '.'/'..')."));
+                    // 🚨 The handle names a file inside the staging folder, so it must be ONE
+                    // hex segment — never a path. Anything else is a traversal attempt dressed as
+                    // a hash, and it would read (and then write into the collection) an arbitrary
+                    // file under the provider's base path.
+                    if (!IsSafeStagingHandle(s.Handle))
+                        return Observable.Throw<int>(new InvalidOperationException(
+                            $"Unsafe staged content handle '{s.Handle}' for '{s.Path}' (expected a hex content hash)."));
+                }
 
                 // Full collection-relative path of an incoming file (baseDir + its relative Path).
                 string FullPath(string rel)
@@ -183,21 +205,41 @@ public static class ContentImportExtensions
                     return baseDir.Length == 0 ? r : $"{baseDir}/{r}";
                 }
 
-                var writes = request.Files.Count == 0
+                (string Dir, string Name) Split(string rel)
+                {
+                    var full = FullPath(rel);
+                    var slash = full.LastIndexOf('/');
+                    return slash < 0 ? (string.Empty, full) : (full[..slash], full[(slash + 1)..]);
+                }
+
+                // 🚨 The staging folder is RESERVED (#3233) and is excluded from the mirror's prune,
+                // so a content file written there would be permanently unprunable — and a sync could
+                // otherwise plant bytes under a handle name. Rejected outright rather than
+                // sanitized, like every other unsafe path on this handler.
+                foreach (var destination in request.Files.Select(f => f.Path)
+                             .Concat(stagedFiles.Select(s => s.Path)))
+                    if (ContentStaging.IsStagingPath(FullPath(destination)))
+                        return Observable.Throw<int>(new InvalidOperationException(
+                            $"Content file path '{destination}' targets the reserved "
+                            + $"'{ContentStaging.Folder}' folder."));
+
+                var writeOps = new List<IObservable<int>>(request.Files.Count + stagedFiles.Count);
+                foreach (var f in request.Files)
+                {
+                    var (dir, name) = Split(f.Path);
+                    // Fresh MemoryStream per subscribe (SaveFile disposes it), bytes are immutable.
+                    writeOps.Add(target.SaveFile(dir, name, () => new MemoryStream(f.Content, writable: false))
+                        .Select(_ => 1));
+                }
+                foreach (var s in stagedFiles)
+                {
+                    var (dir, name) = Split(s.Path);
+                    writeOps.Add(WriteStaged(target, s, dir, name, logger));
+                }
+
+                var writes = writeOps.Count == 0
                     ? Observable.Return(0)
-                    : request.Files
-                        .Select(f =>
-                        {
-                            var full = FullPath(f.Path);
-                            var slash = full.LastIndexOf('/');
-                            var dir = slash < 0 ? string.Empty : full[..slash];
-                            var name = slash < 0 ? full : full[(slash + 1)..];
-                            // Fresh MemoryStream per subscribe (SaveFile disposes it), bytes are immutable.
-                            return target.SaveFile(dir, name, () => new MemoryStream(f.Content, writable: false))
-                                .Select(_ => 1);
-                        })
-                        .Concat()
-                        .Sum();
+                    : writeOps.Concat().Sum();
 
                 if (!request.Mirror)
                     return writes;
@@ -210,7 +252,8 @@ public static class ContentImportExtensions
                 // set is this request's own Files, exactly as before.
                 var keep = (request.MirrorKeepPaths is { } declaredKeep
                         ? declaredKeep.Select(NormalizePath)
-                        : request.Files.Select(f => FullPath(f.Path)))
+                        : request.Files.Select(f => FullPath(f.Path))
+                            .Concat(stagedFiles.Select(s => FullPath(s.Path))))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
                 // 🚨 issue #435: when the caller declares which paths the SOURCE owns (a GitSync mirror
@@ -226,7 +269,12 @@ public static class ContentImportExtensions
                 // tolerated (best-effort) so a concurrent external delete never fails the mirror.
                 return writes.SelectMany(written =>
                     EnumerateAllFiles(target, baseDir)
-                        .Where(path => !keep.Contains(path)
+                        // 🚨 #3233: the staging folder is FRAMEWORK STATE, not content, and the
+                        // prune rides the FIRST delivery — so pruning it would delete the very
+                        // blobs the following deliveries still have to read. Excluded by name,
+                        // never by luck: a full mirror (sourceOwned == null) enumerates everything.
+                        .Where(path => !ContentStaging.IsStagingPath(path)
+                                       && !keep.Contains(path)
                                        && (sourceOwned is null || sourceOwned.Contains(path)))
                         .Select(path => target.DeleteFile(path)
                             .Select(_ => 0)
@@ -235,6 +283,75 @@ public static class ContentImportExtensions
                         .Sum()
                         .Select(_ => written));
             });
+
+    /// <summary>
+    /// 🚨 <b>Issue #3233 — the receiving half of an out-of-band transfer.</b> Streams a staged blob
+    /// out of the collection's <see cref="ContentStaging.Folder"/> into its destination path. The
+    /// bytes are never materialised as an array here — that is the entire point of not putting them
+    /// on the message — and every leaf runs on the collection's own I/O pool.
+    ///
+    /// <para><b>A handle that does not resolve is a FAILURE, never "zero files".</b> The whole
+    /// contribution of #3101 was that a refused sync says so; an out-of-band transfer that silently
+    /// wrote nothing (or wrote a truncated file) would be the same defect wearing a new hat. So a
+    /// missing blob and a length mismatch each throw, naming the handle and the destination path,
+    /// and the failure travels to the caller's <c>ImportContentResponse</c> and on to the Space's
+    /// <c>_Activity/content-sync</c> ledger.</para>
+    ///
+    /// <para>🚨 <b>The one case the length check cannot cover, said out loud.</b>
+    /// <c>GetContentSize</c> answers <c>-1</c> for a store that HAS the blob but cannot report its
+    /// size (a provider whose stream is not seekable). Refusing there would reject content that is
+    /// almost certainly intact, on every such store, for ever — so the write proceeds, and the fact
+    /// that it went out UNVERIFIED is logged rather than left to be inferred from a contract that
+    /// quietly did not hold. Every file-system-backed collection reports a size, which is every
+    /// store a content sync writes to today.</para>
+    /// </summary>
+    private static IObservable<int> WriteStaged(
+        ContentCollection target, StagedContentFile staged, string dir, string name, ILogger? logger)
+    {
+        var blob = ContentStaging.BlobPath(staged.Handle);
+        // Probe first — GetContentSize never reads the content and, like every other leaf here,
+        // runs on the collection's own pool rather than the subscriber's thread.
+        return target.GetContentSize(blob)
+            .SelectMany(size => size switch
+            {
+                null => Observable.Throw<int>(new InvalidOperationException(
+                    $"Staged content '{staged.Handle}' for '{staged.Path}' is not in collection "
+                    + $"'{target.Collection}' staging area ('{blob}') — the out-of-band transfer "
+                    + "did not complete, so the file was NOT written.")),
+                >= 0 when size != staged.Length => Observable.Throw<int>(new InvalidOperationException(
+                    $"Staged content '{staged.Handle}' for '{staged.Path}' is {size:N0} bytes but "
+                    + $"the handle declares {staged.Length:N0} — refusing to write a truncated asset.")),
+                _ => CopyStaged(target, staged, dir, name, blob, verified: size >= 0, logger)
+            });
+    }
+
+    /// <summary>Streams the staged blob into its destination path, saying so when it could not be verified.</summary>
+    private static IObservable<int> CopyStaged(
+        ContentCollection target, StagedContentFile staged, string dir, string name, string blob,
+        bool verified, ILogger? logger)
+    {
+        if (!verified)
+            logger?.LogWarning(
+                "Staged content {Handle} for {Path} in collection {Collection} was written WITHOUT a "
+                + "length check: the backing store reports the blob exists but cannot report its size, "
+                + "so the declared {Length} bytes could not be confirmed",
+                staged.Handle, staged.Path, target.Collection, staged.Length);
+        return target.GetContent(blob)
+            .SelectMany(stream => stream is null
+                ? Observable.Throw<int>(new InvalidOperationException(
+                    $"Staged content '{staged.Handle}' for '{staged.Path}' disappeared from "
+                    + $"'{blob}' between the probe and the read, so the file was NOT written."))
+                : target.SaveFile(dir, name, () => stream).Select(_ => 1));
+    }
+
+    /// <summary>
+    /// True when <paramref name="handle"/> is a bare lowercase-or-uppercase hex content hash — one
+    /// path segment, nothing that could traverse out of the staging folder. Anything else is
+    /// rejected rather than sanitized.
+    /// </summary>
+    private static bool IsSafeStagingHandle(string? handle)
+        => handle is { Length: > 0 and <= 128 }
+           && handle.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');
 
     /// <summary>
     /// Recursively enumerates every file at or under <paramref name="folder"/> in the collection,
@@ -531,14 +648,19 @@ public sealed class SyncContentFilesBuilder
     ///
     /// <para><b>What this bounds and what it does not.</b> It bounds the ACCUMULATION: a delivery
     /// is never larger than this plus the one file that could not be split, so the delivery's size
-    /// stops being a function of how much content the Space holds. A single file larger than the
-    /// budget still travels whole — that is a different axis (a file that large belongs behind a
-    /// content-store handle, not inline) and it is not the defect this closes.</para>
+    /// stops being a function of how much content the Space holds.</para>
     ///
-    /// <para>🚨 #3101 made that residual OBSERVABLE without closing it: when the sync then fails,
-    /// <see cref="Post"/> folds <see cref="ContentDeliveryBudget.DescribeOverBudget"/> into the
-    /// reason, so the file that cannot fit any delivery is named with its packaged size and this
-    /// budget instead of the failure reading as "the Space has no content".</para>
+    /// <para>🚨 <b>#3101 made the residual OBSERVABLE; #3233 CLOSES it.</b> A file whose packaged
+    /// cost alone exceeds this budget used to travel whole — a file is the atom the receiving
+    /// handler writes and is never split — and was refused wherever the Orleans transport was in the
+    /// path. Such a file now travels OUT OF BAND: its bytes go into the destination collection's
+    /// staging folder and the delivery carries a <see cref="StagedContentFile"/> handle. What is
+    /// left inline is bounded by this budget in both directions. When staging is unavailable the
+    /// file still travels inline (a monolith carries it perfectly well) and, if the transport then
+    /// refuses it, <see cref="Post"/> still folds
+    /// <see cref="ContentDeliveryBudget.DescribeOverBudget"/> plus the reason staging could not run
+    /// into the failure — never a silent success. See
+    /// <c>Doc/Architecture/OutOfBandContentTransfer</c>.</para>
     /// </summary>
     internal const int PayloadBudgetBytes = ContentDeliveryBudget.BudgetBytes;
 
@@ -554,37 +676,86 @@ public sealed class SyncContentFilesBuilder
         => ContentDeliveryBudget.PackagedCost(file);
 
     /// <summary>
-    /// Splits the accumulated files into deliveries none of which exceeds
-    /// <see cref="PayloadBudgetBytes"/>, except where one file alone does. A file is never split —
-    /// it is the atom the receiving handler writes — so the guarantee is
-    /// <c>delivery ≤ budget + largest single file</c>, which is bounded by the CONTENT rather than
-    /// by how much of it there is.
+    /// One thing a delivery carries: either an INLINE file (its bytes) or a STAGED one (a handle
+    /// whose bytes are already in the destination collection, issue #3233), with what it costs the
+    /// packaged payload. Order is the caller's order, so a set with nothing staged partitions
+    /// exactly as it always did.
     /// </summary>
-    private ImmutableList<ImmutableList<InlineContentFile>> SplitIntoDeliveries()
+    private readonly record struct PlannedItem(InlineContentFile? Inline, StagedContentFile? Staged, long Cost);
+
+    /// <summary>What one delivery carries after the split.</summary>
+    private readonly record struct PlannedDelivery(
+        ImmutableList<InlineContentFile> Inline, ImmutableList<StagedContentFile> Staged);
+
+    /// <summary>
+    /// What a staged reference costs the packaged payload: its two strings plus a fixed allowance
+    /// for the JSON around them. Two orders of magnitude below the budget by construction — that is
+    /// the whole point of the handle — but it is counted rather than assumed, so a sync of very many
+    /// staged files still partitions.
+    /// </summary>
+    private static long StagedCost(StagedContentFile staged)
+        => staged.Path.Length + staged.Handle.Length + 64;
+
+    /// <summary>
+    /// Splits the planned items into deliveries none of which exceeds
+    /// <see cref="PayloadBudgetBytes"/>, except where one INLINE file alone does. A file is never
+    /// split — it is the atom the receiving handler writes — so the guarantee is
+    /// <c>delivery ≤ budget + largest inline file</c>, and #3233 removes the second term whenever
+    /// out-of-band staging is available.
+    /// </summary>
+    private static ImmutableList<PlannedDelivery> SplitIntoDeliveries(IReadOnlyList<PlannedItem> items)
     {
+        static PlannedDelivery ToDelivery(IEnumerable<PlannedItem> group)
+        {
+            var group_ = group.ToArray();
+            return new PlannedDelivery(
+                group_.Where(i => i.Inline is not null).Select(i => i.Inline!).ToImmutableList(),
+                group_.Where(i => i.Staged is not null).Select(i => i.Staged!).ToImmutableList());
+        }
+
         // An empty sync is ONE request, deliberately: with Mirror it is the "the source carries
         // nothing here any more" pass, and collapsing it to zero requests would silently skip a
         // prune the caller asked for.
-        if (_files.Count <= 1)
-            return [_files.ToImmutableList()];
+        if (items.Count <= 1)
+            return [ToDelivery(items)];
 
-        var deliveries = ImmutableList.CreateBuilder<ImmutableList<InlineContentFile>>();
-        var current = ImmutableList.CreateBuilder<InlineContentFile>();
+        var deliveries = ImmutableList.CreateBuilder<PlannedDelivery>();
+        var current = new List<PlannedItem>();
         var accumulated = 0L;
-        foreach (var file in _files)
+        foreach (var item in items)
         {
-            var cost = PackagedCost(file);
-            if (current.Count > 0 && accumulated + cost > PayloadBudgetBytes)
+            if (current.Count > 0 && accumulated + item.Cost > PayloadBudgetBytes)
             {
-                deliveries.Add(current.ToImmutable());
+                deliveries.Add(ToDelivery(current));
                 current.Clear();
                 accumulated = 0L;
             }
-            current.Add(file);
-            accumulated += cost;
+            current.Add(item);
+            accumulated += item.Cost;
         }
-        deliveries.Add(current.ToImmutable());
+        deliveries.Add(ToDelivery(current));
         return deliveries.ToImmutable();
+    }
+
+    /// <summary>
+    /// 🚨 <b>Issue #3233 — the outcome of the out-of-band staging pass.</b> Either every over-budget
+    /// file's bytes are in the destination collection's staging folder (<see cref="Staged"/>, keyed
+    /// by the file's index in the accumulated set), or staging could not run and
+    /// <see cref="UnavailableReason"/> says why — in which case those files travel inline exactly as
+    /// they did before, and the reason is folded into any failure that follows.
+    /// </summary>
+    private sealed record StagingPlan(
+        ContentCollection? Destination,
+        ImmutableDictionary<int, StagedContentFile> Staged,
+        string? UnavailableReason)
+    {
+        /// <summary>No file needed staging — the ordinary sync, unchanged in every respect.</summary>
+        public static readonly StagingPlan NotNeeded =
+            new(null, ImmutableDictionary<int, StagedContentFile>.Empty, null);
+
+        /// <summary>Staging could not run; <paramref name="reason"/> travels with any later failure.</summary>
+        public static StagingPlan Unavailable(string reason) =>
+            new(null, ImmutableDictionary<int, StagedContentFile>.Empty, reason);
     }
 
     /// <summary>
@@ -605,6 +776,14 @@ public sealed class SyncContentFilesBuilder
     /// files it would wrongly prune are precisely the ones the FOLLOWING deliveries are about to
     /// write, so the operation still converges on the correct folder. Last-position pruning has no
     /// such property.</para>
+    ///
+    /// <para>🚨 <b>Issue #3233 — a file over the budget goes OUT OF BAND before any of that.</b>
+    /// Splitting cannot help a file whose packaged cost alone exceeds one delivery, so such a file's
+    /// bytes are written into the destination collection's staging folder first and the delivery
+    /// carries a <see cref="StagedContentFile"/> handle instead. The staged blobs are the producer's
+    /// to reclaim and are deleted when this sequence terminates — success or failure — which is also
+    /// the moment nothing can still name them. See
+    /// <c>Doc/Architecture/OutOfBandContentTransfer</c>.</para>
     /// </summary>
     public IObservable<ImportContentResponse> Post()
     {
@@ -617,24 +796,140 @@ public sealed class SyncContentFilesBuilder
         // (built in its second stage, outside) failed closed for a null AccessContext.
         var captured = _identity ?? ContentImportExtensions.CaptureCallerContext(_hub);
         var address = new Address(_nodePath);
-        var deliveries = SplitIntoDeliveries();
+
+        // Which files cannot fit ANY delivery on their own. Empty is the overwhelmingly common case,
+        // and it takes the pipeline that existed before #3233 verbatim — no config round-trip, no
+        // staging pass, nothing to reclaim.
+        var oversized = _files
+            .Select((file, index) => (Index: index, File: file))
+            .Where(x => PackagedCost(x.File) > PayloadBudgetBytes)
+            .ToImmutableList();
+
+        var pipeline = oversized.Count == 0
+            ? PostPlanned(address, captured, StagingPlan.NotNeeded)
+            // Defer so the staging pass — which does I/O and posts a config read — runs on
+            // Subscribe like every other cold write on this surface, never at call time.
+            : Observable.Defer(() => Stage(address, captured, oversized))
+                .SelectMany(plan => Reclaiming(PostPlanned(address, captured, plan), plan));
+
+        return ContentImportExtensions.CarryPostIdentity(pipeline, _hub, _identity);
+    }
+
+    /// <summary>
+    /// Resolves the destination collection from the owning node's hub (config only) and writes each
+    /// over-budget file's bytes into its staging folder. Any failure — no such collection, an
+    /// unreachable store, a hub that does not answer — resolves to
+    /// <see cref="StagingPlan.Unavailable"/> rather than faulting: the sync then travels inline,
+    /// which is what it did before #3233, and the reason is folded into any refusal that follows.
+    /// </summary>
+    private IObservable<StagingPlan> Stage(
+        Address address, AccessContext? captured, ImmutableList<(int Index, InlineContentFile File)> oversized)
+    {
+        var pool = _hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                   ?? IoPool.Unbounded;
+        var logger = Logger();
+        return OutOfBandContentTransfer.ResolveDestination(
+                _hub, address, _targetCollection,
+                o => ContentImportExtensions.ConfigurePost(o, address, captured))
+            .SelectMany(destination => destination is null
+                ? Observable.Return(StagingPlan.Unavailable(
+                    $"node '{_nodePath}' declares no content collection '{_targetCollection}', so its "
+                    + "staging folder cannot be reached from the posting hub"))
+                // Reclaim a dead producer's residue before adding to the folder, never after: the
+                // sweep must not be able to see this run's own blobs.
+                : OutOfBandContentTransfer.SweepStale(destination, DateTime.UtcNow, logger)
+                    .SelectMany(_ => oversized
+                        .Select(entry => OutOfBandContentTransfer.Stage(destination, pool, entry.File)
+                            .Select(staged => (entry.Index, Staged: staged)))
+                        // Concat, never Merge: one large asset in flight at a time is the same
+                        // property the delivery split exists for, one layer down.
+                        .Concat()
+                        .ToList())
+                    .Select(staged => new StagingPlan(
+                        destination,
+                        staged.ToImmutableDictionary(x => x.Index, x => x.Staged),
+                        null)))
+            .Catch<StagingPlan, Exception>(ex => Observable.Return(
+                StagingPlan.Unavailable($"{ex.GetType().Name}: {ex.Message}")));
+    }
+
+    /// <summary>The logger this builder reports staging and reclaim outcomes on, when one exists.</summary>
+    private ILogger? Logger()
+        => _hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(SyncContentFilesBuilder).FullName!);
+
+    /// <summary>
+    /// Reclaims the blobs <paramref name="plan"/> staged once <paramref name="source"/> has
+    /// terminated — after the last answer on the success path, and after the fault on the failure
+    /// path, in both cases keeping the caller's outcome exactly as it was.
+    ///
+    /// <para>🚨 <b>The reclaim is IN the chain, not in a <c>Finally</c>.</b> The producer owns the
+    /// staged bytes and the last answer is precisely the moment nothing can still name a handle —
+    /// so ordering the delete ahead of the caller's answer makes the contract observable ("when this
+    /// sync answers, its staging area is clean") instead of a race a caller would have to poll. A
+    /// subscription abandoned before it terminates reclaims nothing here; that is what
+    /// <see cref="OutOfBandContentTransfer.SweepStale"/> is for, and it is the same crash residue it
+    /// already handles.</para>
+    /// </summary>
+    private IObservable<ImportContentResponse> Reclaiming(
+        IObservable<ImportContentResponse> source, StagingPlan plan)
+    {
+        if (plan.Destination is null || plan.Staged.Count == 0)
+            return source;
+        var logger = Logger();
+        // Never faults: Discard swallows per blob, because a failed reclaim leaves reclaimable
+        // state, never a wrong result, and must not turn a successful sync into a failure.
+        var reclaim = Observable.Defer(() =>
+            OutOfBandContentTransfer.Discard(plan.Destination, plan.Staged.Values.Select(s => s.Handle), logger)
+                .Catch<Unit, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "Reclaiming {Count} staged content blob(s) for {Node}/{Collection} failed; the "
+                        + "age sweep will collect them on a later sync",
+                        plan.Staged.Count, _nodePath, _targetCollection);
+                    return Observable.Return(Unit.Default);
+                }));
+        return source
+            .SelectMany(answer => reclaim.Select(_ => answer))
+            .Catch<ImportContentResponse, Exception>(ex =>
+                reclaim.SelectMany(_ => Observable.Throw<ImportContentResponse>(ex)));
+    }
+
+    /// <summary>
+    /// Builds and posts the deliveries for a settled <paramref name="plan"/>: staged files travel as
+    /// handles, everything else inline, partitioned against the budget in one ordered pass.
+    /// </summary>
+    private IObservable<ImportContentResponse> PostPlanned(
+        Address address, AccessContext? captured, StagingPlan plan)
+    {
+        var items = _files
+            .Select((file, index) => plan.Staged.TryGetValue(index, out var staged)
+                ? new PlannedItem(null, staged, StagedCost(staged))
+                : new PlannedItem(file, null, PackagedCost(file)))
+            .ToArray();
+        var deliveries = SplitIntoDeliveries(items);
         var split = deliveries.Count > 1;
         // Collection-relative, the form the mirror compares against — and the form
-        // SourceOwnedPaths already uses. Only computed when the write was actually split.
-        var keepPaths = split && _mirror
+        // SourceOwnedPaths already uses.
+        // 🚨 A staged file is NOT in its delivery's Files, so without the full keep set the mirror
+        // would measure against the inline slice alone and prune every out-of-band asset it just
+        // received. Hence: the keep set is mandatory whenever anything was staged, not only when the
+        // write was split.
+        var keepPaths = (split || plan.Staged.Count > 0) && _mirror
             ? _files.Select(f => CombineTargetPath(f.Path)).ToImmutableList()
             : null;
 
-        var requests = deliveries.Select((files, index) =>
+        var requests = deliveries.Select((delivery, index) =>
         {
-            // The mirror is ONE pass and it is the FIRST — see the remark on this method.
+            // The mirror is ONE pass and it is the FIRST — see the remark on Post().
             var prunes = _mirror && index == 0;
-            return new SyncContentFilesRequest(_targetCollection, _targetPath, files)
+            return new SyncContentFilesRequest(_targetCollection, _targetPath, delivery.Inline)
             {
                 Mirror = prunes,
                 // An additive chunk prunes nothing, so it carries neither prune input.
                 SourceOwnedPaths = prunes ? _sourceOwnedPaths : null,
-                MirrorKeepPaths = prunes && split ? keepPaths : null,
+                MirrorKeepPaths = prunes ? keepPaths : null,
+                StagedFiles = delivery.Staged.Count == 0 ? null : delivery.Staged,
             };
         });
 
@@ -669,20 +964,45 @@ public sealed class SyncContentFilesBuilder
         //
         // Computed once, outside the pipeline: O(files), never touches the bytes. Null when every
         // file fits, so a refusal that had nothing to do with size is NOT reported as if it did.
-        var overBudget = ContentDeliveryBudget.DescribeOverBudget(_files);
-        var described = overBudget is null
+        //
+        // 🚨 #3233 — measured on what ACTUALLY TRAVELLED INLINE, not on the whole set. A file that
+        // went out of band is not an over-budget payload any more, and reporting it as one would be
+        // a sentence about a delivery nobody built — the very thing ContentDeliveryBudget exists to
+        // prevent. When staging could not run, the files are inline again and so is the sentence,
+        // now with the reason staging was unavailable beside it.
+        var inlineFiles = items.Where(i => i.Inline is not null).Select(i => i.Inline!).ToArray();
+        var described = Describe(ContentDeliveryBudget.DescribeOverBudget(inlineFiles), plan.UnavailableReason);
+        return described is null
             ? posted
             : posted
                 .Select(answer => answer.Success
                     ? answer
-                    : ImportContentResponse.Fail($"{answer.Error} — {overBudget}"))
+                    : ImportContentResponse.Fail($"{answer.Error} — {described}"))
                 // A refusal that arrives as a FAULT (the router's typed NACK surfaces as
                 // DeliveryFailureException) carries the same missing half, so it is decorated the
                 // same way — and it stays a fault, because callers classify on that.
                 .Catch<ImportContentResponse, Exception>(ex => Observable.Throw<ImportContentResponse>(
-                    new ContentDeliveryRefusedException($"{ex.Message} — {overBudget}", ex)));
+                    new ContentDeliveryRefusedException($"{ex.Message} — {described}", ex)));
+    }
 
-        return ContentImportExtensions.CarryPostIdentity(described, _hub, _identity);
+    /// <summary>
+    /// Joins the budget measurement and the reason out-of-band staging could not run into the one
+    /// sentence a failure carries, keeping whichever halves are true. <c>null</c> when neither is —
+    /// a failure that had nothing to do with size says only what it was.
+    /// </summary>
+    private static string? Describe(string? overBudget, string? stagingUnavailable)
+    {
+        var staging = stagingUnavailable is null
+            ? null
+            : $"Out-of-band transfer was unavailable ({stagingUnavailable}), so those bytes travelled "
+              + "inline; see Doc/Architecture/OutOfBandContentTransfer.";
+        return (overBudget, staging) switch
+        {
+            (null, null) => null,
+            (null, _) => staging,
+            (_, null) => overBudget,
+            _ => $"{overBudget} {staging}"
+        };
     }
 
     /// <summary>
