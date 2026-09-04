@@ -2164,11 +2164,33 @@ jobs:
       content-repository: Systemorph/MeshWeaver.Plugins
       content-ref: ${{ needs.gate.outputs.plugins_sha }}
       platform-ref: ${{ needs.gate.outputs.sha }}
-      # The compose set the bake needs (the same two Plugins' own ci.yml passes as
-      # module-artifacts); the rest of the catalog is content, baked below.
+      # The compose set the bake needs — the same set Plugins' own ci.yml passes as
+      # module-artifacts; the rest of the catalog is content, baked below.
+      #
+      # 🚨 THE SET IS "EVERY MODULE THE CONTENT BINDS", not "the two we started with". The bake
+      # lane states the rule in its own input description: *"a repo whose NodeType source binds a
+      # module's types names that module here or in registry-modules, or its bake fails
+      # CS0103/CS0246 on every wave."* It listed two while the Plugins content binds four:
+      #   • MeshWeaver.Maps — the AppleMaps / GoogleMaps / OpenStreetMap galleries and
+      #     Cornerstone/Pricing bind it. It stopped being image-shipped in MeshWeaver#2941 and now
+      #     reaches a mesh only as a module bundle (its lines left MeshWeaver.Plugins'
+      #     src/platform-shipped.txt), so /app supplies nothing for those four to bind.
+      #   • MeshWeaver.Payments.Stripe — the Stripe protocol left Store/Order/Source for its own
+      #     module (MeshWeaver.Plugins#…), so Store/Order binds it, and Store/Catalog, Store/Plugin
+      #     and Store/Maintenance do too through shared=@Store/Order/Source.
+      # Neither gap was OBSERVED as a red compile: this job's bake has been dying earlier, on the
+      # MeshWeaver.Markdown.Collaboration one-producer FATAL (Plugins#1262/#1268), which masks
+      # everything downstream of it. Naming the modules the content binds is right independently of
+      # when that clears.
+      #
+      # 🚨 registry-modules is NOT the alternative here: composing the registry's own bytes would
+      # avoid rebuilding these for the seal, but this repo holds no registry credential
+      # (Doc/Architecture/ModuleBuildArchitecture → "What the gate still cannot see").
       modules: >-
         [{"package": "AI", "module": "MeshWeaver.AI", "project": "src/MeshWeaver.AI/MeshWeaver.AI.csproj"},
-         {"package": "Essentials", "module": "MeshWeaver.Markdown.Collaboration", "project": "src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj"}]
+         {"package": "Essentials", "module": "MeshWeaver.Markdown.Collaboration", "project": "src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj"},
+         {"package": "Maps", "module": "MeshWeaver.Maps", "project": "src/MeshWeaver.Maps/MeshWeaver.Maps.csproj"},
+         {"package": "Stripe", "module": "MeshWeaver.Payments.Stripe", "project": "src/MeshWeaver.Payments.Stripe/MeshWeaver.Payments.Stripe.csproj"}]
       # Registry module PACKAGES are content-versioned and published by Plugins' own lane when a
       # package changes; a platform release changes no package content. The bundles packed here
       # are the bake's inputs (artifacts), nothing more.
@@ -2248,7 +2270,7 @@ jobs:
       content-repository: Systemorph/MeshWeaver.Plugins
       content-ref: ${{ needs.gate.outputs.plugins_sha }}
       bake-source: plugins
-      module-artifacts: module-bundle-MeshWeaver.{AI,Markdown.Collaboration}
+      module-artifacts: module-bundle-MeshWeaver.{AI,Markdown.Collaboration,Maps,Payments.Stripe}
       test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.plugin-test-image.outputs.version }}
       image-digest: ${{ needs.plugins-bake-image.outputs.digest }}
       # 🚨 The PORTAL of this run's promoted set (MeshWeaver#3022): the tester EXECUTES the bake,
