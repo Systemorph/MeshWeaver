@@ -69,6 +69,13 @@ name: node-repo module pack
 # the receipts and the selection disagree. That is invariant #4 for a matrix allowed to change
 # size, and it is the only reason a narrowed matrix is safe to require.
 #
+# 🚨 AND SO IS THE FRAMEWORK IDENTITY (#3310). The receipt also carries the identity its bundle
+# STATES — read off the packed bytes, on the build and reuse legs alike — because a lane pins ONE
+# platform and every guard on the anchor is CONFIG-level: they assert the lane's text and the
+# anchor's location, and cannot see a run END UP stating one identity per module. `verify` refuses
+# a lane whose bundles disagree, and refuses an absent identity SEPARATELY and by name — "absent"
+# reading as "agrees" is the same mistake as a skipped gate reading as a passed one.
+#
 # A caller that ships neither scripts/affected-modules.py nor scripts/project-closure.py is simply
 # not narrowable: the scope script says FULL and says why. Nothing to opt into, nothing to skip.
 #
@@ -2236,16 +2243,40 @@ jobs:
           TESTS: ${{ steps.plan.outputs.need_test != 'true' && 'none' || (inputs.publish && 'inline' || 'lane') }}
           LEDGER_KEY: ${{ steps.plan.outputs.key }}
           LEDGER_DECISION: ${{ steps.plan.outputs.decision }}
+          # 🚨 THE BYTES THIS LEG PRODUCED, whichever leg produced them (#3310). Same expression as
+          # the publish step's: the build leg's packed bundle, or the artifact the reuse leg
+          # downloaded and sha256-verified. The identity is read off THESE bytes, so a reuse leg is
+          # accounted for exactly like a build leg.
+          BUNDLE: ${{ steps.bundle.outputs.path || steps.reused.outputs.path }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/receipts"
           [ -n "$LANE" ]  || { echo "::error::the lane key is empty — the select job did not produce one, so this receipt could not be attributed to this call."; exit 1; }
           [ -n "$TESTS" ] || { echo "::error::this leg recorded no owner for $MODULE's suite — a receipt that cannot say whether the suite ran here, ran in the tests lane, or was not owed leaves 'it ran nowhere' reading as green."; exit 1; }
+          # ───────── THE FRAMEWORK IDENTITY THIS BUNDLE STATES, ON THE RECEIPT (#3310) ─────────
+          # 🚨 THE ONLY EVIDENCE THAT LETS `verify` SEE THE OUTCOME. #3293 and #3306 made the anchor
+          # correct and their guards assert the lane's TEXT and the anchor's LOCATION — neither can
+          # see a run END UP stating more than one identity, which is what a per-module property
+          # reaching the anchor build produces, silently: the bundle packs, the manifest carries a
+          # well-formed 32-hex value, and every non-blank assertion downstream passes. `verify` is
+          # the only place that sees the whole wave, and this field is what it reads.
+          # Read off the BYTES, never from a step output: the packer's exit code, the inspection's
+          # tick and the value in the artifact are three different claims, and only the third is the
+          # one a consumer will compare against.
+          [ -n "${BUNDLE:-}" ] || { echo "::error::this leg produced no bundle path — neither the build nor the reuse leg recorded one, so there are no bytes to read $MODULE's framework identity off. A receipt that cannot state the identity would leave a run's bundles disagreeing (#3310) unfalsifiable."; exit 1; }
+          if ! manifest_json="$(unzip -p "$BUNDLE" meshweaver/manifest.json)" || [ -z "$manifest_json" ]; then
+            echo "::error::cannot read meshweaver/manifest.json out of $BUNDLE (see unzip's message above) — refusing to write a receipt for bytes this lane could not check (#3310)"
+            exit 1
+          fi
+          IDENTITY="$(printf '%s' "$manifest_json" | jq -r '.frameworkMvid // ""' | tr -d '[:space:]')"
+          [ -n "$IDENTITY" ] || { echo "::error::$MODULE's bundle states no framework identity (manifest .frameworkMvid is $(printf '%s' "$manifest_json" | jq -c '.frameworkMvid')) — the receipt would attest nothing and 'the run's bundles agree' would be vacuously true for it (#3310). On a BUILD leg the pack step names the anchor and this manifest did not get it; on a REUSE leg these bytes were packed before the identity was recorded — rebuild them."; exit 1; }
+          echo "$MODULE states framework identity $IDENTITY"
           jq -n --arg l "$LANE" --arg p "$PACKAGE" --arg m "$MODULE" \
                 --arg v "$VERSION" --arg c "$COMPILER" --arg t "$TESTS" \
                 --argjson pub "$PUBLISHED" \
                 --arg lk "$LEDGER_KEY" --arg ld "$LEDGER_DECISION" \
-             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, tests:$t, published:$pub, ledger:{key:$lk, decision:$ld}}' \
+                --arg fid "$IDENTITY" \
+             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, tests:$t, published:$pub, frameworkIdentity:$fid, ledger:{key:$lk, decision:$ld}}' \
              > "$RUNNER_TEMP/receipts/$MODULE.json"
           cat "$RUNNER_TEMP/receipts/$MODULE.json"
       - name: Upload the receipt
@@ -2513,6 +2544,12 @@ jobs:
   # cancelled tests lane is RED here, under the same context name a repo's protection already
   # requires, and a module whose pack leg DELEGATED its suite but produced no test receipt is RED
   # too. Moving the suite off the consumer's critical path may not move it out of the gate.
+  # 🚨 AND IT IS THE ONLY PLACE THAT SEES THE WHOLE WAVE (#3310). The receipts carry the framework
+  # identity each bundle STATES, so this job — and nothing before it — can assert the one property
+  # that is true by definition: a lane pins ONE platform, so its bundles state ONE identity. Every
+  # other guard on that identity reads the lane's TEXT and stays green while a run states one
+  # identity per module. A receipt that states none is refused SEPARATELY and by name: "absent"
+  # reading as "agrees" is this gate's own failure mode, not an edge case.
   verify:
     name: All selected bundles built
     needs: [select, pack, tests]

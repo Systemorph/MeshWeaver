@@ -196,22 +196,54 @@ writing down: a satellite pins the LANE (`uses: …@<sha>`) and `platform-ref` S
 purpose, so a lane edit alone does NOT move a satellite's key. That is safe here only because this
 edit cannot change what the image arm packs; a future edit to the image arm would need the bump.
 
-## The guards are CONFIG-level — what still cannot fail
+## The config-level guards, and the outcome-level one that closes them
 
-Worth stating plainly, because it is the same class of gap this page documents. Both guards assert
-the lane's *text* or the anchor's *location*; **neither can see the outcome fail.** A different
-mechanism that reintroduces a per-module identity — another per-module property reaching that command
-line, a future arm deriving the anchor a third way, a caller passing `--framework-mvid` per module —
-would leave every guard here green, and the failure is silent: the bundle packs, the manifest carries
-a well-formed 32-hex value, and every non-blank assertion passes.
+Worth stating plainly, because it is the same class of gap this page documents. `ModuleIdentityPublishGuard`
+asserts the lane's *text* and `ModulePackCommand` asserts the anchor's *location*; **neither can see
+the outcome fail.** A different mechanism that reintroduces a per-module identity — another per-module
+property reaching that command line (`-p:InformationalVersion`, `-p:SourceRevisionId`, a
+`Directory.Build.props` edit keyed on the module), a future arm deriving the anchor a third way, a
+caller passing `--framework-mvid` per module — would leave every one of them green, and the failure
+is silent: the bundle packs, the manifest carries a well-formed 32-hex value, and every non-blank
+assertion passes. That shape reached production twice — #3211's `(unrecorded)` fleet, then run
+`33874892203` stating two identities for one platform.
 
-The check that would catch it is one assertion at the only place that sees the whole wave: **every
-bundle a run packs states the SAME identity**, which is true by definition — the identity names the
-platform build, and a run has one platform. The receipt `verify` already collects would carry the
-value, and `All selected bundles built` would refuse a lane whose bundles disagree. That is
-[#3310](https://github.com/Systemorph/MeshWeaver/issues/3310); it is not folded in here because it
-changes the receipt schema and the shared `node-repo-pack-verify.py`, which every satellite consumes
-at its own pin — and an absent field there must not read as "agrees".
+**So the lane now asserts the OUTCOME, at the only place that sees the whole wave: every bundle a
+run packs states the SAME framework identity** ([#3310](https://github.com/Systemorph/MeshWeaver/issues/3310)).
+That is true by definition — the identity names the platform build, and a lane pins one platform.
+
+| where | what it does |
+|---|---|
+| `pack` → **Drop the receipt** | reads `.frameworkMvid` out of `meshweaver/manifest.json` **on the bytes this leg produced** (`steps.bundle.outputs.path \|\| steps.reused.outputs.path`) and writes it to the receipt as `frameworkIdentity`. A leg whose bundle states none does not get a receipt — it fails, naming which leg it was |
+| `verify` → `node-repo-pack-verify.py` `identity_agreement` | over **this call's** receipts (lane stamp + declared matrix): more than one distinct identity is RED, naming every module and its identity, under the lane's one stable context `All selected bundles built` |
+
+Three properties, each deliberate:
+
+- **The receipt is read off the BYTES, not off a step output.** The packer's exit code, the
+  inspection's tick and the value in the artifact are three different claims, and only the third is
+  what a consumer compares against. Reading the bundle also covers the **reuse** leg, which the
+  inspection cannot: that leg hands over an artifact an earlier run packed, and the publish-side
+  refusal already sits there for the same reason.
+- **An absent identity is a distinct, NAMED refusal — never "agrees".** Reading silence as agreement
+  would let the gate answer "one identity" from a set that stated none, which is the same mistake as
+  a skipped gate rendering like a passed one. It happens for exactly one reason and the message says
+  so: a caller pins the LANE (`uses: …/node-repo-module-pack.yml@<sha>`) and `platform-ref` — which
+  is where the *script* is read from — **separately and on purpose**, so a caller whose `platform-ref`
+  is newer than its `uses:` ref runs a verifier its own lane predates. Measured 2026-09-04:
+  MeshWeaver.Plugins pins `uses:@c41a34fd` (05:57Z) against `MW_PLATFORM_REF 7d644de9` (11:07Z);
+  MeshWeaver.SocialMedia pins both to `fec69fc6`. The remedy is one line — move the `uses:` ref with
+  the platform ref — and it surfaces on the caller's own pin bump, never on an unrelated author's PR.
+- **It is scoped per LANE, and unconditional within one.** A repo calling the workflow twice
+  (Plugins' `modules-floor` + `modules-rest`) pins one platform per CALL, so the existing lane
+  stamp already scopes it; there is no flag to pass and no input to test, because the evidence is
+  the receipts `verify` had already downloaded. `bundles-built` is untouched: bundles that disagree
+  are still complete and composable, and calling them missing would misname the cause (#2710).
+
+**The mutation is the point.** `node-repo-pack-verify.py --self-test` runs on every lane run and
+turns a green fixture red ten different ways here — two identities in one lane (what reinstating
+`-p:Version="$VERSION"` on the anchor build produces, measured: `-p:Version=1.3.18` →
+`34337c31…`, `-p:Version=1.0.24` → `7c1c4f70…`, no override → `71cc81ba…` twice), an
+absent/empty/whitespace identity, both findings at once, and the lane-scoping in both directions.
 
 ## Still open, deliberately not changed here
 
