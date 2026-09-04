@@ -24,6 +24,16 @@ namespace MeshWeaver.Documentation.Test;
 /// <c>MeshWeaver.Compiler.dll</c> BESIDE the module and on both paths the platform is the pinned
 /// IMAGE. So the comparison had nothing to compare, everywhere.</para>
 ///
+/// <para><b>And the first cure repeated the mistake one level in.</b> #3211 named the anchor
+/// explicitly per arm, but the from-source arm still READ it out of the module's publish output,
+/// on the ground that "the platform ProjectReferences are real, so MeshWeaver.Compiler.dll IS
+/// beside the module". That was measured green — against the two modules the lane then built,
+/// both of which reach the compiler through MeshWeaver.Graph. It is a property of the reference
+/// graph, not of the arm. The hour core's compose set grew to four (#3290, 2026-09-04),
+/// MeshWeaver.Maps and MeshWeaver.Payments.Stripe were red on their first run and core CD stopped
+/// delivering. n=2 with 100% agreement is not evidence when the population is chosen by whoever
+/// edits a list. The arm now BUILDS the anchor from the platform source the call pins (#3293).</para>
+///
 /// <para><b>Why these assertions and not a green run.</b> The three properties below are invisible
 /// in a green log: a pack that omits the anchor still packs, an inspection that does not read the
 /// field still passes, and a publish step that does not check still POSTs. The refusal must also sit
@@ -48,8 +58,24 @@ public class ModuleIdentityPublishGuard
         // opinion, and never left to the packer's default probe, which is exactly the probe that
         // found nothing on all 34 of the fleet's bundles.
         Assert.Contains("anchor=\"$REFS/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
-        Assert.Contains("anchor=\"$PACKDIR/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
         Assert.Contains("--graph-dll \"$anchor\"", pack, StringComparison.Ordinal);
+
+        // 🚨 THE FROM-SOURCE ARM BUILDS ITS ANCHOR — it does not read one out of $PACKDIR.
+        // `dotnet publish` drops MeshWeaver.Compiler.dll beside a module only when that module
+        // transitively ProjectReferences it. MeshWeaver.AI and MeshWeaver.Markdown.Collaboration
+        // both do, through MeshWeaver.Graph, and they were the ONLY two entries this lane built
+        // when the anchor landed — so a property of two reference graphs was written down as a
+        // property of the arm, and 100% of the population agreed. Core's compose set grew to four
+        // on 2026-09-04 (#3290): MeshWeaver.Maps stops at MeshWeaver.Layout and
+        // MeshWeaver.Payments.Stripe is a leaf, so both were RED on their first run and took
+        // `CD delivered, or had a good reason not to` with them.
+        Assert.Contains("anchordir=\"$GITHUB_WORKSPACE/meshweaver/src/MeshWeaver.Compiler\"", pack, StringComparison.Ordinal);
+        Assert.Contains("dotnet build \"$anchordir/MeshWeaver.Compiler.csproj\" -c Release -warnaserror", pack, StringComparison.Ordinal);
+        Assert.Contains("anchor=\"$anchordir/bin/Release/net10.0/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
+
+        // The ratchet: scavenging the anchor out of the module's own publish output is the exact
+        // defect above, and it reads as reasonable every time. It must not come back.
+        Assert.DoesNotContain("anchor=\"$PACKDIR/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
 
         // 🚨 BOTH arms end RED when there is no anchor — the branch picks WHERE to look, never
         // whether to check. A bundle whose identity is a guess is worse than a pack that stops.

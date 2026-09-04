@@ -127,6 +127,16 @@ Each of these is invisible when it bites, which is why they are listed rather th
   runtime-contributed view must carry no CSS/JS of its own — inline what it needs, or ship it as a
   compiled pack. (A pack can self-load its script on first render and gate rendering on it, as
   `RadzenChartView` does with `AssetsReady`.)
+- **A third-party component's root element is not yours to style — unless you ship the rule.** A
+  view that delegates to a component library renders *its* markup, and that markup may carry no
+  `style` attribute at all: BlazorMonaco, for one, emits its editor host as
+  `<div id="…" class="@CssClass">` and nothing else. Wrapping it in a sized `<div>` does not help —
+  `height` does not inherit and a block child does not stretch — so the component's own root
+  collapses to zero pixels and the control renders as an empty gap: no exception, no console
+  warning, no failed request, just nothing on screen. Name a class, ship a `::deep` rule for it in
+  the view's `.razor.css`, and check the rendered box, not the emitted markup. This is what made a
+  node's version comparison invisible for months (MeshWeaver#3288); the guard that now pins it is
+  `MonacoEditorContainerSizingGuard`, beside the views in MeshWeaver.Plugins.
 - **A recompile mints a new type.** Every NodeType rebuild loads into a fresh collectible
   `AssemblyLoadContext`, so "the same" view class is a different CLR type per build. Portal
   contributions are keyed by owner and **replace** on re-registration for exactly this reason;

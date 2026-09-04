@@ -1735,9 +1735,10 @@ jobs:
           #     there, and the module's own output deliberately carries no platform assembly. This
           #     is every satellite call, and it is the case the packer's default probe cannot see.
           #   * platform built from SOURCE (`REFS` empty — core's own main-cd call) — the platform
-          #     ProjectReferences are real, so MeshWeaver.Compiler.dll IS beside the module in the
-          #     publish output. Measured green on CD run 33779812466:
-          #     "built-against MVID ce81fd4e3f5146c7a6ebaa6dc72da3f2".
+          #     ProjectReferences are real, so the compiler CAN be built from them. It is built
+          #     below, deliberately, rather than read out of the module's publish output: publish
+          #     copies it only for a module whose reference graph happens to reach it, which two
+          #     of core's four compose entries do not (see the build step's comment).
           #
           # Both arms end in a RED with no anchor — neither is a quiet fallback, and the packer
           # refuses again behind them, so a bundle whose identity is a guess cannot exist.
@@ -1745,8 +1746,29 @@ jobs:
             anchor="$REFS/MeshWeaver.Compiler.dll"
             where="the pinned platform image's extracted /app"
           else
-            anchor="$PACKDIR/MeshWeaver.Compiler.dll"
-            where="the module's own build output (no platform image is pinned, so the platform was built from source)"
+            # 🚨 BUILT from the platform source, never scavenged out of $PACKDIR. Publish drops
+            # MeshWeaver.Compiler.dll beside the module ONLY when the module transitively
+            # ProjectReferences it — MeshWeaver.AI and MeshWeaver.Markdown.Collaboration both do,
+            # through MeshWeaver.Graph, and they were the ONLY two entries this lane built when
+            # the anchor landed, so "the platform ProjectReferences are real, so it IS beside the
+            # module" was measured on a population of two and read as a property of the arm.
+            # It is a property of the REFERENCE GRAPH: core's compose set grew to four on
+            # 2026-09-04 (#3290) and both new entries reach no compiler — MeshWeaver.Maps stops at
+            # MeshWeaver.Layout, MeshWeaver.Payments.Stripe is a leaf — so both were RED on their
+            # first run and took `CD delivered, or had a good reason not to` down with them for
+            # two hours. The anchor is a property of the PLATFORM this call pins, so derive it
+            # from that platform: the same global properties the module build above passed, which
+            # is what makes this assembly the one publish would have copied.
+            anchordir="$GITHUB_WORKSPACE/meshweaver/src/MeshWeaver.Compiler"
+            # -warnaserror to match the module build above: when a module DOES reach the
+            # compiler transitively, that build is what compiles it, so omitting the flag here
+            # would let MeshWeaver.Maps accept a compiler build MeshWeaver.AI rejects — the same
+            # per-module asymmetry this change exists to remove.
+            dotnet build "$anchordir/MeshWeaver.Compiler.csproj" -c Release -warnaserror \
+              -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" \
+              -p:Version="$VERSION"
+            anchor="$anchordir/bin/Release/net10.0/MeshWeaver.Compiler.dll"
+            where="the platform's own build output (no platform image is pinned, so the platform was built from source)"
           fi
           if [ ! -f "$anchor" ]; then
             echo "::error::no identity anchor for $MODULE — expected MeshWeaver.Compiler.dll at '$anchor', i.e. in $where. Every bundle must state the framework build its bytes were compiled against (#3211): a consumer compares it against what it has landed, and an unstated one makes every reconcile answer 'up to date, identity could not be checked' forever. Nothing here may guess it, so the pack stops."
