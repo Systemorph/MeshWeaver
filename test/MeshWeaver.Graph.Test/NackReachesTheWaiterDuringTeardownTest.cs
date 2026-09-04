@@ -10,8 +10,10 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 using MeshWeaver.Fixture;
+using System.Collections.Concurrent;
 
 // Core twin of MeshWeaver.Plugins/src/MeshWeaver.Hosting.Monolith.Test/NackReachesTheWaiterDuringTeardownTest.cs (ported 2026-09-02):
 // core's own CI cannot run the Plugins-hosted suite, so the 2026-09-02 regression of the owner-disposing
@@ -55,10 +57,27 @@ namespace MeshWeaver.Graph.Test;
 /// to zero is precisely "the owner's verdict reached the waiter", the step that used to be skipped.
 /// With the defect present the post is never made, nothing dispatches, and the entry simply sits
 /// armed until it expires 30 s later.</para>
+///
+/// <para><b>Why the parked merge turn releases itself when the owner starts shutting down.</b>
+/// The first shape of this test parked the owner's merge executor until the test's own
+/// <c>finally</c> — a turn blind to the shutdown, held for the whole assertion window. The verdict
+/// then reached the waiter only after the disposal watchdog had force-torn the parked sync hub down
+/// at 8 s, which made the 10 s assertion "the watchdog plus two seconds" — and a loaded CI shard
+/// lost those two seconds (run 33847949620). That force-teardown no longer exists: a hub whose turn
+/// is parked stays honestly pending and reports the turn (<c>DisposalStallWatchdogTest</c>). So the
+/// parked turn here is what accepted work is supposed to be — it observes the owner's
+/// <c>IsShuttingDown</c> and finishes its job — and the assertion bound is now well inside the
+/// 8 s stall budget, which is also what proves no watchdog took part.</para>
 /// </summary>
 public class NackReachesTheWaiterDuringTeardownTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
+    private readonly StallVerdictCapture verdicts = new();
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services => services.AddSingleton<ILoggerProvider>(verdicts));
+
     [Fact]
     public async Task OwnerDisposingUnderMeshTeardown_StillAnswersTheWaitingCaller()
     {
@@ -86,17 +105,22 @@ public class NackReachesTheWaiterDuringTeardownTest(ITestOutputHelper output)
         //
         // 🚨 No hand-woven gate: the turn → test signal is an AsyncSubject the parked turn
         // completes; the release travels back INTO the deliberately parked turn, so it is a
-        // volatile flag polled under a bounded SpinUntil and written in the `finally`.
+        // volatile flag polled under a bounded SpinUntil and written in the `finally`. The turn
+        // ALSO observes the owner's shutdown (see the class remarks): accepted work finishes its
+        // job when the mesh goes down, it does not sit on the block waiting to be killed.
         var primary = nodeHub!.GetWorkspace().DataContext
             .GetDataSourceForType(typeof(MeshNode))!
             .GetStreamForPartition(null)!;
         var gateEntered = new AsyncSubject<Unit>();
         var releaseGate = 0;
+        var owner = nodeHub!;
         primary.Update((Func<EntityStore?, ChangeItem<EntityStore>?>)(_ =>
         {
             gateEntered.OnNext(Unit.Default);
             gateEntered.OnCompleted();
-            SpinWait.SpinUntil(() => Volatile.Read(ref releaseGate) == 1, TimeSpan.FromSeconds(60));
+            SpinWait.SpinUntil(
+                () => Volatile.Read(ref releaseGate) == 1 || owner.IsShuttingDown,
+                TimeSpan.FromSeconds(60));
             return null;
         }), _ => { });
         try
@@ -132,10 +156,12 @@ public class NackReachesTheWaiterDuringTeardownTest(ITestOutputHelper output)
             // ArmedCount returning to zero is the observable fact "the owner's verdict reached the
             // waiter". The bound is deliberately far below LateResponseWatchBound (30 s), because
             // an entry that merely EXPIRES would also end at zero — waiting that long is
-            // indistinguishable from the defect, so a generous bound would pass on it.
+            // indistinguishable from the defect, so a generous bound would pass on it. It is ALSO
+            // below the 8 s disposal stall budget: the verdict has to come from the ordinary
+            // teardown, never from a stall verdict on a parked hub.
             await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
                 .Where(_ => registry.ArmedCount == 0)
-                .FirstAsync().Timeout(10.Seconds()).Await(ct);
+                .FirstAsync().Timeout(6.Seconds()).Await(ct);
 
             registry.ArmedCount.Should().Be(0,
                 "the owner minted an OwnerDisposing NACK for this patch, and a caller was armed and "
@@ -150,11 +176,43 @@ public class NackReachesTheWaiterDuringTeardownTest(ITestOutputHelper output)
             Output.WriteLine(
                 $"[caller] terminal={(callerTerminal is null ? "<null>" : callerTerminal.Name)} "
                 + $"error={(callerError is null ? "<null>" : callerError.GetType().Name)}");
+
+            // No hub was reported wedged and nothing was cancelled or torn down out of band: the
+            // verdict travelled the ordinary teardown. A stall verdict here would mean the parked
+            // turn did not observe the shutdown — the shape this test no longer relies on.
+            foreach (var verdict in verdicts.Entries)
+                Output.WriteLine(verdict);
+            verdicts.Entries.Should().BeEmpty(
+                "the waiter must be answered by the ordinary teardown, not by a stall verdict on a parked hub");
         }
         finally
         {
             // In a `finally` so a failing assertion above cannot strand the parked executor turn.
             Volatile.Write(ref releaseGate, 1);
+        }
+    }
+
+    /// <summary>Captures the Error-level disposal stall verdicts (both shapes).</summary>
+    private sealed class StallVerdictCapture : ILoggerProvider
+    {
+        public ConcurrentQueue<string> Entries { get; } = new();
+        public ILogger CreateLogger(string categoryName) => new Capturing(Entries);
+        public void Dispose() { }
+
+        private sealed class Capturing(ConcurrentQueue<string> sink) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Error;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+                Exception? exception, Func<TState, Exception?, string> formatter)
+            {
+                if (logLevel < LogLevel.Error)
+                    return;
+                var message = formatter(state, exception);
+                if (message.Contains("DISPOSAL DEADLOCK DETECTED", StringComparison.Ordinal)
+                    || message.Contains("[DISPOSE-WEDGE]", StringComparison.Ordinal))
+                    sink.Enqueue(message);
+            }
         }
     }
 }

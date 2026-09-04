@@ -47,13 +47,14 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// <para>🚨 This is what stops an owner OUT-RUNNING the mechanism that answers it (#1701).
     /// The owner's disposal watchdog is armed at the owner's own <c>Dispose()</c>; a child's is
     /// armed strictly later, in the owner's <c>DisposeHostedHubs</c> phase — so with a fixed
-    /// DURATION watchdog the owner ALWAYS expires first, reports
-    /// <c>DISPOSAL DEADLOCK DETECTED … RunLevel=DisposeHostedHubs</c>, and force-tears-down a
-    /// subtree that was merely still working. That is the same inversion #1317 removed one level
-    /// down (<see cref="DisposeHubsReactive"/>'s flat 5 s cap), left in place one level up. Feeding
+    /// DURATION watchdog the owner ALWAYS expires first and reports
+    /// <c>DISPOSAL DEADLOCK DETECTED … RunLevel=DisposeHostedHubs</c> about a subtree that was
+    /// merely still working. That is the same inversion #1317 removed one level down
+    /// (<see cref="DisposeHubsReactive"/>'s flat 5 s cap), left in place one level up. Feeding
     /// subtree progress back to the owner turns its watchdog into a STALL detector: a healthy
     /// nested teardown keeps re-arming it, and a genuinely wedged one still trips — the difference
-    /// being that the message is then TRUE.</para>
+    /// being that the message is then TRUE. (The watchdog reports and cancels the wedged turn; it
+    /// no longer tears anything down out of band — see <c>MessageHub.OnDisposalStall</c>.)</para>
     ///
     /// <para>Depth-capped like the diagnostics walk, and every child's stream is Catch-guarded:
     /// a progress signal must never fault the teardown it is reporting on.</para>
@@ -514,11 +515,11 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     ///
     /// <para>🚨 <b>This is a JOIN, and a join must not out-run the answers it is joining — so it
     /// carries no deadline of its own</b> (issue #1317). It used to cap the whole wait at a flat
-    /// <c>Timeout(5s)</c>. Every leg it waits on is already bounded, and bounded LONGER: each child
-    /// is a <see cref="MessageHub"/>, whose <c>Dispose</c> arms a disposal watchdog (8 s) that
-    /// force-tears-down and signals <c>DisposalCompleted</c> as its last act — so a child's answer
-    /// is guaranteed terminal, just not inside 5 s. The cap therefore expired 3 s BEFORE the
-    /// mechanism that produces a clean answer, in precisely the wedged case it was written for.
+    /// <c>Timeout(5s)</c>. Every leg it waits on answers from its own terminal state: each child
+    /// is a <see cref="MessageHub"/>, whose disposal signals <c>DisposalCompleted</c> as its last
+    /// act once the work it accepted has drained — so a child's answer is guaranteed to come, just
+    /// not inside 5 s. The cap therefore expired BEFORE the mechanism that produces a clean answer,
+    /// in precisely the busy case it was written for.
     /// Nesting made it fire with nothing wedged at all: a child's own disposal is its quiesce
     /// budget (2 s by default) plus its own hosted-subtree join, so a busy two-level tree exceeds a
     /// flat 5 s while every individual step stays inside its own budget.</para>
@@ -528,9 +529,10 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// services from it. That is the post-teardown straggler class described throughout this file
     /// (#613), i.e. the cap was manufacturing the very leak the rest of the file works to prevent,
     /// and it silently voided the in-flight-construction contract asserted below. Removing it does
-    /// not remove a bound: the owning hub keeps its OWN disposal watchdog over this whole phase,
-    /// which is where a "the shutdown path wedged" deadline belongs, and which force-tears-down
-    /// rather than merely giving up.</para>
+    /// not remove a report: the owning hub keeps its OWN disposal stall detector over this whole
+    /// phase, which names the child that stopped moving; the bound that ENDS a wedged teardown is
+    /// the caller's (the test base's dispose deadline, the host's teardown budget), and it reports
+    /// a hang with those diagnostics rather than a completion that is not true.</para>
     /// </summary>
     private void DisposeHubsReactive()
     {

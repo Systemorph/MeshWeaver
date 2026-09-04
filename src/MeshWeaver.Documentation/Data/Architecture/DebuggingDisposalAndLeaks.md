@@ -180,8 +180,10 @@ root.
 - **A reply that lands at `runLevel=Quiescing`** was gated on teardown work — look
   for a debounced/flushed/timer-driven dependency, not a wedged handler.
 - **Disposed ≠ unrooted.** Use the ClrMD probe; the *root kind* names the bug.
-- **A watchdog that force-completes disposal is a smell** — it usually masks a
-  non-quiescing cascade and can itself leak via its `Task.Delay` timer. Keep it
-  *cancellable* so it never pins the hub it is guarding.
+- **There is no watchdog that force-completes disposal any more — a stall is REPORTED.**
+  `DISPOSAL DEADLOCK DETECTED` / `[DISPOSE-WEDGE]` at Error names the hub, the turn on the
+  block and its age, and attaches the recursive snapshot; the hub stays pending until the
+  turn returns. Read the snapshot for the wedged child or the blocking registrant; never
+  reach for a force ([Teardown Layers](/Doc/Architecture/TeardownLayers)).
 - **Never bump a timeout to "fix" a bulk-only hang.** It's a leak or a flush/
   thread-pool dependency; the timeout is the messenger.

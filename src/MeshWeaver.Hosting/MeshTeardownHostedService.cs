@@ -101,9 +101,21 @@ public sealed class MeshTeardownHostedService(
         catch (Exception ex)
         {
             // Never let a teardown drain failure escape into host shutdown — log and continue so the
-            // host still exits. A genuine leak surfaces via AnyHubQuiescingTimedOut / IoPool in-flight.
-            logger.LogWarning(ex,
-                "MeshTeardownHostedService: mesh drain did not complete cleanly within {Timeout}", TeardownTimeout);
+            // host still exits. But it is an ERROR, with the evidence attached: a mesh that did not
+            // finish draining inside its budget is holding work it has not finished (the process
+            // is about to exit over it), and the red-log pipeline files an Error as an issue. The
+            // recursive disposal snapshot names the hub, the phase, the executing turn and the
+            // pending callbacks — what a reproduction has to start from. (Was a Warning with no
+            // diagnostics; measured on memex/memex-cloud the 55–61 s shutdowns carried nothing
+            // that said WHICH hub was still going down.)
+            string diagnostics;
+            try { diagnostics = mesh.GetDisposalDiagnostics(); }
+            catch (Exception diagEx) { diagnostics = $"(disposal diagnostics unavailable: {diagEx.GetType().Name}: {diagEx.Message})"; }
+            logger.LogError(ex,
+                "MeshTeardownHostedService: mesh {Address} did not finish draining within {Timeout} — the host "
+                + "proceeds to dispose its container over work that has not finished. Find what is still going "
+                + "down; do not widen the budget.\n{Diagnostics}",
+                mesh.Address, TeardownTimeout, diagnostics);
         }
     }
 }

@@ -64,7 +64,7 @@ public sealed class IoPoolRegistry : IDisposable
         if (Volatile.Read(ref _disposing) != 0)
             return _refused.Value;
 
-        var pool = _pools.GetOrAdd(name, n => new IoPool(_options.MaxConcurrencyFor(n), _options.DrainTimeout));
+        var pool = _pools.GetOrAdd(name, n => new IoPool(_options.MaxConcurrencyFor(n), _options.DrainTimeout, _options.DrainGrace));
 
         // Re-check: disposal may have begun between the check above and the add, in which case our
         // pool went in after the snapshot was taken. Pull it back out and refuse — losing a pool
@@ -155,10 +155,22 @@ public sealed class IoPoolRegistry : IDisposable
     /// <param name="byPool">
     /// One entry per pool that did NOT fully unwind, in drain order. Empty on a clean drain.
     /// </param>
-    public int DrainAll(out IReadOnlyList<PoolResidual> byPool)
+    public int DrainAll(out IReadOnlyList<PoolResidual> byPool) => DrainAll(out byPool, out _);
+
+    /// <summary>
+    /// <see cref="DrainAll(out IReadOnlyList{PoolResidual})"/>, also handing back the leaves each pool
+    /// had to CANCEL because they outlived the drain grace with the pool making no further progress
+    /// (<see cref="IoPool.LeavesCancelledAfterGrace"/>). Those leaves unwound — they are not a
+    /// residual — but each is a unit of work that did not finish its job; the teardown report names
+    /// them so a wedged write, read or compile is a visible finding rather than a silent kill.
+    /// </summary>
+    /// <param name="byPool">One entry per pool that did NOT fully unwind, in drain order.</param>
+    /// <param name="cancelledByPool">One entry per pool that had to cancel a wedged leaf, in drain order.</param>
+    public int DrainAll(out IReadOnlyList<PoolResidual> byPool, out IReadOnlyList<PoolResidual> cancelledByPool)
     {
         var leaked = 0;
         var residuals = new List<PoolResidual>();
+        var cancelled = new List<PoolResidual>();
         foreach (var kvp in _pools)
         {
             // Read the sites BEFORE the drain returns nothing to name: Drain() joins, so by the
@@ -166,6 +178,18 @@ public sealed class IoPoolRegistry : IDisposable
             // registered — but a leaf that unwinds during the join must not be reported, so this
             // is read after Drain and reflects what is genuinely still running.
             var residual = kvp.Value.Drain();
+            var wedged = kvp.Value.LeavesCancelledAfterGrace;
+            if (wedged != 0)
+            {
+                cancelled.Add(new PoolResidual(kvp.Key, wedged) { Sites = kvp.Value.CancelledLeafSites });
+                _logger?.LogWarning(
+                    "IoPoolDrain: pool '{PoolName}' had to CANCEL {Wedged} leaf(es) that made no progress "
+                    + "within the {Grace} drain grace — that work did not finish its job. Find why it stalled; "
+                    + "do not widen the grace. Cancelled: {Sites}", kvp.Key, wedged, _options.DrainGrace,
+                    kvp.Value.CancelledLeafSites.Count == 0
+                        ? "(no site captured)"
+                        : string.Join(" | ", kvp.Value.CancelledLeafSites));
+            }
             if (residual != 0)
                 residuals.Add(new PoolResidual(kvp.Key, residual) { Sites = kvp.Value.PendingLeafSites });
             if (residual != 0)
@@ -185,6 +209,7 @@ public sealed class IoPoolRegistry : IDisposable
             leaked += residual;
         }
         byPool = residuals;
+        cancelledByPool = cancelled;
         return leaked;
     }
 

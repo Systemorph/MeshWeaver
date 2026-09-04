@@ -149,14 +149,26 @@ public static class ActivityRunner
             var scopeIdentity = owner ?? ContextOf(created.LastModifiedBy);
             IObservable<string> Run()
             {
+                var cts = new CancellationTokenSource();
                 // Register the run as in flight for the WHOLE of its life, released in the
                 // Finally below — i.e. at TERMINAL (succeeded / failed / cancelled), not when
                 // it was merely dispatched. Teardown quiesces on this: it stops starting new
                 // work and waits for what is running, instead of walking away from it while
                 // the command still executes against a tearing-down mesh.
-                var runRegistration = hub.ServiceProvider.GetService<ActivityTracker>()?.Track();
-
-                var cts = new CancellationTokenSource();
+                //
+                // The registration carries the run's NAME and its cooperative KILL (the same token
+                // a user's cancel request trips), and the run reports progress on every log line
+                // it appends — so a teardown can let a working run finish and cancel only one that
+                // has stopped moving. `killedByTeardown` is what turns that cancel into an ERROR
+                // in the terminal log below rather than the ordinary "cancelled" outcome.
+                var killedByTeardown = 0;
+                var runRegistration = hub.ServiceProvider.GetService<ActivityTracker>()?.TrackRun(
+                    activityPath,
+                    () =>
+                    {
+                        Interlocked.Exchange(ref killedByTeardown, 1);
+                        try { cts.Cancel(); } catch { /* already disposed */ }
+                    });
                 // Cancel watcher: RequestedStatus = Cancelled trips the command's token
                 // (Activity Control Plane). Subscribed for the life of the run; disposed on
                 // completion.
@@ -203,7 +215,13 @@ public static class ActivityRunner
                             activityPath));
 
                 var ctx = new ActivityContext(activityPath, cts.Token,
-                    (msg, level) => Append(workspace, accessService, owner, activityPath, msg, level, logger));
+                    (msg, level) =>
+                    {
+                        // Every appended line is the run saying "still working" — the quiesce's
+                        // notion of progress is exactly this, never a heartbeat.
+                        runRegistration?.Progress();
+                        Append(workspace, accessService, owner, activityPath, msg, level, logger);
+                    });
 
                 // Run the command; on terminal, write the final Status + dispose watcher/cts.
                 return command(ctx)
@@ -213,11 +231,26 @@ public static class ActivityRunner
                     .Catch<Unit, Exception>(ex =>
                     {
                         var cancelled = ex is OperationCanceledException || cts.IsCancellationRequested;
-                        logger?.LogWarning(ex, "Activity {Path} {Outcome}", activityPath,
-                            cancelled ? "cancelled" : "failed");
+                        if (cancelled && Volatile.Read(ref killedByTeardown) != 0)
+                            // 🚨 An ERROR, not the ordinary cancelled outcome: the run did not finish
+                            // its job — teardown found it making no progress and had to kill it.
+                            // That is a defect in whatever the run was waiting on, and an Error is
+                            // what the red-log pipeline files as an issue.
+                            logger?.LogError(ex,
+                                "Activity {Path} was CANCELLED BY TEARDOWN: it made no progress for the "
+                                + "stall budget while the mesh was quiescing, so its work did not finish. "
+                                + "Find what it was waiting on; a run that reports progress is never cancelled.",
+                                activityPath);
+                        else
+                            logger?.LogWarning(ex, "Activity {Path} {Outcome}", activityPath,
+                                cancelled ? "cancelled" : "failed");
                         return Finish(workspace, accessService, owner, activityPath,
                             cancelled ? ActivityStatus.Cancelled : ActivityStatus.Failed,
-                            cancelled ? "Cancelled." : ex.Message, logger);
+                            cancelled
+                                ? (Volatile.Read(ref killedByTeardown) != 0
+                                    ? "Cancelled by teardown: the run made no progress while the mesh was shutting down."
+                                    : "Cancelled.")
+                                : ex.Message, logger);
                     })
                     .Finally(() =>
                     {

@@ -51,6 +51,41 @@ public sealed record TeardownReport(int LeakedIoLeaves, bool AsyncDisposeClean)
     /// </summary>
     public bool ActivitiesQuiesced { get; init; } = true;
 
+    /// <summary>
+    /// Activities the pre-dispose quiesce had to CANCEL because they stopped reporting progress
+    /// (see <c>ActivityTracker.Quiesce</c>). Each is a run that did not finish its job — the
+    /// teardown killed it — and is logged at Error by the orchestrator. Empty when every run
+    /// finished on its own.
+    /// </summary>
+    public IReadOnlyList<string> CancelledActivities { get; init; } = [];
+
+    /// <summary>
+    /// Activities that ignored the cancellation the quiesce handed them and were left behind so
+    /// teardown could proceed. A run listed here is a defect in that run: it observes neither
+    /// progress nor cancellation.
+    /// </summary>
+    public IReadOnlyList<string> AbandonedActivities { get; init; } = [];
+
+    /// <summary>
+    /// Pooled I/O leaves the drain had to CANCEL because they outlived the drain grace with their
+    /// pool making no further progress (<c>IoPool.LeavesCancelledAfterGrace</c>). They unwound —
+    /// they are not in <see cref="LeakedIoLeaves"/> — but each is a unit of work that did not
+    /// finish, and the drain names it per pool in <see cref="CancelledIoByPool"/>.
+    /// </summary>
+    public int CancelledIoLeaves { get; init; }
+
+    /// <summary>Per-pool detail for <see cref="CancelledIoLeaves"/>; empty when nothing was cancelled.</summary>
+    public IReadOnlyList<IoPoolRegistry.PoolResidual> CancelledIoByPool { get; init; } = [];
+
+    /// <summary>
+    /// True when the teardown had to KILL something to get here — an activity cancelled or
+    /// abandoned, a pooled leaf cancelled after the grace. The scope may still be safe to dispose
+    /// (<see cref="Clean"/> answers that); this answers whether every unit of work finished its
+    /// job, which is the contract teardown is held to. A consumer surfaces it like a dirty report.
+    /// </summary>
+    public bool WorkWasKilled =>
+        CancelledActivities.Count > 0 || AbandonedActivities.Count > 0 || CancelledIoLeaves > 0;
+
     /// <summary>True iff nothing survived teardown — the scope may be disposed and node ALCs
     /// unloaded with no thread still executing their code.</summary>
     public bool Clean => LeakedIoLeaves == 0 && AsyncDisposeClean;
@@ -61,6 +96,12 @@ public sealed record TeardownReport(int LeakedIoLeaves, bool AsyncDisposeClean)
         var notes = string.Empty;
         if (!ActivitiesQuiesced)
             notes += "; activities did NOT quiesce within budget";
+        if (CancelledActivities.Count > 0)
+            notes += $"; {CancelledActivities.Count} activit{(CancelledActivities.Count == 1 ? "y" : "ies")} CANCELLED for making no progress [{string.Join(" | ", CancelledActivities)}]";
+        if (AbandonedActivities.Count > 0)
+            notes += $"; {AbandonedActivities.Count} activit{(AbandonedActivities.Count == 1 ? "y" : "ies")} ABANDONED after ignoring cancellation [{string.Join(" | ", AbandonedActivities)}]";
+        if (CancelledIoLeaves > 0)
+            notes += $"; {CancelledIoLeaves} pooled I/O leaf(s) CANCELLED after the drain grace [{string.Join(", ", CancelledIoByPool)}]";
         if (DisposalFault is not null)
             notes += $"; disposal FAULTED: {DisposalFault.GetType().Name}: {DisposalFault.Message}";
         return (Clean

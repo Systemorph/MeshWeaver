@@ -106,6 +106,34 @@ public class PatchVerdictRoutingTest
             .Should().BeFalse();
     }
 
+    /// <summary>
+    /// 🚨 <b>The regression that must not come back.</b> Serving the armed sink ALONGSIDE an
+    /// accepted post — to close the teardown hole where the parent drops the response after this
+    /// returns — was tried twice and reddened live tests both times. A late watch is armed for
+    /// EVERY patch at post time, not just an expired one, so the sink dispatches the ack
+    /// synchronously on the OWNER's turn, ahead of the state change it acknowledges: the caller's
+    /// write completes before what it wrote is readable. Dispatch-first reddened
+    /// <c>ComboGateRollTest</c> (run 33863349195); gated on <c>IsShuttingDown</c> it reddened
+    /// <c>ImportTypeBeforeInstanceTest</c> (run 33865385033), which recycles node hubs throughout
+    /// its import and so meets that gate on the live path. This test is the guard: with a sink
+    /// present and armed, an accepted post must leave it untouched.
+    /// </summary>
+    [Fact]
+    public void AnAcceptedPost_NeverAlsoServesTheSink_EvenWithOneArmed()
+    {
+        var dispatched = 0;
+
+        var routed = DataExtensions.RoutePatchVerdict(
+            Verdict, RequestId,
+            _ => Delivered(MessageDeliveryState.Submitted),
+            (_, _) => { dispatched++; return true; });
+
+        routed.Should().BeTrue();
+        dispatched.Should().Be(0,
+            "the post is the live path's only transport — a second, earlier answer through the "
+            + "sink reorders the ack ahead of the state it acknowledges");
+    }
+
     /// <summary>No sink registered at all (a minimal fixture) degrades the same way — no throw.</summary>
     [Fact]
     public void RefusedPost_WithNoSinkRegistered_ReportsThatNoRouteTookIt()

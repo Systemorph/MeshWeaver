@@ -926,10 +926,10 @@ public static class JsonSynchronizationStream
             // disposing — the re-ask proceeds at once, exactly as before.
             //
             // No .Timeout here, deliberately: this join must not out-run the answer it joins
-            // (#1317). MessageHub.Dispose arms a disposal watchdog that force-tears-down and
-            // signals DisposalCompleted as its last act, so the leg is already guaranteed
-            // terminal; the caller's own budget (UpdateRemote's initial-state wait) is the
-            // deadline that belongs to the caller.
+            // (#1317). The owner signals DisposalCompleted as the last act of its teardown once
+            // its accepted work has drained, so the leg answers from a terminal state; the
+            // caller's own budget (UpdateRemote's initial-state wait) is the deadline that belongs
+            // to the caller.
             IObservable<Unit> OwnerTeardownSettled()
             {
                 var live = LocalInstanceOf(owner);

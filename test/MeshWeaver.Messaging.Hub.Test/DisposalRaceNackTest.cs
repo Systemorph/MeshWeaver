@@ -30,9 +30,13 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// reaching <c>LayoutAreaHost</c> in the recycle window faults with <c>HubDisposingException</c>,
 /// and the sender still hears nothing.</para>
 ///
-/// <para><b>The contract pinned here.</b> Both outcomes must NACK through the PARENT hub with the
-/// TRANSIENT <see cref="ErrorType.ShuttingDown"/> — through the parent because the disposing hub's
-/// own <c>Post</c> re-enters <c>ReportFailure</c>'s "don't post during shutdown" gate
+/// <para><b>The contract pinned here.</b> A delivery the hub accepted is never abandoned in
+/// silence. Since the teardown lets accepted work finish (Doc/Architecture/TeardownLayers) the
+/// ShutdownRequest queues FIFO behind it, so door one is now SERVED — the queued request runs and
+/// is answered before the hub goes down. Door two — a handler that cannot complete because the
+/// hub is tearing down — must still NACK through the PARENT hub with the TRANSIENT
+/// <see cref="ErrorType.ShuttingDown"/>: through the parent because the disposing hub's own
+/// <c>Post</c> re-enters <c>ReportFailure</c>'s "don't post during shutdown" gate
 /// (<c>RunLevel &gt;= DisposeHostedHubs</c>) and is dropped, which is precisely how the disposal
 /// branch's NACK went missing while looking correct in the source.</para>
 /// </summary>
@@ -51,12 +55,14 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
     private static readonly Address FaultingAddress = new("disposal-race-fault", "1");
 
     /// <summary>
-    /// Door one: the delivery reaches <c>HandleMessage</c> with the hub already past
-    /// <c>ShutDown</c>, so no handler is entered at all (<c>NOT_PROCESSED_DISPOSING</c>). It used
-    /// to be returned unchanged — abandoned without a word to the sender.
+    /// Door one: the delivery was accepted into the main queue behind a stalled turn, and the hub
+    /// is disposed before its turn runs. It used to reach <c>HandleMessage</c> after the watchdog
+    /// had forced the hub past <c>ShutDown</c> and be returned unchanged — abandoned without a
+    /// word to the sender (<c>NOT_PROCESSED_DISPOSING</c>). Now the shutdown waits its turn behind
+    /// the accepted work: the request RUNS and is ANSWERED, and only then does the hub go down.
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task AcceptedRequest_IsNacked_WhenTheHubGoesDownBeforeItsTurnRuns()
+    public async Task AcceptedRequest_IsServed_WhenTheHubGoesDownBeforeItsTurnRuns()
         => await RunRace(VictimAddress, faulting: false);
 
     /// <summary>
@@ -82,16 +88,17 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
         var host = GetHost();
         var victim = host.GetHostedHub(victimAddress, c => c
             .WithTypes(typeof(RaceRequest), typeof(FaultingRequest), typeof(RaceResponse), typeof(Blocker))
-            // Deliberately ignores cancellation: keeps the victim's single-threaded action block
-            // busy so the ShutdownRequest posted by Dispose() cannot be processed. Disposal then
-            // completes out of band (the disposal watchdog), which is what lets RunLevel advance
-            // while our request is still sitting in the main queue — the production interleaving,
-            // made deterministic.
-            .WithHandler<Blocker>((_, d) =>
+            // Keeps the victim's single-threaded action block busy so the ShutdownRequest posted
+            // by Dispose() queues behind it — and behind our request. The turn observes the hub's
+            // own shutdown signal as accepted work should, so nothing here depends on a watchdog:
+            // the teardown never forces a hub past a running turn (Doc/Architecture/TeardownLayers).
+            .WithHandler<Blocker>((h, d) =>
             {
                 handlerEntered.OnNext(Unit.Default);
                 handlerEntered.OnCompleted();
-                SpinWait.SpinUntil(() => Volatile.Read(ref releaseHandler) == 1, TimeSpan.FromSeconds(60));
+                SpinWait.SpinUntil(
+                    () => Volatile.Read(ref releaseHandler) == 1 || h.IsShuttingDown,
+                    TimeSpan.FromSeconds(60));
                 return d.Processed();
             })
             // Both handlers WOULD answer / would be entered, so a pass can only come from the
@@ -120,20 +127,28 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
                 .FirstAsync()
                 .Await(TestContext.Current.CancellationToken);
 
-            // 3. Dispose. The phase machine is starved behind the stall, so the disposal watchdog
-            //    tears the hub down out of band and RunLevel reaches Dead with our request still
-            //    queued. Polls the public RunLevel rather than sleeping a fixed budget.
+            // 3. Dispose. The blocker observes the shutdown and returns; the queue behind it —
+            //    our request, then the ShutdownRequest — runs in order.
             victim!.Dispose();
-            await WaitUntil(() => victim.RunLevel >= MessageHubRunLevel.ShutDown,
-                "the victim must reach ShutDown while the request is still queued");
-            Output.WriteLine($"victim RunLevel at release: {victim.RunLevel}");
 
-            // 4. Let the turn loop reach our request.
-            Volatile.Write(ref releaseHandler, 1);
+            if (!faulting)
+            {
+                // Door one: the accepted request is SERVED before the hub goes down. A force-torn
+                // hub used to abandon it (NOT_PROCESSED_DISPOSING, no NACK); a silently-dropped
+                // one would leave this task pending for the [Fact] timeout with no explanation —
+                // exactly the production symptom (an install that spins for 60 s).
+                var served = await response;
+                served.Should().NotBeNull("the request was accepted, so it runs and is answered "
+                    + "before the hub goes down — the shutdown waits its turn behind accepted work");
+                await victim.DisposalCompleted.FirstOrDefaultAsync().Await()
+                    .WaitAsync(TestTimeouts.Convergence);
+                victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
+                return;
+            }
 
-            // WITHOUT the fix this task never completes and the [Fact] timeout fires with no
-            // explanation — exactly the production symptom (an install that spins for 60 s, a
-            // page that never renders).
+            // Door two: the handler throws HubDisposingException — it cannot complete because
+            // the hub is tearing down. WITHOUT the fix this task never completes and the [Fact]
+            // timeout fires with no explanation.
             var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
             failure.Failure.Should().NotBeNull();
             Output.WriteLine(
@@ -164,17 +179,5 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
         {
             Volatile.Write(ref releaseHandler, 1);
         }
-    }
-
-    private static async Task WaitUntil(Func<bool> condition, string because)
-    {
-        for (var i = 0; i < 400; i++)
-        {
-            if (condition())
-                return;
-            await Task.Delay(50);
-        }
-
-        Assert.Fail($"Timed out waiting: {because}");
     }
 }
