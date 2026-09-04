@@ -7,10 +7,13 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Chrome and content language
 
-> **Status: proposal.** This page answers [#3203](https://github.com/Systemorph/MeshWeaver/issues/3203)
-> and is written to be decided, not to be assumed. The rule below is not in force until a maintainer
-> says so; [Localization](../Localization) still describes what the platform does today. Nothing here
-> has been implemented.
+> **Status: IN FORCE.** Adopted 2026-09-04 in answer to
+> [#3203](https://github.com/Systemorph/MeshWeaver/issues/3203): the maintainer accepted the two
+> clauses below and declined the issue's option (a). Chrome keeps following the viewer.
+> [Localization](../Localization) carries the clauses as the rule a contributor is held to; this page
+> carries the measurement behind them — why the content-language alternative was declined, what a
+> per-node language field would cost, and which code the clauses still reach. Adoption status per
+> item is in **Adoption** below.
 
 ## The observation
 
@@ -215,6 +218,10 @@ viewer on the same portal. The same file passes `locale: host.ViewerLocale()` co
 menu, so this is an omission, not a decision. Under clause 2 both labels go and the disagreement goes
 with them.
 
+Both files are declared in MeshWeaver.Plugins, so this change lands there, not here — it is
+outstanding as
+[MeshWeaver.Plugins#1308](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1308).
+
 ## What identifies content language today
 
 **Nothing, on a `MeshNode`.** The record carries `Id`, `Namespace`, `MainNode`, `Name`,
@@ -290,45 +297,61 @@ its signal off the course root it already owns, and it names which signal decide
 inferred from the rendered page. That shape is correct and should be the template for any module that
 needs the same fallback.
 
-## Migration
+## Adoption
 
-**There is no content migration.** No node changes, no schema changes, no backfill, no re-import. The
-work is a bounded code change list:
+**There is no content migration.** No node changes, no schema changes, no backfill, no re-import. No
+existing content page changes meaning, and no author has to do anything. The work is a bounded code
+change list, and most of it lands in MeshWeaver.Plugins because that is where the in-flow controls
+live — core owns the rule and one unowned pair.
+
+**Landed.**
+
+- **The rule itself**, here and in [Localization](../Localization) — the page a contributor is
+  pointed at from `AGENTS.md` carries clause 1 and clause 2, so the rule is readable where it is
+  looked for rather than only in this companion page.
+- **The Edu quiz has an owner.** `Edu/Quiz` and `Edu/Workbook` went from **zero** localization calls
+  to the module's own text table
+  ([MeshWeaver.Plugins#1261](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1261), closed by
+  MeshWeaver.Plugins#1280). *Question 6 of 6* is now *Frage 6 von 6* for a German reader.
+- **The copy-to-home dialog title** reads its catalog key (`ui.copyToHomeTitle`, added to the core
+  catalog by [#3219](https://github.com/Systemorph/MeshWeaver/pull/3219)), as does *Read-only
+  content* (`ui.readOnlyContent`).
+
+**Outstanding — all of it in MeshWeaver.Plugins, tracked as
+[MeshWeaver.Plugins#1308](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1308):**
 
 1. **Drop the redundant label from the two code-cell toolbars** (clause 2), and pass the locale at
    `CodeViews.BuildCellToolbar`'s call site so the English-pinned path stops disagreeing with the
-   other one. The glyph and the localized tooltip are already there.
-2. **Give the unowned strings an owner.** This is the bulk of it, and it is NOT only a plugins job —
-   **this repo has instances too**:
+   other one. The glyph and the localized tooltip are already there. This is the symptom #3203
+   reported and it is the whole of clause 2's first application.
+2. **Give the remaining unowned strings an owner** — clause 1:
 
    | Unowned string | Where |
    |---|---|
-   | *"Interactive code execution is unavailable here…"*, *"Starting interactive kernel…"* — both rendered **inside the cell frame** | `src/MeshWeaver.Markdown/MarkdownViewLogic.cs` (**this repo**) |
    | `aria-label="Copy code"`, sitting beside an already-localized `title` | `MeshWeaver.Plugins/src/MeshWeaver.Blazor/Components/CodeBlock.razor` |
-   | dialog titles *"Save Failed"* (5 sites), *"Copy to your home space?"*, *"Read-only content"*; `"Code Files"`, `"Loading code..."`, `"Enter display name..."`, `"never executed"` | `MeshWeaver.Plugins/src/MeshWeaver.Graph.Views/CodeViews.cs` |
-   | the entire quiz — progress, feedback, score, notices, privacy note, problem block | `MeshWeaver.Plugins/Edu/Quiz/**` and `Edu/Workbook/**`, which contain **zero** localization calls of any kind |
+   | dialog title *"Save Failed"* (5 sites); `"Code Files"`, `"Loading code..."`, `"Enter display name..."`, `"never executed"` | `MeshWeaver.Plugins/src/MeshWeaver.Graph.Views/CodeViews.cs` |
+   | *"Interactive code execution is unavailable here…"*, *"Starting interactive kernel…"* — both rendered **inside the cell frame** | `src/MeshWeaver.Markdown/MarkdownViewLogic.cs` (**this repo**; the three helpers are pure and take no locale, so the key and the parameter land here and the call sites that pass `ViewerLocale()` land in Plugins — one change, two repos, core first) |
 
-   The Edu half is filed as
-   [MeshWeaver.Plugins#1261](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1261). The owner
-   for a module's strings is the module's own text table, following `EduTexts`, which makes EN/DE
-   parity a **compile** error because every member is `required`; the owner for a platform string is
-   the core catalog.
+   The owner for a module's strings is the module's own text table, following `EduTexts`, which makes
+   EN/DE parity a **compile** error because every member is `required`; the owner for a platform
+   string is the core catalog.
 3. **Mirror any new core catalog key** into `MeshWeaver.Plugins/clients/react/src/i18n/`, core first —
    its drift guard compares **values**, not just keys, and stays red until the core change merges.
-4. **Add the guard** below.
-
-No existing content page changes meaning, and no author has to do anything.
+4. **Add the guard** below. It belongs in MeshWeaver.Plugins, because four of the five in-flow
+   surfaces are declared there and a core test cannot see them.
 
 ## Enforcement — and what cannot be enforced
 
 Be precise about which half is mechanical.
 
-**Mechanical, and worth adding.** Clause 2 over the enumerated in-flow set: assert that each in-flow
-control renders no localized *visible* label, and that its tooltip/accessible name *is* a catalog
-lookup. For the code cell that is a direct assertion on `MarkdownCodeCellToolbar` and on
-`CodeViews`'s run-button area. The set is enumerated deliberately — a guard over "every control
-everywhere" would be a guard nobody can keep green, and [CI](/Doc/Architecture/ReadingCiSignals)
-green on a guard that cannot fail is worse than no guard.
+**Mechanical, and NOT YET BUILT — do not read this paragraph as a guard that exists.** Clause 2 over
+the enumerated in-flow set is testable: assert that each in-flow control renders no localized
+*visible* label, and that its tooltip/accessible name *is* a catalog lookup. For the code cell that
+is a direct assertion on `MarkdownCodeCellToolbar` and on `CodeViews`'s run-button area — both
+declared in MeshWeaver.Plugins, which is where the guard has to live, because a core test cannot see
+a Plugins component. It is outstanding with the label removal it protects. The set is enumerated
+deliberately — a guard over "every control everywhere" would be a guard nobody can keep green, and
+[CI](/Doc/Architecture/ReadingCiSignals) green on a guard that cannot fail is worse than no guard.
 
 **Already mechanical.** `LocalizationTest.EveryShippedLanguage_CoversEveryEnglishKey` asserts full
 en/de key parity — 1104 keys each, currently zero missing. #3203's option (b) asks for "a
@@ -339,19 +362,20 @@ values.
 **NOT mechanical, and this is the honest limit.** No test can find clause 1's real failure — a string
 that never became a key at all. `UserPreferencesLocalizationTest` states it exactly: *"a string that
 never became a key is not a missing key, it is an absent one."* A hard-coded literal in a view is
-invisible to every catalog guard by construction. The proof is `Edu/Quiz`: it contains **zero**
-localization calls, so every catalog guard in the fleet is green while a whole feature renders one
-language. The controls that exist for this are review and the enumerated in-flow guard; there is no
-third one, and claiming otherwise would be the kind of guard-that-checks-nothing this repo has been
-bitten by before.
+invisible to every catalog guard by construction. The proof is `Edu/Quiz`: it contained **zero**
+localization calls, so every catalog guard in the fleet stayed green while a whole feature rendered
+one language, for as long as it took a reader to notice and file #3203. The controls that exist for
+this are review and the enumerated in-flow guard; there is no third one, and claiming otherwise
+would be the kind of guard-that-checks-nothing this repo has been bitten by before.
 
-**Also not mechanical, and worth saying because it is the same shape:** the localization docs
-currently cite a guard that no longer exists. `AnonymousCircuitLocaleSeedTest` was lost when
+**Also not mechanical, and worth saying because it is the same shape:** the localization docs used to
+cite a guard that no longer exists. `AnonymousCircuitLocaleSeedTest` was lost when
 `MeshWeaver.Hosting.Blazor` moved to MeshWeaver.Plugins and its sibling tests moved without it, so the
-anonymous locale seed has zero coverage on either `main` while four prose sites still describe it as
-what stops the defect regressing
-([MeshWeaver.Plugins#1273](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1273)). A rule that
-is only prose decays exactly this way, which is the argument for keeping clause 2's guard small enough
+anonymous locale seed has zero coverage on either `main` while prose still described it as what stops
+the defect regressing
+([MeshWeaver.Plugins#1273](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1273)).
+[Localization](../Localization) now names it as **absent** rather than as coverage. A rule that is
+only prose decays exactly this way, which is the argument for keeping clause 2's guard small enough
 to survive a move.
 
 ## The trade-off being accepted
@@ -363,7 +387,7 @@ German node menu, German section headings and English lesson prose. What it remo
 — a translated word sitting inside the author's sentence. The thesis is that a page where every word's
 language is explained by **whose word it is** reads as designed, while a page where a German verb
 appears mid-paragraph reads as broken. That is a claim about how the seam is perceived, and it is the
-claim a maintainer is being asked to accept or reject.
+claim the maintainer accepted when adopting this rule.
 
 The other two costs:
 
@@ -381,7 +405,8 @@ The other two costs:
 - Whether a **module** may ever choose content-language chrome for a surface it fully owns. The rule
   says no by default; a module with a genuine case should argue it against the Edu revert above, not
   around it.
-- The **Edu quiz strings themselves** — owned by MeshWeaver.Plugins#1261, not by this page.
+- The **Edu quiz strings themselves** — they were owned by MeshWeaver.Plugins#1261, not by this page,
+  and that issue is closed: the quiz now reads its module's text table.
 - Whether `PluginContent.Language` should become **required** for a published content package. It is
   the one signal that exists and it is half populated; requiring it is a Store decision, not a
   localization one.
