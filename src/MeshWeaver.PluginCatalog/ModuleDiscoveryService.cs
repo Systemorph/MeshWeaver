@@ -786,12 +786,17 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
         return announcements
             // As SYSTEM, like every other write in a scan: there is no user on a boot or a webhook
             // emission, and the Admin-partition record is not writable by anyone else.
+            // Addressed to the PLATFORM explicitly. The discovery record already lives under
+            // `Admin/_Discovery/{owner}.{repo}`, so this changed nothing about where the row lands —
+            // it states the addressee instead of inheriting it from the record's path, which is what
+            // the census test can then check.
             .Select(module => AsSystem(() => NotificationService.CreateNotification(
                     meshService, recordPath,
                     accessService.Localize($"plugins.discovery.{Key(module.Status)}.title", module.Name ?? module.Id),
                     accessService.Localize($"plugins.discovery.{Key(module.Status)}.body",
                         module.Name ?? module.Id, module.Detail ?? ""),
-                    NotificationType.System, targetNodePath: recordPath))
+                    NotificationType.System, targetNodePath: recordPath,
+                    recipient: NotificationService.PlatformAddressee))
                 .Take(1)
                 .Select(_ => Unit.Default)
                 .Catch((Exception exception) =>

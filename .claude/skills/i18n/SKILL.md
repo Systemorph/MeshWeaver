@@ -31,6 +31,39 @@ the node menu uses ✏️ 🔖 ➡️ 📋 🗑️. An icon plus a translated to
 translated label — it shrinks the translation surface and reads identically in every locale. (The
 tooltip still needs a key.)
 
+### 🚨 Inside authored content that preference is BINDING — clause 2
+
+The rule was settled by
+[#3203](https://github.com/Systemorph/MeshWeaver/issues/3203) and lives in
+[ChromeAndContentLanguage.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ChromeAndContentLanguage.md):
+
+> **Clause 1 — ownership decides the language.** Platform-/module-owned text (a catalog key, a
+> module text table, a `[Translation]`) follows the **viewer**. Authored content renders **as
+> authored**. A bare literal compiled into a view is **unowned — that is a bug**, not a third
+> category.
+>
+> **Clause 2 — in-flow chrome minimises words.** A platform/module control rendered *inside* the
+> author's flow carries **no translated visible label** where a glyph, a number or a symbol conveys
+> the same thing. The localized text moves to the tooltip and the accessible name.
+
+The symptom this exists for: a German-profile reader of an English lesson met **Ausführen** on the
+code cell's Run button, mid-English-paragraph. The button already had a ▶ glyph and an already
+localized `Title`; the word added nothing.
+
+Two things this does NOT license:
+
+- 🚨 **Dropping a visible label without an accessible name.** A tooltip *is* the control's
+  accessible name — a glyph-only control keeps a localized `Title` / `aria-label`, or you have
+  traded a language bug for an accessibility one.
+- 🚨 **Making in-content chrome follow the CONTENT's language.** That is #3203's option (a), and it
+  is declined: the Edu pack shipped it, measured it and reverted it (`EduTexts.ResolveChrome`'s
+  comment: *"do not restore the old order"*), because its worst reader is an English speaker facing
+  a German course whose every control is in a language they do not have.
+
+Clause 2 reaches an **enumerated** list of in-flow surfaces — the code-cell toolbars, the fenced
+block's copy affordance, the kernel placeholders inside the cell frame, `Edu/**` — not the shell. A
+German node menu around an English document is not an inconsistency and keeps its words.
+
 ## Two shapes — pick by whether the text hangs off a declaration
 
 - **On a declaration** (property label, node-type name, enum member) → add `[Translation("de", "…")]`
@@ -143,6 +176,10 @@ catalog "just this once".
 
 - [ ] Every new user-visible string is a `[Translation]` on its declaration or a key in **both**
       `strings.en.json` and `strings.de.json`.
+- [ ] Every string has an OWNER — platform catalog, module table, or the author. No bare literal
+      compiled into a `.razor`/`.cs` view.
+- [ ] A control rendered INSIDE authored content carries a glyph, not a translated word — and keeps
+      a localized `Title`/`aria-label` as its accessible name.
 - [ ] Nothing resolves culture from `CurrentUICulture`/`CurrentCulture` — including date/number
       formatting.
 - [ ] If the string also appears in a web client, the mirror in

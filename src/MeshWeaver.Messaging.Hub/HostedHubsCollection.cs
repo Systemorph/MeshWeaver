@@ -82,9 +82,22 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// <param name="create">Whether to create the hub when absent, or only read.</param>
     /// <returns>The existing or newly created hub, or null if absent (read-only), refused during disposal, or construction failed.</returns>
     public IMessageHub? GetHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
+        => GetHubWithOutcome(address, config, create).Hub;
+
+    /// <summary>
+    /// <see cref="GetHub"/> plus the REASON — see <see cref="HostedHubOutcome"/>. Same work, same
+    /// single-flight, same logging; the only difference is that a caller handed a null hub is also
+    /// told which condition produced it, instead of having to guess between an expected teardown
+    /// race and a configuration that threw (Systemorph/MeshWeaver#3243).
+    /// </summary>
+    /// <param name="address">Address of the hosted hub to find or create.</param>
+    /// <param name="config">Configuration transform applied when a new hub is constructed.</param>
+    /// <param name="create">Whether to create the hub when absent, or only read.</param>
+    /// <returns>The hub (when there is one) and the outcome that produced this answer.</returns>
+    public HostedHubResult GetHubWithOutcome(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
     {
         if (messageHubs.TryGetValue(address, out var hub))
-            return hub;
+            return new HostedHubResult(hub, HostedHubOutcome.Available, null);
 
         // 🚨 Never-create lookups are PURE READS and must not touch any lock:
         // RouteStreamMessage probes this per stream message per parent-chain
@@ -98,12 +111,12 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         // burning an Orleans grain turn for minutes (the AgenticPension space
         // "wedge": queue backing up behind a multi-minute drain turn).
         if (create != HostedHubCreation.Always)
-            return null;
+            return new HostedHubResult(null, HostedHubOutcome.Absent, null);
 
         if (IsDisposing)
         {
             logger.LogWarning("Rejecting hosted hub creation for address {Address} in Host {Host} during disposal - collection is disposing", address, Host);
-            return null;
+            return new HostedHubResult(null, HostedHubOutcome.HostShuttingDown, null);
         }
 
         // Per-address single-flight; CONSTRUCTION RUNS OUTSIDE ANY GLOBAL LOCK.
@@ -111,22 +124,22 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         // blocks only on that address); creators of different addresses never
         // contend. The factory re-checks messageHubs so a creator racing the
         // post-construction cleanup below cannot build a duplicate hub.
-        var lazy = creations.GetOrAdd(address, a => new Lazy<IMessageHub?>(() =>
+        var lazy = creations.GetOrAdd(address, a => new Lazy<HostedHubResult>(() =>
         {
             if (messageHubs.TryGetValue(a, out var existing))
-                return existing;
+                return new HostedHubResult(existing, HostedHubOutcome.Available, null);
             if (IsDisposing)
             {
                 logger.LogWarning("Rejecting hosted hub creation for address {Address} in Host {Host} during disposal - collection is disposing", a, Host);
-                return null;
+                return new HostedHubResult(null, HostedHubOutcome.HostShuttingDown, null);
             }
-            var newHub = CreateHub(a, config);
-            if (newHub != null)
+            var created = CreateHub(a, config);
+            if (created.Hub is not null)
             {
-                messageHubs[a] = newHub;
-                try { _hubAdded.OnNext(newHub); } catch { /* never throw on notification */ }
+                messageHubs[a] = created.Hub;
+                try { _hubAdded.OnNext(created.Hub); } catch { /* never throw on notification */ }
             }
-            return newHub;
+            return created;
         }, LazyThreadSafetyMode.ExecutionAndPublication));
 
         // 🚨 In-flight construction is TRACKED so disposal can FINISH it instead of racing it.
@@ -175,7 +188,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// live only for the duration of one construction; <see cref="messageHubs"/>
     /// remains the steady-state registry.
     /// </summary>
-    private readonly ConcurrentDictionary<Address, Lazy<IMessageHub?>> creations = new(AddressComparer.Instance);
+    private readonly ConcurrentDictionary<Address, Lazy<HostedHubResult>> creations = new(AddressComparer.Instance);
 
     /// <summary>
     /// Registers a hub under its own address, wires its removal from the registry on disposal and
@@ -335,26 +348,86 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         }
     }
 
-    private IMessageHub? CreateHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
+    private HostedHubResult CreateHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
         if (IsDisposing)
         {
             logger.LogWarning("Preventing hub creation for address {Address} in host {Host} - collection is disposing", address, Host);
-            return null;
+            return new HostedHubResult(null, HostedHubOutcome.HostShuttingDown, null);
         }
 
         try
         {
             logger.LogDebug("Creating new hosted hub for address {Address} in host {Host} ", address, Host);
             var hub = serviceProvider.CreateMessageHub(address, config);
-            return hub;
+            return new HostedHubResult(hub, HostedHubOutcome.Available, null);
+        }
+        catch (ObjectDisposedException ex) when (IsHostContainerDisposed())
+        {
+            // 🚨 A TEARDOWN RACE, not a fault (Systemorph/MeshWeaver#3243). The creation passed
+            // IsDisposing — the freeze had not reached this collection — and then the container
+            // itself died under the build: the generic host stops, the root provider goes down,
+            // and Autofac answers every resolution with ObjectDisposedException
+            // (LifetimeScope.ThrowDisposedException). Nothing failed and nothing was written; the
+            // next access re-activates on a live host. Reported as fail: it is indistinguishable
+            // from a configuration that genuinely threw on the same line, so every pod rollout
+            // fingerprinted and ticketed a shutdown (incident e2028eb86d6a85a6 and its sibling).
+            //
+            // The filter is the CLASSIFICATION, and it is a measurement, not an assumption: a
+            // disposed container is asked, directly, whether it can still resolve. Should the
+            // probe itself throw, the CLR treats the filter as false and this falls through to the
+            // LOUD branch below — the conservative direction, by construction.
+            logger.LogDebug(ex,
+                "Hosted hub creation for address {Address} in host {Host} lost a race with teardown: "
+                + "the container it builds from is already disposed ({Evidence}), so this host is "
+                + "going down. Nothing failed and nothing was written — the next access re-activates "
+                + "on a live host.",
+                address, Host, DescribeDisposedContainer(ex));
+            return new HostedHubResult(null, HostedHubOutcome.HostShuttingDown, ex);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to create hosted hub for address {Address}", address);
-            return null;
+            return new HostedHubResult(null, HostedHubOutcome.ConstructionFaulted, ex);
         }
     }
+
+    /// <summary>
+    /// Asks the container this collection builds hubs from whether it is still alive — the honest
+    /// discriminator between an expected teardown race and a hub configuration that faulted while
+    /// the host was up. A live Autofac scope answers a plain resolution; a disposed one throws
+    /// <see cref="ObjectDisposedException"/> from <c>LifetimeScope.ThrowDisposedException</c>,
+    /// which is the exact frame the production incident carried.
+    ///
+    /// <para>Only ever called on the failure path, so the hot creation path pays nothing for it.
+    /// <see cref="ILoggerFactory"/> is a service the container is KNOWN to hold — this collection's
+    /// own logger came from it — so a live scope cannot answer this with a miss.</para>
+    /// </summary>
+    /// <returns>True when the container is disposed.</returns>
+    private bool IsHostContainerDisposed()
+    {
+        try
+        {
+            _ = serviceProvider.GetService(typeof(ILoggerFactory));
+            return false;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The evidence line for a benign teardown race — what the container actually said, so the
+    /// Debug line STATES why it was judged benign instead of asserting it (the same contract as
+    /// <c>CancellationClassifier.Describe</c>).
+    /// </summary>
+    /// <param name="exception">The exception hub construction raised.</param>
+    /// <returns>A short, log-safe description.</returns>
+    private static string DescribeDisposedContainer(ObjectDisposedException exception) =>
+        string.IsNullOrEmpty(exception.ObjectName)
+            ? $"{exception.GetType().Name}; a plain service resolution against it throws too"
+            : $"{exception.GetType().Name} on {exception.ObjectName}; a plain service resolution against it throws too";
 
     private readonly object locker = new();
     private bool IsDisposing => disposalStarted || creationClosed;

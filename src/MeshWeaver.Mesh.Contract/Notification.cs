@@ -24,11 +24,23 @@ public enum NotificationType
 }
 
 /// <summary>
-/// Represents a notification about a main entity (a thread, an approval, a job).
-/// Notifications are <b>satellites</b> of their main entity: the notification node
-/// has <c>MainNode = mainEntityPath</c> and its own path lives under
-/// <c>{mainEntityPath}/_Notification/{id}</c>. Storage routes through the
-/// <c>notifications</c> table via <see cref="SatelliteTableMapping"/>.
+/// Represents a notification ADDRESSED to exactly one addressee — a person (their user partition)
+/// or the platform operators collectively (<c>Admin</c>).
+///
+/// <para>🚨 <b>The addressee owns the delivery location, not the entity the notification is
+/// about.</b> A notification node lives at <c>{addressee}/_Notification/{id}</c> with
+/// <c>MainNode = {addressee}</c>; the entity it concerns is a REFERENCE in
+/// <see cref="TargetNodePath"/>. Storage routes through the addressee's <c>notifications</c> table
+/// via <see cref="SatelliteTableMapping"/>, so the bell reads ONE schema per addressee instead of
+/// UNIONing every partition on the server. Two consequences fall out and both are the point:
+/// visibility is the ordinary path-based permission fold on the addressee's partition (no
+/// satellite rule needed), and mark-as-read writes into the reader's own partition.</para>
+///
+/// <para>Written before 2026-09-03 these lived under the ENTITY —
+/// <c>{mainEntityPath}/_Notification/{id}</c> — which is why the bell could not name a partition
+/// and why a platform-admin notification in <c>Admin</c> was never returned at all
+/// (<c>Admin</c> is excluded from <c>public.searchable_schemas</c>). See
+/// Doc/Architecture/AddressedNotifications.</para>
 /// </summary>
 public record Notification
 {
@@ -85,4 +97,17 @@ public record Notification
     /// </summary>
     [Browsable(false)]
     public string? CreatedBy { get; init; }
+
+    /// <summary>
+    /// The ADDRESSEE — the partition this notification was delivered into: a person's user
+    /// partition, or <c>Admin</c> for one addressed to the platform operators collectively.
+    ///
+    /// <para>The path already carries it (<c>{Recipient}/_Notification/{Id}</c>); recording it on
+    /// the content is what makes the invariant CHECKABLE — a census test and a create-time
+    /// validator can ask the node instead of parsing its path, and a repair pass can tell an
+    /// already-addressed row from a legacy one. <c>null</c> on every row written before the
+    /// addressed model (Doc/Architecture/AddressedNotifications).</para>
+    /// </summary>
+    [Browsable(false)]
+    public string? Recipient { get; init; }
 }

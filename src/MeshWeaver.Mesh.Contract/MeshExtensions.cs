@@ -5048,17 +5048,24 @@ public static class MeshExtensions
         var sourcePath = moveRequest.SourcePath;
         var targetPath = moveRequest.TargetPath;
 
+        // 🚨 PreserveAuthorship — the copy leg of a MOVE re-creates the SAME node at a new path, so
+        // its creation and modification stamps travel with it verbatim (issue #3263). This is why
+        // the request is posted here rather than through IMeshService.CopyNode: that surface says
+        // nothing about authorship, and a move is the one caller for which it is not free to invent
+        // it. Same seam MeshService uses — the issuing hub posts to the node-operation target and
+        // stamps the caller's AccessContext, so the per-node creates inside the copy authorise as
+        // the mover, exactly as before.
+        //
         // 🚨 RequireComplete — the copy leg must carry EVERY node storage holds under the source,
-        // and refuse before creating anything when it cannot (issue #3272). This is why the request
-        // is posted here rather than through IMeshService.CopyNode: that surface has no way to say
-        // it, and a MOVE is the one caller for which "carried less than everything" means the delete
-        // leg below destroys the remainder. Same seam MeshService uses — the issuing hub posts to
-        // the node-operation target and stamps the caller's AccessContext, so the per-node creates
-        // inside the copy authorise as the mover.
+        // and refuse before creating anything when it cannot (issue #3272). The same argument as
+        // above applies to posting the request directly: IMeshService.CopyNode cannot say it, and a
+        // MOVE is the one caller for which "carried less than everything" means the delete leg
+        // below destroys the remainder.
         var copyRequest = new CopyNodeRequest(sourcePath, targetPath)
         {
             IncludeDescendants = true,
             IncludeSatellites = true,
+            PreserveAuthorship = true,
             RequireComplete = true,
         };
         var callerContext = request.AccessContext
@@ -5194,6 +5201,77 @@ public static class MeshExtensions
             return request.Processed();
         }
 
+        // 🚨 A QUERY RESULT IS A PROJECTION, NOT THE NODE. The subtree query below decides WHICH
+        // paths this caller may copy — that part is authoritative, because it is the read the
+        // row-level security filter runs through. What comes back is NOT the stored node: a
+        // provider is free to omit columns, and the production one does. PostgreSqlSqlGenerator's
+        // SELECT list carries id/namespace/name/node_type/description/category/icon/display_order/
+        // last_modified/version/state/content/desired_id/main_node/sync_behavior/
+        // exclude_from_context and NOTHING ELSE — `created_by`, `created_date` and
+        // `last_modified_by` exist as real columns (PostgreSqlStorageAdapter.AuthorCols reads them,
+        // the INSERT writes them) but no query projects them. So on PG every node this handler saw
+        // arrived with CreatedBy null and CreatedDate default, the create path filled the blanks
+        // with "now, by the caller", and a MOVE — copy + delete of the source — destroyed the real
+        // authorship of the whole subtree with nothing left to recover it from (issue #3263).
+        //
+        // Re-creating a node is a lifecycle operation, so it reads the node from STORAGE, exactly
+        // as the move's delete leg enumerates from storage rather than the catalog (#839). The
+        // query stays in charge of WHICH nodes; storage is in charge of WHAT they are.
+        //
+        // 🚨 DefaultIfEmpty, not just Take(1): an adapter whose Read COMPLETES EMPTY for a path it
+        // cannot serve would otherwise end this node's sequence without an emission — the copy
+        // would produce no root, post no response, and the move that awaits it would sit out the
+        // hub's request timeout.
+        //
+        // 🚨 And the empty case is NOT the same question for the two operations. For a plain copy
+        // the stamps are cleared anyway, so falling back to the projection loses nothing and keeps
+        // a copy possible on a store that cannot answer a point read. For a PRESERVING copy the
+        // projection is precisely the thing that destroyed the authorship, so falling back to it
+        // would re-open this bug behind the fix — quietly, on exactly the store that cannot answer.
+        // It REFUSES instead, and because the delete leg only runs after the copy succeeds, a
+        // refused read leaves the source and its stamps untouched rather than moving them away.
+        IObservable<MeshNode> ProjectionFallback(MeshNode projected) =>
+            copyRequest.PreserveAuthorship
+                ? Observable.Throw<MeshNode>(new InvalidOperationException(
+                    $"Authoritative read of '{projected.Path}' returned nothing — refusing to relocate it "
+                    + "from a query projection, which does not carry createdBy/createdDate/lastModifiedBy."))
+                : Observable.Return(projected);
+
+        IObservable<MeshNode> Authoritative(MeshNode projected) =>
+            persistence is null
+                ? ProjectionFallback(projected)
+                : persistence.Read(projected.Path, hub.JsonSerializerOptions)
+                    .Take(1)
+                    .DefaultIfEmpty()
+                    .SelectMany(stored => stored is not null
+                        ? Observable.Return(stored)
+                        : ProjectionFallback(projected));
+
+        // 🚨 PRESERVED AUTHORSHIP IS NOT FREE FOR THE ASKING. CopyNodeRequest is a wire message, so
+        // the flag is caller-settable, and a node whose CreatedBy names someone else is not inert:
+        // AccessContextScope.FromNode impersonates exactly that identity, so an unguarded flag would
+        // let anyone who can read a node mint one, in a place they control, that owner-scoped work
+        // then runs AS its author.
+        //
+        // The flag exists for one operation, so it is gated on that operation's own entitlement:
+        // Delete on the source's namespace, which is what MoveNodePermissionAttribute already
+        // requires of a mover. A caller who holds it could have MOVED the node and preserved the
+        // stamps that way, so the flag grants nothing the platform did not already grant them; a
+        // caller who does not is refused. UNDETERMINED is a refusal too, reported as unavailability
+        // rather than as a denial (#974/#2742) — a fold that reached no answer must never read as
+        // one, in either direction.
+        IObservable<(string Message, bool Undetermined)?> AuthorshipPreservationRefusal() =>
+            !copyRequest.PreserveAuthorship
+                ? Observable.Return<(string, bool)?>(null)
+                : hub.CheckPermissionOutcome(NamespaceOf(sourcePath), Permission.Delete)
+                    .Select(outcome => outcome.IsGranted
+                        ? ((string, bool)?)null
+                        : outcome.IsUndetermined
+                            ? ($"Cannot determine whether '{sourcePath}' may be relocated with its authorship: "
+                                + $"{outcome.UndeterminedReason}", true)
+                            : ($"Preserving authorship on a copy of '{sourcePath}' requires Delete on its "
+                                + "namespace — the same entitlement a move of it requires.", false));
+
         // 🚨 EVERY path storage holds under the source — the AUTHORITATIVE inventory, and the SAME
         // enumeration the move's delete leg is planned from (IStorageAdapter.ListDescendantPaths,
         // "a native prefix enumeration across every table of the partition"). Two things are read
@@ -5265,15 +5343,30 @@ public static class MeshExtensions
                 .Select(list => (IReadOnlyList<MeshNode>)list);
         }
 
-        logger.LogDebug("[CopyNode] start source={Source} target={Target} (descendants={Desc} satellites={Sat} requireComplete={Complete})",
+        logger.LogDebug("[CopyNode] start source={Source} target={Target} (descendants={Desc} satellites={Sat} preserveAuthorship={Preserve} requireComplete={Complete})",
             sourcePath, targetPath, copyRequest.IncludeDescendants, copyRequest.IncludeSatellites,
-            copyRequest.RequireComplete);
+            copyRequest.PreserveAuthorship, copyRequest.RequireComplete);
 
         // Subtree query covers source + descendants (satellites come from the sweep above).
         // Query's first emission is the initial result set; we Take(1) and project each
         // node into a CreateNode call at the new target path.
-        StoredSubtreePaths().SelectMany(storedPaths =>
-            meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        AuthorshipPreservationRefusal()
+            .SelectMany(refusal =>
+            {
+                if (refusal is { } denied)
+                {
+                    logger.LogWarning("[CopyNode] REFUSED preserveAuthorship {Source} -> {Target}: {Reason}",
+                        sourcePath, targetPath, denied.Message);
+                    hub.Post(CopyNodeResponse.Fail(denied.Message,
+                            denied.Undetermined
+                                ? NodeCopyRejectionReason.Unknown
+                                : NodeCopyRejectionReason.Unauthorized),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
+                }
+
+                return StoredSubtreePaths().SelectMany(storedPaths =>
+                    meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{sourcePath} scope:subtree").Complete())
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))
@@ -5364,19 +5457,30 @@ public static class MeshExtensions
                         // Every create runs under the caller's identity (CreateUnderCaller) so the
                         // routed per-descendant CreateNodeRequest carries a valid AccessContext
                         // across the scheduler hop.
-                        return CreateUnderCaller(RetargetNode(sourceNode, sourcePath, targetPath))
+                        //
+                        // 🚨 Authoritative(...) on EVERY node, satellites included (#3263): a query
+                        // row is a PROJECTION and does not carry created_by/created_date/
+                        // last_modified_by on Postgres, so a preserving copy that re-created from it
+                        // would rewrite the authorship it exists to keep. The satellites the sweep
+                        // found arrived through the same query surface, so they go through the same
+                        // storage read.
+                        return Authoritative(sourceNode)
+                            .Select(stored => RetargetNode(stored, sourcePath, targetPath, copyRequest.PreserveAuthorship))
+                            .SelectMany(CreateUnderCaller)
                             .SelectMany(rootCreated =>
                             {
                                 if (toCopy.Count == 0)
                                     return Observable.Return<(MeshNode Root, int Desc, int Sat)>((rootCreated, descCount, satCount));
                                 return toCopy.ToObservable()
-                                    .Select(n => RetargetNode(n, sourcePath, targetPath))
+                                    .SelectMany(Authoritative)
+                                    .Select(n => RetargetNode(n, sourcePath, targetPath, copyRequest.PreserveAuthorship))
                                     .SelectMany(retargeted => CreateUnderCaller(retargeted))
                                     .ToList()
                                     .Select(_ => ((MeshNode Root, int Desc, int Sat))(rootCreated, descCount, satCount));
                             });
                     });
-            }))
+            }));
+            })
             .Subscribe(
                 t =>
                 {
@@ -5400,11 +5504,44 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// The namespace a path lives in — everything before its last segment, or the path itself when
+    /// it has none. Deliberately the SAME computation
+    /// <see cref="MoveNodePermissionAttribute"/> uses to decide which namespace a move must hold
+    /// Delete on, because the copy handler's preserve-authorship gate asks that same question and
+    /// the two answers must not be able to drift apart.
+    /// </summary>
+    private static string NamespaceOf(string path)
+    {
+        var lastSlash = path.LastIndexOf('/');
+        return lastSlash > 0 ? path[..lastSlash] : path;
+    }
+
+    /// <summary>
     /// Builds a new MeshNode by relocating <paramref name="node"/> from <paramref name="oldRoot"/>
     /// to <paramref name="newRoot"/>. Path is derived from Namespace + Id; MainNode is rewritten
     /// when it pointed inside the old subtree.
+    ///
+    /// <para>🚨 <paramref name="preserveAuthorship"/> decides the four stamps, and it is the ONLY
+    /// thing that decides them — the create at the target keeps whatever this method leaves set
+    /// (<c>CreatedDate == default ? now : …</c>) and fills in whatever it clears.</para>
+    /// <list type="bullet">
+    /// <item><b>A MOVE preserves them.</b> The node at the target IS the node that was at the
+    /// source. <c>CreatedDate</c> and <c>CreatedBy</c> are documented on <see cref="MeshNode"/> as
+    /// "set once at creation time; never updated thereafter" / "never changed", and
+    /// <c>LastModified</c>/<c>LastModifiedBy</c> answer "who last wrote this content" — a
+    /// relocation writes no content. This method used to stamp <c>LastModified = UtcNow</c>
+    /// unconditionally, which is half of issue #3263; the other half is the projection the copy
+    /// used to read its nodes from (see <c>Authoritative</c> in
+    /// <see cref="HandleCopyNodeRequest"/>). A move that should be recorded belongs in the
+    /// activity log, not on top of who wrote the thing.</item>
+    /// <item><b>A COPY clears them</b> so the create path stamps the copier and the moment of the
+    /// copy. Clearing is deliberate: inheriting the original's <c>CreatedBy</c> would hand the
+    /// copy an owner who never touched it, and <c>AccessContextScope</c> impersonates exactly that
+    /// identity. It also makes a copy's stamps identical on every backend instead of depending on
+    /// which fields the store's query happens to project.</item>
+    /// </list>
     /// </summary>
-    private static MeshNode RetargetNode(MeshNode node, string oldRoot, string newRoot)
+    private static MeshNode RetargetNode(MeshNode node, string oldRoot, string newRoot, bool preserveAuthorship)
     {
         var newPath = string.Equals(node.Path, oldRoot, StringComparison.Ordinal)
             ? newRoot
@@ -5419,13 +5556,21 @@ public static class MeshExtensions
             : node.MainNode.StartsWith(oldRoot + "/", StringComparison.Ordinal)
                 ? newRoot + node.MainNode[oldRoot.Length..]
                 : node.MainNode;
-        return node with
+        var relocated = node with
         {
             Id = id,
             Namespace = ns,
             MainNode = newMainNode,
-            LastModified = DateTimeOffset.UtcNow
         };
+        return preserveAuthorship
+            ? relocated
+            : relocated with
+            {
+                CreatedDate = default,
+                CreatedBy = null,
+                LastModified = default,
+                LastModifiedBy = null,
+            };
     }
 
     /// <summary>
