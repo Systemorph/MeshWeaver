@@ -2286,6 +2286,14 @@ jobs:
       # from here would wake the same satellites twice for the same identity.
       upstream-sources: ''
       dispatch-dependents: false
+      # 🚨 THE ONE EVENT CORE EMITS. The preflight above already asserts vars.PLATFORM_WEBHOOK_URL
+      # and secrets.PLATFORM_WEBHOOK_SECRET are set — and then this call did not pass either, so
+      # every publication sealed and was NEVER registered: "the publication is sealed but memex was
+      # NOT told — provision on the calling repository" on a repository that HAS provisioned it
+      # (run 33883938454, 2026-09-04). Asserting an input EXISTS is not asserting it ARRIVES.
+      # Without this, memex never fans the release out and every satellite falls back to its
+      # schedule poll — silent, slow, and invisible from here.
+      webhook-url: ${{ vars.PLATFORM_WEBHOOK_URL }}
     secrets:
       # No acr-* secrets: the platform holds none, and the reusable bake pulls the image through
       # the same OIDC identity that publishes to storage (its 'oidc' registry mode).
@@ -2295,6 +2303,11 @@ jobs:
       # The content checkout of the private Plugins repo — see plugins-modules.
       content-app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
       content-app-private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+      # Signs X-Hub-Signature-256 on the publication record. Must be byte-identical to the control
+      # instance's Hosting:PlatformWebhookSecret — a mismatch is INVISIBLE from here (the POST still
+      # answers 2xx and the watcher drops every delivery as unverifiable), which is why the preflight
+      # asserts it and why it must actually reach this lane.
+      webhook-secret: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
 
   verify-images:
     name: "Verify every image shipped"
