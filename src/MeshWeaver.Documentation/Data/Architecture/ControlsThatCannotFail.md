@@ -1,7 +1,7 @@
 ---
 Name: Controls That Cannot Fail
 Category: Architecture
-Description: A control whose green is guaranteed by construction is not a control. Six measured instances from one day — a test, a detector, an identity anchor, a preflight, a watcher and a CD verdict — and the one question that catches all six.
+Description: A control whose green is guaranteed by construction is not a control. Eight measured instances — a test, a detector, an identity anchor, a preflight, a watcher, a CD verdict, a git idiom that answers the wrong question, and a generator whose failure mode is a success line — and the one question that catches all eight.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/><path d="M12 8v8" opacity="0.25"/></svg>
 ---
 
@@ -17,7 +17,7 @@ silently disappears and the wall stays green.
 > 1. *"If the subject of this check were broken right now, what would this print?"*
 > 2. *"And have I run it against a subject I broke on purpose?"*
 
-**Every one of the six instances below passes the first question by reasoning, and fails the second.**
+**Every one of the eight instances below passes the first question by reasoning, and fails the second.**
 That is not a coincidence, and it is the reason the first question alone is not enough: reasoning about
 a control is done by the person who built it, in the model they built it from, and a control fails
 precisely where that model is wrong. Instance 1 is the cleanest proof — its probe was *adversarially
@@ -41,11 +41,15 @@ instances. The family is larger, and it is worth recognising by shape.
 | **Green-and-wrong** | an anchor that emits a non-blank but meaningless value | red stops the line; a wrong value travels |
 | **Blindness rendered as health** | a watcher whose read failure and whose "no matches" look identical | "I cannot see" is reported as "nothing is wrong" |
 | **One word covering three states** | `completed/success` over checked-and-passed, never-ran, and ran-and-did-nothing | the verdict is not the outcome |
+| **A tool that collapses several failures into one exit code** | `git cat-file -e "$sha:$path" \|\| echo ABSENT` | absent-path, bad-sha, missing-object and bad-quoting all read the same |
+| **A writer whose failure mode is a SUCCESS line** | a generator that skips its work and prints a summary anyway | nothing distinguishes "wrote it" from "declined to" |
 
-## Six measured instances
+## Eight measured instances
 
-All six were found in a single day, across tests, CI, publication and ops. Each is stated with what
-was *measured*, not with what was suspected.
+The first six were found in a single day, across tests, CI, publication and ops. The last two were
+found **while writing this page** — one by its author, one by the session that supplied instances
+2–6, independently, within an hour of each other. Each is stated with what was *measured*, not with
+what was suspected.
 
 ### 1. A control served by the transport the test then destroyed
 
@@ -80,6 +84,15 @@ the refusal it exists to complain about. Fixed in #3309 (tests and docs only; th
 
 **Rule:** a detector must be run against a subject you broke *on purpose*, or you have only measured
 that it runs.
+
+🚨 **The same rule decides when a ZERO may be banked.** "No occurrences in 73 runs" and "the detector
+is dead" are the *same reading* until you have seen the detector fire — this instance wearing an
+absence for a hat. So a null is publishable only with its calibration attached: for #890 the counts
+were matched against a known occurrence's own published figures (56 `BELOW-ROSLYN` / 20
+`PROCESS CANNOT EMIT`) and the exposure suite was confirmed to have run in the window, *before* the
+zero was believed. Even then the arithmetic has to clear: at ~1 % per run, P(0 in 73) ≈ 48 %, so that
+null is a coin toss and #890 stays open on it. **Refusing to bank a null is only a virtue if the
+detector was known to work; otherwise it is the same mistake as banking one.**
 
 ### 3. A fix for a red that replaced it with a silent one, in the same edit
 
@@ -168,6 +181,113 @@ nothing* — indistinguishable without opening that list.
 [Reading CI Signals](/Doc/Architecture/ReadingCiSignals) and
 [How to tell if CD actually published](/Doc/Architecture/ContinuousDeliveryContract).
 
+### 7. The idiom that checks the check — found while writing this page
+
+The six above were other people's, spread over a day. This one is the page's own author's, made
+**inside the verification of a claim about verification**, hours after drafting the entries above. It
+is included because a page containing only other people's mistakes is easy to read and easy to
+dismiss.
+
+A dependent repository pins the platform at a commit, so "can this dependent use the new API?" is
+answered by asking whether the file exists **at the pin**. The check used was:
+
+```bash
+git cat-file -e "$sha:$path" && echo PRESENT || echo ABSENT
+```
+
+It reported `ABSENT`, correctly, and that verdict was published. Challenged later, the same idiom was
+re-run and reported **`PRESENT`** — a shell-quoting artifact, not a fact — which for one turn
+persuaded its author that their original, correct measurement had been wrong. Three worktrees and
+`git ls-tree` then agreed the file was genuinely absent.
+
+`git cat-file -e` exits non-zero for an absent path, a bad sha, an object not in the local store, and
+a malformed argument, **all identically**. That is exactly shape 6 — one word covering several states
+— one layer down, in the toolchain rather than in CI. The remedy is a command whose two answers cannot
+be confused:
+
+```bash
+git ls-tree --name-only "$sha" -- "$path"   # prints the path, or prints nothing
+```
+
+**Two lessons, and the second is the general one.**
+
+- A verdict of the form *"blocked at the pin"* is true only of **the sha it was measured against**.
+  The original measurement here was correct and then **expired silently** when the pin moved a few
+  hours later, with nothing anywhere announcing it. Name the sha in the verdict, and re-measure before
+  repeating it — including when repeating it to yourself.
+- When two measurements of the same thing disagree, the first question is **"what changed between
+  them?"**, not "which mechanism explains the discrepancy?" A mechanism invented to explain a
+  disagreement is a story, and a plausible story is harder to dislodge than a wrong number. Here the
+  first reviewer's proposed mechanism — that the wrong file had been read — was itself wrong; the
+  values had merely coincided until a pin bump separated them.
+
+### 8. A writer whose failure mode is a success line
+
+Found the same evening as instance 7, and independently by two people within the hour — which is why
+it is here rather than in a footnote about tooling.
+
+`scripts/gen-manifests.py` derives each module's version from a content hash compared against the
+highest published git **tag**. In a checkout with no tags fetched it computes a lower version for
+everything, and a deliberate **forward-only guard** then refuses to write a version downward. That
+guard is correct. Its consequence is not: **a tagless run does nothing and says so in the voice of
+success**, leaving every lock stale while the same tree still fails `gen-manifests.py --check-versions`.
+Write mode and check mode appear to contradict each other. They do not — the writer simply had
+nothing to compare against.
+
+Two encounters, same evening:
+
+- One run reported 25 stale locks at the gate. Tags fetched first (1063 of them), 25 rewritten, and
+  then — **not trusting the writer** — `--check-versions` run as an independent reader: *every
+  module's version matches its content*.
+- Another session, draining six branches, got the no-op line back on five of them and nearly read it
+  as "already current". What saved it was declining to read the writer's report at all: it checked
+  `Validate node repos` on each head instead and got `completed/success` five times. On the sixth the
+  script genuinely rewrote 16 locks, where the gate had been red on 17 stale ones with the fix named
+  in its own output.
+
+**Rule:** never accept a writer's report as evidence that the write happened. Verify with an
+independent reader — the tool's own check mode, or the gate that consumes the artifact. A tool that
+reports success while doing nothing is the purest form of this page's subject: there is no error to
+notice, no red to chase, and the only signal is one you have to go and ask for.
+
+## The family's edge: a control that fires correctly and hands you an impossible next step
+
+The eight above are all one defect — a control whose green is guaranteed. This last one is
+deliberately kept separate, because it is that defect **one step downstream**, in the ACTION rather
+than in the verdict, and collapsing the two would blunt both.
+
+`EmitPipeline`'s canary detects its condition correctly. On a `BELOW-ROSLYN` verdict it then told the
+reader to **capture a core dump** — and `DOTNET_DbgEnableMiniDump` fires on a **signal**, while this
+particular death is the wall-clock cap killing the process as `exit=124`/SIGTERM. No signal, no dump,
+ever.
+
+**Nine occurrences carried that instruction and produced zero dumps** (#890, fixed in #3317).
+
+Nothing looked wrong at any point, and that is the whole lesson. A missing dump reads as *"nobody got
+round to it"*, never as *"the instruction is impossible"*. The verdict fired, named the right
+condition, and routed every investigation into a wall — which is arguably **worse** than staying
+silent, because it consumed nine investigations before anyone questioned the advice rather than the
+defect.
+
+The repair is the shape to copy: name the followable remedy instead — a split-arm re-run — and put
+*"one clean arm proves nothing"* **inside** the instruction, so the remedy carries its own control arm
+and the next reader cannot take a single green arm as an answer.
+
+**The sibling finding, same PR:** the verdict also *named a residual it never measured*. Two legs both
+asked "can this process emit?"; neither asked whether it could still perform the READ the emit dies
+on. A third leg now dissects that directly, so the verdict discriminates between two hypotheses it
+previously conflated. **A verdict may only name what one of its legs actually measured** — otherwise
+it is a guess wearing a measurement's clothes.
+
+> 🚨 **Ask it of remedies too, not just checks:** *if I followed this instruction right now, could it
+> possibly produce what it promises?* Nine people did not, and the instruction was in the tooling the
+> whole time.
+
+If this page needs one line to justify existing, it is that the cure for a check that cannot fail is
+not a better check but a **habit** — *ask what this would print if the subject were broken, then go
+break it* — and that the habit applies to instructions exactly as much as to assertions. A remedy that
+carries its own control arm is that thesis applied to itself.
+
 ## What to do about it
 
 1. **Break the subject on purpose, once — this is the whole discipline.** Revert only the fixing
@@ -183,7 +303,12 @@ nothing* — indistinguishable without opening that list.
    consumer — pass it and have the consumer confirm.
 5. **Prefer a red that stops the line to a value that travels.** A refusal is recoverable; a
    plausible-looking wrong value is not.
-6. **Do not promote an experiment into a guard by default.** An experiment that pins a cause and a test
+6. 🚨 **Never trust a `--no-build` result after a build you did not just watch succeed — in EITHER
+   direction.** The familiar warning is that `--no-build` on an unbuilt project exits 0 having run
+   nothing, a false PASS. It also produces false FAILS: a stale mutation binary left in the output
+   directory failed a full suite that was actually fine. The rule is about the staleness, not about
+   the polarity of the answer.
+7. **Do not promote an experiment into a guard by default.** An experiment that pins a cause and a test
    that guards against regression are different artifacts. If the experiment's setup depends on an
    ordering you cannot *enforce*, committing it manufactures the next flake — record it in the change
    instead.
