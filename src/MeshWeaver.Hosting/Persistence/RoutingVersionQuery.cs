@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -27,6 +28,13 @@ public class RoutingVersionQuery : IVersionQuery
         _queries[partition] = query;
     }
 
+    /// <inheritdoc />
+    /// <remarks>True when ANY registered partition provider retains history. The routing layer
+    /// cannot answer per-path here (the surfaces that ask are reporting a deployment-level
+    /// capability, not a per-node one), and "some partition records history" is the honest
+    /// answer to "are these surfaces functional at all".</remarks>
+    public bool RetainsHistory => _queries.Values.Any(q => q.RetainsHistory);
+
     private IVersionQuery? GetQuery(string path)
     {
         var segment = PathPartition.GetFirstSegment(path);
@@ -54,9 +62,21 @@ public class RoutingVersionQuery : IVersionQuery
 /// <summary>
 /// No-op implementation of <see cref="IVersionQuery"/> for environments
 /// without version history support.
+///
+/// <para>🚨 This is what EVERY database-backed deployment resolves — `PersistenceExtensions`
+/// only ever hands out a real store for a <c>FileSystemStorageAdapter</c>, so PostgreSQL, Cosmos,
+/// Sqlite and Snowflake all land here and retain nothing (MeshWeaver#3264). It answers
+/// <see cref="RetainsHistory"/> = <c>false</c> so a caller can say WHICH of the two facts it is
+/// looking at, rather than reporting "no history for this node" about a deployment that records
+/// none for any node.</para>
 /// </summary>
 public class NoOpVersionQuery : IVersionQuery
 {
+    /// <inheritdoc />
+    /// <remarks>Nothing is ever written here, so an empty answer is a property of the
+    /// deployment, not of the node.</remarks>
+    public bool RetainsHistory => false;
+
     /// <inheritdoc />
     public IObservable<MeshNodeVersion> GetVersions(string path)
         => Observable.Empty<MeshNodeVersion>();
