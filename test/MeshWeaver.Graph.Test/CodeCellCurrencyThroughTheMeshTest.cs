@@ -110,7 +110,114 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
             "the visible output belongs to source the reader is no longer looking at");
     }
 
+    /// <summary>
+    /// #3301, the whole issue in one case: a run whose last-execution stamp NEVER LANDED is still
+    /// found, because the Activity node the dispatcher created before dispatching names the cell on
+    /// <c>ActivityLog.HubPath</c>.
+    ///
+    /// <para><b>The repro is deterministic, not simulated.</b> Two cells really run through
+    /// <c>ExecuteScriptRequest</c>, so two real Activity nodes exist in the same <c>_Activity</c>
+    /// namespace. Then one cell's stamp is WIPED — which is exactly the state #3249's failure paths
+    /// leave behind (the write is one node write; it lands whole or not at all). From that point the
+    /// cell is, to every reader, indistinguishable from one nobody ever ran.</para>
+    ///
+    /// <para><b>Three arms, because a lookup that always says "ran" would be worthless.</b> The
+    /// wiped cell must be recovered as <see cref="CodeOutputCurrency.Unverified"/>; a cell that
+    /// genuinely never ran must stay <see cref="CodeOutputCurrency.NeverRun"/>; and the second,
+    /// still-stamped cell proves the <c>content.hubPath</c> predicate is doing the work rather than
+    /// the namespace listing finding any activity at all.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ARunWhoseStampNeverLandedIsStillFoundByTheActivityItWrote()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var options = Mesh.JsonSerializerOptions;
+
+        // Two cells, both genuinely run: the second one's Activity shares the _Activity namespace,
+        // so a lookup that merely listed the namespace would pass on the wrong evidence.
+        var wiped = await CreateCell(new CodeConfiguration { Code = Source, IsExecutable = true });
+        var neighbour = await CreateCell(new CodeConfiguration { Code = Source, IsExecutable = true });
+        await Run(wiped);
+        await Run(neighbour);
+
+        // The stamp is one write to one node — it lands whole or not at all. Removing it reproduces
+        // the state every #3249 failure path leaves behind.
+        await Mesh.GetWorkspace().GetMeshNodeStream(wiped)
+            .Update(current => current with
+            {
+                Content = (current.ContentAs<CodeConfiguration>(options) ?? new CodeConfiguration())
+                    with
+                    {
+                        LastExecutedAt = null,
+                        LastExecutedBy = null,
+                        LastActivityPath = null,
+                        LastExecutedCodeHash = null,
+                    },
+            })
+            .FirstAsync()
+            .Timeout(Bound)
+            .Await();
+
+        var stampless = await ReadCell(wiped, c => c is
+        {
+            Code: Source, LastExecutedAt: null, LastActivityPath: null, LastExecutedCodeHash: null,
+        });
+
+        // The defect, asserted rather than assumed: from the cell alone, the run is gone.
+        stampless.OutputCurrency().Should().Be(CodeOutputCurrency.NeverRun,
+            "with no stamp the cell carries no evidence of its own run — this is the state a reader "
+            + "sees after a reload, and it is indistinguishable from a cell nobody ever ran (#3301)");
+
+        // The fix: the run is found by the edge the DISPATCHER wrote.
+        var recovered = await stampless
+            .ResolveOutputCurrency(wiped, viewerHome: null, meshService)
+            .Timeout(Bound)
+            .Await();
+        recovered.Should().Be(CodeOutputCurrency.Unverified,
+            "the Activity node created before the dispatch still names this cell on HubPath, so the "
+            + "run is not lost — only the cell's pointer to it is. A run with nothing recording WHAT "
+            + "it ran is Unverified, the same fail-closed verdict as a stamp that arrived without "
+            + "its fingerprint");
+
+        // Non-vacuity: a cell that genuinely never ran must still say so, or the lookup is a rubber
+        // stamp that would report every unrun cell in the mesh as having run.
+        var untouched = await CreateCell(new CodeConfiguration { Code = Source, IsExecutable = true });
+        var untouchedCell = await ReadCell(untouched, c => c is { Code: Source });
+        var untouchedVerdict = await untouchedCell
+            .ResolveOutputCurrency(untouched, viewerHome: null, meshService)
+            .Timeout(Bound)
+            .Await();
+        untouchedVerdict.Should().Be(CodeOutputCurrency.NeverRun,
+            "no Activity anywhere names this cell — and the neighbour's run, which lives in the very "
+            + "same _Activity namespace, must not be mistaken for it. A verdict that could not come "
+            + "out NeverRun here would prove nothing above");
+
+        // The stamped neighbour never reaches the lookup at all — the stamp answers first, which is
+        // what keeps a notebook of normal cells at zero queries.
+        var neighbourCell = await ReadCell(neighbour, c => c is { LastExecutedCodeHash: not null and not "" });
+        var neighbourVerdict = await neighbourCell
+            .ResolveOutputCurrency(neighbour, viewerHome: null, meshService)
+            .Timeout(Bound)
+            .Await();
+        neighbourVerdict.Should().Be(CodeOutputCurrency.Current,
+            "a cell whose stamp landed is judged by the stamp, unchanged and without a query");
+    }
+
     // ── helpers ──
+
+    private async Task Run(string path)
+    {
+        var dispatch = await RequestHub
+            .Observe<ExecuteScriptResponse>(new ExecuteScriptRequest(), o => o.WithTarget(new Address(path)))
+            .FirstAsync()
+            .Timeout(Bound)
+            .Await();
+        dispatch.Message.Success.Should().BeTrue(
+            $"the run of '{path}' must be accepted before anything about it can be asserted");
+        // The stamp is what makes the run observable from the cell; waiting on it also guarantees
+        // the Activity node exists before the lookup goes looking for it.
+        await ReadCell(path, c => c is { LastExecutedCodeHash: not null and not "" });
+    }
 
     private async Task<string> CreateCell(CodeConfiguration content)
     {

@@ -152,8 +152,11 @@ public static class CodeNodeType
                 return unresolved switch
                 {
                     null => partitionRoot,
-                    "{viewer}" when !string.IsNullOrEmpty(viewerHome) => viewerHome!,
-                    "{viewer}" => partitionRoot,
+                    // Spelled through the constant, not the literal: the #3301 lookup that finds a
+                    // cell's runs when the stamp did not land has to expand the sentinel THE SAME
+                    // WAY, and two literals in two assemblies are free to drift silently.
+                    CodeRunHistory.ViewerHomeSentinel when !string.IsNullOrEmpty(viewerHome) => viewerHome!,
+                    CodeRunHistory.ViewerHomeSentinel => partitionRoot,
                     var p => p
                 };
             });
