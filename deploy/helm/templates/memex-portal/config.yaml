@@ -159,6 +159,31 @@ data:
   Notifications__Retention__Enabled: "{{ .Values.config.memex_portal.Notifications__Retention__Enabled | default "true" }}"
   Notifications__Retention__MaxAge: "{{ .Values.config.memex_portal.Notifications__Retention__MaxAge | default "90.00:00:00" }}"
   Notifications__Retention__MaxDeletionsPerRun: "{{ .Values.config.memex_portal.Notifications__Retention__MaxDeletionsPerRun | default "200" }}"
+  {{- /* The model-credit FX rate feed (MeshWeaver.Plugins, AI/ModelCreditRateFeed). A daily
+         download that keeps Admin/ModelCredit/_Rate-{FROM}-{TO} current from a published reference
+         feed, so the credit meter can fold a USD-priced round against a CHF allowance.
+
+         🚨 THESE KEYS MUST EXIST HERE OR THEY ARE SILENTLY DROPPED. This ConfigMap names every key
+         explicitly and the Deployment's only env path is envFrom, so a values file that sets a key
+         this template does not render produces NOTHING — the Memex#53 shape. That failure is
+         especially bad for this feature: the operator sets Enabled=true, the key never reaches a
+         pod, the feed reads "absent" and stays disarmed, and the knob LOOKS set. Which is exactly
+         the class of silence the feed's own configuration reader was written to refuse.
+
+         DISARMED by default, and unlike notification retention that is deliberate: a wrong answer
+         there deletes a three-month-old pointer, a wrong answer here writes a NUMBER THE PLATFORM
+         BILLS AGAINST — at a margin (Stripe's currency-conversion fee) nobody has verified for this
+         account. So no Helm `default` arms it, and the empty string these render while unset is
+         what the reader treats as absent.
+
+         🚨 An EMPTY value means absent; a value an operator TYPED but that is not a value makes the
+         service REFUSE TO ARM and log which key and which value. "Margin: 0,015" is not 0.015. */}}
+  ModelCredit__RateFeed__Enabled: "{{ .Values.config.memex_portal.ModelCredit__RateFeed__Enabled | default "" }}"
+  ModelCredit__RateFeed__Margin: "{{ .Values.config.memex_portal.ModelCredit__RateFeed__Margin | default "" }}"
+  ModelCredit__RateFeed__Pairs: "{{ .Values.config.memex_portal.ModelCredit__RateFeed__Pairs | default "" }}"
+  ModelCredit__RateFeed__Url: "{{ .Values.config.memex_portal.ModelCredit__RateFeed__Url | default "" }}"
+  ModelCredit__RateFeed__IntervalHours: "{{ .Values.config.memex_portal.ModelCredit__RateFeed__IntervalHours | default "" }}"
+  ModelCredit__RateFeed__InitialDelaySeconds: "{{ .Values.config.memex_portal.ModelCredit__RateFeed__InitialDelaySeconds | default "" }}"
   {{- /* Commit-pinned source replica (GitModuleReplica). Point Root at a DEDICATED persistent mount —
          see .Values.persistence for the volume. Empty means "unset": the option then falls back to a
          temp subdir, which on a pod is ephemeral and re-clones the repo on every restart. This key
