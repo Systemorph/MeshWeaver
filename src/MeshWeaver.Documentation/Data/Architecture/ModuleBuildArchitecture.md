@@ -98,6 +98,12 @@ things say so rather than a comment:
 dropped *before* any suite, so a red suite still does not read as "bundle missing" to a gate that
 only COMPOSES the bundle (#2710, Plugins#937). Those are two different questions.
 
+The receipt carries one more thing, and it is the lane's only OUTCOME-level assertion: the
+**framework identity the bundle states**, read off the packed manifest on the build and reuse legs
+alike. A lane pins one platform, so `verify` refuses a lane whose bundles state more than one — and
+refuses an absent identity separately and by name, because "absent" must never read as "agrees".
+See [The Module Identity Anchor](/Doc/Architecture/ModuleIdentityAnchor).
+
 ## Every stage asserts its OWN postcondition — never the next one's
 
 A stage's exit code answers *"did my work throw?"*. It does not answer *"did I produce what the
