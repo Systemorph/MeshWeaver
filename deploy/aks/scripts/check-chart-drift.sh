@@ -36,6 +36,12 @@
 #                                        AVAILABILITY shape below
 #   PodDisruptionBudget / ScaledObject   existence and shape
 #
+# 🚨 THREE SIDES, not two — added 2026-09-05. D = the chart as CI renders it, L = the live objects,
+# M = the LAST-DEPLOYED release manifest (`helm get manifest`). Everything above is D vs L. The
+# deletion hazard is not in that comparison: it is D vs M. A key that is live and helm-owned but no
+# longer rendered is a chart retirement the next `helm upgrade` will land — see CLUSTER-ONLY below.
+# The manifest is a REQUIRED input: unread, every live-only key would read as the surviving half.
+#
 # 🚨 THE AVAILABILITY SHAPE was added 2026-08-14, because the check as first written would have
 # MISSED the incident it was created in response to. On that day production served every request
 # from ONE pod, and all three of the reasons were outside what this script looked at:
@@ -77,6 +83,11 @@
 # a DIFFERS value. Ranking the backlog by "what a deploy would destroy" ranked it by a hazard
 # that does not exist, and buried the one that does — see SHADOWS/COLLIDES below.
 #
+# There IS one deploy-destroys shape, and it is narrow: a key the LAST deploy rendered and this
+# chart does not is still in the release's own manifest, so helm owned it and the merge deletes it.
+# That is a chart RETIREMENT landing, not out-of-band drift surviving — and since 2026-09-05 this
+# script computes it instead of leaving it to be re-derived by hand. See CLUSTER-ONLY below.
+#
 # FIVE CLASSES OF FINDING, worst first, and they mean different things:
 #   COLLIDES       inline env + a ConfigMap key differing only in CASE → the pod carries BOTH
 #                  (Linux env is case-SENSITIVE); .NET's config provider is case-INSENSITIVE and
@@ -89,11 +100,19 @@
 #                  the values files and the ConfigMap is reading a value no pod uses. This is the
 #                  #2235 shape: the ConfigMap said Hosting/PlatformBuilds, the pod ran
 #                  Store/Payments, every signal was green and the endpoint 404'd for 11 days.
-#   CLUSTER-ONLY   live, not rendered   → survives a deploy UNLESS the release manifest still owns the
-#                  key (a chart RETIREMENT — then the merge deletes it; check `helm get manifest`),
-#                  and it exists in NO committed source, so
-#                  it is lost the moment the namespace is rebuilt or restored from the chart, and
-#                  it is invisible to review. Fleet rule: nothing may live only on the cluster.
+#   CLUSTER-ONLY   live, not rendered   → TWO halves, and the finding now SAYS which, because the
+#                  check reads the release manifest itself (`helm get manifest`, the `original` side
+#                  of the merge) rather than telling you to go and look:
+#                    • NEVER-OWNED (not in the manifest) — survives every deploy. It exists in NO
+#                      committed source, so it is lost the moment the namespace is rebuilt or
+#                      restored from the chart, and it is invisible to review. Fleet rule: nothing
+#                      may live only on the cluster.
+#                    • 🚨 PENDING DELETION (in the manifest, so helm owns it, and this chart no
+#                      longer renders it) — a chart RETIREMENT that has not landed. The next
+#                      `helm upgrade` REMOVES it. This is the ONE cluster-only shape a deploy does
+#                      destroy, and the finding reports whether the LIVE VALUE is empty (the removal
+#                      is a no-op) or not (it is a real removal) — the value decides that, not the
+#                      key name, and all 13 found by hand on 2026-09-04 were zero-length.
 #   CHART-ONLY     rendered, not live   → described but never applied; nobody is getting it
 #   DIFFERS        both, values differ  → chart and cluster disagree; a deploy does NOT resolve it,
 #                  so it persists until somebody decides which side is authoritative. ONE exception,
@@ -241,6 +260,17 @@ fetch_data_keys() { # $1 = resource, e.g. secret/foo or configmap/bar
                    --command "kubectl -n $NS get $1 -o go-template='$tmpl'" 2>"$WORK/kubectl.err" ;;
   esac
 }
+# The THIRD side: what the LAST deploy rendered — the `original` half of helm's three-way merge, and
+# the only thing that says which live-only settings helm still OWNS. helm is available on both
+# transports (it is a preflight-asserted binary here, and it is the same v3 binary `az aks command
+# invoke` runs inside the cluster).
+fetch_manifest() {
+  case "$VIA" in
+    kubectl)    helm get manifest "$RELEASE" -n "$NS" 2>"$WORK/helm-manifest.err" ;;
+    aks-invoke) az aks command invoke -g "$RG" -n "$AKS" -o tsv --query logs \
+                   --command "helm get manifest $RELEASE -n $NS" 2>"$WORK/helm-manifest.err" ;;
+  esac
+}
 
 for res in "configmap/memex-portal-config" "deployment/memex-portal-deployment" \
            "poddisruptionbudgets" "scaledobjects.keda.sh"; do
@@ -251,6 +281,26 @@ for res in "configmap/memex-portal-config" "deployment/memex-portal-deployment" 
     exit 1
   fi
 done
+
+# ---------------------------------------------------------------------------
+# OWNED — what the LAST deploy rendered. Same rule as every fetch above: an unreadable input is a
+# FAILURE, never an absence of findings.
+#
+# 🚨 And here the failure mode is worse than silence. Without the manifest, EVERY cluster-only key
+# looks never-owned — the half that survives a deploy — so the report would answer "nothing here is
+# about to be deleted" precisely when it could not tell. That is the skip-trapdoor shape AGENTS.md
+# forbids, expressed as a default value instead of an `if:`. The comparator refuses to run without
+# it for the same reason; this check exists so the error names the transport that failed.
+# ---------------------------------------------------------------------------
+MANIFEST="$WORK/release-manifest.yaml"
+if ! fetch_manifest > "$MANIFEST" || [ ! -s "$MANIFEST" ]; then
+  echo "::error::could not read the release manifest for '$RELEASE' in namespace '$NS' via --via $VIA"
+  echo "    (\`helm get manifest $RELEASE -n $NS\`). This is a FAILURE, not an absence of pending"
+  echo "    deletions: without it the checker cannot tell a live-only key helm still OWNS — which"
+  echo "    the next \`helm upgrade\` DELETES — from one nobody owns, which survives every deploy."
+  [ -s "$WORK/helm-manifest.err" ] && sed 's/^/    /' "$WORK/helm-manifest.err"
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # COMPARE
@@ -308,7 +358,8 @@ python3 "$SELF_DIR/chart-drift-compare.py" \
   "$EXPECT_PATCH" \
   "$WORK/live-poddisruptionbudgets.json" \
   "$WORK/live-scaledobjects-keda-sh.json" \
-  "$SOURCE_KEYS"
+  "$SOURCE_KEYS" \
+  "$MANIFEST"
 rc=$?
 
 if [ "$rc" -ne 0 ]; then
