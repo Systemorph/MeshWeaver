@@ -171,7 +171,13 @@ quiescingSubscription = drained
 > trips (the gap is always 50 ms, never 2 s). The deadline must be a **separate
 > total-duration `Observable.Timer`**, raced against the drain signal with `Amb`.
 
-If the budget elapses with callbacks still pending, the hub sets the sticky
+If the budget elapses with callbacks still pending, the hub first asks whether any of
+them is **owed by a sibling hub in this mesh that is itself shutting down** — resolved at
+the mesh root like `HierarchicalRouting` does — and if so **re-arms the budget** rather
+than cancelling (`[QUIESCE-WAIT]`): that sibling answers every delivery it accepted before
+it leaves the registry, so the wait ends by construction (a cycle breaker,
+`MaxQuiesceRearms`, covers two hubs holding each other's deferred requests; see
+[Teardown Layers](/Doc/Architecture/TeardownLayers)). Otherwise the hub sets the sticky
 `QuiescingTimedOut` flag, records `QuiescingTimeoutDetail` and force-cancels them.
 **Tests treat `AnyHubQuiescingTimedOut()` as a dispose failure** — a leaked `Observe`
 subscription that never got its reply is a real bug, not a teardown oddity. Either

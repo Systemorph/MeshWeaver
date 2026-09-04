@@ -937,14 +937,28 @@ public static class DataExtensions
     /// <c>MessageService.PostImplGeneric</c> stamps <c>POST_REFUSED_SHUTTING_DOWN</c> and returns
     /// exactly that when the owner AND its parent are past <c>DisposeHostedHubs</c>, and its own
     /// comment says "This site does NOT answer the sender itself".</para>
+    /// <para>🚨 <b>Except when the caller is ARMED on the late watch</b> (<paramref name="isArmed"/>):
+    /// the caller's <c>Observe</c> callback has then already expired and handed its wait to the
+    /// registry, so a post can only reach it the long way round — routed through the parent to the
+    /// cache hub, whose handler dispatches into the same registry. On a whole-mesh teardown that
+    /// route closes asynchronously: the owner's <c>Post</c> ACCEPTS the response (its own run level
+    /// is still open) and the PARENT's routing then drops it ("cannot route … its parent hub is
+    /// shutting down (RunLevel=DisposeHostedHubs)"), which this seam cannot see — measured on a
+    /// 2-core runner as the merge's own ack never reaching the armed watch
+    /// (NackReachesTheWaiterDuringTeardownTest, run 33861078925). An armed caller is served through
+    /// the sink FIRST; the transport for writes whose callback is still pending is unchanged.</para>
     /// </summary>
     /// <returns><c>true</c> when the post was accepted or the sink found an armed caller.</returns>
     internal static bool RoutePatchVerdict(
         PatchDataResponse response,
         string requestId,
         Func<PatchDataResponse, IMessageDelivery?> post,
-        Func<string, PatchDataResponse, bool>? dispatchLate)
+        Func<string, PatchDataResponse, bool>? dispatchLate,
+        Func<string, bool>? isArmed = null)
     {
+        if (dispatchLate is not null && isArmed is not null && isArmed(requestId)
+            && dispatchLate(requestId, response))
+            return true;
         var delivery = post(response);
         if (delivery is not null && delivery.State != MessageDeliveryState.Failed)
             return true;
@@ -1019,7 +1033,8 @@ public static class DataExtensions
                 response,
                 request.Id,
                 resp => hub.Post(resp, o => o.ResponseFor(request)),
-                lateVerdicts is null ? null : lateVerdicts.Dispatch))
+                lateVerdicts is null ? null : lateVerdicts.Dispatch,
+                lateVerdicts is null ? null : lateVerdicts.IsAdmissible))
             return;
 
         logger?.LogWarning(

@@ -1806,6 +1806,7 @@ public sealed class MessageHub : IMessageHub
     internal static readonly EventId DisposalWedgedTurnIgnoresCancellation = new(7312, nameof(DisposalWedgedTurnIgnoresCancellation));
     internal static readonly EventId DisposalStalledBelowThisHub = new(7313, nameof(DisposalStalledBelowThisHub));
     internal static readonly EventId DisposalShutDownPhaseBlocked = new(7314, nameof(DisposalShutDownPhaseBlocked));
+    internal static readonly EventId DisposalQuiesceWaitCutOff = new(7315, nameof(DisposalQuiesceWaitCutOff));
     private readonly Stopwatch disposalStopwatch = new();
 
     private bool DisposalSignalled => Volatile.Read(ref disposalSignalled) != 0;
@@ -2084,6 +2085,20 @@ public sealed class MessageHub : IMessageHub
                 Address, DisposalWatchdogTimeout, lastProgress, RunLevel, current,
                 snapshot.Value.CurrentMessageElapsedMs, snapshot.Value.Buffer, DescribeWedge());
             return;
+        }
+
+        if (RunLevel == MessageHubRunLevel.Quiescing)
+        {
+            var owed = SnapshotPendingCallbacks()
+                .Where(c => AReplyIsOwedByAShuttingDownLocalHub(c.Target)).ToArray();
+            if (owed.Length > 0)
+            {
+                TryLog(LogLevel.Information,
+                    "[DISPOSE-BUSY] {Address}: quiescing — {Count} reply(ies) still owed by shutting-down hub(s) "
+                    + "in this mesh ({Pending}); their own teardown answers them. Waiting.",
+                    Address, owed.Length, FormatPendingCallbacks(owed));
+                return;
+            }
         }
 
         logger.LogError(DisposalStalledBelowThisHub,
@@ -2443,21 +2458,7 @@ public sealed class MessageHub : IMessageHub
                 // separate total-duration timer.) The result funnels into OnQuiesceComplete,
                 // which posts DisposeHostedHubs. No Task.Delay, no await — the handler returns
                 // immediately and the action block stays free.
-                var quiesceSw = Stopwatch.StartNew();
-                var drained = Observable
-                    .Interval(QuiescePollInterval)
-                    .StartWith(-1L)
-                    .Select(_ => { lock (responseSubjects) return responseSubjects.Count == 0; })
-                    .Where(empty => empty)
-                    .Take(1)
-                    .Select(_ => true);
-                var quiesceDeadline = Observable.Timer(QuiesceTimeout).Select(_ => false);
-                quiescingSubscription = drained
-                    .Amb(quiesceDeadline)
-                    .Take(1)
-                    .Subscribe(
-                        drainedOk => OnQuiesceComplete(drainedOk, quiesceSw, initialPendingSnapshot),
-                        _ => OnQuiesceComplete(drainedOk: false, quiesceSw, initialPendingSnapshot));
+                StartQuiesceWait(Stopwatch.StartNew(), initialPendingSnapshot);
                 break;
             case MessageHubRunLevel.DisposeHostedHubs:
                 var disposeHostedHubsStopwatch = Stopwatch.StartNew();
@@ -2611,6 +2612,92 @@ public sealed class MessageHub : IMessageHub
     internal bool OwnsServiceProvider => Configuration.OwnsServiceProvider;
 
     /// <summary>
+    /// One Quiescing wait: the reactive drain poll raced against one <see cref="QuiesceTimeout"/>
+    /// deadline, funnelled into <see cref="OnQuiesceComplete"/>. Called once from the Quiescing
+    /// phase and again by <see cref="OnQuiesceComplete"/> when the budget expired on replies that a
+    /// shutting-down sibling still owes (see <see cref="AReplyIsOwedByAShuttingDownLocalHub"/>).
+    /// </summary>
+    private void StartQuiesceWait(
+        Stopwatch quiesceSw,
+        (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[]
+            initialPendingSnapshot)
+    {
+        var drained = Observable
+            .Interval(QuiescePollInterval)
+            .StartWith(-1L)
+            .Select(_ => { lock (responseSubjects) return responseSubjects.Count == 0; })
+            .Where(empty => empty)
+            .Take(1)
+            .Select(_ => true);
+        var quiesceDeadline = Observable.Timer(QuiesceTimeout).Select(_ => false);
+        quiescingSubscription = drained
+            .Amb(quiesceDeadline)
+            .Take(1)
+            .Subscribe(
+                drainedOk => OnQuiesceComplete(drainedOk, quiesceSw, initialPendingSnapshot),
+                _ => OnQuiesceComplete(drainedOk: false, quiesceSw, initialPendingSnapshot));
+    }
+
+    /// <summary>
+    /// How many times the Quiescing budget may be re-armed on replies a shutting-down sibling still
+    /// owes before the wait is cut and the callbacks cancelled. The wait normally ends by
+    /// construction — the sibling answers or leaves the registry — so this is the cycle breaker
+    /// for two hubs each holding a deferred request of the other's, never a duration to tune.
+    /// </summary>
+    private const int MaxQuiesceRearms = 20;
+    private int quiesceRearms;
+
+    /// <summary>
+    /// True when a pending reply for <paramref name="target"/> is guaranteed to arrive from a hub in
+    /// THIS mesh that is itself shutting down. Such a hub answers every delivery it accepted before
+    /// it signals Dead and leaves its owner's registry: served ahead of its own ShutdownRequest, or
+    /// NACKed <c>ShuttingDown</c> by its <c>messageService.Dispose()</c> (DISPOSE-DISCARD). A
+    /// Quiescing hub therefore WAITS for that reply instead of cancelling its callback on a
+    /// duration — the wait ends by construction when the sibling has answered or gone.
+    ///
+    /// <para>Measured on the #3261 detector: every callback the 0.5 s test budget cancelled was a
+    /// request to a sibling disposing concurrently — <c>CreateOrUpdateNodeRequest@portal/nodeops-*</c>,
+    /// <c>SubscribeRequest@cache/*</c> — whose answer was on its way; production shows the same
+    /// <c>[QUIESCE-TIMEOUT] … CreateNodeRequest@portal/nodeops-*</c> at 2 s. Cancelling those was
+    /// discarding accepted work and reporting a leak that was not one.</para>
+    ///
+    /// <para>Resolution mirrors <c>HierarchicalRouting</c> at the root: the address's host chain is
+    /// climbed and the top-level hub is looked up (never created), then shorter prefixes for a hub
+    /// hosting a sub-path. Only hubs directly under the mesh root are recognised; anything else
+    /// — a remote address, a nested hub, a live hub that is not disposing — keeps today's budget.</para>
+    /// </summary>
+    private bool AReplyIsOwedByAShuttingDownLocalHub(Address? target)
+    {
+        if (target is null)
+            return false;
+        try
+        {
+            IMessageHub root = this;
+            while ((root as MessageHub)?.messageService is MessageService ms && ms.ParentHub is { } parent)
+                root = parent;
+            if (ReferenceEquals(root, this))
+                return false;
+            var top = target;
+            while (top.Host is not null)
+                top = top.Host;
+            var segments = top.Segments;
+            for (var k = segments.Length; k >= 1; k--)
+            {
+                var candidate = k == segments.Length ? top : new Address(segments[..k]);
+                if (root.GetHostedHub(candidate, HostedHubCreation.Never) is not MessageHub sibling
+                    || ReferenceEquals(sibling, this))
+                    continue;
+                return sibling.IsShuttingDown && !sibling.DisposalSignalled;
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            // The registry or a scope is already gone — nothing there will answer.
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Terminal step of the reactive Quiescing poll (see the Quiescing branch of
     /// <see cref="HandleShutdownCore"/>). Runs on the poll's scheduler thread when the
     /// response subjects drain (<paramref name="drainedOk"/> = true) or the
@@ -2624,6 +2711,7 @@ public sealed class MessageHub : IMessageHub
         (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[]
             initialPendingSnapshot)
     {
+        var advance = true;
         try
         {
             if (drainedOk)
@@ -2635,6 +2723,32 @@ public sealed class MessageHub : IMessageHub
             else
             {
                 var stuck = SnapshotPendingCallbacks();
+                var owed = stuck.Where(c => AReplyIsOwedByAShuttingDownLocalHub(c.Target)).ToArray();
+                if (owed.Length > 0 && quiesceRearms < MaxQuiesceRearms)
+                {
+                    // Accepted work, still being answered: the sibling that owes each reply is in
+                    // this mesh and shutting down, so it WILL answer before it goes. Re-arm the
+                    // budget instead of cancelling — the wait ends when the reply lands or the
+                    // sibling has left the registry, whichever comes first.
+                    quiesceRearms++;
+                    TryLog(LogLevel.Information,
+                        "[QUIESCE-WAIT] {Address}: {Count} callback(s) still pending after {Elapsed}ms are owed by "
+                        + "hub(s) in this mesh that are themselves shutting down and answer before they go — "
+                        + "waiting (re-arm {Rearm}/{Max}), not cancelling: {Pending}",
+                        Address, owed.Length, quiesceSw.ElapsedMilliseconds, quiesceRearms, MaxQuiesceRearms,
+                        FormatPendingCallbacks(owed));
+                    advance = false;
+                    quiescingSubscription?.Dispose();
+                    StartQuiesceWait(quiesceSw, initialPendingSnapshot);
+                    return;
+                }
+                if (owed.Length > 0)
+                    logger.LogError(DisposalQuiesceWaitCutOff,
+                        "[QUIESCE-CUT] Hub {Address}: {Count} reply(ies) owed by shutting-down hub(s) in this mesh "
+                        + "never arrived across {Rearms} re-armed budgets ({Elapsed}ms) — most likely each side is "
+                        + "holding a deferred request of the other's. Cancelling them now; the sender is answered "
+                        + "with a disposal failure. Pending: {Pending}",
+                        Address, owed.Length, quiesceRearms, quiesceSw.ElapsedMilliseconds, FormatPendingCallbacks(owed));
                 var detail = FormatPendingCallbacks(stuck);
                 // 🚨 The HANDLER side (issue #981). The line above is caller-only — it says a
                 // request was posted and never answered. This one says what happened to the
@@ -2684,10 +2798,12 @@ public sealed class MessageHub : IMessageHub
         }
         finally
         {
-            // Advance to DisposeHostedHubs. Registered subscriptions are disposed
+            // Advance to DisposeHostedHubs — unless the budget was re-armed on replies a
+            // shutting-down sibling still owes. Registered subscriptions are disposed
             // synchronously later, in the ShutDown phase (DisposeImpl →
             // disposables.Dispose) — there is no async dispose-action drain to await.
-            Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+            if (advance)
+                Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
         }
     }
 

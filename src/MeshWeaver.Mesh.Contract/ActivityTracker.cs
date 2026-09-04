@@ -177,10 +177,21 @@ public sealed class ActivityTracker : IDisposable
 
             // Every verdict runs on the tracker's own event loop, so the two lists above are only
             // ever touched from one thread and the poll cannot overlap itself.
+            // 🚨 Idle is decided on the RUN REGISTRY, never on the replayed count alone. A delta
+            // reaches the count stream through the event loop, so a quiesce that subscribes right
+            // after TrackRun() can replay a count of zero while `runs` already holds the run —
+            // measured on a 2-core CI runner as a report that never looked at the run it was
+            // asked to wait for. The registry is written synchronously by TrackRun/Complete, so
+            // it is the fact; the count is the wake-up.
+            if (runs.IsEmpty)
+            {
+                Finish();
+                return Disposable.Empty;
+            }
             // One-shot: a fault on the count stream ends the quiesce with what it has — the
             // report is still the truthful answer, and a fault here must never leave the
             // teardown waiting on a signal that will not come.
-            var idle = counts.Where(running => running == 0).Take(1)
+            var idle = counts.Where(running => running == 0 && runs.IsEmpty).Take(1)
                 .ObserveOn(scheduler)
                 .Subscribe(_ => Finish(), _ => Finish());
 

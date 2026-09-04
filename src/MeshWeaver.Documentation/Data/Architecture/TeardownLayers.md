@@ -148,6 +148,27 @@ forces: `MonolithMeshTestBase.DisposeTimeout` (30 s) fails the class with the sn
 host proceed to `HostOptions.ShutdownTimeout` (90 s); Kubernetes ends the process at its grace
 ceiling. At no point does a hub say it has finished when it has not.
 
+### Quiescing waits for a reply a shutting-down sibling still owes
+
+The Quiescing phase gives a hub's pending `Observe` callbacks `QuiesceTimeout` (2 s, 0.5 s in
+the test base) to drain, then cancels them and records a leak. Measured with #3261's departed-child
+detector, every callback that cancel hit in a whole-mesh teardown was a request to a **sibling hub
+that was itself disposing** — `CreateOrUpdateNodeRequest@portal/nodeops-*` from a type hub,
+`SubscribeRequest@…` and `PatchDataRequest@Plugins/_Policy` from a `cache/*` hub — and production
+shows the identical `[QUIESCE-TIMEOUT] … CreateNodeRequest@portal/nodeops-*` at 2 s. Those replies
+were on their way: a disposing hub answers every delivery it accepted before it leaves its owner's
+registry (served ahead of its own `ShutdownRequest`, or NACKed `ShuttingDown` by its
+`messageService.Dispose()`). Cancelling them discarded accepted work and reported a leak that was
+not one.
+
+So on expiry the phase now asks, per pending callback, whether its target resolves — at the mesh
+root, the way `HierarchicalRouting` resolves it — to a hub that `IsShuttingDown` and has not
+signalled `Dead`. If any does, the budget is **re-armed** (`[QUIESCE-WAIT]`, Information) instead
+of cancelled; the wait ends by construction when the reply lands or the sibling has gone. A cycle
+breaker (`MaxQuiesceRearms`, 20) covers two hubs each holding a deferred request of the other's:
+past it the callbacks are cancelled as before and the case is logged at **Error** (`[QUIESCE-CUT]`,
+7315). The stall detector treats a Quiescing hub with owed replies as *busy*.
+
 ### What a hub still discards, and why that is an Error too
 
 Two things a disposing hub cannot carry across: deliveries **deferred** behind an initialization
