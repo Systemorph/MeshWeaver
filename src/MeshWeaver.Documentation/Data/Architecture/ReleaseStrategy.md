@@ -53,31 +53,32 @@ a reviewer enforce (c)+(d). The checklist is in `.github/pull_request_template.m
 
 ## 2. Versions: current-build vs official
 
-The one number is `PlatformVersion` in `Directory.Build.props` — **today `3.1.0`**, the *next*
+The one number is `PlatformVersion` in `Directory.Build.props` — **today `3.0.0`**, the *next*
 release. Every build derives its version from it ([details](/Doc/Architecture/ReleaseProcess)):
 
-- **Current build (continuous):** `3.1.0-ci.<n>` — the default. `<n>` is the **GitHub Actions run
+- **Current build (continuous):** `3.0.0-ci.<n>` — the default. `<n>` is the **GitHub Actions run
   number** (monotonic), so newer builds always sort higher. 🔴 This monotonicity is load-bearing: the
   self-updater picks the *newest* version, and the old seconds-since-midnight build number reset at
   midnight (a morning build would sort below the prior evening's). Do not revert it.
-- **Official release:** clean `3.1.0` — **the same bytes as one continuous build**, promoted by
-  `release.yml` when the annotated tag `v3.1.0` is pushed on a commit `main-cd` has promoted and
-  sealed. Nothing is rebuilt.
+- **Official release:** clean `3.0.0` — **the same bytes as one continuous build**, promoted by
+  `release.yml` when the annotated tag `v3.0.0` is pushed on a commit `main-cd` has promoted and
+  sealed. Nothing is rebuilt. Cut only when every open issue is closed.
 
-> 🚨 **No pre-release label on the core, and no rc line.** `3.1.0-ci.<n>` sorts above every
-> `3.0.0-*` by its minor number, below the clean `3.1.0`, and below the next line's first
-> `3.2.0-ci.1` — which is why the bump to `3.2.0` happens the day `3.1.0` is tagged (the lane opens
-> that pull request). The rc labels were retired on 2026-09-05: SemVer compares them as text, so
-> `rc13` sorted below `rc2`. See [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) §1.
+> 🚨 **No pre-release label on the core, and no rc line.** `3.0.0-ci.<n>` sorts below the clean
+> `3.0.0` and below the next line's first `3.1.0-ci.1` — which is why the bump to `3.1.0` happens
+> the day `3.0.0` is tagged (the lane opens that pull request). It also sorts below the
+> `3.0.0-rc*` images already in the registry, so until the release lands a Continuous install on an
+> rc build stays where it is. The rc labels were retired on 2026-09-05: SemVer compares them as
+> text, so `rc13` sorted below `rc2`. See [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) §1.
 
 ### Cutting an official release and starting the next line
 
-1. **Cut the official release:** commit the notes page `Doc/ReleaseNotes/3_1_0`, then push an
-   annotated `v3.1.0` tag on a promoted, sealed commit. `release.yml` retags that commit's set
+1. **Cut the official release:** commit the notes page `Doc/ReleaseNotes/3_0_0`, then push an
+   annotated `v3.0.0` tag on a promoted, sealed commit. `release.yml` retags that commit's set
    with the clean version in ACR, mirrors it to GHCR, records the release marker and publishes the
    GitHub Release. Stable installs pick it up.
 2. **Start the next line:** merge the pull request the lane opened —
-   `PlatformVersion` `3.1.0` → `3.2.0`. Continuous builds are now `3.2.0-ci.<n>`, above the release.
+   `PlatformVersion` `3.0.0` → `3.1.0`. Continuous builds are now `3.1.0-ci.<n>`, above the release.
 
 ---
 
@@ -88,8 +89,8 @@ string** — that tag is what each install compares.
 
 | Channel | Trigger | Version baked + image tag | Workflow |
 |---|---|---|---|
-| **Continuous** | green merge to `main` | `3.1.0-ci.<run#>` (+ short SHA + moving `main`) | `main-cd.yml` |
-| **Official** | push an annotated `v*.*.*` tag on a promoted, sealed commit | clean `3.1.0` — the continuous set **retagged** in ACR and mirrored to GHCR; nothing rebuilt | `release.yml` |
+| **Continuous** | green merge to `main` | `3.0.0-ci.<run#>` (+ short SHA + moving `main`) | `main-cd.yml` |
+| **Official** | push an annotated `v*.*.*` tag on a promoted, sealed commit | clean `3.0.0` — the continuous set **retagged** in ACR and mirrored to GHCR; nothing rebuilt | `release.yml` |
 
 So the continuous build produces all images, the release names one of them, and a running install
 only has to list ACR tags and pick the best per its policy. (`main-cd.yml` still rolls the environments once as
@@ -205,20 +206,20 @@ not `kubectl set image` by hand. The manual [AKS runbook](/Doc/Architecture/Depl
 
 | Step | Action | What ships | Who rolls to it |
 |---|---|---|---|
-| **a** | **Merge to `main`** (preconditions §1 green) | `main-cd.yml` builds the **multi-arch** image set (amd64 + arm64), tags it `3.1.0-ci.<run#>` (+ short SHA + moving `main`), pushes to **ACR**, bakes and seals | **Continuous** installs (dev/test) |
-| **b** | **Push the annotated tag `v3.1.0`** on a promoted, sealed commit | `release.yml` retags that set `3.1.0` in ACR, mirrors it to GHCR, records `_releases/3.1.0`, publishes the GitHub Release | **Stable** installs (prod) |
-| **c** | **Merge the bump** the lane opened (`PlatformVersion` → `3.2.0`) | continuous builds become `3.2.0-ci.<n>` | opens the next development line |
+| **a** | **Merge to `main`** (preconditions §1 green) | `main-cd.yml` builds the **multi-arch** image set (amd64 + arm64), tags it `3.0.0-ci.<run#>` (+ short SHA + moving `main`), pushes to **ACR**, bakes and seals | **Continuous** installs (dev/test) |
+| **b** | **Push the annotated tag `v3.0.0`** on a promoted, sealed commit | `release.yml` retags that set `3.0.0` in ACR, mirrors it to GHCR, records `_releases/3.0.0`, publishes the GitHub Release | **Stable** installs (prod) |
+| **c** | **Merge the bump** the lane opened (`PlatformVersion` → `3.1.0`) | continuous builds become `3.1.0-ci.<n>` | opens the next development line |
 
 ```bash
 # (a) ship a continuous build — just merge; CI builds + pushes + seals the image set
 git switch main && git pull
 
 # (b) cut the official release — an immutable, ANNOTATED tag on a commit whose CD run sealed
-#     (Doc/ReleaseNotes/3_1_0 must already be committed; the lane refuses a release without notes)
-git tag -a v3.1.0 -m "MeshWeaver 3.1.0" <sha> && git push origin v3.1.0
+#     (Doc/ReleaseNotes/3_0_0 must already be committed; the lane refuses a release without notes)
+git tag -a v3.0.0 -m "MeshWeaver 3.0.0" <sha> && git push origin v3.0.0
 
 # (c) open the next line — merge the pull request release.yml opened:
-#     release: PlatformVersion 3.1.0 → 3.2.0
+#     release: PlatformVersion 3.0.0 → 3.1.0
 ```
 
 > **(a) can look shipped and produce no image.** CD reacts to *MeshWeaver Build and Test* completing
