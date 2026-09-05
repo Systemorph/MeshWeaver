@@ -1,4 +1,4 @@
-namespace MeshWeaver.ContainerRegistry;
+namespace MeshWeaver.ContainerImages;
 
 /// <summary>
 /// Decides whether a caller may pull. A SEAM, not an implementation: this assembly deliberately
@@ -6,7 +6,7 @@ namespace MeshWeaver.ContainerRegistry;
 /// <c>InstanceRegistryAuthenticator</c> — the same instance key satellites already present to the
 /// plugin registry, which is the credential this mirror exists to reuse.
 /// </summary>
-public interface IContainerRegistryAuthenticator
+public interface IContainerImageAuthenticator
 {
     /// <summary>
     /// Resolves the caller from an <c>Authorization</c> header. Emits <c>null</c> for "not

@@ -7,7 +7,15 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # A Container Registry in Memex
 
-> **Status: v1 pull surface IMPLEMENTED** (`src/MeshWeaver.ContainerRegistry`, issue #3353) —
+> **Status: v1 pull surface IMPLEMENTED** (`src/MeshWeaver.ContainerImages`, issue #3353) —
+>
+> 🚨 The assembly is **`MeshWeaver.ContainerImages`, deliberately NOT `MeshWeaver.ContainerRegistry`**
+> — MeshWeaver.Plugins already ships an assembly of that name (the plugin registry module), in the
+> same namespace, declaring its own `ContainerRegistryEndpoints`, `ContainerRegistryOptions` and an
+> identical `MapContainerRegistry(this IEndpointRouteBuilder)`. Two assemblies of one name is the
+> one-producer FATAL by name; two identical fully-qualified types is `CS0433`; two identical
+> extension signatures is `CS0121`. The config section moved to `ContainerImages:` for the same
+> reason. Renamed in #3361 while nothing referenced it yet — which is the only cheap moment.
 > `GET /v2/`, `…/manifests/{reference}`, `…/blobs/{digest}` and `…/tags/list`, proxied to the
 > upstream with the mirror's own credential while the caller authenticates against memex. No push,
 > no cache yet, and the boot image still comes from the upstream. The rest of this page — caching,
@@ -156,7 +164,7 @@ alone, because they all derive from *reading* manifests and layers.
 * **Off unless configured.** `Upstream`, `Username` and `Password` must all be set, or every route
   is 404 — never a partial service, which would be indistinguishable from a working one until a
   pull returned the wrong bytes.
-* **An allowlist, empty by default.** `ContainerRegistry:Repositories` names exactly what may be
+* **An allowlist, empty by default.** `ContainerImages:Repositories` names exactly what may be
   served. Without it, one upstream credential becomes an open read proxy for the whole registry.
 * **Pull only, by construction.** A blob reference must be a content digest, so the entire upload
   family (`blobs/uploads/…`) is refused by SHAPE rather than by blocklisting names — a test caught

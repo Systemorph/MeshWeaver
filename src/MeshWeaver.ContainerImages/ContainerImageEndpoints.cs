@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.ContainerRegistry;
+namespace MeshWeaver.ContainerImages;
 
 /// <summary>
 /// The OCI Distribution pull surface, served from the mesh: <c>GET /v2/</c>,
@@ -28,20 +28,20 @@ namespace MeshWeaver.ContainerRegistry;
 /// image cannot start. Serving OTHER installations, and serving CI, has no such circularity — the
 /// constraint is per-instance, not global.</para>
 /// </summary>
-public static class ContainerRegistryEndpoints
+public static class ContainerImageEndpoints
 {
     /// <summary>Route prefix mandated by the OCI Distribution Specification.</summary>
     public const string RoutePrefix = "/v2";
 
     /// <summary>Set by the auth gate so handlers can name the caller in logs.</summary>
-    private const string CallerItemKey = "ContainerRegistry.Caller";
+    private const string CallerItemKey = "ContainerImages.Caller";
 
     /// <summary>
     /// Maps the pull surface. <c>AllowAnonymous</c> at the ASP.NET layer for the same reason the
     /// plugin registry does it — callers are INSTANCES and CI jobs, not signed-in users — with the
     /// bearer gate below doing the real work.
     /// </summary>
-    public static IEndpointRouteBuilder MapContainerRegistry(this IEndpointRouteBuilder endpoints)
+    public static IEndpointRouteBuilder MapContainerImages(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup(RoutePrefix).AllowAnonymous();
 
@@ -50,7 +50,7 @@ public static class ContainerRegistryEndpoints
             var http = ctx.HttpContext;
             var client = http.RequestServices.GetRequiredService<UpstreamRegistryClient>();
             var logger = http.RequestServices.GetService<ILoggerFactory>()
-                ?.CreateLogger(typeof(ContainerRegistryEndpoints));
+                ?.CreateLogger(typeof(ContainerImageEndpoints));
 
             // Unconfigured is 404 on everything, not 401 and not a partial service. A mirror
             // without a credential cannot serve a single byte, and saying "unauthorised" would
@@ -60,12 +60,12 @@ public static class ContainerRegistryEndpoints
                 logger?.LogDebug(
                     "Container registry mirror: {Path} refused — {Section}:Upstream/Username/Password "
                     + "are not all set, so the mirror is off.",
-                    http.Request.Path, ContainerRegistryOptions.SectionName);
+                    http.Request.Path, ContainerImageOptions.SectionName);
                 return Results.NotFound();
             }
 
             var authenticator = http.RequestServices
-                .GetRequiredService<IContainerRegistryAuthenticator>();
+                .GetRequiredService<IContainerImageAuthenticator>();
             // 🚨 ObserveCompletion, never .ToTask() — a Task completed inside an Rx pipeline
             // resumes its awaiter INLINE on the signalling thread, still inside Rx's trampoline,
             // and everything the continuation then does inherits that scheduler.
@@ -111,7 +111,7 @@ public static class ContainerRegistryEndpoints
     {
         var client = http.RequestServices.GetRequiredService<UpstreamRegistryClient>();
         var logger = http.RequestServices.GetService<ILoggerFactory>()
-            ?.CreateLogger(typeof(ContainerRegistryEndpoints));
+            ?.CreateLogger(typeof(ContainerImageEndpoints));
 
         var rest = (string?)http.Request.RouteValues["rest"] ?? string.Empty;
         if (!RegistryRoute.TryParse(rest, out var route))
@@ -120,13 +120,13 @@ public static class ContainerRegistryEndpoints
         // 🚨 The allowlist is the difference between a mirror and an open read proxy for the whole
         // upstream. Empty means NONE.
         var options = http.RequestServices
-            .GetRequiredService<Microsoft.Extensions.Options.IOptions<ContainerRegistryOptions>>()
+            .GetRequiredService<Microsoft.Extensions.Options.IOptions<ContainerImageOptions>>()
             .Value;
         if (!options.Repositories.Contains(route.Repository, StringComparer.Ordinal))
         {
             logger?.LogDebug(
                 "Container registry mirror: repository {Repository} is not in {Section}:Repositories",
-                route.Repository, ContainerRegistryOptions.SectionName);
+                route.Repository, ContainerImageOptions.SectionName);
             return Results.NotFound();
         }
 

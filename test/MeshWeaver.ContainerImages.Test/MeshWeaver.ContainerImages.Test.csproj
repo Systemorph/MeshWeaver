@@ -3,6 +3,6 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\MeshWeaver.ContainerRegistry\MeshWeaver.ContainerRegistry.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.ContainerImages\MeshWeaver.ContainerImages.csproj" />
   </ItemGroup>
 </Project>

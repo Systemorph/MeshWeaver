@@ -8,7 +8,7 @@
   <ItemGroup>
     <!-- For ReactiveCompletion.ObserveCompletion — the sanctioned Rx→Task edge. This assembly
          deliberately takes NO dependency on the plugin catalogue: the caller-authentication seam
-         is IContainerRegistryAuthenticator, bound by the portal. -->
+         is IContainerImageAuthenticator, bound by the portal. -->
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
   </ItemGroup>
 </Project>

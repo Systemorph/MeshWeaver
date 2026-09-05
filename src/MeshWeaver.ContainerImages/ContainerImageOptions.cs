@@ -1,17 +1,17 @@
-namespace MeshWeaver.ContainerRegistry;
+namespace MeshWeaver.ContainerImages;
 
 /// <summary>
-/// Configuration for the container-registry mirror, bound from <c>ContainerRegistry:*</c>.
+/// Configuration for the container-registry mirror, bound from <c>ContainerImages:*</c>.
 ///
 /// <para>🚨 The mirror is OFF unless all three of <see cref="Upstream"/>, <see cref="Username"/>
 /// and <see cref="Password"/> are present. An unconfigured mirror answers 404 on every route
 /// rather than falling back to anything: a half-configured registry that served SOMETHING would
 /// be indistinguishable from a working one right up until a pull returned the wrong bytes.</para>
 /// </summary>
-public sealed class ContainerRegistryOptions
+public sealed class ContainerImageOptions
 {
     /// <summary>Configuration section name.</summary>
-    public const string SectionName = "ContainerRegistry";
+    public const string SectionName = "ContainerImages";
 
     /// <summary>Upstream registry host, e.g. <c>meshweaver.azurecr.io</c>. No scheme.</summary>
     public string? Upstream { get; set; }

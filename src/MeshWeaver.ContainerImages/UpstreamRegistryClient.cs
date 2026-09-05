@@ -6,7 +6,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace MeshWeaver.ContainerRegistry;
+namespace MeshWeaver.ContainerImages;
 
 /// <summary>
 /// Talks to the UPSTREAM OCI registry on the mirror's behalf, holding the one credential the
@@ -26,11 +26,11 @@ namespace MeshWeaver.ContainerRegistry;
 /// </summary>
 public sealed class UpstreamRegistryClient(
     HttpClient http,
-    IOptions<ContainerRegistryOptions> options,
+    IOptions<ContainerImageOptions> options,
     ILogger<UpstreamRegistryClient> logger)
 {
     private readonly ConcurrentDictionary<string, CachedToken> tokens = new();
-    private readonly ContainerRegistryOptions opts = options.Value;
+    private readonly ContainerImageOptions opts = options.Value;
 
     /// <summary>The upstream host, e.g. <c>meshweaver.azurecr.io</c>. Empty when unconfigured —
     /// callers must treat that as "the mirror is off", never as "allow".</summary>
@@ -112,7 +112,7 @@ public sealed class UpstreamRegistryClient(
             // echo request detail. The status and the repository are the whole diagnostic.
             logger.LogWarning(
                 "Container registry mirror: upstream token request for {Repository} answered {Status}. "
-                + "Check ContainerRegistry:Username/Password — the mirror cannot serve pulls without it.",
+                + "Check ContainerImages:Username/Password — the mirror cannot serve pulls without it.",
                 repository, (int)response.StatusCode);
             throw new UpstreamRegistryException(
                 $"upstream token request answered {(int)response.StatusCode}");
