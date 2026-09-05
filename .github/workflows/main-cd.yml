@@ -1119,6 +1119,56 @@ jobs:
           .github/scripts/check-image-build-identity.sh
           "${{ needs.gate.outputs.staging_tag }}"
           "${{ steps.vars.outputs.version }}"
+      # 🚨 THE IMAGE'S CLOSURE IS A CONTRACT WITH EVERY SATELLITE — and nothing asserted it until
+      # MeshWeaver#3327/#3328. "The platform image is the compiler and the reference set"
+      # (Doc/Architecture/ModuleBuildArchitecture) means a module does not compile against a source
+      # tree or a feed: node-repo-module-pack.yml `docker cp`s this very directory out of the image
+      # and hands it to MSBuild as `-p:MeshWeaverRefs`. So what lands here is published to six
+      # repositories, and every one of them used to discover its contents the same way — by failing
+      # to compile against it, hours later, on pull requests that had changed nothing.
+      #
+      # Two breaches arrived on 2026-09-04, in opposite directions, and both rode ci.7758:
+      #   * a MODULE's assembly in /app (#3327 — MeshWeaver.Markdown.Collaboration). The bake's
+      #     one-producer refusal already existed (BakeHost.ShippedByHostProblem, #3175); it runs
+      #     AFTER promote, so the image is already tagged and the red lands in someone else's repo.
+      #   * a reference set that does not RESOLVE (#3328). Plugins#1284 put Microsoft.Data.Sqlite
+      #     (→ SQLitePCLRaw.core 2.1.11.2622) in /app beside a Roslyn assembly that binds
+      #     SQLitePCLRaw.core 3.0.2.2801 and whose package declares no such dependency at all — so
+      #     NuGet never saw the second consumer, and every module bundle in every satellite died on
+      #     `error MSB3277` under that lane's -warnaserror.
+      #
+      # 🚨 BEFORE `promote`, which is the whole point: an image that breaches either invariant never
+      # receives a tag a consumer can select, so the red lands on the run that produced it. Same
+      # reasoning as the identity readback above — a tag is not evidence about the bytes under it.
+      #
+      # The directory is FOUND, not assumed: the publish output is what PublishContainer lays down
+      # at /app (MeshWeaverSurfaceManifest.targets adds the manifest to @(ResolvedFileToPublish),
+      # and PublishContainer consumes that list — the comment in that file says so in its own
+      # words). Locating it by the manifest rather than by a hard-coded RID also means BOTH
+      # architectures of the multi-arch publish are checked. Finding none is RED: a gate that
+      # cannot find its subject must never report silence.
+      - name: The published image's closure must be a reference set modules can build against
+        run: |
+          set -euo pipefail
+          # 🚨 PyYAML is NOT on the runner, and a plain `pip install` is refused (PEP 668
+          # externally-managed). The gate reads the composed-module set out of THIS workflow rather
+          # than restating it, so it needs a real YAML parser — same venv idiom, same pinned
+          # version, as the workflow-shell gate in dotnet-test.yml. Unconditional: an install that
+          # fails is RED, never a reason to skip the gate.
+          python3 -m venv "$RUNNER_TEMP/refsetgate"
+          "$RUNNER_TEMP/refsetgate/bin/pip" install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
+          export PATH="$RUNNER_TEMP/refsetgate/bin:$PATH"
+          python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
+          root=plugins-repo/src/Memex.Portal.Distributed/bin/Release
+          mapfile -t dirs < <(find "$root" -type f -name meshweaver-surface.manifest -path '*/publish/*' -exec dirname {} \; | sort -u)
+          if [ "${#dirs[@]}" -eq 0 ]; then
+            echo "::error::no publish output under '$root' holds a meshweaver-surface.manifest, so the bytes that BECOME /app cannot be located and this gate would verify nothing. Either the publish layout moved — re-point this step, never make it conditional — or the surface manifest stopped being published, which on its own breaks NodeType bake adoption (#1699)."
+            exit 1
+          fi
+          echo "checking ${#dirs[@]} published closure(s): ${dirs[*]}"
+          for d in "${dirs[@]}"; do
+            .github/scripts/check-platform-reference-set.sh "$d" .github/workflows/main-cd.yml
+          done
 
   migration-image:
     name: "Build + push migration image"
