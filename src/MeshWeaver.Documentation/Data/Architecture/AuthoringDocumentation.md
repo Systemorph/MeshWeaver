@@ -16,7 +16,7 @@ Documentation lives as markdown files under `src/MeshWeaver.Documentation/Data/`
 | `Data/Architecture.md` | `Doc/Architecture` |
 | `Data/Architecture/AsynchronousCalls.md` | `Doc/Architecture/AsynchronousCalls` |
 | `Data/GUI/ContainerControl/Stack.md` | `Doc/GUI/ContainerControl/Stack` |
-| `Data/ReleaseNotes/3_0_0/index.md` | `Doc/ReleaseNotes/3_0_0` (an `index.md` *is* its folder's node) |
+| `Data/ReleaseNotes/3_1_0/index.md` | `Doc/ReleaseNotes/3_1_0` (an `index.md` *is* its folder's node) |
 
 Note the pairing: `Architecture.md` is the **index node** and the folder `Architecture/` holds its children. Agent definitions follow the same scheme under the **`Agent`** partition (`content/ai/Agent/Researcher.md` → `Agent/Researcher`), and skills under the **`Skill`** partition (`content/ai/Skill/code.md` → `Skill/code`).
 
