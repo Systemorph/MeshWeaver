@@ -215,6 +215,7 @@ set, before the fix was written:
 | reference set | invariant 1 | invariant 2 | exit |
 |---|---|---|---|
 | `ci.7755` `/app` (210 assemblies) | **RED** — `MeshWeaver.Markdown.Collaboration` in the closure *and* the manifest | OK (377 refs) | `1` |
+| `ci.7757` `/app` — the image before the transition | **RED** — breach 1 still open | OK | `1` |
 | `ci.7758` `/app` — the transition image | OK — breach 1 closed here | **RED** — breach 2 opened here | `1` |
 | `ci.7779` `/app` — the version #3328 names | OK | **RED** — `MSB3277` | `1` |
 | `ci.7794` `/app` (214 assemblies) | OK | **RED** — `MSB3277`, `SQLitePCLRaw.core` 2.1.11.2622 ↔ 3.0.2.2801 | `1` |
@@ -223,7 +224,9 @@ set, before the fix was written:
 | the same publish, fix reverted **in place** | OK | **RED** — `MSB3277` | `1` |
 
 Each half fails on the image that actually broke and passes on the one that did not, so neither is
-a blanket red and neither is decorative.
+a blanket red and neither is decorative. The consecutive pair `ci.7757` / `ci.7758` is the sharpest
+evidence of that: across one build the two verdicts **swap**, invariant 1 going green as
+Plugins#1268 lands and invariant 2 going red as Plugins#1284 does.
 
 The `arm64` half of `ci.7794` was checked too — same 214 assemblies, same 381 resolved references,
 same conflict — so the gate checking both published architectures adds no architecture-specific
