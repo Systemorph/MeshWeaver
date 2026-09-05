@@ -197,6 +197,15 @@ one:
 - `ResolveAssemblyReferences` must report **≥ 50 resolved references**, or the probe compiled
   against nothing and its silence means nothing.
 
+Each of those was **made to fail on purpose**, because prose that asserts a guard is not a guard:
+
+| deliberate defect | exit | what it said |
+|---|---|---|
+| a directory that does not exist | `1` | *"…does not exist. This gate reads the bytes that become /app; without them it verifies nothing, so it refuses rather than passes."* |
+| a directory holding 1 assembly | `1` | *"…holds 1 assemblies at its root — that is not a platform reference set (the portal ships ~214)."* |
+| 214 assemblies, surface manifest removed | `1` | *"…has no meshweaver-surface.manifest beside its assemblies… EITHER this gate pointed at the wrong directory OR the manifest silently stopped being published (#1699). Both are RED."* |
+| pointed at a workflow with no `plugins-modules` job | `1` | *"jobs.plugins-modules.with.modules is absent or empty … refuses to fall back to a hard-coded list."* |
+
 ### Mutation proof
 
 The gate was run against the real extracted `/app` of both promoted images and against the fixed
