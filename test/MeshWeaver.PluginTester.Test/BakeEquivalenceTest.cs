@@ -207,8 +207,8 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
             });
             output.WriteLine("── compiler-driven bake ──");
             output.WriteLine(treeLog.ToString());
-            Assert.Null(treeReport.FatalError);
-            Assert.All(treeReport.Types, t => Assert.Null(t.Error));
+            Assert.True(treeReport.FatalError is null, treeReport.FatalError);
+            Assert.All(treeReport.Types, t => Assert.True(t.Error is null, $"{t.NodePath}: {t.Error}"));
 
             // ── the MESH-driven bake: exactly what CI runs today ──
             var meshReport = await PluginGateRunner.Run(new GateOptions
@@ -222,7 +222,14 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
             }).FirstAsync().Await();
             output.WriteLine("── mesh-driven bake ──");
             output.WriteLine(meshLog.ToString());
-            Assert.Null(meshReport.FatalError);
+            // 🚨 Assert.True(…, message) rather than Assert.Null — xUnit renders a failed
+            // Assert.Null as `Actual: "…"···`, truncated at ~50 characters, and this bake's fatal
+            // errors are long by design: they name the type, the version claimed and what the store
+            // actually holds. #3333 has three sightings of this test, ALL reading
+            // `InvalidOperationException: bake: 'Widget/Thing' cl`···, and the version — the one
+            // fact that would settle whether the stamp or the store is wrong — has been cut off
+            // every time. A diagnostic nobody can read is not a diagnostic.
+            Assert.True(meshReport.FatalError is null, meshReport.FatalError);
 
             var mesh = ReadBakeDirectory(meshDir);
             var tree = ReadBakeDirectory(treeDir);
