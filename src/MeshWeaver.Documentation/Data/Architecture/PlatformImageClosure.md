@@ -205,6 +205,7 @@ set, before the fix was written:
 | reference set | invariant 1 | invariant 2 | exit |
 |---|---|---|---|
 | `ci.7755` `/app` (210 assemblies) | **RED** — `MeshWeaver.Markdown.Collaboration` in the closure *and* the manifest | OK (377 refs) | `1` |
+| `ci.7758` `/app` — the transition image | OK — breach 1 closed here | **RED** — breach 2 opened here | `1` |
 | `ci.7779` `/app` — the version #3328 names | OK | **RED** — `MSB3277` | `1` |
 | `ci.7794` `/app` (214 assemblies) | OK | **RED** — `MSB3277`, `SQLitePCLRaw.core` 2.1.11.2622 ↔ 3.0.2.2801 | `1` |
 | `ci.7794` `/app` + the fix | OK | OK (381 refs) | `0` |
