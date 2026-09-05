@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Release Process & Versioning"
-Abstract: "How MeshWeaver is versioned and released: one central PlatformVersion in Directory.Build.props, two channels (CONTINUOUS for CI/local — build-numbered, vs RELEASED for CD — clean), and the RC→official→next workflow for NuGet and Docker. The same version is the data-sync content-version."
+Abstract: "How MeshWeaver is versioned and released: one central PlatformVersion in Directory.Build.props naming the NEXT release, continuous builds as <version>-ci.<n>, and a release that is a PROMOTION of a sealed continuous set — never a rebuild. No rc line, no NuGet. The same version is the data-sync content-version."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#3949ab'/><path d='M12 4c3 1.5 4.5 4.5 4.5 8l-2 2h-5l-2-2C7.5 8.5 9 5.5 12 4z' fill='white'/><circle cx='12' cy='10' r='1.5' fill='#3949ab'/><path d='M9.5 16l-1.5 3 3-1.5M14.5 16l1.5 3-3-1.5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>"
 Thumbnail: "images/DataMesh.svg"
 Authors:
@@ -11,14 +11,12 @@ Tags:
   - "Release"
   - "Versioning"
   - "CI/CD"
-  - "NuGet"
 ---
 
 # Release Process & Versioning
 
-One number, two channels. The whole scheme lives in
-`Directory.Build.props` and applies to every
-project in the solution.
+One number, two channels, one set of bytes. The whole scheme lives in
+`Directory.Build.props` and applies to every project in the solution.
 
 ---
 
@@ -26,156 +24,173 @@ project in the solution.
 
 ```xml
 <!-- Directory.Build.props -->
-<PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc1</PlatformVersion>
+<PlatformVersion Condition="'$(PlatformVersion)' == ''">3.1.0</PlatformVersion>
 ```
 
-This is the single maintained version, set centrally. **Override it at build time**
-(Docker image / CI) without editing the file:
+The single maintained version names the **next release**. Every continuous build derives its
+version from it by appending the CI run number as the one and only pre-release identifier:
 
-```bash
--p:PlatformVersion=3.0.0-rc2     # cut a different RC
--p:PlatformVersion=3.0.0         # graduate to the official release
+| Build | Version | Where it comes from |
+|---|---|---|
+| continuous (CI) | `3.1.0-ci.7900` | `main-cd.yml`, every green merge to `main` |
+| local | `3.1.0-ci.0` | any `dotnet build` on a developer machine |
+| release | `3.1.0` | `release.yml`, on the annotated tag `v3.1.0` — a **promotion** of one of the continuous builds above |
+
+The ordering is what the self-updater relies on (`VersionSelect`, SemVer 2 via `NuGetVersion`):
+
+```
+3.0.0-rc9.ci.7818  <  3.0.0-rc13  <  3.1.0-ci.1  <  3.1.0-ci.7900  <  3.1.0  <  3.2.0-ci.1
 ```
 
-It is also the **data-sync content-version**: a release tagged `v$(PlatformVersion)`
-is what a deployed binary syncs its docs/seed nodes from
-([DataSyncSetup.md §3](/Doc/Architecture/DataSyncSetup)). Code and content ship in lockstep.
+Three consequences, all load-bearing:
 
-> 🚨 **The `-rc1` label is not cosmetic — do not drop it from the default.** SemVer
-> pre-release identifiers compare ASCII-lexically (§11.4) and `"ci" < "preview1"`, so a
-> bare `3.0.0` core would yield `3.0.0-ci.<n> < 3.0.0-preview1` — every CI build sorting
-> *below* the already-published `v3.0.0-preview1`. The self-updater picks the **newest**
-> version off the registry, so it would pin to `3.0.0-preview1` and never roll forward
-> again. `3.0.0-rc1.ci.<n> > 3.0.0-preview1` is correct. The tag must also resolve:
-> data-sync pulls content from `v$(PlatformVersion)`, and only `v3.0.0-preview1` and
-> `v3.0.0-rc1` exist. Keep a pre-release label on the core until `3.0.0` ships clean.
+- **Continuous installs always move forward.** `3.1.0-ci.<n>` outranks every `3.0.0-*` by its
+  minor number, and `<n>` is the GitHub Actions run number, monotonic per workflow. 🔴 Do not
+  replace it with anything that can reset (the old seconds-since-midnight number made a morning
+  build sort below the previous evening's).
+- **A Stable install takes the clean release and nothing before it.** `Stable` selects
+  `!IsPrerelease`; the only clean tags are the promoted ones.
+- **The number must move the day a release is tagged.** `3.1.0-ci.7950` sorts *below* `3.1.0`, so
+  a continuous build stamped with an already-released number would stop every Continuous install
+  from rolling forward. `release.yml` opens the pull request that moves the line to `3.2.0` itself;
+  rc6 shipped with the props still reading rc6 and rc10–rc13 were tagged with them on rc9, which is
+  why that bump is no longer a human step.
+
+> 🚨 **There is no rc line.** The `3.0.0-rc1` … `3.0.0-rc13` labels were retired on 2026-09-05 and
+> `3.0.0` was never cut clean. Two reasons, one of them a trap worth remembering: SemVer §11.4
+> compares pre-release identifiers as text, so `rc13 < rc2`, and nuget.org listed `rc9` as the
+> newest pre-release for the whole run; and a "candidate" that is rebuilt on tagging is not a
+> candidate of anything (§4). A clean line has neither problem: the build number is the only
+> pre-release identifier, and it compares numerically. Do not "fill in" `v3.0.0`.
+
+It is also the **data-sync content-version**: a continuous build syncs its docs and seed nodes
+from the commit stamped into its assemblies, a release from the tag `v$(PlatformVersion)` that
+names the same tree ([DataSyncSetup.md §4c](/Doc/Architecture/DataSyncSetup)). Code and content
+ship in lockstep.
 
 ---
 
 ## 2. Two channels — CONTINUOUS vs RELEASED
 
-The `PublicRelease` flag picks the channel (think **CI** vs **CD**):
+The `PublicRelease` flag picks the channel, and the split between the *publishable string* and
+the *compiled attributes* is what makes a promotion possible at all:
 
-| | Flag | `Version` / NuGet / Docker | `AssemblyVersion` | `FileVersion` | Use |
+| | Flag | `Version` / image tag | `AssemblyVersion` | `FileVersion` | `InformationalVersion` |
 |---|---|---|---|---|---|
-| **CONTINUOUS** | *(default)* | `3.0.0-rc1.ci.<build>` | `3.0.0.0` | `3.0.0.<build>` | CI pipeline + every local/dev build. Carries a build number so it is **distinguishable** from a release. |
-| **RELEASED** | `-p:PublicRelease=true` | `3.0.0-rc1` *(clean)* | `3.0.0.0` | `3.0.0.<build>` | The CD/publish pipeline. Clean version on the package and the container image. |
+| **CONTINUOUS** | *(default)* | `3.1.0-ci.<run>` | `3.1.0.0` | `3.1.0.0` | `3.1.0+<sha>` under `CIRun` |
+| **RELEASED** | `-p:PublicRelease=true` | `3.1.0` | `3.1.0.0` | `3.1.0.0` | `3.1.0+<sha>` under `CIRun` |
 
-- **`AssemblyVersion` is STABLE `3.0.0.0`** — never build-numbered. It is the runtime
-  **assembly-binding identity**, so it must be identical across every assembly in one
-  build; `<build>` is evaluated *per project* at MSBuild time, so a time-based
-  `AssemblyVersion` drifts a few seconds between projects in the same run. That is
-  exactly issue #143: `Memex.Database.Migration` bound to `MeshWeaver.Documentation,
-  Version=3.0.0.280` while the packaged DLL carried another number →
-  `FileNotFoundException` at startup → the migration CrashLoopBackOff'd and Space
-  creation failed. **Do not reintroduce a per-build `AssemblyVersion`.**
-- **`FileVersion` is pinned** (`3.0.0.0`) for the same reason `AssemblyVersion` is:
-  it is a *compiled* attribute, and CI compile inputs are **commit-deterministic**
-  ([#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3) so two CI builds
-  of the same commit produce ABI-identical assemblies — that is what lets the CI
-  NodeType bake seed at portal boot. Both are numeric — the `-rc1` pre-release label
-  is illegal in either.
-- **The `.ci.N` suffix** uses `$(GITHUB_RUN_NUMBER)` when present (**monotonic** —
-  the self-updater picks the newest version, and the seconds-since-midnight fallback
-  resets at midnight); **locally it is a stable `0`**. It reaches ONLY `$(Version)` —
-  NuGet package versions and image tags — never a compiled attribute. The runtime
-  still sees it: the container publish injects `$(Version)` as the
-  `MESHWEAVER_PLATFORM_VERSION` environment variable (image config, not bytes).
-- **`InformationalVersion`** is `$(PlatformVersion)` under `CIRun=true` (the SDK
-  appends `+<commit-sha>`); locally it equals `$(Version)`. NodeType ABI identity is
-  `NodeTypeCompilationHelpers.FrameworkVersion` (`FrameworkBuildIdentity`): hosts that
-  ship a `meshweaver-surface.manifest` (portals, the CI bake host) resolve the
-  **API-surface hash** (`s<hash>` — stable across internal-only changes, moved by
-  breaking surface changes and by any change to the toolchain full-MVID set:
-  `MeshWeaver.Compiler` / `MeshWeaver.NuGet` plus their computed MeshWeaver
-  dependency closure, #1707); manifest-less CI
-  processes fall back to the **stamped commit identity** (`g<sha>`,
-  `AssemblyMetadata("MeshWeaverFrameworkIdentity")`, kept as provenance everywhere);
-  manifest-less local builds fall back to the **identity anchor's MVID**
-  (`MeshWeaver.Compiler.dll`).
-- **`-p:Version=…`** still overrides everything (escape hatch) — and it is what the
-  tag-driven release workflows actually pass.
+- **Nothing builds under `PublicRelease` any more.** The flag survives for local experiments; a
+  release is a continuous image retagged, so the bytes inside a `3.1.0` image report the
+  `3.1.0-ci.<n>` build they are, via `MESHWEAVER_PLATFORM_VERSION` in the image config. That is
+  deliberate: the release *is* that build.
+- **`AssemblyVersion` is STABLE within a line** (`3.1.0.0`) — the runtime assembly-binding
+  identity, identical across every assembly in one build. A per-project time-based number once
+  made `Memex.Database.Migration` bind to `MeshWeaver.Documentation, Version=3.0.0.280` while the
+  packaged DLL carried another number (#143); binding identity must not depend on wall-clock
+  time. It moves with the line (`3.2.0.0` after the next bump), which is fine: module bundles are
+  keyed by framework identity and re-baked per set, never bound by assembly version.
+- **`FileVersion` is pinned** for the same reason `InformationalVersion` is: both are *compiled*
+  attributes, and CI compile inputs are **commit-deterministic**
+  ([#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3) so two CI builds of one
+  commit produce ABI-identical assemblies — that is what lets the CI NodeType bake seed at portal
+  boot.
+- **The `-ci.<n>` suffix** uses `$(GITHUB_RUN_NUMBER)` when present, `0` locally. It reaches
+  ONLY `$(Version)` — the image tag and `MESHWEAVER_PLATFORM_VERSION` — never a compiled
+  attribute. 🚨 Anything that parses the build number back out of a version must accept both
+  separators, `[.-]ci.<n>`: the retired rc line used `.ci.` and its tags are still in ACR.
+- **`InformationalVersion`** is the bare `$(PlatformVersion)` under `CIRun=true` (the SDK appends
+  `+<commit-sha>`); locally it equals `$(Version)`. NodeType ABI identity is
+  `NodeTypeCompilationHelpers.FrameworkVersion` (`FrameworkBuildIdentity`): hosts that ship a
+  `meshweaver-surface.manifest` resolve the **API-surface hash** (`s<hash>`), manifest-less CI
+  processes fall back to the stamped commit identity (`g<sha>`), manifest-less local builds to
+  the identity anchor's MVID. None of them read the version string.
+- **`-p:Version=…`** overrides the publishable string and NOTHING else (#3022) — `main-cd.yml`
+  passes it to the portal publish so the image reports its own build.
 
 ---
 
 ## 3. Commands
 
 ```bash
-# CONTINUOUS — CI pipeline / local. Nothing to add → 3.0.0-rc1.ci.<build>
+# CONTINUOUS — CI and local. Nothing to add → 3.1.0-ci.<run> (3.1.0-ci.0 locally)
 dotnet build
-dotnet pack -c Release                       # → 3.0.0-rc1.ci.<build>.nupkg
 
-# RELEASED NuGet (CD) — clean 3.0.0-rc1
-dotnet pack -c Release -p:PublicRelease=true # → 3.0.0-rc1.nupkg
+# What CI computes for an image (the same call main-cd.yml makes):
+dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
+  -getProperty:Version -p:CIRun=true -nologo
 
-# RELEASED Docker image (CD) — clean 3.0.0-rc1 baked into the binary
-dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
-  -t:PublishContainer -p:PublicRelease=true -p:PlatformVersion=3.0.0-rc1 \
-  -p:ContainerImageTag=3.0.0-rc1
+# RELEASE — no command builds one. Push an annotated tag on a promoted, sealed commit:
+git tag -a v3.1.0 -m "MeshWeaver 3.1.0" <sha> && git push origin v3.1.0
 ```
 
-(`-p:ContainerImageTag` is the image tag; `-p:PlatformVersion` is the version baked
-into the assemblies. Keep them equal for a release.)
+### What `release.yml` does on that tag — and what it refuses
 
-### Automated by GitHub Actions — the real release path
+The lane **promotes**; it compiles nothing. In order:
 
-You don't run `pack`/`publish` by hand for a release. Pushing a **`v*.*.*` tag**
-fires two tag-gated workflows (both derive `VERSION` from the tag):
+1. **Refuses** a version that is not `v<major>.<minor>.<patch>`, a lightweight tag, a commit not on
+   `main`, a commit whose `PlatformVersion` differs from the tag, and a version with no committed
+   notes page at `Doc/ReleaseNotes/<x_y_z>`.
+2. **Resolves the continuous set** for the commit from the tags on `memex-portal-ai:<short-sha>`
+   (`3.1.0-ci.<n>` and the `<core>-p<plugins>` pair tag), and refuses a commit `main-cd` never
+   promoted — *"wait for CD, confirm `Plugins: bake + seal`, push the tag again"*.
+3. **Asserts the set is complete** (`check-image-set.sh`) **and sealed** for both the platform
+   content and the Plugins modules (`check-release-availability.sh`).
+4. **Records the release marker** `_releases/3.1.0` on every artifact store, holding the same
+   framework identity the continuous build recorded, and re-asserts availability under the clean
+   name — the very question a Stable install's gate asks ([ReleaseGates](/Doc/Architecture/ReleaseGates)).
+5. **Retags** `memex-migration`, `mw-plugin-test`, then `memex-portal-ai` last (`<short-sha>` →
+   `3.1.0`, manifest-only, seconds), and mirrors the three to GHCR.
+6. **Publishes the GitHub Release** from the notes page.
+7. **Opens the pull request** that moves `PlatformVersion` to `3.2.0`.
 
-- `.github/workflows/release-packages.yml`
-  → builds with `/p:Version=$VERSION`, packs `--no-build` with
-  `/p:PackageVersion=$VERSION`, and pushes to **nuget.org** (clean `3.0.0-rc1`).
-- `.github/workflows/release-images.yml`
-  → builds the `memex-portal-ai-base` image multi-arch with buildx, then the three app
-  images **with `-p:Version=$VERSION`** so the binaries carry the clean tag version, and
-  pushes to **GHCR** (`ghcr.io/<owner>/memex-portal-ai`, `memex-portal`,
-  `memex-migration`) tagged `$VERSION` + `latest` — then **mirrors all three into ACR**
-  (`meshweaver.azurecr.io`) with `az acr import`, so a `Stable`-policy install finds the
-  clean release on the same registry it already polls.
-
-Neither workflow passes `-p:PublicRelease=true`: the explicit `-p:Version=$VERSION`
-already overrides the channel logic, and the tag is the source of the version.
-
-So **cutting a release = pushing a tag**:
-
-```bash
-git tag v3.0.0-rc1 && git push origin v3.0.0-rc1
-```
-
-The deployed image's binaries then carry `3.0.0-rc1`, and data-sync pulls content
-from that same `v3.0.0-rc1` tag ([DataSyncSetup.md §4c](/Doc/Architecture/DataSyncSetup)) — one tag,
-one consistent code + image + content.
+Everything the lane needs is asserted RED by a `preflight` job — no `continue-on-error`, no
+`if: secret != ''` (AGENTS.md: a gate never tests its own inputs).
 
 ---
 
-## 4. The workflow — RC → official → next
+## 4. The workflow — continuous → release → next line
 
-We stay in **pre-release** (`-rcN`) and iterate until it's right, then graduate.
+1. **Iterate.** Every green merge ships `3.1.0-ci.<n>`; Continuous installs roll onto it.
+2. **Pick the build to release.** A commit whose CD run has `Promote`, `Verify every image
+   shipped` **and** `Plugins: bake + seal` green — read the seal JOB, never the run's conclusion
+   ([ContinuousDeliveryContract](/Doc/Architecture/ContinuousDeliveryContract)). Commit its notes
+   page, `Doc/ReleaseNotes/3_1_0`, first: the lane will not release without it.
+3. **Tag it, annotated.** `git tag -a v3.1.0 -m "MeshWeaver 3.1.0" <sha> && git push origin v3.1.0`.
+   The lane promotes the set (§3); Stable installs pick it up on their next check.
+4. **Merge the bump.** The lane's pull request moves the line to `3.2.0`; auto-arm enqueues it.
+   Until it merges, no continuous build may be relied on to roll a Continuous install forward.
 
-1. **Iterate continuous builds** locally / in CI — `3.0.0-rc1.ci.<build>`. Deploy
-   these for local testing.
-2. **Cut a release candidate** when you want a clean artifact to verify:
-   `-p:PublicRelease=true` → `3.0.0-rc1`. Tag the repo `v3.0.0-rc1`. Bump to
-   `-rc2`, `-rc3`… (`-p:PlatformVersion=3.0.0-rcN`) as needed.
-3. **Graduate to official** when it all works:
-   `-p:PublicRelease=true -p:PlatformVersion=3.0.0` → `3.0.0`. Tag `v3.0.0`.
-4. **Move to the next line:** bump the central default in `Directory.Build.props`
-   to `3.1.0-rc1` (or `3.0.1-rc1`) and repeat. This is the *only* time you edit the
-   file — RCs are just build-time overrides.
-
-> **Tagging discipline.** A version tag must be **immutable** (annotated, never
-> force-moved): both the release artifacts *and* the data-sync content key off it, so
-> moving a tag silently ships different content under the same version. The tag — not
-> the build's own commit — is the sync ref (the chicken-and-egg, see
-> [DataSyncSetup.md §4c](/Doc/Architecture/DataSyncSetup)); GitHub resolves tag→commit at sync time.
+> **Tagging discipline.** A version tag must be **immutable** (annotated, never force-moved): the
+> images, the release marker and data-sync all key off it, so moving a tag silently ships different
+> content under the same version. Patch lines are not a thing under continuous delivery from
+> `main`: a fix is the next continuous build, and the next release is the next minor.
 
 ---
 
-## 5. See also
+## 5. Retired: the rc line and NuGet
+
+Up to `3.0.0-rc13` (2026-08-31) every `v*` tag also ran `dotnet pack` and pushed every packable
+project to nuget.org. That stopped with the rc line: **nothing in the fleet restores a MeshWeaver
+package** — in-mesh source compiles against the platform *image*, module bundles carry their own
+closures, and satellite repositories build inside `mw-plugin-test`
+([PluginPackaging](/Doc/Architecture/PluginPackaging),
+[ModuleBuildArchitecture](/Doc/Architecture/ModuleBuildArchitecture)). The packages already
+published stay listed as history; `MeshWeaver.Hosting.PostgreSql`, `MeshWeaver.AI` and
+`MeshWeaver.Blazor` stopped at `rc7` when they moved to MeshWeaver.Plugins, which publishes bundles
+and no packages.
+
+---
+
+## 6. See also
 
 - [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy) — the end-to-end model this versioning
   feeds: merge preconditions, CI producing all images to ACR by version, and the policy-driven
   **self-update** (each install rolls itself per `Admin/UpdatePolicy`).
+- [ContinuousDeliveryContract.md](/Doc/Architecture/ContinuousDeliveryContract) — what a promoted,
+  sealed set is, and why the seal job is the signal.
+- [ReleaseGates.md](/Doc/Architecture/ReleaseGates) — the availability verdict the release marker
+  feeds.
 - [DataSyncSetup.md](/Doc/Architecture/DataSyncSetup) — the platform version doubles as the
   content-version for static-repo / GitHub data-sync.
 - [Deployment.md](/Doc/Architecture/Deployment) — where the built images go (AKS vs Container Apps).

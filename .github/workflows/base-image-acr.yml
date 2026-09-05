@@ -15,8 +15,9 @@ name: Rebuild portal-ai base image (ACR, multi-arch)
 # No local Docker needed: buildx runs on the GitHub runner; setup-qemu-action emulates the arm64
 # RUN steps on the amd64 runner; `buildx --push` writes the manifest list straight to ACR in one shot
 # (@anthropic-ai/claude-code is pure JS / arch-independent; @github/copilot resolves its matching
-# per-platform optional-dep binary inside each platform's emulated build). This mirrors the GHCR base
-# build in release-images.yml — same buildx step, pushed to ACR (meshweaver.azurecr.io) instead.
+# per-platform optional-dep binary inside each platform's emulated build). This is the ONLY lane
+# that builds the base: main-cd layers the portal on `memex-portal-ai-base:latest` from ACR, and a
+# release is a promotion of that set (release.yml), never a second build.
 #
 # Auth: OIDC federated login (no stored secret). The federated credential is scoped to
 # ref:refs/heads/main, so dispatch this on the `main` ref: `gh workflow run base-image-acr.yml --ref main`.

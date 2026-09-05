@@ -132,7 +132,7 @@ whole guard is drawn along:
 
 This gate resolves a pull-request *number the author declared*, under a scoped GitHub App
 installation token with `pull-requests: read`. No plugin source enters core's build; `dotnet build`
-here still needs no sibling on disk; `release-packages` still ships without one. That is the same
+here still needs no sibling on disk; a release (`release.yml`) checks nothing out at all. That is the same
 footing [`shared-rules`](/Doc/Architecture/SharedRuleBlocks) has stood on since #2732, and both are
 inventoried in [Repository Dependency Direction](/Doc/Architecture/RepositoryDependencyDirection) § C.
 

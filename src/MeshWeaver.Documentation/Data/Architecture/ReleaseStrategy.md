@@ -53,33 +53,31 @@ a reviewer enforce (c)+(d). The checklist is in `.github/pull_request_template.m
 
 ## 2. Versions: current-build vs official
 
-The one number is `PlatformVersion` in `Directory.Build.props` — **today `3.0.0-rc1`**. Every build
-derives its version from it ([details](/Doc/Architecture/ReleaseProcess)):
+The one number is `PlatformVersion` in `Directory.Build.props` — **today `3.1.0`**, the *next*
+release. Every build derives its version from it ([details](/Doc/Architecture/ReleaseProcess)):
 
-- **Current build (continuous):** `3.0.0-rc1.ci.<n>` — the default. `<n>` is the **GitHub Actions run
+- **Current build (continuous):** `3.1.0-ci.<n>` — the default. `<n>` is the **GitHub Actions run
   number** (monotonic), so newer builds always sort higher. 🔴 This monotonicity is load-bearing: the
   self-updater picks the *newest* version, and the old seconds-since-midnight build number reset at
   midnight (a morning build would sort below the prior evening's). Do not revert it.
-- **Official release:** clean `3.0.0-rc1` — built with `-p:PublicRelease=true` (or, on the tag-driven
-  workflows, an explicit `-p:Version=`), fired by pushing a `v3.0.0-rc1` tag.
+- **Official release:** clean `3.1.0` — **the same bytes as one continuous build**, promoted by
+  `release.yml` when the annotated tag `v3.1.0` is pushed on a commit `main-cd` has promoted and
+  sealed. Nothing is rebuilt.
 
-> 🚨 **Keep the pre-release label on the core.** A bare `3.0.0` default would make every continuous
-> build `3.0.0-ci.<n>`, which sorts **below** the already-published `3.0.0-preview1` (SemVer §11.4
-> compares pre-release identifiers ASCII-lexically, and `"ci" < "preview1"`) — the self-updater would
-> pin to `preview1` and never roll forward again. See
-> [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) §1.
+> 🚨 **No pre-release label on the core, and no rc line.** `3.1.0-ci.<n>` sorts above every
+> `3.0.0-*` by its minor number, below the clean `3.1.0`, and below the next line's first
+> `3.2.0-ci.1` — which is why the bump to `3.2.0` happens the day `3.1.0` is tagged (the lane opens
+> that pull request). The rc labels were retired on 2026-09-05: SemVer compares them as text, so
+> `rc13` sorted below `rc2`. See [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) §1.
 
 ### Cutting an official release and starting the next line
 
-This is the only time you edit `Directory.Build.props`:
-
-1. **Cut the official release:** push the matching `v$(PlatformVersion)` tag (today `v3.0.0-rc1`).
-   `release-images.yml` + `release-packages.yml` build the clean artifacts, push the images to GHCR
-   and **mirror them into ACR** (`az acr import`), and push the packages to nuget.org. Stable
-   installs pick it up.
-2. **Start the next line:** bump `PlatformVersion` in `Directory.Build.props` (e.g. `3.1.0-rc1`).
-   Continuous builds are now `3.1.0-rc1.ci.<n>`. (Because `3.1.0 > 3.0.0`, the new line dominates the
-   comparison — a `3.1.0-rc1.ci.1` is newer than any `3.0.0-rc1.ci.<n>`.)
+1. **Cut the official release:** commit the notes page `Doc/ReleaseNotes/3_1_0`, then push an
+   annotated `v3.1.0` tag on a promoted, sealed commit. `release.yml` retags that commit's set
+   with the clean version in ACR, mirrors it to GHCR, records the release marker and publishes the
+   GitHub Release. Stable installs pick it up.
+2. **Start the next line:** merge the pull request the lane opened —
+   `PlatformVersion` `3.1.0` → `3.2.0`. Continuous builds are now `3.2.0-ci.<n>`, above the release.
 
 ---
 
@@ -90,11 +88,11 @@ string** — that tag is what each install compares.
 
 | Channel | Trigger | Version baked + image tag | Workflow |
 |---|---|---|---|
-| **Continuous** | green merge to `main` | `3.0.0-rc1.ci.<run#>` (+ short SHA + moving `main`) | `main-cd.yml` |
-| **Official** | push `v*.*.*` tag | clean `3.0.0-rc1` (+ `latest`) — GHCR **and** mirrored into ACR via `az acr import` | `release-images.yml` |
+| **Continuous** | green merge to `main` | `3.1.0-ci.<run#>` (+ short SHA + moving `main`) | `main-cd.yml` |
+| **Official** | push an annotated `v*.*.*` tag on a promoted, sealed commit | clean `3.1.0` — the continuous set **retagged** in ACR and mirrored to GHCR; nothing rebuilt | `release.yml` |
 
-So "build produces all images, with or without a build number," and a running install only has to
-list ACR tags and pick the best per its policy. (`main-cd.yml` still rolls the environments once as
+So the continuous build produces all images, the release names one of them, and a running install
+only has to list ACR tags and pick the best per its policy. (`main-cd.yml` still rolls the environments once as
 the bootstrap; steady-state updates are the self-updater below.)
 
 Two properties of the continuous leg matter to a reader of tags:
@@ -207,19 +205,20 @@ not `kubectl set image` by hand. The manual [AKS runbook](/Doc/Architecture/Depl
 
 | Step | Action | What ships | Who rolls to it |
 |---|---|---|---|
-| **a** | **Merge to `main`** (preconditions §1 green) | `main-cd.yml` builds the **multi-arch** image set (amd64 + arm64), tags it `3.0.0-rc1.ci.<run#>` (+ short SHA + moving `main`), pushes to **ACR** | **Continuous** installs (dev/test) |
-| **b** | **Push tag `v3.0.0-rc1`** | `release-images.yml` + `release-packages.yml` build the clean `3.0.0-rc1` multi-arch images (GHCR, mirrored into **ACR** via `az acr import`) + NuGet packages | **Stable** installs (prod) |
-| **c** | **Bump `PlatformVersion`** to the next line (e.g. `3.1.0-rc1`) in `Directory.Build.props` | continuous builds become `3.1.0-rc1.ci.<n>` | opens the next development line |
+| **a** | **Merge to `main`** (preconditions §1 green) | `main-cd.yml` builds the **multi-arch** image set (amd64 + arm64), tags it `3.1.0-ci.<run#>` (+ short SHA + moving `main`), pushes to **ACR**, bakes and seals | **Continuous** installs (dev/test) |
+| **b** | **Push the annotated tag `v3.1.0`** on a promoted, sealed commit | `release.yml` retags that set `3.1.0` in ACR, mirrors it to GHCR, records `_releases/3.1.0`, publishes the GitHub Release | **Stable** installs (prod) |
+| **c** | **Merge the bump** the lane opened (`PlatformVersion` → `3.2.0`) | continuous builds become `3.2.0-ci.<n>` | opens the next development line |
 
 ```bash
-# (a) ship a continuous build — just merge; CI builds + pushes the image set
+# (a) ship a continuous build — just merge; CI builds + pushes + seals the image set
 git switch main && git pull
 
-# (b) cut the official release — push an immutable, annotated tag matching PlatformVersion
-git tag v3.0.0-rc1 && git push origin v3.0.0-rc1
+# (b) cut the official release — an immutable, ANNOTATED tag on a commit whose CD run sealed
+#     (Doc/ReleaseNotes/3_1_0 must already be committed; the lane refuses a release without notes)
+git tag -a v3.1.0 -m "MeshWeaver 3.1.0" <sha> && git push origin v3.1.0
 
-# (c) open the next line — the ONLY time you edit Directory.Build.props:
-#     <PlatformVersion …>3.1.0-rc1</PlatformVersion>   (commit on a normal PR)
+# (c) open the next line — merge the pull request release.yml opened:
+#     release: PlatformVersion 3.1.0 → 3.2.0
 ```
 
 > **(a) can look shipped and produce no image.** CD reacts to *MeshWeaver Build and Test* completing
@@ -228,8 +227,9 @@ git tag v3.0.0-rc1 && git push origin v3.0.0-rc1
 > with `gh workflow run main-cd.yml --ref main` if it is missing (it also self-heals HEAD on a
 > hourly schedule).
 
-(a) and (b) are **independent**: a merge always ships a continuous build; a tag always ships a
-clean release. (c) follows (b) once per release line. The version mechanics behind each step are in
+(b) depends on (a): a tag can only name a set that a merge already shipped and sealed — that is the
+whole point of a promotion. (c) follows (b) once per release line, opened by the lane and merged
+by you. The version mechanics behind each step are in
 [Release Process & Versioning](/Doc/Architecture/ReleaseProcess); §2 above covers the same cut from
 the version-scheme angle.
 

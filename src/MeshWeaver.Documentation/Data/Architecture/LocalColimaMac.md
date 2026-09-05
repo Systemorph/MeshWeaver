@@ -109,15 +109,15 @@ You have two ways to get an arm64 image onto the VM. **CI now publishes multi-ar
 
 Both pipelines build **multi-arch manifest lists** (`linux/amd64` + `linux/arm64`) via the .NET SDK's `ContainerRuntimeIdentifiers="linux-x64;linux-arm64"` (an OCI image index — supported since SDK 8.0.405, and we build on .NET 10). They do **not** build the same set:
 
-- **CONTINUOUS** (`main-cd.yml`, every green merge to `main` → **ACR**) publishes the four-image set `memex-portal-ai`, `memex-migration`, `mw-plugin-test`, `memex-portal-next`, all-or-nothing via its `promote` job. This is the channel the self-updater watches.
-- **RELEASE** (`release-images.yml`, on a `v*.*.*` tag → **GHCR**, then mirrored into ACR) publishes `memex-portal-ai`, the lean `memex-portal`, and `memex-migration`. The lean `memex-portal` exists **only** in this channel — do not expect it on a `ci.<n>` tag. The hand-authored base `memex-portal-ai-base` is likewise built multi-arch with `docker buildx --platform linux/amd64,linux/arm64`. So on this arm64 VM, Docker/k3s pulls the **native arm64** variant automatically — no emulation, and the in-pod self-updater (the blockquote in the intro) can roll forward to new ACR tags on its own.
+- **CONTINUOUS** (`main-cd.yml`, every green merge to `main` → **ACR**) publishes the image set `memex-portal-ai`, `memex-migration`, `mw-plugin-test`, all-or-nothing via its `promote` job. This is the channel the self-updater watches.
+- **RELEASE** (`release.yml`, on a `v*.*.*` tag) publishes nothing new: it **promotes** the sealed continuous set of the tagged commit — the same three images retagged with the clean version in ACR and mirrored to **GHCR**. There is no lean `memex-portal` any more (it existed only in the retired rebuild lane). The hand-authored base `memex-portal-ai-base` is built multi-arch by `base-image-acr.yml` with `docker buildx --platform linux/amd64,linux/arm64`. So on this arm64 VM, Docker/k3s pulls the **native arm64** variant automatically — no emulation, and the in-pod self-updater (the blockquote in the intro) can roll forward to new ACR tags on its own.
 
 > **🚨 This only holds for genuinely multi-arch tags.** Tags built before the multi-arch CI change (and any tag hand-built single-arch) are **amd64-only**; run emulated on the arm64 VM they make .NET's `ConfigurationBinder` throw a spurious `NullReferenceException` (`InvokeStub_GraphStorageConfig.get_ConnectionString`) that crashes the portal on startup. Verify a tag is multi-arch before relying on it:
 > ```bash
 > docker manifest inspect meshweaver.azurecr.io/memex-portal-ai:latest \
 >   | grep -A1 '"architecture"'        # expect both "amd64" and "arm64"
 > ```
-> **One-time operator step:** the very first multi-arch roll needs the base rebuilt multi-arch *before* the app build (the app's arm64 leg has no base layer otherwise). `release-images.yml` does this on the next `v*.*.*` tag; to do it by hand into ACR: `az acr build --registry meshweaver --image memex-portal-ai-base:latest --platform linux/amd64 --platform linux/arm64 deploy/base-images/portal-ai` (or `docker buildx ... --push`).
+> **One-time operator step:** the very first multi-arch roll needs the base rebuilt multi-arch *before* the app build (the app's arm64 leg has no base layer otherwise). `gh workflow run base-image-acr.yml --ref main` does it; by hand into ACR: `az acr build --registry meshweaver --image memex-portal-ai-base:latest --platform linux/amd64 --platform linux/arm64 deploy/base-images/portal-ai` (or `docker buildx ... --push`).
 
 ### Option B — build natively (fast inner loop for un-pushed edits)
 

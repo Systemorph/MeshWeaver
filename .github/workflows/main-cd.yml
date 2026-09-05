@@ -10,10 +10,11 @@ name: Continuous Delivery (main)
 # tests. workflow_run starts after the named workflow COMPLETES; the `if` below filters to a
 # successful run that came from a push to main (not a PR run, not a failed run).
 #
-# This is the CONTINUOUS channel (build-numbered 3.0.0-ci.<build> baked in, images tagged by
-# commit SHA). The RELEASED channel — clean 3.0.0 NuGet packages + clean GHCR images — is a
-# SEPARATE path fired by pushing a v*.*.* tag (release-packages.yml + release-images.yml).
-# "Freeze a release" = push a tag; "merge to main" = this workflow.
+# This is the CONTINUOUS channel (build-numbered 3.1.0-ci.<build> baked in, images tagged by
+# commit SHA). The RELEASED channel — the clean 3.1.0 — is NOT a second build: release.yml, fired
+# by pushing a v*.*.* tag, PROMOTES the sealed set this workflow already published for that commit
+# (retags the images, copies the release marker, publishes the GitHub Release). Nothing ships to
+# NuGet any more. "Freeze a release" = push a tag; "merge to main" = this workflow.
 #
 # The portal and migration images build in PARALLEL jobs: the migration image is small
 # (~5 min) and used to run sequentially after the portal's ~18-minute multi-arch publish on
@@ -965,7 +966,8 @@ jobs:
       # never reach "up to date" and re-rolled on every check floor, and the About page said
       # `Version: 1.0.0` while /api/version answered correctly off a core-built assembly.
       #
-      # edge-images.yml and release-images.yml have always passed it, and say why in the same words
+      # edge-images.yml has always passed it, and says why in the same words (release.yml passes
+      # nothing: a release retags this build, so the bytes already report the version)
       # ("BAKED, not just tagged"). The step after the publish below reads the variable back out of
       # the pushed image, so a future omission fails the run instead of shipping a portal that
       # misreports itself — a tag is not evidence about the bytes under it.
@@ -2045,9 +2047,9 @@ jobs:
   # and it was silent because the broadcaster had NO CALLER (#2235; fixed in MeshWeaver.Plugins
   # together with the watcher's missing AccessContext), not because a mesh hop is unreliable. Two
   # emitters for one event is exactly the cross-repo coupling the rule above forbids; the receivers'
-  # own `schedule` poll remains the fallback for a lost dispatch. Package releases
-  # (`release-packages.yml`) emit nothing either: in-mesh source compiles against the IMAGE, never
-  # against a NuGet feed.
+  # own `schedule` poll remains the fallback for a lost dispatch. A clean release (`release.yml`)
+  # emits the same platform-build fact for the promoted tag and nothing else: in-mesh source
+  # compiles against the IMAGE, never against a package feed (NuGet publication is retired).
 
   # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (required) ──────────────────
   # After the release is ARMED (promote's last PUT), tell the control instance's mesh that a new
