@@ -92,6 +92,44 @@ something fails to compile against them.**
    Our own retention could refuse to evict a digest any live `Deployment` node names — the same
    discipline `KeepVersionsPerType` applies to assemblies, applied to layers.
 
+## The credential argument, which is the strongest one
+
+**Measured 2026-09-05 — registry secrets across the fleet:**
+
+| repo | secrets |
+|---|---|
+| MeshWeaver | `MW_REGISTRY_KEY` |
+| MeshWeaver.Plugins | `ACR_USERNAME`, `ACR_PASSWORD`, `ACR_PUSH_USERNAME`, `ACR_PUSH_PASSWORD`, `REGISTRY_PUBLISH_TOKEN` |
+| MeshWeaver.Education | `MW_REGISTRY_KEY`, `MW_REGISTRY_USERNAME`, `MW_REGISTRY_PASSWORD` |
+| MeshWeaver.Reinsurance | `ACR_USERNAME`, `ACR_PASSWORD`, `MW_REGISTRY_KEY` |
+| MeshWeaver.SocialMedia | `ACR_USERNAME`, `ACR_PASSWORD`, `MW_REGISTRY_KEY`, `REGISTRY_PUBLISH_TOKEN` |
+
+Two different credentials are in that table. `MW_REGISTRY_KEY` is the **memex** plugin registry —
+already the npm/NuGet-style pattern where the source credential is encapsulated in the registry and
+consumers hold only a registry token ([Plugin Registry](../PluginRegistry)). `ACR_USERNAME` /
+`ACR_PASSWORD` are **ACR pull credentials**, handed to each satellite's lane so
+`node-repo-compile-check` can `docker login` and pull the tester image.
+
+So every satellite already holds a memex registry credential — and carries a **second, different**
+credential purely to pull images. That is the sprawl, and it is the thing a mirror removes: the
+satellite drops the ACR pair and reuses the token it already has.
+
+### The bootstrap constraint does NOT apply to this use
+
+The circularity above is about a cluster **booting its own portal**. A CI job pulling the tester
+image is not a boot path — nothing is starting memex, and memex is already running. Likewise, one
+memex instance serving images to a *different* installation has no circularity: only the registry
+instance's own boot image must come from outside.
+
+**The circularity is per-instance, not global.** That matters, because the credential sprawl lives
+entirely in CI and in other installations — exactly where the constraint is silent.
+
+| who pulls | today | with a mirror |
+|---|---|---|
+| satellite CI (tester/portal image) | ACR pull credential per repo | existing memex token |
+| another installation | ACR credential it should not have | its own memex identity |
+| the registry instance's own cluster, at boot | ACR | **ACR, permanently** |
+
 ## The shape: a read-through mirror first
 
 ```
@@ -108,6 +146,10 @@ something fails to compile against them.**
 Pull-side only, to begin with. Pushes keep going to ACR, so CD is unchanged and the mirror can be
 turned off without a migration. Every benefit above except (4) is available from the pull side
 alone, because they all derive from *reading* manifests and layers.
+
+**The first consumer to move is satellite CI, not any cluster.** It is where the duplicated
+credentials are, it is unaffected by the bootstrap constraint, and a mirror that is wrong there
+costs a red CI run rather than an outage. Clusters move later, if at all.
 
 ## What the implementation has to get right
 
