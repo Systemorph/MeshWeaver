@@ -109,7 +109,24 @@
          the 2.1.x managed layer. Deliberately version-AGNOSTIC prose: naming a specific version
          here goes stale the moment the pin below is bumped (it said 3.50.3 while the pin read
          3.53.3). The pin is the source of truth; this comment explains WHY it exists.
-         Pinned explicitly in the Sqlite projects. -->
+         Pinned explicitly in the Sqlite projects.
+
+         🚨 THE MANAGED LAYER IS PINNED TOO, AND NOT HERE (MeshWeaver#3328). Nothing in this src/
+         tree consumes SQLitePCLRaw — MeshWeaver.Hosting.Sqlite lives in MeshWeaver.Plugins — and
+         with CentralPackageTransitivePinningEnabled unset a PackageVersion for a purely transitive
+         package overrides nothing, so the managed pin is a VersionOverride on that project's own
+         PackageReference (MeshWeaver.Plugins#1351): core 3.0.2, provider.e_sqlite3 3.0.2.
+
+         The reason is NOT that project's: it is in the PORTAL IMAGE's closure, and that closure is
+         the reference set every satellite's module bundles compile against. It also holds Roslyn,
+         and Microsoft.CodeAnalysis.Workspaces binds SQLitePCLRaw.core 3.0.2.2801 while declaring NO
+         SQLitePCLRaw dependency in its package — so NuGet resolved the family on Microsoft.Data.Sqlite
+         alone, at 2.1.11.2622, and every module bundle in the fleet died on MSB3277. 3.0.2 is the
+         version the image's other consumer already binds.
+
+         Do NOT "finish the family" by raising bundle_e_sqlite3 to 3.0.x: its 3.0 shape replaces
+         SQLitePCLRaw.lib.e_sqlite3 with SourceGear.sqlite3 3.50.4.2 and would quietly undo the pin
+         above. Doc/Architecture/PlatformImageClosure has the measurements. -->
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
     <PackageVersion Include="ModelContextProtocol" Version="1.4.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.2.0" />
