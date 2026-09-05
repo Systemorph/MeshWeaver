@@ -1150,6 +1150,15 @@ jobs:
       - name: The published image's closure must be a reference set modules can build against
         run: |
           set -euo pipefail
+          # 🚨 PyYAML is NOT on the runner, and a plain `pip install` is refused (PEP 668
+          # externally-managed). The gate reads the composed-module set out of THIS workflow rather
+          # than restating it, so it needs a real YAML parser — same venv idiom, same pinned
+          # version, as the workflow-shell gate in dotnet-test.yml. Unconditional: an install that
+          # fails is RED, never a reason to skip the gate.
+          python3 -m venv "$RUNNER_TEMP/refsetgate"
+          "$RUNNER_TEMP/refsetgate/bin/pip" install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
+          export PATH="$RUNNER_TEMP/refsetgate/bin:$PATH"
+          python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
           root=plugins-repo/src/Memex.Portal.Distributed/bin/Release
           mapfile -t dirs < <(find "$root" -type f -name meshweaver-surface.manifest -path '*/publish/*' -exec dirname {} \; | sort -u)
           if [ "${#dirs[@]}" -eq 0 ]; then
