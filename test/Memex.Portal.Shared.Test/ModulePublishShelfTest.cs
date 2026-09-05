@@ -53,14 +53,16 @@ public class ModulePublishShelfTest : IDisposable
         catch { /* temp cleanup is the OS's problem, never a test failure */ }
     }
 
-    /// <summary>A packed module bundle the route can read, declaring the given floor.</summary>
-    private static byte[] Bundle(string? minMeshVersion)
+    /// <summary>A packed module bundle the route can read, declaring the given floor. A null
+    /// <paramref name="frameworkMvid"/> omits the field entirely — the shape a producer on a lane
+    /// older than #3211 uploads, and the one the registry refuses since #3240.</summary>
+    private static byte[] Bundle(string? minMeshVersion, string? frameworkMvid = "test-build")
     {
         var manifestJson = JsonSerializer.Serialize(new
         {
             plugin = "SpeechPkg",
             version = "1.0.0",
-            frameworkMvid = "test-build",
+            frameworkMvid,
             module = new
             {
                 assemblyName = "MeshWeaver.Speech",
@@ -83,7 +85,8 @@ public class ModulePublishShelfTest : IDisposable
         return buffer.ToArray();
     }
 
-    private async Task<HttpResponseMessage> Publish(string? minMeshVersion)
+    private async Task<HttpResponseMessage> Publish(
+        string? minMeshVersion, string? frameworkMvid = "test-build")
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -104,7 +107,7 @@ public class ModulePublishShelfTest : IDisposable
             HttpMethod.Post,
             PluginBundleEndpoints.RoutePrefix + "/SpeechPkg?packagePath=Plugins/SpeechPkg");
         request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + Token);
-        request.Content = new ByteArrayContent(Bundle(minMeshVersion));
+        request.Content = new ByteArrayContent(Bundle(minMeshVersion, frameworkMvid));
         return await client.SendAsync(request);
     }
 
@@ -169,5 +172,56 @@ public class ModulePublishShelfTest : IDisposable
         var list = ModuleActivationSidecar.Read(root);
         Assert.True(list.PendingRestart, "an activated landing loads at the next restart");
         Assert.Equal("0.0.1", Assert.Single(list.Entries).MinMeshVersion);
+    }
+
+    /// <summary>
+    /// 🚨 #3240 — THE REGISTRY'S OWN 400, armed 2026-09-05. A bundle that states no framework
+    /// identity is REFUSED, by name, instead of shelving a null that the index then advertises.
+    ///
+    /// <para>Why the registry checks something its producers already refuse: a null on the SERVED
+    /// side is the one unknown landing cannot heal. <c>ModuleUpdateDecision</c> (#3154) compares
+    /// (version, framework identity) on every reconcile of every installation, and a module's
+    /// version encodes CONTENT only — so a rebuild of unchanged source against a new platform
+    /// republishes under the SAME version and the identity is the only thing that distinguishes it
+    /// from a no-op. Shelve one null and every consumer of that module answers "already landed, the
+    /// identity could not be checked" forever. A registry that trusts its publishers is not a
+    /// registry.</para>
+    ///
+    /// <para>The refusal must stay shape-AGNOSTIC — `g&lt;sha&gt;`, a 32-hex MVID and `s&lt;hash&gt;`
+    /// are all identities a lane legitimately states. Only ABSENCE is refused, which is what
+    /// <see cref="AStatedIdentityOfAnyShape_IsAccepted"/> pins from the other side.</para>
+    /// </summary>
+    [Fact]
+    public async Task ABundleStatingNoFrameworkIdentity_IsRefused_AndNothingIsShelved()
+    {
+        using var response = await Publish(minMeshVersion: null, frameworkMvid: null);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var error = body.RootElement.GetProperty("error").GetString();
+        Assert.Contains("states no framework identity", error);
+        // The remedy is named, not merely the fault — the publisher has to know what to change.
+        Assert.Contains("node-repo-module-pack.yml", error);
+
+        // 🚨 NOTHING was shelved. A refusal that still wrote the bytes would leave the null on the
+        // shelf and only change the status code the publisher sees.
+        Assert.Empty(ModuleActivationSidecar.Read(root).Entries);
+    }
+
+    /// <summary>
+    /// The other side of the same refusal: an identity of a shape the from-source lane produces (a
+    /// bare 32-hex MVID) is accepted and survives verbatim. Without this, narrowing the check to
+    /// one token shape would look like a passing test while redding a lane that states its identity
+    /// perfectly well.
+    /// </summary>
+    [Fact]
+    public async Task AStatedIdentityOfAnyShape_IsAccepted()
+    {
+        const string mvid = "cef92e9759e940ea8a1aa73173b12227";
+        using var response = await Publish(minMeshVersion: null, frameworkMvid: mvid);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var entry = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        Assert.Equal(mvid, entry.FrameworkMvid);
     }
 }
