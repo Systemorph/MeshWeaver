@@ -101,55 +101,28 @@
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection" Version="10.0.10" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
-    <!-- 🚨 THE SQLitePCLRaw FAMILY IS PINNED AS A SET — native AND the managed trio (#3328).
-         Pin the patched native engine first: Microsoft.Data.Sqlite pulls
+    <!-- Pin the patched native SQLite engine: Microsoft.Data.Sqlite pulls
          SQLitePCLRaw.lib.e_sqlite3 2.1.11 transitively, which bundles a SQLite engine with the
          high-severity vuln GHSA-2m69-gcr7-jv3q (NU1903). The native engine package is versioned to
          track the bundled SQLite version, so any 3.50+ engine is past the vulnerable range.
-         Deliberately version-AGNOSTIC prose: naming a specific version here goes stale the moment a
-         pin below is bumped (it once said 3.50.3 while the pin read 3.53.3). The pins are the
-         source of truth; this comment explains WHY they exist.
+         Deliberately version-AGNOSTIC prose: naming a specific version here goes stale the moment
+         the pin below is bumped (it once said 3.50.3 while the pin read 3.53.3). The pin is the
+         source of truth; this comment explains WHY it exists.
+         Pinned explicitly in the Sqlite projects.
 
-         🚨 AND THE MANAGED TRIO IS PINNED TOO, at the 3.x family — because leaving it unpinned made
-         the PLATFORM IMAGE internally inconsistent, and that fails EVERY module compile in EVERY
-         satellite with no repo change to blame. Measured on the 3.0.0-rc9.ci.7779 image
-         (MeshWeaver.Plugins#1349, four bundles):
+         🚨 THE MANAGED TRIO IS DELIBERATELY *NOT* PINNED HERE (#3328, #3342 withdrawn). The image's
+         Roslyn binds SQLitePCLRaw.core 3.0.2 while declaring no package dependency on it, so /app
+         shipped 2.1.11 and every module bundle in every satellite died on MSB3277. The fix lives
+         beside its reason, as a VersionOverride in MeshWeaver.Plugins'
+         MeshWeaver.Hosting.Sqlite.csproj (Plugins#1351) — nothing in this repo's src/ consumes
+         SQLitePCLRaw, so a central pin here is inert for a pure transitive AND would force that
+         repository to move its platform pin before it could take effect.
 
-             error MSB3277: conflict between "SQLitePCLRaw.core, Version=2.1.11.2622" and
-             "SQLitePCLRaw.core, Version=3.0.2.2801"
-               depends on 2.1.11.2622: platform-refs-effective/SQLitePCLRaw.core.dll   ← /app ships this
-               depends on 3.0.2.2801:  platform-refs-effective/Microsoft.CodeAnalysis.Workspaces.dll
-
-         Both sides are INSIDE /app. Roslyn's Workspaces assembly (its optional SQLite persistent
-         storage) is compiled against core 3.0.2, while /app shipped 2.1.11 because that is what
-         Microsoft.Data.Sqlite asks for. 🚨 The 3.0.2 side is an ASSEMBLY reference baked into
-         Roslyn's metadata, NOT a package edge — no package in the closure depends on it, and
-         lib.e_sqlite3 3.53.3 has empty dependency groups. So pinning the managed trio at 2.1.11
-         would be a no-op: 2.1.11 is already what resolves, and it is the LOSING side.
-
-         3.x is also the coherent pairing — 3.x managed beside a 3.53.3 native — where 2.1.x managed
-         under a 3.53.3 native was only ever the CVE workaround. Verified, not assumed:
-         Microsoft.Data.Sqlite 10.0.10 against SQLitePCLRaw.core/provider/bundle 3.0.2 and
-         lib 3.53.3 builds with NO MSB3277, loads core 3.0.2.2801, reports engine 3.53.3 and
-         round-trips a query.
-
-         🚨 THESE THREE ARE INERT ON THEIR OWN — do not read them as the fix landed. Under Central
-         Package Management a bare <PackageVersion> does NOT pin a PURE TRANSITIVE; it binds only
-         where something references the package directly. Measured on this very edit: building
-         MeshWeaver.Plugins' MeshWeaver.Hosting.Sqlite against this tree still resolved
-         core/provider/bundle 2.1.11, while lib.e_sqlite3 took 3.53.3 — because that project alone
-         carries an explicit <PackageReference> for it ("Explicit so nearest-wins beats the
-         transitive"). The remedy is the narrow one this file already prescribes for
-         DataProtection: a VERSIONLESS <PackageReference> in the project the package flows through
-         (MeshWeaver.Hosting.Sqlite, beside the lib one), which makes this central pin bite for that
-         project — NOT repo-wide CentralPackageTransitivePinningEnabled, whose blast radius is
-         resolution-wide and belongs in its own PR. That half lives in MeshWeaver.Plugins and is
-         gated on this commit reaching its MW_PLATFORM_REF: a versionless reference to a package
-         with no PackageVersion in the pinned core is a CPM error. See #3328. -->
-    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
-    <PackageVersion Include="SQLitePCLRaw.core" Version="3.0.2" />
-    <PackageVersion Include="SQLitePCLRaw.provider.e_sqlite3" Version="3.0.2" />
-    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.2" />
+         🚨 AND NEVER PIN SQLitePCLRaw.bundle_e_sqlite3 TO 3.0.x "to finish the family". Its 3.0
+         shape depends on SourceGear.sqlite3 3.50.4.2 INSTEAD of SQLitePCLRaw.lib.e_sqlite3 —
+         measured in a restore graph — so it silently swaps the native engine out from under the
+         pin below and the CVE fix stops being the thing supplying the engine. #3342 pinned it and
+         was withdrawn for exactly this. -->
     <PackageVersion Include="ModelContextProtocol" Version="1.4.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.2.0" />
     <PackageVersion Include="ModelContextProtocol.Core" Version="1.2.0" />
