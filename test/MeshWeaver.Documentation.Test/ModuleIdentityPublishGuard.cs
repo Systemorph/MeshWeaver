@@ -69,44 +69,54 @@ public class ModuleIdentityPublishGuard
         Assert.Contains("anchor=\"$REFS/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
         Assert.Contains("--graph-dll \"$anchor\"", pack, StringComparison.Ordinal);
 
-        // 🚨 THE FROM-SOURCE ARM BUILDS ITS ANCHOR — it does not read one out of $PACKDIR.
-        // `dotnet publish` drops MeshWeaver.Compiler.dll beside a module only when that module
-        // transitively ProjectReferences it. MeshWeaver.AI and MeshWeaver.Markdown.Collaboration
-        // both do, through MeshWeaver.Graph, and they were the ONLY two entries this lane built
-        // when the anchor landed — so a property of two reference graphs was written down as a
-        // property of the arm, and 100% of the population agreed. Core's compose set grew to four
-        // on 2026-09-04 (#3290): MeshWeaver.Maps stops at MeshWeaver.Layout and
-        // MeshWeaver.Payments.Stripe is a leaf, so both were RED on their first run and took
-        // `CD delivered, or had a good reason not to` with them.
-        Assert.Contains("anchordir=\"$GITHUB_WORKSPACE/meshweaver/src/MeshWeaver.Compiler\"", pack, StringComparison.Ordinal);
-        Assert.Contains("dotnet build \"$anchordir/MeshWeaver.Compiler.csproj\" -c Release -warnaserror", pack, StringComparison.Ordinal);
-        Assert.Contains("anchor=\"$anchordir/bin/Release/net10.0/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
+        // 🚨 THE FROM-SOURCE ARM STATES THE IDENTITY; IT DOES NOT BUILD ONE.
+        //
+        // Three cures were tried on this arm and all three were the same mistake — deriving the
+        // platform's identity from a DLL sitting in a per-MODULE job:
+        //   #3211 read it out of $PACKDIR (present only when the module transitively
+        //         ProjectReferences the compiler — a property of two reference graphs, written
+        //         down as a property of the arm, and 100% of a population of two agreed);
+        //   #3293 built it from the platform tree (correct location, still per job);
+        //   #3306 removed the `-p:Version` that polluted that build (correct property, still per job).
+        // Run 33950389008 (2026-09-05, four entries, ONE commit, every leg `plan: BUILD`) still
+        // stated three identities: Maps and Payments.Stripe agreed on 0051e721… having compiled the
+        // compiler ONCE, while Markdown.Collaboration (6553ea37…) and AI (395909c2…) each compiled
+        // it TWICE and each got its own. The split is exactly the reference graph: those two reach
+        // the compiler transitively, so the MODULE build compiles it first, into the same output
+        // path, under the module's own global properties — and the anchor build that follows keeps
+        // those bytes. No property removed from the ANCHOR build can fix pollution that arrives
+        // from the MODULE build upstream.
+        Assert.Contains("identity=(--framework-mvid \"g$sha\")", pack, StringComparison.Ordinal);
+        Assert.Contains("rev-parse HEAD", pack, StringComparison.Ordinal);
 
-        // The ratchet: scavenging the anchor out of the module's own publish output is the exact
-        // defect above, and it reads as reasonable every time. It must not come back.
+        // 🚨 THE RATCHET THAT REPLACES ALL THREE. The arm must not compile the platform's compiler
+        // at all: a per-job build is the mechanism every previous cure left in place, and it packs
+        // GREEN while handing #3154's comparison a value no consumer can match. If a fourth cure
+        // ever reaches for `dotnet build …MeshWeaver.Compiler.csproj` here, this fails.
+        Assert.DoesNotContain("MeshWeaver.Compiler.csproj", pack, StringComparison.Ordinal);
+        Assert.DoesNotContain("anchordir=", pack, StringComparison.Ordinal);
+
+        // The older ratchet stands: scavenging the anchor out of the module's own publish output
+        // reads as reasonable every time. It must not come back either.
         Assert.DoesNotContain("anchor=\"$PACKDIR/MeshWeaver.Compiler.dll\"", pack, StringComparison.Ordinal);
 
-        // 🚨 #3176 — AND THE ANCHOR BUILD PASSES NO MODULE VERSION. `$VERSION` is the MODULE's
-        // package version; MSBuild writes it into the assembly's version attributes, which are part
-        // of the metadata the MVID is computed over. Passing it makes every matrix job build its
-        // OWN compiler, so a run states one identity PER MODULE — measured on THIS command, the two
-        // package versions core CD packs: -p:Version=1.3.18 → 34337c31960d47f5b5251d32ef923fc6,
-        // -p:Version=1.0.24 → 7c1c4f70de084da78659e6bda495e1c5, while two runs with NO override are
-        // byte-identical (71cc81badb364c5d8558ac5e7db6a44e twice). Observed in the field on run 33874892203
-        // (MeshWeaver.AI be27d0fb…, MeshWeaver.Markdown.Collaboration d756b82e…, same platform,
-        // same commit). That is the SILENT half of this defect: absent the anchor the pack goes
-        // red, but a per-module anchor packs GREEN and hands #3154's comparison a value no
-        // consumer can match. The identity is the PLATFORM's, so the platform's own properties
-        // build it and nothing per-module may reach that command line.
-        var anchorBuild = pack[pack.IndexOf(
-            "dotnet build \"$anchordir/MeshWeaver.Compiler.csproj\"", StringComparison.Ordinal)..];
-        anchorBuild = anchorBuild[..anchorBuild.IndexOf("anchor=\"$anchordir", StringComparison.Ordinal)];
-        Assert.DoesNotContain("-p:Version", anchorBuild, StringComparison.Ordinal);
+        // 🚨 AND `g<sha>` IS THE TOKEN A CONSUMER ACTUALLY READS. A portal image is built with
+        // -p:CIRun=true, so AddCommitHashMetadata stamps
+        // AssemblyMetadata("MeshWeaverFrameworkIdentity", "g<sha>") and
+        // FrameworkIdentity.ReadIdentity PREFERS that stamp over the MVID. A bundle stating a
+        // 32-hex MVID could therefore never equal what a consumer reports — not "usually differs",
+        // never equal, by construction — so #3154's (version, identity) comparison could only ever
+        // answer "identity could not be checked". Determinism alone would not have fixed that;
+        // stating the commit does.
+        Assert.Contains("MeshWeaverFrameworkIdentity", File.ReadAllText(Path.Combine(
+            SourceScan.FindRepoRoot(), "src", "MeshWeaver.Plugin.Build", "FrameworkIdentity.cs")),
+            StringComparison.Ordinal);
 
-        // 🚨 BOTH arms end RED when there is no anchor — the branch picks WHERE to look, never
-        // whether to check. A bundle whose identity is a guess is worse than a pack that stops.
+        // 🚨 An unreadable platform commit ends the arm RED — it never falls back to a derived or
+        // empty identity. The branch picks WHERE the identity comes from, never whether to have one.
         Assert.Contains("if [ ! -f \"$anchor\" ]; then", pack, StringComparison.Ordinal);
         Assert.Contains("::error::no identity anchor for $MODULE", pack, StringComparison.Ordinal);
+        Assert.Contains("cannot read the platform commit", pack, StringComparison.Ordinal);
         Assert.DoesNotContain("--graph-dll \"${anchor:-", pack, StringComparison.Ordinal);
     }
 
