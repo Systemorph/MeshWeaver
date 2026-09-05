@@ -73,7 +73,7 @@ data:
   #       NodeType, sequential, measured 2026-08-10 — ~10 min on the largest mesh we run).
   #       See probes.startup in values — turning the gate on without raising it means
   #       Kubernetes kills the pod mid-bake, every time, forever. Nothing else reads the
-  #       gate: a namespace probing /alive or /healthz ignores it entirely.
+  #       gate: a namespace probing /alive, /ready or /healthz ignores it entirely.
   #    3. strategy.maxUnavailable: 0 — the gate works by making the NEW pod refuse
   #       readiness, which protects nothing if the serving pod was already deleted.
   # PreWarm__AllowUnprovenBake: the escape hatch for the one condition that is NOT a verdict —

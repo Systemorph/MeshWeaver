@@ -116,10 +116,10 @@ public static class SetupOnlyHost
         // instance awaiting setup is not failing; it is waiting for a person.
         //
         // 🚨 ALL of them, and this is not defensive breadth — it is the chart's actual contract.
-        // The deployment probes /health (startup) and /alive (readiness + liveness); only /healthz
-        // was mapped here, so every probe 404-ed, the pod never went READY, the previous replica
-        // kept the traffic, and the wizard was unreachable through the ingress. The portal was
-        // serving it perfectly the whole time and no one could get to it. Measured on a real
+        // The deployment probes /health (startup), /ready (readiness) and /alive (liveness); only
+        // /healthz was mapped here, so every probe 404-ed, the pod never went READY, the previous
+        // replica kept the traffic, and the wizard was unreachable through the ingress. The portal
+        // was serving it perfectly the whole time and no one could get to it. Measured on a real
         // cluster, 2026-09-03 — SetupProbeEndpointsTest pins the set against the chart.
         foreach (var probe in ProbePaths)
             app.MapGet(probe, () => Results.Text("ok"));
@@ -132,12 +132,14 @@ public static class SetupOnlyHost
     /// Every path the deployment may probe while this instance waits to be set up.
     ///
     /// <para>🚨 These are the CHART's paths, not a guess: <c>deploy/helm</c> gives the portal a
-    /// startup probe on <c>/health</c> and readiness + liveness probes on <c>/alive</c>, and the
-    /// ASP.NET service defaults add <c>/healthz</c>. A path missing here is a probe that 404s, a pod
-    /// that never reports READY, and a wizard nobody can reach — the failure is total and it is
-    /// silent, because the portal itself is working.</para>
+    /// startup probe on <c>/health</c>, a readiness probe on <c>/ready</c> and a liveness probe on
+    /// <c>/alive</c>, and the ASP.NET service defaults add <c>/healthz</c>. A path missing here is
+    /// a probe that 404s, a pod that never reports READY, and a wizard nobody can reach — the
+    /// failure is total and it is silent, because the portal itself is working.
+    /// <c>SetupProbeEndpointsTest</c> reads the chart and holds this list to it, which is how
+    /// <c>/ready</c> arrived here in the same change that put it in the chart (#3330).</para>
     /// </summary>
-    public static IReadOnlyList<string> ProbePaths { get; } = ["/healthz", "/health", "/alive"];
+    public static IReadOnlyList<string> ProbePaths { get; } = ["/healthz", "/health", "/alive", "/ready"];
 
     /// <summary>
     /// The message a host logs when it hands over to the wizard, so the reason appears in the log

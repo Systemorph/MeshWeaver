@@ -186,7 +186,7 @@ config:
     #      Without it Kubernetes kills the pod mid-bake, every time, forever.
     #   2. The startupProbe must actually EXIST and point at /health — that probe
     #      is the only thing that reads this gate. A namespace with no startupProbe
-    #      (or one probing /alive or /healthz) ignores the gate completely.
+    #      (or one probing /alive, /ready or /healthz) ignores the gate completely.
     #   3. strategy.maxUnavailable MUST be 0. The gate protects a portal only by
     #      making the new pod refuse readiness; at maxUnavailable:1 with replicas:1
     #      the serving pod can be deleted first, so the gate reports and the outage

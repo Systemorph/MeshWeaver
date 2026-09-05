@@ -127,8 +127,9 @@ prometheus:
         # 🚨 ALERT ON A REPLICA THAT DEGRADES WHILE STAYING READY (MeshWeaver#2194, items 4-5).
         # 2026-08-25, ns memex-cloud: two portal pods climbed 2.7 GB → 17.2 and 20.4 GB over four
         # hours of sync/bake recompile waves, pegged ~4 cores in GC, and served hung pages for THREE
-        # AND A HALF HOURS. No OOMKill, no probe failure (both post-startup probes watch /alive, and
-        # what /alive measures is a property of the deployed image, not of this chart), and no alert
+        # AND A HALF HOURS. No OOMKill, no probe failure (both post-startup probes watched /alive at
+        # the time — readiness moved to /ready in MeshWeaver#3330 — and what /alive measures is a
+        # property of the deployed image, not of this chart), and no alert
         # — so nothing pulled them from the Service endpoints and nobody knew until a human ran
         # `kubectl top`. The memory curve was the only witness and it alerted nobody; this is that
         # witness, wired up.
@@ -200,8 +201,9 @@ prometheus:
                 description: >-
                   One replica's working set is more than 3× the lightest in the same namespace and above
                   8 GB. That replica is accumulating retained memory faster than its siblings and will go
-                  GC-bound while still answering /alive, so it stays in the Service endpoints serving hung
-                  and garbled requests. Confirm with `kubectl top pods -n <ns>`; the immediate remediation
+                  GC-bound while still answering /ready, so it stays in the Service endpoints serving hung
+                  and garbled requests until a progress-aware /alive restarts it (readiness deliberately
+                  does NOT evict it — that hands its traffic to siblings on the same curve, MeshWeaver#3330). Confirm with `kubectl top pods -n <ns>`; the immediate remediation
                   is `kubectl delete pod` on the outliers (they grace-drain and the deployment replaces
                   them), which buys hours, not days. To tell the causes apart before acting, grep the
                   pod's whole life for `Stale-build convergence` and `self-heal recompile` — if both are
@@ -281,8 +283,9 @@ prometheus:
                   where .NET's default container GC heap hard limit sits, and it is BELOW the limit the
                   kubelet would OOMKill at — so from here the runtime defends memory with back-to-back
                   blocking gen2 rather than letting the pod restart, and the pod degrades while passing
-                  every probe. Measured on 2026-09-03: GC pause share 0.66 sustained for 2 h 15 with
-                  /alive answering Healthy throughout. Confirm the process is GC-bound rather than merely
+                  its readiness probe. Measured on 2026-09-03: GC pause share 0.66 sustained for 2 h 15
+                  with /alive answering Healthy throughout — before a progress-aware handler carried the
+                  live tag. Confirm the process is GC-bound rather than merely
                   large by grepping the pod for `Platform stalled` — pause ÷ stall above ~0.6 sustained,
                   with gen2 climbing while the reported managed MB does not fall, is retention. Unlike
                   PortalReplicaWorkingSetDiverged this fires when EVERY replica is heavy, which is the

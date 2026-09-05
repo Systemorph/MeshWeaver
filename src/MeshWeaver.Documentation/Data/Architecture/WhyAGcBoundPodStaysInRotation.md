@@ -263,6 +263,15 @@ say which side owns the handler and what core alone guarantees.
 the pod and hands its traffic to the survivors — the 2026-07-21 death-spiral. Liveness restarting
 one pegged replica has no such feedback loop; readiness does.
 
+🚨 **And do not point readiness at `/alive` either — it was, and that is #3330.** Both post-startup
+probes shared `/alive`, so the moment `MeshWeaver.Plugins#1234` made it progress-aware, readiness
+became progress-aware too, and readiness trips first (10 s × 3 = 30 s against liveness's
+15 s × 6 = 90 s). A GC-bound replica was therefore evicted a full minute before it was restarted,
+onto siblings at the same point on the same curve — the convergence measured above (ratio 1.06) is
+exactly what turns that into a cascade. Readiness now has its own path (`/ready`) and its own
+health-check tag; the derivation, the allow-list argument and the two guards that hold the chart and
+the code together are in [Probe semantics](../ProbeSemantics).
+
 ## Triage
 
 ```bash

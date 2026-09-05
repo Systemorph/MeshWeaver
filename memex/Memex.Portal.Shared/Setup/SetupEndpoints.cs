@@ -38,7 +38,8 @@ public static class SetupEndpoints
     /// wizard unreachable in practice.</para>
     /// </summary>
     private static readonly ImmutableHashSet<string> AlwaysAllowed =
-        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "/healthz", "/alive", "/health");
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase,
+            "/healthz", "/alive", "/ready", "/health");
 
     /// <summary>
     /// Maps the wizard and, while <see cref="InstanceSetupStatusAccessor.IsAwaitingSetup"/>, the
