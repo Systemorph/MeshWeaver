@@ -204,6 +204,7 @@ Each of those was **made to fail on purpose**, because prose that asserts a guar
 | a directory that does not exist | `1` | *"…does not exist. This gate reads the bytes that become /app; without them it verifies nothing, so it refuses rather than passes."* |
 | a directory holding 1 assembly | `1` | *"…holds 1 assemblies at its root — that is not a platform reference set (the portal ships ~214)."* |
 | 214 assemblies, surface manifest removed | `1` | *"…has no meshweaver-surface.manifest beside its assemblies… EITHER this gate pointed at the wrong directory OR the manifest silently stopped being published (#1699). Both are RED."* |
+| surface manifest truncated to 5 entries | `1` | *"…names only 5 assemblies; the platform's MeshWeaver.\* compile surface is ~44. A truncated manifest would make the one-producer half compare almost nothing."* |
 | pointed at a workflow with no `plugins-modules` job | `1` | *"jobs.plugins-modules.with.modules is absent or empty … refuses to fall back to a hard-coded list."* |
 
 ### Mutation proof
