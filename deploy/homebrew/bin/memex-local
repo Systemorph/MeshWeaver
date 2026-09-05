@@ -79,6 +79,9 @@ readonly MEMEX_LOCAL_VERSION="0.2.0"
 
 readonly LOCAL_HOME="${MEMEX_LOCAL_HOME:-$HOME/.memex-local}"
 readonly OVERLAY="$LOCAL_HOME/values.local.yaml"
+# The feature flag helm_deploy declares the mounted checkouts under, so they land on the RECONCILED
+# lane (re-asserted on every boot) and not only on the seed-once one — see the block in helm_deploy.
+readonly MOUNTED_FLAG="mountedCheckouts"
 # ── REGISTRY MODE — this install CONSUMES a remote plugin registry ──────────────────────────────
 # Written by `memex-local registry <url> [--key mwr_…] [--id ID]`, read by helm_deploy as one more
 # values file (passed AFTER the user's overlay, so it wins). Its presence IS the mode switch: with it
@@ -718,11 +721,29 @@ helm_deploy() {
   # --from-acr / --skip-image run, as the info line above says), plugin_args/install_names whenever
   # no plugin checkout was found. So the deploy died on "unbound variable" for exactly the paths the
   # script itself documents as normal. This tool is macOS-only; the guard is not optional here.
+  # 🚨 installByDefault is a SEED lane, and a seed says nothing about a portal that is already
+  # populated: InstanceAutoRegistrationService records what it delivered on
+  # Plugins/_DefaultInstallLedger and never re-asserts it ("the seed must not fight an operator").
+  # That is right for a deployment seeding itself and wrong here, where the whole point is to MIRROR
+  # a working tree — the mounted repos were installed once and then stopped tracking their
+  # checkouts, silently: measured on 2026-09-05, a portal still served a course as of 2026-08-31
+  # while the mount had moved on for a week, with every boot reporting "0 written, 0 unchanged"
+  # (MeshWeaver#3359). Neither auto-update mechanism covers this shape either — PluginUpdateWatcher
+  # needs GitHub webhooks a local install never receives, and RegistryUpdateReconciler does nothing
+  # without a registry — so the boot is the only occasion there is.
+  #
+  # The same patterns therefore ALSO go on the environment's own composition lane (a feature flag,
+  # MeshWeaver#1735), which is exempt from the seed ledger and re-asserts on every boot. It costs
+  # nothing when nothing changed: CatalogLayoutAreas.InstallOrUpdateCore short-circuits on the
+  # package's manifest.lock hash and no node travels. Both lanes are set, not one: the seed still
+  # establishes a FRESH install, and the flag keeps it honest afterwards.
   local n i=0
   for n in ${install_names[@]+"${install_names[@]}"}; do
     plugin_args+=(--set "pluginCatalog.installByDefault[$i]=$n/*")
+    plugin_args+=(--set "features.$MOUNTED_FLAG.packages[$i]=$n/*")
     i=$((i + 1))
   done
+  [ "$i" -gt 0 ] && plugin_args+=(--set "features.$MOUNTED_FLAG.enabled=true")
 
   # Layering: chart defaults < TRACKED local defaults (ship with the brew package, so existing
   # installs pick up new behaviour — e.g. the adopt-only startup — on upgrade)
