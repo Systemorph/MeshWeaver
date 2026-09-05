@@ -101,6 +101,16 @@ WebhookInbox__Targets__0__SecretConfigKey: "Hosting:PlatformWebhookSecret"
 It names a **key**, never a secret value: nothing here belongs in a ConfigMap, and a secret pasted
 in by mistake resolves to no key and refuses everything rather than leaking.
 
+🚨 **The declaration is paired with a SLOT, and slot `__0` is not the same target on every
+deployment.** The instance that receives platform builds renders
+`webhookInboxTargets: ["Store/Payments", "Hosting/PlatformBuilds"]` from its `Hosting/Deployment`
+record — so *its* `__0` is **Stripe**, and the platform target is `__1`. A blanket default would
+demand `X-Hub-Signature-256` from Stripe, which signs `Stripe-Signature`, and 401 every payment
+delivery. The chart therefore renders both slots' declarations **empty**, and each instance sets
+its own on the index that actually carries the target — in the same record that sets the slot
+(`extraPortalConfig` on the `Hosting/Deployment` record, which `HelmValues` projects onto
+`config.memex_portal`). Set the target and its declaration in one change, never separately.
+
 When a target declares one, the endpoint verifies `X-Hub-Signature-256` over the raw body **before
 anything is stored**:
 

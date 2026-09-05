@@ -87,17 +87,20 @@ config:
     # stores deliveries nobody consumes.
     WebhookInbox__Targets__0: "Hosting/PlatformBuilds"
     # 🚨 #3312 — what makes a WRONG secret VISIBLE, paired with the slot ABOVE that it describes.
-    # Naming the key here tells the inbox to verify X-Hub-Signature-256 itself and answer 401 when
-    # it does not, instead of storing the delivery, answering 2xx and letting the watcher drop it
-    # unverifiable. Before this, "the secret matches" and "the secret drifted" were the SAME green
-    # POST from CD's side. It names a KEY, never a secret: the value stays in the
-    # SecretProviderClass-mounted Hosting:PlatformWebhookSecret.
+    # Naming a configuration key here tells the inbox to verify X-Hub-Signature-256 itself and
+    # answer 401 when it does not, instead of storing the delivery, answering 2xx and letting the
+    # consumer drop it unverifiable. Before this, "the secret matches" and "the secret drifted"
+    # were the SAME green POST from CD's side. It names a KEY, never a secret: the value stays in
+    # the vault-mounted Hosting:PlatformWebhookSecret.
     #
-    # 🚨 IT DESCRIBES __0 AND ONLY __0. Set it wherever the platform-build target is set, and
-    # nowhere else — a deployment that moves the target to __1 (see below) must move this with it,
-    # and a slot holding a STRIPE target must leave its declaration empty, because Stripe signs
-    # `Stripe-Signature` and would 401 against this scheme on every delivery.
-    WebhookInbox__Targets__0__SecretConfigKey: "Hosting:PlatformWebhookSecret"
+    # 🚨 EMPTY BY DEFAULT, AND IT MUST STAY THAT WAY. This declaration is PAIRED WITH A SLOT, and
+    # slot __0 is not the same target on every deployment: memex-cloud's record renders
+    # webhookInboxTargets ["Store/Payments", "Hosting/PlatformBuilds"], so its __0 is STRIPE.
+    # Defaulting a GitHub-style HMAC here would demand X-Hub-Signature-256 from Stripe — which
+    # signs `Stripe-Signature` — and 401 every payment delivery. Declare it per instance, in the
+    # SAME record that sets the slot (extraPortalConfig on the Hosting/Deployment record), on
+    # whichever index actually carries Hosting/PlatformBuilds.
+    WebhookInbox__Targets__0__SecretConfigKey: ""
     # A deployment that ALSO needs a second inbox target (e.g. memex-cloud additionally listens
     # on Store/Payments for Stripe) sets __1 too — never a second writer of __0. See #2235: a
     # hand-set `kubectl set env WebhookInbox__Targets__0=...` on the live Deployment permanently
@@ -105,11 +108,11 @@ config:
     # so the platform-build target silently never took effect even though the ConfigMap was
     # correct. Leave empty when only one target is needed.
     WebhookInbox__Targets__1: ""
-    # Empty because __1 is empty here. An overlay that puts Hosting/PlatformBuilds on __1 — which
-    # is what the control instance does, its __0 being permanently shadowed by an unrecorded inline
-    # `env:` (#2352) — MUST set this to Hosting:PlatformWebhookSecret in the same overlay. Until it
-    # does, the inbox accepts release events without checking them and both CD lanes say so on
-    # every publish: `signature: not-required`, with a ::warning:: naming this key.
+    # The __1 pairing, empty for the same reason. On the instance that RECEIVES platform builds
+    # (memex-cloud: __0 = Store/Payments, __1 = Hosting/PlatformBuilds) this is the slot that must
+    # name Hosting:PlatformWebhookSecret, and its record does so through extraPortalConfig. Until
+    # some instance declares it, the inbox accepts release events without checking them and both CD
+    # lanes say so on every publish: `signature: not-required`, with a ::warning:: naming this key.
     WebhookInbox__Targets__1__SecretConfigKey: ""
     # ---- Instance branding (per-env) ----------------------------------------
     # Large Safari bookmark / Start-Page / Add-to-Dock tile (apple-touch-icon, 180×180 PNG).
