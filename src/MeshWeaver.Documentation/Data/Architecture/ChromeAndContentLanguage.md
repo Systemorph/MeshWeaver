@@ -350,13 +350,14 @@ live — core owns the rule and one unowned pair.
 
 **Outstanding.**
 
-1. **Five `CodeViews` literals still render English for a German viewer** — the dialog title *"Save
-   Failed"* (5 sites), `"Code Files"`, `"Loading code…"`, `"Enter display name…"` and *"never
-   executed"*, all in `MeshWeaver.Plugins/src/MeshWeaver.Graph.Views/CodeViews.cs`. Their **core
-   catalog keys now exist** (`code.saveFailed`, `code.codeFiles`, `code.loadingCode`,
-   `code.enterDisplayName`, `code.neverExecuted`) — none had one before, which is why this could not
-   ship from Plugins alone. What remains is consuming them there. Tracked as
-   [MeshWeaver.Plugins#1308](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1308).
+1. ~~**Five `CodeViews` literals still render English for a German viewer**~~ — **DONE**
+   (MeshWeaver.Plugins#1360): the dialog title *"Save Failed"*, `"Code Files"`, `"Loading code…"`,
+   `"Enter display name…"` and *"never executed"* all consume their core keys now, through
+   `CodeViews.Localized`/`OrAuthored` — the fallback that lets the catalog half and the consuming
+   half land in either order.
+
+   **What is left of this item is the PROVENANCE SENTENCE around `code.neverExecuted`**, described
+   below. Its keys did not exist either; they do now (`code.lastRun`, `code.lastRunBy`).
 
    🚨 **`code.neverExecuted` does not finish its own line, and that is worth knowing before the fix
    is called done.** Measured at MeshWeaver.Plugins `d3b5ae01`, the provenance text is a ternary

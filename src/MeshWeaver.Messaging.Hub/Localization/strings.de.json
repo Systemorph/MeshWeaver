@@ -27,6 +27,8 @@
   "code.loadingCode": "Code wird geladen…",
   "code.enterDisplayName": "Anzeigenamen eingeben…",
   "code.neverExecuted": "nie ausgeführt",
+  "code.lastRun": "zuletzt ausgeführt {0}",
+  "code.lastRunBy": "zuletzt ausgeführt {0} von {1}",
   "common.send": "Senden",
   "common.sending": "Wird gesendet…",
   "common.copy": "Kopieren",
