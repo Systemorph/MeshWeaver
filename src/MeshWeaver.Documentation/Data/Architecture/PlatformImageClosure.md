@@ -168,6 +168,19 @@ flags. A hand-written version comparison would be a second opinion about what
 `ResolveAssemblyReferences` does, and this entire defect class is two artefacts that were each
 individually plausible.
 
+The probe's reference set is faithful to the real one by construction. The portal repository's
+`src/Directory.PlatformRefs.targets` — what `-p:MeshWeaverRefs=<dir>` actually drives — reads:
+
+```xml
+<Reference Include="$(MeshWeaverRefs)/*.dll"
+           Exclude="$(MeshWeaverRefs)/$(AssemblyName).dll;@(ProjectReference->'$(MeshWeaverRefs)/%(Filename).dll')">
+```
+
+A **root-level glob**, which is why `app/modules/` seeds are outside the reference set and why the
+probe globs the root only. The real build additionally *excludes* the module's own name and its
+project references — module-owned names, never a third-party assembly — so the probe's set is a
+superset of every module's. It can therefore miss no conflict a module would hit.
+
 ### Anti-vacuity
 
 A gate that cannot fail is not a gate, so every input is asserted and a missing one is RED, naming
