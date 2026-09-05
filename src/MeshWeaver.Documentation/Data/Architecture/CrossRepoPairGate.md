@@ -214,6 +214,66 @@ Two rules follow, and they generalise past these two files:
   it. Core's twins now name the guard that enforces them.
 
 
+### An eighth shape: a `PackageVersion` the satellite consumes VERSIONLESS (#3344)
+
+The seven shapes above are all about *code*. This one is about the **central package list**, and it
+is the cheapest of them to trip.
+
+`MeshWeaver.Plugins/src/Directory.Packages.props` **imports this repo's**
+`Directory.Packages.props`. A satellite project may therefore carry a versionless
+`<PackageReference Include="X" />` whose only version source is an entry here. Delete that entry —
+even as collateral in an unrelated withdrawal — and the satellite stops restoring, with
+`error NU1010: PackageReference items do not define a corresponding PackageVersion item`.
+
+**Both repos stay green while it is broken**, for two independent reasons:
+
+- nothing in *this* repo consumes the package, so no compile, test or gate here can miss it;
+- the satellite pins this repo at `MW_PLATFORM_REF`, so *its* CI still sees the old list — the break
+  is invisible there until someone moves the pin, which is a different day and a different PR.
+
+The pair gate does not see it either: nothing public is removed. The first thing that notices is
+**`main-cd`**, which is the only lane that builds a checked-out plugins tree against this repo's
+list — and by then the damage is that no set seals.
+
+**Measured, #3344 (2026-09-05).** A withdrawal of three SQLitePCLRaw pins also removed
+`SQLitePCLRaw.lib.e_sqlite3 3.53.3`, which was not part of that set and had been here since
+2026-06-29:
+
+| | |
+|---|---|
+| #3344 merged | 10:01:41Z (every check green) |
+| main-cd #7813 failed | 10:05:09Z — `NU1010`, `Plugins: bake + seal` **skipped** |
+| last sealed set | #7811, 09:27:02Z |
+
+It was also the CVE remedy for GHSA-2m69-gcr7-jv3q, so the same line drop reintroduced a
+high-severity advisory as `NU1903`. The comment block above the entry survived the removal intact
+and still read *"the pin below"* and *"The pin is the source of truth"* — pointing at a line that
+was gone, which is what made the deletion read as deliberate in review.
+
+**How big is it?** Measured on `main`, 2026-09-05: MeshWeaver.Plugins carries **49** versionless
+`<PackageReference>`s that no project in this repository references at all, and **47** of those
+resolve their version from an entry here. Any one of them can be deleted with every core check
+green, and Plugins stops restoring.
+
+**There is NO guard for this yet, and a list would be the wrong one.** The obvious control — naming
+the load-bearing entries in a test here — was written, measured against that number, and discarded:
+a hand-maintained list of 47 goes red on core PRs whenever *Plugins* legitimately drops a
+dependency, taxing every unrelated change in this repo for a fact that lives in another one.
+
+The control that fits the shape is a **restore of the satellite tree in core's PR lane** — the same
+`actions/checkout` of `Systemorph/MeshWeaver.Plugins` that `main-cd` already does, followed by a
+`dotnet restore` of the projects that import this file. It is cheap (the failure is a restore
+diagnostic, not a build) and it derives the answer instead of remembering it. Until it exists,
+**this shape is uncovered**: when you remove an entry from `Directory.Packages.props`, grep the
+satellite for it by hand —
+
+```
+grep -rn 'PackageReference Include="<id>"' ../MeshWeaver.Plugins/src/*/*.csproj
+```
+
+— and treat a versionless hit as a blocker.
+
+
 ## Member-level detection (the sixth shape)
 
 `check-type-forwards.py` indexes, under each public top-level type, the **names** of its public
