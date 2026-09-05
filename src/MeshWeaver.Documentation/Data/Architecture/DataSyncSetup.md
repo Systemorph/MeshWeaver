@@ -157,7 +157,7 @@ The source enumerates nodes read from a **public GitHub repository** over HTTP �
 list the tree, fetch each authored MeshNode file's content, map file→node. Pin the
 ref to the **commit the binary was built from** — every CI assembly carries it as
 `AssemblyMetadata("MeshWeaverCommitHash")` — or, on a clean release, to the immutable
-tag `v$(PlatformVersion)` (e.g. `v3.1.0`), which names the same tree. Set
+tag `v$(PlatformVersion)` (e.g. `v3.0.0`), which names the same tree. Set
 `Versioned = true`, so the fingerprint changes exactly when the source commit changes
 and a boot at the same commit is a no-op (§3). No clone, no working copy: the GitHub
 REST API (`git/trees/{ref}?recursive=1` for the listing) + `raw.githubusercontent.com`
@@ -167,9 +167,9 @@ REST API (`git/trees/{ref}?recursive=1` for the listing) + `raw.githubuserconten
 > 🥚 **Which ref: the stamped commit, or the release tag.** A binary CAN know its own
 > commit: CI stamps `$(GITHUB_SHA)` / `SourceRevisionId` into every assembly
 > (`Directory.Build.props` → `MeshWeaverCommitHash`), because the hash names the tree
-> being built, not the build. A continuous build (`3.1.0-ci.<n>`) therefore syncs from
+> being built, not the build. A continuous build (`3.0.0-ci.<n>`) therefore syncs from
 > that commit — there is no tag for it, and there never will be. A clean release
-> (`3.1.0`) may sync from `v$(PlatformVersion)` instead; it resolves to the same tree,
+> (`3.0.0`) may sync from `v$(PlatformVersion)` instead; it resolves to the same tree,
 > because a release is a promotion of a continuous build, never a rebuild
 > ([ReleaseProcess.md](/Doc/Architecture/ReleaseProcess)). A release tag must be
 > **immutable** (annotated, never force-moved) so the fingerprint is sound.
@@ -238,7 +238,7 @@ redeploy:
   "targetPartition": "Doc",
   "source":  "github",
   "url":     "https://github.com/Systemorph/MeshWeaver",
-  "ref":     "v3.1.0",       // immutable release tag (or the stamped commit) = the version gate (§3, §4c)
+  "ref":     "v3.0.0",       // immutable release tag (or the stamped commit) = the version gate (§3, §4c)
   "path":    "src/MeshWeaver.Documentation/Data",
   "enabled": true
 }
@@ -250,7 +250,7 @@ stamped commit on a continuous build (§4c) — never a moving branch, so the fi
 single canonical GitHub tree URL:
 
 ```
-https://github.com/Systemorph/MeshWeaver/tree/v3.1.0/src/MeshWeaver.Documentation/Data
+https://github.com/Systemorph/MeshWeaver/tree/v3.0.0/src/MeshWeaver.Documentation/Data
 ```
 
 Bumping the sync to a newer release is one edit to the config node's `ref` (or, for

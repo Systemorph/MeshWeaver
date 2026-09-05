@@ -19,7 +19,7 @@ name: Release (promote a sealed set)
 #      tag whose commit carries a different PlatformVersion, a commit main-cd never promoted, a set
 #      whose content bake is not sealed, a release with no committed release-notes page;
 #   2. copies the release marker  _releases/<ci-version> → _releases/<clean>  on every artifact
-#      store, so the gates that ask "which framework identity is release 3.1.0?" get the answer the
+#      store, so the gates that ask "which framework identity is release 3.0.0?" get the answer the
 #      continuous build recorded (publish-bake-bundles.sh; Doc/Architecture/ReleaseGates);
 #   3. retags the promoted images  <short-sha> → <clean>  in ACR, memex-portal-ai LAST — the same
 #      ordering main-cd's promote uses, because that tag is the one write a Stable self-updater

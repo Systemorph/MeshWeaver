@@ -180,7 +180,7 @@ name: node-repo module pack
 #      wrote down. It cannot come from the repository: the evaluator runs no MSBuild property
 #      functions, so a module repo cannot DERIVE the platform's identity in its props (Plugins
 #      tried; every module came out 1.0.0.0), and a LITERAL there is right for one platform and
-#      wrong the day the line moves (3.0.0 → 3.1.0 reddened every image build in the fleet). The
+#      wrong the day the line moves (the 2026-09-05 bump to 3.1.0 reddened every image build in the fleet). The
 #      global build step probes the tester for the flag and FAILS naming the pin to move when the
 #      pinned image predates it; the pack step still compares the emitted identity against the one
 #      the builder read out of the image, so drift cannot ship silently either way.
