@@ -212,6 +212,7 @@ static async Task<int> RunBuildProject(string[] args)
     var superseded = new List<string>();
     var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     var allowWarnings = false;
+    var bindToImage = false;
     var maxParallel = Math.Max(1, Environment.ProcessorCount);
     for (var i = 0; i < args.Length; i++)
     {
@@ -270,6 +271,9 @@ static async Task<int> RunBuildProject(string[] args)
             case "--verbose":
                 verbose = true;
                 break;
+            case "--bind-to-image":
+                bindToImage = true;
+                break;
             // The no-warn policy is ON by default; both spellings of the opt-out are accepted
             // because both are documented, and a flag that silently means nothing is worse than a
             // flag that does not exist.
@@ -317,6 +321,7 @@ static async Task<int> RunBuildProject(string[] args)
         Accept = accept,
         SupersededImageAssemblies = superseded,
         Properties = properties,
+        BindToImage = bindToImage,
         AllowWarnings = allowWarnings,
         Verbose = verbose,
         MaxParallel = maxParallel,
@@ -344,7 +349,7 @@ static string BuildProjectUsage() =>
     + "[--shared-frameworks <dir>] [--prebuilt <dir>]... "
     + "[--extra-refs <dir>]... [--generators <dir|dll>]... [--razor-generators <dir>] "
     + "[--accept <construct>]... [--superseded-image-assembly <name>]... "
-    + "[-p:Name=Value]... [--allow-warnings] [--max-parallel <n>]\n"
+    + "[-p:Name=Value]... [--bind-to-image] [--allow-warnings] [--max-parallel <n>]\n"
     + "  Compiles a .NET project with NO dotnet SDK and NO NuGet restore: the .csproj is evaluated "
     + "without MSBuild, every reference is resolved from this container's /app (and its .deps.json), "
     + "ProjectReferences inside the source root are built first in dependency order, and Roslyn runs "
@@ -356,7 +361,11 @@ static string BuildProjectUsage() =>
     + "quietly emitting an assembly with no components in it. The emitted assembly carries the "
     + "identity GenerateAssemblyInfo would have given it (AssemblyVersion/FileVersion/"
     + "InformationalVersion and the rest); -p:Name=Value supplies the properties it is derived "
-    + "from, SourceRevisionId included — this builder runs no git.";
+    + "from, SourceRevisionId included — this builder runs no git. --bind-to-image stamps "
+    + "AssemblyVersion and FileVersion with the IMAGE's own binding identity (immutable globals; an "
+    + "explicit -p: still wins), because a module built here loads into this image's process and "
+    + "any other identity is a runtime FileNotFoundException — the evaluator runs no MSBuild "
+    + "property functions, so a project cannot derive that value itself.";
 
 static string BuildUsage() =>
     "usage: mw-plugin-test build <repo-root> [<package>... | all] [--module <dll>]... [--out <dir>] "

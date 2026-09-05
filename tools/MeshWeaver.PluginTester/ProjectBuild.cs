@@ -165,6 +165,25 @@ public static class ProjectBuild
         public IReadOnlyList<string> PrebuiltDirectories { get; init; } = [];
 
         /// <summary>
+        /// Stamp every emitted assembly with the IMAGE's own binding identity: <c>AssemblyVersion</c>
+        /// and <c>FileVersion</c> become immutable globals set to
+        /// <see cref="ContainerReferenceSet.PlatformAssemblyVersion"/> unless the caller passed them
+        /// in <see cref="Properties"/>, which still wins. A module built inside a platform image loads
+        /// into that image's process and is bound BY its assemblies, so any other identity is a runtime
+        /// <c>FileNotFoundException</c> (MeshWeaver#143) — which is why the pack lane's postcondition
+        /// refuses drift outright. Off by default, so the SDK-parity semantics of the evaluator (an
+        /// explicit <c>AssemblyVersion</c> in the project wins, else the SDK's derivation) stay
+        /// measurable; the lane turns it on.
+        /// <para>Why the builder and not the project file: the evaluator runs no MSBuild property
+        /// functions, so a module repository cannot DERIVE its identity from the platform in its
+        /// props — MeshWeaver.Plugins tried, and every module came out <c>1.0.0.0</c> — while a literal
+        /// there is right for exactly one platform and wrong the day the line moves (3.0.0 → 3.1.0
+        /// reddened every image build in the fleet). The image knows its own identity; nothing else
+        /// has to.</para>
+        /// </summary>
+        public bool BindToImage { get; init; }
+
+        /// <summary>
         /// Image assemblies whose copy in the container is SUPERSEDED for this run: this
         /// repository's source now defines types they still contain, so referencing them would
         /// import a second definition of a type being compiled here (CS0436).
@@ -303,6 +322,36 @@ public static class ProjectBuild
                 $"{ex.GetType().Name}: {ex.Message}")));
     }
 
+    /// <summary>
+    /// The global property set with the image's binding identity added — see
+    /// <see cref="Options.BindToImage"/>. A caller-supplied <c>AssemblyVersion</c> or
+    /// <c>FileVersion</c> is left alone and said so, because a global that silently changes value
+    /// is the defect globals exist to prevent.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string> BoundToImage(
+        IReadOnlyDictionary<string, string> properties, string platformAssemblyVersion, Sink sink)
+    {
+        var bound = new Dictionary<string, string>(properties, StringComparer.OrdinalIgnoreCase);
+        var stamped = new List<string>(2);
+        var kept = new List<string>(2);
+        foreach (var name in new[] { "AssemblyVersion", "FileVersion" })
+        {
+            if (bound.TryGetValue(name, out var explicitValue))
+                kept.Add($"{name}={explicitValue}");
+            else
+            {
+                bound[name] = platformAssemblyVersion;
+                stamped.Add(name);
+            }
+        }
+        if (stamped.Count > 0)
+            sink.Info($"binding identity: {string.Join(" and ", stamped)} = {platformAssemblyVersion}, the image's own "
+                + "(--bind-to-image; an immutable global, so a project's own value cannot drift from the process it loads into)");
+        if (kept.Count > 0)
+            sink.Info($"binding identity: caller-supplied {string.Join(", ", kept)} kept over the image's {platformAssemblyVersion}");
+        return bound;
+    }
+
     private static IObservable<Report> RunCore(Options options)
     {
         var wall = Stopwatch.StartNew();
@@ -335,6 +384,11 @@ public static class ProjectBuild
             $"reference set: {container.AssembliesByName.Count} assembl(y|ies) from {container.AppDirectory} "
             + $"+ the shared framework; {container.PackageVersions.Count} package version(s) from the image's "
             + $"deps.json; platform AssemblyVersion {container.PlatformAssemblyVersion}");
+
+        if (options.BindToImage)
+        {
+            options = options with { Properties = BoundToImage(options.Properties, container.PlatformAssemblyVersion, sink) };
+        }
 
         Graph graph;
         try
