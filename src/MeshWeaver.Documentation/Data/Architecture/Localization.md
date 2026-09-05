@@ -78,6 +78,19 @@ ambient design would silently render one user's UI in another user's language.
 Instead, `LayoutAreaHost` captures the subscriber's `AccessContext` at construction and restores it
 for the render scope — which is exactly what makes an explicit read correct.
 
+🚨 **The rule is now MEASURED, and the shape it measures is the implicit one.** Nobody writes
+`CurrentUICulture` on purpose; they write `timestamp.Humanize()` or `value.ToString("N2")`, which
+reach for it silently — every instance found across the fleet during
+[#3203](https://github.com/Systemorph/MeshWeaver/issues/3203) was a culture-less `Humanize()`, not a
+named symbol. `AmbientCultureRatchetGuard` (`test/MeshWeaver.Documentation.Test`) therefore bans the
+CALL SHAPE as well as the symbol, over all of `src/`, with comments and string literals masked so
+that explaining the ban is not mistaken for committing it.
+
+It is a **ratchet at zero**: `src/` had no offender when it landed, so there is no allow file and
+nothing to grandfather. The fix for a red is never a new entry — it is to state the culture, from
+`AccessContext.Locale` / `host.ViewerLocale()`, or `CultureInfo.InvariantCulture` where the value
+sits inside deliberately unlocalized text.
+
 ## Three lookup shapes, one resolution rule
 
 All three resolve the viewer's language through `Locales.Resolve`, so they can
