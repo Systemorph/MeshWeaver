@@ -173,13 +173,17 @@ name: node-repo module pack
 #   1. The PINNED image must carry the `build-project` verb (MeshWeaver#2850 merged AND an image
 #      built from it AND `platform-image-digest` moved to that image). Before that, the container
 #      run exits non-zero on an unknown argument.
-#   2. `build-project` must stamp the project's <AssemblyVersion>. It runs no MSBuild targets, so
-#      the SDK's GenerateAssemblyInfo does not happen and Roslyn's default identity is emitted —
-#      shipping 0.0.0.0 into a 3.0.0.0 process is MeshWeaver#143 exactly: it does not fail at build,
-#      it fails at runtime binding, in another repo, naming a version nobody wrote down. The build
-#      step compares the emitted identity against the one the builder itself read out of the image
-#      and FAILS on drift, so this cannot ship silently — but until the builder honours the
-#      property, that check is what a `container` entry will hit.
+#   2. `build-project` must carry `--bind-to-image`: the builder stamps every module with the
+#      IMAGE's own AssemblyVersion/FileVersion as immutable globals, because a module built here
+#      loads into that image's process and any other identity is MeshWeaver#143 exactly — it does
+#      not fail at build, it fails at runtime binding, in another repo, naming a version nobody
+#      wrote down. It cannot come from the repository: the evaluator runs no MSBuild property
+#      functions, so a module repo cannot DERIVE the platform's identity in its props (Plugins
+#      tried; every module came out 1.0.0.0), and a LITERAL there is right for one platform and
+#      wrong the day the line moves (3.0.0 → 3.1.0 reddened every image build in the fleet). The
+#      global build step probes the tester for the flag and FAILS naming the pin to move when the
+#      pinned image predates it; the pack step still compares the emitted identity against the one
+#      the builder read out of the image, so drift cannot ship silently either way.
 #
 # ──────────── The .NET SDK is a DECLARED need (`dotnet-sdk`) ────────────
 # 🚨 "make installing dotnet sdk a feature flag" (maintainer, 2026-08-31).
@@ -1023,6 +1027,15 @@ jobs:
           [ "${#superseded[@]}" -eq 0 ] || echo "superseding ${#superseded[@]} image assembl(y|ies) from the reference set: ${SUPERSEDED}"
           args=()
           for prj in "${projects[@]}"; do args+=("/repo/$prj"); done
+          # 🚨 The binding identity comes from the IMAGE, never from the repository (header,
+          # precondition 2). A tester that predates the flag would exit 2 on an unknown option with
+          # a message naming nothing; probe its usage first and name the pin that has to move.
+          if ! docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" -e HOME=/tmp \
+               -v "$tester_app:/tester:ro" --entrypoint dotnet "$img" \
+               /tester/mw-plugin-test.dll build-project --help 2>&1 | grep -q -- '--bind-to-image'; then
+            echo "::error::the pinned tester (tester-image-digest $TESTER_DIGEST) has no 'build-project --bind-to-image', so it cannot stamp modules with the image's own AssemblyVersion — every module would fail the binding-identity check, or bind to a literal that is wrong for this platform. Move tester-image-digest and platform-image-digest TOGETHER to a set built from MeshWeaver main after the flag landed."
+            exit 1
+          fi
           echo "global build: ${#projects[@]} container entr(y|ies) in ONE workspace — ${projects[*]}"
           # AS THE RUNNER'S UID (a root-owned /out is unwritable to later steps); HOME=/tmp keeps
           # runtime probes off read-only image paths. No --extra-refs, ever, on this lane.
@@ -1032,7 +1045,7 @@ jobs:
             -v "$tester_app:/tester:ro" \
             -v "$out:/out" \
             --entrypoint dotnet "$img" \
-            /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out ${accepts[@]+"${accepts[@]}"} ${superseded[@]+"${superseded[@]}"} 2>&1 | tee "$out/workspace-build.log"
+            /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out --bind-to-image ${accepts[@]+"${accepts[@]}"} ${superseded[@]+"${superseded[@]}"} 2>&1 | tee "$out/workspace-build.log"
           echo "built=true" >> "$GITHUB_OUTPUT"
       # 🚨 THE PLATFORM CHECKOUT LANDS **AFTER** THE BUILD, ON PURPOSE. This job mounts
       # `$GITHUB_WORKSPACE` at `/repo:ro` for the container build, so anything checked out beside
