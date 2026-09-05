@@ -1753,51 +1753,60 @@ jobs:
           if [ -n "$REFS" ]; then
             anchor="$REFS/MeshWeaver.Compiler.dll"
             where="the pinned platform image's extracted /app"
+            if [ ! -f "$anchor" ]; then
+              echo "::error::no identity anchor for $MODULE — expected MeshWeaver.Compiler.dll at '$anchor', i.e. in $where. Every bundle must state the framework build its bytes were compiled against (#3211): a consumer compares it against what it has landed, and an unstated one makes every reconcile answer 'up to date, identity could not be checked' forever. Nothing here may guess it, so the pack stops."
+              exit 1
+            fi
+            # The image's own compiler, stamped by the build that produced the image, so
+            # FrameworkIdentity.ReadIdentity returns its `g<sha>` — the same token a portal image
+            # reports. Reading it off the DLL is right HERE because the DLL is the platform.
+            identity=(--graph-dll "$anchor")
           else
-            # 🚨 BUILT from the platform source, never scavenged out of $PACKDIR. Publish drops
-            # MeshWeaver.Compiler.dll beside the module ONLY when the module transitively
-            # ProjectReferences it — MeshWeaver.AI and MeshWeaver.Markdown.Collaboration both do,
-            # through MeshWeaver.Graph, and they were the ONLY two entries this lane built when
-            # the anchor landed, so "the platform ProjectReferences are real, so it IS beside the
-            # module" was measured on a population of two and read as a property of the arm.
-            # It is a property of the REFERENCE GRAPH: core's compose set grew to four on
-            # 2026-09-04 (#3290) and both new entries reach no compiler — MeshWeaver.Maps stops at
-            # MeshWeaver.Layout, MeshWeaver.Payments.Stripe is a leaf — so both were RED on their
-            # first run and took `CD delivered, or had a good reason not to` down with them for
-            # two hours (#3293).
-            anchordir="$GITHUB_WORKSPACE/meshweaver/src/MeshWeaver.Compiler"
-            # -warnaserror to match the module build above: when a module DOES reach the
-            # compiler transitively, that build is what compiles it, so omitting the flag here
-            # would let MeshWeaver.Maps accept a compiler build MeshWeaver.AI rejects — the same
-            # per-module asymmetry this change exists to remove.
+            # 🚨 STATE the identity; never DERIVE it from a DLL this job built (#3308).
             #
-            # 🚨 AND DELIBERATELY **NO** `-p:Version="$VERSION"` (#3176). #3293 passed it, to make
-            # this "the assembly publish would have copied" — but that is the one global property
-            # that must NOT reach here, because $VERSION is the MODULE's package version and the
-            # identity must be the PLATFORM's. MSBuild writes Version into the assembly's version
-            # attributes, so it lands in the metadata the MVID is computed over. Measured on THIS
-            # command, with the two package versions core CD packs, plus a control:
-            #     -p:Version=1.3.18 (AI)         -> 34337c31960d47f5b5251d32ef923fc6
-            #     -p:Version=1.0.24 (Essentials) -> 7c1c4f70de084da78659e6bda495e1c5
-            #     no override, run A             -> 71cc81badb364c5d8558ac5e7db6a44e
-            #     no override, run B             -> 71cc81badb364c5d8558ac5e7db6a44e   (identical)
-            # With it, each matrix job builds its OWN compiler and the run states one identity PER
-            # MODULE — already seen in the field on run 33874892203, by the earlier route to the
-            # same pollution: AI stated be27d0fb9ad54ae6a862bfa7aeb97c9b while
-            # Markdown.Collaboration stated d756b82e09804a11b0ea44d26233af6c for the same platform
-            # and the same commit. A
-            # per-module identity names no platform build a consumer can have landed, so #3154's
-            # (version, identity) comparison gets a value that means nothing — GREEN, and useless.
-            # Without it every job builds byte-identical bytes from one commit, so the whole run
-            # states ONE identity, which is what the field is for.
-            dotnet build "$anchordir/MeshWeaver.Compiler.csproj" -c Release -warnaserror \
-              -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver"
-            anchor="$anchordir/bin/Release/net10.0/MeshWeaver.Compiler.dll"
-            where="the platform's own build output (no platform image is pinned, so the platform was built from source)"
-          fi
-          if [ ! -f "$anchor" ]; then
-            echo "::error::no identity anchor for $MODULE — expected MeshWeaver.Compiler.dll at '$anchor', i.e. in $where. Every bundle must state the framework build its bytes were compiled against (#3211): a consumer compares it against what it has landed, and an unstated one makes every reconcile answer 'up to date, identity could not be checked' forever. Nothing here may guess it, so the pack stops."
-            exit 1
+            # The arm used to `dotnet build` MeshWeaver.Compiler per matrix job and read the MVID
+            # off the result. #3293 built it from the platform tree instead of scavenging it, and
+            # #3306 removed the `-p:Version` that polluted it — and the run STILL stated one
+            # identity per module. Measured on run 33950389008 (2026-09-05, four entries, one
+            # commit, every leg `plan: BUILD`):
+            #
+            #     MeshWeaver.Maps                     0051e7210e4144a6a18620a36e629d84  (1 compiler build)
+            #     MeshWeaver.Payments.Stripe          0051e7210e4144a6a18620a36e629d84  (1 compiler build)
+            #     MeshWeaver.Markdown.Collaboration   6553ea371eab49e4afdd0af20ea7ac59  (2 compiler builds)
+            #     MeshWeaver.AI                       395909c22d3042d4b23fb055337db63b  (2 compiler builds)
+            #
+            # The split is exactly the reference graph: MeshWeaver.AI and
+            # MeshWeaver.Markdown.Collaboration reach MeshWeaver.Compiler transitively, so the
+            # MODULE build compiles it FIRST, into this same output path, carrying the module's
+            # own global properties — and the anchor build that follows finds it up to date and
+            # keeps those bytes. Maps and Payments.Stripe never build it, so their anchor build
+            # compiles it clean and they agree. Removing `-p:Version` from the ANCHOR build could
+            # never fix that: the pollution comes from the module build UPSTREAM, which is
+            # entitled to its own version.
+            #
+            # 🚨 And a derived MVID could not be matched even if it were stable. A portal image is
+            # built with -p:CIRun=true, so AddCommitHashMetadata stamps
+            # AssemblyMetadata("MeshWeaverFrameworkIdentity", "g<sha>") and
+            # FrameworkIdentity.ReadIdentity PREFERS that stamp over the MVID. A consumer
+            # therefore reads `g<sha>` while a source-built bundle stated a 32-hex MVID: never
+            # equal, by construction, so #3154's (version, identity) comparison could never answer
+            # anything but "identity could not be checked".
+            #
+            # So: the platform IS this checkout, and a commit is exactly what the consumer reads.
+            # `--framework-mvid` is the packer's own flag for "the platform's own reading", and
+            # `g<sha>` is one of the three tokens it documents. One identity per platform commit,
+            # identical for every entry in the run, and no compiler build per matrix job at all.
+            sha="$(git -C "$GITHUB_WORKSPACE/meshweaver" rev-parse HEAD 2>/dev/null || true)"
+            case "$sha" in
+              [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) : ;;
+              *)
+                echo "::error::cannot read the platform commit at \$GITHUB_WORKSPACE/meshweaver (git rev-parse HEAD gave '${sha:-<nothing>}'). No platform image is pinned, so the checkout IS the platform and its commit IS the identity every bundle of this run must state (#3308). Nothing here may guess it, so the pack stops."
+                exit 1
+                ;;
+            esac
+            identity=(--framework-mvid "g$sha")
+            where="the platform checkout's own commit (no platform image is pinned, so the platform was built from source)"
+            echo "framework identity for this run: g$sha (stated from the platform checkout, not derived per job)"
           fi
           echo "packing $MODULE from $PACKDIR (compiler: $COMPILER); closure flags: ${closure[*]:-<none>}"
           dotnet "$RUNNER_TEMP/pack-tool/MeshWeaver.Plugin.Build.dll" \
@@ -1807,7 +1816,7 @@ jobs:
             --plugin "$PACKAGE" \
             --package-version "$VERSION" \
             --min-mesh-version "$FLOOR" \
-            --graph-dll "$anchor" \
+            "${identity[@]}" \
             --own-platform "$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src")" \
             --out "$RUNNER_TEMP/bundles"
 

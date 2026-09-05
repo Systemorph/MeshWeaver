@@ -73,7 +73,11 @@ from pathlib import Path
 # genuinely differ — and a REUSED pre-#3211 bundle would be refused at the publish step, which is the
 # right verdict for those bytes and the wrong thing to spend a run discovering. One rebuild wave, and
 # every recorded key afterwards attests bytes that state what they were built against.
-RECIPE_VERSION = "2"
+# 3: the from-source arm STATES the framework identity as the platform commit (`g<sha>`)
+# instead of deriving an MVID from a compiler DLL built per matrix job (#3308). Bundles packed
+# under recipe 2 state an identity no consumer can match, so they must be REPACKED rather than
+# reused — which is exactly what changing this constant forces.
+RECIPE_VERSION = "3"
 
 # Repo-level files that change what EVERY project compiles or tests. Presence and content both
 # count; a file the repo does not have hashes as null so adding it later changes the key.
