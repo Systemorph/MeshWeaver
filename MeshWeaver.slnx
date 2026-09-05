@@ -32,6 +32,7 @@
   <Folder Name="/src/">
     <Project Path="src/MeshWeaver.Cli/MeshWeaver.Cli.csproj" />
     <Project Path="src/MeshWeaver.Compiler/MeshWeaver.Compiler.csproj" />
+    <Project Path="src/MeshWeaver.ContainerRegistry/MeshWeaver.ContainerRegistry.csproj" />
     <Project Path="src/MeshWeaver.Connection.Orleans/MeshWeaver.Connection.Orleans.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
     <Project Path="src/MeshWeaver.Data.Contract/MeshWeaver.Data.Contract.csproj" />
@@ -69,6 +70,7 @@
     <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
   </Folder>
   <Folder Name="/test/">
+    <Project Path="test/MeshWeaver.ContainerRegistry.Test/MeshWeaver.ContainerRegistry.Test.csproj" />
     <File Path="test/appsettings.json" />
     <File Path="test/Directory.Build.props" />
     <File Path="test/Directory.Packages.props" />

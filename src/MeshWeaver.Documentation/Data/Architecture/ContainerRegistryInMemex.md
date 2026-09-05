@@ -7,7 +7,11 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # A Container Registry in Memex
 
-> **Status: PROPOSAL.** Nothing described here is built. Container images live in Azure Container
+> **Status: v1 pull surface IMPLEMENTED** (`src/MeshWeaver.ContainerRegistry`, issue #3353) —
+> `GET /v2/`, `…/manifests/{reference}`, `…/blobs/{digest}` and `…/tags/list`, proxied to the
+> upstream with the mirror's own credential while the caller authenticates against memex. No push,
+> no cache yet, and the boot image still comes from the upstream. The rest of this page — caching,
+> closure-as-data, GC — remains DESIGN. Nothing else described here is built. Container images live in Azure Container
 > Registry (`meshweaver.azurecr.io`), named by `ACR:` in `main-cd.yml` and referenced by eight
 > workflows. This page exists so the decision is a decision rather than a recurring conversation.
 
@@ -146,6 +150,28 @@ entirely in CI and in other installations — exactly where the constraint is si
 Pull-side only, to begin with. Pushes keep going to ACR, so CD is unchanged and the mirror can be
 turned off without a migration. Every benefit above except (4) is available from the pull side
 alone, because they all derive from *reading* manifests and layers.
+
+### What v1 actually enforces
+
+* **Off unless configured.** `Upstream`, `Username` and `Password` must all be set, or every route
+  is 404 — never a partial service, which would be indistinguishable from a working one until a
+  pull returned the wrong bytes.
+* **An allowlist, empty by default.** `ContainerRegistry:Repositories` names exactly what may be
+  served. Without it, one upstream credential becomes an open read proxy for the whole registry.
+* **Pull only, by construction.** A blob reference must be a content digest, so the entire upload
+  family (`blobs/uploads/…`) is refused by SHAPE rather than by blocklisting names — a test caught
+  that route being accepted as a pull before it shipped.
+* **Repository names keep their slashes.** Kind and reference come from the END of the path, so
+  `a/b/c/manifests/x` is repository `a/b/c` — what the allowlist checks is what the upstream sees.
+* **Bodies stream.** `ResponseHeadersRead` upstream, `CopyToAsync` downstream; a layer never lands
+  on the heap.
+* **The mirror's own credential failing is a 502, not a 401** — a 401 would send the caller to fix
+  a token that is not the broken thing.
+
+**v1 is the proxy WITHOUT the cache, deliberately.** The credential goal is met by authenticating
+the caller against memex and using the mirror's credential upstream; caching is an optimisation on
+top that can be added without changing the surface. Shipping it first would have meant storage,
+eviction and correctness work before anything was usable.
 
 **The first consumer to move is satellite CI, not any cluster.** It is where the duplicated
 credentials are, it is unaffected by the bootstrap constraint, and a mirror that is wrong there
