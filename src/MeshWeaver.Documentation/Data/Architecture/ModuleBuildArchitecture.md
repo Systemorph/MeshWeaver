@@ -123,7 +123,7 @@ selected entry**:
 |---|---|
 | `<Module>/<Module>.dll` | present and non-empty (a truncated emit reads as "the file is there") |
 | `<Module>.closure.txt` | present — without it a pack job cannot know which in-tree siblings ride *this* bundle, and a glob would ride every other module's |
-| `platform AssemblyVersion` in the build log | readable — it is the expected side of the binding-identity check every pack job runs |
+| `platform AssemblyVersion` in the build log | readable — it is the expected side of the binding-identity check every pack job runs, and since `--bind-to-image` it is also the value the builder STAMPED: a module's `AssemblyVersion`/`FileVersion` come from the image, never from the repository's props (the evaluator runs no MSBuild property functions, so a repository cannot derive them, and a literal is right for one platform only) |
 
 Three properties make it a postcondition rather than a second opinion:
 

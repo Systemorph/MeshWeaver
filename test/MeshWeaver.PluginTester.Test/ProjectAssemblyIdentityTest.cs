@@ -205,6 +205,90 @@ public class ProjectAssemblyIdentityTest : IDisposable
         AttributeValue(path, "System.Reflection.AssemblyFileVersionAttribute").Should().Be("3.0.0.0");
     }
 
+    /// <summary>
+    /// <c>--bind-to-image</c>: the emitted identity is the IMAGE's, whatever the project or its
+    /// <c>Directory.Build.props</c> say. A module built inside a platform image loads into that
+    /// image's process, and the evaluator runs no MSBuild property functions, so a repository cannot
+    /// derive the value itself — MeshWeaver.Plugins tried and every module came out 1.0.0.0, and its
+    /// literal 3.0.0.0 reddened every image build the day the platform line moved to 3.1.0.
+    /// </summary>
+    [Fact]
+    public async Task BindToImageStampsTheImagesOwnIdentityOverThePropsLiteral()
+    {
+        Write("Directory.Build.props", """
+            <Project>
+              <PropertyGroup>
+                <AssemblyVersion>9.9.9.9</AssemblyVersion>
+                <FileVersion>9.9.9.9</FileVersion>
+              </PropertyGroup>
+            </Project>
+            """);
+        var project = Library("    <Nullable>enable</Nullable>");
+        var image = AssemblyName.GetAssemblyName(Path.Combine(AppDirectory(), "MeshWeaver.ShortGuid.dll")).Version!;
+        image.Should().NotBe(new Version(9, 9, 9, 9), "the fixture must be able to tell the two apart");
+
+        var (name, path) = await Emit(OptionsFor(project) with { BindToImage = true });
+
+        name.Version.Should().Be(image,
+            "the image is the process the module loads into; its identity is the only one that binds");
+        AttributeValue(path, "System.Reflection.AssemblyFileVersionAttribute").Should().Be(image.ToString());
+    }
+
+    /// <summary>
+    /// A caller's explicit global still wins under <c>--bind-to-image</c>: a global that silently
+    /// changed value would be the defect globals exist to prevent.
+    /// </summary>
+    [Fact]
+    public async Task BindToImageYieldsToAnExplicitGlobalProperty()
+    {
+        var project = Library("    <Nullable>enable</Nullable>");
+
+        var (name, _) = await Emit(OptionsFor(project) with
+        {
+            BindToImage = true,
+            Properties = new Dictionary<string, string> { ["AssemblyVersion"] = "2.0.0.0" },
+        });
+
+        name.Version.Should().Be(new Version(2, 0, 0, 0));
+    }
+
+    /// <summary>
+    /// A present-but-EMPTY global is not an override: the evaluator ignores empty values, so treating
+    /// it as one would fall through to the SDK derivation and defeat the flag without a word.
+    /// </summary>
+    [Fact]
+    public async Task BindToImageTreatsAnEmptyGlobalAsNotSupplied()
+    {
+        var project = Library("    <Nullable>enable</Nullable>");
+        var image = AssemblyName.GetAssemblyName(Path.Combine(AppDirectory(), "MeshWeaver.ShortGuid.dll")).Version!;
+
+        var (name, _) = await Emit(OptionsFor(project) with
+        {
+            BindToImage = true,
+            Properties = new Dictionary<string, string> { ["AssemblyVersion"] = "", ["FileVersion"] = "  " },
+        });
+
+        name.Version.Should().Be(image);
+    }
+
+    /// <summary>Without the flag the evaluator keeps its SDK-parity semantics: the props literal wins.</summary>
+    [Fact]
+    public async Task WithoutBindToImageThePropsLiteralStillWins()
+    {
+        Write("Directory.Build.props", """
+            <Project>
+              <PropertyGroup>
+                <AssemblyVersion>9.9.9.9</AssemblyVersion>
+              </PropertyGroup>
+            </Project>
+            """);
+        var project = Library("    <Nullable>enable</Nullable>");
+
+        var (name, _) = await Emit(OptionsFor(project));
+
+        name.Version.Should().Be(new Version(9, 9, 9, 9));
+    }
+
     // ── the SDK's derivation rules, as measured against SDK 10.0.400 ───────────────────────────
 
     /// <summary>
