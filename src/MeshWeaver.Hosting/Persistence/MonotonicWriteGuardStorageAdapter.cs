@@ -414,6 +414,15 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
             if (removed) Forget(path);
         });
 
+    /// <inheritdoc />
+    /// <remarks>Every path the batch removed is forgotten, exactly as the single-path
+    /// <see cref="Delete"/> does — a mark left behind would refuse the next write to that path.</remarks>
+    public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
+        => inner.DeleteMany(paths).Do(deleted =>
+        {
+            foreach (var path in deleted) Forget(path);
+        });
+
     /// <summary>
     /// Snaps the mark to what a verification read just proved is durable — the one place the
     /// mark may move DOWN. Only reachable after that read, so it can never weaken the guard:

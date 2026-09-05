@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -288,6 +289,29 @@ public sealed class PersistenceService : IStorageAdapter
                         + $"'{blocking}', which no delete can remove from. The node is readable but "
                         + "not stored in any writable provider — remove it at its source, or "
                         + "override it in a writable partition first."))));
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// One batch per WRITABLE provider, unioned — never one probe-then-delete per path per
+    /// provider, which is what made a subtree delete O(paths × providers) round-trips. A provider
+    /// reports only what it actually removed, so the union is exactly the set that left storage
+    /// and a path no writable provider held is simply absent (the same tolerance
+    /// <see cref="Delete"/> has, without its read-only refusal — a bulk delete is a commit-time
+    /// operation and the read-only refusal is a PRE-FLIGHT question, already answered by
+    /// <see cref="FindDeleteBlockingProvider"/>).
+    /// </remarks>
+    public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
+        => paths.Count == 0
+            ? Observable.Return<IReadOnlyList<string>>([])
+            : _writable
+                .Select(p => p.Adapter.DeleteMany(paths))
+                .Merge()
+                .Aggregate(
+                    ImmutableHashSet<string>.Empty,
+                    (all, removed) => all.Union(removed))
+                // Back into the caller's order: children before parents is the change-feed
+                // contract, and a HashSet has no order to preserve it with.
+                .Select(all => (IReadOnlyList<string>)paths.Where(all.Contains).ToList());
 
     /// <inheritdoc />
     /// <remarks>

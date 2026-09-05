@@ -76,10 +76,9 @@ public static class PartitionStorageHubExtensions
     {
         var adapter = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
 
-        request.Message.Paths
-            .ToInlineObservable()
-            .SelectMany(path => adapter.Delete(path))
-            .ToList()
+        // The request has always carried a LIST; it just used to be spent one Delete at a time.
+        adapter.DeleteMany(request.Message.Paths)
+            .Take(1)
             .Subscribe(
                 deleted => hub.Post(
                     new DeleteBatchResponse(deleted.ToImmutableList()),
