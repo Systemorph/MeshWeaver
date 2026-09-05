@@ -176,11 +176,11 @@ public sealed class FrameworkReleaseBroadcaster
     /// mesh that receives release events and therefore the one that must have subscribers.
     /// </summary>
     private bool AcceptsPlatformBuildDeliveries() =>
-        configuration?.GetSection(WebhookInbox.TargetsConfigSection).GetChildren()
-            .Any(c => string.Equals(
-                WebhookInbox.NormalizeTarget(c.Value),
+        WebhookInbox.ReadTargets(configuration)
+            .Any(t => string.Equals(
+                t.Path,
                 FrameworkBroadcastOptions.PlatformBuildsTarget,
-                StringComparison.OrdinalIgnoreCase)) == true;
+                StringComparison.OrdinalIgnoreCase));
 
     // One repo's dispatch, already isolated: a non-2xx status OR a thrown exception both become a
     // RepoDispatch(ok:false), so Concat never short-circuits on the first failure. Invoke, not
