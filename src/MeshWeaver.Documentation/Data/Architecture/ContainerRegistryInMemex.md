@@ -35,10 +35,29 @@ memex plugin, then starting memex would require memex to already be running. The
 that resolves this for the platform's own image.
 
 It is also a **failure-domain merge**. Today an ACR outage and a portal outage are independent
-events. A registry inside the portal makes every pod start, every scale-up and every restart
-depend on the portal being healthy — a strictly higher availability bar than the portal itself
-carries, and the opposite of the rule that recovery must not live in the failure domain it
-recovers.
+events. A registry inside the portal makes every pod start, every scale-up and every restart depend
+on the portal being healthy — a strictly higher availability bar than the portal itself carries, and
+the opposite of the rule that recovery must not live in the failure domain it recovers.
+
+> **What ACR actually is, measured** (2026-09-05), because "more available" was an assumption worth
+> checking and it did not survive:
+>
+> | | |
+> |---|---|
+> | `publicNetworkAccess` | **Enabled** — internet-reachable, `defaultAction: Allow`, no IP rules |
+> | `anonymousPullEnabled` | **false** — every pull needs a token |
+> | `adminUserEnabled` | **false** — AAD or scoped tokens, no admin user |
+> | sku | Premium |
+> | `zoneRedundancy` | **Disabled** — single zone |
+>
+> Unauthenticated, `GET /v2/` and a manifest pull both answer **401** with
+> `Bearer realm="https://meshweaver.azurecr.io/oauth2/token",service="meshweaver.azurecr.io"`.
+>
+> So the accurate claim is **independent failure domain**, not *higher availability*: ACR is
+> single-zone today. The bootstrap argument above is unaffected — it does not depend on ACR being
+> more reliable, only on it not being the thing we are trying to start. But it does mean a mirror
+> could *improve* pull availability rather than merely adding a hop, which is worth measuring before
+> anyone claims it either way.
 
 **Consequence:** the boot image stays on an external registry, permanently. That is not a
 limitation to engineer away; it is the correct boundary.
@@ -103,7 +122,11 @@ verb list.
 - **The token dance.** A Docker client expects `401` plus
   `WWW-Authenticate: Bearer realm=…,service=…,scope=repository:<name>:pull` and then a token
   endpoint. This is where `AccessContext` plugs in, and it is the only part with real protocol
-  subtlety.
+  subtlety. ACR's own challenge is a live reference for the shape we must emit.
+- **A mirror does NOT remove the credential, it moves it.** Cache-fill still needs an ACR credential
+  server-side, because anonymous pull is off. What changes is *who* needs one: a viewer authenticates
+  to memex and is authorised by `AccessContext`, instead of holding registry credentials. That is the
+  access-control gain in (4) — state it that way, not as "no credentials".
 - **Content addressing is a natural fit.** Digests are immutable ids, so layer dedup across
   repositories is free if blobs are keyed by digest — the mesh is already content-addressed for
   module builds.
