@@ -158,6 +158,10 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
     public IObservable<bool> DeleteIfExists(string path) => inner.DeleteIfExists(path);
 
     /// <inheritdoc />
+    public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
+        => inner.DeleteMany(paths);
+
+    /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => inner.ListChildPaths(parentPath);
 
