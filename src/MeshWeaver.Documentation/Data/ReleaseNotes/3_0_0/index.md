@@ -1,18 +1,18 @@
 ---
-Name: MeshWeaver 3.1.0
+Name: MeshWeaver 3.0.0
 Category: Release Notes
 Description: The first clean release of the 3.x line — a modular platform that installs, updates and verifies itself; a tabbed home with apps and threads; live language services for NodeType authoring; German throughout; and a release that is a promotion of a tested continuous build, never a rebuild.
 Icon: Rocket
 ---
 
-# MeshWeaver 3.1.0
+# MeshWeaver 3.0.0
 
-**3.1.0 is the first clean release of the 3.x line.** The line ran as `3.0.0-rc1` through
-`3.0.0-rc13` between 2026-08-13 and 2026-08-31 and was never cut clean: the candidates were
-rebuilt on tagging rather than promoted, and SemVer sorts `rc13` below `rc2`, so the last four were
-invisible to anything that asked for "the newest". Both defects are gone with this release, and the
-number moved to `3.1.0` so that every continuous build since sorts above every `3.0.0-*` ever
-published (details in [Release Process & Versioning](/Doc/Architecture/ReleaseProcess)).
+**3.0.0 is the first clean release of the 3.x line.** It ran as `3.0.0-rc1` through `3.0.0-rc13`
+between 2026-08-13 and 2026-08-31, and none of those was a release of this build: each candidate
+was rebuilt on tagging rather than promoted, and SemVer sorts `rc13` below `rc2`, so the last four
+were invisible to anything that asked for "the newest". Both defects are gone: `3.0.0` is one
+sealed continuous build, `3.0.0-ci.<n>`, given its clean name, and there are no candidates any more
+(details in [Release Process & Versioning](/Doc/Architecture/ReleaseProcess)).
 
 Everything below shipped as continuous builds and has been running on production portals for
 weeks. The day-by-day record — 837 entries since 2026-07-08, 668 of them fixes — is the
@@ -22,10 +22,10 @@ weeks. The day-by-day record — 837 entries since 2026-07-08, 668 of them fixes
 
 ## A release is a promotion
 
-`3.1.0` is the same bytes as one `3.1.0-ci.<n>` build. Pushing the annotated tag resolves that
+`3.0.0` is the same bytes as one `3.0.0-ci.<n>` build. Pushing the annotated tag resolves that
 build's already-promoted, already-sealed image set, retags it with the clean version, copies the
 release marker under that name, publishes this page as the GitHub Release, and opens the pull
-request that moves the line to `3.2.0`. Nothing is compiled twice, so what is released is exactly
+request that moves the line to `3.1.0`. Nothing is compiled twice, so what is released is exactly
 what was tested, baked and sealed. NuGet publication is retired with the rc line: modules compile
 against the platform image, never against a package feed.
 
@@ -175,12 +175,13 @@ concurrency gates.
 
 ## Upgrading from a 3.0.0-rc build
 
-- **Nothing to do for a running installation.** Every `3.1.0-ci.<n>` build sorts above every
-  `3.0.0-*`, so a Continuous install rolls forward on its own; a Stable install takes `3.1.0`.
-  Module bundles are keyed by framework identity and re-baked per set, so the assembly version
-  moving to `3.1.0.0` changes nothing an install adopts.
+- **Nothing to do for a running installation.** The clean `3.0.0` sorts above every `3.0.0-rc*`
+  build, so a Continuous install rolls forward onto it on its own, and a Stable install takes it as
+  its first release. After it, the line moves to `3.1.0-ci.<n>` and continuous rolling resumes.
+  Module bundles are keyed by framework identity and re-baked per set, so nothing an install
+  adopts changes with the name.
 - **Module floors are satisfied.** A module declaring `minMeshVersion: 3.0.0-rc8` (or any
-  `3.0.0-*`) runs on `3.1.0`; the floor is judged as a regression check, never absolutely
+  `3.0.0-*`) runs on `3.0.0`; the floor is judged as a regression check, never absolutely
   ([Release gates](/Doc/Architecture/ReleaseGates)).
 - **NuGet is retired.** The last packages on nuget.org are `3.0.0-rc13` for the framework and
   `3.0.0-rc7` for `MeshWeaver.Hosting.PostgreSql`, `MeshWeaver.AI` and `MeshWeaver.Blazor`, which

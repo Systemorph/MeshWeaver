@@ -11,7 +11,7 @@ Order: -20260905
 A module compiled inside the platform image loads into that image's process and is bound by its
 assemblies, so it must carry the platform's assembly version exactly. Until now that number had to
 be written into the module repository as a literal, and checked after the fact. The day the
-platform line moved from 3.0.0 to 3.1.0, every image build in the fleet went red on that literal;
+platform line was bumped to 3.1.0 for a few hours, every image build in the fleet went red on that literal;
 a repository that tried to derive the number instead found the in-image builder runs no MSBuild
 property functions, and every module came out `1.0.0.0`.
 

@@ -24,7 +24,7 @@ One number, two channels, one set of bytes. The whole scheme lives in
 
 ```xml
 <!-- Directory.Build.props -->
-<PlatformVersion Condition="'$(PlatformVersion)' == ''">3.1.0</PlatformVersion>
+<PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0</PlatformVersion>
 ```
 
 The single maintained version names the **next release**. Every continuous build derives its
@@ -32,36 +32,43 @@ version from it by appending the CI run number as the one and only pre-release i
 
 | Build | Version | Where it comes from |
 |---|---|---|
-| continuous (CI) | `3.1.0-ci.7900` | `main-cd.yml`, every green merge to `main` |
-| local | `3.1.0-ci.0` | any `dotnet build` on a developer machine |
-| release | `3.1.0` | `release.yml`, on the annotated tag `v3.1.0` — a **promotion** of one of the continuous builds above |
+| continuous (CI) | `3.0.0-ci.7900` | `main-cd.yml`, every green merge to `main` |
+| local | `3.0.0-ci.0` | any `dotnet build` on a developer machine |
+| release | `3.0.0` | `release.yml`, on the annotated tag `v3.0.0` — a **promotion** of one of the continuous builds above |
 
 The ordering is what the self-updater relies on (`VersionSelect`, SemVer 2 via `NuGetVersion`):
 
 ```
-3.0.0-rc9.ci.7818  <  3.0.0-rc13  <  3.1.0-ci.1  <  3.1.0-ci.7900  <  3.1.0  <  3.2.0-ci.1
+3.0.0-ci.7900  <  3.0.0-preview1  <  3.0.0-rc9.ci.7818  <  3.0.0-rc13  <  3.0.0  <  3.1.0-ci.1
 ```
 
-Three consequences, all load-bearing:
+Four consequences, all load-bearing:
 
-- **Continuous installs always move forward.** `3.1.0-ci.<n>` outranks every `3.0.0-*` by its
-  minor number, and `<n>` is the GitHub Actions run number, monotonic per workflow. 🔴 Do not
-  replace it with anything that can reset (the old seconds-since-midnight number made a morning
-  build sort below the previous evening's).
+- **`<n>` is the GitHub Actions run number**, monotonic per workflow, so within a line newer
+  builds sort higher. 🔴 Do not replace it with anything that can reset (the old
+  seconds-since-midnight number made a morning build sort below the previous evening's).
 - **A Stable install takes the clean release and nothing before it.** `Stable` selects
   `!IsPrerelease`; the only clean tags are the promoted ones.
-- **The number must move the day a release is tagged.** `3.1.0-ci.7950` sorts *below* `3.1.0`, so
+- **The number must move the day a release is tagged.** `3.0.0-ci.7950` sorts *below* `3.0.0`, so
   a continuous build stamped with an already-released number would stop every Continuous install
-  from rolling forward. `release.yml` opens the pull request that moves the line to `3.2.0` itself;
+  from rolling forward. `release.yml` opens the pull request that moves the line to `3.1.0` itself;
   rc6 shipped with the props still reading rc6 and rc10–rc13 were tagged with them on rc9, which is
   why that bump is no longer a human step.
+- 🚨 **Until `3.0.0` is cut, a `3.0.0-ci.<n>` build sorts BELOW every `3.0.0-rc*` image already in
+  the registry** — SemVer §11.4 compares pre-release identifiers as text, and `ci` < `preview1` <
+  `rc`. A Continuous install already on an rc build therefore sees nothing newer and stays put
+  (never rolls back, never rolls forward) until the clean `3.0.0` lands, which outranks every rc.
+  That is the price of releasing the number the rc line was named for, paid once; after the
+  release, `3.1.0-ci.<n>` outranks `3.0.0` and continuous rolling resumes. Two `3.1.0-ci` sets
+  (7832, 7835) exist from the hours on 2026-09-05 when the props briefly read 3.1.0; an install
+  that took one of them will not take the clean `3.0.0` and waits for the first `3.1.0-ci` build.
 
-> 🚨 **There is no rc line.** The `3.0.0-rc1` … `3.0.0-rc13` labels were retired on 2026-09-05 and
-> `3.0.0` was never cut clean. Two reasons, one of them a trap worth remembering: SemVer §11.4
-> compares pre-release identifiers as text, so `rc13 < rc2`, and nuget.org listed `rc9` as the
-> newest pre-release for the whole run; and a "candidate" that is rebuilt on tagging is not a
-> candidate of anything (§4). A clean line has neither problem: the build number is the only
-> pre-release identifier, and it compares numerically. Do not "fill in" `v3.0.0`.
+> 🚨 **There is no rc line and there will be none** (maintainer, 2026-09-05). `3.0.0-rc1` …
+> `3.0.0-rc13` were tagged and rebuilt on tagging, which made each "candidate" a candidate of
+> nothing (§4), and SemVer sorted `rc13` below `rc2`, so nuget.org listed `rc9` as the newest
+> pre-release for the whole run. The clean line has neither problem: the build number is the only
+> pre-release identifier, and it compares numerically. The release is cut **only when every open
+> issue is closed** (maintainer, same day); until then main keeps producing `3.0.0-ci.<n>` sets.
 
 It is also the **data-sync content-version**: a continuous build syncs its docs and seed nodes
 from the commit stamped into its assemblies, a release from the tag `v$(PlatformVersion)` that
@@ -77,18 +84,18 @@ the *compiled attributes* is what makes a promotion possible at all:
 
 | | Flag | `Version` / image tag | `AssemblyVersion` | `FileVersion` | `InformationalVersion` |
 |---|---|---|---|---|---|
-| **CONTINUOUS** | *(default)* | `3.1.0-ci.<run>` | `3.1.0.0` | `3.1.0.0` | `3.1.0+<sha>` under `CIRun` |
-| **RELEASED** | `-p:PublicRelease=true` | `3.1.0` | `3.1.0.0` | `3.1.0.0` | `3.1.0+<sha>` under `CIRun` |
+| **CONTINUOUS** | *(default)* | `3.0.0-ci.<run>` | `3.0.0.0` | `3.0.0.0` | `3.0.0+<sha>` under `CIRun` |
+| **RELEASED** | `-p:PublicRelease=true` | `3.0.0` | `3.0.0.0` | `3.0.0.0` | `3.0.0+<sha>` under `CIRun` |
 
 - **Nothing builds under `PublicRelease` any more.** The flag survives for local experiments; a
-  release is a continuous image retagged, so the bytes inside a `3.1.0` image report the
-  `3.1.0-ci.<n>` build they are, via `MESHWEAVER_PLATFORM_VERSION` in the image config. That is
+  release is a continuous image retagged, so the bytes inside a `3.0.0` image report the
+  `3.0.0-ci.<n>` build they are, via `MESHWEAVER_PLATFORM_VERSION` in the image config. That is
   deliberate: the release *is* that build.
-- **`AssemblyVersion` is STABLE within a line** (`3.1.0.0`) — the runtime assembly-binding
+- **`AssemblyVersion` is STABLE within a line** (`3.0.0.0`) — the runtime assembly-binding
   identity, identical across every assembly in one build. A per-project time-based number once
   made `Memex.Database.Migration` bind to `MeshWeaver.Documentation, Version=3.0.0.280` while the
   packaged DLL carried another number (#143); binding identity must not depend on wall-clock
-  time. It moves with the line (`3.2.0.0` after the next bump), which is fine: module bundles are
+  time. It moves with the line (`3.1.0.0` after the next bump), which is fine: module bundles are
   keyed by framework identity and re-baked per set, never bound by assembly version.
 - **`FileVersion` is pinned** for the same reason `InformationalVersion` is: both are *compiled*
   attributes, and CI compile inputs are **commit-deterministic**
@@ -113,7 +120,7 @@ the *compiled attributes* is what makes a promotion possible at all:
 ## 3. Commands
 
 ```bash
-# CONTINUOUS — CI and local. Nothing to add → 3.1.0-ci.<run> (3.1.0-ci.0 locally)
+# CONTINUOUS — CI and local. Nothing to add → 3.0.0-ci.<run> (3.0.0-ci.0 locally)
 dotnet build
 
 # What CI computes for an image (the same call main-cd.yml makes):
@@ -121,7 +128,7 @@ dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
   -getProperty:Version -p:CIRun=true -nologo
 
 # RELEASE — no command builds one. Push an annotated tag on a promoted, sealed commit:
-git tag -a v3.1.0 -m "MeshWeaver 3.1.0" <sha> && git push origin v3.1.0
+git tag -a v3.0.0 -m "MeshWeaver 3.0.0" <sha> && git push origin v3.0.0
 ```
 
 ### What `release.yml` does on that tag — and what it refuses
@@ -132,17 +139,17 @@ The lane **promotes**; it compiles nothing. In order:
    `main`, a commit whose `PlatformVersion` differs from the tag, and a version with no committed
    notes page at `Doc/ReleaseNotes/<x_y_z>`.
 2. **Resolves the continuous set** for the commit from the tags on `memex-portal-ai:<short-sha>`
-   (`3.1.0-ci.<n>` and the `<core>-p<plugins>` pair tag), and refuses a commit `main-cd` never
+   (`3.0.0-ci.<n>` and the `<core>-p<plugins>` pair tag), and refuses a commit `main-cd` never
    promoted — *"wait for CD, confirm `Plugins: bake + seal`, push the tag again"*.
 3. **Asserts the set is complete** (`check-image-set.sh`) **and sealed** for both the platform
    content and the Plugins modules (`check-release-availability.sh`).
-4. **Records the release marker** `_releases/3.1.0` on every artifact store, holding the same
+4. **Records the release marker** `_releases/3.0.0` on every artifact store, holding the same
    framework identity the continuous build recorded, and re-asserts availability under the clean
    name — the very question a Stable install's gate asks ([ReleaseGates](/Doc/Architecture/ReleaseGates)).
 5. **Retags** `memex-migration`, `mw-plugin-test`, then `memex-portal-ai` last (`<short-sha>` →
-   `3.1.0`, manifest-only, seconds), and mirrors the three to GHCR.
+   `3.0.0`, manifest-only, seconds), and mirrors the three to GHCR.
 6. **Publishes the GitHub Release** from the notes page.
-7. **Opens the pull request** that moves `PlatformVersion` to `3.2.0`.
+7. **Opens the pull request** that moves `PlatformVersion` to `3.1.0`.
 
 Everything the lane needs is asserted RED by a `preflight` job — no `continue-on-error`, no
 `if: secret != ''` (AGENTS.md: a gate never tests its own inputs).
@@ -151,14 +158,14 @@ Everything the lane needs is asserted RED by a `preflight` job — no `continue-
 
 ## 4. The workflow — continuous → release → next line
 
-1. **Iterate.** Every green merge ships `3.1.0-ci.<n>`; Continuous installs roll onto it.
+1. **Iterate.** Every green merge ships `3.0.0-ci.<n>` (see the ordering note in §1 for who rolls onto it).
 2. **Pick the build to release.** A commit whose CD run has `Promote`, `Verify every image
    shipped` **and** `Plugins: bake + seal` green — read the seal JOB, never the run's conclusion
    ([ContinuousDeliveryContract](/Doc/Architecture/ContinuousDeliveryContract)). Commit its notes
-   page, `Doc/ReleaseNotes/3_1_0`, first: the lane will not release without it.
-3. **Tag it, annotated.** `git tag -a v3.1.0 -m "MeshWeaver 3.1.0" <sha> && git push origin v3.1.0`.
+   page, `Doc/ReleaseNotes/3_0_0`, first: the lane will not release without it.
+3. **Tag it, annotated.** `git tag -a v3.0.0 -m "MeshWeaver 3.0.0" <sha> && git push origin v3.0.0`.
    The lane promotes the set (§3); Stable installs pick it up on their next check.
-4. **Merge the bump.** The lane's pull request moves the line to `3.2.0`; auto-arm enqueues it.
+4. **Merge the bump.** The lane's pull request moves the line to `3.1.0`; auto-arm enqueues it.
    Until it merges, no continuous build may be relied on to roll a Continuous install forward.
 
 > **Tagging discipline.** A version tag must be **immutable** (annotated, never force-moved): the

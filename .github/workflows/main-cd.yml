@@ -10,8 +10,8 @@ name: Continuous Delivery (main)
 # tests. workflow_run starts after the named workflow COMPLETES; the `if` below filters to a
 # successful run that came from a push to main (not a PR run, not a failed run).
 #
-# This is the CONTINUOUS channel (build-numbered 3.1.0-ci.<build> baked in, images tagged by
-# commit SHA). The RELEASED channel — the clean 3.1.0 — is NOT a second build: release.yml, fired
+# This is the CONTINUOUS channel (build-numbered 3.0.0-ci.<build> baked in, images tagged by
+# commit SHA). The RELEASED channel — the clean 3.0.0 — is NOT a second build: release.yml, fired
 # by pushing a v*.*.* tag, PROMOTES the sealed set this workflow already published for that commit
 # (retags the images, copies the release marker, publishes the GitHub Release). Nothing ships to
 # NuGet any more. "Freeze a release" = push a tag; "merge to main" = this workflow.
