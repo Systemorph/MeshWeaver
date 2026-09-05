@@ -2105,6 +2105,13 @@ jobs:
             2*)
               echo "### 📣 Release event for $SHA ($DIGEST) accepted by the inbox (HTTP $code)" >> "$GITHUB_STEP_SUMMARY"
               echo "The mesh STORED the delivery. Whether the wave actually ran is verified on the satellites (a repository_dispatch run + the MW_IMAGE_DIGEST bump PR), never here — see #2235." >> "$GITHUB_STEP_SUMMARY"
+              # 🚨 #3312: a 2xx says bytes landed; only the BODY says whether this instance
+              # actually checked the HMAC we just computed. Recorded here, judged in the next step.
+              if grep -Eq '"signature"[[:space:]]*:[[:space:]]*"verified"' /tmp/resp; then
+                echo "- signature: **verified** — the instance checked this POST's HMAC." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "- signature: **NOT checked** — the instance declares no SecretConfigKey for this target (#3312)." >> "$GITHUB_STEP_SUMMARY"
+              fi
               ;;
             000)
               echo "::error::could not reach the platform-update inbox at all (DNS/TLS/connection refused). No release event was delivered, so no satellite will re-bake against $SHA until its next schedule poll."
@@ -2114,11 +2121,43 @@ jobs:
               echo "::error::the platform-update inbox answered 404. It is FAIL-CLOSED and answers 404 for BOTH an unlisted target and a wrong URL — check vars.PLATFORM_WEBHOOK_URL against the instance's WebhookInbox:Targets (deploy/aks/values.aks.yaml sets WebhookInbox__Targets__0=Hosting/PlatformBuilds). No release event was delivered."
               exit 1
               ;;
+            401)
+              echo "::error::the platform-update inbox REFUSED the signature (HTTP 401): secrets.PLATFORM_WEBHOOK_SECRET here and Hosting:PlatformWebhookSecret on the instance are not byte-identical. Rotate one to match the other — do NOT read either value to compare them; re-set both from the same source. No release event was delivered. (Before #3312 this same drift answered 2xx and every delivery was dropped unverifiable, with nothing red anywhere.)"
+              exit 1
+              ;;
+            500)
+              echo "::error::the platform-update inbox declares a SecretConfigKey that is empty on the instance (HTTP 500), so it can verify nothing and refuses every delivery. Provision the key WebhookInbox__Targets__N__SecretConfigKey names (deploy/aks/values.aks.yaml: Hosting:PlatformWebhookSecret) on the target instance. No release event was delivered."
+              exit 1
+              ;;
             *)
               echo "::error::the platform-update inbox refused the release event (HTTP $code). No satellite will re-bake against $SHA until its next schedule poll."
               exit 1
               ;;
           esac
+
+      # 🚨 ITS OWN STEP, deliberately. The step above is held to "every message ends the job"
+      # (PlatformReleaseNotifyGuard forbids `::warning` in it outright), because a release event
+      # that never arrived must never be decorated into a pass. THIS is the opposite case: the
+      # event DID arrive and was stored — the open question is whether the instance verified the
+      # signature while doing so, which is a provisioning gap on the receiving end, not a failed
+      # delivery. Mixing the two into one step would either soften that guard or overstate this.
+      #
+      # A warning and not a failure only while the declaration rolls out: it reaches an instance
+      # through its Hosting/Deployment record + `helm upgrade`, never through self-update (a `set
+      # image`), so failing here would red every publish until that lands. Escalate to an error
+      # once the control instance answers "verified" — that is the last step of #3312.
+      - name: "Did the inbox VERIFY the build fact?"
+        run: |
+          set -euo pipefail
+          if [ ! -f /tmp/resp ]; then
+            echo "::error::no inbox response was captured — the POST step did not run to completion."
+            exit 1
+          fi
+          if grep -Eq '"signature"[[:space:]]*:[[:space:]]*"verified"' /tmp/resp; then
+            echo "the control instance verified this POST's HMAC — a drifted PLATFORM_WEBHOOK_SECRET would now fail loudly (401)."
+          else
+            echo "::warning::the inbox ACCEPTED this release event WITHOUT checking its signature: it declares no WebhookInbox__Targets__N__SecretConfigKey for this target, so secrets.PLATFORM_WEBHOOK_SECRET was never exercised and a drifted secret would still be invisible (#3312). Provision it on the receiving instance's Hosting/Deployment record."
+          fi
 
   # ─────────────────────────── DID IT ACTUALLY SHIP? ──────────────────────────
   # Belt and braces: `promote` PREVENTS a partial set, this CONFIRMS one landed. Assert the
