@@ -27,6 +27,8 @@
   "code.loadingCode": "Loading code…",
   "code.enterDisplayName": "Enter display name…",
   "code.neverExecuted": "never executed",
+  "code.lastRun": "last run {0}",
+  "code.lastRunBy": "last run {0} by {1}",
   "common.send": "Send",
   "common.sending": "Sending...",
   "common.copy": "Copy",
