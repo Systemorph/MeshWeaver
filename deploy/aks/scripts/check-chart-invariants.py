@@ -258,6 +258,54 @@ for key, why in NEVER_BLANK_CONFIG.items():
             f"never `default \"\"`. Absent is fine here; blank is not.",
         )
 
+# ---------------------------------------------------------------------------
+# 10. Readiness and liveness must not probe the SAME path.
+#
+# 🚨 MeshWeaver#3330. Both post-startup probes were `/alive`, which was harmless only while
+# /alive was the trivial process-up check core ships. MeshWeaver.Plugins#1234 registered a
+# progress-aware handler on the tag /alive filters on (merged 2026-09-03), and READINESS inherited
+# it silently — two probes cannot be given different semantics while they share a path.
+#
+# The arithmetic is what makes it a cascade rather than a blip: readiness trips at 10s x 3 = 30s,
+# liveness at 15s x 6 = 90s. So a GC-bound replica LEFT THE SERVICE a full minute before anything
+# restarted it, and for that minute its traffic landed on siblings converging on the same memory
+# ceiling with age (measured 2026-09-04, ns memex: two 28h replicas at 9936Mi and 9409Mi, ratio
+# 1.06). That is the 2026-07-21 death spiral rebuilt out of the fix that was meant to prevent it.
+#
+# Checked on the RENDERED object, per values combination, because that is where an overlay can
+# re-merge what the template separates — a `helm template` is perfectly happy to emit two probes
+# asking one question.
+checks += 1
+_probe_paths = {
+    which: ((portal.get(which) or {}).get("httpGet") or {}).get("path")
+    for which in ("startupProbe", "readinessProbe", "livenessProbe")
+}
+if not _probe_paths["readinessProbe"] or not _probe_paths["livenessProbe"]:
+    finding(
+        "the rendered portal container is missing a readinessProbe or livenessProbe httpGet path",
+        "both are load-bearing and this invariant cannot be evaluated without them — a pod with no "
+        "readiness probe is put in rotation the instant it starts, and one with no liveness probe "
+        "is never restarted when it wedges.",
+    )
+elif _probe_paths["readinessProbe"] == _probe_paths["livenessProbe"]:
+    finding(
+        f"readinessProbe and livenessProbe both probe {_probe_paths['readinessProbe']}",
+        "they cannot then be given different semantics. The moment that path answers a "
+        "progress-aware verdict (ProcessProgressHealthCheck, MeshWeaver.Plugins#1234), a GC-bound "
+        "replica is EVICTED at 30s and only RESTARTED at 90s, and for the minute in between its "
+        "traffic lands on siblings converging on the same memory ceiling — one sick replica becomes "
+        "a cascade (MeshWeaver#3330). Readiness answers 'can I take a request', liveness answers "
+        "'am I making progress': separate paths, separate health-check tags.",
+    )
+elif _probe_paths["readinessProbe"] == _probe_paths["startupProbe"]:
+    finding(
+        f"readinessProbe probes the startupProbe's path {_probe_paths['startupProbe']}",
+        "that path runs EVERY registered health check — the database and the mesh included. Under "
+        "load a heavy readiness check times out, the pod is yanked from the Service endpoints, and "
+        "the survivors inherit its traffic: the 2026-07-21 death spiral. The startup probe already "
+        "holds readiness on the heavy path until the mesh is up; after that readiness must be cheap.",
+    )
+
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:
     print(

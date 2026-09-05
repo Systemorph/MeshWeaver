@@ -34,7 +34,7 @@ public static class GuiShellSwitch
         "/_blazor", "/_framework", "/_content",
         "/static", "/content", "/images", "/favicon", "/robots.txt", "/manifest",
         "/login", "/logout", "/signin-oidc", "/signout", "/authorize", "/token", "/register",
-        "/.well-known", "/healthz", "/alive", "/webhooks",
+        "/.well-known", "/healthz", "/alive", "/ready", "/webhooks",
     ];
 
     /// <summary>
