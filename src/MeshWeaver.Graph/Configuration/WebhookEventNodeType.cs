@@ -123,7 +123,7 @@ public static class WebhookInbox
     /// The result of <see cref="Deliver"/>: the status, the stored node's path when accepted, and
     /// whether the delivery was ACCEPTED HAVING VERIFIED a signature.
     ///
-    /// <para>🚨 <paramref name="SignatureVerified"/> is the half of #3312 the status code cannot
+    /// <para>🚨 <see cref="SignatureVerified"/> is the half of #3312 the status code cannot
     /// carry. "Accepted, verified" and "accepted, nothing was required" are both 2xx and mean very
     /// different things to a sender that signed: the second says this instance declares no
     /// <see cref="SecretConfigKeyName"/> for the target, so its signature was never checked. A
@@ -131,8 +131,15 @@ public static class WebhookInbox
     /// otherwise "we verify now" degrades silently to "we used to verify" the day a chart value
     /// goes missing.</para>
     /// </summary>
-    public record DeliveryResult(
-        DeliveryStatus Status, string? NodePath = null, bool SignatureVerified = false);
+    public record DeliveryResult(DeliveryStatus Status, string? NodePath = null)
+    {
+        /// <summary>Whether this delivery was accepted HAVING VERIFIED its signature. An
+        /// init-only PROPERTY, not a third positional parameter: adding one to a record's primary
+        /// constructor replaces the signature, and every assembly compiled against the old arity
+        /// — every module compiled against the platform image — calls a constructor that no longer
+        /// exists. `Public surface (binary compatibility)` refuses that, correctly.</summary>
+        public bool SignatureVerified { get; init; }
+    }
 
     /// <summary>
     /// One allowlisted target: the node path deliveries may be stored under and, when the
@@ -312,8 +319,10 @@ public static class WebhookInbox
                             },
                         };
                         return mesh.CreateNode(node).Take(1)
-                            .Select(_ => new DeliveryResult(
-                                DeliveryStatus.Accepted, node.Path, signatureVerified));
+                            .Select(_ => new DeliveryResult(DeliveryStatus.Accepted, node.Path)
+                            {
+                                SignatureVerified = signatureVerified,
+                            });
                     }));
     }
 }
