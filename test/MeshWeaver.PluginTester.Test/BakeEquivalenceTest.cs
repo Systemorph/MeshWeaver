@@ -207,7 +207,13 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
             });
             output.WriteLine("── compiler-driven bake ──");
             output.WriteLine(treeLog.ToString());
-            Assert.Null(treeReport.FatalError);
+            // 🚨 Assert.True with the message, NOT Assert.Null — xUnit renders a failing
+            // Assert.Null by truncating the value at 50 characters, so the ONE string that says why
+            // the bake failed arrives cut mid-word ("…bake: 'Widget/Thing' cl"···) and appears
+            // nowhere else in the log (#3370). The reader gets the failure without the diagnosis,
+            // and the next occurrence costs them the same dead end. This prints the whole message on
+            // failure and nothing on success.
+            Assert.True(treeReport.FatalError is null, treeReport.FatalError);
             Assert.All(treeReport.Types, t => Assert.Null(t.Error));
 
             // ── the MESH-driven bake: exactly what CI runs today ──
@@ -222,7 +228,8 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
             }).FirstAsync().Await();
             output.WriteLine("── mesh-driven bake ──");
             output.WriteLine(meshLog.ToString());
-            Assert.Null(meshReport.FatalError);
+            // Same reasoning as the compiler-driven arm above (#3370).
+            Assert.True(meshReport.FatalError is null, meshReport.FatalError);
 
             var mesh = ReadBakeDirectory(meshDir);
             var tree = ReadBakeDirectory(treeDir);
