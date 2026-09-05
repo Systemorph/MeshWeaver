@@ -151,6 +151,32 @@ status-guarded flip to `Pending`, which the watcher turns into the one activity 
 **waits** for that compile to settle before hydrating the answer. The status field is the
 single-flight lock.
 
+### The store address is a TRIPLE, and it moves together or not at all
+
+`LatestAssemblyCollection`, `LatestAssemblyPath` and `LastCompiledVersion` are not three independent
+facts — together they address one blob, and `NodeTypeBatchBake` relies on that in as many words:
+*"LastCompiledVersion always names a store key that has bytes."*
+
+`ApplyCompileSuccess` takes each of them from the compile result, falling back to the value already
+on the definition when the result carries none. That fallback is the contract: **a compile whose
+upload did not happen must leave the previous address exactly as it found it.** The upload is
+allowed not to happen — a `NullAssemblyStore`, unreadable bytes, or a fault or timeout, which is
+deliberately non-terminal because an upload failure has never failed a compile — and
+`result.Version` is set in exactly one place, the projection over a successful `PutWithLocation`. So
+a null there does not mean *"the version is missing"*, it means **nothing was stored**.
+
+🚨 Until #3333, `LastCompiledVersion` alone broke that symmetry: it fell back to the node's version
+*at stamp time* rather than to the previous stamp. A skipped upload then produced old collection +
+old path + **new version** — a key the store never held, so `TryGetAssemblyPath` misses and
+activation silently falls back to the default configuration, the #1368 outcome by a different road.
+Because the stamp takes its value from the same projection that performs the `Put`, that fallback
+was the *only* way the recorded version could disagree with the stored one.
+
+Null is the honest value when nothing was ever uploaded, and it costs nothing: every reader already
+applies its own `?? node.Version` (`MeshOperations`, `MeshDataSource`, `NodeTypeDataModelAreas`,
+`NodeTypeEnrichmentHelpers`), so the guess belongs at the read — where it is a heuristic — rather
+than frozen into the node as a claim about the store.
+
 > 🚨 **The wait must be ORDERED AGAINST THE DISPATCH.** `CompilationStatus == null` reads as
 > *settled*, and correctly so: for a static-only type, or one that already has a usable build,
 > "never compiled" is a final answer and `EnsureCompileDispatched` deliberately leaves those alone.

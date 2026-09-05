@@ -83,14 +83,30 @@ public class NodeTypeCompileStampTest
             .Should().BeTrue("the whole point of the stamp is that lazy activation finds a usable build");
     }
 
+    /// <summary>
+    /// 🚨 #3333 — the three fields that ADDRESS one blob move together, or not at all.
+    ///
+    /// <para>A null <c>result.Version</c> does not mean "the version is missing": it is set in
+    /// exactly one place, the projection over a successful <c>PutWithLocation</c>, so a null means
+    /// the upload did NOT happen (no store, unreadable bytes, or a fault/timeout — deliberately
+    /// non-terminal, since an upload failure has never failed a compile). This test used to assert
+    /// the opposite and was named for it (<c>…AndFallsBackToTheNodeVersion</c>), while its own body
+    /// asserted the collection and path keep their PREVIOUS values two lines below — the same
+    /// incoherence the code had: old collection, old path, brand-new version, naming a store key
+    /// that was never written. <c>NodeTypeBatchBake</c> states the invariant that breaks in as many
+    /// words: "LastCompiledVersion always names a store key that has bytes".</para>
+    /// </summary>
     [Fact]
-    public void Success_WithoutStoreCoordinates_KeepsThePreviousAssemblyReference_AndFallsBackToTheNodeVersion()
+    public void Success_WithoutStoreCoordinates_KeepsThePreviousAssemblyReference_AndTheVersionThatAddressesIt()
     {
         var result = SuccessResult(storeVersion: null) with { Collection = null, ContentPath = null };
         var stamped = NodeTypeCompilationHelpers.ApplyCompileSuccess(
-            PreviouslyBroken(), result, currentNodeVersion: 3, activityPath: null, releasePath: null);
+            PreviouslyBroken() with { LastCompiledVersion = 5 },
+            result, currentNodeVersion: 3, activityPath: null, releasePath: null);
 
-        stamped.LastCompiledVersion.Should().Be(3L);
+        stamped.LastCompiledVersion.Should().Be(5L,
+            "nothing was uploaded, so the previous store key is still the only one with bytes — "
+            + "stamping the node's current version (3) would name a key the store never held");
         stamped.LatestAssemblyCollection.Should().Be("old-collection",
             "a producer without a store must not erase the previous durable reference");
         stamped.LatestAssemblyPath.Should().Be("old/path.dll");
@@ -98,6 +114,26 @@ public class NodeTypeCompileStampTest
             "no new release landed, so the previous one stays");
         stamped.ReleaseNotes.Should().Be("notes for the pending release",
             "un-consumed notes must survive until a release actually carries them");
+    }
+
+    /// <summary>
+    /// The same rule where there is no previous upload either: the stamp stays NULL rather than
+    /// acquiring a version out of the node. Null is honest — it says "no store bytes" — and every
+    /// reader already applies its own <c>?? node.Version</c> (MeshOperations, MeshDataSource,
+    /// NodeTypeDataModelAreas, NodeTypeEnrichmentHelpers), so the guess belongs at the READ, where
+    /// it is a heuristic, not frozen into the node as a claim about the store.
+    /// </summary>
+    [Fact]
+    public void Success_WithNoUploadEverHavingHappened_LeavesTheStoreVersionUnstated()
+    {
+        var result = SuccessResult(storeVersion: null) with { Collection = null, ContentPath = null };
+        var stamped = NodeTypeCompilationHelpers.ApplyCompileSuccess(
+            PreviouslyBroken(), result, currentNodeVersion: 3, activityPath: null, releasePath: null);
+
+        stamped.LastCompiledVersion.Should().BeNull(
+            "no upload has ever happened for this type, so there is no store key to name");
+        stamped.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            "an upload that did not happen has never failed a compile — that contract is unchanged");
     }
 
     // ---- ApplyCompileFailure ------------------------------------------------------------------
