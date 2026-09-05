@@ -5149,11 +5149,17 @@ public static class MeshExtensions
                         // event for each path fires only after that path's storage
                         // commit completes. The storage adapter's Changes feed
                         // fires the Deleted notification from inside its Delete.
-                        return paths
-                            .OrderByDescending(p => p.Length)
-                            .ToObservable()
-                            .SelectMany(p => storage.DeleteAndPublish(p, changeFeed))
-                            .ToList()
+                        // Children before parents, then ONE batch: the path set is already
+                        // authoritative and already committed to, so there is nothing to gain
+                        // from paying a round-trip per row (IStorageAdapter.DeleteMany).
+                        var ordered = paths.OrderByDescending(p => p.Length).ToList();
+                        return storage.DeleteMany(ordered)
+                            .Take(1)
+                            .Do(deleted =>
+                            {
+                                foreach (var p in deleted)
+                                    changeFeed?.Publish(MeshChangeEvent.Deleted(p));
+                            })
                             .Select(_ => copied);
                     }))
             .Subscribe(

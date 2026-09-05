@@ -182,6 +182,45 @@ public interface IStorageAdapter
         => System.Reactive.Linq.Observable.Select(Delete(path), _ => true);
 
     /// <summary>
+    /// Deletes many nodes in as few round-trips as the backend allows, emitting the paths this
+    /// adapter actually removed. The DELETE-side twin of <see cref="WriteMany"/>: the default is
+    /// correct everywhere, and a backend that can do better overrides it (Postgres windows by
+    /// target table and sends one statement per window).
+    ///
+    /// <para><b>Why it exists.</b> A recursive delete removed rows ONE AT A TIME, and on Postgres
+    /// every one of those is its own statement, its own implicit transaction and its own turn on
+    /// a capacity-1 write pool. Retiring a 9,834-node Space on memex took ~8 minutes — about
+    /// 21 nodes a second — and the profile was flat: the subtree was not big, the per-node cost
+    /// was. Nothing about a subtree delete needs one round-trip per row.</para>
+    ///
+    /// <para>🚨 <b>Order is part of the contract, exactly as it is for <see cref="WriteMany"/> —
+    /// but INVERTED.</b> Callers pass paths CHILDREN-FIRST, because a parent must not be removed
+    /// while its children still reference it, and the change feed is what wakes the hubs. Batching
+    /// the storage delete is safe (a statement has no ordering to lose); publishing
+    /// <see cref="Changes"/> out of order is not. An override MUST publish children before
+    /// parents.</para>
+    ///
+    /// <para>Paths this adapter does not own are simply absent from the result — the same
+    /// tolerance <see cref="Delete"/> has — so the composite's per-provider fan-out keeps working
+    /// unchanged. 🚨 Decorators MUST forward, or the batching is silently lost at the outermost
+    /// one that falls back to this default, the same forwarding rule as <see cref="DeleteIfExists"/>
+    /// and <see cref="ListDescendantPaths"/>.</para>
+    /// </summary>
+    IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
+        // Built on DeleteIfExists, not Delete: the result must be what this adapter ACTUALLY
+        // removed (Delete emits its path either way), because the composite unions these to learn
+        // what left storage. Backends that cannot observe the outcome inherit DeleteIfExists's
+        // documented non-strict default and simply report everything, exactly as they do today.
+        => System.Reactive.Linq.Observable.Select(
+            System.Reactive.Linq.Observable.ToList(
+                System.Reactive.Linq.Observable.Where(
+                    System.Reactive.Linq.Observable.Concat(
+                        paths.Select(p => System.Reactive.Linq.Observable.Select(
+                            DeleteIfExists(p), removed => removed ? p : null))),
+                    p => p is not null)),
+            removed => (IReadOnlyList<string>)removed.Select(p => p!).ToList());
+
+    /// <summary>
     /// 🚨 PRE-FLIGHT for <see cref="Delete"/> — names the READ-ONLY storage provider that makes
     /// <paramref name="path"/> structurally undeletable, or <c>null</c> when a delete is
     /// unobstructed. This is the question <see cref="Delete"/> itself answers at COMMIT time,
