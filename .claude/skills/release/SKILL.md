@@ -38,7 +38,7 @@ and the version mechanics in
 | | CONTINUOUS (steady-state) | OFFICIAL (a release) |
 |---|---|---|
 | **Trigger** | merge to `main` | push an **annotated** tag `v<major>.<minor>.<patch>` on a promoted, sealed commit |
-| **Version** | `3.1.0-ci.<run#>` (build-numbered, monotonic from `$GITHUB_RUN_NUMBER`) | clean `3.1.0` — **the same bytes**, retagged |
+| **Version** | `3.0.0-ci.<run#>` (build-numbered, monotonic from `$GITHUB_RUN_NUMBER`) | clean `3.0.0` — **the same bytes**, retagged |
 | **Workflow** | `main-cd.yml` (after `MeshWeaver Build and Test` passes) | `release.yml` |
 | **Docker** | **multi-arch** (`linux-x64;linux-arm64` → OCI image-index) → ACR | ACR retag + GHCR mirror, by digest |
 | **Bake / seal** | ✅ platform content + Plugins modules, sealed per framework identity | ✅ inherited — `_releases/<clean>` copies the identity marker |
@@ -58,9 +58,9 @@ continuous builds ARE the pre-releases, and `PlatformVersion` always names the n
      | xargs -I{} gh api "repos/Systemorph/MeshWeaver/actions/runs/{}/jobs?per_page=100" \
        --jq '.jobs[] | select(.name | test("Promote|Verify every|bake \\+ seal")) | "\(.name): \(.conclusion)"'
    ```
-2. **`PlatformVersion` at that commit equals the tag** (`3.1.0` ↔ `v3.1.0`). The lane refuses a
+2. **`PlatformVersion` at that commit equals the tag** (`3.0.0` ↔ `v3.0.0`). The lane refuses a
    mismatch; so does it refuse a `-rc`/`-beta` suffix and a lightweight tag.
-3. **The notes page exists at that commit**: `src/MeshWeaver.Documentation/Data/ReleaseNotes/3_1_0/index.md`
+3. **The notes page exists at that commit**: `src/MeshWeaver.Documentation/Data/ReleaseNotes/3_0_0/index.md`
    (`Category: Release Notes`). The GitHub Release is published FROM it.
 4. **Secrets present** (can't be read; confirm with the operator): `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/
    `AZURE_SUBSCRIPTION_ID` (OIDC → ACR + the artifact stores, via the `release` environment),
@@ -143,19 +143,20 @@ az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command \
 
 ```bash
 # 0. Pick the commit: on main, its CD run SEALED (preconditions above), PlatformVersion == the tag.
-grep -m1 '<PlatformVersion Condition' Directory.Build.props          # e.g. 3.1.0
+grep -m1 '<PlatformVersion Condition' Directory.Build.props          # e.g. 3.0.0
 # 1. Make sure the notes page is committed at that commit:
-#    src/MeshWeaver.Documentation/Data/ReleaseNotes/3_1_0/index.md
-# 2. Tag it ANNOTATED and push — this is the whole release:
-git tag -a v3.1.0 -m "MeshWeaver 3.1.0" <sha> && git push origin v3.1.0
+#    src/MeshWeaver.Documentation/Data/ReleaseNotes/3_0_0/index.md
+# 2. Tag it ANNOTATED and push — this is the whole release (maintainer: only once every open
+#    issue is closed):
+git tag -a v3.0.0 -m "MeshWeaver 3.0.0" <sha> && git push origin v3.0.0
 #    → release.yml: resolves the sealed set for <sha> → asserts complete + sealed → writes
-#      _releases/3.1.0 → retags memex-migration, mw-plugin-test, memex-portal-ai (last) → mirrors
-#      to GHCR → publishes the GitHub Release → opens "release: PlatformVersion 3.1.0 → 3.2.0".
+#      _releases/3.0.0 → retags memex-migration, mw-plugin-test, memex-portal-ai (last) → mirrors
+#      to GHCR → publishes the GitHub Release → opens "release: PlatformVersion 3.0.0 → 3.1.0".
 # 3. Merge that bump PR the same day. Until it merges, continuous builds sort BELOW the release.
-gh api "repos/Systemorph/MeshWeaver/pulls?state=open&head=Systemorph:release/open-3.2.0-line" --jq '.[].html_url'
+gh api "repos/Systemorph/MeshWeaver/pulls?state=open&head=Systemorph:release/open-3.1.0-line" --jq '.[].html_url'
 ```
 
-What the lane REFUSES, each with a red step naming the fix: a non-clean version (`v3.1.0-rc1`),
+What the lane REFUSES, each with a red step naming the fix: a non-clean version (`v3.0.0-rc14`),
 a lightweight tag, a commit not on `main`, a `PlatformVersion` mismatch, a commit `main-cd` never
 promoted, a set whose bake is not sealed, and a release with no notes page.
 
@@ -177,7 +178,7 @@ az acr repository show-tags -n meshweaver --repository memex-portal-ai -o tsv | 
 az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command \
   "kubectl -n <ns> get deploy memex-portal-deployment -o jsonpath='{.spec.template.spec.containers[0].image}'"
 # The release's identity marker (what a Stable install's gate reads):
-.github/scripts/check-release-availability.sh 3.1.0 meshweaver-content plugins   # needs BAKE_PUBLISH_TARGETS + az login
+.github/scripts/check-release-availability.sh 3.0.0 meshweaver-content plugins   # needs BAKE_PUBLISH_TARGETS + az login
 ```
 
 ## Verify a release is healthy (before declaring done)
