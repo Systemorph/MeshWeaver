@@ -214,6 +214,16 @@ set, before the fix was written:
 Each half fails on the image that actually broke and passes on the one that did not, so neither is
 a blanket red and neither is decorative.
 
+The `arm64` half of `ci.7794` was checked too — same 214 assemblies, same 381 resolved references,
+same conflict — so the gate checking both published architectures adds no architecture-specific
+surprise.
+
+Invariant 1's **matching** is proven both ways as well, because a false positive there would stop
+delivery rather than protect it. Adding `MeshWeaver.AI.Anthropic=…` to a clean host's surface
+manifest leaves the gate green (a composed name must match a whole entry, not a prefix of one);
+adding `MeshWeaver.AI=…` to the same manifest turns it red, naming the assembly and stating that it
+was found *in the manifest* and not in the closure.
+
 ## What this gate still cannot see
 
 - **Only the app ROOT.** `app/modules/<Module>/` seeds (the `MeshModuleClosure` lane) are not part
