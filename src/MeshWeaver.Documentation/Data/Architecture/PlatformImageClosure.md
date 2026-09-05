@@ -224,6 +224,22 @@ manifest leaves the gate green (a composed name must match a whole entry, not a 
 adding `MeshWeaver.AI=…` to the same manifest turns it red, naming the assembly and stating that it
 was found *in the manifest* and not in the closure.
 
+## 🚨 Fixing a breach is a two-repo act, and the second half is not automatic
+
+Both invariants are breached by what the PORTAL HOST's closure contains, and that host lives in
+MeshWeaver.Plugins — but **CD is keyed on CORE's HEAD sha**. A plugins merge that changes what ships
+in the image is therefore *invisible to delivery*: the scheduled reconcile finds core's HEAD image
+set already complete and decides `bake_only`, so no image is rebuilt. `main-cd.yml`'s
+`workflow_dispatch` `rebuild` input exists for exactly this ("the HOSTS changed, rebuild",
+MeshWeaver#2622).
+
+So a fix landing only in the plugins repository leaves every satellite pinned to a broken image
+until an unrelated core commit happens to rebuild — which is also why this gate can be introduced
+safely: **land the image-side fix first, then the gate.** The core merge that brings the gate in is
+itself the core commit that rebuilds the portal, so the gate's first live run is against a closure
+that already contains the fix. Landing them in the other order stops delivery on the very run that
+adds the gate.
+
 ## What this gate still cannot see
 
 - **Only the app ROOT.** `app/modules/<Module>/` seeds (the `MeshModuleClosure` lane) are not part
