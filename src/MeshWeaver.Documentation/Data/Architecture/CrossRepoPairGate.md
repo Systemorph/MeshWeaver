@@ -255,23 +255,60 @@ was gone, which is what made the deletion read as deliberate in review.
 resolve their version from an entry here. Any one of them can be deleted with every core check
 green, and Plugins stops restoring.
 
-**There is NO guard for this yet, and a list would be the wrong one.** The obvious control — naming
-the load-bearing entries in a test here — was written, measured against that number, and discarded:
-a hand-maintained list of 47 goes red on core PRs whenever *Plugins* legitimately drops a
-dependency, taxing every unrelated change in this repo for a fact that lives in another one.
+**Two obvious controls are wrong, and knowing why is what makes the third one right.**
 
-The control that fits the shape is a **restore of the satellite tree in core's PR lane** — the same
-`actions/checkout` of `Systemorph/MeshWeaver.Plugins` that `main-cd` already does, followed by a
-`dotnet restore` of the projects that import this file. It is cheap (the failure is a restore
-diagnostic, not a build) and it derives the answer instead of remembering it. Until it exists,
-**this shape is uncovered**: when you remove an entry from `Directory.Packages.props`, grep the
-satellite for it by hand —
+*A list of the load-bearing entries* was written, measured against that number, and discarded: a
+hand-maintained list of 47 goes red on core PRs whenever *Plugins* legitimately drops a dependency,
+taxing every unrelated change in this repo for a fact that lives in another one.
+
+*A restore of the satellite tree in core's PR lane* — `actions/checkout` of
+`Systemorph/MeshWeaver.Plugins` followed by a `dotnet restore`, the way `main-cd` does — derives the
+answer instead of remembering it, and is the control this page recommended until #3349.
+**It cannot be built here.** `PlatformNeverDependsOnPluginsGuard.ThePullRequestGate_ReachesIntoNoPluginRepository`
+asserts that `dotnet-test.yml` contains zero actionable cross-repo hits, and both
+`repository: Systemorph/MeshWeaver.Plugins` and any line reading `plugins-repo` are hits. That ban
+is the point rather than an obstacle: a gate on core's own pull requests whose verdict depends on a
+sibling's moving HEAD makes the *same* diff go red or green with no change of its own, and re-adding
+a checkout silently restores the external input that workflow was deliberately cleared of.
+
+### The gate that ships: declare the removal (#3349)
+
+`Satellite package pins (removal declared)` fires **only when the diff removes a `PackageVersion`**
+and requires the pull-request body to name each removed id:
+
+```
+Satellite-pins: <PackageId>[, <PackageId>…] — <what you checked and what you found>
+```
+
+It is the same instrument this page already describes for public surface, applied to the same shape
+one category over: a package pin is a `Pairs-with:` case that happens not to be C#. Core-only — no
+checkout, no API read, no credential, no ledger entry, nothing that can go red on somebody else's
+HEAD — so it also runs on **fork** pull requests, where the credentialed gates cannot.
+
+**What it does not do, stated plainly:** it does not know whether a removed pin is load-bearing. It
+makes a human find out, with the grep below, and say what they found. That is weaker than deriving
+the answer and is the honest price of staying inside the dependency direction. There is deliberately
+**no blanket form** — *"none of them matter"* is the sentence that produced #3344.
 
 ```
 grep -rn 'PackageReference Include="<id>"' ../MeshWeaver.Plugins/src/*/*.csproj
 ```
 
-— and treat a versionless hit as a blocker.
+A versionless hit is a **blocker**: keep the entry, or remove the reference there first.
+
+**Proven against the incident, not just against fixtures.** Replaying #3344's own commit
+(`c08fee100`) with its three *intended* withdrawals declared, the gate reds naming exactly the
+fourth:
+
+```
+Undeclared removal(s):
+  • SQLitePCLRaw.lib.e_sqlite3
+```
+
+That is the collateral removal that cost ~80 minutes of sealing nothing and reintroduced the CVE.
+An **undecidable** read — a shallow fetch missing the merge base, a moved props file, a matcher that
+stopped matching — exits RED naming why, never "nothing was removed": *couldn't tell* and *clean*
+must never be one colour, which is the failure that let #3344 through with every check green.
 
 
 ## Member-level detection (the sixth shape)
