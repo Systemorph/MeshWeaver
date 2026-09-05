@@ -204,6 +204,8 @@
   "chat.composerPlaceholder": "Nachricht eingeben… Mit @ auf Nodes verweisen",
   "chat.editPromptPlaceholder": "Nachricht eingeben…",
   "chat.authorEditing": "{0} (wird bearbeitet)",
+  "chat.typeEditing": "Bearbeitung",
+  "chat.typeUser": "Benutzer",
   "chat.you": "Du",
   "chat.assistant": "Assistent",
   "chat.streaming": "Wird übertragen…",
