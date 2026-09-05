@@ -1,4 +1,4 @@
-# MeshWeaver.ContainerRegistry
+# MeshWeaver.ContainerImages
 
 Serves the **OCI Distribution pull surface** from a MeshWeaver portal, proxying container images
 from an upstream registry with one credential the portal holds — while each caller authenticates
@@ -29,7 +29,7 @@ switched off without a migration.
 
 ```jsonc
 {
-  "ContainerRegistry": {
+  "ContainerImages": {
     "Upstream": "myregistry.azurecr.io",
     "Username": "<pull credential>",
     "Password": "<pull credential>",
@@ -46,14 +46,14 @@ answers 404 rather than serving partially.
 ## Wiring
 
 ```csharp
-services.AddSingleton<IContainerRegistryAuthenticator, MyAuthenticator>();
+services.AddSingleton<IContainerImageAuthenticator, MyAuthenticator>();
 services.AddHttpClient<UpstreamRegistryClient>();
-services.Configure<ContainerRegistryOptions>(config.GetSection(ContainerRegistryOptions.SectionName));
+services.Configure<ContainerImageOptions>(config.GetSection(ContainerImageOptions.SectionName));
 
-app.MapContainerRegistry();
+app.MapContainerImages();
 ```
 
-`IContainerRegistryAuthenticator` is a seam: this package takes no dependency on any particular
+`IContainerImageAuthenticator` is a seam: this package takes no dependency on any particular
 identity system, so a host binds it to whatever already issues its tokens.
 
 ## The one hard limit

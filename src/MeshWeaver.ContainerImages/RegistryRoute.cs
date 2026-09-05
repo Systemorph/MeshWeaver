@@ -1,4 +1,4 @@
-namespace MeshWeaver.ContainerRegistry;
+namespace MeshWeaver.ContainerImages;
 
 /// <summary>
 /// One parsed OCI pull route. The spec allows a repository NAME to contain slashes

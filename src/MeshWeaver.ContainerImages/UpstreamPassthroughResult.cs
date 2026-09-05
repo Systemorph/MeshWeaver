@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Http;
 
-namespace MeshWeaver.ContainerRegistry;
+namespace MeshWeaver.ContainerImages;
 
 /// <summary>
 /// Streams an upstream response straight to the caller: status, the headers an OCI client needs,
