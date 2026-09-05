@@ -1796,14 +1796,18 @@ jobs:
             # `--framework-mvid` is the packer's own flag for "the platform's own reading", and
             # `g<sha>` is one of the three tokens it documents. One identity per platform commit,
             # identical for every entry in the run, and no compiler build per matrix job at all.
-            sha="$(git -C "$GITHUB_WORKSPACE/meshweaver" rev-parse HEAD 2>/dev/null || true)"
-            case "$sha" in
-              [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) : ;;
-              *)
-                echo "::error::cannot read the platform commit at \$GITHUB_WORKSPACE/meshweaver (git rev-parse HEAD gave '${sha:-<nothing>}'). No platform image is pinned, so the checkout IS the platform and its commit IS the identity every bundle of this run must state (#3308). Nothing here may guess it, so the pack stops."
-                exit 1
-                ;;
-            esac
+            # NOT `$(… 2>/dev/null || true)`: that swallows git's message AND its exit status, so a
+            # checkout without .git would reach the check below as a blank string with no trace of
+            # why. The `if !` keeps `set -e` from aborting before the explanation, while git's own
+            # stderr still lands in the log.
+            if ! sha="$(git -C "$GITHUB_WORKSPACE/meshweaver" rev-parse HEAD)"; then
+              echo "::error::cannot read the platform commit at \$GITHUB_WORKSPACE/meshweaver — git rev-parse HEAD failed and its message is above. No platform image is pinned, so the checkout IS the platform and its commit IS the identity every bundle of this run must state (#3308). Nothing here may guess it, so the pack stops."
+              exit 1
+            fi
+            if [ ${#sha} -ne 40 ] || [ -n "${sha//[0-9a-f]/}" ]; then
+              echo "::error::the platform commit at \$GITHUB_WORKSPACE/meshweaver read as '${sha}', which is not a 40-character hex sha. The bundle identity must name a commit a consumer can compare against (#3308), so the pack stops rather than stating something unmatchable."
+              exit 1
+            fi
             identity=(--framework-mvid "g$sha")
             where="the platform checkout's own commit (no platform image is pinned, so the platform was built from source)"
             echo "framework identity for this run: g$sha (stated from the platform checkout, not derived per job)"
