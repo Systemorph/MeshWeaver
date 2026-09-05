@@ -4,6 +4,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -40,69 +41,70 @@ public class StorageAdapterDeleteManyTest
     // Returned as the INTERFACE on purpose: DeleteMany is a default interface member, so calling
     // it through the concrete type would not even compile — which is the same reason a decorator
     // that forgets to forward silently gets the default instead of the batched override.
-    private static IStorageAdapter Seeded(params string[] paths)
+    private static async Task<IStorageAdapter> Seeded(params string[] paths)
     {
         IStorageAdapter adapter = new InMemoryStorageAdapter();
         foreach (var path in paths)
-            adapter.Write(Node(path), Options).Wait();
+            await adapter.Write(Node(path), Options).FirstAsync().Await();
         return adapter;
     }
 
     [Fact]
-    public void DeletesEveryPath_AndReportsThemInTheCallersOrder()
+    public async Task DeletesEveryPath_AndReportsThemInTheCallersOrder()
     {
-        var adapter = Seeded("S", "S/A", "S/A/x", "S/B");
+        var adapter = await Seeded("S", "S/A", "S/A/x", "S/B");
         // Children before parents — the order a subtree delete hands down, and the order the
         // change feed must keep, because that feed is what wakes the per-node hubs.
         var order = new[] { "S/A/x", "S/A", "S/B", "S" };
 
-        var deleted = adapter.DeleteMany(order).Wait();
+        var deleted = await adapter.DeleteMany(order).FirstAsync().Await();
 
         Assert.Equal(order, deleted.ToArray());
-        Assert.All(order, p => Assert.Null(adapter.Read(p, Options).Wait()));
+        foreach (var p in order)
+            Assert.Null(await adapter.Read(p, Options).FirstAsync().Await());
     }
 
     [Fact]
-    public void PathsItDoesNotHold_AreAbsentFromTheResult_NotInvented()
+    public async Task PathsItDoesNotHold_AreAbsentFromTheResult_NotInvented()
     {
         // 🚨 The result is the REMOVED set, not an echo of the request: the composite unions these
         // across providers to learn what actually left storage, so an optimistic echo would make
         // it claim a delete no provider performed.
-        var adapter = Seeded("S/A");
+        var adapter = await Seeded("S/A");
 
-        var deleted = adapter.DeleteMany(new[] { "S/A", "S/never-existed" }).Wait();
+        var deleted = await adapter.DeleteMany(new[] { "S/A", "S/never-existed" }).FirstAsync().Await();
 
         Assert.Equal(new[] { "S/A" }, deleted.ToArray());
     }
 
     [Fact]
-    public void EmptyInput_IsANoOp()
+    public async Task EmptyInput_IsANoOp()
     {
-        var adapter = Seeded("S/A");
+        var adapter = await Seeded("S/A");
 
-        Assert.Empty(adapter.DeleteMany(Array.Empty<string>()).Wait());
-        Assert.NotNull(adapter.Read("S/A", Options).Wait());
+        Assert.Empty(await adapter.DeleteMany(Array.Empty<string>()).FirstAsync().Await());
+        Assert.NotNull(await adapter.Read("S/A", Options).FirstAsync().Await());
     }
 
     [Fact]
-    public void IsIdempotent_SoARerunHealsAHalfRemovedSubtree()
+    public async Task IsIdempotent_SoARerunHealsAHalfRemovedSubtree()
     {
-        var adapter = Seeded("S/A", "S/B");
+        var adapter = await Seeded("S/A", "S/B");
         var paths = new[] { "S/A", "S/B" };
 
-        Assert.Equal(2, adapter.DeleteMany(paths).Wait().Count);
+        Assert.Equal(2, (await adapter.DeleteMany(paths).FirstAsync().Await()).Count);
         // Second pass removes nothing and reports nothing — the property the drain loop relies on.
-        Assert.Empty(adapter.DeleteMany(paths).Wait());
+        Assert.Empty(await adapter.DeleteMany(paths).FirstAsync().Await());
     }
 
     [Fact]
-    public void PublishesOneDeletedNotificationPerRemovedPath_InOrder()
+    public async Task PublishesOneDeletedNotificationPerRemovedPath_InOrder()
     {
-        var adapter = Seeded("S", "S/A");
+        var adapter = await Seeded("S", "S/A");
         var seen = new List<string>();
         using var _ = adapter.Changes.Subscribe(c => seen.Add(c.Path));
 
-        adapter.DeleteMany(new[] { "S/A", "S" }).Wait();
+        await adapter.DeleteMany(new[] { "S/A", "S" }).FirstAsync().Await();
 
         Assert.Equal(new[] { "S/A", "S" }, seen.ToArray());
     }
@@ -114,14 +116,14 @@ public class StorageAdapterDeleteManyTest
     /// 8 minutes back.
     /// </summary>
     [Fact]
-    public void TheProductionDecoratorStack_ForwardsTheBatch_InsteadOfFallingBackToSingles()
+    public async Task TheProductionDecoratorStack_ForwardsTheBatch_InsteadOfFallingBackToSingles()
     {
-        var inner = Seeded("S/A", "S/B");
+        var inner = await Seeded("S/A", "S/B");
         var counting = new CountingAdapter(inner);
         IStorageAdapter stack = new SubtreeDeletionGuardStorageAdapter(
             new MonotonicWriteGuardStorageAdapter(counting), registry: null);
 
-        var deleted = stack.DeleteMany(new[] { "S/A", "S/B" }).Wait();
+        var deleted = await stack.DeleteMany(new[] { "S/A", "S/B" }).FirstAsync().Await();
 
         Assert.Equal(new[] { "S/A", "S/B" }, deleted.ToArray());
         Assert.Equal(1, counting.DeleteManyCalls);
