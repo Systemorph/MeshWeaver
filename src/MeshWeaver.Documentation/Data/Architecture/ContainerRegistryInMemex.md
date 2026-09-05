@@ -18,7 +18,7 @@ keeps coming back.
 
 | | what it serves | where it lives today |
 |---|---|---|
-| [Plugin Registry](PluginRegistry) | plugin **bundles** — mesh nodes, NodeType assemblies | **memex**, re-served over a token-gated REST surface |
+| [Plugin Registry](../PluginRegistry) | plugin **bundles** — mesh nodes, NodeType assemblies | **memex**, re-served over a token-gated REST surface |
 | container registry | OCI **images** — the portal, the migration job, the tester | **ACR** |
 
 The bake publishes NodeType assemblies to the portals' storage shares
@@ -50,7 +50,7 @@ something fails to compile against them.**
 
 1. **The closure becomes queryable data.** MeshWeaver#3328 was, at bottom, *"nobody can see what is
    in `/app`"* — the image's application directory is the reference set every satellite's modules
-   compile against ([The Platform Image's Closure](PlatformImageClosure)), and discovering its
+   compile against ([The Platform Image's Closure](../PlatformImageClosure)), and discovering its
    contents meant `docker run … ls /app`. If the registry is in the mesh, the closure is a node:
    assertable, diffable between builds, and answerable without pulling a tarball. The gate added in
    #3334 does this externally with a shell script because there is nowhere else to put it.
@@ -121,5 +121,5 @@ Not "images pull". The measurable claims are:
 
 ## Related
 
-[The Platform Image's Closure](PlatformImageClosure) · [Plugin Registry](PluginRegistry) ·
-[Module Build Architecture](ModuleBuildArchitecture) · [Deployment](Deployment)
+[The Platform Image's Closure](../PlatformImageClosure) · [Plugin Registry](../PluginRegistry) ·
+[Module Build Architecture](../ModuleBuildArchitecture) · [Deployment](../Deployment)
