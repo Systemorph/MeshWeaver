@@ -176,6 +176,44 @@ dependent's own CI reacting to core's release event.
 | 6 | a public **member** leaves a type that **stays** (field, const, method, property, event, positional record parameter, enum constant, interface member, nested type) | #3137 — `CacheDuration`/`NegativeCacheDuration`; `CS0117`; `Portal hosts (shard 0)` red on every Plugins PR for three hours, *"nothing was tested"* | **yes** (since #3103) | yes |
 | 7 | a public method's **BEHAVIOUR** changes behind an **unchanged signature** — same name, same parameters, different answer | #3276 — `CatalogLayoutAreas.RenderFromSource` began rendering the category landing instead of the flat package list; two `MeshWeaver.PluginCatalog.Test` render tests in Plugins went red, found 48 commits later by a pin bump | no — nothing is added or removed, so no surface detector can see it | **only if the dependent actually rebuilds against the release — a PINNED dependent does not** (below) |
 
+### Shape 7's worst form: the dependent holds a COPY of the test (#3345)
+
+Shape 7 is invisible to every surface detector by construction. It gets worse when the behaviour
+that changed is pinned by a test the dependent keeps its **own copy of** — and that is not
+hypothetical, it is the arrangement two teardown tests are in today:
+
+| file | lives in |
+|---|---|
+| `NackReachesTheWaiterDuringTeardownTest` | `test/MeshWeaver.Graph.Test/` **and** `MeshWeaver.Plugins/src/MeshWeaver.Hosting.Monolith.Test/` |
+| `LateNackReenqueueTest` | the same two places |
+
+They are duplicated on purpose: core's CI cannot stand up a monolith mesh, so the copy that actually
+exercises the behaviour lives in the dependent, and the copy that keeps core honest lives here. What
+made #3345 expensive is what held them together — **a comment, on core's copy only**:
+
+> `// Core twin of MeshWeaver.Plugins/… Keep the two in step.`
+
+The person who needed to read that was whoever edited the Plugins copy. The person who saw it was
+whoever edited core's. #3291 rewrote core's twins to the no-forced-teardown contract and left the
+Plugins originals asserting the contract it had just deleted. Nothing was red — a pinned dependent
+does not rebuild on core's release event (see the row above) — until the pin bump, one day later,
+produced a 55-second `VERDICT_TIMEOUT` in a suite whose name points at the mesh. It was filed here
+as a core regression and bisected across five commits before the premise fell over.
+
+**The control is `TeardownTwinParityTest`, and it lives in the dependent** — the only side that can
+see both files, because it builds against `$(MeshWeaverRoot)` at `MW_PLATFORM_REF`. It compares each
+body below the `namespace` line against the core checkout **at the pin, never core's `main`**, so it
+reddens exactly in the change that MOVES the pin, which is the change that owes the update, and it
+is silent in every change that does not. A missing platform checkout FAILS rather than skips.
+
+Two rules follow, and they generalise past these two files:
+
+- **A duplicated test needs a parity guard, not a comment.** Prose that asks a future reader to keep
+  two files in step is a control that only fires when someone is already looking at the right one.
+- **The marker goes on BOTH copies.** A one-sided note is addressed to the party who does not need
+  it. Core's twins now name the guard that enforces them.
+
+
 ## Member-level detection (the sixth shape)
 
 `check-type-forwards.py` indexes, under each public top-level type, the **names** of its public
