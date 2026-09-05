@@ -127,6 +127,47 @@ silent-default failure this section is about.
 A zero without that control beside it is not a measurement, and per the rule at the top of this page
 it cannot license a "not happening" verdict.
 
+#### 🚨 `count_over_time(…[R])` counts a window that starts R *before* your `start`
+
+A range vector is evaluated at each step over `[t-R, t]`, so the **first** bucket of a
+`start`/`end` query reaches `R` before `start`. With `[24h]` at `step=86400` over a 72 h window,
+two of the four buckets lie almost entirely outside the window you asked for.
+
+This is not academic: it over-counted one signal here **by 17×** — 124 summed across the buckets
+against 7 lines actually inside the window, because the burst being counted sat just before
+`start`. The two readings disagreeing is what exposed it; either alone looks authoritative.
+
+**For "how many in window W", use an instant query with W as the range**, so there is exactly one
+bucket and it is the window:
+
+```bash
+curl -sG ".../loki/api/v1/query" \
+  --data-urlencode 'query=sum(count_over_time({namespace="memex-cloud"} |= "<phrase>" [72h]))' \
+  --data-urlencode "time=$(date -u +%s)000000000"
+```
+
+Keep `query_range` with a range vector for the **shape** of a signal over time — a burst that ended
+looks completely different from a steady drip, and that difference usually decides the severity. Just
+do not read the sum of its buckets as a total.
+
+#### 🚨 A rate needs a denominator, and `Information` is not emitted here
+
+Before reporting *N failures*, check that the **success** line is observable at all. A success
+logged at `LogInformation` against a category the deployment filters is simply absent, and the
+failure count then has no denominator: N could be 5 % of traffic or 100 % of it, and the logs cannot
+distinguish those.
+
+The test is one query, and its answer is binary:
+
+```
+sum(count_over_time({namespace="…"} |= "<the success phrase>" [30d]))   -> empty
+sum(count_over_time({namespace="…"} |= "<the failure phrase>" [30d]))   -> 154
+```
+
+Empty-against-nonzero **over the same chunks** means the success path is not being logged, not that
+it never ran. Report the absolute count and say the rate is unavailable — do not silently upgrade
+"154 failures" into "failing".
+
 ### Prometheus — the metric seam, and its rules
 
 Three endpoints, and the last two are the ones people forget:
@@ -262,6 +303,8 @@ example 1. Three issues filed as unrelated were one degradation.
 | Attributing to a stale topology | "restarted the app" | a remediation on something serving no traffic |
 | `python3` inside `--command` | `not found` | a silently empty result |
 | Loki `since=` on 2.6.1 | "nothing in 168 h" | a false zero over the last **1 h** |
+| `count_over_time(…[24h])` summed across buckets | "124 in the window" | 17× over-count; the burst was before `start` |
+| Counting failures with no success line | "154 failures" | a count read as a rate, with no denominator |
 
 ## What a verdict must contain
 
