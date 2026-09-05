@@ -1,7 +1,7 @@
-using MeshWeaver.ContainerRegistry;
+using MeshWeaver.ContainerImages;
 using Xunit;
 
-namespace MeshWeaver.ContainerRegistry.Test;
+namespace MeshWeaver.ContainerImages.Test;
 
 /// <summary>
 /// The route parser is the mirror's attack surface: it decides which repository name the
