@@ -2246,6 +2246,77 @@ jobs:
           --surface-json "$RUNNER_TEMP/surface.json" \
           --pr-body-file "$RUNNER_TEMP/pr-body.md"
 
+  package-pin-removal:
+    name: "Satellite package pins (removal declared)"
+    # 🚨 THE GAP THIS CLOSES (#3349, measured on #3344). MeshWeaver.Plugins'
+    # `src/Directory.Packages.props` IMPORTS this repo's, so a satellite project may carry a
+    # versionless `<PackageReference Include="X" />` whose ONLY version source is an entry here.
+    # Remove that entry — even as collateral in an unrelated withdrawal — and the satellite stops
+    # restoring with NU1010, while BOTH repos stay green: nothing here consumes the package, and
+    # the satellite pins this repo at MW_PLATFORM_REF so its CI reads the old list until somebody
+    # moves the pin, on a different day. `main-cd` is the first lane that notices, and by then the
+    # damage is that no set seals — #3344 sealed nothing for ~80 minutes and reintroduced
+    # GHSA-2m69-gcr7-jv3q as NU1903. Doc/Architecture/CrossRepoPairGate → "An eighth shape".
+    #
+    # 🚨 WHY A DECLARATION AND NOT THE RESTORE THE ISSUE PROPOSED. Checking out
+    # MeshWeaver.Plugins here and restoring it is banned outright:
+    # PlatformNeverDependsOnPluginsGuard.ThePullRequestGate_ReachesIntoNoPluginRepository asserts
+    # this file contains ZERO actionable cross-repo hits, and both `repository:
+    # Systemorph/MeshWeaver.Plugins` and any line reading `plugins-repo` are hits. The ban is the
+    # point, not an obstacle: a gate on core's own pull requests whose verdict depends on a
+    # sibling's moving HEAD makes the SAME diff go red or green with no change of its own. So this
+    # gate does what the repo already does for the same SHAPE one category over — `Pairs-with:`
+    # for public surface — and asks the author to DECLARE what they checked.
+    #
+    # 🚨 NO SKIP-TRAPDOOR:
+    #   * the detector's self-test runs FIRST and fails this job — an unproven gate is no gate;
+    #   * no path filter — a pull request that touches nothing else would otherwise "pass" by not
+    #     running, and the props file is exactly what such a pull request edits;
+    #   * no `continue-on-error:` and no `if:` asking whether a secret is set — this gate needs NO
+    #     credential at all, which is why it also runs on FORK pull requests where the
+    #     credentialed gates cannot. The one exemption is on the EVENT: `merge_group` carries no
+    #     pull-request body, and a pull request cannot reach the queue without this job green,
+    #     since it is a `needs:` of the required check;
+    #   * an UNDECIDABLE read (a shallow fetch missing the merge base, a moved props file) exits
+    #     RED naming why — "couldn't tell" and "nothing was removed" must never be one colour.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        # The gate compares HEAD against the merge base, so the base commit must be present.
+        fetch-depth: 0
+
+    - name: "Prove the pin gate is not vacuous (self-test)"
+      run: python3 scripts/check-package-pin-removal.py --self-test
+
+    # A pull-request body is attacker-controlled text: it goes to a FILE through the environment,
+    # never interpolated into a shell command.
+    - name: Capture the pull-request body
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: |
+        set -euo pipefail
+        printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
+        echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
+
+    - name: "Every removed PackageVersion is declared"
+      run: |
+        set -euo pipefail
+        git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
+        # 🚨 The MERGE BASE, not the base branch tip — the same reasoning as every other diff gate
+        # here. Against the tip, an entry somebody else removed on main while this pull request is
+        # open reads as THIS pull request removing it, and the gate would demand a declaration for
+        # a change it did not make.
+        base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+        echo "Comparing the central package list against merge base $base"
+        python3 scripts/check-package-pin-removal.py \
+          --base "$base" \
+          --pr-body-file "$RUNNER_TEMP/pr-body.md"
+
   collect-results:
     name: "Consolidate test results"
     # plugin-gate is a NEEDS so this required check cannot go green while the plugins are
@@ -2279,7 +2350,7 @@ jobs:
     # hours after the merge that causes it (#2689 records five incidents). Nothing on the causing
     # pull request goes red, so if this gate could not fail the required check it would be a
     # notification rather than a gate — and a notification is what the fleet already had.
-    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair]
+    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -2629,6 +2700,19 @@ jobs:
         echo "::error::The 'Cross-repo pair (public surface)' gate concluded '${{ needs.cross-repo-pair.result }}' — see that job, which names the public types this diff removes from src/ and the state of every declared counterpart."
         echo "::error::This pull request removes public surface, which can red a plugin repo's trunk hours later on pull requests that did not make the change (#2689). Declare the counterpart in the PR BODY as 'Pairs-with: Systemorph/MeshWeaver.Plugins#904', or 'Pairs-with: none — <reason>' when no other repository is affected."
         echo "::error::ORDERING IS THE INVARIANT: the deleting half lands LAST. Merge the counterpart into its repo's default branch first, then re-run. Rationale: Doc/Architecture/CrossRepoPairGate."
+        exit 1
+
+    # ── …and an UNDECLARED PACKAGE-PIN REMOVAL decides it too (#3349) ───────────────────────
+    # `!= 'success'` rather than `== 'failure'`: a job that was skipped or cancelled produced no
+    # verdict, and no verdict must never read as passed. The event predicate is kept IDENTICAL to
+    # the gate's own `if:` so the two can never disagree about who is exempt — `pull_request` only,
+    # because the gate's second input is the pull-request BODY and a merge_group event carries none.
+    - name: Fail if a removed package pin was not declared
+      if: github.event_name == 'pull_request' && needs.package-pin-removal.result != 'success'
+      run: |
+        echo "::error::The 'Satellite package pins (removal declared)' gate concluded '${{ needs.package-pin-removal.result }}' — see that job, which names every PackageVersion this diff removes and whether it was declared."
+        echo "::error::A satellite consumes 47 of this repo's central pins VERSIONLESS, so removing one here stops MeshWeaver.Plugins restoring (NU1010) while both repos stay green — #3344 sealed nothing for ~80 minutes and reintroduced a CVE."
+        echo "::error::Check each removal with: grep -rn 'PackageReference Include=\"<id>\"' ../MeshWeaver.Plugins/src/*/*.csproj — then declare it in the PR BODY as 'Satellite-pins: <id> — what you checked'. Rationale: Doc/Architecture/CrossRepoPairGate."
         exit 1
 
     - name: Fail if the clients gate failed
