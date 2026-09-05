@@ -121,6 +121,11 @@ ci.7755 → ci.7794, ENTERED /app root:   MeshWeaver.Hosting.Sqlite.dll
 Both changes rode the same image, `ci.7758`. One breach closing and another opening, in one build,
 neither visible to anything.
 
+Every promoted image from `ci.7758` to `ci.7794` carries the skew — checked by running the gate at
+`ci.7758`, `ci.7779`, `ci.7789` and `ci.7794`, and by `SQLitePCLRaw.core.dll` being present at
+`/app` root at `ci.7760`, `.7765`, `.7770`, `.7775` and `.7778`. `ci.7756` and `ci.7757` have no
+`SQLitePCLRaw.core.dll` at all, and their reference sets resolve clean.
+
 ### Why the issue's proposed fix would have changed nothing
 
 #3328 proposed pinning the managed trio at **2.1.11**. That is what already resolves — the pin would
