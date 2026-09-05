@@ -42,6 +42,7 @@ instances. The family is larger, and it is worth recognising by shape.
 | **Blindness rendered as health** | a watcher whose read failure and whose "no matches" look identical | "I cannot see" is reported as "nothing is wrong" |
 | **One word covering three states** | `completed/success` over checked-and-passed, never-ran, and ran-and-did-nothing | the verdict is not the outcome |
 | **A tool that collapses several failures into one exit code** | `git cat-file -e "$sha:$path" \|\| echo ABSENT` | absent-path, bad-sha, missing-object and bad-quoting all read the same |
+| **A measurement that truncates and answers anyway** | a profiler capping at N objects and reporting the partial total | the wrong number is *plausible*, so it closes the investigation |
 | **A writer whose failure mode is a SUCCESS line** | a generator that skips its work and prints a summary anyway | nothing distinguishes "wrote it" from "declined to" |
 
 ## Eight measured instances
@@ -128,6 +129,22 @@ Three things make this the sharpest instance on the page, and its author states 
 **Rule:** green-and-wrong is worse than red, and that asymmetry is the whole subject of this page — a
 red is self-reporting, a plausible wrong value is not. Stated as its author put it: *the fix removed
 the symptom and left a better-disguised version of the defect.*
+
+🚨 **The danger scales with how BELIEVABLE the wrong value is, and a measuring tool can supply one.**
+Profiling a live 6.8 GB portal pod, `dotnet-gcdump` silently truncated at exactly **10,000,000
+objects** and reported a **568 MB** heap. The real figure, from `dumpheap -stat`, was **49,827,806
+objects / 5,544,881,838 bytes** — under-reported by a factor of about ten, with no warning of any
+kind. And 568 MB is a *perfectly plausible* heap for a portal, so the number does not look wrong; it
+looks like an answer. Trusting it produces a confident, wrong conclusion — *the heap is fine, look
+elsewhere* — which is strictly worse than no measurement, because it closes the investigation.
+
+Same shape as an anchor emitting a meaningless-but-non-blank value, one layer down: one number
+covering *"this is the heap"* and *"this is as much of the heap as the tool chose to walk"*. **The cure
+here is not "go break the subject" but a second instrument that can DISAGREE** — which is what caught
+it. (A companion from the same session fails the honest way and is worth the contrast: SOS
+`dumpobj`/`gcroot` **segfault** on that process, so field-following had to move to ClrMD. A tool that
+crashes costs you an hour; a tool that answers plausibly costs you the conclusion.) The measurements
+are in [The Portal Heap Is Hubs](/Doc/Architecture/PortalHeapIsHubs).
 
 ### 4. A preflight that asserts a credential exists and never passes it on
 
