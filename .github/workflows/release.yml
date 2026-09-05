@@ -1,0 +1,387 @@
+name: Release (promote a sealed set)
+
+# ═══════════════════════ A RELEASE IS A PROMOTION, NEVER A REBUILD ═══════════════════════
+#
+# The predecessor of this lane (release-images.yml, retired 2026-09-05) BUILT the portal again on
+# every v*.*.* tag: core at the tag, MeshWeaver.Plugins at `vars.MW_PLUGINS_REF || 'main'` — a
+# variable that was never provisioned, so the release paired the tagged core with whatever the
+# plugin repository's main was at that minute. It passed no CIRun, so the compiled framework
+# identity was never stamped; it published no content bake, so no sealed bundles existed for the
+# image; and it built three images where main-cd promotes a set of three plus a pair tag. An install
+# that took such a tag would have recompiled every module at boot, and the self-updater's
+# availability gate would rightly have refused it. Two producers of one release is the defect
+# #3175/#3327 name for modules; this was the same defect one level up.
+#
+# So a release is now the SAME BYTES as a continuous build, under a clean name. Pushing an
+# annotated tag v<major>.<minor>.<patch> on a commit that main-cd has already promoted AND sealed:
+#
+#   1. refuses anything else — a lightweight tag, a pre-release version (the rc line is closed), a
+#      tag whose commit carries a different PlatformVersion, a commit main-cd never promoted, a set
+#      whose content bake is not sealed, a release with no committed release-notes page;
+#   2. copies the release marker  _releases/<ci-version> → _releases/<clean>  on every artifact
+#      store, so the gates that ask "which framework identity is release 3.1.0?" get the answer the
+#      continuous build recorded (publish-bake-bundles.sh; Doc/Architecture/ReleaseGates);
+#   3. retags the promoted images  <short-sha> → <clean>  in ACR, memex-portal-ai LAST — the same
+#      ordering main-cd's promote uses, because that tag is the one write a Stable self-updater
+#      acts on (VersionSelect: Stable = newest clean release);
+#   4. mirrors the three images to GHCR, the public channel;
+#   5. publishes the GitHub Release from Doc/ReleaseNotes/<x_y_z>;
+#   6. opens the pull request that moves PlatformVersion to the next line, so the very next
+#      continuous build sorts above the release again (Directory.Build.props explains the ordering).
+#
+# 🚨 No `continue-on-error`, no `if: secret != ''`: every input is asserted RED by `preflight`
+# (AGENTS.md: a gate never tests its own inputs). Every job carries a literal timeout ≤ 45.
+#
+# Stable installs learn about the clean tag on their next check (a later continuous build's inbox
+# event, a startup pass, or the 6 h retry backstop) — this lane posts no platform-build fact of its
+# own, because the receiver's pin updater would turn a clean version into a Plugins pin PR its own
+# validator refuses (`check-platform-pins.py` requires the `ci.<n>` build number).
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write   # the GitHub Release object
+  packages: write   # the GHCR mirror
+  id-token: write   # OIDC → ACR + the artifact stores
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  ACR: meshweaver.azurecr.io
+  VERSION_PROJECT: src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj
+
+jobs:
+  # ──────────────────────────── EVERY INPUT, ASSERTED RED ────────────────────────────
+  preflight:
+    name: "Every external input is provisioned"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Assert secrets and variables
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "$AZURE_CLIENT_ID" ]            || missing+=("secrets.AZURE_CLIENT_ID             OIDC identity for azure/login (github-actions-deploy; federated credential gh-env-release)")
+          [ -n "$AZURE_TENANT_ID" ]            || missing+=("secrets.AZURE_TENANT_ID             tenant of that identity")
+          [ -n "$AZURE_SUBSCRIPTION_ID" ]      || missing+=("secrets.AZURE_SUBSCRIPTION_ID       subscription holding meshweaver.azurecr.io and the artifact stores")
+          [ -n "$BAKE_PUBLISH_TARGETS" ]       || missing+=("vars.BAKE_PUBLISH_TARGETS           the portals' storage shares the sealed publication lives on (<account>/<share>[/<base>] …)")
+          [ -n "$MESHWEAVER_APP_ID" ]          || missing+=("secrets.MESHWEAVER_APP_ID           the meshweaver-cloud GitHub App, which opens the next-line pull request")
+          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  its private key")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            for m in "${missing[@]}"; do echo "::error::not provisioned: $m"; done
+            echo "::error::${#missing[@]} input(s) missing — a release lane that ran without them would look green having promoted nothing. Provision them and push the tag again."
+            exit 1
+          fi
+          echo "all inputs present"
+
+  # ───────────────────────────────── THE PROMOTION ─────────────────────────────────
+  release:
+    name: "Promote the sealed set under the clean version"
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # 🚨 The `release` environment is what makes the Azure OIDC login work on TAG runs: a plain tag
+    # run's token subject is `…:ref:refs/tags/v<X>` — a NEW subject per release, unmatchable by the
+    # exact-match federated credentials a managed identity supports (v3.0.0-rc1 failed
+    # AADSTS700213 exactly this way). Inside an environment the subject is the STABLE
+    # `repo:Systemorph/MeshWeaver:environment:release`, covered by the `gh-env-release` credential.
+    environment: release
+    outputs:
+      version: ${{ steps.rel.outputs.version }}
+      next: ${{ steps.rel.outputs.next }}
+      sha: ${{ steps.rel.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the tag OBJECT (annotated or not) and main's history (is the commit on main?)
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: "Resolve the release: clean version, annotated tag, on main, PlatformVersion agrees, notes exist"
+        id: rel
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${TAG#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$TAG is not a clean release version. The rc line is closed (2026-09-05): a release is v<major>.<minor>.<patch> and nothing else — continuous builds are already the pre-releases (<version>-ci.<n>)."
+            exit 1
+          fi
+          if [ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ]; then
+            echo "::error::$TAG is a lightweight tag. A release tag must be ANNOTATED (git tag -a) so it is immutable and carries an author and a date — the artifacts, the release marker and data-sync all key off it."
+            exit 1
+          fi
+          SHA=$(git rev-parse "$TAG^{commit}")
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::$TAG points at $SHA, which is not on main. Only a commit main-cd has published can be promoted; a branch build has no promoted set."
+            exit 1
+          fi
+          PROPS=$(dotnet msbuild "$VERSION_PROJECT" -getProperty:PlatformVersion -nologo | tr -d '[:space:]')
+          if [ "$PROPS" != "$VERSION" ]; then
+            echo "::error::PlatformVersion at $SHA is '$PROPS' but the tag says '$VERSION'. The tag must name the line the commit was built under — either the wrong commit was tagged, or Directory.Build.props was bumped ahead of the release. Retag the right commit."
+            exit 1
+          fi
+          NOTES="src/MeshWeaver.Documentation/Data/ReleaseNotes/${VERSION//./_}/index.md"
+          if [ ! -f "$NOTES" ]; then
+            echo "::error::no release-notes page at $NOTES. The GitHub Release is published FROM that page (Doc/ReleaseNotes/${VERSION//./_}); commit it (Category: Release Notes) and tag a commit that carries it."
+            exit 1
+          fi
+          IFS=. read -r MAJOR MINOR _ <<<"$VERSION"
+          NEXT="$MAJOR.$((MINOR + 1)).0"
+          {
+            echo "version=$VERSION"
+            echo "sha=$SHA"
+            echo "short=$(printf '%s' "$SHA" | cut -c1-7)"
+            echo "notes=$NOTES"
+            echo "next=$NEXT"
+          } >> "$GITHUB_OUTPUT"
+          echo "release $VERSION = $SHA (next line $NEXT); notes at $NOTES"
+
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+
+      # The continuous set is keyed by the commit's short sha (check-image-set.sh); the version it
+      # was armed under is recovered from the tags on that digest — the same recovery main-cd's
+      # bake-only reconcile does, and for the same reason: the version is the run's, the sha is the
+      # commit's, and only the image knows how they were paired.
+      - name: "Resolve the promoted continuous set for this commit"
+        id: set
+        env:
+          SHORT: ${{ steps.rel.outputs.short }}
+          VERSION: ${{ steps.rel.outputs.version }}
+        run: |
+          set -euo pipefail
+          tags=$(az acr manifest list-metadata --registry meshweaver --name memex-portal-ai \
+                   --query "[?tags && contains(tags, '${SHORT}')].tags[]" -o tsv)
+          if [ -z "$tags" ]; then
+            echo "::error::memex-portal-ai carries no image tagged $SHORT — main-cd has not promoted this commit. Wait for its run (or \`gh workflow run main-cd.yml --ref main\` when the commit is main's HEAD), confirm \`Plugins: bake + seal\` succeeded, then push the tag again."
+            exit 1
+          fi
+          CI_VERSION=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+[-.]ci\.[0-9]+$' <<<"$tags" | head -1 || true)
+          if [ -z "$CI_VERSION" ]; then
+            echo "::error::memex-portal-ai:$SHORT carries no continuous version tag (tags on that digest: $(tr '\n' ' ' <<<"$tags")) — promote's Phase C never armed a release for this commit. Nothing sealed can be promoted from it."
+            exit 1
+          fi
+          case "$CI_VERSION" in
+            "$VERSION-ci."*) ;;
+            *) echo "::error::the promoted set for $SHORT is $CI_VERSION, not a $VERSION-ci.<n> build — it was built under a different PlatformVersion than the tag claims. Tag a commit built on the $VERSION line."; exit 1 ;;
+          esac
+          PAIR=$(grep -E "^${SHORT}-p[0-9a-f]{7}$" <<<"$tags" | head -1 || true)
+          if [ -z "$PAIR" ]; then
+            echo "::error::memex-portal-ai:$SHORT carries no pair tag (<core>-p<plugins>), so the image cannot be shown to carry a known plugin host (#2622)."
+            exit 1
+          fi
+          {
+            echo "ci_version=$CI_VERSION"
+            echo "plugins_short=${PAIR#*-p}"
+          } >> "$GITHUB_OUTPUT"
+          echo "continuous set: $CI_VERSION (core $SHORT, plugins ${PAIR#*-p})"
+
+      - name: "The set is complete"
+        run: .github/scripts/check-image-set.sh "${{ steps.rel.outputs.short }}" "${{ steps.set.outputs.plugins_short }}"
+
+      - name: "The set is sealed — platform content and the Plugins modules"
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+        run: .github/scripts/check-release-availability.sh "${{ steps.set.outputs.ci_version }}" meshweaver-content plugins
+
+      # The marker FIRST: from the moment memex-portal-ai:<clean> exists, a Stable install may pick
+      # it, and its gate resolves the identity through _releases/<clean>. Written on EVERY target
+      # (the publisher writes all; the gates read the first) — the same layout publish-bake-bundles.sh
+      # owns, mirrored in PublishedBundleCatalogue.
+      - name: "Record the release marker: _releases/<clean> → the continuous build's identity"
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          CI_VERSION: ${{ steps.set.outputs.ci_version }}
+          VERSION: ${{ steps.rel.outputs.version }}
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          # shellcheck disable=SC2086
+          for target in $BAKE_PUBLISH_TARGETS; do
+            account="${target%%/*}"; rest="${target#*/}"; share="${rest%%/*}"; base=""
+            case "$rest" in */*) base="${rest#*/}";; esac
+            dir="${base:+$base/}prebuilt-bundles/_releases"
+            rm -f "$tmp/$CI_VERSION" "$tmp/$VERSION"
+            az storage file download --account-name "$account" --share-name "$share" \
+              --path "$dir/$CI_VERSION" --dest "$tmp/$CI_VERSION" \
+              --auth-mode login --backup-intent --only-show-errors > /dev/null
+            identity=$(tr -d '[:space:]' < "$tmp/$CI_VERSION")
+            if [ -z "$identity" ]; then
+              echo "::error::$account/$share/$dir/$CI_VERSION is empty — the continuous build recorded no framework identity, so there is nothing to promote."
+              exit 1
+            fi
+            printf '%s\n' "$identity" > "$tmp/$VERSION"
+            # Directory-as-path: the CLI appends the source basename, which is the version.
+            az storage file upload --account-name "$account" --share-name "$share" \
+              --path "$dir" --source "$tmp/$VERSION" \
+              --auth-mode login --backup-intent --only-show-errors > /dev/null
+            echo "release marker: $account/$share/$dir/$VERSION → $identity"
+          done
+
+      - name: "The clean version resolves and is sealed (the assertion a Stable install makes)"
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+        run: .github/scripts/check-release-availability.sh "${{ steps.rel.outputs.version }}" meshweaver-content plugins
+
+      # Manifest-only, seconds: the layers are already in ACR under <short-sha>. memex-portal-ai
+      # LAST — it is the one tag a self-updater acts on, so everything it will need must exist first.
+      - name: "Promote the images: <short-sha> → <clean>, memex-portal-ai last"
+        env:
+          SHORT: ${{ steps.rel.outputs.short }}
+          VERSION: ${{ steps.rel.outputs.version }}
+        run: |
+          set -euo pipefail
+          for repo in memex-migration mw-plugin-test; do
+            echo "→ $repo: $VERSION"
+            docker buildx imagetools create --tag "$ACR/$repo:$VERSION" "$ACR/$repo:$SHORT"
+          done
+          echo "→ memex-portal-ai: $VERSION  (arming Stable self-updaters)"
+          docker buildx imagetools create --tag "$ACR/memex-portal-ai:$VERSION" "$ACR/memex-portal-ai:$SHORT"
+          {
+            echo "### Released \`$VERSION\` = \`$SHORT\` (continuous ${{ steps.set.outputs.ci_version }})"
+            echo "- memex-portal-ai, memex-migration, mw-plugin-test retagged \`$VERSION\` in ACR"
+            echo "- release marker \`_releases/$VERSION\` written on every artifact store"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The public channel. Copied by digest from ACR — never a second build (main-cd's Phase B
+      # says why in the same words).
+      - name: "Mirror the release to GHCR"
+        env:
+          SHORT: ${{ steps.rel.outputs.short }}
+          VERSION: ${{ steps.rel.outputs.version }}
+        run: |
+          set -euo pipefail
+          NS=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          for repo in memex-migration mw-plugin-test memex-portal-ai; do
+            docker buildx imagetools create \
+              --tag "ghcr.io/$NS/$repo:$VERSION" \
+              --tag "ghcr.io/$NS/$repo:latest" \
+              "$ACR/$repo:$SHORT"
+          done
+          echo "- mirrored to ghcr.io/$NS/{memex-portal-ai,memex-migration,mw-plugin-test}:$VERSION (+ latest)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Publish the GitHub Release from the committed notes"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ steps.rel.outputs.notes }}
+          VERSION: ${{ steps.rel.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Strip the node's front matter; the body is the release text.
+          awk 'BEGIN { fm = 0 } NR == 1 && /^---$/ { fm = 1; next } fm && /^---$/ { fm = 0; next } !fm' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "MeshWeaver $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          echo "- GitHub Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────── OPEN THE NEXT LINE ─────────────────────────────
+  # 🚨 Not optional and not deferred: a continuous build stamped with a version that has already
+  # been released sorts BELOW the release, so every Continuous install would stop rolling forward.
+  # rc6 shipped with the props still reading rc6 and rc10–rc13 were tagged with the props on rc9;
+  # this job exists so the bump can no longer be forgotten.
+  open-next-line:
+    name: "Open the pull request that moves PlatformVersion to the next line"
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Mint an installation token whose push triggers the pull-request workflows
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          token: ${{ steps.token.outputs.token }}
+
+      - name: "Bump PlatformVersion by grepping its OLD value (a silent no-op is refused)"
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          NEXT: ${{ needs.release.outputs.next }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, sys
+          version, nxt = os.environ["VERSION"], os.environ["NEXT"]
+          path = "Directory.Build.props"
+          text = open(path, encoding="utf-8").read()
+          old = f"""<PlatformVersion Condition="'$(PlatformVersion)' == ''">{version}</PlatformVersion>"""
+          new = f"""<PlatformVersion Condition="'$(PlatformVersion)' == ''">{nxt}</PlatformVersion>"""
+          if new in text:
+              print(f"::notice::main already reads PlatformVersion {nxt}; nothing to bump")
+              open(os.environ["GITHUB_OUTPUT"], "a").write("changed=false\n")
+              sys.exit(0)
+          if text.count(old) != 1:
+              print(f"::error::expected exactly one '{old}' in {path}, found {text.count(old)} — main has moved to a version this lane did not expect; bump by hand")
+              sys.exit(1)
+          open(path, "w", encoding="utf-8").write(text.replace(old, new))
+          open(os.environ["GITHUB_OUTPUT"], "a").write("changed=true\n")
+          print(f"{path}: {version} → {nxt}")
+          PY
+        id: bump
+
+      - name: "Push the branch and open the pull request"
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          VERSION: ${{ needs.release.outputs.version }}
+          NEXT: ${{ needs.release.outputs.next }}
+        run: |
+          set -euo pipefail
+          BRANCH="release/open-$NEXT-line"
+          git config user.name "meshweaver-cloud[bot]"
+          git config user.email "meshweaver-cloud[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add Directory.Build.props
+          git commit -m "release: PlatformVersion $VERSION → $NEXT
+
+          v$VERSION was cut from the continuous build main-cd promoted for $(git rev-parse --short "${{ needs.release.outputs.sha }}").
+          The next continuous build must sort above the release again, so the line moves on the same day the
+          release is tagged (Directory.Build.props explains the ordering)."
+          git push origin "$BRANCH"
+          cat > "$RUNNER_TEMP/body.md" <<EOF
+          ## Summary
+
+          \`v$VERSION\` is released (promoted from the sealed continuous set for \`${{ needs.release.outputs.sha }}\`). This moves \`PlatformVersion\` to \`$NEXT\`, so the next continuous build is \`$NEXT-ci.<n>\` and sorts above the release.
+
+          Opened by \`release.yml\` — the bump that used to be forgotten (rc6, rc10–rc13). No What's New entry: the line change itself was announced with the release.
+
+          Pairs-with: none — a version-number change removes no public surface.
+          EOF
+          gh pr create --base main --head "$BRANCH" \
+            --title "release: PlatformVersion $VERSION → $NEXT" \
+            --body-file "$RUNNER_TEMP/body.md"

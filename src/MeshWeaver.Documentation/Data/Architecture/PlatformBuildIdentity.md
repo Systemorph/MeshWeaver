@@ -59,9 +59,11 @@ the publish is told what it is.
 ## The delivery contract
 
 The version is **baked, not merely tagged**. `main-cd.yml` resolves `$(Version)` from a core
-project and passes it to the portal publish as `-p:Version=`; `edge-images.yml` and
-`release-images.yml` do the same, and say why in the same words. A tag is applied to an image; it
-is not a property of the bytes inside it, and the two can disagree.
+project and passes it to the portal publish as `-p:Version=`; `edge-images.yml` does the same, and
+says why in the same words. A clean release (`release.yml`) bakes nothing: it retags a continuous
+image, so the bytes inside report the `-ci.<n>` build they are — by design, the release IS that
+build. A tag is applied to an image; it is not a property of the bytes inside it, and the two can
+disagree.
 
 Because they can disagree, they are compared. `.github/scripts/check-image-build-identity.sh` reads
 `MESHWEAVER_PLATFORM_VERSION` back out of the **published image config**, for **every**

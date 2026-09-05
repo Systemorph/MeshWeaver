@@ -155,22 +155,24 @@ nodes carry meaningful versions.
 ### c. MeshNodes in a GitHub repo — *the "sync from anywhere" target*
 The source enumerates nodes read from a **public GitHub repository** over HTTP —
 list the tree, fetch each authored MeshNode file's content, map file→node. Pin the
-ref to an **immutable git tag** (`v$(PlatformVersion)`, e.g. `v3.0.0-rc1`) and set
-`Versioned = true`, so the fingerprint changes exactly when the release tag changes
-and a boot at the same tag is a no-op (§3). No clone, no working copy: the GitHub
+ref to the **commit the binary was built from** — every CI assembly carries it as
+`AssemblyMetadata("MeshWeaverCommitHash")` — or, on a clean release, to the immutable
+tag `v$(PlatformVersion)` (e.g. `v3.1.0`), which names the same tree. Set
+`Versioned = true`, so the fingerprint changes exactly when the source commit changes
+and a boot at the same commit is a no-op (§3). No clone, no working copy: the GitHub
 REST API (`git/trees/{ref}?recursive=1` for the listing) + `raw.githubusercontent.com`
 (for content) is enough for a public repo, and all HTTP goes through `IIoPool`
 (never `Observable.FromAsync` — see [ControlledIoPooling.md](/Doc/Architecture/ControlledIoPooling)).
 
-> 🥚 **The chicken-and-egg: pin a TAG, not the build's own commit.** A build cannot
-> embed *its own* commit SHA — the hash does not exist until after the commit, and a
-> commit cannot reference itself. So a deployed binary syncs from the **release tag**
-> derived from its `PlatformVersion` (`v3.0.0-rc1`), not a baked-in SHA. The tag is
-> created at release time, *after* the commit, and GitHub resolves tag→commit at sync
-> time. The tag must be **immutable** (annotated, never force-moved) so the fingerprint
-> is sound. Tag-triggered GitHub Actions ([ReleaseProcess.md](/Doc/Architecture/ReleaseProcess))
-> build the clean-versioned image on the same `v*` tag — so code, image, and synced
-> content all key off one tag.
+> 🥚 **Which ref: the stamped commit, or the release tag.** A binary CAN know its own
+> commit: CI stamps `$(GITHUB_SHA)` / `SourceRevisionId` into every assembly
+> (`Directory.Build.props` → `MeshWeaverCommitHash`), because the hash names the tree
+> being built, not the build. A continuous build (`3.1.0-ci.<n>`) therefore syncs from
+> that commit — there is no tag for it, and there never will be. A clean release
+> (`3.1.0`) may sync from `v$(PlatformVersion)` instead; it resolves to the same tree,
+> because a release is a promotion of a continuous build, never a rebuild
+> ([ReleaseProcess.md](/Doc/Architecture/ReleaseProcess)). A release tag must be
+> **immutable** (annotated, never force-moved) so the fingerprint is sound.
 
 **This is the goal: sync from anywhere.** Once docs (and samples, agent/model
 templates) are synced from GitHub into the partition, the platform **no longer
@@ -236,19 +238,19 @@ redeploy:
   "targetPartition": "Doc",
   "source":  "github",
   "url":     "https://github.com/Systemorph/MeshWeaver",
-  "ref":     "v3.0.0-rc1",   // immutable release tag = the version gate (§3, §4c)
+  "ref":     "v3.1.0",       // immutable release tag (or the stamped commit) = the version gate (§3, §4c)
   "path":    "src/MeshWeaver.Documentation/Data",
   "enabled": true
 }
 ```
 
-Pin an **immutable release tag** (`v$(PlatformVersion)`), not a moving branch and
-not the build's own commit (§4c chicken-and-egg), so the fingerprint (§3) is exact
-and a re-boot at the same tag is a guaranteed no-op. The `ref` resolves to a single
-canonical GitHub tree URL:
+Pin an **immutable ref** — the release tag `v$(PlatformVersion)` on a clean release, the
+stamped commit on a continuous build (§4c) — never a moving branch, so the fingerprint
+(§3) is exact and a re-boot at the same ref is a guaranteed no-op. The `ref` resolves to a
+single canonical GitHub tree URL:
 
 ```
-https://github.com/Systemorph/MeshWeaver/tree/v3.0.0-rc1/src/MeshWeaver.Documentation/Data
+https://github.com/Systemorph/MeshWeaver/tree/v3.1.0/src/MeshWeaver.Documentation/Data
 ```
 
 Bumping the sync to a newer release is one edit to the config node's `ref` (or, for

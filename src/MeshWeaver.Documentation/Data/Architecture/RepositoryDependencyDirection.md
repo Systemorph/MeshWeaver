@@ -36,7 +36,7 @@ incidental coupling that can be tidied away.
 | `main-cd.yml:1020` → `:1080` | same, for `Memex.Database.Migration` | ditto — and a missing migration tag is the 6.5 h production outage of 2026-08-27 (#2555) |
 | `main-cd.yml:524` | `git ls-remote` the Plugins HEAD, to key the image set on the PAIR (#2622) | fails RED, deliberately: an unresolvable HEAD means the image identity cannot be established |
 | `main-cd.yml:2094` (`plugins-modules`), `:2166` (`plugins-bake`) | core's CD packs and bakes the Plugins module bundles the portals adopt for this identity | a red leg means the sealed publication is missing for an identity the images already carry — **and it stalls the whole fleet**: memex still wakes every satellite for that identity, but each of their bakes seeds the Plugins publication and fails `upstream 'plugins' has no SEALED publication` until it exists |
-| `release-images.yml:34` → `:101`, `:114`, `:126` | the `v*.*.*` tag lane, same two projects | a tag release publishes no portal image |
+| `release.yml` | the `v*.*.*` tag lane checks out NO sibling: it promotes the set main-cd already built from the pair, so the Plugins commit a release carries is the one in that set's pair tag | — (a release can only name a set that exists) |
 | `edge-images.yml:39` → `:92`, `:105` | the manual edge channel, same two projects | edge builds fail |
 
 🚨 **The blast radius is the FLEET, not this repo.** A broken plugins tree does not merely red a

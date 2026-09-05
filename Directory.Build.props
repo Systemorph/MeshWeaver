@@ -43,61 +43,45 @@
     <DefineConstants Condition=" '$(CIRun)' == 'true' ">$(DefineConstants);CIRun</DefineConstants>
     <!-- Suppress FluentAssertions license warning for open source project -->
     <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
-    <!-- Maintained platform version — the ONE number, set centrally here. Override at
-         build time (Docker image / CI) with -p:PlatformVersion=3.0.1 (the next patch) or
-         3.1.0-rc1 (to start the next pre-release line). Clean release; CI builds are
-         COMMIT-DETERMINISTIC (issue #1660 WS3 — see the InformationalVersion note below), and
-         NodeType cache invalidation keys on the commit identity, not on a per-build stamp.
-         It is also the content-version for static-repo / GitHub data-sync
-         (Doc/Architecture/DataSyncSetup.md §3): a release tagged v$(PlatformVersion) is what
-         a deployed binary syncs from.
+    <!-- Maintained platform version — the ONE number, set centrally here. It names the NEXT
+         release: the line is 3.1.0, every continuous build is 3.1.0-ci.<run> (_CiSep below), and
+         the release itself is the clean 3.1.0 — not a rebuild, a PROMOTION of a sealed continuous
+         set (release.yml retags the promoted images and copies the release marker when the tag
+         v3.1.0 is pushed; Doc/Architecture/ReleaseProcess). Override at build time with
+         -p:PlatformVersion= only for experiments; CI builds are COMMIT-DETERMINISTIC (issue #1660
+         WS3 — see the InformationalVersion note below), and NodeType cache invalidation keys on the
+         commit identity, not on a per-build stamp.
 
-         🚨 The -rc1 label is NOT cosmetic — dropping it breaks SemVer PRECEDENCE against the
-         already-published v3.0.0-preview1. Pre-release identifiers compare ASCII-lexically
-         (SemVer §11.4), and "ci" < "preview1", so a bare 3.0.0 core yields:
+         ORDERING, which the self-updater (VersionSelect, SemVer2 via NuGetVersion) relies on:
 
-             3.0.0-ci.2054      <  3.0.0-preview1      ← every CI build sorts BELOW the old preview
-             3.0.0-rc1.ci.2054  >  3.0.0-preview1      ← correct
+             3.0.0-rc9.ci.7818  <  3.0.0-rc13  <  3.1.0-ci.1  <  3.1.0-ci.7900  <  3.1.0  <  3.2.0-ci.1
 
-         The self-updater picks the NEWEST version off the registry (ReleaseStrategy.md), so with
-         a bare core it would pin to 3.0.0-preview1 the moment that image reached the registry and
-         never roll forward again. Keep a pre-release label on the core until 3.0.0 ships clean.
+         so every install on the retired rc line rolls forward onto the first 3.1.0 continuous
+         build, a Stable install takes the clean 3.1.0 and nothing before it, and the moment 3.1.0
+         is tagged this number MUST move to 3.2.0 so continuous builds sort above the release again
+         (release.yml opens that PR itself; a continuous build stamped with an already-released
+         number is the defect the .ci.<n> suffix exists to prevent). No pre-release label: `-ci.N`
+         is the only one, and it is the channel marker, never a version.
 
-         It also has to RESOLVE by the time anything pins content-sync to it: data-sync pulls
-         content from the tag v$(PlatformVersion). v3.0.0-rc3 shipped 2026-08-16; v3.0.0-rc5
-         shipped 2026-08-19 — and its tagged tree CANNOT BOOT (Modules:Assemblies still listed
-         the fourteen removed driver DLLs; fixed by #1901 after the tag). v3.0.0-rc6 shipped
-         2026-08-20: the first release whose tree boots, whose module bundles carry their own
-         dependency closures (#1914/#1919/#1923), and whose platform has shed the module-only
-         Azure/OpenAI dependencies.
+         🚨 There is no rc line any more (maintainer, 2026-09-05). The 3.0.0 line shipped rc1–rc13
+         as tags and NuGet packages and was never cut clean; rc10–rc13 were tagged while this
+         property still read rc9, and under SemVer §11.4 "rc13" sorts BELOW "rc2", so nuget.org
+         listed rc9 as the newest pre-release for the whole run. That is why the line was closed
+         rather than graduated: 3.1.0-ci.<n> outranks every 3.0.0-* by its minor number, no matter
+         how the labels compare. NuGet publication is retired with it — in-mesh source compiles
+         against the IMAGE, never against a feed (Doc/Architecture/PluginPackaging) — and the
+         packages already on nuget.org stay listed as history. Do not "fill in" a v3.0.0 tag: the
+         version never shipped clean, and minting it now would publish a superseded set for real.
 
-         v3.0.0-rc7 shipped 2026-08-22 — the release in which the optional GUI and voice
-         surfaces stop riding the app closure: all five Blazor view packs (#2018/#2021) and
-         Speech (#2028) ship under modules/<Name>/ and activate through Modules:Assemblies, with
-         their static web assets served from the module (#1724/#1987/#2017/#2020).
-
-         v3.0.0-rc8 is the line NOW BUILDING — the release that makes the extraction OPERABLE:
-         the registry shelf accepts modules for platforms newer than itself (the rc7 three-way
-         deadlock: image ships no modules → only the registry delivers them → the registry
-         refused to carry them until it updated → it could not update without them), CD goes RED
-         when a red main switches it off (#2069), the transient-probe dispose race is gone
-         (#2068), provisioning gets its inverse (Plugins #585), and the hosting operator is
-         enabled on the control instance. Its tag is created only when rc8 is released — never
-         tag it early, the v*.*.* tag IS the trigger for the NuGet + image publish.
-
-         🚨 BUMP THIS THE MOMENT A LINE IS TAGGED, in the same session. rc6 was released while
-         this property still read rc6, so every continuous build afterwards kept stamping a
-         version that was already published — the tag and the line it was cut from stopped being
-         distinguishable, which is precisely what the -ci.<n> suffix exists to prevent.
-
-         🚨 rc4 was never tagged, and the gap is deliberate rather than a slip: the line built
-         under that label all through the module extraction (#1882), so a v3.0.0-rc4 tag would
-         have published the fourteen driver packages to NuGet on its way out the door — exactly
-         the set being retired. rc5 is the first release cut AFTER they leave, so the packages
-         it publishes are the ones the platform still builds. Do not "fill in" rc4 later: the
-         version never shipped, and minting a tag for it now would publish that superseded
-         content set for real. -->
-    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc9</PlatformVersion>
+         History of the 3.0.0-rc line, kept because the release marker and bake identity notes
+         elsewhere cite these versions: rc3 2026-08-16 · rc4 never tagged (its packages would
+         have shipped the fourteen driver DLLs being retired, #1882) · rc5 2026-08-19, tagged tree
+         could not boot (Modules:Assemblies listed removed DLLs; #1901) · rc6 2026-08-20, first
+         bootable release whose module bundles carry their own closures (#1914/#1919/#1923) · rc7
+         2026-08-22, the Blazor view packs and Speech leave the app closure (#2018/#2021/#2028) ·
+         rc8 2026-08-29, the registry shelf accepts modules for newer platforms (#2069/#2068) ·
+         rc9–rc13 2026-08-30/31, the plugin build CLI (#2834–#2858). -->
+    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.1.0</PlatformVersion>
   </PropertyGroup>
   <!-- Multi-arch container publish race fix (main-cd / release-images / edge-images pass
        -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"). The SDK's _PublishMultiArchContainers
@@ -195,12 +179,14 @@
            Code="MW1026"
            Text="Container publish for RuntimeIdentifier '$(_MeshWeaverFailedLegRid)' reported success but produced NO image — CreateNewImage set no Manifest/Config/Digest. That task logs a swallowed cancellation as the bare warning 'The operation was canceled.' and still returns true, so the true fault is the warning IMMEDIATELY ABOVE this error, not this target. In CI it is a stalled connect (Microsoft.NET.Build.Containers hard-codes SocketsHttpHandler.ConnectTimeout=30s and drops the inner TimeoutException, so no host is logged): check the base registry '$(ContainerBaseRegistry)/$(ContainerBaseName):$(ContainerBaseTag)' and the output registry '$(ContainerRegistry)/$(ContainerRepository)', and look for a ~30 s gap in the timestamps before the warning. Do NOT respond by dropping a RID, disabling the image index, wrapping the publish in a retry, or suppressing this error — see issue #1026." />
   </Target>
-  <!-- Two version channels — CONTINUOUS (CI) vs RELEASED (CD):
-       • RELEASED  (-p:PublicRelease=true, the CD/release pipeline): clean $(PlatformVersion).
-         This is what NuGet packages AND the Docker image carry, e.g. 3.0.0-rc1. Tag the repo
-         v$(PlatformVersion); data-sync (DataSyncSetup.md §3) pulls content from that tag.
+  <!-- Two version channels — CONTINUOUS (CI) vs RELEASED (the promotion):
+       • RELEASED  (-p:PublicRelease=true): clean $(PlatformVersion), e.g. 3.1.0. Nothing BUILDS
+         with this flag any more — release.yml promotes an already-built continuous set by
+         retagging it (the bytes are the ci build's); the flag survives for local experiments.
+         The tag v$(PlatformVersion) is what the promotion keys on and what data-sync
+         (DataSyncSetup.md §3) pulls content from once a release exists.
        • CONTINUOUS (default — CI pipeline and local dev): append a build number, e.g.
-         3.0.0-rc1.ci.21901, so continuous packages are DISTINGUISHABLE from the release and a
+         3.1.0-ci.7900, so continuous images are DISTINGUISHABLE from the release and a
          local-deploy build always carries a build number.
        🚨 $(Version) — the run-numbered string — feeds NuGet package versions and Docker image
        tags ONLY. It must NOT reach any COMPILED attribute: under CIRun every compiled input is
@@ -226,12 +212,15 @@
   <!-- Pure functions of $(PlatformVersion). OUTSIDE the guard below, because the COMPILED
        attributes derive from them and must not vary with whether a caller supplied -p:Version=. -->
   <PropertyGroup>
-    <!-- Numeric version core: PlatformVersion with the -rc label stripped (3.0.0-rc1 → 3.0.0). -->
+    <!-- Numeric version core: PlatformVersion with any pre-release label stripped (3.1.0 → 3.1.0;
+         a hypothetical 3.1.0-x → 3.1.0). The default carries no label since the rc line closed. -->
     <_VersionDash>$(PlatformVersion.IndexOf('-'))</_VersionDash>
     <_VersionNumeric Condition="'$(_VersionDash)' == '-1'">$(PlatformVersion)</_VersionNumeric>
     <_VersionNumeric Condition="'$(_VersionDash)' != '-1'">$(PlatformVersion.Substring(0, $(_VersionDash)))</_VersionNumeric>
-    <!-- Pre-release separator for the .ci.N suffix: already a pre-release (3.0.0-rc1) → '.ci.N';
-         a clean release core (3.0.0) → start a pre-release with '-ci.N'. Both are valid SemVer. -->
+    <!-- Pre-release separator for the ci.N suffix: a clean line (3.1.0, the default) starts the
+         pre-release with '-ci.N'; a labelled override (3.1.0-x) appends '.ci.N'. Both are valid
+         SemVer. 🚨 Consumers that parse the build number back out of a version must accept BOTH
+         separators ([.-]ci.<n>): the retired rc line used '.ci.' and its tags are still in ACR. -->
     <_CiSep Condition="'$(_VersionDash)' == '-1'">-</_CiSep>
     <_CiSep Condition="'$(_VersionDash)' != '-1'">.</_CiSep>
   </PropertyGroup>
@@ -300,7 +289,8 @@
          full bake runs ONCE per commit, on CI; pods adopt. -->
     <InformationalVersion Condition="'$(CIRun)' == 'true'">$(PlatformVersion)</InformationalVersion>
     <InformationalVersion Condition="'$(CIRun)' != 'true'">$(Version)</InformationalVersion>
-    <!-- 🔴 AssemblyVersion is STABLE (3.0.0.0) — it is the RUNTIME ASSEMBLY-BINDING identity, so it
+    <!-- 🔴 AssemblyVersion is STABLE within a line ($(_VersionNumeric).0, i.e. 3.1.0.0) — it is the
+         RUNTIME ASSEMBLY-BINDING identity, so it
          MUST be identical across every assembly in a coherent build. `_BuildNumber` is
          seconds-since-midnight/2 evaluated PER PROJECT at MSBuild time, so a time-based
          AssemblyVersion drifts a few seconds (→ a different number) between projects built in the

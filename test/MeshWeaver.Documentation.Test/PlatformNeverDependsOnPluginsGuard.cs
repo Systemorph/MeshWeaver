@@ -55,7 +55,8 @@ public class PlatformNeverDependsOnPluginsGuard
     /// <summary>
     /// The workflows allowed to reach into a plugin repository, and why. Each entry is a lane that
     /// publishes an IMAGE whose source lives there; nothing else may join this list without moving
-    /// the source, or moving the lane.
+    /// the source, or moving the lane. The <c>v*.*.*</c> tag lane (<c>release.yml</c>) is deliberately
+    /// NOT here: a release is a promotion of a set main-cd already built, so it checks nothing out.
     /// </summary>
     private static readonly ImmutableDictionary<string, string> Ledger =
         ImmutableDictionary.CreateRange(StringComparer.OrdinalIgnoreCase,
@@ -63,8 +64,6 @@ public class PlatformNeverDependsOnPluginsGuard
             new KeyValuePair<string, string>("main-cd.yml",
                 "publishes portal-ai + memex-migration from plugins-repo/src, keys the image set on the "
                 + "core/plugins PAIR (#2622), and packs+bakes the Plugins module bundles for that identity"),
-            new KeyValuePair<string, string>("release-images.yml",
-                "the v*.*.* tag lane — same two projects"),
             new KeyValuePair<string, string>("edge-images.yml",
                 "the manual edge channel — same two projects"),
         ]);

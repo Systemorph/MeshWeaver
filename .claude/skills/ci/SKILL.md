@@ -150,7 +150,7 @@ The rule, enforced by `.github/scripts/check-workflow-timeouts.py` (self-tested,
   `platform-ref` and runs it against the caller's tree — pin `platform-ref` beside the `uses:` sha.
 
 Measured headroom on 2026-09-02: the longest honest jobs are the Plugins portal-host shards
-(25–30 min), `release-images` (36–41 min) and the Education install shards (~27 min). A job that
+(25–30 min), the retired `release-images` rebuild lane (36–41 min) and the Education install shards (~27 min). A job that
 reaches 45 is **stuck, not slow** — find what is not completing; never raise the bound (AGENTS.md →
 "No band-aids"). And a cap that fires destroys the hung test's transcript with it (a host-cap kill
 leaves no `.trx`), so when you are chasing a hang, capture the stack (`dotnet-stack report -p`)

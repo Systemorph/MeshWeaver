@@ -372,8 +372,8 @@ az acr import --name $ACR --source ghcr.io/systemorph/memex-portal-ai-base:lates
 > `az acr import` **preserves the manifest list** — it copies the whole multi-arch
 > OCI image index (all per-platform child manifests) referenced by the source tag,
 > so the ACR copy stays multi-arch (amd64 + arm64); it does not flatten to one
-> architecture. (This is the same server-side copy `release-images.yml` uses to
-> mirror released images from GHCR into ACR.)
+> architecture. (The retired tag lane used the same server-side copy to mirror released
+> images from GHCR into ACR; `release.yml` now promotes inside ACR by digest.)
 
 Then point the **real** keys at the ACR — on the `helm` command line, or (better,
 so it survives every upgrade) in your values overlay:
