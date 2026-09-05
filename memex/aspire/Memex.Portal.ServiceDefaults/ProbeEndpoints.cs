@@ -26,7 +26,7 @@ namespace Memex.Portal.ServiceDefaults;
 /// <see cref="LiveTag"/>, so the predicate matched nothing and answered 200 for any process that
 /// could accept a socket. <c>MeshWeaver.Plugins#1234</c> then tagged a progress-aware check —
 /// correct, and the fix to a real blindness — and readiness silently inherited it, because two
-/// probes cannot be given different SEMANTICS while they share a PATH.
+/// probes cannot be given different SEMANTICS while they share a PATH.</para>
 ///
 /// <para>The result was an amplifier built out of the containment: readiness trips at
 /// 10 s × 3 = 30 s, liveness at 15 s × 6 = 90 s, so a GC-bound replica left the Service a full
@@ -34,7 +34,7 @@ namespace Memex.Portal.ServiceDefaults;
 /// converging on the SAME memory ceiling (measured 2026-09-04 in ns <c>memex</c>: two 28 h
 /// replicas at 9936Mi and 9409Mi — ratio 1.06). One sick replica became a cascade. That is the
 /// 2026-07-21 death spiral, which the chart's readiness comment has warned against ever since,
-/// rebuilt out of the #2194 item-4 fix.</para></para>
+/// rebuilt out of the #2194 item-4 fix.</para>
 ///
 /// <para>🚨 <b>Why the readiness predicate is an ALLOW-list.</b> The bug was not a wrong number, it
 /// was a check registered in ANOTHER repository joining readiness's predicate by carrying a tag

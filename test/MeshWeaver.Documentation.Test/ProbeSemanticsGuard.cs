@@ -170,9 +170,16 @@ public class ProbeSemanticsGuard
             // Both YAML shapes: the inline `httpGet: { path: X, port: N }` this chart uses, and the
             // block form. SetupProbeEndpointsTest was once blind to the inline form and passed
             // anyway off a hard-coded fallback — so match both, and assert the match.
+            // 🚨 The body is bounded to lines indented DEEPER than the probe key, not merely to
+            // "up to the next *Probe:". The liveness probe is the last one in the template, so an
+            // unbounded body ran to EOF — and the first httpGet after it happened to be its own
+            // only by luck of ordering. A sidecar probe added later would have been read as the
+            // liveness path, and this guard would then be asserting about something else entirely
+            // while still passing. A guard that can silently change subject is the failure this
+            // whole change is about.
             var match = Regex.Match(
                 yaml,
-                $@"^\s*{probe}:\s*$(?<body>(?:\n(?!\s*\w+Probe:).*)*)",
+                $@"^(?<indent>[ ]*){probe}:[ ]*$(?<body>(?:\n\k<indent>[ ].*)*)",
                 RegexOptions.Multiline);
             Assert.True(match.Success,
                 $"{Deployment} declares no {probe}. All three are load-bearing: the startup probe "

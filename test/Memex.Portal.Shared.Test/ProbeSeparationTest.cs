@@ -175,7 +175,10 @@ public class ProbeSeparationTest
 
     private static string PathOf(string yaml, string probe)
     {
-        var block = Regex.Match(yaml, $@"^\s*{probe}:\s*$(?<body>(?:\n(?!\s*\w+Probe:).*)*)",
+        // Bounded to lines indented deeper than the probe key: the liveness probe is the last in
+        // the template, so an unbounded body runs to EOF and a sidecar httpGet added later would
+        // be read as the liveness path — the guard silently changing subject.
+        var block = Regex.Match(yaml, $@"^(?<indent>[ ]*){probe}:[ ]*$(?<body>(?:\n\k<indent>[ ].*)*)",
             RegexOptions.Multiline);
         Assert.True(block.Success, $"the deployment template declares no {probe}");
 
