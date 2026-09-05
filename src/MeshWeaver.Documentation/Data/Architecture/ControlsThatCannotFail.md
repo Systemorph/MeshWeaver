@@ -42,7 +42,7 @@ instances. The family is larger, and it is worth recognising by shape.
 | **Blindness rendered as health** | a watcher whose read failure and whose "no matches" look identical | "I cannot see" is reported as "nothing is wrong" |
 | **One word covering three states** | `completed/success` over checked-and-passed, never-ran, and ran-and-did-nothing | the verdict is not the outcome |
 | **A tool that collapses several failures into one exit code** | `git cat-file -e "$sha:$path" \|\| echo ABSENT` | absent-path, bad-sha, missing-object and bad-quoting all read the same |
-| **A measurement that truncates and answers anyway** | a profiler capping at N objects and reporting the partial total | the wrong number is *plausible*, so it closes the investigation |
+| **A measurement that truncates and answers anyway** | a profiler capping at N objects; `\| head -10` on a sorted sweep | the wrong number is *plausible* — and on ordered output the survivors are biased, so a partial view reads as a clean one |
 | **A writer whose failure mode is a SUCCESS line** | a generator that skips its work and prints a summary anyway | nothing distinguishes "wrote it" from "declined to" |
 
 ## Eight measured instances
@@ -139,7 +139,23 @@ looks like an answer. Trusting it produces a confident, wrong conclusion — *th
 elsewhere* — which is strictly worse than no measurement, because it closes the investigation.
 
 Same shape as an anchor emitting a meaningless-but-non-blank value, one layer down: one number
-covering *"this is the heap"* and *"this is as much of the heap as the tool chose to walk"*. **The cure
+covering *"this is the heap"* and *"this is as much of the heap as the tool chose to walk"*.
+
+🚨 **And it happens in the shell, where the truncation is BIASED toward exactly the answer you were
+hoping for.** A sweep for ambient-culture uses in a satellite repo was run as `git grep … | head -10`
+and reported **zero** production offenders. The sweep had **19** lines and the real offender was
+number **18** — because comments and test files sort early, clustering in doc-heavy and `*.Test`
+paths, so the first ten lines were *all* commentary and tests. The truncated view did not look
+partial; it looked clean. The same person had been caught by the same shape four hours earlier, in a
+different costume: `… | tee list.txt | head -30` let `head` close the pipe, `SIGPIPE` truncated what
+`tee` wrote, and a satellite-only package sweep reported **31** where the truth was **49** — with the
+tell being that the one package which had just taken CD down was missing from its own sweep.
+
+This is the ordinary case, not an exotic one: `grep`, `git grep`, `ls` and `find` all emit in a sorted
+or otherwise structured order, so **a head-truncated view is a systematically unrepresentative
+sample, not a random one** — and the bias points toward whichever files sort first, which is usually
+the ones you were not looking for. **Count first (`| wc -l`), filter comments and tests INSIDE the
+pipeline, and treat `head` as a way to eyeball SHAPE — never as a way to establish ABSENCE.** **The cure
 here is not "go break the subject" but a second instrument that can DISAGREE** — which is what caught
 it. (A companion from the same session fails the honest way and is worth the contrast: SOS
 `dumpobj`/`gcroot` **segfault** on that process, so field-following had to move to ClrMD. A tool that
