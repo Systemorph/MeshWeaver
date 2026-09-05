@@ -224,7 +224,7 @@ a blanket red and neither is decorative.
   last two are named in `platform-shipped.txt`'s own comment as *measured ABSENT from `/app`*, with
   "do NOT re-add"; they are present in both `ci.7755` and `ci.7794`. That is the same
   declaration-versus-bytes gap this page is about, one layer over, and it interacts with the
-  in-flight optional-Blazor work — so it is filed rather than folded in here.
+  in-flight optional-Blazor work — so it is filed as #3335 rather than folded in here.
 - **Runtime binding.** `/app` is a runtime directory and the runtime binds by simple name, ignoring
   version — which is why the portal runs perfectly with a reference set that will not resolve. This
   gate asserts the COMPILE contract, which is the one the fleet consumes.
