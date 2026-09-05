@@ -1267,9 +1267,42 @@ jobs:
                 echo "### 📣 Publication registered with memex (HTTP $code)"
                 echo "- source: \`$SOURCE\`  identity: \`${IDENTITY:-?}\`  image: \`$IMAGE\`  platform: \`$PLATFORM_IMAGE\`"
                 echo "memex STORED the record. Whether it dispatched meshweaver-upstream-published is read on memex and on the dependents, never here."
+                if grep -Eq '"signature"[[:space:]]*:[[:space:]]*"verified"' /tmp/resp; then
+                  echo "- signature: **verified** — the instance checked this POST's HMAC."
+                else
+                  echo "- signature: **NOT checked** — the instance declares no SecretConfigKey for this target, so a drifted webhook-secret would still be invisible (MeshWeaver#3312)."
+                fi
               } >> "$GITHUB_STEP_SUMMARY"
               ;;
             000) echo "::error::could not reach the inbox at all (DNS/TLS/connection refused) — the publication is sealed but unregistered; no dependent is told until its schedule poll."; exit 1 ;;
             404) echo "::error::the inbox answered 404 — FAIL-CLOSED for both an unlisted target and a wrong URL; check webhook-url against the instance's WebhookInbox:Targets."; exit 1 ;;
+            401) echo "::error::the inbox REFUSED the signature (HTTP 401) — this repo's webhook-secret and the instance's Hosting:PlatformWebhookSecret are not byte-identical. Re-set BOTH from the same source; never read either to compare them. The publication is sealed but unregistered. (Before MeshWeaver#3312 this drift answered 2xx and the record was dropped unverifiable, with nothing red.)"; exit 1 ;;
+            500) echo "::error::the inbox declares a SecretConfigKey that is empty on the instance (HTTP 500) — it can verify nothing and refuses every delivery. Provision that key on the target instance. The publication is sealed but unregistered."; exit 1 ;;
             *)   echo "::error::the inbox refused the publication record (HTTP $code) — sealed but unregistered."; exit 1 ;;
           esac
+
+      # 🚨 NO `::warning::` IN THIS JOB, and that is a rule worth obeying rather than carving out.
+      # `UpstreamBuildGateGuard.TheLaneEndsByRegisteringWithMemex_AndDispatchesToNobody` forbids one
+      # anywhere in `register-publication`, because the lane's whole contract is that a record memex
+      # never received goes RED and is never decorated into a pass. This step reports a DIFFERENT
+      # thing — the record arrived, but did the instance check the signature while storing it? — and
+      # a guard cannot tell the two apart from a substring, so the plain-echo form is the honest
+      # answer rather than weakening a guard that exists because a delivery failure was once
+      # downgraded to a warning.
+      #
+      # The verdict is still recorded, twice: on the step summary above and in this log. When the
+      # receiving instance declares its SecretConfigKey and this becomes an `::error::` + `exit 1`
+      # (MeshWeaver#3338), the guard positively WANTS that shape — it already asserts the job
+      # carries `exit 1`. So the end state is guard-compatible; only this interim is quiet.
+      - name: "Did the inbox VERIFY the publication record?"
+        run: |
+          set -euo pipefail
+          if [ ! -f /tmp/resp ]; then
+            echo "::error::no inbox response was captured — the POST step did not run to completion."
+            exit 1
+          fi
+          if grep -Eq '"signature"[[:space:]]*:[[:space:]]*"verified"' /tmp/resp; then
+            echo "signature VERIFIED — the instance checked this POST's HMAC, so a drifted webhook-secret would now fail loudly (401)."
+          else
+            echo "signature NOT CHECKED — the inbox accepted this publication record without verifying it: the receiving instance declares no WebhookInbox__Targets__N__SecretConfigKey for this target, so webhook-secret was never exercised and a drifted secret would still be invisible (MeshWeaver#3312). Provision it on that instance's Hosting/Deployment record."
+          fi

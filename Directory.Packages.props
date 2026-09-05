@@ -101,32 +101,42 @@
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection" Version="10.0.10" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
-    <!-- Pin the patched native SQLite engine: Microsoft.Data.Sqlite 10.0.0 pulls
+    <!-- Pin the patched native SQLite engine: Microsoft.Data.Sqlite pulls
          SQLitePCLRaw.lib.e_sqlite3 2.1.11 transitively, which bundles a SQLite engine with the
          high-severity vuln GHSA-2m69-gcr7-jv3q (NU1903). The native engine package is versioned to
          track the bundled SQLite version, so any 3.50+ engine is past the vulnerable range. The
          provider P/Invokes the engine by ABI-stable export name, so the native lib drops in under
          the 2.1.x managed layer. Deliberately version-AGNOSTIC prose: naming a specific version
-         here goes stale the moment the pin below is bumped (it said 3.50.3 while the pin read
+         here goes stale the moment the pin below is bumped (it once said 3.50.3 while the pin read
          3.53.3). The pin is the source of truth; this comment explains WHY it exists.
-         Pinned explicitly in the Sqlite projects.
 
-         🚨 THE MANAGED LAYER IS PINNED TOO, AND NOT HERE (MeshWeaver#3328). Nothing in this src/
-         tree consumes SQLitePCLRaw — MeshWeaver.Hosting.Sqlite lives in MeshWeaver.Plugins — and
-         with CentralPackageTransitivePinningEnabled unset a PackageVersion for a purely transitive
-         package overrides nothing, so the managed pin is a VersionOverride on that project's own
-         PackageReference (MeshWeaver.Plugins#1351): core 3.0.2, provider.e_sqlite3 3.0.2.
+         🚨 THE NATIVE PIN BELOW STAYS. #3344 withdrew it along with the three managed pins it meant
+         to withdraw, and that took core CD down: MeshWeaver.Hosting.Sqlite.csproj (in Plugins)
+         carries a VERSIONLESS PackageReference to it, so the withdrawal left NU1010 ("no
+         corresponding PackageVersion") and then NU1903 as resolution fell back to the vulnerable
+         2.1.11 this pin exists to avoid. Restored in 8a4fadf0a; Plugins#1361 additionally states the
+         version at the reference, so the two no longer depend on each other.
 
-         The reason is NOT that project's: it is in the PORTAL IMAGE's closure, and that closure is
-         the reference set every satellite's module bundles compile against. It also holds Roslyn,
-         and Microsoft.CodeAnalysis.Workspaces binds SQLitePCLRaw.core 3.0.2.2801 while declaring NO
-         SQLitePCLRaw dependency in its package — so NuGet resolved the family on Microsoft.Data.Sqlite
-         alone, at 2.1.11.2622, and every module bundle in the fleet died on MSB3277. 3.0.2 is the
-         version the image's other consumer already binds.
+         🚨 THE MANAGED TRIO IS DELIBERATELY *NOT* PINNED HERE (#3328; #3342 withdrawn). Nothing in
+         this src/ tree consumes SQLitePCLRaw — MeshWeaver.Hosting.Sqlite lives in MeshWeaver.Plugins
+         — and with CentralPackageTransitivePinningEnabled unset a PackageVersion for a purely
+         transitive package overrides nothing, so a central pin here is INERT and would additionally
+         force that repository to move its platform pin before it could take effect. The fix lives
+         beside its reason, as a VersionOverride on that project's own PackageReference
+         (Plugins#1351): core 3.0.2, provider.e_sqlite3 3.0.2.
 
-         Do NOT "finish the family" by raising bundle_e_sqlite3 to 3.0.x: its 3.0 shape replaces
-         SQLitePCLRaw.lib.e_sqlite3 with SourceGear.sqlite3 3.50.4.2 and would quietly undo the pin
-         above. Doc/Architecture/PlatformImageClosure has the measurements. -->
+         Why 3.0.2: the portal image's closure is the reference set every satellite's module bundles
+         compile against, and it also holds Roslyn. Microsoft.CodeAnalysis.Workspaces binds
+         SQLitePCLRaw.core 3.0.2.2801 while declaring NO SQLitePCLRaw dependency, so NuGet resolved
+         the family on Microsoft.Data.Sqlite alone at 2.1.11.2622 and every module bundle in the
+         fleet died on MSB3277. 3.0.2 is the version the image's other consumer already binds.
+
+         🚨 AND NEVER PIN SQLitePCLRaw.bundle_e_sqlite3 TO 3.0.x "to finish the family". Its 3.0
+         shape depends on SourceGear.sqlite3 3.50.4.2 INSTEAD of SQLitePCLRaw.lib.e_sqlite3 —
+         measured in a restore graph — so it silently swaps the native engine out from under the
+         pin below and the CVE fix stops being the thing supplying the engine. #3342 pinned it and
+         was withdrawn for exactly this. Doc/Architecture/PlatformImageClosure has the
+         measurements. -->
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
     <PackageVersion Include="ModelContextProtocol" Version="1.4.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.2.0" />

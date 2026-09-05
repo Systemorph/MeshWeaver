@@ -464,23 +464,19 @@ public static class PluginBundleEndpoints
                     return Results.Json(new { error = decline }, statusCode: StatusCodes.Status400BadRequest);
                 }
 
-                // 🚨 #3211 — the arming signal for the LAST refusal, named per publisher.
-                // A bundle stating no framework identity shelves a null, the index advertises a
-                // null, and ModuleUpdateDecision (#3154) then answers "already landed — the
-                // identity could not be checked" for this module on every reconcile of every
-                // installation, forever: an unknown on the SERVED side is the one landing cannot
-                // heal. The producer's own lane already refuses to pack or POST such a bundle, so
-                // reaching here means a publisher on a pin older than #3211. This line is what says
-                // WHICH — the measurement the registry-side 400 waits on, rather than a refusal
-                // armed on faith that would take the fleet's publishes down with it.
-                if (string.IsNullOrWhiteSpace(accepted.FrameworkMvid))
-                    logger?.LogWarning(
-                        "Module publish for {Plugin}: '{Module}' version {Version} states NO "
-                        + "framework identity, so it shelves a null and every consumer of it will "
-                        + "answer 'up to date — identity could not be checked' on every reconcile "
-                        + "(#3154). Its producer packs on a lane older than MeshWeaver#3211; bump "
-                        + "that repo's node-repo-module-pack.yml pin. This becomes a 400.",
-                        plugin, accepted.Module, accepted.Version ?? "(unversioned)");
+                // 🚨 #3211's last refusal is ARMED (#3240), and it lives in ModulePublish.Validate
+                // above — so an unstated framework identity has already left through the 400 path a
+                // few lines up, named, and `accepted.FrameworkMvid` is non-blank from here on.
+                //
+                // A WARNING used to stand here instead. It was the runway, not the fix: it named
+                // WHICH publisher was still emitting nulls so the refusal could be armed on
+                // evidence rather than on faith (arming it while producers still packed
+                // "built-against MVID (unrecorded)" would have taken the fleet's publishes down
+                // instead of the nulls). Both halves of #3240's criterion were measured on
+                // 2026-09-05 — every producer's pin past #3237, and a full publish wave from each
+                // stating an identity — so the runway is spent and the warning is gone with it.
+                // Do NOT reintroduce a warning here: a null that is merely logged is a null that
+                // gets shelved, and this is the one place that can still refuse it.
 
                 ModuleLandingOutcome outcome;
                 try

@@ -18,6 +18,15 @@ using System.Collections.Concurrent;
 // Core twin of MeshWeaver.Plugins/src/MeshWeaver.Hosting.Monolith.Test/NackReachesTheWaiterDuringTeardownTest.cs (ported 2026-09-02):
 // core's own CI cannot run the Plugins-hosted suite, so the 2026-09-02 regression of the owner-disposing
 // NACK (PR #3070) reached main unseen. Keep the two in step.
+//
+// 🚨 EDITING THIS FILE? The Plugins copy is a separate file and this comment cannot make anyone open
+// it — #3345: #3291 rewrote this twin to the no-forced-teardown contract, left the Plugins one
+// asserting the contract it had just deleted, and the pin bump a day later produced a 55-second
+// VERDICT_TIMEOUT that was filed as a core regression and bisected across five commits. What holds
+// the two together now is Plugins' TeardownTwinParityTest, which compares this body against its own
+// below the namespace line, at MW_PLATFORM_REF. It reddens in the PIN BUMP, not here — so a change
+// to this file is not done until the Plugins copy carries it too.
+// See Doc/Architecture/CrossRepoPairGate → "Shape 7's worst form".
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>

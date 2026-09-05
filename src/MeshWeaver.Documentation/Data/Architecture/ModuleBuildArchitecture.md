@@ -205,12 +205,26 @@ moved `1` → `2` in `module-build-key.py` for the same reason — the lane now 
 for the same source, so every recorded key is invalidated and no run reuses a bundle whose publish
 would be refused.
 
-**Still to arm: the registry's own 400.** `ModulePublish.Validate` accepts a manifest stating no
-identity, and `ShelveModule` shelves the null the index then advertises. Arming that refusal before
-every producer's `node-repo-module-pack.yml` pin has moved would take the fleet's publishes down
-rather than the nulls — the pin is bumped deliberately, per repo, in its own PR. Until then the
-publish endpoint logs a warning naming the package, the module and the version, which is the
-measurement the arming step reads. The criterion and the two repos it waits on are #3240.
+**Armed 2026-09-05: the registry's own 400 (#3240).** `ModulePublish.Validate` now refuses a
+manifest stating no identity, by name, through the publish route's existing 400 — so the registry no
+longer depends on its producers being correct, which is the only version of this check that is worth
+having. A registry that trusts its publishers is not a registry.
+
+It was deliberately NOT armed when the producer-side refusals landed (#3237), and the reason is the
+reusable part: arming a refusal before every producer can satisfy it takes the fleet's publishes
+down instead of the nulls. On 2026-09-03 every one of MeshWeaver.Plugins' 34 bundles still packed
+`built-against MVID (unrecorded)` (run 33773265959). The runway was a WARNING at the publish
+endpoint naming the package, module and version — a measurement, not a fix — and the arming
+criterion was that it fall silent. Both halves, measured on 2026-09-05:
+
+| half | measurement |
+|---|---|
+| every publishing repo pins `node-repo-module-pack.yml` past #3237 (`da2bb12d3`, 09-03 17:49Z) | MeshWeaver.Plugins `c41a34fda` (09-04 05:57Z), MeshWeaver.SocialMedia `fec69fc66` (09-03 21:27Z). Education and Reinsurance do not call the lane. |
+| a full publish wave from each, stating an identity | Plugins run 33941672487 (09-05 03:31Z) `built against: g7d644de95…`; SocialMedia run 33941835795 (09-05 03:27Z) `built against: cef92e9759…`. Both `publish: true`, both jobs green, so the producer-side refusal never fired. |
+
+🚨 The refusal is shape-**agnostic** on purpose: an image-pinned lane states `g<sha>`, a from-source
+lane a 32-hex MVID, and `FrameworkIdentity` documents a third (`s<hash>`). Only ABSENCE is refused.
+Narrowing it to one shape would red a lane that is stating its identity perfectly well.
 
 ## Content-addressed outputs = the module build ledger (as built, 2026-09-02)
 
@@ -760,9 +774,10 @@ producer of the same publication and is removed — a follow-up, not part of thi
   `ModuleUpdateDecision` compares the served bundle's framework identity, not the version alone.
   The producer half landed with #3211 — a bundle that cannot state what it was built against is
   refused at the packer, at the pack step and at the hand-over (see *A bundle states what it was
-  built against — or it is not published*, above). Still open:
-  arming the registry's own 400 in `ModulePublish.Validate`, which waits on every producer's lane
-  pin having moved; and pinning satellites' `MW_PLATFORM_REF` to the promoted set so keys survive
+  built against — or it is not published*, above). The registry's own 400 in
+  `ModulePublish.Validate` is **armed** as of 2026-09-05 (#3240) — it waited on every producer's
+  lane pin having moved AND on a publish wave from each stating an identity, both measured before
+  arming. Still open: pinning satellites' `MW_PLATFORM_REF` to the promoted set so keys survive
   core commits.
 * **`pack-module`, `compile-check` and test verbs inside the tester** — the last runner-side
   `dotnet`/python uses move into the image the fleet already ships.

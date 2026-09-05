@@ -42,6 +42,7 @@ instances. The family is larger, and it is worth recognising by shape.
 | **Blindness rendered as health** | a watcher whose read failure and whose "no matches" look identical | "I cannot see" is reported as "nothing is wrong" |
 | **One word covering three states** | `completed/success` over checked-and-passed, never-ran, and ran-and-did-nothing | the verdict is not the outcome |
 | **A tool that collapses several failures into one exit code** | `git cat-file -e "$sha:$path" \|\| echo ABSENT` | absent-path, bad-sha, missing-object and bad-quoting all read the same |
+| **A measurement that truncates and answers anyway** | a profiler capping at N objects and reporting the partial total | the wrong number is *plausible*, so it closes the investigation |
 | **A writer whose failure mode is a SUCCESS line** | a generator that skips its work and prints a summary anyway | nothing distinguishes "wrote it" from "declined to" |
 
 ## Eight measured instances
@@ -129,6 +130,22 @@ Three things make this the sharpest instance on the page, and its author states 
 red is self-reporting, a plausible wrong value is not. Stated as its author put it: *the fix removed
 the symptom and left a better-disguised version of the defect.*
 
+🚨 **The danger scales with how BELIEVABLE the wrong value is, and a measuring tool can supply one.**
+Profiling a live 6.8 GB portal pod, `dotnet-gcdump` silently truncated at exactly **10,000,000
+objects** and reported a **568 MB** heap. The real figure, from `dumpheap -stat`, was **49,827,806
+objects / 5,544,881,838 bytes** — under-reported by a factor of about ten, with no warning of any
+kind. And 568 MB is a *perfectly plausible* heap for a portal, so the number does not look wrong; it
+looks like an answer. Trusting it produces a confident, wrong conclusion — *the heap is fine, look
+elsewhere* — which is strictly worse than no measurement, because it closes the investigation.
+
+Same shape as an anchor emitting a meaningless-but-non-blank value, one layer down: one number
+covering *"this is the heap"* and *"this is as much of the heap as the tool chose to walk"*. **The cure
+here is not "go break the subject" but a second instrument that can DISAGREE** — which is what caught
+it. (A companion from the same session fails the honest way and is worth the contrast: SOS
+`dumpobj`/`gcroot` **segfault** on that process, so field-following had to move to ClrMD. A tool that
+crashes costs you an hour; a tool that answers plausibly costs you the conclusion.) The measurements
+are in [The Portal Heap Is Hubs](/Doc/Architecture/PortalHeapIsHubs).
+
 ### 4. A preflight that asserts a credential exists and never passes it on
 
 `main-cd.yml` asserted that `vars.PLATFORM_WEBHOOK_URL` and `secrets.PLATFORM_WEBHOOK_SECRET` were
@@ -160,6 +177,29 @@ reader than one that looks like instinct.
 
 **Rule:** report *read failure* and *no matches* as distinct states, and give every watcher its own
 control arm. A monitor that greps only for the success marker stays silent through a crash.
+
+🚨 **This entry was repeated by the author of this page, against this page, under an hour after
+writing it.** A watcher built to follow three pull requests computed `pending = count(status !=
+completed)` over the check list and called zero-pending green. On a freshly pushed head the list is
+**empty** — no checks created yet — so it reported *ALL CHECKS GREEN* for a pull request whose
+required contexts did not exist. Same shape as the four above: an absence rendered as health.
+
+The cure is the one this page already gives for CI verdicts, applied one level in — **evaluate the
+required contexts BY NAME**, so a context that is missing reports *not created yet* and can never
+read as a passing one:
+
+| state | reported as |
+|---|---|
+| context absent from the list | `not created yet` |
+| context present, not completed | `running` |
+| context present, `success` / `skipped` / `neutral` | satisfied |
+| the read itself failed | `READ-FAILED` |
+
+**The generalisation is the uncomfortable one:** *the author of an entry is not immune to it, and the
+interval between writing it and repeating it can be under an hour.* This defect is not carelessness
+and cannot be fixed by care. A control is reasoned about by the person who built it, in the model
+they built it from — which is why the second half of this page's diagnostic asks you to go and break
+the subject rather than to think harder about it.
 
 ### 6. One verdict covering three different outcomes
 

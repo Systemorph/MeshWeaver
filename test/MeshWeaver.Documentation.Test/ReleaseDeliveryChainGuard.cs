@@ -67,7 +67,10 @@ public class ReleaseDeliveryChainGuard
     /// chart, re-creating the identical silent misconfiguration one index over.
     /// </param>
     /// <param name="Consequence">What is silently lost when no deployment can set the key.</param>
-    private sealed record ChainKey(string Joint, string EnvKeyPrefix, int Slots, string Consequence);
+    /// <param name="EnvKeySuffix">Appended after the slot index, for keys that are a CHILD of a
+    /// slot rather than the slot itself (<c>…__0__SecretConfigKey</c>).</param>
+    private sealed record ChainKey(
+        string Joint, string EnvKeyPrefix, int Slots, string Consequence, string EnvKeySuffix = "");
 
     /// <summary>
     /// The chain's keys, each derived from the CONSTANT its reader owns — never a literal. A
@@ -86,6 +89,27 @@ public class ReleaseDeliveryChainGuard
             EnvForm(WebhookInbox.TargetsConfigSection) + "__", 2,
             "CD's notify-platform-update 404s on every promoted build and no release event ever "
             + "reaches the mesh");
+
+        // Joint 1b — the inbox actually CHECKS the signature on that target (#3312). Without this
+        // key the endpoint keeps the dumb contract: it stores the delivery and answers 2xx
+        // whatever the HMAC says, so a secret that has drifted between CD and the instance is
+        // byte-identical to one that matches — the exact state this ledger exists to make
+        // impossible. Both slots, for the same reason as above: the slot carrying
+        // Hosting/PlatformBuilds is not the same index on every deployment, and a declaration
+        // rendered for only __0 would leave the control instance's real slot undeclarable.
+        //
+        // 🚨 This asserts the key is RENDERABLE, not that any deployment sets it — and it must not
+        // be strengthened into "…is non-empty in values". An empty declaration is CORRECT for a
+        // slot holding a Stripe target: Stripe signs `Stripe-Signature`, and requiring this
+        // scheme there would 401 every payment delivery. What catches a MISSING declaration on the
+        // slot that needs one is the publishing lane reading the inbox's answer
+        // (`signature: not-required` → ::warning::), not this file.
+        yield return new ChainKey(
+            "the webhook inbox VERIFIES the release event's signature",
+            EnvForm(WebhookInbox.TargetsConfigSection) + "__", 2,
+            "the inbox accepts every delivery to that target unverified, so a drifted "
+            + "PLATFORM_WEBHOOK_SECRET answers 2xx and is dropped in silence downstream",
+            EnvKeySuffix: "__" + WebhookInbox.SecretConfigKeyName);
 
         // Joint 2 — the verified release fans out — is NOT a configuration key any more. Since
         // 2026-09-03 the subscriber set is data in the mesh (the Hosting/Deployment records'
@@ -112,7 +136,8 @@ public class ReleaseDeliveryChainGuard
         var values = File.ReadAllText(Path.Combine(root, ValuesAks.Replace('/', Path.DirectorySeparatorChar)));
 
         var broken = ChainKeys()
-            .SelectMany(k => Enumerable.Range(0, k.Slots).Select(i => (k, EnvKey: k.EnvKeyPrefix + i)))
+            .SelectMany(k => Enumerable.Range(0, k.Slots)
+                .Select(i => (k, EnvKey: k.EnvKeyPrefix + i + k.EnvKeySuffix)))
             .Select(x => (x.k, x.EnvKey,
                 inConfigMap: RendersKey(configMap, x.EnvKey), inValues: DeclaresKey(values, x.EnvKey)))
             .Where(x => !x.inConfigMap || !x.inValues)

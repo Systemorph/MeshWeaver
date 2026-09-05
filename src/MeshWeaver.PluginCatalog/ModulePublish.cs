@@ -47,14 +47,11 @@ public static class ModulePublish
     /// republishes under the same version and the identity is the only thing that tells that
     /// rebuild from a no-op.</para>
     ///
-    /// <para>Null here is therefore a permanent skip-and-say-so for every consumer of the bundle —
-    /// an unknown on the SERVED side cannot be healed by landing, only an unknown on the landed
-    /// side can. #3211 closes that where it is created: the packer refuses to write a bundle that
-    /// states no identity (<c>module-pack</c> exit 2) and the module-pack lane refuses to POST one.
-    /// Arming the same refusal HERE — a named 400 out of <see cref="Validate"/> — is the last step,
-    /// and it waits on the fleet: measured 2026-09-03 on MeshWeaver.Plugins run 33773265959, all 34
-    /// bundles packed <c>built-against MVID (unrecorded)</c>, so a refusal armed before every
-    /// producer's pin has moved would take the fleet's publishes down rather than the null.</para>
+    /// <para>Null here would therefore be a permanent skip-and-say-so for every consumer of the
+    /// bundle — an unknown on the SERVED side cannot be healed by landing, only an unknown on the
+    /// landed side can. #3211 closes that where it is created (the packer refuses to write such a
+    /// bundle, the lane refuses to POST one) and, since #3240, <see cref="Validate"/> refuses it
+    /// HERE too, as a named 400. So this value is never null on an accepted upload.</para>
     /// </param>
     /// <param name="Files">The module's closure: file name + bytes, entry DLL included.</param>
     public sealed record Accepted(
@@ -163,6 +160,42 @@ public static class ModulePublish
         var entry = module + ".dll";
         if (!files.Any(f => string.Equals(f.FileName, entry, StringComparison.OrdinalIgnoreCase)))
             return (null, $"the bundle carries no entry assembly '{entry}'");
+
+        // 🚨 ARMED 2026-09-05 (#3240) — the LAST refusal of #3211, and the registry's own.
+        //
+        // A bundle stating no framework identity shelves a null, the index advertises a null, and
+        // ModuleUpdateDecision (#3154) then answers "already landed — the identity could not be
+        // checked" for this module on every reconcile of every installation, FOREVER: an unknown on
+        // the SERVED side is the one landing cannot heal. The producer already refuses to pack or
+        // POST such a bundle, but a registry that trusts its producers is not a registry — this is
+        // the check that does not depend on which lane, which pin, or which repo sent the bytes.
+        //
+        // 🚨 IT WAS DELIBERATELY NOT ARMED UNTIL BOTH HALVES OF #3240'S CRITERION WERE MEASURED,
+        // because arming it early takes the fleet's publishes down instead of the nulls (measured
+        // 2026-09-03: MeshWeaver.Plugins run 33773265959 packed all 34 bundles "built-against MVID
+        // (unrecorded)"). Both halves, measured 2026-09-05:
+        //
+        //   1. every repo that publishes modules pins node-repo-module-pack.yml PAST #3237
+        //      (da2bb12d3, 09-03 17:49Z) — MeshWeaver.Plugins at c41a34fda (09-04 05:57Z) and
+        //      MeshWeaver.SocialMedia at fec69fc66 (09-03 21:27Z); Education and Reinsurance do not
+        //      call the lane at all;
+        //   2. a full publish wave from EACH completed since, `publish: true`, stating an identity:
+        //      Plugins run 33941672487 (09-05 03:31Z) "built against: g7d644de95…" and SocialMedia
+        //      run 33941835795 (09-05 03:27Z) "built against: cef92e9759…". Both publish jobs
+        //      succeeded, so the producer-side refusal never fired.
+        //
+        // Both token shapes are fine here and the check must stay shape-AGNOSTIC: an image-pinned
+        // lane states `g<sha>`, a from-source lane a 32-hex MVID, and FrameworkIdentity documents a
+        // third (`s<hash>`). The only thing that is never acceptable is ABSENCE — a value this
+        // registry would shelve as null.
+        if (string.IsNullOrWhiteSpace(manifest.FrameworkMvid))
+            return (null,
+                $"the bundle states no framework identity (manifest frameworkMvid is absent), so "
+                + $"the registry would shelve a null for '{module}' and advertise a null on the "
+                + "index — and every consumer would then answer 'already landed, the identity "
+                + "could not be checked' on every reconcile, forever (#3154, #3211). Its producer "
+                + "packs on a lane older than MeshWeaver#3211: bump that repo's "
+                + "node-repo-module-pack.yml pin and re-publish.");
 
         return (new Accepted(
             module,

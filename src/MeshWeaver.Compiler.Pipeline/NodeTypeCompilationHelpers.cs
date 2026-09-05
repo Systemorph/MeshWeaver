@@ -2745,9 +2745,15 @@ internal static class NodeTypeCompilationHelpers
     /// <param name="def">The NodeType definition as currently persisted.</param>
     /// <param name="result">The successful compile's result (assembly + store coordinates).</param>
     /// <param name="currentNodeVersion">
-    /// Fallback for <see cref="NodeTypeDefinition.LastCompiledVersion"/> when the result carries no
-    /// store version — must be the version of the node the stamp lands on (see the inline note:
-    /// the stamped version must MATCH the version the <c>IAssemblyStore</c> upload used).
+    /// The version of the node this stamp lands on.
+    ///
+    /// <para>🚨 #3333 — it is deliberately NOT the fallback for
+    /// <see cref="NodeTypeDefinition.LastCompiledVersion"/> any more, and wiring it back is the
+    /// defect. A null <c>result.Version</c> does not mean "the version is missing", it means the
+    /// <c>IAssemblyStore</c> upload did not happen — so there is no store key to name, and naming
+    /// this one claims bytes that were never written. The fallback is
+    /// <c>def.LastCompiledVersion</c>, which keeps the (collection, path, version) triple moving
+    /// together. See the inline note at the stamp.</para>
     /// </param>
     /// <param name="activityPath">The CONFIRMED compile-activity path, or null when none was created.</param>
     /// <param name="releasePath">The CONFIRMED release-node path, or null when the create didn't land.</param>
@@ -2778,7 +2784,30 @@ internal static class NodeTypeCompilationHelpers
             // (set by UploadToStoreIfNeeded — the captured node Version at compile kickoff).
             // A different version here would point activation at a store key that has no
             // bytes — TryGetAssemblyPath miss, activation falls back to the default config.
-            LastCompiledVersion = result.Version ?? currentNodeVersion,
+            //
+            // 🚨 #3333 — THE FALLBACK IS `def.`, NOT `currentNodeVersion`, and the difference is
+            // the whole defect. `result.Version` is set in exactly ONE place: the projection over
+            // a SUCCESSFUL `PutWithLocation`. Every other path out of UploadToStoreIfNeeded returns
+            // the result WITHOUT it — no assembly location, no NodeType configurations, a
+            // NullAssemblyStore, unreadable bytes, or an upload that faulted or timed out (which is
+            // deliberately non-terminal: an upload failure has never failed a compile). So a null
+            // here does not mean "we forgot the version", it means NOTHING WAS STORED.
+            //
+            // Falling back to `currentNodeVersion` then stamped the node's version AT STAMP TIME as
+            // if it were a store key, while the sibling fields beside it kept the PREVIOUS upload's
+            // address (`result.Collection ?? def.LatestAssemblyCollection`, and the same for the
+            // path and the MVID). That splits the triple that addresses one blob: old collection,
+            // old path, new version — a key the store never held. NodeTypeBatchBake states the
+            // invariant this broke in as many words: "LastCompiledVersion always names a store key
+            // that has bytes", justified by "it uploaded the node it was handed" — true only when
+            // an upload actually happened.
+            //
+            // Keeping the previous value keeps the triple COHERENT: no upload, no change to any of
+            // the three. And null stays honest — every reader already applies its own
+            // `?? node.Version` (MeshOperations, MeshDataSource, NodeTypeDataModelAreas,
+            // NodeTypeEnrichmentHelpers), so the guess lives at the read, where it is a heuristic,
+            // instead of being frozen into the node as a claim.
+            LastCompiledVersion = result.Version ?? def.LastCompiledVersion,
             LastCompilationActivityPath = activityPath,
             LatestReleasePath = releasePath ?? def.LatestReleasePath,
             ReleaseNotes = releasePath is not null ? null : def.ReleaseNotes,

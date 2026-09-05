@@ -86,6 +86,21 @@ config:
     # provisioned for anything to read the inbox — an allowlisted target with no watcher
     # stores deliveries nobody consumes.
     WebhookInbox__Targets__0: "Hosting/PlatformBuilds"
+    # 🚨 #3312 — what makes a WRONG secret VISIBLE, paired with the slot ABOVE that it describes.
+    # Naming a configuration key here tells the inbox to verify X-Hub-Signature-256 itself and
+    # answer 401 when it does not, instead of storing the delivery, answering 2xx and letting the
+    # consumer drop it unverifiable. Before this, "the secret matches" and "the secret drifted"
+    # were the SAME green POST from CD's side. It names a KEY, never a secret: the value stays in
+    # the vault-mounted Hosting:PlatformWebhookSecret.
+    #
+    # 🚨 EMPTY BY DEFAULT, AND IT MUST STAY THAT WAY. This declaration is PAIRED WITH A SLOT, and
+    # slot __0 is not the same target on every deployment: memex-cloud's record renders
+    # webhookInboxTargets ["Store/Payments", "Hosting/PlatformBuilds"], so its __0 is STRIPE.
+    # Defaulting a GitHub-style HMAC here would demand X-Hub-Signature-256 from Stripe — which
+    # signs `Stripe-Signature` — and 401 every payment delivery. Declare it per instance, in the
+    # SAME record that sets the slot (extraPortalConfig on the Hosting/Deployment record), on
+    # whichever index actually carries Hosting/PlatformBuilds.
+    WebhookInbox__Targets__0__SecretConfigKey: ""
     # A deployment that ALSO needs a second inbox target (e.g. memex-cloud additionally listens
     # on Store/Payments for Stripe) sets __1 too — never a second writer of __0. See #2235: a
     # hand-set `kubectl set env WebhookInbox__Targets__0=...` on the live Deployment permanently
@@ -93,6 +108,12 @@ config:
     # so the platform-build target silently never took effect even though the ConfigMap was
     # correct. Leave empty when only one target is needed.
     WebhookInbox__Targets__1: ""
+    # The __1 pairing, empty for the same reason. On the instance that RECEIVES platform builds
+    # (memex-cloud: __0 = Store/Payments, __1 = Hosting/PlatformBuilds) this is the slot that must
+    # name Hosting:PlatformWebhookSecret, and its record does so through extraPortalConfig. Until
+    # some instance declares it, the inbox accepts release events without checking them and both CD
+    # lanes say so on every publish: `signature: not-required`, with a ::warning:: naming this key.
+    WebhookInbox__Targets__1__SecretConfigKey: ""
     # ---- Instance branding (per-env) ----------------------------------------
     # Large Safari bookmark / Start-Page / Add-to-Dock tile (apple-touch-icon, 180×180 PNG).
     # This ships the PROJECT's own mark (Systemorph builds MeshWeaver — the chart's
@@ -186,7 +207,7 @@ config:
     #      Without it Kubernetes kills the pod mid-bake, every time, forever.
     #   2. The startupProbe must actually EXIST and point at /health — that probe
     #      is the only thing that reads this gate. A namespace with no startupProbe
-    #      (or one probing /alive or /healthz) ignores the gate completely.
+    #      (or one probing /alive, /ready or /healthz) ignores the gate completely.
     #   3. strategy.maxUnavailable MUST be 0. The gate protects a portal only by
     #      making the new pod refuse readiness; at maxUnavailable:1 with replicas:1
     #      the serving pod can be deleted first, so the gate reports and the outage

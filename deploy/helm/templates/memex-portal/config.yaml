@@ -73,7 +73,7 @@ data:
   #       NodeType, sequential, measured 2026-08-10 — ~10 min on the largest mesh we run).
   #       See probes.startup in values — turning the gate on without raising it means
   #       Kubernetes kills the pod mid-bake, every time, forever. Nothing else reads the
-  #       gate: a namespace probing /alive or /healthz ignores it entirely.
+  #       gate: a namespace probing /alive, /ready or /healthz ignores it entirely.
   #    3. strategy.maxUnavailable: 0 — the gate works by making the NEW pod refuse
   #       readiness, which protects nothing if the serving pod was already deleted.
   # PreWarm__AllowUnprovenBake: the escape hatch for the one condition that is NOT a verdict —
@@ -383,6 +383,14 @@ data:
   # binds to a TimeSpan and an empty string aborts the host in the configuration binder.
   SelfUpdate__SafetyNetCheckInterval: "{{ .Values.config.memex_portal.SelfUpdate__SafetyNetCheckInterval | default "01:00:00" }}"
   WebhookInbox__Targets__0: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0 | default "" }}"
+  # 🚨 #3312 — how a target says it is AUTHENTICATED, paired with the slot it authenticates.
+  # Names the CONFIGURATION KEY holding that target's shared HMAC (never the secret itself), and
+  # when set the inbox verifies X-Hub-Signature-256 over the raw body and answers 401 instead of
+  # storing a delivery it cannot verify. Empty = the original dumb contract, which is the ONLY safe
+  # default here: this slot is not always Hosting/PlatformBuilds, and declaring a GitHub-style HMAC
+  # on a Stripe target would 401 every Stripe delivery (Stripe signs `Stripe-Signature`, which this
+  # endpoint does not speak). Set it in the same overlay that sets the slot, never separately.
+  WebhookInbox__Targets__0__SecretConfigKey: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0__SecretConfigKey | default "" }}"
   # 🚨 #2235: a SECOND slot, because index 0 is not this template's alone to give. memex-cloud
   # hand-set WebhookInbox__Targets__0=Store/Payments directly on the Deployment (kubectl set env,
   # unrecorded, pre-dating this chart key) BEFORE the platform-release broadcast existed. Explicit
@@ -393,6 +401,11 @@ data:
   # 404'd on every promoted build with no error anywhere until #2268 made the 404 fail loud. A
   # deployment needing more than one inbox target sets __0 AND __1 (not two writers of __0).
   WebhookInbox__Targets__1: "{{ .Values.config.memex_portal.WebhookInbox__Targets__1 | default "" }}"
+  # The __1 pairing of the declaration above. 🚨 It matters most HERE: on the deployment whose __0
+  # is permanently shadowed, __1 is the slot that actually carries Hosting/PlatformBuilds, so its
+  # overlay is the one that must set this — otherwise the inbox keeps accepting release events
+  # unverified and CD reports `signature: not-required` on every publish.
+  WebhookInbox__Targets__1__SecretConfigKey: "{{ .Values.config.memex_portal.WebhookInbox__Targets__1__SecretConfigKey | default "" }}"
   # ---- Framework-release broadcast: NO subscriber slots (retired 2026-09-03) --------------
   # FrameworkBroadcast__Subscribers__0..3 used to be rendered here as the release wave's
   # subscriber list. The set is DATA IN THE MESH now — every repository a Hosting/Deployment
