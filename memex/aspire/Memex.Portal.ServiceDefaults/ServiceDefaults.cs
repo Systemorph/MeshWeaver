@@ -138,10 +138,13 @@ public static class ServiceDefaults
                 tracing.AddSource("Microsoft.Orleans.Application");
                 tracing.AddSource(builder.Environment.ApplicationName)
                     .AddAspNetCoreInstrumentation(tracing2 =>
-                        // Don't trace requests to the health endpoint
+                        // Don't trace requests to the probe endpoints — a kubelet polls all three
+                        // every few seconds for the life of the pod, and none of it is a trace
+                        // anybody reads.
                         tracing2.Filter = httpContext =>
-                            !(httpContext.Request.Path.StartsWithSegments("/health")
-                              || httpContext.Request.Path.StartsWithSegments("/alive"))
+                            !(httpContext.Request.Path.StartsWithSegments(ProbeEndpoints.Health)
+                              || httpContext.Request.Path.StartsWithSegments(ProbeEndpoints.Live)
+                              || httpContext.Request.Path.StartsWithSegments(ProbeEndpoints.Ready))
                     )
                     .AddHttpClientInstrumentation();
             });
@@ -177,8 +180,16 @@ public static class ServiceDefaults
                     build: static policy => policy.Expire(TimeSpan.FromSeconds(20))));
 
         builder.Services.AddHealthChecks()
-            // Add a default liveness check to ensure app is responsive
-            .AddCheck("self", () => HealthCheckResult.Healthy(), ["live"]);
+            // The trivial process-up check: the process is running and can execute a delegate.
+            //
+            // 🚨 It carries BOTH probe tags, and that is what keeps ProbeEndpoints.Ready
+            // non-vacuous. A MapHealthChecks whose predicate matches NOTHING answers 200 for any
+            // process that can still accept a socket — the exact blindness that let two replicas
+            // serve hung pages for three and a half hours on 2026-08-25 while /alive reported
+            // Healthy with an empty "live" set (MeshWeaver#2194). A readiness endpoint that could
+            // not fail would be that same defect, rebuilt.
+            .AddCheck("self", () => HealthCheckResult.Healthy(),
+                [ProbeEndpoints.LiveTag, ProbeEndpoints.ReadyTag]);
 
         return builder;
     }
@@ -188,10 +199,15 @@ public static class ServiceDefaults
         app.UseRequestTimeouts();
 
         // All health checks must pass for app to be considered ready
-        app.MapHealthChecks("/health");
+        app.MapHealthChecks(ProbeEndpoints.Health);
 
         // Only health checks tagged with "live" must pass for app to be considered alive
-        app.MapHealthChecks("/alive", new HealthCheckOptions { Predicate = r => r.Tags.Contains("live") });
+        app.MapHealthChecks(ProbeEndpoints.Live,
+            new HealthCheckOptions { Predicate = r => r.Tags.Contains(ProbeEndpoints.LiveTag) });
+
+        // Only health checks tagged with "ready" decide whether this pod stays in the Service.
+        app.MapHealthChecks(ProbeEndpoints.Ready,
+            new HealthCheckOptions { Predicate = r => r.Tags.Contains(ProbeEndpoints.ReadyTag) });
 
         app.MapVersionEndpoint();
         app.MapDrainEndpoint();

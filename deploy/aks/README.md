@@ -1250,7 +1250,7 @@ missing either is *false confidence* — it reports and the outage happens anywa
 
 | Must be true | Why | Check |
 |---|---|---|
-| a `startupProbe` exists **on `/health`** | that probe is the ONLY reader of the gate; no startupProbe (or one on `/alive` / `/healthz`) ignores it entirely | `kubectl -n <ns> get deploy memex-portal-deployment -o jsonpath='{.spec.template.spec.containers[0].startupProbe}'` |
+| a `startupProbe` exists **on `/health`** | that probe is the ONLY reader of the gate; no startupProbe (or one on `/alive` / `/ready` / `/healthz`) ignores it entirely | `kubectl -n <ns> get deploy memex-portal-deployment -o jsonpath='{.spec.template.spec.containers[0].startupProbe}'` |
 | `strategy.maxUnavailable: 0` | surge-first keeps the old pod serving until the new one passes; at `maxUnavailable:1` with `replicas:1` the only serving pod can be deleted BEFORE the replacement is ready | `kubectl -n <ns> get deploy memex-portal-deployment -o jsonpath='{.spec.strategy.rollingUpdate}'` |
 
 Both are rendered correctly by the chart — a `helm upgrade` restores them. A
@@ -1394,8 +1394,9 @@ after a burst of content syncs or a scheduled bake. Cause class (2026-08-25,
 MeshWeaver#2194): each NodeType publication mints a new AssemblyLoadContext and
 serving instances stay on the OLD build behind the Recycle banner, so every
 superseded ALC stays rooted — the type-hosting silos climb to tens of GB and go
-GC-bound while still answering `/alive` (both post-startup probes), so Kubernetes
-never pulls them from rotation.
+GC-bound while still answering `/ready` (the readiness probe's path since MeshWeaver#3330), so
+Kubernetes never pulls them from rotation — deliberately: eviction hands the traffic to siblings
+converging on the same ceiling. A progress-aware `/alive` restarts such a pod instead.
 
 ```bash
 az aks command invoke -g <rg> -n <cluster> --command "kubectl top pods -n <ns> --no-headers"
@@ -1618,8 +1619,9 @@ Symptom: some requests hang or serve garbled state while most succeed, typically
 content syncs or a scheduled bake. Cause class (2026-08-25, MeshWeaver#2194): each NodeType
 publication mints a new AssemblyLoadContext and serving instances stay on the OLD build behind the
 Recycle banner, so every superseded ALC stays rooted — the type-hosting silos climb to tens of GB
-and go GC-bound while still answering `/alive` (both post-startup probes), so Kubernetes never
-pulls them from rotation.
+and go GC-bound while still answering `/ready` (the readiness probe's path since MeshWeaver#3330),
+so Kubernetes never pulls them from rotation — deliberately, because eviction hands the traffic to
+siblings converging on the same ceiling. A progress-aware `/alive` restarts such a pod instead.
 
 ```bash
 az aks command invoke -g <rg> -n <cluster> --command "kubectl top pods -n <ns> --no-headers"
@@ -1639,9 +1641,11 @@ pages for three and a half hours. It is DETECTION only; the fix is still converg
 observability stack installed (`install-observability.sh`), and it can never fire on a
 single-replica namespace by construction (`max == min`).
 
-⚠️ Still open on #2194: a **progress-aware `/alive`**. Both post-startup probes watch `/alive`, a
-trivial process-up check a GC-thrashing pod answers happily. Do NOT "fix" that by pointing readiness
-back at `/health` — that re-creates the 2026-07-21 probe death-spiral. A restart threshold needs
-calibrating against real GC-pause data first, which is what the alert above starts producing.
+✅ Closed on #2194: a **progress-aware `/alive`** ships in `Memex.Portal.Distributed`
+(`ProcessProgressHealthCheck`, MeshWeaver.Plugins#1234), and readiness has been moved OFF that path
+onto `/ready` so the progress verdict restarts a pod instead of evicting it 60 s earlier onto
+siblings at the same ceiling (MeshWeaver#3330). Do NOT "fix" anything here by pointing readiness
+back at `/health` OR at `/alive` — the first re-creates the 2026-07-21 probe death-spiral, the
+second rebuilt it out of the containment. See `Doc/Architecture/ProbeSemantics`.
 
 ## Known gaps / follow-ups

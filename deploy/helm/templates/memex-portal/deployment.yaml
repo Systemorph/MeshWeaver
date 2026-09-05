@@ -286,33 +286,49 @@ spec:
             timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}
           readinessProbe:
-            # ⚠️ /alive (light: process-up), NOT /health (heavy: DB + mesh checks). /health as the
-            # readiness probe is the "probe death-spiral": under load a heavy /health times out (5s) →
-            # 3 fails → the pod is yanked from the Service endpoints → 503 flapping, and the connection
-            # churn that follows aggravates the SslStream SIGSEGV. The rollout gate stays correct
-            # because the STARTUP probe below already holds readiness on /health until the mesh is up
-            # (so no 502 to a booting pod); once up, /alive keeps a serving pod in rotation and never
-            # flaps it out. (Fixed live 2026-07-21; it regressed because the fix wasn't in this chart.)
-            # ⚠️ The trade's blind spot (2026-08-25, MeshWeaver#2194): a pod that degrades AFTER
-            # startup — GC-bound at 10-14 GB — still answers /alive, so it stays in rotation serving
-            # hung requests until a human reads `kubectl top`. Do NOT "fix" this by pointing
-            # readiness back at /health — that re-creates the death-spiral above.
+            # ⚠️ /ready (light: the trivial process-up check, tag `ready`), NOT /health (heavy: DB +
+            # mesh checks). /health as the readiness probe is the "probe death-spiral": under load a
+            # heavy /health times out (5s) → 3 fails → the pod is yanked from the Service endpoints →
+            # 503 flapping, and the connection churn that follows aggravates the SslStream SIGSEGV.
+            # The rollout gate stays correct because the STARTUP probe above already holds readiness
+            # on /health until the mesh is up (so no 502 to a booting pod); once up, /ready keeps a
+            # serving pod in rotation and never flaps it out.
+            # (Fixed live 2026-07-21; it regressed because the fix wasn't in this chart.)
             #
-            # 🚨 READINESS AND LIVENESS SHARE THIS PATH, AND THAT BOUNDS WHAT #2194 ITEM 4 MAY DO.
-            # Both probes below are `/alive`, and what /alive MEASURES is a property of the deployed
-            # image, not of this chart: core registers only the trivial "self" check (tag `live`,
-            # unconditionally Healthy), while a progress-aware handler is registered by the HOST
-            # (Memex.Portal.Distributed, in MeshWeaver.Plugins) under the same tag. So the moment a
-            # progress-aware /alive ships, READINESS becomes progress-aware too — and it trips FIRST:
-            # 10s x 3 = 30s here, against liveness's 15s x 6 = 90s. A GC-bound replica is therefore
-            # pulled from the Service three times sooner than it is restarted, and its traffic lands
-            # on siblings that converge on the SAME memory ceiling with age (measured 2026-09-04: ns
-            # memex, two 28h replicas at 9936Mi and 9409Mi, ratio 1.06). That is the 2026-07-21
-            # death-spiral rebuilt out of the item-4 fix.
-            # ⇒ A progress-aware liveness signal needs its OWN path, or readiness must move off this
-            #   one. Do not make /alive progress-aware while both probes point at it.
-            #   Full derivation: Doc/Architecture/WhyAGcBoundPodStaysInRotation.
-            httpGet: { path: /alive, port: 8080 }
+            # 🚨 THIS PATH MUST NEVER BE THE LIVENESS PATH. That is not style — it is #3330, and the
+            # chart carried the hazard here as an open warning until it fired.
+            # Both probes used to be `/alive`, and what /alive MEASURES is a property of the deployed
+            # image, not of this chart: core registers the trivial "self" check, while a
+            # PROGRESS-AWARE handler is registered by the HOST (ProcessProgressHealthCheck, in
+            # MeshWeaver.Plugins#1234) under the same `live` tag. The moment that shipped (merged
+            # 2026-09-03) readiness became progress-aware too — and readiness trips FIRST:
+            # 10s x 3 = 30s here, against liveness's 15s x 6 = 90s. So a GC-bound replica left the
+            # Service a full minute before anything restarted it, and for that minute its traffic
+            # landed on siblings converging on the SAME memory ceiling with age (measured 2026-09-04:
+            # ns memex, two 28h replicas at 9936Mi and 9409Mi, ratio 1.06). One sick replica became a
+            # cascade: the 2026-07-21 death-spiral, rebuilt out of the #2194 item-4 fix. Confirmed
+            # live on 2026-09-05 — both probes on /alive, readiness 30s, liveness 90s.
+            #
+            # The fix is SEPARATE PATHS, so the two probes can be given the different SEMANTICS they
+            # have always been documented as having. /ready runs only checks tagged `ready` — an
+            # ALLOW-list, deliberately: a deny-list (everything not tagged `live`) would sweep the
+            # untagged DB and mesh checks into readiness and rebuild the 2026-07-21 spiral instead.
+            # Tag a check `ready` only when failing it should hand this pod's traffic to its
+            # siblings; tag it `live` when failing it should restart this pod. See
+            # memex/aspire/Memex.Portal.ServiceDefaults/ProbeEndpoints.cs (the paths and the tags are
+            # declared there, once) and Doc/Architecture/ProbeSemantics.
+            # ProbeSemanticsGuard and ProbeSeparationTest hold this chart and that file to each other.
+            #
+            # 🚨 ROLLOUT ORDER: THE IMAGE FIRST, THE CHART SECOND. /ready is mapped by the portal
+            # IMAGE (MapDefaultEndpoints), so `helm upgrade` with this chart against a pod running an
+            # image from before 2026-09-05 probes a path that 404s — and a 404 readiness probe takes
+            # EVERY replica out of the Service. The fleet's normal order is already the safe one (CD
+            # rolls images continuously with `set image`; a helm upgrade is always a deliberate human
+            # action, and self-update cannot run one), but confirm the running image is at or past
+            # the commit that added /ready before upgrading a namespace that has been pinned.
+            #   kubectl -n <ns> exec deploy/memex-portal-deployment -- \
+            #     curl -sf -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/ready
+            httpGet: { path: /ready, port: 8080 }
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
@@ -325,17 +341,20 @@ spec:
             # share has stayed above 60% for five consecutive checks", while the readinessProbe
             # comment ten lines above called a progress-aware check an open design item. Both were
             # committed at once and a status report quoted the stale half as current. The truth is
-            # image-dependent: core registers ONLY the trivial "self" check on tag `live`; any
-            # progress-aware handler comes from the host (Memex.Portal.Distributed, in
+            # image-dependent: core registers ONLY the trivial "self" check (tags `live` + `ready`);
+            # any progress-aware handler comes from the host (Memex.Portal.Distributed, in
             # MeshWeaver.Plugins). Measured 2026-09-04: /alive answered `Healthy` on a replica
             # holding a 10 065 MiB managed heap — which is consistent with either handler, since its
             # pause share was low at that moment, so it is not evidence about the image.
             #
-            # 🚨 readinessProbe IS pointed here — see the hazard block on it above. A readiness check
-            # that fails under load removes the pod, and the survivors inherit its traffic (the
-            # 2026-07-21 death-spiral). Liveness restarting ONE pegged replica has no such feedback
-            # loop, but liveness and readiness cannot be given different SEMANTICS while they share
-            # a PATH. That is the open half of #2194 item 4.
+            # 🚨 readinessProbe IS NOT pointed here, and MUST NOT BE (#3330 — it was, from the
+            # 2026-07-21 fix until 2026-09-05). A readiness check that fails under load removes the
+            # pod, and the survivors inherit its traffic (the 2026-07-21 death-spiral). Liveness
+            # restarting ONE pegged replica has no such feedback loop — but liveness and readiness
+            # cannot be given different SEMANTICS while they share a PATH, so pointing readiness
+            # here converts every progress-aware verdict into an eviction 60 s before the restart it
+            # is supposed to trigger. Readiness has its own path (/ready) and its own tag; keep it
+            # that way. ProbeSemanticsGuard fails the build if these two paths are ever equal.
             #
             # Ready-but-degraded triage: `kubectl top pods -n <ns>`. Two alerts in
             # values.observability.yaml watch for it and they are loud at opposite ends of the

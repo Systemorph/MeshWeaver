@@ -31,6 +31,9 @@
 #   5. a PDB uses maxUnavailable, never minAvailable          minAvailable is not scale-invariant
 #   6. a PDB implies a replica floor > 1                      over one pod it blocks all or evicts all
 #   7. a ScaledObject implies strategy.maxUnavailable: 0      surge-first, or the roll drops traffic
+#   8. every values key the platform must let a deploy set is actually RENDERED, and never blank
+#   9. a key whose consumer parses it must never render BLANK   absent is fine; blank throws at bind
+#  10. readiness and liveness probe DIFFERENT paths           one path cannot answer two questions
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
