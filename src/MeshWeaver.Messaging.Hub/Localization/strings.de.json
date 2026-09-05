@@ -202,6 +202,8 @@
   "chat.allocatingAgent": "Agent wird zugewiesen…",
   "chat.creatingConversation": "Unterhaltung wird erstellt und weitergeleitet",
   "chat.composerPlaceholder": "Nachricht eingeben… Mit @ auf Nodes verweisen",
+  "chat.editPromptPlaceholder": "Nachricht eingeben…",
+  "chat.authorEditing": "{0} (wird bearbeitet)",
   "chat.you": "Du",
   "chat.assistant": "Assistent",
   "chat.streaming": "Wird übertragen…",

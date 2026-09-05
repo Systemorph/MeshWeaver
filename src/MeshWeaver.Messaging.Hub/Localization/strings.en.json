@@ -202,6 +202,8 @@
   "chat.allocatingAgent": "Allocating agent…",
   "chat.creatingConversation": "Creating conversation and redirecting",
   "chat.composerPlaceholder": "Type a message... Use @ to reference nodes",
+  "chat.editPromptPlaceholder": "Type your message...",
+  "chat.authorEditing": "{0} (editing)",
   "chat.you": "You",
   "chat.assistant": "Assistant",
   "chat.streaming": "Streaming...",
