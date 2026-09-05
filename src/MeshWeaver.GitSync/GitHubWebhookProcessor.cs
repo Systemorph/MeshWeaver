@@ -605,7 +605,22 @@ public sealed class GitHubWebhookProcessor
                 {
                     // Never throw: GitHub retries a non-2xx delivery, so a write failure would turn
                     // into a delivery storm. Surface it and report "nothing recorded".
-                    logger?.LogWarning("Recording build completion at {Path} failed: {Error}", path, d.Message.Error);
+                    //
+                    // 🚨 The line NAMES WHAT THE DROP COST, because nothing else will (#3374). The
+                    // comment below states the invariant this path breaks — the record and the sync
+                    // "hang off this one green-build event so they cannot disagree about what
+                    // shipped" — and here they disagree: neither happened, GitHub is answered 200 so
+                    // it will not redeliver, and no other lane retries this. A reader who finds only
+                    // "recording … failed" has to derive all of that from the source; 154 of these
+                    // were logged on memex-cloud in one week and every one of them cost that
+                    // derivation. The sibling failure path below already states its outcome
+                    // ("recorded, but triggering the sync failed"); this one now meets the same bar.
+                    logger?.LogWarning(
+                        "Recording build completion at {Path} failed: {Error}. The green build of "
+                        + "{Repo} at {Sha} is NOT recorded AND the sync it authorises did NOT run. "
+                        + "GitHub is answered 200, so there is no redelivery, and nothing retries "
+                        + "this elsewhere — the build fact is lost unless someone replays it.",
+                        path, d.Message.Error, repoUrl, headSha);
                     return Observable.Return(0);
                 }
                 // The build record is the CI gate's verdict; the import is what the verdict authorises.
