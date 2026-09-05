@@ -79,6 +79,54 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
 random, and an aggregate hides that completely — one replica at a steady 40/h next to five at zero
 is a different bug from six replicas at 7/h.
 
+#### 🚨 `since=` is SILENTLY IGNORED — always write `start`/`end`
+
+The Loki running here is **2.6.1** (built 2022-07-18), which predates `since` on `query_range`. It
+does not reject the parameter; it **ignores** it and falls back to the endpoint's default window of
+**one hour**. So `since=168h` does not ask for a week and get trimmed — it asks for nothing, and
+gets the last hour:
+
+| Query over `{namespace="memex-cloud"}` | Oldest line it can see |
+|---|---|
+| `since=168h`, `direction=forward&limit=1` | **1.0 h** ago |
+| *no time parameters at all*, same otherwise | **1.0 h** ago — within 36 s of the line above |
+| `start`/`end` as explicit ns, same otherwise | **167 h** ago — the whole window |
+
+Rows one and two landing on the same window is the proof: the parameter is inert, not clipped.
+
+**This is not a limit you can raise.** The cluster's limits are `max_query_lookback: 0s` (no
+lookback cap at all) and `max_query_length: 30d1h`, against `retention_period: 31d` — nothing was
+capping anything. A reading that blames a cap will send the next person to raise a bound that is
+already unlimited.
+
+The consequence is a **false zero that looks exactly like a real one**: you write `since=72h`, get
+`0` lines, and report three days of silence that you never queried. This has already happened here
+and nearly parked an issue on it.
+
+**The control — run it every time, alongside the query, never instead of it:** ask the same
+selector for its *oldest* visible line and check the age against the window you meant to search.
+
+```bash
+END=$(date -u +%s); START=$((END - 168*3600))          # the window you actually mean
+
+az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+ "curl -sG 'http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/query_range' \
+    --data-urlencode 'query={namespace=\"memex-cloud\"}' \
+    --data-urlencode 'start=${START}000000000' \
+    --data-urlencode 'end=${END}000000000' \
+    --data-urlencode 'direction=forward' \
+    --data-urlencode 'limit=1'" -o tsv --query "logs"
+```
+
+`direction=forward` is what makes this a control: the default is `backward`, which returns the
+*newest* entries, so it reports the freshness of the stream no matter how small the window really
+was. Forward returns the oldest, which is the only end that can expose a truncated window. Bounds are
+nanoseconds, hence the `000000000` suffix; RFC3339 works too, but mixing the two invites the same
+silent-default failure this section is about.
+
+A zero without that control beside it is not a measurement, and per the rule at the top of this page
+it cannot license a "not happening" verdict.
+
 ### Prometheus — the metric seam, and its rules
 
 Three endpoints, and the last two are the ones people forget:
@@ -213,6 +261,7 @@ example 1. Three issues filed as unrelated were one degradation.
 | Probing a load-balanced host once | "it is fixed" | a per-replica fault, still live |
 | Attributing to a stale topology | "restarted the app" | a remediation on something serving no traffic |
 | `python3` inside `--command` | `not found` | a silently empty result |
+| Loki `since=` on 2.6.1 | "nothing in 168 h" | a false zero over the last **1 h** |
 
 ## What a verdict must contain
 
