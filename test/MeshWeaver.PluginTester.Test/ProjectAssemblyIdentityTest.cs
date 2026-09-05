@@ -252,6 +252,25 @@ public class ProjectAssemblyIdentityTest : IDisposable
         name.Version.Should().Be(new Version(2, 0, 0, 0));
     }
 
+    /// <summary>
+    /// A present-but-EMPTY global is not an override: the evaluator ignores empty values, so treating
+    /// it as one would fall through to the SDK derivation and defeat the flag without a word.
+    /// </summary>
+    [Fact]
+    public async Task BindToImageTreatsAnEmptyGlobalAsNotSupplied()
+    {
+        var project = Library("    <Nullable>enable</Nullable>");
+        var image = AssemblyName.GetAssemblyName(Path.Combine(AppDirectory(), "MeshWeaver.ShortGuid.dll")).Version!;
+
+        var (name, _) = await Emit(OptionsFor(project) with
+        {
+            BindToImage = true,
+            Properties = new Dictionary<string, string> { ["AssemblyVersion"] = "", ["FileVersion"] = "  " },
+        });
+
+        name.Version.Should().Be(image);
+    }
+
     /// <summary>Without the flag the evaluator keeps its SDK-parity semantics: the props literal wins.</summary>
     [Fact]
     public async Task WithoutBindToImageThePropsLiteralStillWins()

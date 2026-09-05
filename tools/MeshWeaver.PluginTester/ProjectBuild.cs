@@ -336,7 +336,10 @@ public static class ProjectBuild
         var kept = new List<string>(2);
         foreach (var name in new[] { "AssemblyVersion", "FileVersion" })
         {
-            if (bound.TryGetValue(name, out var explicitValue))
+            // Present-but-empty (`-p:AssemblyVersion=`) is NOT an override: the evaluator ignores an
+            // empty value (`Length: > 0`) and would fall through to the SDK derivation, defeating the
+            // flag in a way no log line would name. Only a value that would actually be used counts.
+            if (bound.TryGetValue(name, out var explicitValue) && !string.IsNullOrWhiteSpace(explicitValue))
                 kept.Add($"{name}={explicitValue}");
             else
             {
