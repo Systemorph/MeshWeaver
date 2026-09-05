@@ -133,6 +133,35 @@ In practice that means the following substitutions:
 
 A hand-rolled `.Result` / `.Wait()` / `.GetAwaiter().GetResult()` in a test body is the failure mode from the other direction — it holds the sync-context thread and bypasses the pooled subscribe. Always go through `.Should()`.
 
+### 2.1 A settled assertion has already unsubscribed
+
+**When the `await` returns, the assertion is no longer a subscriber.** You may rely on that with no
+grace period, no poll and no retry — which matters whenever the very next thing the test measures is
+*"is anything still watching this?"*:
+
+```csharp
+await Cache.GetStream(path, options).Materialize().Should().Match(n => n.Kind == NotificationKind.OnError);
+
+// Legitimate: the only subscriber was the assertion above, and it is gone.
+Cache.ReleaseIfUnwatched(path).Should().BeTrue();
+```
+
+That question is common — a refcounted cache entry that may only be reclaimed unwatched, a released
+claim, an idle sweep that skips a live path — and until 2026-09-05 the guarantee did not hold.
+`ReactiveWait.First` disposed as a **continuation on the settled task**, which structurally cannot
+get there first: the task carries `RunContinuationsAsynchronously`, so `TrySetResult` queues the
+awaiting test immediately, while `Take(1)` disposes its upstream from inside `ForwardOnCompleted` —
+*after* it has pushed the value into the handler. The unsubscribe was always last, by a few
+instructions, and a loaded runner is enough to lose that race.
+`ChangeFeedResetReleasesUpstreamTest.ControlArm_ReleaseIfUnwatched_…` did lose it: the entry it asked
+the cache to release was pinned by the assertion that had just returned. The wait now disposes inside
+the handler, ahead of the settle; `AssertionUnsubscribesBeforeItSettlesTest` pins it.
+
+The converse still holds and is deliberate: a fault arriving **after** a wait has settled can no
+longer be carried by the task, so it is traced rather than dropped — never rethrown into an unrelated
+test, and never left to surface on the finalizer as an `UnobservedTaskException` (xUnit v3 escalates
+those to a Catastrophic failure that poisons the next class).
+
 **The mirror-image mistake is dropping the `await`.** `obs.Should().Emit();` as a bare statement is a discarded `Task<T>`: it subscribes and returns immediately, so the test asserts nothing and proceeds on a race. In an expression position the compiler usually catches it (`Task<MeshNode?>` will not bind to `MeshNode?`), but as a statement it is silent.
 
 ---
