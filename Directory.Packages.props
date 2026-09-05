@@ -123,6 +123,7 @@
          measured in a restore graph — so it silently swaps the native engine out from under the
          pin below and the CVE fix stops being the thing supplying the engine. #3342 pinned it and
          was withdrawn for exactly this. -->
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
     <PackageVersion Include="ModelContextProtocol" Version="1.4.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.2.0" />
     <PackageVersion Include="ModelContextProtocol.Core" Version="1.2.0" />
