@@ -1037,13 +1037,14 @@ jobs:
           # on Plugins#1371's second run and passed on its first — the same tester, the same image
           # (measured: both print the flag when run by hand). A probe that swallows the output it
           # judges also cannot say WHY it failed, which is the other half of this shape.
-          set +e
-          usage=$(docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" -e HOME=/tmp \
-                    -v "$tester_app:/tester:ro" --entrypoint dotnet "$img" \
-                    /tester/mw-plugin-test.dll build-project --help 2>&1)
-          probe_rc=$?
-          set -e
-          if [ "$probe_rc" -ne 0 ]; then
+          # `if out=$(…)` captures output AND exit status without toggling errexit — the shape the
+          # framework-identity probe below already uses.
+          if usage=$(docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" -e HOME=/tmp \
+                       -v "$tester_app:/tester:ro" --entrypoint dotnet "$img" \
+                       /tester/mw-plugin-test.dll build-project --help 2>&1); then
+            :
+          else
+            probe_rc=$?
             printf '%s\n' "$usage" | tail -n 20
             echo "::error::the pinned tester could not run inside the pinned image (exit $probe_rc, output above) — 'build-project --help' is the cheapest thing it does, so this is the tester app (tester-image-digest $TESTER_DIGEST, restored at $tester_app) or the platform image ($DIGEST), not the flag. A cache entry restored broken reads exactly like this: delete the tester-app-<digest> cache entry and rerun before moving any pin."
             exit 1
