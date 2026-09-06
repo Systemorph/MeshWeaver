@@ -424,6 +424,14 @@ Empty `secrets` renders nothing, so an environment that has not opted in is byte
 before. With any entry the vault, tenant and identity are **required** and a half-declared block
 fails `helm template` naming the key. Names only: no value is ever in values or in the render.
 
+An instance that reads **more than one** vault-secret set — `memex` runs the hand-made `memex-kv`
+alongside the chart-owned `memex-portal-keyvault` — declares the rest under `keyVaultSecretClasses`,
+a list of the same shape. Order is precedence, and **one vault object may serve several keys**: that
+is how one credential lands under both `PluginCatalog__RegistryToken` and
+`PluginCatalog__Registries__0__Token`. Why a single slot was a data-loss bug, and the other two
+layers a record could not previously see, are in
+[Deployment env layers](/Doc/Architecture/DeploymentEnvLayers).
+
 🚨 **Why it moved into the chart.** Until then every `SecretProviderClass` in the fleet was a
 hand-made object — `kubectl apply`-ed once from a laptop, present in no repository, rendered by
 nothing — and the values file could only point at it by name (`extraEnvFrom` / `extraVolumes`,
