@@ -228,6 +228,32 @@ was closing. That fault reached `ClassifyPatchException` — the ONE funnel ever
 fault passes through — and fell out of its `_ =>` arm as `Unknown`. The writer therefore reported a
 **lost write for a patch that had committed**, and the installer failed the package.
 
+### 🚨 Count the base rate before naming a cause
+
+The obvious story — *"a package root is disposed mid-install under a reconcile"* — is what the
+symptom looks like, and it is **falsified by the run that sealed**. Counting the four bake jobs, all
+with per-request tracing on (`handler-side fate` present in every one, so no count below is a
+missing denominator):
+
+| bake job | verdict | `[QUIESCE-TIMEOUT]` | `reconcile failed … disposed before the response arrived` | `VERDICT_TIMEOUT` |
+|---|---|---:|---:|---:|
+| core `main-cd` #7937 | FAILED `install: Chess` | 6 | 10 | **5** |
+| core `main-cd` **#7938** | **SEALED** | **10** | **12** | **0** |
+| core `main-cd` #7941 | FAILED `install: Hosting` | 5 | 8 | **0** |
+| Plugins #1422 gate | FAILED `idempotence: Chess` | 3 | 7 | **10** |
+
+**The root being recycled under an in-flight reconcile is at its MAXIMUM in the run that sealed.** It
+is normal, it is answered (the requester gets a typed `HubDisposedBeforeResponseException`), and it
+is not the cause. What separates a seal from a failure is the third column: a write that reached no
+verdict at all.
+
+Which also says the two failures are not one bug. #7937 and the gate run are this page's defect.
+**#7941 is not**: it has zero unanswered write verdicts and instead carries two
+`JsonSynchronizationStream … resubscribe failed` lines — zero in the sealed control — whose parked
+stream leaves the *outer* `CreateOrUpdateNodeRequest` with no terminal at all, one layer above the
+verdict watcher. That is its own defect, tracked separately, and no amount of correct classification
+here would have sealed that run.
+
 Fixing only the silence makes this *worse-looking, not better*: before the fault was caught at all
 (#2543) the writer burned the full 31 s `WriteVerdictBound` and reported `OwnerUnreachable`; after,
 it got a prompt `Unknown`. Same failed install, 31 seconds sooner.
