@@ -155,22 +155,70 @@ public static class BakeOutput
     }
 
     /// <summary>
-    /// One compiled type's bundle entry: read the stamped record back (a replay — the compile gate
-    /// already saw it settle), resolve the bytes the compile put in the run's assembly store, and
-    /// bind them to the node path plus the source snapshot the compile consumed.
+    /// Why this record is NOT yet the settled one the bake may ship from, or <c>null</c> when it is.
+    ///
+    /// <para>🚨 The bake used to read the FIRST record it saw and treat it as settled — "a replay,
+    /// the compile gate already saw it settle". It had not (MeshWeaver#3370, #3333): the package
+    /// installer requests a RELEASE for every type it installs, and
+    /// <c>ObserveNodeTypeRelease</c> completes when the trigger has been WRITTEN, not when the
+    /// compile it starts has finished — so the gate's report, and the bake behind it, run while
+    /// that compile is in flight. Its upload lands under a NEWER store version, the file-system
+    /// store evicts superseded versions at write, and the still-old record then names bytes the
+    /// store no longer holds: <i>"claims a usable build at v7 but the run's assembly store has NO
+    /// bytes for it"</i>. Reading a settled record closes that window at its source; the claim and
+    /// the payload are read as one state.</para>
+    ///
+    /// <para>Settled means: the compile reached <see cref="CompilationStatus.Ok"/>, no compile is
+    /// in flight (<see cref="NodeTypeDefinition.DispatchedBuildInputs"/> is cleared on every
+    /// terminal status, #3390), and no release request is waiting for the watcher — the same
+    /// pending test the release watcher itself applies.</para>
+    /// </summary>
+    internal static string? NotYetSettled(NodeTypeDefinition def)
+    {
+        if (def.CompilationStatus is not CompilationStatus.Ok)
+            return $"CompilationStatus={def.CompilationStatus?.ToString() ?? "(null)"}";
+        if (def.DispatchedBuildInputs is not null)
+            return $"a compile is in flight (DispatchedBuildInputs={def.DispatchedBuildInputs})";
+        if (def.RequestedReleaseAt is { } req
+            && (def.LastReleaseRequestHandledAt is null || req > def.LastReleaseRequestHandledAt.Value))
+            return $"a release request is pending (RequestedReleaseAt={req:O}, "
+                   + $"LastReleaseRequestHandledAt={def.LastReleaseRequestHandledAt?.ToString("O") ?? "(null)"})";
+        return null;
+    }
+
+    /// <summary>
+    /// One compiled type's bundle entry: wait for the SETTLED record (see
+    /// <see cref="NotYetSettled"/>), resolve the bytes the compile put in the run's assembly
+    /// store, and bind them to the node path plus the source snapshot the compile consumed.
     /// </summary>
     private static IObservable<BundleWriter.AssemblyEntry> CollectOne(
         IWorkspace workspace,
         IAssemblyStore store,
         IIoPool pool,
         string typePath)
-        => workspace.GetMeshNodeStream(typePath)
+    {
+        string? lastReason = null;
+        return workspace.GetMeshNodeStream(typePath)
             .Where(node => node is not null)
-            .Take(1)
-            .Timeout(ReadBudget)
-            .SelectMany(node =>
+            .Select(node => (Node: node!, Def: node!.ContentAs<NodeTypeDefinition>(workspace.Hub.JsonSerializerOptions)))
+            // The record must be SETTLED before it names the bytes: a compile still in flight
+            // will re-stamp it, and the store may already have moved past what it names.
+            .Where(x =>
             {
-                var def = node!.ContentAs<NodeTypeDefinition>(workspace.Hub.JsonSerializerOptions);
+                if (x.Def is null) { lastReason = "content is not a NodeTypeDefinition"; return false; }
+                lastReason = NotYetSettled(x.Def);
+                return lastReason is null;
+            })
+            .Take(1)
+            .Timeout(ReadBudget, Observable.Defer(() => Observable.Throw<(MeshNode Node, NodeTypeDefinition? Def)>(
+                new InvalidOperationException(
+                    $"bake: '{typePath}' did not settle within {ReadBudget.TotalSeconds:0}s — last seen: "
+                    + $"{lastReason ?? "no record"}. The bake ships only a record whose compile has reached "
+                    + "its terminal state and whose release requests are handled (MeshWeaver#3370)."))))
+            .SelectMany(x =>
+            {
+                var node = x.Node;
+                var def = x.Def;
                 if (def?.LastCompiledVersion is not { } version)
                     throw new InvalidOperationException(
                         $"bake: '{typePath}' settled at CompilationStatus.Ok but records no "
@@ -216,6 +264,7 @@ public static class BakeOutput
                             }));
                     });
             });
+    }
 
     /// <summary>
     /// The live source set's fingerprint for one NodeType (#2813) — the mesh-driven producer's half
