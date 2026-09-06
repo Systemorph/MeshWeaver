@@ -159,6 +159,22 @@ data:
   Notifications__Retention__Enabled: "{{ .Values.config.memex_portal.Notifications__Retention__Enabled | default "true" }}"
   Notifications__Retention__MaxAge: "{{ .Values.config.memex_portal.Notifications__Retention__MaxAge | default "90.00:00:00" }}"
   Notifications__Retention__MaxDeletionsPerRun: "{{ .Values.config.memex_portal.Notifications__Retention__MaxDeletionsPerRun | default "200" }}"
+  {{- /* The plan EVERY viewer of this instance is on (MeshWeaver.Plugins, AI/ModelCreditGate).
+         Set it and subscriptions are not read at all; leave it unset and the viewer's own
+         subscription decides, falling back to `free`. For a portal whose users are staff rather
+         than customers — memex.systemorph.com — naming `enterprise` here is what "this is not a
+         shop" means, and it beats minting a subscription per person that must be re-minted for
+         every new one.
+
+         🚨 SAME RULE AS THE FEED KEYS BELOW: it must exist HERE or it is silently dropped, and the
+         failure looks like success — the overlay says `enterprise`, the key never reaches the pod,
+         every viewer stays on `free`, and the knob LOOKS set. `check-config-key-coverage.py` is
+         what catches that, and it caught exactly this key on 2026-09-06.
+
+         Empty means "use subscriptions", which is also what a ConfigMap renders for an overlay that
+         does not set it — so no Helm `default` may arm this. Defaulting it the other way would put
+         every viewer of any instance carrying a stray blank onto a plan nobody chose. */}}
+  ModelCredit__InstanceTier: "{{ .Values.config.memex_portal.ModelCredit__InstanceTier | default "" }}"
   {{- /* The model-credit FX rate feed (MeshWeaver.Plugins, AI/ModelCreditRateFeed). A daily
          download that keeps Admin/ModelCredit/_Rate-{FROM}-{TO} current from a published reference
          feed, so the credit meter can fold a USD-priced round against a CHF allowance.
