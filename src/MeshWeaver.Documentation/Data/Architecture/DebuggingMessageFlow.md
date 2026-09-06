@@ -245,7 +245,10 @@ after it, on both hops, and could not say which wait it was in):
 | `PATCH_MERGE_DEFERRED cold-store` | the owner was activating cold; the retry re-arms once the store loads (`deferred-retry`) |
 | `PATCH_MERGE_STAMPED v=… refused=…` and nothing after | the merge committed on the executor but the echo CONTAINING it never reached the ack watcher — the reduced stream is not emitting |
 | `PATCH_MERGE_NOCHANGE refused=…` | the merge changed nothing (a no-op or a fully refused write); the verdict follows immediately |
-| `PATCH_ECHO_SEEN` and nothing after | the commit echo arrived; the wait is the durable flush (storage behind) — `[PatchAck] FLUSH_OUTLIVED_BOUND` names the same wait from the log side |
+| `PATCH_ECHO_SEEN` and nothing after | the commit echo arrived and the flush's `Subscribe` **never returned** — the storage write chain blocked the thread the echo arrived on, so the 10 s bound timer (armed only after that call) never existed. 🚨 Measured 2026-09-06 (#2543, Reinsurance gate 34044287799): twelve stalls ended here with **no** `PATCH_ACK`, **no** `FLUSH_OUTLIVED_BOUND` — the earlier reading of this row ("the wait is the durable flush, the bound names it") was FALSE, the bound never fired |
+| `PATCH_FLUSH_SUBSCRIBED` | the flush's `Subscribe` returned; a synchronous flush has acked before this, so `PATCH_ACK` may precede it |
+| `PATCH_FLUSH_BOUND_ARMED` and nothing after | the flush is in flight AND the bound timer exists, yet neither produced a verdict — the bound's scheduler (`Scheduler.Default`, the thread pool) never ran the callback: read the `[STALE-CALLBACK]` line's `[pool threads=… pendingWork=…]` — a pinned thread count with a large pending count is a starved pool |
+| `PATCH_FLUSH_BOUND_FIRED` | the bound expired before the flush answered; `[PatchAck] FLUSH_OUTLIVED_BOUND` is the same event from the log side and `PATCH_ACK ok` follows — the commit is acked, the flush keeps running |
 | `PATCH_ACK ok` / `PATCH_ACK nack=<code>` | the owner posted its verdict |
 
 `NoteRequestStage` is a no-op unless something is awaiting that id, so it is free to call

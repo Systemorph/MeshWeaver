@@ -1261,7 +1261,8 @@ public static class DataExtensions
         string hubPath,
         Func<bool> ownerIsShuttingDown,
         ILogger? logger = null,
-        System.Reactive.Concurrency.IScheduler? flushBoundScheduler = null)
+        System.Reactive.Concurrency.IScheduler? flushBoundScheduler = null,
+        Action<string>? noteStage = null)
         => commitEcho
             .WhenCompletesEmpty(() =>
             {
@@ -1344,10 +1345,18 @@ public static class DataExtensions
                                 }
                                 ackOnce(false, ClassifyPatchException(ex, hubPath));
                             });
+                    // The Subscribe above returned: the storage write chain did not block the thread the
+                    // echo arrived on. A trail that ends at PATCH_ECHO_SEEN without this stage names a
+                    // flush whose Subscribe never returned (MeshWeaver#2543, arm 1). A synchronous flush
+                    // has already acked by now, so PATCH_ACK may legitimately precede this stage.
+                    noteStage?.Invoke("PATCH_FLUSH_SUBSCRIBED");
                     bound.Disposable = Observable
                         .Timer(flushTimeout, flushBoundScheduler ?? System.Reactive.Concurrency.Scheduler.Default)
                         .Subscribe(_ =>
                         {
+                            // The bound's scheduler ran the callback; a trail ending at BOUND_ARMED without
+                            // this stage names a scheduler that never ran it (arm 2: a starved pool).
+                            noteStage?.Invoke("PATCH_FLUSH_BOUND_FIRED");
                             if (!ClaimVerdict()) return;
                             logger?.LogWarning(
                                 "[PatchAck] FLUSH_OUTLIVED_BOUND path={Path} bound={BoundMs}ms — the merge "
@@ -1358,6 +1367,9 @@ public static class DataExtensions
                         });
                     // ONE registration for the leg, as before: the flush subscription and the bound
                     // timer live and die together with the owner hub.
+                    // The bound timer exists from here on; if the flush is still in flight, the verdict
+                    // is now owed by the flush OR by the bound's scheduler — never by nothing.
+                    noteStage?.Invoke("PATCH_FLUSH_BOUND_ARMED");
                     registerForDisposal(new CompositeDisposable(flushSub, bound));
                 },
                 ex => ackOnce(false, ClassifyPatchException(ex, hubPath)));
@@ -1952,7 +1964,8 @@ public static class DataExtensions
                         // caller's watch already gone, standing aside converts an answerable write into
                         // silence — so answer now, on whatever transport is still open.
                         () => hub.IsShuttingDown && lateVerdicts is not null && lateVerdicts.IsAdmissible(request.Id),
-                        hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"));
+                        hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"),
+                        noteStage: stage => hub.NoteRequestStage(request.Id, stage));
                     hub.RegisterForDisposal(postSub);
 
                     // Route via the hub's DataChangeRequest pipeline — the workspace
@@ -2097,7 +2110,8 @@ public static class DataExtensions
             // caller's watch already gone, standing aside converts an answerable write into
             // silence — so answer now, on whatever transport is still open.
             () => hub.IsShuttingDown && lateVerdicts is not null && lateVerdicts.IsAdmissible(request.Id),
-            hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"));
+            hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"),
+            noteStage: stage => hub.NoteRequestStage(request.Id, stage));
         hub.RegisterForDisposal(postSub);
         // Registered AFTER postSub so the composite disposes the watcher FIRST, then this NACK
         // claims the gate — an unacked in-flight patch always gets a terminal, never silence.

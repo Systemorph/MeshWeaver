@@ -217,6 +217,54 @@ public class PatchAckTotalityTest
         flush.HasObservers.Should().BeFalse("Take(1) completes on the flush's own emission");
     }
 
+    /// <summary>
+    /// MeshWeaver#2543: a trail that ended at <c>PATCH_ECHO_SEEN</c> with no <c>PATCH_ACK</c> and no
+    /// <c>FLUSH_OUTLIVED_BOUND</c> could not say whether the flush's Subscribe never returned or the
+    /// bound's scheduler never ran. The watcher now names each step: SUBSCRIBED once the storage
+    /// chain's Subscribe returns, BOUND_ARMED once the timer exists, BOUND_FIRED when the scheduler
+    /// runs it. Driven on a virtual clock. A slow flush therefore reads SUBSCRIBED → BOUND_ARMED →
+    /// (bound) → BOUND_FIRED, and the ack follows the firing.
+    /// </summary>
+    [Fact]
+    public void ASlowFlush_NamesSubscribedThenBoundArmed_ThenBoundFiredBeforeTheAck()
+    {
+        using var h = new Harness();
+        var flush = new Subject<bool>();
+        var clock = new TestScheduler();
+        var stages = new List<string>();
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Return(42), _ => flush, FlushTimeout, (ok, err) => { stages.Add(ok ? "ACK" : "NACK"); h.AckOnce(ok, err); },
+            h.Register, HubPath, () => false, logger: null, flushBoundScheduler: clock, noteStage: stages.Add);
+        stages.Should().Equal(new[] { "PATCH_FLUSH_SUBSCRIBED", "PATCH_FLUSH_BOUND_ARMED" },
+            "the Subscribe returned and the timer exists — a trail stopping before either names its own arm");
+        clock.AdvanceBy(FlushTimeout.Ticks);
+        stages.Should().Equal(new[] { "PATCH_FLUSH_SUBSCRIBED", "PATCH_FLUSH_BOUND_ARMED", "PATCH_FLUSH_BOUND_FIRED", "ACK" },
+            "the scheduler ran the bound, and the commit was acked on it");
+        h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null));
+    }
+
+    /// <summary>
+    /// A flush that answers synchronously on Subscribe acks BEFORE the SUBSCRIBED stage is recorded —
+    /// the order the doc row states, so a reader never mistakes <c>PATCH_ACK</c> preceding
+    /// <c>PATCH_FLUSH_SUBSCRIBED</c> for a defect. No bound stage follows: the timer was disposed by
+    /// the flush's own completion before it could fire.
+    /// </summary>
+    [Fact]
+    public void AFlushThatAnswersOnSubscribe_AcksFirst_ThenRecordsSubscribedAndArmed()
+    {
+        using var h = new Harness();
+        var clock = new TestScheduler();
+        var stages = new List<string>();
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Return(42), _ => Observable.Return(true), FlushTimeout,
+            (ok, err) => { stages.Add(ok ? "ACK" : "NACK"); h.AckOnce(ok, err); },
+            h.Register, HubPath, () => false, logger: null, flushBoundScheduler: clock, noteStage: stages.Add);
+        stages.Should().Equal(new[] { "ACK", "PATCH_FLUSH_SUBSCRIBED", "PATCH_FLUSH_BOUND_ARMED" });
+        clock.AdvanceBy(FlushTimeout.Ticks * 2);
+        stages.Should().NotContain("PATCH_FLUSH_BOUND_FIRED", "the flush's completion disposed the bound before it fired");
+        h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null));
+    }
+
     /// <summary>A flush that faults AFTER the bound acked the commit must not re-verdict it: the gate
     /// is latched on the owner, so the fault is logged and the sampler stays the writer of record.</summary>
     [Fact]
