@@ -1,0 +1,168 @@
+name: Pinned image digests
+
+# Does every image digest the fleet PINS still exist in the registry?
+#
+# WHY (MeshWeaver#3438, 2026-09-05). ACR's `purge-old-images` retention task deleted the manifests
+# MeshWeaver.Education's `main` pins. Every run of that repo's `Disposable-mesh gate` then died at
+# `manifest unknown` before a single content gate executed — including `main`'s OWN NIGHTLY, so the
+# repository lost its gate and its green baseline in the same instant. Education, Manufacturing and
+# SocialMedia went down together at 15:29Z. Nothing named the cause: a registry 404 four layers
+# below anything a CI log calls out, and the purge itself is not adjacent to the breakage in any log
+# (runners and pods serve from cache long after the delete — Memex#122's lesson, unchanged here).
+#
+# 🚨 THIS IS THE CHEAP HALF, AND DELIBERATELY NOT THE FIX. It does not stop the deletion. It turns
+# "an entire repository's CI is inexplicably dead, including its nightly" into one red naming the
+# repository, the declaration and the digest. The retention half — locking pinned manifests so
+# `acr purge` skips them, and collapsing the two divergent purge tasks into one — is designed in
+# src/MeshWeaver.Documentation/Data/Architecture/PinnedImageRetention.md and is a live change to
+# shared registry infrastructure, so it is the maintainer's to apply.
+#
+# 🛡️ THIS WORKFLOW MAY NOT SKIP (AGENTS.md — "a gate NEVER tests its own inputs"). GitHub paints a
+# skipped job with the same grey tick as a passed one, so:
+#   * `preflight` asserts EVERY external input and fails RED naming what to provision. It never
+#     asks "is the credential set?" in order to decide whether to check.
+#   * `sweep` runs `needs: [preflight]` with NO input-shaped `if:` and NO `continue-on-error:`.
+#   * check-pinned-digests.py probes the registry with a CONTROL first, and treats any az answer
+#     that is not the registry's own `manifest unknown` as INDETERMINATE — a red naming the az
+#     output, never "the pins are gone". A gate that cannot reach its subject has not checked it.
+#   * It PRINTS THE DENOMINATOR — repos scanned, repos that pin, repos that do not, pins found,
+#     pins resolved — because "0 unresolved" has two causes and only one of them is good news.
+#
+# WHY THERE IS NO `pull_request` TRIGGER. The subject is the live state of a registry, which is not
+# a property of a pull request; and a credentialed PR-reachable job would put both secrets into the
+# Dependabot store's blast radius for no gain (#3399). The script's own falsification runs on every
+# PR instead, as `check-pinned-digests.py --self-test` in dotnet-test.yml's workflow-shell lane —
+# an unproven gate is no gate. The `push` trigger below re-asserts against the real registry the
+# moment a change to either file lands.
+
+on:
+  schedule:
+    # 05:20 UTC — AFTER both ACR retention tasks (purge-old-images at 03:00, purge-old-ci-releases
+    # at 04:00) and before the working day, so a pin the night's purge ate is named in a red that is
+    # already waiting rather than discovered by a satellite's CI dying at `manifest unknown`.
+    - cron: "20 5 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/pinned-digests.yml'
+      - '.github/scripts/check-pinned-digests.py'
+
+permissions:
+  contents: read
+  id-token: write     # azure/login OIDC — no long-lived registry secret in this repo
+
+jobs:
+  preflight:
+    name: Assert the inputs exist
+    runs-on: ubuntu-latest
+    # Four emptiness tests, a mint and one API call. The fleet cap is 45
+    # (check-workflow-timeouts.py) and nothing here has any business approaching it.
+    timeout-minutes: 10
+    steps:
+      # No `if:` anywhere in this job. It asserts, it does not decide whether to assert.
+      - name: Every external input, or a red build naming what to provision
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        run: |
+          missing=()
+          [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID        OIDC app registration for azure/login; needs AcrPull/Reader on the meshweaver registry")
+          [ -n "$AZURE_TENANT_ID" ]       || missing+=("secrets.AZURE_TENANT_ID        the Systemorph AAD tenant")
+          [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID  the subscription holding meshweaver.azurecr.io")
+          [ -n "$MESHWEAVER_APP_ID" ]     || missing+=("secrets.MESHWEAVER_APP_ID          app id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet — it is how the satellites' workflows are read")
+          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the pinned-digest sweep cannot run — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "All external inputs are present."
+
+      # 🚨 PRESENT is not VALID, and chart-drift.yml learned that the hard way (2026-08-17): a
+      # provisioned-but-worthless credential passed an emptiness test and every job downstream died
+      # at "Bad credentials", with the preflight above it reporting that all inputs were present.
+      # So assert the CAPABILITY the sweep needs — enumerating the installation's repositories —
+      # against the real API. That is also the sweep's fleet list: it is discovered, never
+      # committed, so a repository added to the org is swept the day the App reaches it.
+      - name: Mint an installation token for the fleet
+        id: fleet-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+
+      - name: The token can enumerate the fleet it is meant to sweep
+        env:
+          GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          # No `2>/dev/null` and no `|| true`: a failed enumeration must print WHY. Swallowing it
+          # would turn "the token cannot read the org" into "the fleet is empty", which is the one
+          # answer this gate must never produce (check-workflow-shell.py's `swallow` class).
+          if ! reachable=$(gh api --paginate /installation/repositories \
+                             --jq '.repositories[].full_name'); then
+            echo "::error::the minted installation token could not enumerate its own repositories."
+            echo "  /installation/repositories is the endpoint an installation token answers about"
+            echo "  itself, so this is the token, not the network. Confirm the meshweaver-cloud App"
+            echo "  is installed on the Systemorph org and holds Contents: Read."
+            exit 1
+          fi
+          count=$(printf '%s\n' "$reachable" | grep -c . || true)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::the installation reaches ZERO repositories."
+            echo "  A sweep over an empty fleet reports 'every pin resolves' having checked nothing."
+            echo "  Add the fleet repositories to the meshweaver-cloud installation."
+            exit 1
+          fi
+          echo "The App reaches $count repository(ies); those are what the sweep will read."
+
+  sweep:
+    name: Every pinned digest still resolves
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    # The sweep is ~10 repositories × a contents listing and a handful of file reads, plus one
+    # `az acr repository show` per distinct digest (12 on 2026-09-06). Minutes, not tens of minutes.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 1 }
+
+      # Cross-repo reads are a GitHub App installation token minted per run, never a stored PAT — a
+      # PAT rots exactly as PATs do (chart-drift.yml carried one; HTTP 401 on all nine runs after it
+      # was provisioned, so the check never ran once, #1709). This one is minted fresh, expires in an
+      # hour, and holds Contents: Read and nothing else.
+      - name: Mint an installation token for the fleet
+        id: fleet-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+
+      - name: Ensure Azure CLI
+        # GitHub's ubuntu-latest no longer ships the Azure CLI on PATH for azure/login@v3
+        # ("Unable to locate executable file: az"). Install it if missing (idempotent).
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # No `if:`, no `continue-on-error:`. The script fails closed on an unreadable repository, on a
+      # pin-shaped declaration whose value is not a digest, on an indeterminate registry answer, and
+      # on a fleet in which it found no pins at all — that last one because a sweep that extracted
+      # nothing has proven the extractor broken, not the fleet clean.
+      - name: Sweep the fleet
+        env:
+          GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
+        run: python3 .github/scripts/check-pinned-digests.py --discover --registry meshweaver
