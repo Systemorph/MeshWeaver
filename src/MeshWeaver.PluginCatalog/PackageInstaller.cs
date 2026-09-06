@@ -3812,24 +3812,11 @@ public static class PackageInstaller
     private static IObservable<int> SeedPrebuiltAssemblies(
         IMessageHub hub, string packageId, IReadOnlyCollection<string> nodeTypePaths, ILogger? logger)
     {
-        var consumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
-        if (consumer is null)
-        {
-            // 🚨 #3429 — the silent zero that is invisible from inside the seeder, because the
-            // seeder never runs. A host reaches this by composing WITHOUT
-            // AddPrebuiltAssemblyConsumption / AddDynamicTypePreWarming; every type this package
-            // ships then compiles in-mesh no matter how many bundles are mounted beside it.
-            if (nodeTypePaths.Count > 0)
-                logger?.LogWarning(
-                    "Install: {Package}: NO prebuilt assembly was adopted for {Count} installed "
-                    + "type(s) because this host registers no {Consumer} — it consumes no bundle "
-                    + "source at all, so every one of them compiles in-mesh. Call "
-                    + "IServiceCollection.AddPrebuiltAssemblyConsumption() (or "
-                    + "AddDynamicTypePreWarming()) on this composition if it is meant to consume a "
-                    + "bake",
-                    packageId, nodeTypePaths.Count, nameof(IPrebuiltAssemblyConsumer));
-            return Observable.Return(0);
-        }
+        // 🚨 ORDER MATTERS, and it is the ORDER that makes "reported unconditionally" true. The
+        // empty-type-set check runs FIRST because it is the more specific fact and the one an
+        // operator can act on; asking about the consumer first left the (no consumer AND no types)
+        // corner logging nothing at all, so the doc above would have asserted a guarantee the code
+        // did not keep (Copilot review, #3483). Every path below now emits exactly one line.
         if (nodeTypePaths.Count == 0)
         {
             // Not a shortfall — there is nothing to adopt FOR — but it is the fact that separates
@@ -3838,6 +3825,23 @@ public static class PackageInstaller
             logger?.LogInformation(
                 "Install: {Package}: the install recognised no NodeType definition among the nodes "
                 + "it wrote, so prebuilt adoption had nothing to look for", packageId);
+            return Observable.Return(0);
+        }
+        var consumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
+        if (consumer is null)
+        {
+            // 🚨 #3429 — the silent zero that is invisible from inside the seeder, because the
+            // seeder never runs. A host reaches this by composing WITHOUT
+            // AddPrebuiltAssemblyConsumption / AddDynamicTypePreWarming; every type this package
+            // ships then compiles in-mesh no matter how many bundles are mounted beside it.
+            logger?.LogWarning(
+                "Install: {Package}: NO prebuilt assembly was adopted for {Count} installed "
+                + "type(s) because this host registers no {Consumer} — it consumes no bundle "
+                + "source at all, so every one of them compiles in-mesh. Call "
+                + "IServiceCollection.AddPrebuiltAssemblyConsumption() (or "
+                + "AddDynamicTypePreWarming()) on this composition if it is meant to consume a "
+                + "bake",
+                packageId, nodeTypePaths.Count, nameof(IPrebuiltAssemblyConsumer));
             return Observable.Return(0);
         }
         var bound = SeedBound(nodeTypePaths.Count);

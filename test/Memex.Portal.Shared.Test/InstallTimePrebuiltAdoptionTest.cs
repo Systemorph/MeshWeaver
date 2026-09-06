@@ -159,27 +159,34 @@ public class InstallTimePrebuiltAdoptionTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 300_000)]
     public async Task AfterBoot_APackageWhoseBundleIsMounted_AdoptsIt()
     {
-        MountBundle($"{Package}.zip", CoveredType);
-        var expectedMvid = ServedBuildIdentity.OfBytes(BundleBytes());
-        expectedMvid.Should().NotBeNullOrEmpty("the mounted bundle carries a real PE image");
+        try
+        {
+            MountBundle($"{Package}.zip", CoveredType);
+            var expectedMvid = ServedBuildIdentity.OfBytes(BundleBytes());
+            expectedMvid.Should().NotBeNullOrEmpty("the mounted bundle carries a real PE image");
 
-        var install = new LogSink();
-        var result = await InstallAfterBoot(install.Logger);
-        result.Written.Should().BeGreaterThan(0, "the install must have written its nodes");
+            var install = new LogSink();
+            var result = await InstallAfterBoot(install.Logger);
+            result.Written.Should().BeGreaterThan(0, "the install must have written its nodes");
 
-        await Mesh.GetWorkspace().GetMeshNodeStream(CoveredType)
-            .Should().Within(120.Seconds())
-            .Match(
-                n => string.Equals(
-                    n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.LatestAssemblyMvid,
-                    expectedMvid, StringComparison.Ordinal),
-                "the bytes for this type were mounted when the package installed — install-time "
-                + "adoption is the ONLY lane that can serve a package that arrives after boot");
+            await Mesh.GetWorkspace().GetMeshNodeStream(CoveredType)
+                .Should().Within(120.Seconds())
+                .Match(
+                    n => string.Equals(
+                        n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.LatestAssemblyMvid,
+                        expectedMvid, StringComparison.Ordinal),
+                    "the bytes for this type were mounted when the package installed — install-time "
+                    + "adoption is the ONLY lane that can serve a package that arrives after boot");
 
-        install.Dump(Output, "INSTALL");
-        install.Lines.Should().Contain(
-            l => l.Contains($"Install: {Package}: adopted 1 prebuilt", StringComparison.Ordinal),
-            "an adoption that happened must be reported, naming the package");
+            install.Dump(Output, "INSTALL");
+            install.Lines.Should().Contain(
+                l => l.Contains($"Install: {Package}: adopted 1 prebuilt", StringComparison.Ordinal),
+                "an adoption that happened must be reported, naming the package");
+        }
+        finally
+        {
+            RemoveMount();
+        }
     }
 
     /// <summary>
@@ -190,35 +197,51 @@ public class InstallTimePrebuiltAdoptionTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 300_000)]
     public async Task AfterBoot_APackageNoBundleCovers_SaysWhy()
     {
-        // A real, well-formed, identity-matching bundle — for somebody else's types. This is
-        // exactly Edu's shape as measured: bundles mounted, none of them a candidate.
-        MountBundle("Other.zip", "SomeOtherPackage/Thing");
+        try
+        {
+            // A real, well-formed, identity-matching bundle — for somebody else's types. This is
+            // exactly Edu's shape as measured: bundles mounted, none of them a candidate.
+            MountBundle("Other.zip", "SomeOtherPackage/Thing");
 
-        var install = new LogSink();
-        await InstallAfterBoot(install.Logger);
+            var install = new LogSink();
+            await InstallAfterBoot(install.Logger);
 
-        install.Dump(Output, "INSTALL");
-        _meshLog.Dump(Output, "MESH");
+            install.Dump(Output, "INSTALL");
+            _meshLog.Dump(Output, "MESH");
 
-        install.Lines.Should().Contain(
-            l => l.StartsWith("Warning: ", StringComparison.Ordinal)
-                 && l.Contains($"Install: {Package}: adopted NO prebuilt assembly", StringComparison.Ordinal),
-            "the install lane must say, loudly and naming the PACKAGE, that it adopted nothing — "
-            + "a completed seed that covered zero used to log exactly as much as a deployment with "
-            + "no bundles at all");
+            install.Lines.Should().Contain(
+                l => l.StartsWith("Warning: ", StringComparison.Ordinal)
+                     && l.Contains($"Install: {Package}: adopted NO prebuilt assembly", StringComparison.Ordinal),
+                "the install lane must say, loudly and naming the PACKAGE, that it adopted nothing — "
+                + "a completed seed that covered zero used to log exactly as much as a deployment "
+                + "with no bundles at all");
 
-        _meshLog.Lines.Should().Contain(
-            l => l.Contains("adopted no prebuilt assembly for", StringComparison.Ordinal)
-                 && l.Contains(CoveredType, StringComparison.Ordinal),
-            "the seeder must name the UNCOVERED type paths — 'nothing adopted' without them cannot "
-            + "be acted on");
+            _meshLog.Lines.Should().Contain(
+                l => l.Contains("adopted no prebuilt assembly for 1 of 1 requested", StringComparison.Ordinal)
+                     && l.Contains(CoveredType, StringComparison.Ordinal),
+                "the seeder must name the UNCOVERED type paths and count them against what was "
+                + "REQUESTED — 'nothing adopted' without them cannot be acted on, and a denominator "
+                + "derived from per-entry sums would double-count a type two sources both carry");
 
-        _meshLog.Lines.Should().Contain(
-            l => l.Contains("name only NodeTypes OUTSIDE this set", StringComparison.Ordinal),
-            "…and the REASON, which is the half #3429 asks for: a bundle source WAS mounted and "
-            + "read, and none of its entries named a requested type. That reads differently from "
-            + "'no bundle source exists' and from 'a bundle named it and it did not land', and the "
-            + "three must never look alike again");
+            _meshLog.Lines.Should().Contain(
+                l => l.Contains("name only NodeTypes OUTSIDE this set", StringComparison.Ordinal),
+                "…and the REASON, which is the half #3429 asks for: a bundle source WAS mounted and "
+                + "read, and none of its entries named a requested type. That reads differently from "
+                + "'no bundle source exists' and from 'a bundle named it and it did not land', and "
+                + "the three must never look alike again");
+        }
+        finally
+        {
+            RemoveMount();
+        }
+    }
+
+    /// <summary>Removes the mounted bundle directory. Best-effort in a <c>finally</c>, matching this
+    /// suite's own convention (PrebuiltPublicationTest): a failing assertion must not be replaced by
+    /// a cleanup exception, and a temp root left behind on one run would accumulate across CI.</summary>
+    private void RemoveMount()
+    {
+        try { Directory.Delete(_bundleDirectory, recursive: true); } catch { /* best effort */ }
     }
 
     /// <summary>An <see cref="ILoggerProvider"/> that keeps every line, so a test can assert on what

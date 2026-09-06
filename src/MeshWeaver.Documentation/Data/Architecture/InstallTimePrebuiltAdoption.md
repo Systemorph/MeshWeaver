@@ -74,9 +74,16 @@ one of:
 | 3 | bundles read, **no entry named these types** | ← **Edu's shape.** The bake did not cover this package, or the paths it baked differ from the paths the install wrote | `Information` |
 | 4 | entries **did** name these types and coverage fell short | the bytes were here and did not land: a per-type decline, a whole-bundle identity decline, a hollow bundle, a fault | `Warning` |
 
-The discriminator between 3 and 4 is `EntriesMatched` — how many bundle entries named a **requested**
-NodeType path, counted before anything can decline them. Without it a shortfall line can only guess,
-and guessing is what cost #3429 its investigation.
+The discriminator between 3 and 4 is the set of **offered-but-uncovered paths**: the pass witnesses
+every type path a bundle entry NAMED, before anything can decline it, and subtracts what the store
+ended up backing. Without it a shortfall line can only guess, and guessing is what cost #3429 its
+investigation. Answer 4 therefore also *names* those paths — the actionable subset.
+
+🚨 **Sets of paths, never sums of bundle entries.** A type carried by both the image bundle and the
+CI-published one contributes two entries and one path, so a decision or a denominator built from
+summed counters is wrong in a way nothing downstream could detect — "1 of 3 requested" for a pass
+that asked for two. That is the same confidently-wrong signal this page is about, reproduced inside
+the cure; `PrebuiltShortfallSpeaksTest.ADenominatorIsTheREQUESTEDSet_NotASumOfBundleEntries` pins it.
 
 Answer 4 is also where MeshWeaver#3472 lands: a portal adopting bytes stamped for a *different*
 framework identity is worse than adopting none, so a wrong-identity adoption and a missing one must
@@ -142,7 +149,7 @@ page's. See [Modules](../Modules) and [Module Build Architecture](../ModuleBuild
 ## Where it is pinned
 
 - `test/MeshWeaver.Hosting.Test/PrebuiltShortfallSpeaksTest.cs` — the four answers, deterministically,
-  with no mesh, no bundle and no disk, plus the level each one carries.
+  with no mesh, no bundle and no disk, plus the level each one carries and the denominator rule.
 - `test/Memex.Portal.Shared.Test/InstallTimePrebuiltAdoptionTest.cs` — a real monolith mesh, a real
   bundle written with `BundleWriter`, a package installed **after boot**. Two arms: the positive
   control (mounted bundle ⇒ adopted, and the install says so) and the defect (bundle mounted for
