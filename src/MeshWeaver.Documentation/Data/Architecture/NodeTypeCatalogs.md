@@ -78,8 +78,9 @@ The seams that do:
 **The one that did not — and the deepest cause of #902.** `EnsurePartitionBootstrap`'s root-existence
 probe (`ReadNodeAuthoritative`) fell back to `FindStaticNode(path)` with no guard. For a catalog
 whose discriminator equals its partition name, the definition at `@Agent` therefore answered *"the
-root exists"*, so `ProvisionAndCreateRoot` never ran: **no schema was provisioned and no durable root
-was written**, while every other seam correctly saw nothing. That is the ghost precisely — present to
+root exists"*, so `HealPartitionRoot` never ran: **no durable root was written** (and, until #3451
+took provisioning off the repair path, no schema either), while every other seam correctly saw
+nothing. That is the ghost precisely — present to
 the existence check, absent to reads, un-creatable ("already exists"), no version history, and no
 route back. The probe now skips definition-only entries, so the bare partition path is free to be an
 ordinary root.
