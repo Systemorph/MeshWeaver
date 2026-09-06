@@ -297,6 +297,19 @@ additionally asserts that it and `check-pinned-digests.py` still **agree** on a 
 future edit that diverges them reddens rather than quietly splitting the fleet's idea of a pin in
 two.
 
+That agreement was also measured on the **real fleet**, not only on the fixture — both scripts run
+over the same 34 repositories, their digest sets compared at a common truncation (2026-09-07):
+
+```
+guard distinct digests   5      lock distinct digests  15
+in guard, NOT in lock:   0      ← the lock job misses no axis-1 pin the guard finds
+in lock,  NOT in guard: 10      ← 7 axis-2 overlay manifests + 3 currently-locked-but-unpinned
+```
+
+Zero divergence on the axis they share, and the whole difference is the axis the guard cannot see
+plus the release candidates — the shape the design predicts, measured rather than asserted. Worth
+re-running after any change to either extractor: a fixture can be made to agree, a fleet cannot.
+
 **Axis 2's scope is narrow, and the boundary was measured rather than guessed.** Widening it to
 every YAML/JSON under `deploy/` was tried and rejected: this repository's
 `deploy/aks/operator/test/fixtures/**` carry image references to tags that never existed
