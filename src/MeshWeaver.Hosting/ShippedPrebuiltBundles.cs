@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
@@ -98,7 +99,8 @@ public static class ShippedPrebuiltBundles
                     .EnumerateFiles(dir, "*.zip", SearchOption.TopDirectoryOnly)
                     .OrderBy(f => f, StringComparer.Ordinal)
                     .ToList(),
-                logger);
+                logger)
+                .Select(tally => tally.Covered);
         });
 
     /// <summary>
@@ -136,7 +138,8 @@ public static class ShippedPrebuiltBundles
                     "ShippedPrebuiltBundles: no CI-published bundles for framework identity "
                     + "{Identity} under {Root} — the sweep compiles instead",
                     identity, publishedRoot);
-            return SeedBundles(mesh, dir, () => CompletePublishedBundlesOf(dir, logger), logger);
+            return SeedBundles(mesh, dir, () => CompletePublishedBundlesOf(dir, logger), logger)
+                .Select(tally => tally.Covered);
         });
 
     /// <summary>
@@ -235,23 +238,140 @@ public static class ShippedPrebuiltBundles
                 .Where(p => !string.IsNullOrEmpty(p))
                 .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
 
-            var seeds = new List<IObservable<int>>
+            // 🚨 #3429 — THE PASS WITNESSES ITS OWN COVERAGE, so a zero can name the types it left
+            // behind. Per-subscription (it lives inside the Defer), never static, and written from
+            // the seeder's pool threads — a ConcurrentDictionary for the same reason `onCovered`
+            // documents thread-safety. The caller's own witness is chained, never replaced.
+            var covered = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+            void Witness(string path)
+            {
+                covered.TryAdd(path, 0);
+                onCovered?.Invoke(path);
+            }
+
+            var seeds = new List<IObservable<SeedTally>>
             {
                 SeedBundles(mesh, imageDir,
                     () => Directory
                         .EnumerateFiles(imageDir, "*.zip", SearchOption.TopDirectoryOnly)
                         .OrderBy(f => f, StringComparer.Ordinal)
                         .ToList(),
-                    logger, paths, onCovered),
+                    logger, paths, Witness),
             };
+            var sources = new List<string> { imageDir };
             if (!string.IsNullOrWhiteSpace(publishedRoot))
             {
                 var identityDir = Path.Combine(publishedRoot, PrebuiltAssemblySeeder.LiveFrameworkMvid);
+                sources.Add(identityDir);
                 seeds.Add(SeedBundles(mesh, identityDir,
-                    () => CompletePublishedBundlesOf(identityDir, logger), logger, paths, onCovered));
+                    () => CompletePublishedBundlesOf(identityDir, logger), logger, paths, Witness));
             }
-            return seeds.Concat().Aggregate(0, (total, adopted) => total + adopted);
+            return seeds.Concat()
+                .Aggregate(default(SeedTally), (total, one) => total + one)
+                // 🚨 #3429 — A SHORTFALL SPEAKS. Every other zero-coverage exit in this file already
+                // says why AT the moment it happens; this pass's own zero said nothing at all, so
+                // "ten matching assemblies on disk, none adopted" read in a log exactly like "no
+                // bundles mounted" and a package installed after boot compiled types whose bytes it
+                // was standing on. The line is emitted only when the pass covered LESS than it was
+                // asked for, and its level is the honest one: a bundle that NAMED a requested type
+                // and still did not back it is a failure (Warning); a deployment with no bundle for
+                // these types is a fact about the deployment (Information).
+                .Do(tally =>
+                {
+                    var uncovered = paths.Where(p => !covered.ContainsKey(p))
+                        .OrderBy(p => p, StringComparer.Ordinal)
+                        .ToArray();
+                    if (DescribeShortfall(tally, uncovered, sources) is not { } shortfall)
+                        return;
+                    if (IsShortfallAFailure(tally))
+                        logger?.LogWarning("ShippedPrebuiltBundles: {Shortfall}", shortfall);
+                    else
+                        logger?.LogInformation("ShippedPrebuiltBundles: {Shortfall}", shortfall);
+                })
+                .Select(tally => tally.Covered);
         });
+
+    /// <summary>How many uncovered type paths a shortfall line names before it truncates.</summary>
+    private const int NamedUncoveredPaths = 8;
+
+    /// <summary>
+    /// Whether a shortfall is a FAILURE (bytes were here and did not land) rather than an absence
+    /// (no bundle on this deployment covers these types).
+    ///
+    /// <para>The discriminator is <see cref="SeedTally.EntriesMatched"/> against
+    /// <see cref="SeedTally.Covered"/>: a bundle entry that named a requested NodeType and did not
+    /// end up backing it was declined per type, faulted, or timed out — each of which is a real
+    /// defect on a mesh that shipped the bytes. A whole bundle declined on framework identity, an
+    /// unreadable bundle and a hollow one are failures for the same reason (MeshWeaver#3472: a
+    /// portal adopting bytes stamped for another identity is worse than adopting none, and both
+    /// must be distinguishable from success).</para>
+    /// </summary>
+    internal static bool IsShortfallAFailure(SeedTally tally) =>
+        tally.EntriesMatched > tally.Covered
+        || tally.BundlesDeclined > 0
+        || tally.BundlesHollow > 0
+        || tally.Faulted > 0;
+
+    /// <summary>
+    /// The operator-facing reason a seeding pass covered less than it was asked for, or null when
+    /// it covered everything. PURE — no I/O, no logging — so the reasoning is pinned by a test with
+    /// no mesh, which is what keeps "a zero must say why" from regressing into a zero that says
+    /// something unhelpful.
+    /// </summary>
+    /// <param name="tally">What the pass observed.</param>
+    /// <param name="uncovered">The requested NodeType paths no bundle backed.</param>
+    /// <param name="sources">The bundle source directories the pass was pointed at.</param>
+    internal static string? DescribeShortfall(
+        SeedTally tally, IReadOnlyCollection<string> uncovered, IReadOnlyCollection<string> sources)
+    {
+        if (uncovered.Count == 0)
+            return null;
+
+        var named = string.Join(", ", uncovered.Take(NamedUncoveredPaths));
+        if (uncovered.Count > NamedUncoveredPaths)
+            named += $", … (+{uncovered.Count - NamedUncoveredPaths} more)";
+        var where = sources.Count == 0 ? "(none)" : string.Join(", ", sources);
+        var head =
+            $"adopted no prebuilt assembly for {uncovered.Count} of {uncovered.Count + tally.Covered} "
+            + $"requested NodeType(s) — {named}. ";
+
+        if (tally.Leaving > 0)
+            return head
+                + "This hub is LEAVING (#3129), so no adoption pass ran on it; the next generation "
+                + "seeds its own bundles and these types compile here in the meantime.";
+
+        if (tally.SourcesPresent == 0)
+            return head
+                + $"No bundle source directory exists on this deployment ({where}) — there was "
+                + "nowhere to look, so these types compile in-mesh. Configure "
+                + $"{DirectoryConfigKey} (bundles shipped in the image) or {PublishedRootConfigKey} "
+                + "(the CI-published, framework-identity-keyed root) if this deployment is meant to "
+                + "consume a bake.";
+
+        if (tally.BundlesSeen == 0)
+            return head
+                + $"{tally.SourcesPresent} bundle source(s) exist ({where}) but hold no bundle for "
+                + $"framework identity {PrebuiltAssemblySeeder.LiveFrameworkMvid} — nothing was "
+                + "published for this build, so these types compile in-mesh.";
+
+        if (tally.EntriesMatched == 0)
+            return head
+                + $"All {tally.BundlesSeen} bundle(s) under {where} name only NodeTypes OUTSIDE "
+                + "this set, so none of these types was ever a candidate. Either the bake did not "
+                + "cover this package, or the paths it baked differ from the paths this install "
+                + "wrote — compare the bundle manifests' node paths with the names above.";
+
+        return head
+            + $"{tally.EntriesMatched} bundle entry(ies) DID name these types across "
+            + $"{tally.BundlesSeen} bundle(s) under {where} and {tally.Covered} landed"
+            + (tally.BundlesDeclined > 0
+                ? $"; {tally.BundlesDeclined} bundle(s) were declined WHOLE on framework identity "
+                  + $"(live: {PrebuiltAssemblySeeder.LiveFrameworkMvid})"
+                : string.Empty)
+            + (tally.BundlesHollow > 0 ? $"; {tally.BundlesHollow} carried no assemblies" : string.Empty)
+            + (tally.Faulted > 0 ? $"; {tally.Faulted} could not be read" : string.Empty)
+            + ". The per-entry decline is logged above with its reason.";
+    }
 
     /// <summary>
     /// What one seeding pass did, split by the only distinction that matters operationally:
@@ -266,15 +386,52 @@ public static class ShippedPrebuiltBundles
     /// and destroy the signal. <see cref="Covered"/> is therefore what callers see, and the log
     /// names both halves.</para>
     /// </summary>
-    private readonly record struct SeedTally(int Adopted, int AlreadyCurrent, int FilteredOut = 0)
+    internal readonly record struct SeedTally(int Adopted, int AlreadyCurrent, int FilteredOut = 0)
     {
         /// <summary>Assemblies this bundle has BACKED on the store — adopted now or already there.
         /// This is the coverage number; it is unchanged by the skip optimisation.</summary>
         public int Covered => Adopted + AlreadyCurrent;
 
+        /// <summary>Bundle SOURCES this pass was pointed at (the image's <c>prebuilt/</c>, the
+        /// CI-published identity directory) — the denominator of "was there anywhere to look".</summary>
+        public int SourcesConsulted { get; init; }
+
+        /// <summary>…of those, the ones that exist on disk.</summary>
+        public int SourcesPresent { get; init; }
+
+        /// <summary>Bundle files opened.</summary>
+        public int BundlesSeen { get; init; }
+
+        /// <summary>Bundle ENTRIES that named one of the requested NodeType paths. The one number
+        /// that separates "the bytes were never here" from "the bytes were here and did not
+        /// land" — the two states MeshWeaver#3429 could not tell apart from a log.</summary>
+        public int EntriesMatched { get; init; }
+
+        /// <summary>Bundles declined WHOLE on framework identity.</summary>
+        public int BundlesDeclined { get; init; }
+
+        /// <summary>Bundles carrying no assemblies (or no readable manifest).</summary>
+        public int BundlesHollow { get; init; }
+
+        /// <summary>Bundles that could not be read, plus whole sources that faulted.</summary>
+        public int Faulted { get; init; }
+
+        /// <summary>Sources skipped because this hub is LEAVING (#3129).</summary>
+        public int Leaving { get; init; }
+
         public static SeedTally operator +(SeedTally left, SeedTally right) =>
             new(left.Adopted + right.Adopted, left.AlreadyCurrent + right.AlreadyCurrent,
-                left.FilteredOut + right.FilteredOut);
+                left.FilteredOut + right.FilteredOut)
+            {
+                SourcesConsulted = left.SourcesConsulted + right.SourcesConsulted,
+                SourcesPresent = left.SourcesPresent + right.SourcesPresent,
+                BundlesSeen = left.BundlesSeen + right.BundlesSeen,
+                EntriesMatched = left.EntriesMatched + right.EntriesMatched,
+                BundlesDeclined = left.BundlesDeclined + right.BundlesDeclined,
+                BundlesHollow = left.BundlesHollow + right.BundlesHollow,
+                Faulted = left.Faulted + right.Faulted,
+                Leaving = left.Leaving + right.Leaving,
+            };
     }
 
     /// <summary>
@@ -299,7 +456,7 @@ public static class ShippedPrebuiltBundles
     /// resolves (on the pool's blocking leg), through the one bundle pipeline.
     /// <paramref name="typePathFilter"/> replaces the mesh-wide NodeType enumeration when the
     /// caller already knows which types it is consuming for (#1707 slice 3).</summary>
-    private static IObservable<int> SeedBundles(
+    private static IObservable<SeedTally> SeedBundles(
         IMessageHub mesh, string dir, Func<List<string>> enumerateBundles, ILogger? logger,
         ImmutableHashSet<string>? typePathFilter = null, Action<string>? onCovered = null)
         => Observable.Defer(() =>
@@ -320,21 +477,22 @@ public static class ShippedPrebuiltBundles
                     "ShippedPrebuiltBundles: this hub is LEAVING (#3129: shutting down, or hosted by a "
                     + "process that has begun stopping) — no adoption pass starts on it; the next "
                     + "generation seeds its own bundles");
-                return Observable.Return(0);
+                return Observable.Return(default(SeedTally) with { SourcesConsulted = 1, Leaving = 1 });
             }
 
             if (!Directory.Exists(dir))
             {
                 logger?.LogDebug(
                     "ShippedPrebuiltBundles: no bundle directory at {Directory} — nothing to seed", dir);
-                return Observable.Return(0);
+                return Observable.Return(default(SeedTally) with { SourcesConsulted = 1 });
             }
 
             var meshService = mesh.ServiceProvider.GetService<IMeshService>();
             if (meshService is null && typePathFilter is null)
             {
                 logger?.LogDebug("ShippedPrebuiltBundles: no IMeshService registered — nothing to seed");
-                return Observable.Return(0);
+                return Observable.Return(default(SeedTally)
+                    with { SourcesConsulted = 1, SourcesPresent = 1 });
             }
             var accessService = mesh.ServiceProvider.GetService<AccessService>();
             var pool = mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>().Get("prebuilt:files");
@@ -390,7 +548,8 @@ public static class ShippedPrebuiltBundles
                             {
                                 logger?.LogDebug(
                                     "ShippedPrebuiltBundles: {Directory} holds no bundles", dir);
-                                return Observable.Return(0);
+                                return Observable.Return(default(SeedTally)
+                                    with { SourcesConsulted = 1, SourcesPresent = 1 });
                             }
 
                             return snapshot
@@ -432,18 +591,24 @@ public static class ShippedPrebuiltBundles
                                                 + "logged above (identity decline, hollow bundle, fault). The "
                                                 + "sweep compiles whatever stays uncovered",
                                                 tally.FilteredOut, bundles.Count, dir, existing.Paths.Count);
-                                    }))
-                                .Select(tally => tally.Covered);
+                                    })
+                                    .Select(tally => tally with
+                                    {
+                                        SourcesConsulted = 1,
+                                        SourcesPresent = 1,
+                                        BundlesSeen = bundles.Count,
+                                    }));
                         }))
                 // The seeding is an optimisation in front of the sweep — a fault here must degrade
                 // to "compile as today", never hold or fail the boot. Loud, so an operator can see
                 // WHY an image that ships bundles still compiled.
-                .Catch<int, Exception>(ex =>
+                .Catch<SeedTally, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
                         "ShippedPrebuiltBundles: seeding failed — the sweep will compile instead "
                         + "(the shipped bundles under {Directory} were not adopted)", dir);
-                    return Observable.Return(0);
+                    return Observable.Return(default(SeedTally)
+                        with { SourcesConsulted = 1, SourcesPresent = 1, Faulted = 1 });
                 });
         });
 
@@ -476,7 +641,7 @@ public static class ShippedPrebuiltBundles
                     logger?.LogInformation(
                         "ShippedPrebuiltBundles: bundle {Bundle} DECLINED whole: {Reason} — "
                         + "the sweep compiles instead", Path.GetFileName(bundlePath), reason);
-                    return Observable.Return(default(SeedTally));
+                    return Observable.Return(default(SeedTally) with { BundlesDeclined = 1 });
                 }
                 if (manifest!.Assemblies is not { Count: > 0 } assemblies)
                 {
@@ -500,7 +665,7 @@ public static class ShippedPrebuiltBundles
                         logger?.LogWarning(
                             "ShippedPrebuiltBundles: bundle {Bundle} carries no assemblies (or no "
                             + "readable manifest) — nothing to adopt", Path.GetFileName(bundlePath));
-                    return Observable.Return(default(SeedTally));
+                    return Observable.Return(default(SeedTally) with { BundlesHollow = 1 });
                 }
 
                 var present = assemblies
@@ -521,6 +686,12 @@ public static class ShippedPrebuiltBundles
                     // line would then assert the opposite of what happened.
                     return Observable.Return(new SeedTally(0, 0, FilteredOut: 1));
 
+                // 🚨 #3429 — `present.Count` is carried out of both branches below as
+                // SeedTally.EntriesMatched: how many entries NAMED a requested type, counted before
+                // anything can decline them. It is the number that separates "the bytes were never
+                // here" from "the bytes were here and did not land", and without it a shortfall line
+                // can only guess — which is the guess that cost #3429 its investigation.
+                //
                 // Sequential (Concat, never Merge) for the same reason NodeTypeBakeStatus.Probe is:
                 // the store is typically a shared network volume or blob container, and a fan-out
                 // of lookups across every type at startup is the cold burst this whole mechanism
@@ -552,7 +723,8 @@ public static class ShippedPrebuiltBundles
                                 + "already carry this build and the store holds their bytes — no "
                                 + "assembly read, no hub activated, no write",
                                 Path.GetFileName(bundlePath), alreadyCurrent);
-                            return Observable.Return(new SeedTally(0, alreadyCurrent));
+                            return Observable.Return(new SeedTally(0, alreadyCurrent)
+                                with { EntriesMatched = present.Count });
                         }
 
                         return pool
@@ -560,7 +732,8 @@ public static class ShippedPrebuiltBundles
                                 .ReadFile(bundlePath, deviating))
                             .SelectMany(payload => SeedPayloads(
                                 mesh, bundlePath, manifest.FrameworkMvid,
-                                payload.Assemblies, alreadyCurrent, logger, onCovered));
+                                payload.Assemblies, alreadyCurrent, logger, onCovered))
+                            .Select(tally => tally with { EntriesMatched = present.Count });
                     });
             })
             .Catch<SeedTally, Exception>(ex =>
@@ -568,7 +741,7 @@ public static class ShippedPrebuiltBundles
                 logger?.LogWarning(ex,
                     "ShippedPrebuiltBundles: bundle {Bundle} could not be read — skipped "
                     + "(the sweep compiles instead)", Path.GetFileName(bundlePath));
-                return Observable.Return(default(SeedTally));
+                return Observable.Return(default(SeedTally) with { Faulted = 1 });
             });
 
     /// <summary>

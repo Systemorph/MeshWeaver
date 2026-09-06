@@ -196,6 +196,19 @@ public static class NodeTypeRecompileExtensions
                 // compiles exactly as before. Never faults, never blocks past its budget; a host
                 // without bundle consumption has no consumer and skips straight through.
                 var consumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
+                // 🚨 #3429 — this branch used to be silent, and a silent skip of adoption is
+                // indistinguishable from an adoption that found nothing. Neither the seeder nor
+                // anything downstream can report it (the seeder never runs), so it is said here,
+                // once per push, naming what is missing and what it costs.
+                if (consumer is null)
+                {
+                    logger?.LogInformation(
+                        "[Recompile] This host registers no {Consumer}, so it consumes no prebuilt "
+                        + "bundle source — all {Count} affected NodeType(s) compile in-mesh. Call "
+                        + "IServiceCollection.AddPrebuiltAssemblyConsumption() on this composition "
+                        + "if it is meant to consume a bake.",
+                        nameof(IPrebuiltAssemblyConsumer), ordered.Count);
+                }
                 var seed = consumer is null
                     ? Observable.Return(0)
                     : consumer.SeedForTypes(ordered)
