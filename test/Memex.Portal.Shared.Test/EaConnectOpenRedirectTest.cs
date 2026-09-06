@@ -1,4 +1,5 @@
-using System.Threading;
+using System;
+using System.Reactive.Linq;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Mesh;
@@ -42,15 +43,18 @@ public class EaConnectOpenRedirectTest
             return "https://login.microsoftonline.example/consent?state=" + state;
         }
 
-        public Task<bool> ExchangeAndStoreAsync(
-            string code, string redirectUri, string userObjectId, CancellationToken ct) =>
-            Task.FromResult(true);
+        public IObservable<bool> ExchangeAndStore(
+            string code, string redirectUri, string userObjectId) => Observable.Return(true);
 
-        public Task<string?> GetAccessTokenAsync(string userObjectId, CancellationToken ct) =>
-            Task.FromResult<string?>(connected ? "token" : null);
+        public IObservable<EaGraphAccess> GetAccessToken(string userObjectId) =>
+            Observable.Return(connected
+                ? EaGraphAccess.Connected("token")
+                : EaGraphAccess.NotConnected());
 
-        public Task<bool> IsConnectedAsync(string userObjectId, CancellationToken ct) =>
-            Task.FromResult(connected);
+        public IObservable<EaGraphAccess> GetConnection(string userObjectId) =>
+            Observable.Return(connected
+                ? EaGraphAccess.Connected()
+                : EaGraphAccess.NotConnected());
     }
 
     private static EaConsentController Controller(FakeEaGraphAuth ea)
