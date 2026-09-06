@@ -251,7 +251,20 @@ def fetch_workflows(gh_repo: str) -> tuple[list[tuple[str, str]], str | None]:
     if rc != 0:
         blob = (err + out).lower()
         if "404" in blob or "not found" in blob:
-            # No workflows directory at all. A measured zero, reported as such — not an error.
+            # 🚨 A 404 HERE HAS TWO CAUSES AND THEY ARE OPPOSITE VERDICTS:
+            #   * the repository is fine and simply has no `.github/workflows` — a MEASURED ZERO;
+            #   * the repository is not there, renamed, or not readable by this token — NOT CHECKED.
+            # Both arrive as the same status, and reading the second as the first is precisely the
+            # failure this gate exists to name: it would print "no digest pin declared" for a
+            # repository nobody looked at, and the sweep would go green. Measured 2026-09-06:
+            # `--repos Systemorph/ThisRepoDoesNotExist12345` reported exactly that, and exit 0.
+            # So ask about the REPOSITORY before believing the absence.
+            rc_repo, _, err_repo = gh_api(f"repos/{gh_repo}")
+            if rc_repo != 0:
+                return [], (
+                    "the repository itself could not be read, so its pins were never looked for "
+                    f"(not 'it has no workflows'). gh said: {err_repo.strip()[:200]}"
+                )
             return [], None
         return [], err.strip()[:400] or "unknown error listing .github/workflows"
     try:

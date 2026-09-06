@@ -134,6 +134,15 @@ here in some form:
   `.github/shared-rules.json`'s `repos` array — a check keyed on that list would have swept six and
   silently left a seventh out.
 
+- **A GitHub 404 has two causes and they are opposite verdicts.** Listing `.github/workflows`
+  answers 404 both when a repository genuinely has no workflows — a **measured zero** — and when the
+  repository is absent, renamed, or unreadable by the token, which means **nobody looked**. Reading
+  the second as the first prints *"no digest pin declared"* for a repository that was never swept,
+  and the run goes green. So the repository itself is probed before any absence is believed:
+  `Systemorph/iac` (real, no workflows) reports a measured zero and passes; a name that does not
+  resolve reports UNREADABLE and **fails**. Both arms measured 2026-09-06 — the second only after it
+  was caught doing the wrong thing.
+
 - **Never read "cannot reach" as "gone".** `az` exits non-zero both when a manifest is absent and
   when the registry is unreachable or the credential is refused. Only the registry's own
   `manifest unknown` counts as absence; every other answer is INDETERMINATE and fails the run
