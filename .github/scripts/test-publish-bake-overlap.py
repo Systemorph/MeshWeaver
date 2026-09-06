@@ -257,6 +257,14 @@ if action == "show":
         die("this stub models exactly one `file show` query, %r with -o tsv — the script asked "
             "for %r. Teach the stub the new query (and re-measure how knack renders it) rather "
             "than loosening it." % (SHOW_QUERY, q))
+    # Reproduces the ONE way the read-back loop can end early: a command inside a `while read`
+    # loop that consumes the loop's stdin. Without the script's `< /dev/null` (and the accounting
+    # assertion behind it), the verification would cover a PREFIX of the publication and seal.
+    if os.environ.get("MOCK_AZ_EAT_STDIN") == "1":
+        try:
+            sys.stdin.read()
+        except Exception:
+            pass
     fails = os.environ.get("MOCK_AZ_SHOW_FAILS")
     if fails and path.endswith(fails):
         sys.stderr.write("stub-az: simulated read failure for %s\n" % path); sys.exit(1)
@@ -599,6 +607,21 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
         check(f"every one of the {EXPECTED_FILES} published files is verified before the seal",
               f"{EXPECTED_FILES}/{EXPECTED_FILES} file(s) hold this run's bytes" in r.stdout,
               "expected/verified are both printed")
+
+    # ── The read-back loop is fed by a redirect. A command inside it that ate stdin would end it
+    # ── early, and a verification covering a PREFIX would report no foreign bytes and SEAL.
+    print("\nthe read-back loop cannot be truncated by something eating its stdin:")
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "1701", {"MOCK_AZ_EAT_STDIN": "1"})
+    s = h.shelf()
+    if expect_defect:
+        check("PRE-FIX: no read-back loop exists to truncate",
+              s.sealed() and r.returncode == 0, f"rc={r.returncode}, {denominator(s)}")
+    else:
+        check("stdin-eating does not truncate the verification",
+              r.returncode == 0 and s.sealed()
+              and f"{EXPECTED_FILES}/{EXPECTED_FILES} file(s) hold this run's bytes" in r.stdout,
+              f"rc={r.returncode}, {denominator(s)} — all {EXPECTED_FILES} still verified")
 
     # ── SAME LANE: the shape that was actually measured most often. Two pushes to ONE repo bake
     # ── concurrently and land on one identity; a single owner for the prefix does not touch it.

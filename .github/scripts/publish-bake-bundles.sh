@@ -367,9 +367,14 @@ verify_publication() { # <account> <share> <dest>
     # or a CLI shape change into "no digest recorded" — the one answer that is indistinguishable
     # from "another publisher wrote this", and the errors below would then name the wrong cause.
     # An unreadable file is refused as loudly as a foreign one; it is simply refused by name.
+    # `< /dev/null` because this runs INSIDE a `while read` loop fed by the manifest: a command
+    # that consumed stdin would swallow the remaining lines, and the loop would end early having
+    # verified a PREFIX of the publication while reporting no foreign bytes at all. The accounting
+    # assertion after the loop is the belt to that brace.
     if ! props=$(az storage file show --account-name "$account" --share-name "$share" \
         --path "$dest/$rel" --auth-mode login --backup-intent \
-        --query "[[metadata.digest || '-', metadata.publication || '-']]" -o tsv --only-show-errors); then
+        --query "[[metadata.digest || '-', metadata.publication || '-']]" -o tsv --only-show-errors \
+        < /dev/null); then
       unreadable+=("$rel")
       continue
     fi
@@ -413,9 +418,26 @@ verify_publication() { # <account> <share> <dest>
     fi
   done < "$MANIFEST"
 
-  for rel in ${overlapped[@]+"${overlapped[@]}"}; do
-    echo "::notice::under $dest: $rel — that publication wrote the very bytes this run uploaded, so two publications overlapped on this prefix (MeshWeaver#3461). Identical bytes distinguish nothing, so this file is not a mix."
-  done
+  # Each element is "<file> ← '<publication>'" and carries spaces, so it is iterated quoted, behind
+  # an emptiness test — the same shape as the `foreign` and `unreadable` loops below. (The
+  # `${a[@]+"${a[@]}"}` idiom used elsewhere in this file does preserve per-element quoting; this
+  # is written the long way because a reader should not have to know that to be sure.)
+  if [ "${#overlapped[@]}" -gt 0 ]; then
+    for rel in "${overlapped[@]}"; do
+      echo "::notice::under $dest: $rel — that publication wrote the very bytes this run uploaded, so two publications overlapped on this prefix (MeshWeaver#3461). Identical bytes distinguish nothing, so this file is not a mix."
+    done
+  fi
+
+  # 🚨 THE DENOMINATOR, ASSERTED. Every manifest line must have landed in exactly one bucket. It
+  # cannot fail by inspection — which is precisely why it is checked: the loop is fed by a
+  # redirect, so anything inside it that consumed stdin would end it EARLY, and a verification that
+  # covered the first few files would then report "no foreign bytes" and SEAL. A guard that can
+  # quietly check less than it claims is the vacuity every gate here is written to avoid.
+  local accounted=$((ours + neutral + ${#foreign[@]} + ${#unreadable[@]}))
+  if [ "$accounted" -ne "$MANIFEST_COUNT" ]; then
+    echo "::error title=Refusing to seal — the verification did not cover the publication::$account/$share/$dest: $accounted of $MANIFEST_COUNT file(s) were accounted for ($ours ours, $neutral byte-identical, ${#foreign[@]} foreign, ${#unreadable[@]} unreadable). The read-back loop ended early, so this publication has NOT been shown to be free of another publisher's bytes. Refusing."
+    return 1
+  fi
 
   # An unreadable file leaves the verdict UNDECIDABLE, so it takes precedence over all three and
   # never touches an existing sentinel: we cannot tell a mix from a clean supersession.
@@ -635,6 +657,14 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
       # writes the marker — so the arm64 lane is blocked forever by an instruction that can never
       # be carried out. Stamping is safe precisely because the refusal below is sound: only the
       # amd64 lane has ever published, and this IS that lane.
+      #
+      # 🚨 Deliberately NOT `upload_published_file`: this writes onto a publication that is NOT
+      # this run's, so stamping it with this run's `publication` token would be a lie — a later
+      # verification would read one of somebody else's files as ours. It is safe to leave
+      # unstamped because it only ever runs on a directory that IS sealed (`complete = true`), and
+      # a publisher that is mid-flight has removed the sentinel — so no concurrent
+      # `verify_publication` can be looking at this file while it is written. If this run goes on
+      # to republish, `publish_one_target` overwrites it stamped a moment later.
       az storage file upload --account-name "$ACCOUNT" --share-name "$SHARE" \
         --path "$DEST" --source "$ARCH_MARKER_LOCAL" \
         --auth-mode login --backup-intent --only-show-errors > /dev/null

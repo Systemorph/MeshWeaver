@@ -237,6 +237,12 @@ Stated plainly, because a page that only lists what works is how the next sessio
 - **A refused publication leaves the prefix unsealed**, which every consumer skips — correct, and
   it means an overlap now costs a red lane and a re-run rather than a portal that renders nothing.
   It is not free: the identity serves nothing until either publisher runs again.
+- 🚨 **Expect the reds, and do not read them as noise.** The four same-lane overlaps measured on
+  2026-09-06 were, every one of them, a mix being sealed in silence. Under the postcondition each
+  becomes a red publish job in the repo that lost the race. That is four reds a day the fleet did
+  not have before, and it is the correct number: the alternative is four sealed mixes a day, which
+  is what the fleet actually had. Whoever is holding the loser's re-run should not "fix" it by
+  loosening the check.
 - **The window itself remains.** In this layout it cannot be removed — in-place replacement means
   unsealed time, and the alternative is a layout migration every reader must land first (the portal
   boot seeder, the gate's Azure-direct path, and every pinned satellite workflow copy).
