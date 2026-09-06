@@ -24,6 +24,10 @@ uses is operational detail about live services — it belongs with whoever runs 
   [Systemorph/Memex](https://github.com/Systemorph/Memex) repo — `docs/deployments.md` for what runs
   where, `deployments/aks/` for each one's configuration.
 
+- **What each instance actually runs** — platform build, commit, framework identity, update policy and
+  every module's coordinate — is not written down anywhere: every instance **reports it** to the control
+  instance, hourly. See [DeploymentInventory](/Doc/Architecture/DeploymentInventory).
+
 The rest of this page is the mechanism, and applies to any installation.
 
 ## Shared platform (all cloud instances)

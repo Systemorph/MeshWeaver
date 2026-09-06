@@ -137,6 +137,15 @@ public static class PluginCatalogConfigurationExtensions
                 // service: it is a pull-on-demand READER — it starts nothing, subscribes to nothing,
                 // and writes nothing, so it costs an instance that never calls it exactly nothing.
                 .AddSingleton<InstanceComboReader>()
+                // Every instance reports what it runs (Doc/Architecture/DeploymentInventory): the
+                // platform build, framework identity, update policy and the combo above, to the
+                // control instance's fleet inbox once the default install settles and hourly after.
+                // Inert without Hosting:Deployment — a report under a guessed id would overwrite
+                // another instance's inventory. Same two-registration idiom: the IHostedService
+                // forward is what STARTS it.
+                .AddSingleton<DeploymentReportService>()
+                .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
+                    sp => sp.GetRequiredService<DeploymentReportService>())
                 // The runtime modules/ writer (#1664 step 7) — lands a compiled module's
                 // assemblies + activation record; restart-as-activation. Inert until called:
                 // Slice C's PackageInstaller binary branch is its caller. Mesh-scoped so its

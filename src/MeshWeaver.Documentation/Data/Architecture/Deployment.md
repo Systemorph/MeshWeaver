@@ -19,6 +19,7 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 | Scenario | Read |
 |---|---|
 | See every **running instance** — who it's for, its infra, database, and version — and how to create or delete one | [Instances.md](/Doc/Architecture/Instances) |
+| Know **what each instance actually runs** — platform build, commit, framework identity, update policy and every module's pinned coordinate, reported by the instance itself, hourly | [DeploymentInventory.md](/Doc/Architecture/DeploymentInventory) |
 | **Database backups** & disaster recovery — managed PITR, geo-redundancy, restore | [DatabaseBackups.md](/Doc/Architecture/DatabaseBackups) |
 | Understand the release model, merge gates, version channels, and **policy-driven self-update** | [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy) |
 | Know what CD **guarantees** about a published image set — all-or-nothing publication, the promote ordering, the self-healing reconciler — and why you verify the IMAGE and never the green tick | [ContinuousDeliveryContract.md](/Doc/Architecture/ContinuousDeliveryContract) |
