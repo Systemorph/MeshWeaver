@@ -1904,6 +1904,28 @@ jobs:
     - name: "Every fleet image pin is extractable — the gate can fail (self-test)"
       run: python3 .github/scripts/check-pinned-digests.py --self-test
 
+    # 🚨 …and the OTHER question about the same pins, which existence answers nothing about:
+    # do a repository's pins agree with EACH OTHER, and do they name ONE promoted build?
+    # (MeshWeaver#3454.) Two manifests that both exist satisfy the sweep above completely and are
+    # still the whole defect when one is `ci.7917` and the other `ci.7574`; the precedent cost an
+    # hour of core CD with every check green (#3344). Three satellites had no such gate at all —
+    # not one that skipped, one that did not exist — so this script is what they now run, fetched
+    # at their pinned platform ref, and its self-test is proven HERE on every core PR.
+    #
+    # The self-test falsifies BOTH WAYS: a consistent set greens over a non-zero denominator, and
+    # each of the hand-edit splits — one of two `platform-image-digest:` literals moved, an `env:`
+    # digest moved while the `with:` copies stay, a lane ref moved off its own `platform-ref:`, an
+    # orphaned `MW_PLATFORM_REF`, a placeholder in EITHER shape, an unplaceable pin, an empty
+    # repository, and five registry-tag cases — fires on its own.
+    - name: "A repository's pins name ONE promoted build — the gate can fail (self-test)"
+      run: python3 .github/scripts/check-pin-set-consistency.py --self-test
+
+    # Core itself pins no platform image (it IS the platform), so this is a MEASURED zero and it is
+    # printed as one. Deliberately without `--require-pins`: the day core does start pinning, the
+    # denominator above stops reading 0 and the arms engage — nothing here has to be remembered.
+    - name: "…and this repository's own pin set is consistent"
+      run: python3 .github/scripts/check-pin-set-consistency.py --root .
+
     # 🚨 THE GAP actionlint CLOSES (MeshWeaver#3228): every check above reads a workflow with
     # `yaml.safe_load`, and **PyYAML accepts a duplicate mapping key and silently keeps the last
     # one**. So a STRUCTURAL defect — the kind GitHub itself refuses — parses cleanly here, every
