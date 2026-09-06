@@ -320,8 +320,9 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
 
     private CachedWorkspace BuildOrReuseWorkspace(string nodeTypePath, CompilationInputs inputs)
     {
+        var shapeKey = ShapeKeyOf(inputs);
         if (_cache.TryGetValue(nodeTypePath, out var existing)
-            && VersionsEqual(existing.SourceVersions, inputs.SourceVersions))
+            && CanReuseWorkspace(existing.SourceVersions, existing.ShapeKey, inputs))
         {
             return existing;
         }
@@ -389,12 +390,64 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
             ProjectId: projectId,
             SourceVersions: inputs.SourceVersions,
             DocumentsByPath: pathToDocId.ToImmutable(),
-            SkeletonDocumentId: skeletonDocId);
+            SkeletonDocumentId: skeletonDocId,
+            ShapeKey: shapeKey);
 
         _cache[nodeTypePath] = cached;
         logger.LogDebug("Built AdhocWorkspace for {NodeTypePath} with {DocCount} user documents",
             nodeTypePath, inputs.Sources.Length);
         return cached;
+    }
+
+    /// <summary>
+    /// Whether a cached workspace still describes <paramref name="inputs"/> — the WHOLE reuse
+    /// decision, extracted so it can be driven directly by a test.
+    ///
+    /// <para>🚨 Both halves are load-bearing and they cover different things: source VERSIONS carry
+    /// the identity of the source texts, and the shape key carries everything else the workspace was
+    /// built from — above all the reference set. Testing <see cref="ShapeKeyOf"/> alone would leave
+    /// this call site free to drop the shape check and stay green, which is the failure mode #3396
+    /// is an instance of.</para>
+    /// </summary>
+    internal static bool CanReuseWorkspace(
+        ImmutableDictionary<string, long> cachedSourceVersions,
+        int cachedShapeKey,
+        CompilationInputs inputs)
+        => VersionsEqual(cachedSourceVersions, inputs.SourceVersions)
+           && cachedShapeKey == ShapeKeyOf(inputs);
+
+    /// <summary>
+    /// Everything a workspace is built from EXCEPT the source texts, whose identity
+    /// <see cref="CompilationInputs.SourceVersions"/> already carries.
+    ///
+    /// <para>🚨 <b>Source versions alone are NOT the cache key.</b> They were, and the result was a
+    /// workspace pinned to a stale REFERENCE set: a NodeType whose sources had not changed but whose
+    /// module/reference set had kept answering the diagnostics it produced against the old
+    /// references. On memex-cloud that surfaced as a byte-identical 403,625-byte <c>Error</c> payload
+    /// nine minutes apart for <c>Store/Plugin</c>, whose own <c>compilationStatus</c> was <c>Ok</c> —
+    /// a false positive from the tool AGENTS.md points at for the pre-deploy sweep (#3396). The
+    /// reference set genuinely does move underneath unchanged sources: #3395 measured two compiles in
+    /// ONE boot resolving different module sets 15 s apart.</para>
+    ///
+    /// <para>A hash rather than a stored copy because this is compared on the interactive paths too
+    /// (hover, completions), and because retaining every reference list per NodeType would keep the
+    /// old <see cref="MetadataReference"/> graph alive — the very thing the disposal below exists to
+    /// release. A collision would reuse a stale workspace, i.e. degrade to exactly today's behaviour
+    /// for that one entry, so the failure direction is no worse than the bug being fixed.</para>
+    /// </summary>
+    internal static int ShapeKeyOf(CompilationInputs inputs)
+    {
+        var hash = new HashCode();
+        hash.Add(inputs.AssemblyName, StringComparer.Ordinal);
+        hash.Add(inputs.SkeletonSource, StringComparer.Ordinal);
+        hash.Add(inputs.GlobalUsingsSource, StringComparer.Ordinal);
+        hash.Add(inputs.ParseOptions);
+        hash.Add(inputs.CompilationOptions);
+        // Order matters: the reference list IS ordered, and a reorder can change resolution.
+        hash.Add(inputs.References.Length);
+        foreach (var reference in inputs.References)
+            hash.Add(reference.Display, StringComparer.Ordinal);
+        return hash.ToHashCode();
     }
 
     private static bool VersionsEqual(
@@ -871,5 +924,6 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
         ProjectId ProjectId,
         ImmutableDictionary<string, long> SourceVersions,
         ImmutableDictionary<string, DocumentId> DocumentsByPath,
-        DocumentId SkeletonDocumentId);
+        DocumentId SkeletonDocumentId,
+        int ShapeKey);
 }
