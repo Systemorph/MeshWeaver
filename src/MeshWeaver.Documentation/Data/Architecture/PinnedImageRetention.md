@@ -320,6 +320,12 @@ az acr task update --registry meshweaver --name purge-old-images --file purge-dr
 az acr task run   --registry meshweaver --name purge-old-images
 ```
 
+One dimension to check while you are in there: the per-step `timeout: 3600` is a ceiling **per
+step**, while the task's own `timeout` bounds the whole run — and both existing tasks are at 3600 s
+(measured 2026-09-06). Two steps therefore share one hour, not two. Each purge completes in minutes
+today, so this is a thing to confirm on the dry run rather than a number to change pre-emptively;
+`az acr task update --timeout <seconds>` is where it lives if it ever binds.
+
 Note what `--ago` measures: a manifest's `lastUpdateTime`, which a re-push refreshes. A digest that
 happens to be republished stays young; a digest that is merely *pinned* does not. That asymmetry is
 the whole failure in one sentence.
