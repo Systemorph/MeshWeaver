@@ -548,7 +548,15 @@ public record LayoutAreaHost : IDisposable
 
             // Emit as a Full: a complete snapshot the client's control streams
             // re-evaluate wholesale, delivering nested sub-areas reliably.
-            return new ChangeItem<EntityStore>(resultStore, Stream.StreamId, Stream.Hub.Version);
+            // 🚨 #3321 step 3: the hub is resolved ONCE, through the PRESENCE accessor, because
+            // this transform runs on the sync hub's turn — which a Dispose() on another thread can
+            // overtake — and a released stream has no Version to stamp. `null` is Update's own
+            // documented no-op. HubIfHeld, not TryGetHub: this mirrors the `TryGetActiveHub` guard
+            // Update already applied before posting the transform, so it refuses exactly when the
+            // write would be refused and never tightens a render that would still have landed.
+            if (Stream.HubIfHeld() is not { } renderHub)
+                return null;
+            return new ChangeItem<EntityStore>(resultStore, Stream.StreamId, renderHub.Version);
             // resolvedArea, not Reference.Area — the latter is null for a default-area
             // subscription, so this line said "(null)" for exactly the renders #1182 was
             // about. The render-FAILURE paths were fixed there; these two remaining
@@ -1428,7 +1436,10 @@ public record LayoutAreaHost : IDisposable
                 // Stop the "Building layout…" spinner now the area has resolved (to an error).
                 .Update(LayoutAreaReference.Data,
                     coll => coll.SetItem(ProgressDataId, new { message = "", progress = 100 }));
-            return new ChangeItem<EntityStore>(store, Stream.StreamId, Stream.Hub.Version);
+            // Hub resolved through the presence accessor — see PushRenderResult (#3321 step 3).
+            if (Stream.HubIfHeld() is not { } errorHub)
+                return null;
+            return new ChangeItem<EntityStore>(store, Stream.StreamId, errorHub.Version);
         }, updateEx => logger.LogWarning(updateEx, "Cannot surface render error for {Area}", area));
     }
 
@@ -1477,11 +1488,14 @@ public record LayoutAreaHost : IDisposable
     /// <param name="percent">Optional 0–100 completion hint.</param>
     public void UpdateProgress(string message, double? percent = null)
         => Stream.Update(current =>
-            new ChangeItem<EntityStore>(
-                (current ?? new EntityStore()).Update(LayoutAreaReference.Data,
-                    coll => coll.SetItem(ProgressDataId, new { message, progress = percent ?? 0 })),
-                Stream.StreamId,
-                Stream.Hub.Version),
+            // Hub resolved through the presence accessor — see PushRenderResult (#3321 step 3).
+            Stream.HubIfHeld() is not { } progressHub
+                ? null
+                : new ChangeItem<EntityStore>(
+                    (current ?? new EntityStore()).Update(LayoutAreaReference.Data,
+                        coll => coll.SetItem(ProgressDataId, new { message, progress = percent ?? 0 })),
+                    Stream.StreamId,
+                    progressHub.Version),
             // resolvedArea — see "Cannot apply render for" above.
             ex => logger.LogWarning(ex, "Cannot update loading progress for {Area}", resolvedArea));
 

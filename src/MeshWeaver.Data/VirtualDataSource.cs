@@ -171,10 +171,18 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
                         using (accessService?.ImpersonateAsSystem())
                             stream.Update(store =>
                             {
+                                // 🚨 #3321 step 3: this transform runs on the sync hub's turn, which
+                                // a Dispose() on another thread can overtake — and a released stream
+                                // has no hub to stamp a Version from. `null` is this delegate's own
+                                // documented no-op, so the refusal costs nothing and invents nothing.
+                                // PRESENCE, not liveness: it mirrors the `TryGetActiveHub` guard
+                                // Update already applied before posting this transform.
+                                if (stream.HubIfHeld() is not { } streamHub)
+                                    return null;
                                 var newStore = (store ?? new EntityStore())
                                     .WithCollection(typeSource.CollectionName, collection);
                                 return (ChangeItem<EntityStore>?)
-                                    new ChangeItem<EntityStore>(newStore, Id.ToString()!, stream.StreamId, ChangeType.Full, stream.Hub.Version, []);
+                                    new ChangeItem<EntityStore>(newStore, Id.ToString()!, stream.StreamId, ChangeType.Full, streamHub.Version, []);
                             }, _ => { });
                     },
                     // 🚨 THE ERROR ARM IS NOT OPTIONAL — omitting it is a PROCESS KILLER, not a

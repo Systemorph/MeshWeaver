@@ -1924,8 +1924,12 @@ public static class MeshDataSourceExtensions
         ISynchronizationStream<MeshNode> stream, MeshNode current,
         JsonElement updated, JsonPatch? patch, string changedBy)
     {
-        var updatedNode = updated.Deserialize<MeshNode>(stream.Hub.JsonSerializerOptions);
-        return new(updatedNode!, changedBy, stream.StreamId, ChangeType.Patch, stream.Hub.Version,
+        // One hub read, through RequireHub() — see the note on StandardReducers' patch functions
+        // (#3321 step 3): a reducer must return a change, so its only refusal channel is the
+        // TRANSIENT HubDisposingException, which ToChangeItem maps to its modelled `null`.
+        var hub = stream.RequireHub();
+        var updatedNode = updated.Deserialize<MeshNode>(hub.JsonSerializerOptions);
+        return new(updatedNode!, changedBy, stream.StreamId, ChangeType.Patch, hub.Version,
             [new EntityUpdate(nameof(MeshNode), updatedNode?.Id, updatedNode) { OldValue = current }]);
     }
 

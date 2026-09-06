@@ -84,6 +84,21 @@ c => c
         {
             try
             {
+                // 🚨 #3321 step 3: the stream is the SUBSCRIBER here, and a subscription callback
+                // can be mid-flight when the stream is disposed or its hub torn down — at which
+                // point `ret.Hub` is released. Skipping the whole emission is the "no" this
+                // callback already models: it returns void, and `ret.OnNext` on a released stream
+                // is a documented drop, so the frame had nowhere to land either way. PRESENCE, not
+                // liveness (HubIfHeld, not TryGetHub) — this guard mirrors OnNext's own
+                // `isDisposed || Hub is null`, so it can never refuse a frame that would still
+                // have landed. Resolved ONCE and reused for both stamps below, never re-read.
+                if (ret.HubIfHeld() is not { } retHub)
+                {
+                    logger.LogDebug(
+                        "Combined stream {StreamId} for {Address} is torn down — dropping this frame",
+                        ret.StreamId, workspace.Hub.Address);
+                    return;
+                }
                 logger.LogDebug("Retrieved values {Changes}", changes.Select(c => JsonSerializer.Serialize(c, ret.Host.JsonSerializerOptions)));
                 if (!isInitialized)
                 {
@@ -92,7 +107,7 @@ c => c
                         .Where(c => c.Value != null)
                         .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value!));
 
-                    var initialChange = new ChangeItem<EntityStore>(initialStore, ret.StreamId, ret.Hub.Version);
+                    var initialChange = new ChangeItem<EntityStore>(initialStore, ret.StreamId, retHub.Version);
 
                     ret.OnNext(initialChange);
 
@@ -115,7 +130,7 @@ c => c
                             .Where(c => c.Value != null)
                             .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value!));
 
-                        var updateChange = new ChangeItem<EntityStore>(updatedStore, ret.StreamId, ret.Hub.Version)
+                        var updateChange = new ChangeItem<EntityStore>(updatedStore, ret.StreamId, retHub.Version)
                         {
                             ChangedBy = string.Join(", ", newChanges.Select(c => c.ChangedBy).Where(cb => !string.IsNullOrEmpty(cb))),
                             Updates = newChanges.SelectMany(c => c.Updates).ToArray(),
