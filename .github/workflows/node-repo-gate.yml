@@ -705,8 +705,15 @@ jobs:
           if [ -n "${REGISTRY_URL:-}" ]; then
             # The REGISTRY serves the sealed publication (MeshWeaver#2487) — HTTPS + instance key,
             # no Azure, works on pull_request. Fails RED on 404 (unsealed) or 401/403 (no grant).
-            fetched=0
-            for src in $UPSTREAMS; do
+            #
+            # 🚨 ONE SOURCE'S SEED READS ONE PUBLICATION, OR NONE (MeshWeaver#3401). A publication
+            # that moves under the N+1 reads below answers 412; the correct response is to read
+            # the publication that NOW applies — never to keep the half already fetched, and
+            # never to re-ask the read that failed. `SRC_FETCHED` counts only a completed source,
+            # so a restart cannot inflate the total.
+            seed_one_source() { # <src> → 0 fetched, 2 the publication moved mid-fetch (re-read)
+              local src="$1" base code generation name bcode
+              SRC_FETCHED=0
               base="${REGISTRY_URL%/}/api/plugins/bundles/prebuilt/$IDENTITY/$src"
               code=$(registry_get "$base" "$SEED_DIR/.index.json")
               case "$code" in
@@ -734,18 +741,49 @@ jobs:
               # generation; we then send no If-Match and behave exactly as before, so an older
               # portal is unaffected.
               generation=$(jq -r '.generation // empty' "$SEED_DIR/.index.json")
+              : > "$SEED_DIR/.attempt.list"
               for name in $(jq -r '.bundles[]' "$SEED_DIR/.index.json"); do
                 bcode=$(registry_get "$base/$name" "$SEED_DIR/$name" "$generation")
                 case "$bcode" in
                   200) ;;
-                  412) echo "::error::the '$src' publication was resealed while this fetch was in flight (we held generation $generation). The gate reads ONE publication or none — never half of two. Re-run once the publisher has settled."; exit 1 ;;
+                  412)
+                    # 🚨 DISCARD THE HALF WE HOLD. A name the REJECTED publication listed and the
+                    # next one does not would otherwise linger in the seed — a bundle from a
+                    # publication this gate refused, which is the mix the precondition exists to
+                    # prevent. The re-read then re-fetches every name the current seal lists.
+                    rm -f "$SEED_DIR/$name"
+                    while IFS= read -r stale; do rm -f "$SEED_DIR/$stale"; done < "$SEED_DIR/.attempt.list"
+                    rm -f "$SEED_DIR/.attempt.list"
+                    echo "::notice::the '$src' publication was resealed while this fetch was in flight (we held generation $generation) — discarding the partial seed and re-reading the publication that now applies. The gate reads ONE publication or none, never half of two."
+                    return 2 ;;
                   404) echo "::error::'$name' is listed in the '$src' publication index but the registry will not serve it — the seal and the store disagree, and that needs a republish. This is NOT the republish window: that answers 503 and is waited out above."; exit 1 ;;
                   *) echo "::error::could not fetch $name from $base — registry answered $bcode."; exit 1 ;;
                 esac
-                fetched=$((fetched+1))
+                printf '%s\n' "$name" >> "$SEED_DIR/.attempt.list"
+                SRC_FETCHED=$((SRC_FETCHED+1))
               done
-              rm -f "$SEED_DIR/.index.json"
+              rm -f "$SEED_DIR/.index.json" "$SEED_DIR/.attempt.list"
               echo "upstream '$src': fetched from $REGISTRY_URL"
+            }
+            # 🚨 BOUNDED, and the bound is what makes this a READ rather than a poll: a publisher
+            # resealing faster than a seed completes is a real condition (two lanes publish the
+            # `plugins` prefix — core CD and the Plugins satellite), and it goes RED naming itself
+            # rather than spinning. Nothing here re-asks a read the server refused.
+            RESTARTS=2
+            fetched=0
+            for src in $UPSTREAMS; do
+              attempt=0
+              while :; do
+                rc=0
+                seed_one_source "$src" || rc=$?
+                [ "$rc" = 2 ] || break
+                attempt=$((attempt+1))
+                if [ "$attempt" -gt "$RESTARTS" ]; then
+                  echo "::error::the '$src' publication was resealed under every one of $((RESTARTS+1)) seed attempts — the publisher is republishing faster than this gate can read one publication. This is MeshWeaver#3401, NOT a fault of this repo's diff or its platform pin: re-run once the upstream's publish-bake has settled."
+                  exit 1
+                fi
+              done
+              fetched=$((fetched+SRC_FETCHED))
             done
             printf '%s' "$IDENTITY" > "$SEED_DIR/framework-mvid.txt"
             [ "$fetched" -gt 0 ] || { echo "::error::sealed but empty — refusing an empty seed"; exit 1; }

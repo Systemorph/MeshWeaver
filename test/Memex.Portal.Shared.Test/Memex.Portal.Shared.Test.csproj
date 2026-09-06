@@ -19,6 +19,13 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
+    <!-- SealedModuleCompositionTest drives the REAL `memex build plugin` sealed-module composition
+         (MeshWeaver#3401) against the REAL registry endpoints in this project's TestServer. The
+         defect is a client that reads a publication's index and then its bundles without pinning
+         which publication it read, so the loop that has to be right is the CLI's — a copy of it in
+         a harness here would be free to agree with itself. The CLI has no ProjectReferences and is
+         in no MeshModulesClosureSubset, so nothing of it lands in modules/ for prune to shadow. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Cli\MeshWeaver.Cli.csproj" />
     <!-- MapDefaultEndpoints / MapVersionEndpoint live here, beside /health and /alive. -->
     <ProjectReference Include="..\..\memex\aspire\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
     <!-- DbVersionHealthCheckTest drives the portal's own db_version health check: whether a

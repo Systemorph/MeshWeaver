@@ -463,13 +463,75 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         string registryUrl, string key, string upstreamSources, string identity,
         string modules, string extDir, CancellationToken ct)
     {
-        Directory.CreateDirectory(extDir);
-        var args = new List<string>();
         using var http = new HttpClient { BaseAddress = new Uri(registryUrl.TrimEnd('/') + "/") };
         http.DefaultRequestHeaders.Authorization = new("Bearer", key);
+        return await ComposeSealedModules(http, upstreamSources, identity, modules, extDir, ct);
+    }
+
+    /// <summary>
+    /// How many times a consumer re-reads a publication that moved under its N+1 reads before it
+    /// refuses (MeshWeaver#3401). The bound is what makes this a READ rather than a poll: a
+    /// publisher resealing faster than a composition completes is a real condition, and it must
+    /// go RED naming itself instead of spinning. Mirrored as <c>RESTARTS</c> in
+    /// <c>.github/scripts/compose-sealed-modules.sh</c> and <c>node-repo-gate.yml</c>.
+    /// </summary>
+    public const int MaxPublicationRestarts = 2;
+
+    /// <summary>
+    /// 🚨 <b>A composition reads ONE publication, or none</b> (MeshWeaver#3401). The module-set
+    /// index and the N bundle fetches are N+1 reads of a directory the publisher unseals, rewrites
+    /// and re-seals — and both core CD and the Plugins satellite publish the <c>plugins</c>
+    /// prefix, so the two writers can land inside each other's window. Each fetch therefore pins
+    /// the generation its index came from; a publication that moves answers 412, and the answer to
+    /// that is to read the publication that NOW applies — never to keep the half already staged,
+    /// and never to re-ask the read the server refused.
+    ///
+    /// <para>Takes the <see cref="HttpClient"/> so the composition can be driven against a real
+    /// registry in a test: this loop is the thing that has to be right, and a copy of it in a test
+    /// harness would be free to agree with itself.</para>
+    /// </summary>
+    public async Task<List<string>?> ComposeSealedModules(
+        HttpClient http, string upstreamSources, string identity, string modules, string extDir,
+        CancellationToken ct)
+    {
+        Directory.CreateDirectory(extDir);
+        for (var attempt = 0; ; attempt++)
+        {
+            var composed = await ComposeOnce(http, upstreamSources, identity, modules, extDir, ct);
+            // Composed, or refused for a reason already reported — either answer is final.
+            if (!composed.PublicationMoved) return composed.Args;
+            if (attempt >= MaxPublicationRestarts)
+            {
+                await error.WriteLineAsync(
+                    $"error: the upstream publication(s) ({upstreamSources}) for identity {identity} "
+                    + $"were resealed under every one of {MaxPublicationRestarts + 1} composition "
+                    + "attempts — the publisher is republishing faster than a module set can be "
+                    + "read (MeshWeaver#3401). This is not a fault of this repo's content or its "
+                    + "platform pin: re-run once the upstream's publish-bake has settled.");
+                return null;
+            }
+        }
+    }
+
+    /// <summary>One composition attempt against one publication instance per upstream. Carries
+    /// <see cref="ComposeAttempt.PublicationMoved"/> when a 412 says the seal moved mid-fetch —
+    /// distinct from a refusal, which comes back as a null <see cref="ComposeAttempt.Args"/>.
+    /// </summary>
+    private readonly record struct ComposeAttempt(List<string>? Args, bool PublicationMoved);
+
+    private async Task<ComposeAttempt> ComposeOnce(
+        HttpClient http, string upstreamSources, string identity, string modules, string extDir,
+        CancellationToken ct)
+    {
+        var args = new List<string>();
+        // What THIS attempt staged, so a 412 can discard it: a module bundle from a publication
+        // that has since been superseded must not survive into the compile surface — mixing two
+        // publications' module bytes is the mvid mismatch that DECLINES every NodeType assembly
+        // at adoption, silently.
+        var staged = new List<string>();
 
         var sources = upstreamSources.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var sealedSets = new List<(string Source, List<string> Bundles)>();
+        var sealedSets = new List<(string Source, List<string> Bundles, string? Generation)>();
         foreach (var src in sources)
         {
             var url = $"api/plugins/bundles/prebuilt/{identity}/{src}/modules";
@@ -482,22 +544,23 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                     + $"sealing (no modules/_index). Republish '{src}' under a core that carries "
                     + "MeshWeaver#2707. Not composing from the registry instead: that is the decline this "
                     + "exists to end.");
-                return null;
+                return new ComposeAttempt(null, false);
             }
             if (response.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
             {
                 await error.WriteLineAsync(
                     $"error: the registry refused the instance key for '{src}' ({(int)response.StatusCode}) — "
                     + $"the instance needs a whole-source grant '{src}/*'.");
-                return null;
+                return new ComposeAttempt(null, false);
             }
             if (!response.IsSuccessStatusCode)
             {
                 await error.WriteLineAsync(
                     $"error: registry answered {(int)response.StatusCode} for {url} — refusing.");
-                return null;
+                return new ComposeAttempt(null, false);
             }
             List<string> bundles;
+            string? generation;
             try
             {
                 using var doc = await System.Text.Json.JsonDocument.ParseAsync(
@@ -507,20 +570,25 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                 {
                     await error.WriteLineAsync(
                         $"error: {url} answered 200 but not a module-set index — refusing to guess.");
-                    return null;
+                    return new ComposeAttempt(null, false);
                 }
                 bundles = arr.EnumerateArray()
                     .Select(e => e.GetString())
                     .Where(n => n is { Length: > 0 })
                     .Select(n => n!)
                     .ToList();
+                // The publication INSTANCE this listing describes (#3401). Absent on a registry
+                // that predates it — no If-Match is then sent and the behaviour is as before.
+                generation = doc.RootElement.TryGetProperty("generation", out var gen)
+                    ? gen.GetString()
+                    : null;
             }
             catch (System.Text.Json.JsonException ex)
             {
                 await error.WriteLineAsync($"error: {url} answered 200 but not JSON: {ex.Message}");
-                return null;
+                return new ComposeAttempt(null, false);
             }
-            sealedSets.Add((src, bundles));
+            sealedSets.Add((src, bundles, generation));
             await output.WriteLineAsync(
                 $"upstream '{src}' sealed {bundles.Count} module bundle(s) for identity {identity}");
         }
@@ -529,7 +597,7 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         {
             var wanted = $"{pkg.ToLowerInvariant()}.module.nupkg";
             var hit = sealedSets
-                .Select(set => (set.Source, Name: set.Bundles.FirstOrDefault(
+                .Select(set => (set.Source, set.Generation, Name: set.Bundles.FirstOrDefault(
                     b => string.Equals(b, wanted, StringComparison.OrdinalIgnoreCase))))
                 .FirstOrDefault(x => x.Name is not null);
             if (hit.Name is null)
@@ -540,15 +608,34 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                     + "in its bake (module-artifacts / registry-modules) so its seal carries it; composing it "
                     + "from anywhere else would carry the wrong mvid and every publication type built against "
                     + "it would be DECLINED.");
-                return null;
+                return new ComposeAttempt(null, false);
             }
             var zipPath = Path.Combine(extDir, hit.Name);
+            var moduleUrl = $"api/plugins/bundles/prebuilt/{identity}/{hit.Source}/modules/{hit.Name}";
             try
             {
-                using var moduleResponse = await RegistryGet(
-                    http,
-                    $"api/plugins/bundles/prebuilt/{identity}/{hit.Source}/modules/{hit.Name}",
-                    null, ct);
+                // 🚨 PINNED to the generation the listing above came from (#3401). Without it this
+                // fetch silently returns bytes from whatever publication is current, which need not
+                // be the one whose index named this bundle.
+                using var moduleResponse = await RegistryGet(http, moduleUrl, hit.Generation, ct);
+                if (moduleResponse.StatusCode == System.Net.HttpStatusCode.PreconditionFailed)
+                {
+                    await output.WriteLineAsync(
+                        $"the '{hit.Source}' publication was resealed while its module set was being "
+                        + $"composed (we held generation {hit.Generation}) — discarding what this "
+                        + "attempt staged and re-reading the publication that now applies.");
+                    Discard(staged, zipPath);
+                    return new ComposeAttempt(null, true);
+                }
+                if (moduleResponse.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    await error.WriteLineAsync(
+                        $"error: '{hit.Name}' is listed in the '{hit.Source}' sealed module set for "
+                        + $"identity {identity} but the registry will not serve it — the seal and the "
+                        + "store disagree, and that needs a republish. This is NOT the republish "
+                        + "window: that answers 503 and is waited out.");
+                    return new ComposeAttempt(null, false);
+                }
                 moduleResponse.EnsureSuccessStatusCode();
                 await using var body = await moduleResponse.Content.ReadAsStreamAsync(ct);
                 await using var file = File.Create(zipPath);
@@ -557,16 +644,27 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
             catch (Exception ex)
             {
                 await error.WriteLineAsync(
-                    $"error: could not fetch sealed module {hit.Name} of '{hit.Source}' for identity {identity}: {ex.Message}");
-                return null;
+                    $"error: could not fetch sealed module {hit.Name} of '{hit.Source}' for identity "
+                    + $"{identity}: {ex.GetType().Name}: {ex.Message}");
+                return new ComposeAttempt(null, false);
             }
             var name = await StageModuleBundle(zipPath, extDir, pkg);
-            if (name is null) return null;
+            if (name is null) return new ComposeAttempt(null, false);
+            staged.Add(Path.Combine(extDir, name));
             args.Add("--module"); args.Add($"/ext/{name}/{name}.dll");
             await output.WriteLineAsync(
                 $"external module composed from the SEALED publication of '{hit.Source}': {name} ({pkg}, {hit.Name})");
         }
-        return args;
+        return new ComposeAttempt(args, false);
+    }
+
+    /// <summary>Removes what one rejected attempt staged, so nothing from a superseded publication
+    /// reaches the compile surface (#3401).</summary>
+    private static void Discard(List<string> staged, string zipPath)
+    {
+        File.Delete(zipPath);                 // a no-op when the fetch never landed
+        foreach (var dir in staged)
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
     }
 
     /// <summary>
