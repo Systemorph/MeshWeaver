@@ -1,7 +1,7 @@
 ---
 Name: A Container Registry in Memex
 Category: Architecture
-Description: A design for serving OCI images from the mesh — what it would buy us that ACR cannot, the bootstrap circularity that decides the shape, and why the first increment is a read-through mirror rather than a replacement. Proposal, not built.
+Description: Serving OCI images from the mesh — what it buys us that ACR cannot, the bootstrap circularity that decides the shape, and why the first increment is a read-through mirror rather than a replacement. The pull surface, the bearer handshake and closure-as-data are built; the cache, GC and the /app assembly closure are not.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="9" width="20" height="11" rx="2"/><path d="M6 9V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v3"/><line x1="7" y1="14" x2="7" y2="14"/><line x1="11" y1="14" x2="11" y2="14"/><line x1="15" y1="14" x2="15" y2="14"/></svg>
 ---
 
@@ -16,10 +16,21 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > one-producer FATAL by name; two identical fully-qualified types is `CS0433`; two identical
 > extension signatures is `CS0121`. The config section moved to `ContainerImages:` for the same
 > reason. Renamed in #3361 while nothing referenced it yet — which is the only cheap moment.
-> `GET /v2/`, `…/manifests/{reference}`, `…/blobs/{digest}` and `…/tags/list`, proxied to the
-> upstream with the mirror's own credential while the caller authenticates against memex. No push,
-> no cache yet, and the boot image still comes from the upstream. The rest of this page — caching,
-> closure-as-data, GC — remains DESIGN. Nothing else described here is built. Container images live in Azure Container
+> **Built:** `GET /v2/`, the bearer token exchange at `GET /v2/token`, `…/manifests/{reference}`,
+> `…/blobs/{digest}` (Range included) and `…/tags/list`, proxied to the upstream with the mirror's
+> own credential while the caller authenticates against memex — plus the OCI-level **closure and
+> provenance of every manifest served, recorded as `ContainerImage` nodes**.
+>
+> 🚨 The token exchange arrived one increment LATE, and the gap is worth recording: the first cut
+> emitted a correct-looking `WWW-Authenticate` challenge naming a realm at `/v2/token`, and **nothing
+> served that route**. Every endpoint read correctly in isolation; a real `docker pull` went
+> 401 → fetch the realm → 404 → give up. Only a test that walks the WHOLE handshake — probe,
+> challenge, token, pull — could see it, which is why `PullSurfaceTest` is written as one
+> conversation rather than per-endpoint assertions.
+>
+> **Not built:** no push, **no cache** (every pull still goes to the upstream), no GC, and no
+> **/app assembly** closure — see "What v1 records" below for exactly where that line falls. The
+> boot image comes from the upstream, permanently. Container images live in Azure Container
 > Registry (`meshweaver.azurecr.io`), named by `ACR:` in `main-cd.yml` and referenced by eight
 > workflows. This page exists so the decision is a decision rather than a recurring conversation.
 
@@ -175,6 +186,64 @@ alone, because they all derive from *reading* manifests and layers.
   on the heap.
 * **The mirror's own credential failing is a 502, not a 401** — a 401 would send the caller to fix
   a token that is not the broken thing.
+* **The handshake COMPLETES.** `GET /v2/token` is the realm the challenge names, and it sits
+  OUTSIDE the challenge filter: a token endpoint that answered 401-with-a-challenge would name
+  itself and loop a client between the two forever. It refuses with a bare 401 instead.
+* **The mirror mints nothing.** The bearer the token exchange hands back IS the caller's own
+  instance key. A minted token would stay valid for its full lifetime after the key behind it was
+  revoked, and would make the mirror a second issuer of credentials for an identity it does not
+  own. Echoing the key means every later request re-runs the authenticator, so revocation takes
+  effect at the next exchange — and the mirror stores no token state at all.
+* **Layer transfers are BOUNDED, not merely unbuffered.** The body copy runs through `IIoPool`'s
+  `Blob` pool (cap 128), holding a slot for the whole transfer. Not buffering keeps one layer off
+  the heap; the pool is what stops a hundred concurrent pulls — a rolling restart of a large
+  deployment — from each holding a socket and a buffer at once. `Http` (cap 16) would have been
+  wrong: one layer parked there for a minute starves every plugin-catalog call the portal makes.
+
+### What v1 records, and the line it does not cross
+
+Every manifest the mirror serves is recorded as a `ContainerImage` node under
+`ContainerImages:ImageRoot` — **empty means recording is off, and the mirror still proxies**. The
+record carries the resolved digest (computed over the served bytes, never taken from a header), the
+media type, the config digest, every layer by digest and size, an index's platforms, and the
+provenance: which upstream, which repository, which reference, observed when and by whom.
+
+**It records what it SEES, and fetches nothing speculatively.** A real pull fetches the index for a
+tag and then the manifest for its own architecture, so one pull leaves both records behind, and the
+index's platform entries are digests whose own records carry the layers. That keeps recording free:
+no extra upstream request, no added pull latency, nothing a cache would later have to justify. The
+cost is stated plainly — an index nobody ever resolves (`crane manifest` and stop) leaves its
+platforms unrecorded.
+
+Recording is **observational and cannot fail a pull**: the write is subscribed off the response
+path with an explicit error arm, and a failure is a warning naming the root, never something handed
+to a `docker pull`.
+
+🚨 **The line.** This is the **OCI-level** closure — which blobs, how big, from where. It is NOT
+the **/app assembly** closure that [The Platform Image's Closure](../PlatformImageClosure)
+is about, and that #3328 was: those file names live INSIDE a layer tarball and no manifest names
+them. Reaching them means streaming the app layer through gzip + tar and recording entry names plus
+the (few-KB) `meshweaver-surface.manifest`. That is a bounded, streamable piece of work, and
+deliberately a separate increment: it cannot ride the pull path — decompressing hundreds of
+megabytes per pull is exactly the cost this design refuses — so it needs a trigger and a bandwidth
+budget of its own.
+
+#### How #3334's gate maps onto this data
+
+`check-platform-reference-set.sh` has two halves, and they land on opposite sides of that line.
+
+* **One producer** — no composed module's name may appear as `<name>.dll` in `/app` nor as an entry
+  in the surface manifest. This becomes a data assertion *once the layer scan exists*: read the
+  composed set from `main-cd.yml` (unchanged — it must stay the producer's own list, never a second
+  copy) and assert no name appears in the image record's app-assembly list or surface manifest.
+  Today the data cannot answer it.
+* **The set must resolve** — this half can **never** become an assertion over data, by construction.
+  It does not model MSBuild's binding rules, it RUNS them: a throwaway project whose references ARE
+  the directory, built with the module lane's own flags. Data can make the probe cheaper (its inputs
+  become known without pulling), but the verdict still requires a build. Saying otherwise would be
+  the second-opinion mistake the script's own comments warn about.
+
+So acceptance (2) is *"half of it, after one more increment"* — not "done", and not "impossible".
 
 **v1 is the proxy WITHOUT the cache, deliberately.** The credential goal is met by authenticating
 the caller against memex and using the mirror's credential upstream; caching is an optimisation on
@@ -211,12 +280,21 @@ verb list.
 
 ## What would say this is working
 
-Not "images pull". The measurable claims are:
+Not "images pull". The measurable claims, with where each one actually stands:
 
-* the closure of a promoted image can be answered from mesh data, with no `docker run`;
-* #3334's gate can be re-expressed as an assertion over that data;
-* a pin bump moves **one** reference instead of six literals;
-* an ACR outage still costs us nothing at boot, because the boot image never moved.
+| claim | status |
+|---|---|
+| the closure of a promoted image can be answered from mesh data, with no `docker run` | **OCI closure: yes** — config and every layer, by digest and size, read off the node. **/app assembly closure: not yet** — it needs the layer scan described above |
+| #3334's gate can be re-expressed as an assertion over that data | **half, and the other half never** — see the mapping above: one-producer becomes data once the layer scan lands; the resolve half RUNS MSBuild and cannot be modelled |
+| a pin bump moves **one** reference instead of six literals | **the data supports it** — a tag is resolved to a digest at a deterministic node path, so a consumer carries the tag. Nothing has been converted to use it yet; `ci.yml` still carries its six literals |
+| an ACR outage still costs us nothing at boot | **yes, structurally** — the boot image never moved, and switching the mirror off is a configuration change |
+
+🚨 **And one that is NOT yet measured: pull latency.** The mirror adds a hop, and no number for it
+against a real upstream exists. The streaming and pool behaviour are tested (a client receives the
+first bytes while the upstream is still producing the rest), but that is a correctness property, not
+a latency measurement. Nothing should DEPEND on the mirror until pull latency through it is measured
+against ACR directly — which is also what would settle whether the mirror *improves* pull
+availability, the open question the single-zone measurement above raised.
 
 ## Related
 

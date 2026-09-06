@@ -67,13 +67,65 @@ that, letting a consumer **ask**.
 
 ## The three steps, in the only order that works
 
-1. **Expose the predicate.** `SynchronizationStreamLiveness.IsUsable(stream)` and
+1. ✅ **Expose the predicate.** `SynchronizationStreamLiveness.IsUsable(stream)` and
    `stream.TryGetHub()` make the existing answer reachable from other assemblies.
-2. **Migrate the dereference sites** onto `TryGetHub()`, which can answer `null`.
+2. ✅ **Migrate the dereference sites** onto `TryGetHub()`, which can answer `null`.
 3. **Only then** clear `Hub` on disposal — at which point a null hub is a state the contract admits
-   rather than a lie.
+   rather than a lie. **Not done.**
 
 Doing 3 before 2 is the production NRE, in the order it happened. Doing 2 before 1 is impossible.
+
+### What step 2 actually migrated, and what it deliberately did not
+
+Measured on the branch that did it: **54** occurrences in `src/` where the receiver of `.Hub` is an
+`ISynchronizationStream` (excluding comments, and excluding `SynchronizationStream`'s own bare
+`Hub` field reads). The header's "47" is the earlier count and is superseded. Of those 54, **28**
+were migrated and **26** were deliberately left.
+
+**Every migrated site answers with the "no" its own signature already modelled** — that is the rule,
+not a style preference. `GetPatch` returns `null` (its callers already test for it); `GetStream<T>`
+returns `Observable.Empty<T>()` (a dead stream's completed store would produce exactly that);
+`GetDataBoundValue<T>` returns `default` (the answer it already gives twice for an absent value);
+`SubmitModel` returns an `ActivityLog` carrying `activity.dataUpdate.streamClosed`, the same shape
+as its existing no-route branch; `ToDataChanged` returns `null`, its declared "nothing to forward".
+Where a surface has no absent value, the refusal goes out the channel it does have:
+`WorkspaceOperations.UpdateStream` throws its existing `DataException`, and `LayoutAreaHost`'s
+constructor and `MarkdownExecutionExtensions.Execute` throw `HubDisposingException` — an
+`ObjectDisposedException`, so it classifies as `ErrorType.ShuttingDown`, the transient
+"retry, the address may reactivate" answer instead of the terminal `DeliveryFailure` the NRE
+produced. **No site swallows.**
+
+The 26 left fall in three groups, and the reason differs per group:
+
+- **Already answerable, or already a liveness check (3).** `LayoutClientExtensions`'
+  conversion-failure logger is already written `stream?.Hub?.…`. `Workspace`'s cache probe reads
+  `existing.Stream.Hub is { RunLevel: <= Started }` — a null-safe pattern that IS a liveness check;
+  replacing it with `IsUsable` would TIGHTEN it (chain walk, fault check) and so change behaviour
+  for a live stream, which step 2 may not do. `Workspace`'s eviction path calls
+  `kv.Value.Stream.Hub.Dispose()` inside a try/catch that already logs the failure — and guarding it
+  would SKIP a disposal, leaking the hub of a reduced stream whose parent died first.
+  (`SynchronizationStream`'s own write paths funnel through the private `TryGetActiveHub`, and
+  `DeliverMessage` / `OnNext` / `RegisterForDisposal` carry `isDisposed || Hub is null`. Those are
+  bare `Hub` field reads with no stream receiver, so they are outside the 54 by construction.)
+- **Hub-turn confined (3).** The three `Stream.Hub.Version` reads inside `LayoutAreaHost`'s
+  `Stream.Update(…)` lambdas. `Update` already refuses on a dead stream via
+  `SignalDisposedToProducer`, and the lambda itself runs inside the sync hub's
+  `UpdateStreamRequest` handler — a hub that is executing a turn is by construction alive.
+- **Owner-side, no way to say "no" (20).** `StandardReducers` (10), `MeshDataSource`'s patch
+  reducer (2), and the stream-creation paths in `WorkspaceStreams` (2),
+  `PartitionedHubDataSource` (2), `VirtualDataSource` (1), `GenericUnpartitionedDataSource` (1) and
+  `JsonSynchronizationStream`'s `reduced.Hub.Register` (2). A reducer's signature is
+  `… → ChangeItem<T>`: it MUST return a change, so
+  there is no absent value to hand back and no error channel to use. Forcing one would mean
+  inventing a failure mode rather than migrating onto an existing one — so they are named here
+  instead. **They are step 3's remaining work**: before `Hub` can be cleared on disposal, each of
+  these needs a decision about what a reducer does when its stream has died, and that is a design
+  question, not a mechanical substitution.
+
+One more constraint the migration follows: **a guarded read inside a per-emission lambda re-reads
+`TryGetHub()` rather than capturing the hub resolved at pipeline-construction time.** Capturing
+would pin the hub's whole resolved graph for the lifetime of every subscription — the exact
+retention this issue exists to release.
 
 ### Why step 1 is an extension, not an interface member
 

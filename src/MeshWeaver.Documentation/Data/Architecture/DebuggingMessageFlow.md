@@ -231,6 +231,23 @@ hub.NoteRequestStage(request.Id, "CREATE_CHAIN_COMPLETED_EMPTY …");      // �
 hub.NoteRequestStage(request.Id, $"CREATE_SAVE_DECLINED adapter={…} path={…}");
 ```
 
+The two handlers behind every cross-hub mesh-node write record their arms the same way
+(MeshWeaver#2543 — the bake wedge's trail ended at `HANDLER_EXIT state=Processed` with nothing
+after it, on both hops, and could not say which wait it was in):
+
+| trail ends at | what it means |
+|---|---|
+| `UPSERT_READ …` (nodeops, `CreateOrUpdateNodeRequest`) | the existing-node read answered; the arrow names the branch taken (`create`, `no-op probe`, `update`) |
+| `UPSERT_WRITE_THROUGH_STREAM path=…` | nodeops handed the write to the per-node OWNER; the wait is now on that owner's `PatchDataRequest` — read ITS trail |
+| `UPSERT_REPLY ok …` / `UPSERT_REPLY fail reason=…` | nodeops posted its verdict; a caller still waiting lost the reply in transit |
+| `PATCH_MERGE_DISPATCHED` and nothing after | the owner queued its merge turn on the primary stream's executor and the turn NEVER RAN — the executor is behind other work (a compile, a burst of sibling writes); the offset of the next stage, when it comes, is the queueing time |
+| `PATCH_MERGE_TURN entered` | the turn ran; a trail ending here faulted inside the merge without a verdict |
+| `PATCH_MERGE_DEFERRED cold-store` | the owner was activating cold; the retry re-arms once the store loads (`deferred-retry`) |
+| `PATCH_MERGE_STAMPED v=… refused=…` and nothing after | the merge committed on the executor but the echo CONTAINING it never reached the ack watcher — the reduced stream is not emitting |
+| `PATCH_MERGE_NOCHANGE refused=…` | the merge changed nothing (a no-op or a fully refused write); the verdict follows immediately |
+| `PATCH_ECHO_SEEN` and nothing after | the commit echo arrived; the wait is the durable flush (storage behind) — `[PatchAck] FLUSH_OUTLIVED_BOUND` names the same wait from the log side |
+| `PATCH_ACK ok` / `PATCH_ACK nack=<code>` | the owner posted its verdict |
+
 `NoteRequestStage` is a no-op unless something is awaiting that id, so it is free to call
 unconditionally. **Add the `onCompleted` arm**: a chain that completes empty posts nothing, and
 without a stage there it is indistinguishable from one that is still running. `HandleCreateNodeRequest`

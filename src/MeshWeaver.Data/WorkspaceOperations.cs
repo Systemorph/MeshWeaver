@@ -150,7 +150,14 @@ public static class WorkspaceOperations
         var stream = group.Key.DataSource!.GetStreamForPartition(group.Key.Partition);
         if (stream is null)
             throw new DataException($"Data source {group.Key.DataSource.Reference} does not have a stream for partition {group.Key.Partition}");
-        if (!stream.Hub.Started.IsCompleted)
+        // Two distinct refusals, both through this method's existing error channel (DataException,
+        // which the caller already surfaces as an activity log entry). "Torn down" is checked
+        // FIRST because a dead stream cannot answer the readiness question at all — its Hub is a
+        // corpse — and because the two states need different words: "not initialized" says wait,
+        // "torn down" says this stream will never be ready.
+        if (stream.TryGetHub() is not { } streamHub)
+            throw new DataException($"Data source {group.Key.DataSource.Reference} for partition {group.Key.Partition} has been torn down.");
+        if (!streamHub.Started.IsCompleted)
             throw new DataException($"Data source {group.Key.DataSource.Reference} for partition {group.Key.Partition} is not initialized.");
 
         var applied = new AsyncSubject<ImmutableList<LogMessage>>();

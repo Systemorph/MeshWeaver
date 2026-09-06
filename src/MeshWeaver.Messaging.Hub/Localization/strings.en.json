@@ -1221,6 +1221,7 @@
   "activity.compile.aborted": "Compile aborted by {exceptionType}:\n{detail}",
   "activity.compile.releaseCreated": "Release created: {path}",
   "activity.dataUpdate.noRoute": "Failed to post DataChangeRequest (no route).",
+  "activity.dataUpdate.streamClosed": "The connection to this page was closed; nothing was submitted.",
   "activity.dataUpdate.unexpectedResponse": "Unexpected response shape '{shape}'.",
   "activity.dataUpdate.typesUnmapped": "Types {types} could not be mapped to data source",
   "activity.dataUpdate.streamUpdateFailed": "Update of {stream} failed: {error}",

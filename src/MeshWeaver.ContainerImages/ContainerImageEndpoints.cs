@@ -1,18 +1,20 @@
 using System.Reactive.Linq;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.ContainerImages;
 
 /// <summary>
-/// The OCI Distribution pull surface, served from the mesh: <c>GET /v2/</c>,
-/// <c>…/manifests/{reference}</c>, <c>…/blobs/{digest}</c> and <c>…/tags/list</c>, proxied to the
-/// upstream registry with the mirror's own credential while the CALLER authenticates against
-/// memex.
+/// The OCI Distribution pull surface, served from the mesh: <c>GET /v2/</c>, the bearer token
+/// exchange at <c>GET /v2/token</c>, <c>…/manifests/{reference}</c>, <c>…/blobs/{digest}</c> and
+/// <c>…/tags/list</c>, proxied to the upstream registry with the mirror's own credential while the
+/// CALLER authenticates against memex.
 ///
 /// <para><b>Why this exists</b> (see <c>Doc/Architecture/ContainerRegistryInMemex</c>): the fleet
 /// carried an <c>ACR_USERNAME</c>/<c>ACR_PASSWORD</c> pair in every satellite repository purely so
@@ -33,24 +35,57 @@ public static class ContainerImageEndpoints
     /// <summary>Route prefix mandated by the OCI Distribution Specification.</summary>
     public const string RoutePrefix = "/v2";
 
-    /// <summary>Set by the auth gate so handlers can name the caller in logs.</summary>
+    /// <summary>
+    /// The token endpoint, relative to <see cref="RoutePrefix"/>. This is the <c>realm</c> the
+    /// bearer challenge NAMES, so the two must never drift: a challenge pointing at a route
+    /// nothing serves turns every <c>docker pull</c> into "401, fetch the realm, 404, give up".
+    /// </summary>
+    public const string TokenRoute = "/token";
+
+    /// <summary>The API version every OCI client expects the version probe to declare.</summary>
+    public const string ApiVersionHeader = "Docker-Distribution-Api-Version";
+
+    /// <summary>Value of <see cref="ApiVersionHeader"/>.</summary>
+    public const string ApiVersion = "registry/2.0";
+
+    /// <summary>
+    /// Lifetime advertised on an issued token, in seconds. Short on purpose: the token IS the
+    /// caller's own instance key (see <see cref="IssueToken"/>), so a client re-presenting it
+    /// re-runs <see cref="IContainerImageAuthenticator"/> — which is what makes revoking a key
+    /// take effect in minutes rather than whenever a minted credential happened to expire.
+    /// </summary>
+    public const int TokenLifetimeSeconds = 300;
+
+    /// <summary>Set by the auth gate so handlers can name the caller in logs and records.</summary>
     private const string CallerItemKey = "ContainerImages.Caller";
+
+    private const string ManifestsKind = "manifests";
 
     /// <summary>
     /// Maps the pull surface. <c>AllowAnonymous</c> at the ASP.NET layer for the same reason the
     /// plugin registry does it — callers are INSTANCES and CI jobs, not signed-in users — with the
     /// bearer gate below doing the real work.
     /// </summary>
+    /// <param name="endpoints">The route builder to map onto.</param>
+    /// <returns>The route builder, for chaining.</returns>
     public static IEndpointRouteBuilder MapContainerImages(this IEndpointRouteBuilder endpoints)
     {
+        // 🚨 The token endpoint sits OUTSIDE the challenge filter, in its own group over the same
+        // prefix. The filter answers "not authenticated" with a challenge that NAMES this route —
+        // so putting this route behind it makes an unauthenticated client loop: challenge → token
+        // → challenge → token. A token endpoint authenticates ITSELF and refuses with a bare 401.
+        // Route precedence puts the literal `/v2/token` ahead of the `/v2/{**rest}` catch-all, so
+        // this wins without depending on registration order.
+        var tokenGroup = endpoints.MapGroup(RoutePrefix).AllowAnonymous();
+        tokenGroup.MapGet(TokenRoute, (HttpContext http, CancellationToken ct) => IssueToken(http, ct));
+
         var group = endpoints.MapGroup(RoutePrefix).AllowAnonymous();
 
         group.AddEndpointFilter(async (ctx, next) =>
         {
             var http = ctx.HttpContext;
             var client = http.RequestServices.GetRequiredService<UpstreamRegistryClient>();
-            var logger = http.RequestServices.GetService<ILoggerFactory>()
-                ?.CreateLogger(typeof(ContainerImageEndpoints));
+            var logger = Logger(http);
 
             // Unconfigured is 404 on everything, not 401 and not a partial service. A mirror
             // without a credential cannot serve a single byte, and saying "unauthorised" would
@@ -64,20 +99,7 @@ public static class ContainerImageEndpoints
                 return Results.NotFound();
             }
 
-            var authenticator = http.RequestServices
-                .GetRequiredService<IContainerImageAuthenticator>();
-            // 🚨 ObserveCompletion, never .ToTask() — a Task completed inside an Rx pipeline
-            // resumes its awaiter INLINE on the signalling thread, still inside Rx's trampoline,
-            // and everything the continuation then does inherits that scheduler.
-            var caller = await authenticator
-                .Authenticate(http.Request.Headers.Authorization.ToString(), http.RequestAborted)
-                .FirstAsync()
-                .ObserveCompletion(
-                    ex => logger?.LogWarning(ex,
-                        "Container registry mirror: authentication for {Path} faulted after the "
-                        + "request had already been answered", http.Request.Path),
-                    http.RequestAborted);
-
+            var caller = await Authenticate(http, ct: http.RequestAborted);
             if (caller is null)
                 return Challenge(http);
 
@@ -87,21 +109,120 @@ public static class ContainerImageEndpoints
 
         // The spec's version probe. A client hits this first and reads the challenge from it, so
         // it must answer 200 (authenticated) or 401-with-challenge — never 404.
-        group.MapGet("/", () => Results.Ok(new { }));
+        group.MapGet("/", (HttpContext http) =>
+        {
+            http.Response.Headers[ApiVersionHeader] = ApiVersion;
+            return Results.Ok(new { });
+        });
 
         group.MapGet("/{**rest}", (HttpContext http, CancellationToken ct) => Serve(http, ct));
         return endpoints;
     }
 
     /// <summary>
+    /// Resolves the caller through <see cref="IContainerImageAuthenticator"/>, normalising the
+    /// <c>Authorization</c> header to the single bearer shape the seam has to speak.
+    /// </summary>
+    private static async Task<string?> Authenticate(HttpContext http, CancellationToken ct)
+    {
+        var authenticator = http.RequestServices.GetRequiredService<IContainerImageAuthenticator>();
+        var header = http.Request.Headers.Authorization.ToString();
+        // Both shapes a registry client uses reduce to one secret; an unreadable header is passed
+        // through verbatim so the seam — not this file — stays the authority on what counts.
+        var normalized = RegistryCredential.TryReadSecret(header) is { } secret
+            ? RegistryCredential.AsBearerHeader(secret)
+            : header;
+        var logger = Logger(http);
+        // 🚨 ObserveCompletion, never .ToTask() — a Task completed inside an Rx pipeline
+        // resumes its awaiter INLINE on the signalling thread, still inside Rx's trampoline,
+        // and everything the continuation then does inherits that scheduler.
+        return await authenticator
+            .Authenticate(normalized, ct)
+            .FirstAsync()
+            .ObserveCompletion(
+                ex => logger?.LogWarning(ex,
+                    "Container registry mirror: authentication for {Path} faulted after the "
+                    + "request had already been answered", http.Request.Path),
+                ct);
+    }
+
+    /// <summary>
+    /// The token exchange the bearer challenge sends a client to:
+    /// <c>GET /v2/token?service=…&amp;scope=repository:&lt;name&gt;:pull</c> carrying
+    /// <c>Basic base64(user:key)</c>, answered with a bearer the client then presents on every
+    /// pull.
+    ///
+    /// <para>🚨 <b>The mirror does not MINT a credential in v1 — the bearer it hands back IS the
+    /// caller's own instance key.</b> That is a deliberate choice, not a shortcut: a minted token
+    /// would stay valid for its full lifetime after the key behind it was revoked, and it would
+    /// make the mirror a second issuer of credentials for an identity it does not own. Echoing the
+    /// key means every subsequent request re-runs
+    /// <see cref="IContainerImageAuthenticator"/> — revocation takes effect at the next token
+    /// exchange, which <see cref="TokenLifetimeSeconds"/> keeps minutes away. It also means the
+    /// mirror stores no token state at all, so there is nothing to leak, expire or replicate.</para>
+    ///
+    /// <para>The <c>scope</c> query parameter is deliberately NOT enforced here. The pull path
+    /// checks the repository allowlist on every request against the repository it actually
+    /// forwards, so a token scoped by this endpoint would be a SECOND opinion about what may be
+    /// served — and two opinions is how one of them ends up wrong.</para>
+    /// </summary>
+    private static async Task<IResult> IssueToken(HttpContext http, CancellationToken ct)
+    {
+        var client = http.RequestServices.GetRequiredService<UpstreamRegistryClient>();
+        if (!client.IsConfigured)
+            return Results.NotFound();
+
+        var secret = RegistryCredential.TryReadSecret(http.Request.Headers.Authorization.ToString());
+        if (secret is null)
+            return RefuseToken(http);
+
+        var caller = await Authenticate(http, ct);
+        if (caller is null)
+            return RefuseToken(http);
+
+        Logger(http)?.LogDebug(
+            "Container registry mirror: issued a pull token to {Caller} for scope {Scope}",
+            caller, http.Request.Query["scope"].ToString());
+
+        // `token` is the OCI Distribution field; `access_token` is the OAuth2 spelling ACR and
+        // Docker Hub both also return. Clients read one or the other, so emit both.
+        return Results.Json(new
+        {
+            token = secret,
+            access_token = secret,
+            expires_in = TokenLifetimeSeconds,
+            issued_at = DateTimeOffset.UtcNow.ToString("O"),
+        });
+    }
+
+    /// <summary>
+    /// A refused token exchange: 401 WITHOUT a bearer challenge. Challenging here would name this
+    /// very route and loop the client.
+    /// </summary>
+    private static IResult RefuseToken(HttpContext http)
+    {
+        http.Response.Headers[ApiVersionHeader] = ApiVersion;
+        return Results.Json(
+            new { errors = new[] { new { code = "UNAUTHORIZED", message = "instance key required" } } },
+            statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    /// <summary>
     /// The bearer challenge every OCI client expects before it will present a credential. Naming
-    /// the realm is what makes `docker pull` fetch a token rather than simply failing.
+    /// the realm is what makes `docker pull` fetch a token rather than simply failing — and the
+    /// realm names <see cref="TokenRoute"/>, which <see cref="MapContainerImages"/> serves.
     /// </summary>
     private static IResult Challenge(HttpContext http)
     {
-        var realm = $"{http.Request.Scheme}://{http.Request.Host}{RoutePrefix}/token";
-        http.Response.Headers["WWW-Authenticate"] =
-            $"Bearer realm=\"{realm}\",service=\"{http.Request.Host}\"";
+        var realm = $"{http.Request.Scheme}://{http.Request.Host}{RoutePrefix}{TokenRoute}";
+        var challenge = $"Bearer realm=\"{realm}\",service=\"{http.Request.Host}\"";
+        // The scope, when the request names a repository: a client uses it verbatim to ask for a
+        // token, and the shape matches the one ACR emits (the live reference for this handshake).
+        if (http.Request.RouteValues["rest"] is string rest
+            && RegistryRoute.TryParse(rest, out var route))
+            challenge += $",scope=\"repository:{route.Repository}:pull\"";
+        http.Response.Headers["WWW-Authenticate"] = challenge;
+        http.Response.Headers[ApiVersionHeader] = ApiVersion;
         return Results.Json(
             new { errors = new[] { new { code = "UNAUTHORIZED", message = "instance key required" } } },
             statusCode: StatusCodes.Status401Unauthorized);
@@ -110,8 +231,7 @@ public static class ContainerImageEndpoints
     private static async Task<IResult> Serve(HttpContext http, CancellationToken ct)
     {
         var client = http.RequestServices.GetRequiredService<UpstreamRegistryClient>();
-        var logger = http.RequestServices.GetService<ILoggerFactory>()
-            ?.CreateLogger(typeof(ContainerImageEndpoints));
+        var logger = Logger(http);
 
         var rest = (string?)http.Request.RouteValues["rest"] ?? string.Empty;
         if (!RegistryRoute.TryParse(rest, out var route))
@@ -119,9 +239,7 @@ public static class ContainerImageEndpoints
 
         // 🚨 The allowlist is the difference between a mirror and an open read proxy for the whole
         // upstream. Empty means NONE.
-        var options = http.RequestServices
-            .GetRequiredService<Microsoft.Extensions.Options.IOptions<ContainerImageOptions>>()
-            .Value;
+        var options = http.RequestServices.GetRequiredService<IOptions<ContainerImageOptions>>().Value;
         if (!options.Repositories.Contains(route.Repository, StringComparer.Ordinal))
         {
             logger?.LogDebug(
@@ -146,6 +264,120 @@ public static class ContainerImageEndpoints
             return Results.StatusCode(StatusCodes.Status502BadGateway);
         }
 
-        return new UpstreamPassthroughResult(upstream);
+        // 🚨 The bound on the layer transfer. IoPoolNames.Blob, not Http: `Http` is capped at 16
+        // for short API round-trips, and one 300 MB layer parked in that pool for a minute would
+        // starve every plugin-catalog and registration call the portal makes. `Blob` IS the
+        // large-async-binary resource class (cap 128), which is exactly what a layer transfer is.
+        var pool = http.RequestServices.GetService<IMessageHub>()?.ServiceProvider
+                       .GetService<IoPoolRegistry>()?.Get(IoPoolNames.Blob)
+                   ?? IoPool.Unbounded;
+
+        if (TryReadManifestForRecording(route, upstream, options, ct, out var manifest))
+        {
+            byte[] body;
+            try
+            {
+                body = await manifest;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException)
+            {
+                // 🚨 The upstream connection died mid-manifest. Nothing has been written to the
+                // caller yet, so this is a clean 502 — and the response MUST be disposed here:
+                // ownership normally passes to UpstreamPassthroughResult, which is never
+                // constructed on this path, so returning without disposing leaks the connection.
+                upstream.Dispose();
+                logger?.LogWarning(ex,
+                    "Container registry mirror: reading the manifest for {Path} failed mid-body",
+                    http.Request.Path);
+                return Results.StatusCode(StatusCodes.Status502BadGateway);
+            }
+
+            Record(http, client.Upstream, route, body, options.ImageRoot!, logger);
+            // Serving the bytes we already hold, rather than re-reading a consumed stream.
+            return new UpstreamPassthroughResult(upstream, pool, body);
+        }
+
+        return new UpstreamPassthroughResult(upstream, pool);
     }
+
+    /// <summary>
+    /// Whether this response is a MANIFEST small enough to hold in memory in order to record it.
+    ///
+    /// <para>🚨 The size test is on the upstream's declared <c>Content-Length</c>, BEFORE
+    /// anything is read — so a body that would not fit is never partially consumed, and streams
+    /// untouched. And it applies to manifests only: a blob is never buffered under any
+    /// configuration, which is the difference between recording an image and OOMing the portal.</para>
+    /// </summary>
+    private static bool TryReadManifestForRecording(
+        RegistryRoute route,
+        HttpResponseMessage upstream,
+        ContainerImageOptions options,
+        CancellationToken ct,
+        out Task<byte[]> body)
+    {
+        body = Task.FromResult<byte[]>([]);
+        if (route.Kind != ManifestsKind
+            || !upstream.IsSuccessStatusCode
+            || options.ImageRoot is not { Length: > 0 }
+            || upstream.Content.Headers.ContentLength is not { } length
+            || length <= 0
+            || length > options.MaxRecordedManifestBytes)
+            return false;
+        body = upstream.Content.ReadAsByteArrayAsync(ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Records what the mirror just served as a <see cref="ContainerImageRecord"/> node.
+    ///
+    /// <para>🚨 OFF the response path, and never able to fail it. The write is a cold observable
+    /// subscribed here with an explicit error arm — it runs on <c>Subscribe</c>, not on call, and
+    /// a failure is a warning naming the root, never an error handed to a <c>docker pull</c>.
+    /// Recording is observational: the mirror's contract is to serve the right bytes.</para>
+    /// </summary>
+    private static void Record(
+        HttpContext http, string registry, RegistryRoute route, byte[] body, string imageRoot,
+        ILogger? logger)
+    {
+        var hub = http.RequestServices.GetService<IMessageHub>();
+        if (hub is null)
+        {
+            logger?.LogDebug(
+                "Container registry mirror: no message hub in scope, so {Repository}:{Reference} "
+                + "was served but not recorded.", route.Repository, route.Reference);
+            return;
+        }
+
+        var record = ContainerImageCatalog.Describe(
+            registry, route.Repository, route.Reference, body,
+            http.Items.TryGetValue(CallerItemKey, out var caller) ? caller as string : null,
+            DateTimeOffset.UtcNow);
+        if (record is null)
+        {
+            // Not an OCI/Docker v2 manifest — an attestation, a signature artifact, a v1 manifest.
+            // Served, not modelled. Recording a half-parsed closure would be worse than none.
+            logger?.LogDebug(
+                "Container registry mirror: {Repository}:{Reference} is not a manifest shape this "
+                + "mirror models, so it was served but not recorded.",
+                route.Repository, route.Reference);
+            return;
+        }
+
+        ContainerImageCatalog.Record(hub, imageRoot, record)
+            .Subscribe(
+                node => logger?.LogDebug(
+                    "Container registry mirror: recorded {Repository}:{Reference} at {Path} "
+                    + "({Digest}, {Layers} layer(s), {Platforms} platform(s))",
+                    route.Repository, route.Reference, node.Path, record.Digest,
+                    record.Layers.Length, record.Platforms.Length),
+                ex => logger?.LogWarning(ex,
+                    "Container registry mirror: serving {Repository}:{Reference} succeeded but "
+                    + "recording it under {ImageRoot} failed. The pull is unaffected; the closure "
+                    + "for this image is simply not in the mesh. Check that {ImageRoot} exists.",
+                    route.Repository, route.Reference, imageRoot, imageRoot));
+    }
+
+    private static ILogger? Logger(HttpContext http) =>
+        http.RequestServices.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(ContainerImageEndpoints));
 }

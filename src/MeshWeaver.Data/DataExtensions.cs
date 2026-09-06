@@ -2019,6 +2019,9 @@ public static class DataExtensions
         void AckOnce(bool success, MeshNodeError? error = null)
         {
             if (System.Threading.Interlocked.Exchange(ref ackPosted, 1) != 0) return;
+            // The verdict leg of the trail (MeshWeaver#2543): which arm produced the terminal.
+            hub.NoteRequestStage(request.Id,
+                success ? "PATCH_ACK ok" : $"PATCH_ACK nack={error?.Code}");
             var resp = new PatchDataResponse(success, hub.Version);
             if (error is not null)
                 resp = resp with { Error = error.Message, NodeError = error };
@@ -2074,7 +2077,13 @@ public static class DataExtensions
             // stream that ENDS before the echo arrives, or a flush that ends without emitting,
             // still posts exactly one terminal (#3033) — ArmPatchAckWatcher names each path's
             // verdict and why a bare completion arm would NACK successful writes.
-            committed => hub.ServiceProvider.GetService<IPostCommitFlush>()?.Flush(committed.Value!),
+            committed =>
+            {
+                // The echo CONTAINING this write reached the watcher: the merge committed. What
+                // follows is durability; a trail ending here names a slow or lost flush.
+                hub.NoteRequestStage(request.Id, "PATCH_ECHO_SEEN");
+                return hub.ServiceProvider.GetService<IPostCommitFlush>()?.Flush(committed.Value!);
+            },
             TimeSpan.FromSeconds(10),
             AckOnce,
             d => hub.RegisterForDisposal(d),
@@ -2130,6 +2139,11 @@ public static class DataExtensions
             {
                 try
                 {
+                    // 🚨 The stage that splits #2543's two readings of "HANDLER_EXIT … then nothing":
+                    // recorded ON the primary's executor, so its absence after PATCH_MERGE_DISPATCHED
+                    // means the turn never ran (the executor is behind other work), and its offset
+                    // says how long it queued.
+                    hub.NoteRequestStage(request.Id, deferred ? "PATCH_MERGE_TURN deferred-retry" : "PATCH_MERGE_TURN entered");
                     var s = store ?? new EntityStore();
                     var collection = s.GetCollection(collectionName);
                     var entityId = preReadId;
@@ -2226,6 +2240,7 @@ public static class DataExtensions
                                         + "the patch was NOT applied; safe to retry once the "
                                         + "activation has loaded")));
                             hub.RegisterForDisposal(deferSub);
+                            hub.NoteRequestStage(request.Id, "PATCH_MERGE_DEFERRED cold-store");
                             return null; // no write this turn — the deferred attempt commits
                         }
                         AckOnce(false, new MeshNodeError(
@@ -2259,6 +2274,7 @@ public static class DataExtensions
                     // so the caller re-reads and re-applies instead of believing the lie.
                     if (System.Text.Json.Nodes.JsonNode.DeepEquals(preMergeNode, currentNode))
                     {
+                        hub.NoteRequestStage(request.Id, $"PATCH_MERGE_NOCHANGE refused={refusedKeys}");
                         if (refusedKeys > 0)
                             AckOnce(false, new MeshNodeError(
                                 MeshNodeErrorCode.Conflict, hubPath,
@@ -2312,6 +2328,7 @@ public static class DataExtensions
                     // write, so a load echo / sibling emission can never ack it.
                     System.Threading.Volatile.Write(ref stampedId, entityId);
                     System.Threading.Interlocked.Exchange(ref stampedVersion, minted);
+                    hub.NoteRequestStage(request.Id, $"PATCH_MERGE_STAMPED v={minted} refused={refusedKeys}");
 
                     var newStore = s.Update(collectionName, c => c.Update(entityId, merged));
                     return primary.ApplyChanges(new EntityStoreAndUpdates(
@@ -2327,6 +2344,8 @@ public static class DataExtensions
             },
             ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
 
+        // Dispatched to the primary's executor; the next stage is recorded on that executor.
+        hub.NoteRequestStage(request.Id, "PATCH_MERGE_DISPATCHED");
         RunMergeTurn(deferred: false);
     }
 

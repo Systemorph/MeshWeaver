@@ -1221,6 +1221,7 @@
   "activity.compile.aborted": "Kompilierung abgebrochen durch {exceptionType}:\n{detail}",
   "activity.compile.releaseCreated": "Release erstellt: {path}",
   "activity.dataUpdate.noRoute": "DataChangeRequest konnte nicht gesendet werden (keine Route).",
+  "activity.dataUpdate.streamClosed": "Die Verbindung zu dieser Seite wurde geschlossen; es wurde nichts übermittelt.",
   "activity.dataUpdate.unexpectedResponse": "Unerwartete Antwortform '{shape}'.",
   "activity.dataUpdate.typesUnmapped": "Die Typen {types} konnten keiner Datenquelle zugeordnet werden",
   "activity.dataUpdate.streamUpdateFailed": "Aktualisierung von {stream} fehlgeschlagen: {error}",

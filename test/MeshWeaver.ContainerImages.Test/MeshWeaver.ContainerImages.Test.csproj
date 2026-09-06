@@ -3,6 +3,20 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.ContainerImages\MeshWeaver.ContainerImages.csproj" />
+    <!-- ContainerImageRecordingTest drives the recording half against a REAL monolith mesh: the
+         thing under test is that a served manifest lands as a node whose content reads back TYPED,
+         and only a real mesh can be wrong about that. -->
+    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- PullSurfaceTest walks the whole bearer handshake over a real HTTP pipeline. The realm the
+         challenge names has to be a route that ANSWERS, and nothing short of a real pipeline
+         (routing precedence included) can show that. -->
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
   </ItemGroup>
 </Project>

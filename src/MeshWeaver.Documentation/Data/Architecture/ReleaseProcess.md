@@ -163,9 +163,14 @@ Everything the lane needs is asserted RED by a `preflight` job — no `continue-
    shipped` **and** `Plugins: bake + seal` green — read the seal JOB, never the run's conclusion
    ([ContinuousDeliveryContract](/Doc/Architecture/ContinuousDeliveryContract)). Commit its notes
    page, `Doc/ReleaseNotes/3_0_0`, first: the lane will not release without it.
-3. **Tag it, annotated.** `git tag -a v3.0.0 -m "MeshWeaver 3.0.0" <sha> && git push origin v3.0.0`.
+3. **Scan it.** Run the two OWASP ZAP scans — public active, authenticated passive — against the
+   deployment serving that build, and write the verdict and every finding's disposition on the
+   notes page ([OWASP ZAP Scan — Every Release](/Doc/Architecture/SecurityScanning)). `FAIL-NEW`
+   must read 0 on both runs; a `Vulnerable JS Library` WARN blocks the tag; every other WARN is
+   fixed or carried with a written reason. The lane cannot check this — it is the operator's gate.
+4. **Tag it, annotated.** `git tag -a v3.0.0 -m "MeshWeaver 3.0.0" <sha> && git push origin v3.0.0`.
    The lane promotes the set (§3); Stable installs pick it up on their next check.
-4. **Merge the bump.** The lane's pull request moves the line to `3.1.0`; auto-arm enqueues it.
+5. **Merge the bump.** The lane's pull request moves the line to `3.1.0`; auto-arm enqueues it.
    Until it merges, no continuous build may be relied on to roll a Continuous install forward.
 
 > **Tagging discipline.** A version tag must be **immutable** (annotated, never force-moved): the
@@ -201,3 +206,5 @@ and no packages.
 - [DataSyncSetup.md](/Doc/Architecture/DataSyncSetup) — the platform version doubles as the
   content-version for static-repo / GitHub data-sync.
 - [Deployment.md](/Doc/Architecture/Deployment) — where the built images go (AKS vs Container Apps).
+- [SecurityScanning.md](/Doc/Architecture/SecurityScanning) — the OWASP ZAP scans every release
+  runs before its tag, and the findings each release carried.
