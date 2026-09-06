@@ -311,6 +311,50 @@ stopped matching — exits RED naming why, never "nothing was removed": *couldn'
 must never be one colour, which is the failure that let #3344 through with every check green.
 
 
+### A ninth shape: a RENDERED-UI change the satellite's e2e asserts on (#3401 fallout, 2026-09-06)
+
+Shape 5 is about the i18n **mirror** — a value change in `strings.{en,de}.json` reddening
+MeshWeaver.Plugins' catalog guard. This is the other end of the same wire: the value reaches a
+**satellite's browser tests**, which assert on rendered text and rendered navigation. Nothing sees
+it. Not the pair gate (nothing public is removed), not the mirror guard (that compares catalogs, not
+pages), not the satellite's own CI (it pins the platform, so it keeps passing until someone moves
+the pin — a different day and a different PR).
+
+**One core commit produced TWO independent breakages in MeshWeaver.Education, and the first hid the
+second.** `c521f929e` (2026-09-03) — *"the plugin catalog opens with categories and loads packages
+per category"*:
+
+| | what changed | how it surfaced |
+|---|---|---|
+| a | `package(s)` → the localized plurals `plural.package.one` / `plural.package.other` | `TEXT.catalogAvailable`, the literal `'package(s) available'`, matched nothing. Bootstrap waited 20 s for text the page will never show again — while the page read `… — 12 packages available.` |
+| b | the catalog now opens on a **category index** and loads cards per category | with (a) fixed, it failed later and faster (9.8 min → 4.9 min): `the Plugin Catalog has no card titled 'Store'`, on a page whose only children were two links, `Uncategorized` and `All packages` |
+
+Both look like the satellite is broken. Neither is. And (b) was **unreachable** until (a) was fixed,
+so a single round of debugging finds one wall and reports success prematurely.
+
+**Why the pin makes it worse, not better.** Education's platform pin predated `c521f929e` by days,
+so its e2e stayed green the entire time the break existed. The break arrived with the *pin bump* —
+authored by someone fixing an unrelated purged-manifest problem — which is the worst possible moment
+for it, because the bump's own diff is three digests and cannot plausibly be the cause. Expect the
+report to be *"the pin bump broke the e2e"*.
+
+**What to do about it, on both sides:**
+
+- **Core:** a rendered-string or navigation change is a cross-repo change even though nothing public
+  moves. It cannot be gated from here — no core test knows what a satellite asserts on — so the
+  honest instrument is the release note, not a checker.
+- **Satellites:** do not assert on literal platform UI text. Education's fix was a regex tolerating
+  singular, plural *and* the retired `package(s)` form, plus a `openCatalog()` helper whose category
+  click is **conditional** — so the specs pass against a platform on either side of the change
+  rather than being pinned to one build. That property is what makes the next bump cheap.
+
+🚨 **Reading the failure is what shortens this.** Both walls were diagnosed from the Playwright page
+snapshot in the run's artifact, which showed the catalog rendering correctly in both cases. Two
+plausible causes taken from the container log — Orleans `no active nodes … grain podhub`, and
+`ConfigMasterKeyProvider` refusing without a master key — were both **excluded by evidence**: the
+podhub errors appear in the last PASSING run too, and that refusal landed ten days before it. Guess
+from a log and this costs a day; read the snapshot and it costs an hour.
+
 ## Member-level detection (the sixth shape)
 
 `check-type-forwards.py` indexes, under each public top-level type, the **names** of its public
