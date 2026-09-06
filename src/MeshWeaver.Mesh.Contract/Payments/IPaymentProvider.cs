@@ -126,7 +126,10 @@ public interface IPaymentProvider
     /// This is what sees that. Cold; it never faults — a read that failed comes back as
     /// <see cref="PaymentDeliveryPath.ReadProblem"/>, because "I could not look" must stay
     /// distinguishable from "there is nothing there".</para>
+    ///
+    /// <para>It reports what the provider HAS, and never what the caller expected: comparing the
+    /// account's endpoints against this portal's own hook URL is the caller's decision, so a
+    /// provider cannot quietly answer the question it finds easier.</para>
     /// </summary>
-    /// <param name="hookUrl">The URL this portal expects deliveries on, or null when it declares none.</param>
-    IObservable<PaymentDeliveryPath> DescribeDeliveryPath(string? hookUrl);
+    IObservable<PaymentDeliveryPath> DescribeDeliveryPath();
 }
