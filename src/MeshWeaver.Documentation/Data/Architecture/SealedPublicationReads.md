@@ -2,7 +2,7 @@
 nodeType: Markdown
 name: Sealed Publication Reads
 category: Architecture
-description: How a consumer reads a sealed bundle publication while the publisher is replacing it — the three answers (404, 503, 412), the generation that pins one publication instance, and what is still not closed.
+description: How a sealed bundle publication is written and read while it is being replaced — the writer's byte-level postcondition that refuses to seal a mix, the three read answers (404, 503, 412), the generation that pins one publication instance, and what is still not closed.
 icon: /static/NodeTypeIcons/box.svg
 ---
 
@@ -51,11 +51,12 @@ Measured on 2026-09-06 (MeshWeaver.Plugins run 34029118937, one publish, two tar
 11:59:47  sealed: target 2/_complete (36 bundle(s))
 ```
 
-🚨 **And the prefix has TWO writers.** Core CD's `plugins-bake` job and the MeshWeaver.Plugins
+🚨 **And the prefix has SEVERAL writers.** Core CD's `plugins-bake` job and the MeshWeaver.Plugins
 satellite's own `publish-bake` both publish `bake-source: plugins`, so both write
 `prebuilt-bundles/<identity>/plugins/`. Attributing a window to "core CD is rolling" is therefore
 wrong roughly half the time — the 2026-09-06 red was the satellite's own bake, while two core CD
-runs were in flight publishing a *different* identity.
+runs were in flight publishing a *different* identity. And the more frequent overlap is not between
+the lanes at all — see "How many writers, measured" below.
 
 ## Three answers where there used to be one
 
@@ -143,16 +144,99 @@ dependency record mismatch — built against mvid:…, live is mvid:…
 failure `assert-bake-consumption.sh` exists to catch, and it is why the module lane is pinned even
 though its window is the same size as the bundle lane's.
 
+## How many writers, measured
+
+The issue that opened this ([#3461](https://github.com/Systemorph/MeshWeaver/issues/3461)) names two
+lanes and asks which should own the prefix. Measuring first changed the answer, so the numbers are
+here rather than in a comment. **2026-09-06, one day: 25 core-CD publish jobs and 19 satellite ones
+examined; every job log fetched, none expired.**
+
+| | core CD `plugins-bake` | satellite `publish-bake` |
+|---|---|---|
+| distinct framework identities written | 20 | 2 |
+| identities written by BOTH lanes | 2 | 2 |
+| closest cross-lane approach on one identity | \-- | 24 min |
+| strict cross-lane time overlaps | 0 | 0 |
+| **same-lane time overlaps on one identity** | \-- | **4** |
+
+Both shared identities were the satellite unsealing core's publication and republishing it from a
+different source sha (`sf09fa2c9…`: `3e81b03960` → `9717e13e49`; `sa55f8190…`: `bbb893d673` →
+`88f1d44a19`). They collide because the identity is **breaking-change-keyed**: four consecutive
+image pairs in that same day resolved the *same* `s<hash>`, which is exactly what lets a frozen
+satellite pin land on an identity core CD is still publishing to.
+
+🚨 **Two conclusions, and the second is the one that decides the design.**
+
+1. **Neither lane can be removed.** Core CD wrote 20 identities, 18 of them reachable by no other
+   producer — a surface change mints a new identity that the satellite, pinned to an older core,
+   cannot publish to until its pin moves. The satellite wrote the only fresh *content* for its own
+   identity, and core CD batches, so dropping it would make plugin content delivery wait on core
+   merges. "Give the prefix a single owner" costs real coverage in both directions.
+2. **The single owner would race itself anyway.** The only overlaps actually measured were
+   *within* one lane — three concurrent bakes on `sa55f8190…` at 08:03Z, two of which sealed 24
+   minutes apart, plus three more pairs the same day — against zero cross-lane ones. A rule about
+   which *repository* owns the prefix does not address that at all.
+
+So the fix is publisher-agnostic: it asks *"are the bytes on the shelf the ones I uploaded"*, never
+*"which repo is the other one"*.
+
+## The writer's postcondition
+
+`publish-bake-bundles.sh` stamps every file it uploads with two metadata values —
+
+```
+digest       the SHA-256 of the exact local bytes uploaded
+publication  a token unique to this run (repository + run id + attempt), which also NAMES it
+```
+
+— and reads all of them back immediately before writing `_complete`. Each file lands in one of three
+buckets, and the buckets are the verdict:
+
+| bucket | meaning |
+|---|---|
+| **ours** | digest matches *and* our token wrote it — only this run could have put those bytes there |
+| **neutral** | digest matches, another publication wrote it. Compatible with both; distinguishes nothing |
+| **foreign** | digest differs, or there is none. Somebody else's bytes |
+
+- **foreign = 0** → seal. The directory is byte-for-byte this publication.
+- **ours = 0, foreign > 0** → *superseded*. Nothing distinguishing survived; the shelf is another
+  publication, whole. **Leave its seal alone** and go red — a run reporting "published" having
+  shipped nothing is the silent-nothing outcome this script exists to prevent.
+- **ours > 0, foreign > 0** → a **mix**. Refuse, and delete any sentinel over it, because a
+  publisher can finish and seal inside a gap in our uploads: refusing to write *our* sentinel is not
+  enough when the one already there covers a directory we have since partly overwritten.
+
+🚨 **The neutral bucket is not a nicety.** `architecture.txt` is `linux-x64` in every bake,
+`modules/_index` is the same list whenever the module set is unchanged, and a bundle a narrowed bake
+did not touch is byte-identical across two source shas. Counting those as *ours* turns a clean
+supersession into a false "mix" — measured while building this, `architecture.txt` alone made
+`ours = 1` and the core lane deleted the satellite's perfectly good seal.
+
+🚨 **A claim token cannot do this job**, and it is the obvious thing to reach for. "Stamp a marker
+before unsealing, re-read it before sealing" is check-then-act on one mutable cell with the wrong
+asymmetry: whoever stamps *last* re-reads its own marker and seals happily over the other's bytes.
+The loser detects the winner; the winner detects nothing. No arrangement of a single marker fixes
+that, because a marker records who wrote last, not whose bytes are on the shelf.
+
+The same two stamps close the carry-forward (below): `carry-forward-bundles.sh` verifies each
+bundle it downloads against the digest the publication records, and refuses when the carried set
+names more than one `publication` — which is what "the publication was replaced while I was reading
+it" looks like from inside a narrowed bake.
+
 ## What is NOT closed
 
 Stated plainly, because a page that only lists what works is how the next session repeats this.
 
-- 🚨 **Two writers on one prefix can produce a seal whose bytes are a mix, and no reader can detect
-  it.** If core CD and the Plugins satellite overlap on `<identity>/plugins`, both unseal, both
-  upload, and the last to seal writes a sentinel over a directory holding some of each one's bytes.
-  The result is *one* seal with *one* generation — self-consistent to every consumer, and wrong.
-  Closing it needs either a single owner for the prefix or a publish that cannot interleave
-  (a generation directory plus an atomic pointer swap); both are scope calls, not code changes.
+- 🚨 **The postcondition is a postcondition, not mutual exclusion.** It leaves one window: between
+  the last verification read and the `_complete` upload. A publisher that overwrites a file inside
+  that single-upload window still lands under this run's seal. That shrinks the exposure from the
+  whole ~90-second publication to one file upload, and it is why the *layout* question stays open —
+  a generation directory plus an atomic pointer swap removes republication in place entirely, and
+  is the shape the read side already pins. Closing it is a layout migration every reader must land
+  first.
+- **A refused publication leaves the prefix unsealed**, which every consumer skips — correct, and
+  it means an overlap now costs a red lane and a re-run rather than a portal that renders nothing.
+  It is not free: the identity serves nothing until either publisher runs again.
 - **The window itself remains.** In this layout it cannot be removed — in-place replacement means
   unsealed time, and the alternative is a layout migration every reader must land first (the portal
   boot seeder, the gate's Azure-direct path, and every pinned satellite workflow copy).
@@ -174,6 +258,21 @@ the pin is removed:
   reseal storm, and a registry publishing no generation at all. It asserts `If-Match` was actually
   sent, because a script that stopped pinning would still compose two files and pass on the outputs
   alone.
+- `.github/scripts/test-publish-bake-overlap.py` — runs the REAL `publish-bake-bundles.sh` **twice,
+  interleaved**, against a stub share, and reads the verdict off the BYTES rather than off the
+  script's own log: each fixture bundle names the bake that produced it, so "the sealed directory
+  holds two bakes" is a fact about the shelf. Twenty-one assertions over eight cases — three
+  controls that must PASS (settled publish, republish of new content, already-published skip), the
+  other lane in flight, the other lane completing inside a gap, a full supersession, an unreadable
+  read-back, an unstamped incumbent, and two concurrent runs of ONE repo. `--expect-defect` runs
+  the same cases against the pre-fix script and asserts the opposite; on `main` before the fix,
+  every overlap case sealed a mix.
+- `carry-forward-bundles.sh --self-test` — eleven cases, now executed by CI for the first time
+  (this script runs only inside a node repo's publish lane, so the first execution of an edit used
+  to be a production publish). It covers the shrink refusals it has always owed plus the
+  one-publication postcondition, the digest mismatch, the fail-closed unreadable stamp, and the
+  adoption path where an incumbent predates stamping and the check reports — with numbers — that it
+  proved nothing.
 
 Related: [CI Content Bake](../CiContentBake) · [Plugin Build Contract](../PluginBuildContract) ·
 [Bake Identity Mismatch](../BakeIdentityMismatch) · [Module Build Architecture](../ModuleBuildArchitecture)

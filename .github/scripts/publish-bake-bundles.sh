@@ -178,6 +178,274 @@ ARCH_MARKER="architecture.txt"
 ARCH_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$ARCH_MARKER"
 printf '%s\n' "$BAKE_ARCHITECTURE" > "$ARCH_MARKER_LOCAL"
 
+# ══════════════════════ THE TWO-WRITER POSTCONDITION (MeshWeaver#3461) ══════════════════════
+#
+# 🚨 `<identity>/plugins` HAS SEVERAL WRITERS. Core CD's `plugins-bake` job publishes `bake-source:
+# plugins` at `gate.outputs.plugins_sha`, and the MeshWeaver.Plugins satellite's own `publish-bake`
+# publishes the same source at its own head. Both call this script; both write one prefix. They
+# resolve the SAME framework identity whenever the core surface has not changed between core's tip
+# and the satellite's `MW_PLATFORM_REF` pin — which is the ordinary case, because the identity is
+# breaking-change-keyed by construction.
+#
+# Measured on 2026-09-06 (25 core-CD publish jobs, 19 satellite ones): core CD wrote 20 distinct
+# identities, the satellite 2, and BOTH of the satellite's were also written by core CD — each time
+# the satellite unsealed core's publication and republished it from a different source sha
+# (`sf09fa2c9…`: 3e81b03960 → 9717e13e49; `sa55f8190…`: bbb893d673 → 88f1d44a19). Closest
+# cross-lane approach 24 minutes; no strict cross-lane time overlap in that window.
+#
+# 🚨 AND THE SAME LANE OVERLAPS WITH ITSELF, more often than the two lanes overlap with each other.
+# The same measurement found FOUR same-identity window overlaps inside the satellite's own CI on
+# that one day — three concurrent bakes on `sa55f8190…` at 08:03Z, two of which sealed 24 minutes
+# apart — against zero cross-lane ones. That is why "give the prefix a single owner" does not
+# close this: the single owner races itself. The postcondition below is publisher-agnostic on
+# purpose; it asks "are these MY bytes", never "which repo is the other one".
+#
+# Everything below `publish_one_target` is single-writer-safe and nothing more. Interleave two runs
+# on one prefix and the sealed-skip's answer is stale for whichever loses the race: both unseal,
+# both upload, and the last to write `_complete` seals a sentinel over a directory holding SOME OF
+# EACH one's bytes. That is one seal with one generation — self-consistent to every consumer, and
+# wrong. #3460's read-side generation cannot see it (there is nothing stale to refuse), the boot
+# seeder cannot see it (the sentinel is present and every listed bundle exists), and the first
+# symptom is `dependency record mismatch — built against mvid:…, live is mvid:…` on a portal that
+# renders nothing.
+#
+# 🚨 A CLAIM TOKEN CANNOT FIX THIS, and it is the obvious thing to reach for. "Stamp a per-run
+# marker before unsealing, re-read it before sealing" is check-then-act on ONE MUTABLE CELL, and
+# the cell has the wrong asymmetry: if A stamps after B, A re-reads its OWN stamp and seals
+# happily over B's bytes. The loser detects the winner; the WINNER detects nothing. There is no
+# arrangement of a single marker that fixes that, because the marker records who wrote LAST, not
+# whose bytes are on the shelf.
+#
+# So the postcondition is asserted on THE BYTES, which is what "a mix" actually means. Every file
+# this run uploads carries two metadata values:
+#
+#     digest       the SHA-256 of the exact local bytes uploaded
+#     publication  a token unique to this run (and the run that wrote it, by name)
+#
+# and `verify_publication` re-reads all of them immediately before the seal. A foreign publisher
+# that overwrote ANY file leaves ITS digest there, so:
+#
+#   * every file's digest matches ⇒ the sealed set is byte-for-byte what this run uploaded. Not a
+#     mix, by definition — there is nothing else it could be.
+#   * any file's digest differs   ⇒ REFUSE TO SEAL. The directory stays sentinel-less, which is the
+#     state every reader already skips, and `publication` NAMES the run that overwrote it.
+#
+# This is symmetric, which the claim token is not: in a genuine overlap BOTH runs find foreign
+# bytes and BOTH refuse, so no mix is ever sealed. It needs no coordination between the lanes, no
+# lease, no lock, and no staleness heuristic that could deadlock the prefix behind a cancelled run.
+#
+# 🚨 What it does NOT close, stated so the next session does not re-derive it: the interval between
+# the last verification read and the `_complete` upload. A publisher that overwrites a file inside
+# that one-upload window still lands under this run's seal. The window shrinks from the whole
+# ~90-second publication to a single file upload, and it is why #3461 stays open for the layout
+# question (a generation directory plus an atomic pointer swap, which removes republication in
+# place entirely). The refusal below is a postcondition, not mutual exclusion.
+#
+# Cost: one `az storage file show` per published file per target, at seal time — measured against
+# the ~43-file publication these lanes produce, ~1s each. That is the price of the assertion and it
+# is deliberately paid in full: verifying a SAMPLE would be a guard that passes on the files nobody
+# overwrote.
+sha256_of() { # <file> — hex digest, portable across the CI runner and a developer's macOS
+  if command -v sha256sum > /dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+# The publication token: unique to THIS invocation, and readable as the run that made it. Metadata
+# values are ASCII, and `-o tsv` splits on tabs, so it is restricted to [A-Za-z0-9._-] — a value
+# carrying a tab or a space would silently split into two fields and compare equal to a truncation.
+PUBLICATION="$(printf '%s-%s-%s' \
+  "${GITHUB_REPOSITORY:-local}" "${GITHUB_RUN_ID:-$$}" "${GITHUB_RUN_ATTEMPT:-$(date -u +%s)}" \
+  | tr -c 'A-Za-z0-9._-' '-')"
+
+# Quoted by every refusal. It names both shapes because BOTH were measured on 2026-09-06, and the
+# more frequent one is the one the issue title does not mention.
+OVERLAP_WRITERS="One prefix, several publishers. ACROSS lanes: core CD's 'plugins-bake' job and the MeshWeaver.Plugins satellite's own 'publish-bake' both publish bake-source 'plugins' and resolve the same identity whenever the core surface has not moved between core's tip and the satellite's pin. WITHIN one lane: several main pushes bake concurrently — four same-identity window overlaps were measured in the satellite's own CI on 2026-09-06 alone, against zero cross-lane ones, so 'let the other repo finish' is not the whole answer. Find the publication named above, let it settle, and re-run this one."
+
+# The manifest of what this run publishes: "<path-under-dest><TAB><sha256>", one line per file.
+# Built ONCE — the local bytes are identical for every target — and consumed by both the upload
+# loop and the verification below, so the two can never disagree about the set.
+MANIFEST="$SENTINEL_LOCAL_DIR/manifest"
+: > "$MANIFEST"
+manifest_add() { # <path-under-dest> <local-file>
+  printf '%s\t%s\n' "$1" "$(sha256_of "$2")" >> "$MANIFEST"
+}
+for zip in "${BUNDLES[@]}"; do manifest_add "$(basename "$zip")" "$zip"; done
+for m in ${MODULES[@]+"${MODULES[@]}"}; do
+  manifest_add "$MODULES_DIR_NAME/$(basename "$m")" "$m"
+done
+manifest_add "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL"
+manifest_add "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL"
+manifest_add "$ARCH_MARKER" "$ARCH_MARKER_LOCAL"
+# The denominator every verification prints and every refusal quotes. A publication with nothing
+# in it cannot be verified into existence, and a zero here would make the sweep below pass having
+# read nothing — the exact vacuity a guard must never render as green.
+MANIFEST_COUNT=$(grep -c '[^[:space:]]' "$MANIFEST" || true)
+if [ "${MANIFEST_COUNT:-0}" -lt 1 ]; then
+  echo "::error::the publication manifest is EMPTY — nothing would be verified before the seal, so the seal would claim completeness for an unchecked directory. Refusing."
+  exit 1
+fi
+echo "publication $PUBLICATION: $MANIFEST_COUNT file(s) to publish and verify per target (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s), 3 marker/index file(s))"
+
+# Uploads ONE file of the publication, stamped with the two metadata values the postcondition
+# reads back. The digest is LOOKED UP from the manifest rather than recomputed: a file uploaded
+# that the manifest does not describe would be published and never verified, so that is fatal
+# rather than a fresh digest.
+upload_published_file() { # <account> <share> <dest> <path-under-dest> <local-file> [<upload-path>]
+  local account="$1" share="$2" dest="$3" rel="$4" src="$5" upload_path="${6:-$3/$4}" digest
+  digest=$(awk -F'\t' -v k="$rel" '$1 == k { print $2; found = 1 } END { exit !found }' "$MANIFEST") || {
+    echo "::error::'$rel' is being uploaded but the publication manifest does not describe it — it would be published and never verified. This is a bug in this script, not in the bake."
+    exit 1
+  }
+  az storage file upload --account-name "$account" --share-name "$share" \
+    --path "$upload_path" --source "$src" \
+    --metadata "digest=$digest" "publication=$PUBLICATION" \
+    --auth-mode login --backup-intent --only-show-errors > /dev/null
+}
+
+# Removes a seal that is known to cover a MIX. Called only from the mixed verdict below, and it
+# is the other half of the fix: a foreign publisher can finish and seal INSIDE a gap in this run's
+# uploads, so refusing to write our own sentinel is not enough — the sentinel already there covers
+# a directory we have since partly overwritten. Deleting it returns the prefix to the state every
+# reader skips.
+#
+# 🚨 It is NEVER called on the fully-superseded verdict. A publication whose files carry none of
+# our bytes is somebody else's, complete and consistent; deleting its seal would un-publish a good
+# publication and strand the identity unsealed until that lane's content next changes. "Some of
+# ours, some of theirs" is the only state in which the seal is provably wrong.
+unseal_mixed_publication() { # <account> <share> <dest>
+  local account="$1" share="$2" dest="$3" present
+  present=$(az storage file exists --account-name "$account" --share-name "$share" \
+    --path "$dest/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors) || present="unknown"
+  if [ "$present" != "true" ]; then
+    echo "::notice::$dest carries no $SENTINEL (exists=$present) — the mix is already unreadable to every consumer; nothing to remove."
+    return 0
+  fi
+  if az storage file delete --account-name "$account" --share-name "$share" \
+      --path "$dest/$SENTINEL" --auth-mode login --backup-intent --only-show-errors > /dev/null; then
+    echo "::warning::removed $dest/$SENTINEL — it sealed a directory holding bytes from two publications. The prefix is now unsealed (consumers skip it) rather than serving a mix; the next publication of either lane republishes it wholesale."
+    return 0
+  fi
+  echo "::error::$dest/$SENTINEL seals a MIX and could not be removed — consumers will keep adopting bytes from two publications until a publication of either lane replaces it. Remove it by hand."
+  return 1
+}
+
+# THE POSTCONDITION. Runs immediately before the seal. Every file is sorted into three buckets,
+# and the buckets are what decide the verdict:
+#
+#   OURS      the digest matches what we uploaded AND our publication token wrote it. Only this run
+#             could have put those bytes there.
+#   NEUTRAL   the digest matches ours but another publication wrote it. The bytes are the ones we
+#             uploaded, so this file is compatible with BOTH publications and distinguishes
+#             nothing. This bucket is not a curiosity: `architecture.txt` is 'linux-x64' in every
+#             bake, `modules/_index` is the same list whenever the module set is unchanged, and a
+#             bundle a narrowed bake did not touch is byte-identical across two source shas.
+#   FOREIGN   the digest differs, or there is none. Somebody else's bytes are on the shelf.
+#
+#   FOREIGN = 0                → SEAL. Every file is byte-for-byte this run's publication.
+#   OURS = 0 and FOREIGN > 0   → SUPERSEDED. Nothing that distinguishes this run survived: the
+#                                shelf is another publication, whole and self-consistent. LEAVE ITS
+#                                SEAL ALONE and go RED — a run that reports "published" having
+#                                shipped nothing is the silent-nothing outcome this script exists
+#                                to make impossible, and deleting a good seal would strand the
+#                                identity unsealed until that lane's content next changes.
+#   OURS > 0 and FOREIGN > 0   → MIX. Refuse, and remove any sentinel over it.
+#
+# 🚨 Counting NEUTRAL as OURS is the mistake that turns a clean supersession into a false "mix",
+# and a false mix DELETES a publication that was never wrong. Measured while building this: with
+# the satellite's publication whole on the shelf, `architecture.txt` alone made OURS = 1 and the
+# core lane deleted the satellite's seal.
+verify_publication() { # <account> <share> <dest>
+  local account="$1" share="$2" dest="$3" rel expected actual owner props fields ours=0 neutral=0
+  local -a foreign=() unreadable=() overlapped=()
+  while IFS=$'\t' read -r rel expected; do
+    [ -n "$rel" ] || continue
+    # 🚨 FAIL CLOSED. `|| echo ""` on the read would turn a transient fault, an expired credential
+    # or a CLI shape change into "no digest recorded" — the one answer that is indistinguishable
+    # from "another publisher wrote this", and the errors below would then name the wrong cause.
+    # An unreadable file is refused as loudly as a foreign one; it is simply refused by name.
+    if ! props=$(az storage file show --account-name "$account" --share-name "$share" \
+        --path "$dest/$rel" --auth-mode login --backup-intent \
+        --query "[[metadata.digest || '-', metadata.publication || '-']]" -o tsv --only-show-errors); then
+      unreadable+=("$rel")
+      continue
+    fi
+    # 🚨 THE RENDERING IS MEASURED, NOT ASSUMED, and getting it wrong is silent. knack's
+    # `format_tsv` treats a TOP-LEVEL list as ROWS: `--query "[a, b]" -o tsv` prints a's value and
+    # b's value on TWO LINES, not as two columns — so `awk '{print $2}'` would read EMPTY for every
+    # file, every `owner` would compare unequal to $PUBLICATION, `ours` would be 0 on every publish
+    # and this postcondition would refuse EVERY publication in the fleet as "superseded". Hence a
+    # list-of-ONE-ROW: `[[a, b]]` renders one tab-separated line. The `|| '-'` guards exist because
+    # a null field renders as the LITERAL STRING 'None', not as empty. Both measured against
+    # azure-cli 2.90.0's own jmespath + knack formatter.
+    #
+    # The field count is ASSERTED rather than trusted: if that rendering ever changes, this is a
+    # loud refusal on the next publish instead of a fleet-wide false verdict.
+    fields=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print NF }')
+    if [ "${fields:-0}" -ne 2 ]; then
+      echo "::error::az answered '$props' for $dest/$rel — one tab-separated row of TWO fields was expected from --query \"[[metadata.digest || '-', metadata.publication || '-']]\" -o tsv. The CLI's rendering has changed; this verification cannot be trusted until the parse is updated to match."
+      unreadable+=("$rel (unexpected --query rendering: $fields field(s))")
+      continue
+    fi
+    actual=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $1 }')
+    owner=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $2 }')
+    if [ "$actual" = "-" ]; then actual=""; fi
+    if [ "$owner" = "-" ]; then owner=""; fi
+    if [ -z "$actual" ]; then
+      # Present, but carrying no digest at all: written by a publisher that predates this stamp
+      # (a repo still pinned to an older copy of this script) or by something else entirely.
+      # Either way its bytes cannot be established, and the seal must not claim them.
+      foreign+=("$rel (no digest recorded — written by a publisher that does not stamp one)")
+      continue
+    fi
+    if [ "$actual" != "$expected" ]; then
+      foreign+=("$rel (we uploaded $expected, the shelf holds $actual, written by publication '${owner:-<unstamped>}')")
+      continue
+    fi
+    if [ "$owner" = "$PUBLICATION" ]; then
+      ours=$((ours + 1))
+    else
+      neutral=$((neutral + 1))
+      overlapped+=("$rel ← '${owner:-<unstamped>}'")
+    fi
+  done < "$MANIFEST"
+
+  for rel in ${overlapped[@]+"${overlapped[@]}"}; do
+    echo "::notice::under $dest: $rel — that publication wrote the very bytes this run uploaded, so two publications overlapped on this prefix (MeshWeaver#3461). Identical bytes distinguish nothing, so this file is not a mix."
+  done
+
+  # An unreadable file leaves the verdict UNDECIDABLE, so it takes precedence over all three and
+  # never touches an existing sentinel: we cannot tell a mix from a clean supersession.
+  if [ "${#unreadable[@]}" -gt 0 ]; then
+    echo "::error title=Refusing to seal — the publication could not be read back::$account/$share/$dest: ${#unreadable[@]} of $MANIFEST_COUNT file(s) could not be read after being uploaded, so whether this directory holds one publication or two cannot be established. Refusing rather than assuming — that assumption is what would seal a mix."
+    local entry
+    for entry in "${unreadable[@]}"; do echo "::error::could not read back after uploading it: $entry"; done
+    return 1
+  fi
+
+  if [ "${#foreign[@]}" -eq 0 ]; then
+    echo "verified: $account/$share/$dest — $((ours + neutral))/$MANIFEST_COUNT file(s) hold this run's bytes ($ours written by publication $PUBLICATION, $neutral byte-identical from another)"
+    return 0
+  fi
+
+  local entry
+  if [ "$ours" -eq 0 ]; then
+    echo "::error title=Refusing to seal — this run's publication was entirely superseded::$account/$share/$dest holds nothing that distinguishes this run: ${#foreign[@]} of $MANIFEST_COUNT file(s) were overwritten by another publication while this one was in flight, and the remaining $neutral are byte-identical in both (MeshWeaver#3461). That publication is whole, and is left exactly as it is — sealing OUR sentinel over it would claim a bundle set that is not there. Nothing of this run reached this target."
+    for entry in "${foreign[@]}"; do echo "::error::superseded: $entry"; done
+    echo "::error::$OVERLAP_WRITERS"
+    return 1
+  fi
+
+  echo "::error title=Refusing to seal — this directory holds a MIX of two publications::$account/$share/$dest holds $ours file(s) only this run could have written and ${#foreign[@]} written by another publication ($neutral more are byte-identical in both; $MANIFEST_COUNT in total). Sealing now would write a sentinel over bytes from two bakes — one seal, one generation, self-consistent to every consumer and wrong (MeshWeaver#3461). Its first symptom is 'dependency record mismatch — built against mvid:…' on a portal that renders nothing."
+  for entry in "${foreign[@]}"; do echo "::error::overwritten during this publication: $entry"; done
+  echo "::error::$OVERLAP_WRITERS"
+  unseal_mixed_publication "$account" "$share" "$dest" || true
+  return 1
+}
+
 # The release-marker directory (must match PublishedBundleCatalogue.ReleaseMarkerDirectoryName).
 # Leading underscore so it can never collide with a framework-identity directory (s… / g…).
 RELEASES_DIR="_releases"
@@ -238,37 +506,37 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
   fi
   local zip
   for zip in "${BUNDLES[@]}"; do
-    az storage file upload --account-name "$account" --share-name "$share" \
-      --path "$dest/$(basename "$zip")" --source "$zip" \
-      --auth-mode login --backup-intent --only-show-errors > /dev/null
+    upload_published_file "$account" "$share" "$dest" "$(basename "$zip")" "$zip"
     echo "published: $account/$share/$dest/$(basename "$zip")"
   done
   # The module set: every bundle, then its index — both strictly before the sentinel.
   ensure_directory "$account" "$share" "$dest/$MODULES_DIR_NAME"
   local m
   for m in ${MODULES[@]+"${MODULES[@]}"}; do
-    az storage file upload --account-name "$account" --share-name "$share" \
-      --path "$dest/$MODULES_DIR_NAME/$(basename "$m")" --source "$m" \
-      --auth-mode login --backup-intent --only-show-errors > /dev/null
+    upload_published_file "$account" "$share" "$dest" \
+      "$MODULES_DIR_NAME/$(basename "$m")" "$m"
     echo "published module: $account/$share/$dest/$MODULES_DIR_NAME/$(basename "$m")"
   done
-  az storage file upload --account-name "$account" --share-name "$share" \
-    --path "$dest/$MODULES_DIR_NAME" --source "$MODULES_INDEX_LOCAL" \
-    --auth-mode login --backup-intent --only-show-errors > /dev/null
+  upload_published_file "$account" "$share" "$dest" \
+    "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL" "$dest/$MODULES_DIR_NAME"
   echo "module set: $account/$share/$dest/$MODULES_DIR_NAME/$MODULES_INDEX (${#MODULES[@]} bundle(s))"
   # 🚨 Both marker uploads pass the DIRECTORY as --path on purpose — the CLI appends the source
   # basename. An extensionless "$dest/$SENTINEL" --path would be silently re-interpreted as a
   # DIRECTORY and fail ParentNotFound (see the SENTINEL_LOCAL comment above).
-  az storage file upload --account-name "$account" --share-name "$share" \
-    --path "$dest" --source "$SOURCE_MARKER_LOCAL" \
-    --auth-mode login --backup-intent --only-show-errors > /dev/null
-  az storage file upload --account-name "$account" --share-name "$share" \
-    --path "$dest" --source "$ARCH_MARKER_LOCAL" \
-    --auth-mode login --backup-intent --only-show-errors > /dev/null
+  upload_published_file "$account" "$share" "$dest" "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL" "$dest"
+  upload_published_file "$account" "$share" "$dest" "$ARCH_MARKER" "$ARCH_MARKER_LOCAL" "$dest"
+  # 🚨 THE POSTCONDITION, between the last content upload and the seal (MeshWeaver#3461). Every
+  # file above is read back and must still carry THIS run's digest; a foreign publisher that
+  # overwrote any of them makes this refuse, and the directory stays sentinel-less rather than
+  # sealed over a mix. See the long note beside verify_publication.
+  if ! verify_publication "$account" "$share" "$dest"; then
+    exit 1
+  fi
   # LAST write — the atomic completeness marker. Anything that dies before this line leaves the
   # directory sentinel-less: unreadable to portals, re-published wholesale by the next run.
   az storage file upload --account-name "$account" --share-name "$share" \
     --path "$dest" --source "$SENTINEL_LOCAL" \
+    --metadata "digest=$(sha256_of "$SENTINEL_LOCAL")" "publication=$PUBLICATION" \
     --auth-mode login --backup-intent --only-show-errors > /dev/null
   echo "sealed: $account/$share/$dest/$SENTINEL (${#BUNDLES[@]} bundle(s), source ${SOURCE_SHA:-unknown})"
 }

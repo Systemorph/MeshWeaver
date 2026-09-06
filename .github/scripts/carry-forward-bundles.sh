@@ -43,26 +43,58 @@ if [ "${1:-}" = "--self-test" ]; then
   ST=$(mktemp -d); trap 'rm -rf "$ST"' EXIT
   ME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   mkdir -p "$ST/bin"
+  # The stub models the two calls this script makes — `file download` and the `file show` whose
+  # ONE query it reads back — and REFUSES anything else, so the script and the stub cannot drift
+  # apart silently. Metadata lives in a sidecar named after the file.
   cat > "$ST/bin/az" <<'AZ'
 #!/usr/bin/env bash
-account=""; share=""; path=""; dest=""
+action="$3"
+account=""; share=""; path=""; dest=""; query=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --account-name) account="$2"; shift 2;; --share-name) share="$2"; shift 2;;
-    --path) path="$2"; shift 2;; --dest) dest="$2"; shift 2;; *) shift;;
+    --path) path="$2"; shift 2;; --dest) dest="$2"; shift 2;;
+    --query) query="$2"; shift 2;; *) shift;;
   esac
 done
 file="$MOCK_AZ_ROOT/$account/$share/$path"
-[ -f "$file" ] || exit 1
-mkdir -p "$(dirname "$dest")"; cp "$file" "$dest"
+case "$action" in
+  download)
+    [ -f "$file" ] || exit 1
+    mkdir -p "$(dirname "$dest")"; cp "$file" "$dest" ;;
+  show)
+    if [ "$query" != "[[metadata.digest || '-', metadata.publication || '-']]" ]; then
+      echo "stub-az: unmodelled query '$query' — teach the stub rather than loosening it" >&2; exit 64
+    fi
+    [ -f "$file" ] || exit 1
+    [ -f "$file.meta.unreadable" ] && exit 1
+    # knack renders `[[a || '-', b || '-']]` as ONE tab-separated row, '-' where the value is
+    # absent. The sidecar already holds that shape; a file with no metadata at all is '-\t-'.
+    if [ -f "$file.meta" ]; then cat "$file.meta"; else printf -- '-\t-\n'; fi ;;
+  *)
+    echo "stub-az: unmodelled action '$action'" >&2; exit 64 ;;
+esac
 AZ
   chmod +x "$ST/bin/az"; PATH="$ST/bin:$PATH"; export MOCK_AZ_ROOT="$ST/remote"
   REMOTE="$ST/remote/acct/share/prebuilt-bundles/ID1/plugins"
   FAILED=0
-  ok()   { printf '  OK   %s\n' "$1"; }
+  PASSED=0
+  ok()   { printf '  OK   %s\n' "$1"; PASSED=$((PASSED + 1)); }
   bad()  { printf '  FAIL %s\n' "$1"; FAILED=$((FAILED + 1)); }
 
-  setup() {  # <listing lines…> — the sealed publication holds a bundle for each
+  digest_of() { if command -v sha256sum > /dev/null 2>&1; then sha256sum "$1" | awk '{print $1}';
+                else shasum -a 256 "$1" | awk '{print $1}'; fi; }
+  stamp() {  # <bundle> <publication> — record the stamp publish-bake-bundles.sh writes
+    printf '%s\t%s\n' "$(digest_of "$REMOTE/$1")" "$2" > "$REMOTE/$1.meta"
+  }
+
+  setup() {  # <listing lines…> — the sealed publication holds a bundle for each, all from ONE run
+    rm -rf "$ST/bake" "$ST/remote" "$ST/listing"
+    mkdir -p "$ST/bake" "$REMOTE"
+    for b in "$@"; do echo "published $b" > "$REMOTE/$b"; stamp "$b" "Systemorph-MeshWeaver-1-1"; done
+    printf '%s\n' "$@" > "$ST/listing"
+  }
+  setup_unstamped() {  # a publication sealed before the stamp existed
     rm -rf "$ST/bake" "$ST/remote" "$ST/listing"
     mkdir -p "$ST/bake" "$REMOTE"
     for b in "$@"; do echo "published $b" > "$REMOTE/$b"; done
@@ -116,12 +148,73 @@ AZ
   OUT=$(run); RC=$?
   [ "$RC" -ne 0 ] && ok "a missing bake directory is refused" || bad "missing bake dir should be fatal"
 
+  echo "refusals (the carried set must come from ONE publication — MeshWeaver#3461):"
+  setup Store.zip Edu.zip Chess.zip
+  rebuilt Edu.zip
+  OUT=$(run); RC=$?
+  if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "carry-forward consistency: 2 of 2 carried bundle(s) stamped, all from publication"; then
+    ok "a settled publication carries forward, and the check SAYS how many it proved (2 of 2)"
+  else
+    bad "one-publication control (rc=$RC): $(printf '%s' "$OUT" | tail -3)"
+  fi
+
+  # THE DEFECT: the publication is replaced between the listing and the downloads, so the bundles
+  # carried forward come from two bakes. Sealing them would claim one publication for both.
+  setup Store.zip Edu.zip Chess.zip
+  rebuilt Edu.zip
+  echo "republished Chess.zip" > "$REMOTE/Chess.zip"; stamp Chess.zip "Systemorph-MeshWeaver.Plugins-2-1"
+  OUT=$(run); RC=$?
+  if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "name 2 DIFFERENT publications"; then
+    ok "bundles carried from TWO publications are refused, and both are named"
+  else
+    bad "two-publication carry-forward should be fatal (rc=$RC): $(printf '%s' "$OUT" | tail -3)"
+  fi
+
+  setup Store.zip Edu.zip
+  rebuilt Edu.zip
+  # The bytes moved but the stamp did not — a replaced download, or a stamp that no longer
+  # describes the file. Either way what arrived is not what the publication records.
+  printf '%s\t%s\n' "0000000000000000000000000000000000000000000000000000000000000000" \
+    "Systemorph-MeshWeaver-1-1" > "$REMOTE/Store.zip.meta"
+  OUT=$(run); RC=$?
+  if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "what arrived here hashes to"; then
+    ok "a carried bundle whose bytes do not match the recorded digest is refused"
+  else
+    bad "digest mismatch should be fatal (rc=$RC): $(printf '%s' "$OUT" | tail -3)"
+  fi
+
+  setup Store.zip Edu.zip
+  rebuilt Edu.zip; touch "$REMOTE/Store.zip.meta.unreadable"
+  OUT=$(run); RC=$?
+  if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "an unreadable stamp is not an absent one"; then
+    ok "an unreadable stamp is refused, never read as 'no stamp' (fail closed)"
+  else
+    bad "unreadable metadata should be fatal (rc=$RC): $(printf '%s' "$OUT" | tail -3)"
+  fi
+
+  # ADOPTION: a publication sealed before the stamp existed. The check has no evidence, and must
+  # SAY SO with numbers rather than reporting a consistency it never established.
+  setup_unstamped Store.zip Edu.zip
+  rebuilt Edu.zip
+  OUT=$(run); RC=$?
+  if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "1 of 1 carried bundle(s) carry no publication stamp"; then
+    ok "an unstamped incumbent still carries forward, and the check reports that it proved NOTHING"
+  else
+    bad "unstamped incumbent (rc=$RC): $(printf '%s' "$OUT" | tail -3)"
+  fi
+
   if [ "$FAILED" -gt 0 ]; then
     echo "::error title=carry-forward self-test failed::$FAILED case(s) — this is the only thing preventing a narrowed bake from shrinking the publication."
     exit 1
   fi
   echo ""
-  echo "carry-forward self-test: 2 hydration cases, 4 refusals — all green."
+  # The denominator, computed rather than written down: a case list that silently stopped
+  # executing would otherwise keep printing the number someone typed here.
+  if [ "$PASSED" -lt 11 ]; then
+    echo "::error title=carry-forward self-test ran too few cases::$PASSED case(s) executed, at least 11 expected — a harness that quietly tests less renders the same green tick as one that tests the lane."
+    exit 1
+  fi
+  echo "carry-forward self-test: $PASSED case(s) — hydration, shrink refusals, and the one-publication postcondition — all green."
   exit 0
 fi
 
@@ -142,9 +235,40 @@ BASE=""
 case "$REST" in */*) BASE="${REST#*/}";; esac
 SRC_DIR="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/$SOURCE"
 
+# 🚨 THE CARRY-FORWARD IS AN N+1 READ OF A DIRECTORY THAT CAN BE REPLACED UNDERNEATH IT
+# (MeshWeaver#3461). The listing came from the sealed publication `bake-scope.sh` read; each
+# download below is a separate request, and `<identity>/plugins` has several publishers — core CD's
+# `plugins-bake`, the satellite's own `publish-bake`, and (measured four times in one day, more
+# often than the cross-lane case) two concurrent runs of ONE of them. If the publication is
+# replaced between the listing and a download, two things can happen:
+#
+#   a listed name has GONE          → it lands in missing[] below and this script goes RED. Loud.
+#   a listed name has NEW BYTES     → today it is carried forward silently, and the publication
+#                                     this bake then seals holds bundles from two generations. The
+#                                     seal claims one publication for bytes that came from two.
+#
+# The second is the same silent mix as the two-writer case, reached by one writer alone, and
+# publish-bake-bundles.sh's own postcondition cannot see it: that check asks "is the shelf what I
+# uploaded", and a carried-forward mix IS what this run uploaded.
+#
+# So every carried file is checked against the stamps publish-bake-bundles.sh writes — the SAME
+# two metadata values, not a third detector: `digest` (the bytes, so a truncated or replaced
+# download is caught) and `publication` (which publication put them there, so bundles carried from
+# two of them are caught). All carried files must name ONE publication.
+sha256_of() { # <file> — hex digest, portable across the CI runner and a developer's macOS
+  if command -v sha256sum > /dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
 carried=0
 rebuilt=0
+stamped=0
 missing=()
+corrupt=()
+publications=""
 while IFS= read -r name; do
   [ -n "$name" ] || continue
   case "$name" in */*|..|.) echo "::error::the published listing names '$name', which is not a plain file name"; exit 1;; esac
@@ -157,6 +281,40 @@ while IFS= read -r name; do
        --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
     carried=$((carried + 1))
     echo "carried forward: $name"
+    # Read the stamp of the file we just took. A read that FAILS is not "no stamp" — an unreadable
+    # answer and a permissive one must never be the same value, so it is recorded as corrupt.
+    if props=$(az storage file show --account-name "$ACCOUNT" --share-name "$SHARE" \
+         --path "$SRC_DIR/$name" --auth-mode login --backup-intent \
+         --query "[[metadata.digest || '-', metadata.publication || '-']]" -o tsv --only-show-errors); then
+      # 🚨 The query is a list-of-ONE-ROW and the fields carry a '-' guard, both for the reason
+      # publish-bake-bundles.sh sets out at length: knack's format_tsv renders a top-level list as
+      # ROWS (so `[a, b]` prints two LINES, and `$2` reads empty for every file), and a null field
+      # renders as the literal string 'None'. Measured against azure-cli 2.90.0. The field count is
+      # asserted so a rendering change is a refusal, never a wrong answer.
+      fields=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print NF }')
+      if [ "${fields:-0}" -ne 2 ]; then
+        corrupt+=("$name (az answered '$props' — one tab-separated row of TWO fields was expected; the CLI's --query rendering has changed)")
+        continue
+      fi
+      remote_digest=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $1 }')
+      remote_pub=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $2 }')
+      if [ "$remote_digest" = "-" ]; then remote_digest=""; fi
+      if [ "$remote_pub" = "-" ]; then remote_pub=""; fi
+    else
+      corrupt+=("$name (its metadata could not be read — an unreadable stamp is not an absent one)")
+      continue
+    fi
+    if [ -n "$remote_digest" ]; then
+      local_digest=$(sha256_of "$BAKE_DIR/$name")
+      if [ "$local_digest" != "$remote_digest" ]; then
+        corrupt+=("$name (the publication says $remote_digest, what arrived here hashes to $local_digest)")
+        continue
+      fi
+    fi
+    if [ -n "$remote_pub" ]; then
+      stamped=$((stamped + 1))
+      case " $publications " in *" $remote_pub "*) ;; *) publications="$publications $remote_pub";; esac
+    fi
   else
     missing+=("$name")
   fi
@@ -167,6 +325,31 @@ if [ "${#missing[@]}" -gt 0 ]; then
   for m in "${missing[@]}"; do echo "::error::could not carry forward: $m"; done
   echo "::error::Re-run this workflow to take the full-bake path (bake-scope.sh falls back to a full bake whenever the publication cannot be read), or fix access to the target."
   exit 1
+fi
+
+if [ "${#corrupt[@]}" -gt 0 ]; then
+  echo "::error title=Carry-forward failed — a carried bundle is not the one the publication holds::${#corrupt[@]} of $carried carried file(s) could not be shown to be the bytes the sealed publication under $ACCOUNT/$SHARE/$SRC_DIR records. Publishing them would seal a bundle set nobody produced."
+  for c in "${corrupt[@]}"; do echo "::error::$c"; done
+  exit 1
+fi
+
+# ONE publication, or none at all. Counting the distinct stamps is what tells "carried from the
+# publication the listing came from" apart from "carried from two, because it was replaced while
+# this ran" — the second is the silent mix, and it is refused.
+pubcount=$(printf '%s' "$publications" | tr ' ' '\n' | grep -c '[^[:space:]]' || true)
+if [ "$pubcount" -gt 1 ]; then
+  echo "::error title=Carry-forward failed — the publication was replaced while this read it::$carried bundle(s) were carried forward from $ACCOUNT/$SHARE/$SRC_DIR and they name $pubcount DIFFERENT publications:$publications. The sealed publication was replaced between the listing this run was given and the downloads it made, so the set about to be sealed would hold bundles from two bakes under one sentinel (MeshWeaver#3461) — one seal, one generation, self-consistent to every consumer and wrong. Re-run this workflow once the publisher has settled; nothing has been written."
+  exit 1
+fi
+# 🚨 The denominator, printed on EVERY path — including the one that proves nothing. A publication
+# sealed before publish-bake-bundles.sh stamped its files carries no `publication` metadata at all,
+# and this check then has no evidence either way. It says so, loudly and with numbers, rather than
+# reporting a consistency it did not establish; the next publication of this source stamps every
+# file and the check becomes enforceable with no action from anyone.
+if [ "$carried" -gt 0 ] && [ "$stamped" -eq 0 ]; then
+  echo "::warning title=Carry-forward consistency NOT established::$carried of $carried carried bundle(s) carry no publication stamp — the sealed publication under $ACCOUNT/$SHARE/$SRC_DIR predates the stamp publish-bake-bundles.sh now writes (MeshWeaver#3461). Whether they all came from ONE publication could not be checked. The next publication of source '$SOURCE' stamps them and this becomes enforceable."
+elif [ "$carried" -gt 0 ]; then
+  echo "carry-forward consistency: $stamped of $carried carried bundle(s) stamped, all from publication$publications"
 fi
 
 # The postcondition, asserted rather than assumed: the set about to be published is a SUPERSET of
