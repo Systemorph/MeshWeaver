@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
@@ -132,7 +133,7 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
                 .RunAsSystem(() => ObserveNodeOperation(new CreateNodeRequest(node)))
                 .FirstAsync()
                 .Select(d => d.Message)
-                .Timeout(90.Seconds())
+                .Timeout(TestTimeouts.Convergence)
                 .Await();
             response.Success.Should().BeTrue(
                 $"the fixture must actually exist before it is deleted — '{node.Path}' answered "
@@ -157,7 +158,7 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
                 }))
             .FirstAsync()
             .Select(d => d.Message)
-            .Timeout(120.Seconds())
+            .Timeout(TestTimeouts.CrossSilo)
             .Await();
         Output.WriteLine($"delete {path} success={response.Success} error={response.Error}");
         return response;
@@ -199,13 +200,13 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
         var definitionPath = $"{PartitionNodeType.Namespace}/{partition}";
         var persistence = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
 
-        (await persistence.Exists(definitionPath).FirstAsync().Timeout(30.Seconds()).Await())
+        (await persistence.Exists(definitionPath).FirstAsync().Timeout(TestTimeouts.Convergence).Await())
             .Should().BeTrue("the fixture writes the definition, so the assertion below can fail");
 
         var response = await DeleteAsSystem(partition);
         response.Success.Should().BeTrue($"the delete itself must succeed: {response.Error}");
 
-        (await persistence.Exists(definitionPath).FirstAsync().Timeout(30.Seconds()).Await())
+        (await persistence.Exists(definitionPath).FirstAsync().Timeout(TestTimeouts.Convergence).Await())
             .Should().BeFalse(
                 $"'{definitionPath}' must be removed with the partition it describes — a definition "
                 + "left behind keeps the partition in the routing prime and in every partition "
