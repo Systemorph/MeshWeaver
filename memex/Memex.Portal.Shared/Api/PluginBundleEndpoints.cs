@@ -218,8 +218,9 @@ public static class PluginBundleEndpoints
                 PrebuiltModule(http, identity, source, bundle, Caller(http), BuildCaller(http)));
     }
 
-    /// <summary>The sealed publication's bundle names, or 404 when none is sealed for that
-    /// identity/source, or 403 when the caller holds no whole-source grant on it.</summary>
+    /// <summary>The sealed publication's bundle names and its GENERATION, or 404 when nothing is
+    /// published for that identity/source, 503 while it is being republished, or 403 when the
+    /// caller holds no whole-source grant on it.</summary>
     private static IResult PrebuiltIndex(
         HttpContext http, string identity, string source,
         AuthenticatedInstance? caller, AuthenticatedBuild? build)
@@ -227,16 +228,71 @@ public static class PluginBundleEndpoints
         if (PrebuiltDecision(http, identity, source, caller, build) is { } refused)
             return refused;
         var directory = PrebuiltDirectory(http, identity, source);
-        var sealed_ = directory is null ? null : PublishedBundleCatalogue.SealedBundlesOf(directory, Log(http));
-        if (sealed_ is null)
-            return Results.Json(
-                new { error = $"no sealed publication for source '{source}' under framework identity '{identity}'" },
-                statusCode: StatusCodes.Status404NotFound);
-        return Results.Json(new { identity, source, bundles = sealed_ });
+        if (directory is null)
+            return NothingPublished(identity, source);
+        var reading = PublishedBundleCatalogue.SealedPublicationOf(directory, Log(http));
+        if (reading.Bundles is null)
+            return BeingRepublished(http, identity, source, reading.TornReason!);
+        http.Response.Headers.ETag = $"\"{reading.Generation}\"";
+        return Results.Json(
+            new { identity, source, bundles = reading.Bundles, generation = reading.Generation });
     }
 
-    /// <summary>One sealed bundle's bytes. A name the seal does not list is 404 even if the file
-    /// exists — an unsealed file is not part of the publication.</summary>
+    /// <summary>Nothing has ever been published here — a permanent answer, unlike
+    /// <see cref="BeingRepublished"/>.</summary>
+    private static IResult NothingPublished(string identity, string source) =>
+        Results.Json(
+            new { error = $"no sealed publication for source '{source}' under framework identity '{identity}'" },
+            statusCode: StatusCodes.Status404NotFound);
+
+    /// <summary>
+    /// 🚨 503, NOT 404 (#3401). The publisher UNSEALS before it republishes and re-seals LAST, on
+    /// purpose, so that nobody can read a mix of two publications. A request that lands in that
+    /// window is looking at a publication that exists and is being replaced — "temporarily
+    /// unavailable, come back", which is what 503 + <c>Retry-After</c> means and what every
+    /// transient-aware client already does with it. Answering 404 told MeshWeaver.Manufacturing on
+    /// 2026-09-06 that a bundle was GONE; the same bundle was served intact 20 minutes later, and
+    /// the wrong status cost the whole investigation.
+    /// </summary>
+    private static IResult BeingRepublished(
+        HttpContext http, string identity, string source, string reason)
+    {
+        http.Response.Headers.RetryAfter = "30";
+        return Results.Json(
+            new { error = $"{reason} — source '{source}', framework identity '{identity}'" },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    /// <summary>
+    /// The caller pinned a generation with <c>If-Match</c> and the publication has moved since
+    /// (#3401). Its remaining fetches would mix bytes from two publications, which no status it
+    /// could otherwise receive would tell it — so refuse the read and name both generations.
+    /// </summary>
+    private static IResult GenerationMoved(string held, string current) =>
+        Results.Json(
+            new
+            {
+                error = "the publication was resealed after you read its index — restart the fetch "
+                        + "against the current generation rather than mixing two publications",
+                held,
+                current,
+            },
+            statusCode: StatusCodes.Status412PreconditionFailed);
+
+    /// <summary>The generation the caller pinned via <c>If-Match</c>, or null when it pinned none.
+    /// Quotes are optional so a hand-written <c>curl -H 'If-Match: abc'</c> works.</summary>
+    private static string? HeldGeneration(HttpContext http) =>
+        http.Request.Headers.IfMatch.ToString() is { Length: > 0 } raw
+            ? raw.Trim().Trim('"')
+            : null;
+
+    /// <summary>
+    /// One sealed bundle's bytes — and THREE distinct answers where there used to be one 404
+    /// (#3401): 404 when the seal does not list this name (a permanent mistake, even if the file
+    /// exists — an unsealed file is not part of the publication), 503 while the publication is
+    /// being republished (transient), and 412 when the caller pinned a generation that has since
+    /// moved. Collapsing these is what made a republish window read as a missing bundle.
+    /// </summary>
     private static IResult PrebuiltBundle(
         HttpContext http, string identity, string source, string bundle,
         AuthenticatedInstance? caller, AuthenticatedBuild? build)
@@ -244,10 +300,16 @@ public static class PluginBundleEndpoints
         if (PrebuiltDecision(http, identity, source, caller, build) is { } refused)
             return refused;
         var directory = PrebuiltDirectory(http, identity, source);
-        var sealed_ = directory is null ? null : PublishedBundleCatalogue.SealedBundlesOf(directory, Log(http));
-        if (sealed_ is null || !sealed_.Contains(bundle, StringComparer.OrdinalIgnoreCase))
+        if (directory is null)
+            return NothingPublished(identity, source);
+        var reading = PublishedBundleCatalogue.SealedPublicationOf(directory, Log(http));
+        if (reading.Bundles is null)
+            return BeingRepublished(http, identity, source, reading.TornReason!);
+        if (HeldGeneration(http) is { } held && held != reading.Generation)
+            return GenerationMoved(held, reading.Generation!);
+        if (!reading.Bundles.Contains(bundle, StringComparer.OrdinalIgnoreCase))
             return NoSuchBundle();
-        var path = Path.Combine(directory!, bundle);
+        var path = Path.Combine(directory, bundle);
         return Results.File(path, "application/zip", fileDownloadName: bundle);
     }
 
@@ -262,14 +324,21 @@ public static class PluginBundleEndpoints
         if (PrebuiltDecision(http, identity, source, caller, build) is { } refused)
             return refused;
         var directory = PrebuiltDirectory(http, identity, source);
-        var reading = directory is null
-            ? new ModuleSetReading(null, "no sealed publication")
-            : PublishedBundleCatalogue.SealedModulesOf(directory, Log(http));
+        if (directory is null)
+            return NothingPublished(identity, source);
+        // The republish window reaches the module set too, and it is transient there for the same
+        // reason (#3401) — separate it from a module set that is genuinely unusable.
+        var publication = PublishedBundleCatalogue.SealedPublicationOf(directory, Log(http));
+        if (publication.Bundles is null)
+            return BeingRepublished(http, identity, source, publication.TornReason!);
+        var reading = PublishedBundleCatalogue.SealedModulesOf(directory, Log(http));
         if (reading.Modules is null)
             return Results.Json(
                 new { error = $"{reading.Refusal} — source '{source}', framework identity '{identity}'" },
                 statusCode: StatusCodes.Status404NotFound);
-        return Results.Json(new { identity, source, modules = reading.Modules });
+        http.Response.Headers.ETag = $"\"{publication.Generation}\"";
+        return Results.Json(
+            new { identity, source, modules = reading.Modules, generation = publication.Generation });
     }
 
     /// <summary>One sealed module bundle's bytes. A name the module index does not list is 404
@@ -284,12 +353,17 @@ public static class PluginBundleEndpoints
             return Results.Json(new { error = "bundle must be a bare name" },
                 statusCode: StatusCodes.Status400BadRequest);
         var directory = PrebuiltDirectory(http, identity, source);
-        var reading = directory is null
-            ? new ModuleSetReading(null, "no sealed publication")
-            : PublishedBundleCatalogue.SealedModulesOf(directory, Log(http));
+        if (directory is null)
+            return NothingPublished(identity, source);
+        var publication = PublishedBundleCatalogue.SealedPublicationOf(directory, Log(http));
+        if (publication.Bundles is null)
+            return BeingRepublished(http, identity, source, publication.TornReason!);
+        if (HeldGeneration(http) is { } held && held != publication.Generation)
+            return GenerationMoved(held, publication.Generation!);
+        var reading = PublishedBundleCatalogue.SealedModulesOf(directory, Log(http));
         if (reading.Modules is null || !reading.Modules.Contains(bundle, StringComparer.OrdinalIgnoreCase))
             return NoSuchBundle();
-        var path = Path.Combine(directory!, PublishedBundleCatalogue.ModulesDirectoryName, bundle);
+        var path = Path.Combine(directory, PublishedBundleCatalogue.ModulesDirectoryName, bundle);
         return Results.File(path, "application/zip", fileDownloadName: bundle);
     }
 

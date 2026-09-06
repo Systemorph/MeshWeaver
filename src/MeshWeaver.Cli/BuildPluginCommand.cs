@@ -473,7 +473,7 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         foreach (var src in sources)
         {
             var url = $"api/plugins/bundles/prebuilt/{identity}/{src}/modules";
-            using var response = await http.GetAsync(url, ct);
+            using var response = await RegistryGet(http, url, null, ct);
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
                 await error.WriteLineAsync(
@@ -545,8 +545,12 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
             var zipPath = Path.Combine(extDir, hit.Name);
             try
             {
-                await using var body = await http.GetStreamAsync(
-                    $"api/plugins/bundles/prebuilt/{identity}/{hit.Source}/modules/{hit.Name}", ct);
+                using var moduleResponse = await RegistryGet(
+                    http,
+                    $"api/plugins/bundles/prebuilt/{identity}/{hit.Source}/modules/{hit.Name}",
+                    null, ct);
+                moduleResponse.EnsureSuccessStatusCode();
+                await using var body = await moduleResponse.Content.ReadAsStreamAsync(ct);
                 await using var file = File.Create(zipPath);
                 await body.CopyToAsync(file, ct);
             }
@@ -563,6 +567,44 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                 $"external module composed from the SEALED publication of '{hit.Source}': {name} ({pkg}, {hit.Name})");
         }
         return args;
+    }
+
+    /// <summary>
+    /// One registry GET that survives a REPUBLISH WINDOW (MeshWeaver#3401).
+    ///
+    /// <para>The publisher unseals a publication before replacing it and re-seals it LAST, on
+    /// purpose, so nobody can read a mix of two. A request landing in that window now answers
+    /// <c>503 + Retry-After</c> — "this exists and is being replaced" — and waiting it out is the
+    /// correct response, not a retry papering over a fault. The two shell lanes that read the same
+    /// endpoint (<c>node-repo-gate.yml</c>, <c>compose-sealed-modules.sh</c>) already back off on
+    /// the same codes with the same delays; this verb did not, and would have died on the window
+    /// the moment it opened.</para>
+    ///
+    /// <para><paramref name="generation"/> pins the publication INSTANCE the caller read its index
+    /// from, so the server can refuse a fetch that would mix two publications (412) rather than
+    /// silently serving half of each. It is opt-in: a registry that predates #3401 publishes no
+    /// generation, the header is then absent, and the behaviour is exactly as before.</para>
+    /// </summary>
+    private async Task<HttpResponseMessage> RegistryGet(
+        HttpClient http, string url, string? generation, CancellationToken ct)
+    {
+        int[] delays = [15, 30, 60, 90];
+        for (var attempt = 0; ; attempt++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (generation is { Length: > 0 })
+                request.Headers.TryAddWithoutValidation("If-Match", generation);
+            var response = await http.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, ct);
+            var code = (int)response.StatusCode;
+            if (!(code is 408 or 429 || code >= 500) || attempt >= delays.Length)
+                return response;
+            response.Dispose();
+            await error.WriteLineAsync(
+                $"registry answered {code} for {url} — transient (a republish window looks like "
+                + $"this); re-asking in {delays[attempt]}s, attempt {attempt + 2}");
+            await Task.Delay(TimeSpan.FromSeconds(delays[attempt]), ct);
+        }
     }
 
     /// <summary>
@@ -583,7 +625,7 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         foreach (var src in upstreams.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var basePath = $"api/plugins/bundles/prebuilt/{frameworkIdentity}/{src}";
-            using var resp = await http.GetAsync(basePath, ct);
+            using var resp = await RegistryGet(http, basePath, null, ct);
             if ((int)resp.StatusCode == 404)
             {
                 await error.WriteLineAsync(
@@ -618,6 +660,13 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                     await error.WriteLineAsync($"error: {basePath} answered 200 but not a publication index.");
                     return false;
                 }
+                // The publication INSTANCE this index describes (#3401). Reading the index and then
+                // each bundle it names is N+1 reads of a directory the publisher may reseal
+                // underneath us; carrying it lets the server refuse a mixed read instead of
+                // serving half of two publications. Absent on a registry that predates #3401.
+                var generation = doc.RootElement.TryGetProperty("generation", out var gen)
+                    ? gen.GetString()
+                    : null;
                 foreach (var nameEl in bundles.EnumerateArray())
                 {
                     var name = nameEl.GetString();
@@ -629,7 +678,33 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                         await error.WriteLineAsync($"error: publication index for '{src}' names an unsafe path '{name}' — refusing.");
                         return false;
                     }
-                    await using var body = await http.GetStreamAsync($"{basePath}/{name}", ct);
+                    using var bundleResponse =
+                        await RegistryGet(http, $"{basePath}/{name}", generation, ct);
+                    if ((int)bundleResponse.StatusCode == 412)
+                    {
+                        await error.WriteLineAsync(
+                            $"error: the '{src}' publication was resealed while this fetch was in "
+                            + $"flight (we held generation {generation}). One publication or none — "
+                            + "never half of two. Re-run once the publisher has settled.");
+                        return false;
+                    }
+                    if ((int)bundleResponse.StatusCode == 404)
+                    {
+                        await error.WriteLineAsync(
+                            $"error: '{name}' is listed in the '{src}' publication index but the "
+                            + "registry will not serve it — the seal and the store disagree, and "
+                            + "that needs a republish. This is NOT the republish window: that "
+                            + "answers 503 and is waited out.");
+                        return false;
+                    }
+                    if (!bundleResponse.IsSuccessStatusCode)
+                    {
+                        await error.WriteLineAsync(
+                            $"error: registry answered {(int)bundleResponse.StatusCode} for "
+                            + $"{basePath}/{name} — refusing.");
+                        return false;
+                    }
+                    await using var body = await bundleResponse.Content.ReadAsStreamAsync(ct);
                     await using var file = File.Create(Path.Combine(seedDir, name));
                     await body.CopyToAsync(file, ct);
                     fetched++;
