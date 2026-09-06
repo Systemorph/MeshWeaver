@@ -408,7 +408,8 @@ public static class CatalogLayoutAreas
     internal static IPackageSource? BuildSource(
         LayoutAreaHost host, string? sourceRepoPath, string? sourceSubdir, string? format = null) =>
         PackageSources.FromRepo(
-            host.Hub, sourceRepoPath, sourceSubdir, Logger(host), PackageSources.IsNodeRepoFormat(format));
+            host.Hub, sourceRepoPath, sourceSubdir, Logger(host),
+            PackageSources.IsNodeRepoFormatOrDetected(format, sourceRepoPath, sourceSubdir));
 
     /// <summary>
     /// The live installed-plugin inventory: every <c>Package</c> record in the install registry,
