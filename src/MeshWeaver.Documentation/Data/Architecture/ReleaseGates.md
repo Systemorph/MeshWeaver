@@ -109,10 +109,14 @@ A gate that holds an environment forever is a worse outage than the one it preve
 half asks "is this package perfect for the target"; both ask "would this roll take away something
 that works today".
 
-- **Content**: a package is treated as content-bearing exactly when it has a sealed bake under the
-  identity the instance is running *now* — i.e. when its bytes are being adopted today. A package
-  with no compilable NodeTypes produces no bundle ever, so demanding one would hold its environment
-  forever.
+- **Content**: a package is treated as content-bearing exactly when it has **ever** been sealed
+  under **any** framework identity the published root holds. A package with no compilable NodeTypes
+  produces no bundle ever, so demanding one would hold its environment forever — but the evidence
+  must not come from the artifact store the gate is about to judge. 🚨 It once did (it asked the
+  identity running *now*), and that made the denominator erode exactly where the gate was needed:
+  a package whose bake broke left the set of packages the gate asks about, so every later roll was
+  green about precisely the package that had regressed. See
+  [The Release Gate's Denominator](../ReleaseGateDenominator).
 - **Modules**: a floor is passed to the predicate only when the running platform already satisfies
   it. SemVer puts `3.0.0-rc4.ci.4049` **below** `3.0.0`, so a module declaring `minMeshVersion:
   3.0.0` is below floor on every `-rc` platform, including the one prod runs. Judged absolutely it
@@ -505,6 +509,7 @@ from the name.
 
 ## See also
 
+- [The Release Gate's Denominator](../ReleaseGateDenominator) — why "which packages must be baked" may never be read from the artifact under judgement
 - [CI Content Bake](../CiContentBake) — where the sealed bundles and the framework identity come from
 - [The Continuous Delivery Contract](../ContinuousDeliveryContract) — the publication this gate reads
 - [Release & Self-Update Strategy](../ReleaseStrategy) — the poll, the policy node, the roll

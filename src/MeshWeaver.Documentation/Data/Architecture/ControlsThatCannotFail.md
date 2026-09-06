@@ -43,12 +43,13 @@ instances. The family is larger, and it is worth recognising by shape.
 | **One word covering three states** | `completed/success` over checked-and-passed, never-ran, and ran-and-did-nothing | the verdict is not the outcome |
 | **A tool that collapses several failures into one exit code** | `git cat-file -e "$sha:$path" \|\| echo ABSENT` | absent-path, bad-sha, missing-object and bad-quoting all read the same |
 | **A measurement that truncates and answers anyway** | a profiler capping at N objects; `\| head -10` on a sorted sweep | the wrong number is *plausible* — and on ordered output the survivors are biased, so a partial view reads as a clean one |
+| **A count over a population whose membership varies** | `grep -c "webhook-url:" ci.yml` → `0` across six repos | a zero means "present and omits it" in five and "the thing does not exist" in the sixth |
 | **A writer whose failure mode is a SUCCESS line** | a generator that skips its work and prints a summary anyway | nothing distinguishes "wrote it" from "declined to" |
 
-## Eight measured instances
+## Nine measured instances
 
-The first six were found in a single day, across tests, CI, publication and ops. The last two were
-found **while writing this page** — one by its author, one by the session that supplied instances
+The first six were found in a single day, across tests, CI, publication and ops. Instances 7 and 8
+were found **while writing this page** — one by its author, one by the session that supplied instances
 2–6, independently, within an hour of each other. Each is stated with what was *measured*, not with
 what was suspected.
 
@@ -217,6 +218,39 @@ and cannot be fixed by care. A control is reasoned about by the person who built
 they built it from — which is why the second half of this page's diagnostic asks you to go and break
 the subject rather than to think harder about it.
 
+🚨 **And a THIRD time, by the same author, four hours later — this one defeats the table above.**
+A watcher over three satellite pull requests reported *ALL CHECKS GREEN*. The head carried exactly
+two check-runs, `arm / Arm auto-merge` and the Copilot reviewer, both genuinely green; the four
+required contexts were absent. The cause was not "not created yet": the workflow had ended in
+**`startup_failure`** — a caller passed a reusable workflow an input its pinned lane sha does not
+declare, so GitHub rejected the file at load time and created **no job at all**.
+
+```
+Social Media Plugins CI   completed/startup_failure   event=pull_request
+```
+
+The distinction that matters, and the reason the remedy above is not yet sufficient: a
+`startup_failure` produces a check-**suite** whose `latest_check_runs_count` is **0**, and it is
+**terminal**. The table's `context absent from the list → not created yet` is the right answer for a
+freshly pushed head and the *wrong* answer here — a watcher applying it waits for contexts that will
+never arrive, and reports "running" forever. Two absences that look identical in the check-run list
+are distinguished only one level up:
+
+| suite state | runs | means |
+|---|---|---|
+| `queued` / `in_progress` | 0 | not created **yet** — wait |
+| `completed` / `startup_failure` | **0** | the workflow never loaded — **terminal, red** |
+| `completed` / any conclusion | n | read the runs |
+
+**Rule:** a watcher must read check-**suites** as well as check-runs, and must treat
+`startup_failure` as a first-class terminal red. Counting runs cannot see it, and neither can a
+required-contexts-by-name check that only knows "absent ⇒ pending".
+
+🚨 The same reading applies to the *pull request's* own summary: `mergeable_state` was `blocked` —
+which is correct, and says nothing about why. `blocked` covers "a required context is red", "a
+required context has not reported", and "reviews are outstanding". It is the same one-word-covering-
+three-states shape as instance 6, on the field a merge decision is most often made from.
+
 ### 6. One verdict covering three different outcomes
 
 A green `CD delivered` sat over a **skipped** `bake + seal`, and four consecutive green scheduled CD
@@ -306,6 +340,51 @@ independent reader — the tool's own check mode, or the gate that consumes the 
 reports success while doing nothing is the purest form of this page's subject: there is no error to
 notice, no red to chase, and the only signal is one you have to go and ask for.
 
+### 9. A sweep whose zero had two causes, and the fix it therefore mis-sized
+
+Six repositories were swept for whether their `publish-bake` caller passes `webhook-url` /
+`webhook-secret` through to the reusable lane. The sweep was one number per repo:
+
+```bash
+grep -c "webhook-url:" .github/workflows/ci.yml      # → 0 in five of six
+```
+
+Every number was correct. The conclusion — *"five callers omit it, so five need the same two-line
+fix"* — was wrong, because in one repository the `0` meant something else entirely: it has **no
+reusable caller at all**, a local `publish-bake` job with no such step to wire. The fix there is
+adopting the shared lane, a behavioural change, not a pass-through.
+
+The sweep had an unstated premise — *every repo in this list calls the lane* — that was false for one
+row, and no amount of care in reading the numbers could surface it, because the premise is not
+something the numbers are about.
+
+**The cure is a second column, always: measure the DENOMINATOR in the same pass.**
+
+```
+                      calls the lane   webhook-url:
+Education                   0               0     ← no caller at all      (different fix)
+SocialMedia                 1               0     ← caller, unwired       (two-line fix)
+Reinsurance                 1               1     ← correct
+```
+
+Rows 1 and 2 are indistinguishable in the second column alone, and the difference between them is
+*which fix applies*.
+
+🚨 **The identical shape appeared the same afternoon in an unrelated sweep, by a different session:**
+a fleet grep for `MW_IMAGE_DIGEST` reported one repository as *"does not pin the platform"*. It pins
+under `MW_PORTAL_DIGEST` / `MW_MIGRATION_DIGEST` / `MW_TEST_DIGEST`. Same zero, same false
+conclusion, opposite direction — one under-reported a defect, the other over-reported it.
+
+**This is not the truncated-sweep failure** (a listing cut by `head` whose only offender sorted
+below the cut) nor a sweep that never ran.
+The sweep ran completely and every number was right; the *interpretation* carried a false premise. A
+correct measurement under a false premise reads exactly like a correct answer, which is why it
+belongs on this page: nothing about the output looks wrong.
+
+**Rule:** whenever a sweep's negative can have more than one cause, the sweep is not finished until
+it also measures which cause. If you cannot express the denominator as a column, you do not yet know
+what your zero means.
+
 ## The family's edge: a control that fires correctly and hands you an impossible next step
 
 The eight above are all one defect — a control whose green is guaranteed. This last one is
@@ -368,6 +447,12 @@ carries its own control arm is that thesis applied to itself.
    that guards against regression are different artifacts. If the experiment's setup depends on an
    ordering you cannot *enforce*, committing it manufactures the next flake — record it in the change
    instead.
+8. **Give every count a denominator.** A zero that can mean two things is not a measurement. Before
+   acting on a sweep, name the premise that makes its negatives comparable, and measure that too — as
+   a second column, in the same pass.
+9. **Read check-SUITES, not only check-runs.** `startup_failure` is terminal and produces zero runs,
+   so a run-count filter and an absent-context filter both mis-report it — one as green, one as
+   pending-forever.
 
 ## See also
 

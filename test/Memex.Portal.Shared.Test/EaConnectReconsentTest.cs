@@ -1,5 +1,5 @@
 using System;
-using System.Threading;
+using System.Reactive.Linq;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Mesh;
@@ -24,8 +24,11 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class EaConnectReconsentTest
 {
-    private sealed class FakeEaGraphAuth(bool connected) : IEaGraphAuth
+    private sealed class FakeEaGraphAuth(EaConnection state) : IEaGraphAuth
     {
+        public FakeEaGraphAuth(bool connected)
+            : this(connected ? EaConnection.Connected : EaConnection.NotConnected) { }
+
         public bool ConsentUrlBuilt { get; private set; }
 
         public bool IsConfigured => true;
@@ -37,15 +40,21 @@ public class EaConnectReconsentTest
             return "https://login.microsoftonline.example/consent?state=" + state;
         }
 
-        public Task<bool> ExchangeAndStoreAsync(
-            string code, string redirectUri, string userObjectId, CancellationToken ct) =>
-            Task.FromResult(true);
+        public IObservable<bool> ExchangeAndStore(
+            string code, string redirectUri, string userObjectId) => Observable.Return(true);
 
-        public Task<string?> GetAccessTokenAsync(string userObjectId, CancellationToken ct) =>
-            Task.FromResult<string?>(connected ? "token" : null);
+        public IObservable<EaGraphAccess> GetAccessToken(string userObjectId) =>
+            Observable.Return(Answer("token"));
 
-        public Task<bool> IsConnectedAsync(string userObjectId, CancellationToken ct) =>
-            Task.FromResult(connected);
+        public IObservable<EaGraphAccess> GetConnection(string userObjectId) =>
+            Observable.Return(Answer(null));
+
+        private EaGraphAccess Answer(string? token) => state switch
+        {
+            EaConnection.Connected => EaGraphAccess.Connected(token),
+            EaConnection.Undetermined => EaGraphAccess.Unknown("the credential read did not complete"),
+            _ => EaGraphAccess.NotConnected(),
+        };
     }
 
     private static EaConsentController Controller(FakeEaGraphAuth ea)
@@ -101,6 +110,32 @@ public class EaConnectReconsentTest
 
         result.Should().BeOfType<RedirectResult>()
             .Which.Url.Should().StartWith("https://login.microsoftonline.example/consent");
+        ea.ConsentUrlBuilt.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 #3433 at the consent endpoint. A read that did not ANSWER must not be treated as
+    /// "already connected" — the fast path exists to spare a connected user a pointless dialog, and
+    /// taking it on an unknown state would strand a user who genuinely never connected with a
+    /// redirect that does nothing.
+    ///
+    /// <para>The opposite mistake — treating undetermined as "never connected" and offering the
+    /// link — is the one the EA tools make, and it is wrong THERE because nothing is being consented
+    /// there. Here the consent flow is the safe direction: re-consenting a live grant is harmless
+    /// (Microsoft re-issues it), so the endpoint runs it and logs the diagnostic on the way past.
+    /// The two callers differ because their fallbacks differ, not because the state does.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_undetermined_read_runs_the_consent_rather_than_guessing()
+    {
+        var ea = new FakeEaGraphAuth(EaConnection.Undetermined);
+
+        var result = await Controller(ea).Connect(returnUrl: "/rbuergi");
+
+        result.Should().BeOfType<RedirectResult>()
+            .Which.Url.Should().StartWith("https://login.microsoftonline.example/consent",
+                "an unanswered credential read is not evidence of a stored grant, and the fast path "
+                + "is only correct when we KNOW the user is connected");
         ea.ConsentUrlBuilt.Should().BeTrue();
     }
 }

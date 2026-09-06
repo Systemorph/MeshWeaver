@@ -133,6 +133,30 @@ public class UpstreamBuildGateGuard
         Assert.DoesNotContain("secrets.", condition, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// 🚨 A publication record the instance stored WITHOUT checking its signature now ends the lane
+    /// (MeshWeaver#3338). This lane always signs — the POST step fails RED without
+    /// <c>webhook-secret</c> and always sends <c>X-Hub-Signature-256</c> — so an inbox answering
+    /// <c>not-required</c> is telling every satellite that its secret was never exercised, and a
+    /// drifted one would be invisible exactly as it was before #3312.
+    ///
+    /// <para>The job still carries NO <c>::warning</c>: the state this lane can act on is fatal,
+    /// and the state it cannot (a receiver that predates #3312 and answers no verdict at all) is a
+    /// plain echo. That the fatal branch fires on <c>not-required</c> and stays silent on an absent
+    /// verdict is proven by running the script in <see cref="InboxSignatureVerdictGuard"/>.</para>
+    /// </summary>
+    [Fact]
+    public void AnAcceptedButUnverifiedPublicationRecord_EndsTheLane()
+    {
+        var job = JobBlock(Body(), "register-publication:");
+
+        Assert.Contains("case \"$verdict\" in", job, StringComparison.Ordinal);
+        Assert.Contains("not-required)", job, StringComparison.Ordinal);
+        Assert.Contains("::error", job, StringComparison.Ordinal);
+        Assert.Contains("exit 1", job, StringComparison.Ordinal);
+        Assert.DoesNotContain("::warning", job, StringComparison.Ordinal);
+    }
+
     /// <summary>Everything from a job's key to the next job key at the same indent.</summary>
     private static string JobBlock(string body, string jobKey)
     {

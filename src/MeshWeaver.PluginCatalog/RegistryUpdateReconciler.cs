@@ -617,6 +617,35 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             .ToObservable()
             .Concat()
             .DefaultIfEmpty(Unit.Default)
-            .LastAsync();
+            .LastAsync()
+            // 🚨 #3395 — the wave ENDS here, and ending it is what moves the mesh's module set.
+            // Deliberately outside the per-package Concat: proposing after each module would
+            // publish every intermediate combination as a set the next boot could adopt, which is
+            // the torn half-landed mix the set exists to make unreachable. A wave that dies before
+            // this point proposes nothing, so the mesh keeps running the set it was on.
+            .SelectMany(_ => ProposeMeshModuleSet());
+    }
+
+    /// <summary>
+    /// Closes the landing wave by proposing the module set the activation record now describes
+    /// (#3395). Never fails the reconcile: a proposal that cannot be written leaves the mesh on its
+    /// previous set — every replica still agrees with every other one, and the next wave proposes
+    /// again — so the loud log is the whole remedy.
+    /// </summary>
+    private IObservable<Unit> ProposeMeshModuleSet()
+    {
+        var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
+        if (landing is null)
+            return Observable.Return(Unit.Default);
+        return landing.ProposeModuleSet()
+            .Select(_ => Unit.Default)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "[RegistryUpdate] the landing wave completed but its module set could not be "
+                    + "proposed — the mesh stays on its current set and the next wave proposes "
+                    + "again. Cause: {Cause}", ex.Message);
+                return Observable.Return(Unit.Default);
+            });
     }
 }

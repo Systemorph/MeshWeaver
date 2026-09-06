@@ -1,0 +1,49 @@
+# AwaitedMeshReadSites.allow — the hub-reachable-async ratchet, rule 1 (#3433).
+#
+# Each line is a production file that still `await`s a mesh read or write:
+#
+#     node = await ws.GetMeshNodeStream(path).Take(1).Timeout(10s).FirstAsync()…
+#
+# WHY THE SHAPE IS A DEFECT. The hub's turn loop (MessageService.DrainOne) SUBSCRIBES to one turn
+# at a time and does not dequeue the next until the current one terminates. A caller whose work
+# cannot finish until a cross-hub read finishes therefore holds the very queue that read's reply
+# must travel through: the reply cannot be processed, the read's Timeout fires, and whatever the
+# caller does with that timeout is the user-visible bug. In #3433 it was rendered as "this user
+# never connected their mailbox" to a user whose credential was stored and valid.
+# EaCredentialReadTest.AwaitingTheCredentialReadInsideAHubTurn_NeverCompletes reproduces it
+# against the real mesh: the node is present, and the read still times out.
+#
+# WHAT THE GUARD SEES is itself a moving part. An `await` counts only if its expression mentions
+# one of HubReachableAsyncGuard.MeshOperations. That list is LOAD-BEARING: a new mesh entry point
+# named after none of them is invisible, and the whole rule then passes as zero. Add the name
+# there in the same change that introduces the entry point.
+#
+# THE FIX AT A SITE is to compose reactively and Subscribe — return IObservable<T>, chain with
+# .Select/.SelectMany/.Timeout, and post the answer from the subscription. Where an EXTERNAL
+# signature genuinely forces a Task (an MVC action, an IHostedService, an SDK interface), the
+# bridge belongs at THAT edge — ReactiveCompletion.ObserveCompletion — and must never be pushed
+# back onto a seam the hub side also consumes. That inversion is what #3433 was.
+#
+# THIS RATCHET MAY ONLY SHRINK. A new file, a raised count, or a raised total is a failure.
+# Lower HubReachableAsyncGuard.AwaitedReadTotalBudget whenever you delete or lower an entry.
+#
+# Scope: src/, memex/, tools/, samples/, clients/ (production code). test/ is deliberately out of
+# scope — a test awaits the mesh from its own non-hub thread in order to observe it at all, and
+# EaCredentialReadTest deliberately builds a turn that holds the drain to reproduce the defect.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# THE TWO REMAINING SITES, and why each is at a genuine ASP.NET boundary rather than on a hub.
+# Both are still the shape, and both would deadlock if a hub ever called them — which is why they
+# are counted here rather than exempted by a rule that asks where a method "really" runs.
+#
+# DevAuthController.Signin — an MVC action on the DevLogin sign-in path. It resolves the caller's
+# partition-root User node PRE-AUTH, on the ASP.NET request thread, before any hub turn exists to
+# park. Migrating it means reshaping the sign-in action around a subscription; worth doing, not
+# part of #3433.
+memex/Memex.Portal.Shared/Authentication/DevAuthController.cs	1
+#
+# UserRoleResolver.LoadDbRolesAsync — called from OnboardingMiddleware during authentication, i.e.
+# the same ASP.NET request pipeline. Its own remarks already treat the read as an availability
+# question with a classified outcome (IdentityReadOutcome.Unavailable), which is the #3433 lesson
+# applied — only the Task shape is left.
+memex/Memex.Portal.Shared/Authentication/UserRoleResolver.cs	1

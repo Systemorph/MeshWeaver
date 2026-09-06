@@ -119,6 +119,41 @@ public class PlatformReleaseNotifyGuard
     }
 
     /// <summary>
+    /// 🚨 The signature verdict is judged in its OWN step, and its misconfiguration branch ENDS the
+    /// job (#3338). Two things are pinned here and neither is redundant.
+    ///
+    /// <para>Separation, because the POST step is held to "every message ends the job" — a release
+    /// event that never arrived must never be decorated. Folding the verdict back into it would
+    /// force one of the two to give: either the POST step gains a non-fatal message, or a receiver
+    /// that has not rolled #3312 yet starts failing deliveries that DID arrive.</para>
+    ///
+    /// <para>Fatality, because the escalation is the whole of #3338: an inbox that answers
+    /// <c>not-required</c> to a delivery this lane SIGNED is saying our secret was never exercised,
+    /// so a drifted one would still be invisible — the state #3312 exists to end. That the branch
+    /// actually fires (and that the third state, an answer carrying no verdict at all, does NOT)
+    /// is proven by running the script in <see cref="InboxSignatureVerdictGuard"/>; this asserts
+    /// the shape survives, which a behavioural test alone would not notice if the step were
+    /// deleted outright.</para>
+    /// </summary>
+    [Fact]
+    public void TheSignatureVerdictIsItsOwnStep_AndItsMisconfigurationBranchEndsTheJob()
+    {
+        var notify = JobBlock(Body(), "notify-platform-update:");
+
+        var post = StepBlock(notify, "Sign and POST the build fact");
+        Assert.DoesNotContain("::warning", post, StringComparison.Ordinal);
+        // The POST step RECORDS the receiver's word and never judges it. Two judges can disagree,
+        // and the step summary is the line a reader believes.
+        Assert.DoesNotContain("not-required", post, StringComparison.Ordinal);
+
+        var verify = StepBlock(notify, "Did the inbox VERIFY the build fact?");
+        Assert.Contains("case \"$verdict\" in", verify, StringComparison.Ordinal);
+        Assert.Contains("not-required)", verify, StringComparison.Ordinal);
+        Assert.Contains("::error", verify, StringComparison.Ordinal);
+        Assert.Contains("exit 1", verify, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// 🚨 The half this repository CANNOT see, written down where the next reader will look. The
     /// inbox is deliberately dumb, so a 2xx means "stored", not "the wave ran": if the control
     /// instance's <c>Hosting:PlatformWebhookSecret</c> is unset or differs from CD's, the watcher

@@ -2038,6 +2038,19 @@ public static class MeshExtensions
     /// Going through <c>CreateNode</c> there could never work: the row makes the create answer
     /// "already exists", which this method treats as success, so the ghost survived every
     /// bootstrap that ran over it.</para>
+    ///
+    /// <para>🚨 <b>REPAIR, never RESURRECTION (#3436).</b> With NO root at all, this method is
+    /// only allowed to heal a partition whose backing store is still there. When every provider
+    /// definitively answers that the store is GONE, the partition was deleted — and creating a
+    /// <c>Space</c> root here would <c>EnsurePartitionProvisioned</c> the schema straight back,
+    /// making this a SECOND trigger for partition creation behind
+    /// <c>OwnsPartitionProvisioningValidator</c>'s back and laundering an implicit space creation
+    /// past <c>PartitionWriteGuardValidator</c>'s "no partition, no write" rule. That is exactly
+    /// how four deleted partitions came back on the systemorph staff portal as bare, differently
+    /// typed <c>Space</c> shells with a fresh <c>_Policy</c> 67 ms later — a policy that granted
+    /// Delete to nobody who could have deleted the original, so the shell was then undeletable
+    /// through the ordinary API. A ghost repair is exempt by construction: a durable row means the
+    /// store it was read from exists.</para>
     /// </summary>
     private static IObservable<System.Reactive.Unit> ProvisionAndCreateRoot(
         IMessageHub hub, string partition, IMeshService meshService,
@@ -2062,14 +2075,58 @@ public static class MeshExtensions
             Name = partition,
         };
 
-        return provision.SelectMany(_ =>
-            AsSystem(accessService, () => meshService.CreateNode(root).Take(1))
-                .Select(_ => System.Reactive.Unit.Default)
-                .Catch<System.Reactive.Unit, Exception>(ex => IsAlreadyExists(ex)
-                    ? Observable.Return(System.Reactive.Unit.Default)
-                    : Observable.Throw<System.Reactive.Unit>(ex))
-                .Do(_ => logger.LogInformation(
-                    "[PartitionBootstrap] created missing Space root for partition '{Partition}'", partition)));
+        return PartitionStoreConfirmedAbsent(providers, partition, logger).SelectMany(absent =>
+            absent
+                ? Observable.Return(System.Reactive.Unit.Default)
+                    .Do(_ => logger.LogWarning(
+                        "[PartitionBootstrap] NOT creating a Space root for '{Partition}': every "
+                        + "storage provider reports its backing store is gone, so the partition was "
+                        + "deleted. Healing a root here would re-provision the schema and resurrect "
+                        + "the partition as an empty shell (#3436); the child write that triggered "
+                        + "this is refused by the partition write guard instead.", partition))
+                : provision.SelectMany(_ =>
+                    AsSystem(accessService, () => meshService.CreateNode(root).Take(1))
+                        .Select(_ => System.Reactive.Unit.Default)
+                        .Catch<System.Reactive.Unit, Exception>(ex => IsAlreadyExists(ex)
+                            ? Observable.Return(System.Reactive.Unit.Default)
+                            : Observable.Throw<System.Reactive.Unit>(ex))
+                        .Do(_ => logger.LogInformation(
+                            "[PartitionBootstrap] created missing Space root for partition '{Partition}'", partition))));
+    }
+
+    /// <summary>
+    /// Is the partition's backing store confirmed GONE across every provider? The same global-OR
+    /// fold <c>PartitionWriteGuardValidator</c> applies, and for the same reason: a provider only
+    /// knows its OWN store, so a single <c>false</c> means "not mine", never "nowhere".
+    /// <list type="bullet">
+    ///   <item>any <c>true</c> → the store exists somewhere → NOT absent;</item>
+    ///   <item>every provider <c>false</c> → confirmed absent in every store;</item>
+    ///   <item>anything else (a <c>null</c>, a probe fault, no providers) → indeterminate → NOT
+    ///     absent. Fail OPEN, so a probe hiccup can never block a legitimate root heal.</item>
+    /// </list>
+    /// </summary>
+    private static IObservable<bool> PartitionStoreConfirmedAbsent(
+        IReadOnlyList<IPartitionStorageProvider> providers, string partition, ILogger logger)
+    {
+        if (providers.Count == 0)
+            return Observable.Return(false);
+
+        var probes = providers
+            .Select(p => p.PartitionExists(partition)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Catch<bool?, Exception>(ex =>
+                {
+                    logger.LogDebug(ex,
+                        "[PartitionBootstrap] existence probe failed for '{Partition}' via {Provider}; "
+                        + "treating as indeterminate", partition, p.Name);
+                    return Observable.Return<bool?>(null);
+                }))
+            .ToList();
+
+        return Observable.CombineLatest(probes)
+            .Take(1)
+            .Select(results => results.Count > 0 && results.All(r => r == false));
     }
 
     /// <summary>
@@ -2485,7 +2542,7 @@ public static class MeshExtensions
                 //    failure cannot un-delete anything. Resolving early keeps them RUNNING; a
                 //    guard around the resolution would silently skip the side effect that drops a
                 //    partition's backing store, leaking a database.
-                var postDeletionHandlers = ResolvePostDeletionHandlers(hub, rootNode);
+                var postDeletionHandlers = ResolvePostDeletionHandlers(hub, rootNode, logger);
 
                 // 2. Validate + check Delete permission for THIS node (root of the
                 //    operation). Descendants are validated by their own per-node
@@ -4141,15 +4198,45 @@ public static class MeshExtensions
     ///
     /// <para>Resolving early keeps the handlers RUNNING. Guarding the resolution instead would
     /// silently skip them — and they are the side effects that drop a partition's backing store
-    /// when a partition-owning Space root is deleted, so skipping them leaks a database.</para>
+    /// when a partition ROOT is deleted, so skipping them leaks a database.</para>
+    ///
+    /// <para>Selection asks each handler (<see cref="INodePostDeletionHandler.Matches"/>) rather
+    /// than comparing NodeType strings here, and reports the one case where an EMPTY result is a
+    /// defect rather than a normal outcome — see the body.</para>
     /// </summary>
     private static IReadOnlyList<INodePostDeletionHandler> ResolvePostDeletionHandlers(
-        IMessageHub hub, MeshNode node) =>
-        string.IsNullOrEmpty(node.NodeType)
-            ? []
-            : hub.ServiceProvider.GetServices<INodePostDeletionHandler>()
-                .Where(h => h.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
-                .ToList();
+        IMessageHub hub, MeshNode node, ILogger logger)
+    {
+        // 🚨 Matching is the HANDLER's decision (INodePostDeletionHandler.Matches), not a
+        // NodeType string compare done here. The default Matches IS that compare, so per-type
+        // handlers are unchanged; the partition teardown answers structurally, which is the only
+        // way it can cover a partition root typed by an IN-MESH NodeType (#3436). The old
+        // "untyped node ⇒ no handlers" short-circuit went with it: an untyped partition root is
+        // still a partition root, and skipping its teardown leaked its schema too.
+        var handlers = hub.ServiceProvider.GetServices<INodePostDeletionHandler>()
+            .Where(h => h.Matches(node))
+            .ToList();
+
+        // 🚨 THE DETECTOR THAT CANNOT BE SKIPPED. It lives in the pipeline, not in a host's
+        // registration chain, so it fires on every host — including one that never called
+        // AddGraph and therefore never registered the boot gate. Deleting a partition ROOT with
+        // no teardown handler is exactly the #3436 defect: the recursive delete removes the
+        // mesh_nodes rows and NOTHING drops the backing store, so the schema (with every
+        // satellite table under it) is orphaned, invisible to every Space listing, and — once a
+        // later child write bootstraps a fresh root and policy over it — un-deletable through the
+        // ordinary API. Critical, named, and carrying the partition, because the only cheap
+        // repair is to run the teardown by hand before the partition is resurrected.
+        if (handlers.Count == 0 && PartitionDefinition.IsPartitionRoot(node))
+            logger.LogCritical(
+                "[DeleteNode] partition ROOT '{Path}' (nodeType '{NodeType}') was deleted with NO "
+                + "INodePostDeletionHandler matching it — the partition's backing store was NOT "
+                + "dropped and its Admin/Partition definition was NOT removed. The schema is now "
+                + "ORPHANED. Register the partition teardown (AddGraph does) and drop partition "
+                + "'{Partition}' manually.",
+                node.Path, node.NodeType ?? "(none)", node.Id);
+
+        return handlers;
+    }
 
     /// <summary>
     /// Runs the registered <see cref="INodePostDeletionHandler"/>s matching the deleted
