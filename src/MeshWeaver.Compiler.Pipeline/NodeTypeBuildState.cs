@@ -48,6 +48,15 @@ public static class NodeTypeBuildState
     /// observability + history. Compile correctness must not depend on the create
     /// succeeding. See <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
     /// </summary>
+    /// <summary>
+    /// The re-cut's own release path when a create failed only because that path is already taken,
+    /// else <c>null</c>. The WHOLE decision behind #3407, extracted so a test drives it rather than
+    /// only its ingredient — pinning <see cref="NodeCreationFailure.IsNodeAlreadyExists"/> alone
+    /// would leave the catch free to keep returning <c>null</c> and stay green.
+    /// </summary>
+    internal static string? AdoptOnOwnCollision(Exception ex, string releasePath)
+        => ex.IsNodeAlreadyExists() ? releasePath : null;
+
     internal static IObservable<string?> TryCreateReleaseNode(
         IMessageHub hub,
         string nodeTypePath,
@@ -196,6 +205,33 @@ public static class NodeTypeBuildState
                 .Timeout(TimeSpan.FromSeconds(10), Observable.Return<string?>(null))
                 .Catch<string?, Exception>(ex =>
                 {
+                    // 🚨 A COLLISION AT OUR OWN ID IS SUCCESS (#3407). ReleasePostCondition re-cuts
+                    // when latestReleasePath still names an earlier build; when the retry lands in
+                    // the SAME SECOND as the first attempt, both mint the same id and the second
+                    // create throws. Swallowing that into null left the pointer un-advanced: the
+                    // bytes were published, the Release node existed, and the type went on
+                    // advertising a build no release named — every instance kept executing the
+                    // previous assembly behind a $Banner whose own text says a recycle will not
+                    // clear it. Measured on memex.localhost 2026-09-06 (Edu/CourseInvite build 767);
+                    // only a pod restart cleared it, and nothing in the pipeline did.
+                    //
+                    // Adopting is naming the same bytes, not guessing. The id is
+                    // {yyyyMMddHHmmss}-{8 chars of SHA256(Collection/ContentPath)} — the hash comes
+                    // from the DURABLE content reference, so an equal id means equal second AND
+                    // equal content. A collision can therefore only be this same code's own earlier
+                    // attempt for this same compile. (Healthy re-cuts show in the release list as
+                    // PAIRS a second or two apart sharing the suffix; the failing one was the single
+                    // unpaired id.)
+                    if (AdoptOnOwnCollision(ex, releasePath) is { } adopted)
+                    {
+                        logger?.LogInformation(
+                            "CompileWatcher: Release node at {ReleasePath} already exists — adopting "
+                            + "it. The re-cut collided with its own first attempt in the same second; "
+                            + "the id encodes the content hash, so this names the same bytes.",
+                            adopted);
+                        return Observable.Return<string?>(adopted);
+                    }
+
                     logger?.LogWarning(ex,
                         "CompileWatcher: failed to create Release node at {ReleasePath}",
                         releasePath);
