@@ -45,19 +45,14 @@ public static class UserNodeType
                 new UserAccessRule(sp.GetRequiredService<IMessageHub>()));
             services.AddSingleton<INodePostCreationHandler>(sp =>
                 new UserScopeGrantHandler(sp.GetRequiredService<IMeshService>()));
-            // Deleting a User home removes the ENTIRE per-user partition — the deletion-side
-            // mirror of the eager User-partition provisioning (OwnsPartitionProvisioningValidator,
-            // OwnsPartition=true below). After the recursive node delete, drop the backing store
-            // (Postgres schema incl. every satellite table) on every partition storage provider,
-            // so no schema/satellite rows are orphaned. Mirrors AddSpaceType's Space teardown;
-            // without it a System off-boarding delete left the whole partition behind
-            // (2026-07-19 memex-cloud incident). Interactive callers are blocked upstream by
-            // PartitionRootDeletionGuard — only System reaches this teardown.
-            services.AddSingleton<INodePostDeletionHandler>(sp =>
-                new PartitionDropPostDeletionHandler(
-                    sp.GetRequiredService<IMessageHub>(),
-                    NodeType,
-                    sp.GetService<ILoggerFactory>()?.CreateLogger<PartitionDropPostDeletionHandler>()));
+            // 🚨 NO per-type partition teardown here any more (#3436). Deleting a User home still
+            // removes the ENTIRE per-user partition (backing store included) —
+            // PartitionDropPostDeletionHandler now matches every partition ROOT structurally and
+            // is registered ONCE by AddGraph. This registration was added by hand after the
+            // 2026-07-19 memex-cloud incident left a whole user partition behind; copying the
+            // Space registration instead of generalising it is what let the SAME defect recur for
+            // Store/Plugin-rooted partitions. Interactive callers are still blocked upstream by
+            // PartitionRootDeletionGuard — only System reaches the teardown for a User home.
             return services;
         });
         // nodeType:User without a path constraint → restrict to the "Auth"
