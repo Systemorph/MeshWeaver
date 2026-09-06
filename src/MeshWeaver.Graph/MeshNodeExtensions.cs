@@ -68,7 +68,11 @@ public static class MeshNodeExtensions
                 dsStream.StreamId));
         }, ex =>
         {
-            var logger = stream.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            // Best effort BY CONSTRUCTION: this is a stream Update's exception callback, and the
+            // commonest reason it fires is that the stream is dead — in which case the hub that
+            // died is the one holding the log sink, and this static extension has no other. The
+            // refusal itself is still reported to the producer by SignalDisposedToProducer.
+            var logger = stream.TryGetHub()?.ServiceProvider.GetService<ILoggerFactory>()
                 ?.CreateLogger("MeshWeaver.Graph.UpdateMeshNode");
             logger?.LogError(ex, "UpdateMeshNode failed for {NodePath}", nodePath);
         });

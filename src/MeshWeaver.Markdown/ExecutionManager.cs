@@ -41,8 +41,20 @@ public static class MarkdownExecutionExtensions
     public static void Execute(this ISynchronizationStream stream, Address address, IReadOnlyList<(string Id, string Code)> codeBlock)
     {
         var manager = stream.Get<ExecutionManager>();
-        if(manager == null)
-            stream.Set(manager = new(stream.Hub, address));
+        if (manager == null)
+        {
+            // The manager IS a hub — it exists to post SubmitCodeRequest — so a stream whose hub
+            // is gone cannot build one and the code cannot run. This surface is `void` and has no
+            // logger, so the refusal goes out the only channel it has: the same
+            // HubDisposingException the stream's own constructor throws. That is an
+            // ObjectDisposedException, so it classifies as ErrorType.ShuttingDown — the transient
+            // "retry, the address may reactivate" answer — instead of the NRE this line used to
+            // take, which reaches a subscriber as a TERMINAL failure.
+            if (stream.TryGetHub() is not { } hub)
+                throw new HubDisposingException(stream.Owner, $"execution manager for {address}");
+
+            stream.Set(manager = new(hub, address));
+        }
 
         manager.Update(codeBlock);
     }

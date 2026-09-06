@@ -1675,7 +1675,13 @@ public static class JsonSynchronizationStream
             .Where(predicate)
             .Select(x =>
             {
-                var logger = GetLogger(stream.Hub.ServiceProvider);
+                // `null` is this projection's declared "nothing to forward" (IObservable<TChange?>;
+                // the value-equal skip below returns it too). A stream whose reduce chain is dead
+                // has no container left to resolve a logger from and nothing legitimate to
+                // announce, so it forwards nothing instead of dereferencing a corpse.
+                if (stream.TryGetHub() is not { } streamHub)
+                    return null;
+                var logger = GetLogger(streamHub.ServiceProvider);
                 logger.LogDebug("ToDataChanged processing change item: StreamId={StreamId}, ChangeType={ChangeType}, ChangedBy={ChangedBy}, UpdatesCount={UpdatesCount}",
                     stream.ClientId, x.ChangeType, x.ChangedBy, x.Updates.Count);
 

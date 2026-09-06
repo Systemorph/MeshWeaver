@@ -271,6 +271,12 @@ public static class LayoutExtensions
         JsonPointer referencePointer
     )
     {
+        // A stream whose hub is gone can neither parse this pointer's id (no serializer options)
+        // nor ever emit again — its store is completed or terminally faulted. So an empty sequence
+        // is EXACTLY what subscribing to it would produce, minus the NRE on the way in.
+        if (stream.TryGetHub() is not { } hub)
+            return Observable.Empty<T>();
+
         var first = true;
         var collection = referencePointer.GetSegment(0).ToString();
         var idString = referencePointer.SegmentCount == 1 ? null : referencePointer.GetSegment(1).ToString();
@@ -280,7 +286,7 @@ public static class LayoutExtensions
         var id =
             unescapedIdString == null ? null :
                 unescapedIdString == string.Empty ? string.Empty
-                : JsonSerializer.Deserialize<string>(unescapedIdString, stream.Hub.JsonSerializerOptions);
+                : JsonSerializer.Deserialize<string>(unescapedIdString, hub.JsonSerializerOptions);
 
         return stream
             .Synchronize() // Ensure thread-safety for the 'first' closure variable
@@ -307,9 +313,16 @@ public static class LayoutExtensions
                     var evaluated = referencePointer
                         .Evaluate(i.Value);
                     if (evaluated is null) return default!;
+                    // Re-read the hub per emission rather than capturing the one resolved above:
+                    // capturing would pin the hub's whole resolved graph for the lifetime of every
+                    // subscription, which is the retention #3321 exists to release. A replayed
+                    // frame can reach a late subscriber after teardown, and `default!` is this
+                    // lambda's existing absent answer (the line above and the catch below both
+                    // use it), so the pipeline keeps flowing instead of NRE'ing in the circuit.
+                    if (stream.TryGetHub() is not { } liveHub) return default!;
                     try
                     {
-                        return evaluated.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!;
+                        return evaluated.Value.Deserialize<T>(liveHub.JsonSerializerOptions)!;
                     }
                     catch (Exception ex) when (ex is NotSupportedException || ex is JsonException)
                     {
@@ -317,7 +330,7 @@ public static class LayoutExtensions
                         // discriminator the local hub's TypeRegistry doesn't know about. Surface
                         // the failure via the hub logger and yield default(T) so the observable
                         // pipeline keeps flowing instead of crashing the circuit on decode.
-                        var logger = stream.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                        var logger = liveHub.ServiceProvider.GetService<ILoggerFactory>()
                             ?.CreateLogger("LayoutExtensions.GetStream");
                         var rawPreview = evaluated.Value.ValueKind == JsonValueKind.Undefined
                             ? "<undefined>"
@@ -411,7 +424,13 @@ public static class LayoutExtensions
                 if (!enumerator.MoveNext())
                     return null;
 
-                return enumerator.Current.Value.Deserialize<UiControl>(synchronizationItems.Hub.JsonSerializerOptions);
+                // `null` is this lambda's absent answer on all four branches above and the .Where
+                // below drops it — so a stream torn down under a late subscriber yields no
+                // control, which is the truth, instead of an NRE on a non-nullable Hub.
+                if (synchronizationItems.TryGetHub() is not { } hub)
+                    return null;
+
+                return enumerator.Current.Value.Deserialize<UiControl>(hub.JsonSerializerOptions);
             })
             .Where(x => x is not null);
 
@@ -446,7 +465,11 @@ public static class LayoutExtensions
         stream
             .Reduce(reference)!
             .Where(x => x.Value.ValueKind != JsonValueKind.Null && x.Value.ValueKind != JsonValueKind.Undefined)
-            .Select(x => x.Value.Deserialize<object?>(stream.Hub.JsonSerializerOptions));
+            // 🚨 A REDUCED stream is its parent's SIBLING, not its child — so this pipeline can
+            // still emit while `stream` itself is already dead (the #1455 shape). Without a hub
+            // there is nothing to deserialize with; `null` is the declared element type's absent
+            // value, so the binding sees "no value" rather than the circuit taking an NRE.
+            .Select(x => stream.TryGetHub() is { } hub ? x.Value.Deserialize<object?>(hub.JsonSerializerOptions) : null);
 
     /// <summary>
     /// Returns an observable of the data value stored under <paramref name="id"/> in the Data
@@ -483,7 +506,10 @@ public static class LayoutExtensions
         string id
     ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id))!
         .Where(x => x.Value != null)
-        .Select(x => ConvertDataValue<T>(x.Value!, stream.Hub.JsonSerializerOptions))
+        // The reduced stream outlives its parent (see the JsonPointerReference overload above),
+        // so guard the hub read per emission. `default` is what an unconvertible value already
+        // yields here; the DistinctUntilChanged below is unaffected for a live stream.
+        .Select(x => stream.TryGetHub() is { } hub ? ConvertDataValue<T>(x.Value!, hub.JsonSerializerOptions) : default!)
         .DistinctUntilChangedWithJsonSupport()
     ;
 
@@ -554,7 +580,13 @@ public static class LayoutExtensions
 
     private static void FailRendering(this ISynchronizationStream stream, Exception exception)
     {
-        stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LayoutExtensions)).LogWarning(exception, "Rendering failed");
+        // Best effort BY CONSTRUCTION — see the identical note in LayoutClientExtensions. This is
+        // the exception callback of a stream Update; when the stream is dead, the hub that died is
+        // the one holding the log sink, and this static extension has no other. The refusal is
+        // still reported to the producer by SynchronizationStream.SignalDisposedToProducer, which
+        // is what invoked this in the first place.
+        stream.TryGetHub()?.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(LayoutExtensions)).LogWarning(exception, "Rendering failed");
     }
 
     /// <summary>
@@ -583,7 +615,13 @@ public static class LayoutExtensions
         stream
             .Reduce(reference)!
             .Where(x => x.Value.ValueKind != JsonValueKind.Null && x.Value.ValueKind != JsonValueKind.Undefined)
-            .Select(x => x.Value.Deserialize<object>(stream.Hub.JsonSerializerOptions)!);
+            // The element type is non-nullable, so a hub-less stream cannot answer with `null`
+            // here — it answers by not emitting. The added .Where is inert for a live stream: the
+            // .Where above already excludes Null/Undefined, the only kinds Deserialize<object>
+            // maps to null.
+            .Select(x => stream.TryGetHub() is { } hub ? x.Value.Deserialize<object>(hub.JsonSerializerOptions) : null)
+            .Where(x => x is not null)
+            .Select(x => x!);
 
     /// <summary>
     /// Returns a strongly-typed observable of the value at <paramref name="reference"/> in the
@@ -599,9 +637,11 @@ public static class LayoutExtensions
         stream
             .Reduce(reference)!
             .Select(x =>
-                x.Value.ValueKind == JsonValueKind.Undefined
+                // This overload documents `default` as its answer for an undefined position, so a
+                // torn-down stream — which likewise has no value to give — reuses it.
+                x.Value.ValueKind == JsonValueKind.Undefined || stream.TryGetHub() is not { } hub
                     ? default!
-                    : x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!
+                    : x.Value.Deserialize<T>(hub.JsonSerializerOptions)!
             );
 
     /// <summary>
