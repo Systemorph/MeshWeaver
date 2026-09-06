@@ -60,6 +60,27 @@ carry a `merge_group:` trigger whose event never fires, which is the trap. Copyi
 a satellite is a skip-trapdoor, and a silent one: the satellites' required contexts are the gate
 jobs themselves, and an absent required context counts as SATISFIED.
 
+🚨 **Two traps that make this read as a workflow bug.** (1) **Only `secrets.` is doubled** — there
+is no Dependabot *variables* store (`GET /repos/{o}/{r}/dependabot/variables` → 404), so
+`vars.MW_TEST_IMAGE` resolves perfectly in the same run whose `secrets.ACR_USERNAME` is empty.
+Check which namespace reads a name before concluding anything. (2) **The preflight's list is not
+the denominator.** A secret can be CONSUMED by a pull-request job that no preflight ever asked
+about; the empty value then surfaces deep in a later lane naming no secret at all. Measured on
+MeshWeaver.Reinsurance#128: `Required CI inputs` **passed**, `compile-check` died one job later on
+`compose-sealed-modules.sh: --registry-url needs --registry-key` — an absent `MW_REGISTRY_KEY`.
+Scoring that run by the preflight list would have called it *no gap*.
+
+**`check-pr-secret-preflight.py` enforces the half that can be enforced**: every `secrets.NAME` a
+pull-request-reachable job consumes must be asserted by a preflight (`[ -n "${NAME:-}" ]`), so a
+store gap is named in the first cheap job. It is STATIC — no credential, because none exists:
+`GITHUB_TOKEN` has no `secrets`/`dependabot-secrets` permission key and the org's only App
+(`meshweaver-cloud`) holds contents/metadata/pull_requests. It runs in core's `dotnet-test.yml` and
+reaches every satellite through `node-repo-validate.yml` at the caller's `platform-ref`. Exemptions
+are one reasoned line in `.github/pr-secret-preflight-allow.txt` (a stale entry fails); `secrets:
+inherit` is refused, because the guard cannot prove completeness through it. For the store diff
+itself use `--check-stores --repo owner/name` with your own admin credential — names only, and
+remember it cannot see a name present with an EMPTY value, which the in-run assertion can.
+
 Full reference: [DependabotSecretStore.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DependabotSecretStore.md).
 
 **Legitimate `continue-on-error` (do not "fix" these):** the `Publish Test Results` reporter (the
@@ -252,6 +273,9 @@ Full reference:
 - [ ] No `continue-on-error` on a gate's input step; no `if:` asking whether a secret/variable is
       set. Fork-PR exemption expressed once, on the event.
 - [ ] Missing external inputs fail a `preflight` job RED, naming what to provision.
+- [ ] Adding a `secrets.X` to a pull-request job? A preflight in the same repo asserts it
+      (`check-pr-secret-preflight.py` reds otherwise), and `vars.` vs `secrets.` is the right
+      namespace — only `secrets.` has a second store.
 - [ ] Adding a required secret? It is provisioned in **both** stores (Actions *and* Dependabot), and
       the preflight's remediation line names the store. A `dependabot[bot]` exemption only where the
       same gate runs on `merge_group` — core only.
