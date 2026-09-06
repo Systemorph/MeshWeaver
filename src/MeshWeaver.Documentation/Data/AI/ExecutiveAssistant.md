@@ -46,6 +46,7 @@ The EA agent declares the `Mesh` + `ExecutiveAssistant` plugins. The `ExecutiveA
 | Area | Tools |
 |---|---|
 | Mail | `ListInbox`, `SearchMail`, `ReadMail`, `DraftMail`, `DraftReply`, `GetDraft`, `UpdateDraft`, `DiscardDraft` — and `SendMail`, `ReplyToMail` **only where the deployment opted in**, see below |
+| Mailings | `PrepareMailing` — one subject and body template merged per recipient into personal mails, saved as a page the person reviews; **never sends** — see below |
 | Calendar | `ListEvents`, `GetEvent`, `CreateEvent` (book + invite attendees), `UpdateEvent`, `CancelEvent` |
 
 Example asks: *"Book 30 min with Alice next Tuesday afternoon and invite her"*, *"reply to the vendor that
@@ -77,6 +78,22 @@ through the document path instead — **Share ⇒ as email** in the node menu, i
 [Sending Email](/Doc/Architecture/SendingEmail) and the `/share-email` skill (`get
 Skill/share-email`, served from MeshWeaver.Plugins). It sends **as the user**, off the same
 `EaCredential`, so it needs no second consent.
+
+### Mailings — draft once, approve once, send to many
+
+The same message to several people, each one personal, is a **mailing**, not N drafts. The agent's
+`PrepareMailing` tool takes one subject and one body template with placeholders (`{{Name}}`,
+`{{FirstName}}`, `{{SenderName}}`, and any `key=value` from a recipient line) plus the recipients as
+lines (`email; name; key=value`), files a `Mailing` node under the person, and answers with its
+links. It **never sends**: the person opens the page, checks each recipient's merged mail on
+**Preview**, and approves on **Send** — the mails then leave their own mailbox, one per recipient,
+with the outcome recorded per recipient.
+
+The approve is structural, exactly as the draft step above: no agent tool can flip it, the Send
+button is offered only to the mailing's owner with a connected mailbox, and a mailing with any
+placeholder unresolved for any recipient refuses to send at all. The feature ships with the
+`MeshWeaver.Mail.MicrosoftGraph` module in `Systemorph/MeshWeaver.Plugins`; its README there is
+the reference.
 
 ### Correcting a draft is an AMENDMENT, never a second draft
 

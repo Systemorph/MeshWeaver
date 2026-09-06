@@ -662,6 +662,13 @@ identity as its predecessor — the script skips with a notice instead of re-upl
 [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)
 for the job's preflight discipline and the dependent-repo dispatch.
 
+🚨 Replacing a publication **unseals it first**, on purpose, so nobody can read a mix of old and new
+bundles under a stale sentinel — which means the directory is deliberately unreadable for about a
+minute and a half, per target, per publish, and the `plugins` prefix has two writers.
+[Sealed Publication Reads](/Doc/Architecture/SealedPublicationReads) is the reader's half: the three
+answers that window produces (`404` / `503` / `412`), the generation that lets a multi-read consumer
+pin one publication instance, and what is still not closed.
+
 ### 🚨 CD compiles ONLY what the image embeds — everything else is adopted
 
 The bake is scoped to `src/MeshWeaver.Documentation/Data`, the one tree every portal ships inside
@@ -721,6 +728,7 @@ deliberately deferred.
 | `.github/workflows/node-repo-gate.yml` | the tester gate — `mw-plugin-test` over the (optionally affected-narrowed) mount, cross-repo `requires` staged in; since #3022 executed by the tester **as the portal** (`platform-image`, composed gate host, `--app /app`) |
 | `.github/workflows/node-repo-publish-bake.yml` | the main-only bake + publication — `compile --output` then `--seed` over the full repo or (opt-in) the affected closure, staged-module exclusion, OIDC publish via the canonical `publish-bake-bundles.sh`; since #3022 the bake compiles against and is keyed to the **portal** (`platform-image` + `platform-image-digest`, both required-or-explicit exactly like the tester's) |
 | `.github/workflows/node-repo-tag-modules.yml` | the `<Module>/vX.Y.Z` tag publisher (`scripts/tag-modules.py`) |
+| `.github/workflows/node-repo-platform-ref-bump.yml` | the scheduled `MW_PLATFORM_REF` bump — polls the upstream's default branch and opens a PR (never a push) so the source pin cannot silently lag; mints a GitHub App token, because a pull request opened with `GITHUB_TOKEN` starts no CI at all. Called by MeshWeaver.Plugins and MeshWeaver.SocialMedia — the two node repos that carry such a pin. See [Keeping the Platform Source Pin Current](../PlatformRefBumpLane) |
 
 The design rules the extraction preserves:
 

@@ -259,6 +259,74 @@ public class StaticTestRunnerTest
         finally { Cleanup(directory); }
     }
 
+    /// <summary>
+    /// The same cooperative case as <see cref="CooperativeHangProbe"/>, except that TERMINATING
+    /// costs it real time after the token fires — a <c>finally</c> that outlives any plausible
+    /// scheduling hiccup.
+    ///
+    /// <para>🚨 The <c>Thread.Sleep</c> is the STIMULUS, not a wait for a condition: it stands in
+    /// for the delay a loaded CI runner puts between "the token fired" and "the OS reaped the
+    /// thread", which is the whole of #3442. <c>Thread.Join</c> returns only on real termination,
+    /// so everything a case does on its way out — unwinding through reflection, its own
+    /// <c>finally</c>s, disposing the <c>[ThreadStatic]</c> context — lands INSIDE the window the
+    /// runner allows for answering the ask.</para>
+    /// </summary>
+    private const string SlowUnwindProbe = """
+        using System;
+        using System.Threading;
+        using MeshWeaver.Testing;
+
+        public static class ProbeUnwindTests
+        {
+            public static void EndsOnItsBudgetButTakesTimeToDie()
+            {
+                try
+                {
+                    TestLog.WriteLine("about to wait on the budget");
+                    TestContext.Current.CancellationToken.WaitHandle.WaitOne();
+                    TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+                }
+                finally
+                {
+                    Thread.Sleep(500);
+                }
+            }
+        }
+        """;
+
+    [Fact]
+    public void ACaseThatUnwindsSlowlyAfterTheAskIsStillNamed_NotAbandoned()
+    {
+        // 🚨 #3442, deterministically. The runner used to trip the token at `timeout - lead` and
+        // give up the Join at `timeout`, so the ENTIRE unwind had to fit in `lead` — 200 ms for
+        // this 2 s budget. Two deadlines on one clock: whenever the machine spent more than that
+        // between the token firing and the thread terminating, a case that DID cooperate was
+        // reported as abandoned, and the build was told it had carried a live thread on.
+        //
+        // The ask and the window to answer it are now two measurements in sequence, so this probe
+        // — which spends 500 ms dying, on purpose — must still end by NAME.
+        var directory = TempDirectory("slow-unwind");
+        try
+        {
+            var run = StaticTestRunner.Execute(
+                Emit(directory, "Probe.Unwind", SlowUnwindProbe), [],
+                TimeSpan.FromSeconds(2), null);
+
+            var c = Assert.Single(run.Cases);
+            Assert.Equal(StaticTestRunner.Outcome.Failed, c.Outcome);
+            Assert.Contains("OperationCanceledException", c.Error!, StringComparison.Ordinal);
+            Assert.DoesNotContain("did not return within", c.Error!, StringComparison.Ordinal);
+            Assert.Contains("the case budget (2s) expired", c.Error!, StringComparison.Ordinal);
+
+            // …and the cap is still real: the case was asked to stop when its budget was spent,
+            // not before it, so the runner waited the WHOLE budget before asking.
+            Assert.True(
+                c.Elapsed >= TimeSpan.FromSeconds(2),
+                $"the ask must come after the budget is spent, not inside it — elapsed {c.Elapsed}");
+        }
+        finally { Cleanup(directory); }
+    }
+
     private const string ParallelProbeTemplate = """
         using MeshWeaver.Testing;
 
@@ -454,7 +522,10 @@ public class StaticTestRunnerTest
             .Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
             .Where(p => Path.GetFileName(p)
                 is "System.Runtime.dll" or "netstandard.dll" or "System.Threading.dll"
-                or "System.Console.dll")
+                // System.Threading.Thread.dll is where `Thread` itself lives; System.Threading.dll
+                // holds Monitor/WaitHandle. A probe that says `Thread.Sleep` needs BOTH, and the
+                // compile fails with "are you missing an assembly reference" without this one.
+                or "System.Threading.Thread.dll" or "System.Console.dll")
             .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))),
     ];
 

@@ -1997,6 +1997,17 @@ jobs:
       env:
         GITHUB_WORKSPACE: ${{ github.workspace }}
 
+    # Same posture, different lane: compose-sealed-modules.sh is fetched from here at each
+    # satellite's pinned `platform-ref` and run by their gate and publish-bake, so the first
+    # execution of an edit to it is in THEIR CI. It reads a sealed publication with N+1 requests
+    # while the publisher unseals, rewrites and re-seals it (MeshWeaver#3401) — and a mix there is
+    # silent: module bytes from two publications are the mvid mismatch that DECLINES every NodeType
+    # assembly at adoption. The harness runs the REAL script against a stub registry that
+    # republishes mid-composition, and asserts the precondition header was actually sent — a script
+    # that stopped pinning would still compose its files and pass on the outputs alone.
+    - name: "Execute compose-sealed-modules.sh against a republishing registry"
+      run: python3 .github/scripts/test-sealed-module-compose.py
+
   shared-rules:
     name: "AGENTS.md shared rule blocks"
     # 🚨 THE GAP THIS CLOSES (MeshWeaver.Plugins#705): every repo's CLAUDE.md is a one-line

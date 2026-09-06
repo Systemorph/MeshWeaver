@@ -171,16 +171,39 @@ public static class BuildProtocolDriver
     /// grant readiness for a build this process is not running — which is the one wrong answer this
     /// door could give, and strictly worse than the refusal it replaces.</para>
     ///
-    /// <para>🚨 <b>Fail-closed survives untouched.</b> No GO for this fingerprint — including the
-    /// "no durable store at all" and "the read failed" cases <c>ReadBuildGo</c> deliberately folds
-    /// into <c>null</c> — and the original
-    /// <see cref="BuildCoordinationUnreachableException"/> propagates UNCHANGED, so the sweep still
-    /// faults, readiness is still refused, and the health payload still classifies it through
+    /// <para>🚨 <b>Fail-closed survives untouched where there is a real negative.</b> A witness that
+    /// ANSWERS "no GO for this fingerprint" re-throws the original
+    /// <see cref="BuildCoordinationUnreachableException"/>, so the sweep still faults, readiness is
+    /// still refused, and the health payload still classifies it through
     /// <see cref="DescribesUnreachableCoordination"/>. Nothing here widens a timeout, retries,
     /// polls, or swallows: the transport fault is still logged by
     /// <see cref="RetryUnreachableCoordination"/> at its own severity with its own diagnostic
     /// detail, because it remains the only signal that the pod↔<c>Admin/Build</c>-hub path is
     /// broken. This changes the readiness VERDICT, never the visibility of the fault.</para>
+    ///
+    /// <para>🚨 <b>THE THIRD STATE, and why this door needed a third one (#3404).</b> The witness
+    /// read has three outcomes, not two — <see cref="BuildGoWitness"/> — and the first cut of this
+    /// door had only two branches, so <c>Undetermined</c> was ACTED ON and REPORTED as a definitive
+    /// negative ("the durable witness carries no GO"). That is the same defect the door was built to
+    /// close, one level down: a read that never completed rendered as an answer.</para>
+    ///
+    /// <para>🚨 <b>And the second door is NOT in a different failure domain from the first.</b> In
+    /// the fleet's portal wiring <c>AddPartitionStorageHubs</c> replaces
+    /// <see cref="IStorageAdapter"/> with <c>RoutingProxyAdapter</c>, which serves
+    /// <c>ReadBuildGo</c> as <c>hub.Observe&lt;ReadNodeResponse&gt;(…)</c> over the SAME hub
+    /// transport a <c>SubscribeRequest</c> travels on. The candidates for #3404's silence are a
+    /// routing loss, a wedged per-node hub, a lost reply, the deferred-queue ordering defect
+    /// (#3408) and a root that stops emitting — and the first, fourth and fifth take both doors
+    /// down together. So on the very fault this door exists for, the expected reading is
+    /// <c>Undetermined</c>, not <c>NoGo</c>.</para>
+    ///
+    /// <para><b>What the process does with <c>Undetermined</c>: it MEASURES rather than guesses.</b>
+    /// Fail-open ("grant, lazy compile covers correctness") and fail-closed ("refuse, finding
+    /// nothing is not passing") are both guesses about a build nobody asked. This pod holds a third
+    /// witness that the broken transport cannot touch: its own <see cref="IAssemblyStore"/> — a blob
+    /// container or a mounted volume, never a hub message — probed against the LIVE framework
+    /// identity. See <see cref="WhenTheWitnessCannotBeRead"/> for the verdict rule and why granting
+    /// on it is strictly STRICTER than granting on a GO.</para>
     ///
     /// <para><b>No stand-down, deliberately.</b> The follower's post-GO path withdraws its claim
     /// first, because it really did register one. This path did not: the registration is written by
@@ -195,7 +218,7 @@ public static class BuildProtocolDriver
     /// <param name="definitions">Discovered NodeType definitions by path.</param>
     /// <param name="store">The shared assembly store, for the post-GO probe.</param>
     /// <param name="logger">Diagnostics.</param>
-    /// <returns>The subscription door's outcomes, or — when it is shut and the GO is durable — the probe's.</returns>
+    /// <returns>The subscription door's outcomes, or — when it is shut and the evidence allows — the probe's.</returns>
     internal static IObservable<PreWarmOutcome> WhenTheSubscriptionDoorIsShut(
         IObservable<PreWarmOutcome> subscriptionDoor,
         IMessageHub mesh,
@@ -204,38 +227,127 @@ public static class BuildProtocolDriver
         IAssemblyStore store,
         ILogger? logger)
         => subscriptionDoor.Catch((BuildCoordinationUnreachableException unreachable) =>
-            mesh.ReadBuildGo(fingerprint, logger)
-                .SelectMany(go =>
+            mesh.ReadBuildGoReading(fingerprint, logger)
+                .SelectMany(reading => reading.Witness switch
                 {
-                    if (go is null)
-                    {
-                        // BOTH doors shut. Fail closed, with the original exception — the health
-                        // payload reads it through DescribesUnreachableCoordination, and the
-                        // hosted service logs the refusal.
-                        logger?.LogError(
-                            "BuildProtocol: '{Path}' is unreachable AND the durable witness carries "
-                            + "no GO for framework {Fingerprint} — BOTH doors are shut, so this "
-                            + "process has verified NOTHING and readiness stays REFUSED. The rollout "
-                            + "holds the previous image; a restart re-attempts.",
-                            BuildNodeType.RootPath, fingerprint);
-                        return Observable.Throw<PreWarmOutcome>(unreachable);
-                    }
-
                     // Warning, not Information: readiness is granted on durable evidence, but the
                     // transport fault that forced this door open is REAL and unfixed. It is already
                     // logged in full by RetryUnreachableCoordination; this line says what the
                     // process did about it, so the two are not confused for one another.
-                    logger?.LogWarning(
-                        "BuildProtocol: '{Path}' is UNREACHABLE from this process, but the DURABLE "
-                        + "witness already carries the GO for framework {Fingerprint} (ready at "
-                        + "{ReadyAt:O}) — the build this image needs was approved before this "
-                        + "process asked for it. Readiness follows the durable verdict instead of "
-                        + "refusing a build that is already approved. The unreachability above is "
-                        + "NOT cleared by this and remains the signal that the path from this pod "
-                        + "to the '{Path}' hub is broken.",
-                        BuildNodeType.RootPath, fingerprint, go.ReadyAt, BuildNodeType.RootPath);
-                    return ProbeTheShare(mesh, definitions, store, logger);
+                    BuildGoWitness.Go => Log(logger, LogLevel.Warning, () => logger!.LogWarning(
+                            "BuildProtocol: '{Path}' is UNREACHABLE from this process, but the "
+                            + "DURABLE witness already carries the GO for framework {Fingerprint} "
+                            + "(ready at {ReadyAt:O}) — the build this image needs was approved "
+                            + "before this process asked for it. Readiness follows the durable "
+                            + "verdict instead of refusing a build that is already approved. The "
+                            + "unreachability above is NOT cleared by this and remains the signal "
+                            + "that the path from this pod to the '{Path}' hub is broken.",
+                            BuildNodeType.RootPath, fingerprint, reading.Go!.ReadyAt,
+                            BuildNodeType.RootPath),
+                        ProbeTheShare(mesh, definitions, store, logger)),
+
+                    // A REAL NEGATIVE: the witness answered, and the answer is that no build has
+                    // been approved for this image. Fail closed with the original exception — the
+                    // health payload reads it through DescribesUnreachableCoordination, and the
+                    // hosted service logs the refusal.
+                    BuildGoWitness.NoGo => Log(logger, LogLevel.Error, () => logger!.LogError(
+                            "BuildProtocol: '{Path}' is unreachable AND the durable witness ANSWERED "
+                            + "that it carries no GO for framework {Fingerprint} ({Detail}) — BOTH "
+                            + "doors are shut, so this process has verified NOTHING and readiness "
+                            + "stays REFUSED. The rollout holds the previous image; a restart "
+                            + "re-attempts.",
+                            BuildNodeType.RootPath, fingerprint, reading.Detail),
+                        Observable.Throw<PreWarmOutcome>(unreachable)),
+
+                    _ => WhenTheWitnessCannotBeRead(
+                        mesh, fingerprint, reading, definitions, store, unreachable, logger),
                 }));
+
+    /// <summary>
+    /// Runs a log line, then returns <paramref name="next"/> — so the three-way branch above stays a
+    /// switch expression instead of a statement body that hides the symmetry of its arms.
+    /// </summary>
+    private static IObservable<T> Log<T>(
+        ILogger? logger, LogLevel level, Action write, IObservable<T> next)
+    {
+        if (logger?.IsEnabled(level) == true)
+            write();
+        return next;
+    }
+
+    /// <summary>
+    /// 🚨 THE THIRD STATE'S VERDICT (#3404). Neither coordination door ANSWERED — the subscription
+    /// was unreachable and the durable witness could not be read — so the process knows nothing
+    /// about the build from the mesh. It does not have to guess: it holds a witness the broken
+    /// transport cannot touch.
+    ///
+    /// <para><b>The third witness.</b> <see cref="IAssemblyStore"/> is a blob container (production)
+    /// or a mounted volume (monolith, dev, test) — never a hub message — and
+    /// <c>NodeTypeBakeStatus.Probe</c> asks it, per NodeType, whether bytes exist for the LIVE
+    /// framework identity. That is a MEASUREMENT of exactly the thing the readiness gate is about,
+    /// taken outside the failure domain that shut both doors.</para>
+    ///
+    /// <para>🚨 <b>Fail-open vs fail-closed, decided rather than assumed.</b> The rule is: grant only
+    /// on <c>GateRelevant.IsEmpty</c> — every NodeType that was HEALTHY before this image is
+    /// <c>Baked</c> for this framework identity — and refuse otherwise. That is STRICTER than the GO
+    /// branch above, not laxer: a GO grants and then reports still-pending types as
+    /// <see cref="PreWarmStatus.TimedOut"/>, which <see cref="IsGatingFailure"/> deliberately does
+    /// not gate on, so a half-baked share passes WITH a GO and is refused here WITHOUT one. The
+    /// asymmetry is the point — a GO is another process's certification, and this door has none, so
+    /// it may only grant on evidence it measured itself.</para>
+    ///
+    /// <para>🚨 <b>"Finding nothing is not passing" is preserved verbatim.</b> A probe that finds a
+    /// previously-healthy type still needing a bake refuses, because nobody reachable is going to
+    /// build it: this process could not claim and could not follow. What changed is only that the
+    /// refusal now rests on something the process established, and SAYS that the witness was
+    /// unreadable rather than that there is no GO.</para>
+    /// </summary>
+    private static IObservable<PreWarmOutcome> WhenTheWitnessCannotBeRead(
+        IMessageHub mesh,
+        string fingerprint,
+        BuildGoReading reading,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IAssemblyStore store,
+        BuildCoordinationUnreachableException unreachable,
+        ILogger? logger)
+        => ProbeTheShareReport(mesh, definitions, store, logger)
+            .SelectMany(fresh =>
+            {
+                if (!fresh.GateRelevant.IsEmpty)
+                {
+                    logger?.LogError(
+                        "BuildProtocol: '{Path}' is unreachable AND the durable witness could not be "
+                        + "READ ({Detail}) — so nothing is known about framework {Fingerprint}'s "
+                        + "build, and this pod's own share still needs {Pending} previously-healthy "
+                        + "NodeType(s) ({Summary}). Nobody reachable is going to build them: this "
+                        + "process could neither claim nor follow. Readiness stays REFUSED, the "
+                        + "rollout holds the previous image, and a restart re-attempts. 🚨 This is "
+                        + "an UNDETERMINED witness, NOT a witness that said there is no GO.",
+                        BuildNodeType.RootPath, reading.Detail, fingerprint,
+                        fresh.GateRelevant.Count, fresh.Summary);
+                    return Observable.Throw<PreWarmOutcome>(unreachable);
+                }
+
+                logger?.LogWarning(
+                    "BuildProtocol: '{Path}' is UNREACHABLE and the durable witness could not be "
+                    + "READ ({Detail}) — so the GO for framework {Fingerprint} is UNDETERMINED, "
+                    + "which is not the same as absent. This pod therefore decided on the one "
+                    + "witness the broken transport cannot touch: its own assembly store, which "
+                    + "holds a build for EVERY previously-healthy NodeType on this framework "
+                    + "identity ({Summary}). Readiness follows that measurement. The "
+                    + "unreachability above is NOT cleared by this and remains the signal that the "
+                    + "path from this pod to the '{Path}' hub is broken.",
+                    BuildNodeType.RootPath, reading.Detail, fingerprint, fresh.Summary,
+                    BuildNodeType.RootPath);
+
+                return OutcomesOf(
+                        fresh,
+                        bakedDetail: "on this pod's own share, probed after BOTH coordination doors "
+                            + "went silent",
+                        pendingDetail: "still pending on this pod's own share, and never healthy "
+                            + "before this image")
+                    .ToObservable();
+            });
 
     // ── the winner ──────────────────────────────────────────────────────────────────────────────
 
@@ -623,19 +735,43 @@ public static class BuildProtocolDriver
         IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
         IAssemblyStore store,
         ILogger? logger)
+        => ProbeTheShareReport(mesh, definitions, store, logger)
+            .SelectMany(fresh => OutcomesOf(
+                fresh,
+                bakedDetail: "on the share after GO",
+                pendingDetail: "still pending on the share after the build published GO"));
+
+    /// <summary>
+    /// The probe itself, kept separate from the outcome mapping so a caller that must DECIDE on the
+    /// report — <see cref="WhenTheWitnessCannotBeRead"/>, which needs
+    /// <c>NodeTypeBakeReport.GateRelevant</c> — reads the same measurement the outcomes are built
+    /// from, in ONE probe. Two probes would let the decision and the report disagree about a share
+    /// another process is writing to.
+    /// </summary>
+    private static IObservable<NodeTypeBakeReport> ProbeTheShareReport(
+        IMessageHub mesh,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IAssemblyStore store,
+        ILogger? logger)
         => NodeTypeBakeStatus.Probe(definitions, store, logger: logger,
-                liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
-                liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)
-            .SelectMany(fresh => fresh.Entries
-                .Select(e => new PreWarmOutcome(
-                    e.TypePath,
-                    e.NeedsBake ? PreWarmStatus.TimedOut : PreWarmStatus.AlreadyBaked,
-                    e.NeedsBake
-                        ? "still pending on the share after the build published GO"
-                        : "on the share after GO")
-                {
-                    WasHealthyBeforeBake = e.WasHealthy,
-                }));
+            liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
+            liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId);
+
+    /// <summary>
+    /// One probe report as pre-warm outcomes. A type the share still needs is
+    /// <see cref="PreWarmStatus.TimedOut"/> — NOT evaluated, and therefore non-gating per
+    /// <see cref="IsGatingFailure"/> — because a probe is not a compile and this process has no
+    /// verdict about that type, which is different from a verdict against it.
+    /// </summary>
+    private static IEnumerable<PreWarmOutcome> OutcomesOf(
+        NodeTypeBakeReport fresh, string bakedDetail, string pendingDetail)
+        => fresh.Entries.Select(e => new PreWarmOutcome(
+            e.TypePath,
+            e.NeedsBake ? PreWarmStatus.TimedOut : PreWarmStatus.AlreadyBaked,
+            e.NeedsBake ? pendingDetail : bakedDetail)
+        {
+            WasHealthyBeforeBake = e.WasHealthy,
+        });
 
     // ── shared ──────────────────────────────────────────────────────────────────────────────────
 

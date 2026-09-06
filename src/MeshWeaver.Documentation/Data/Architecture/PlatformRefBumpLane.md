@@ -21,18 +21,22 @@ one — the one that, until 2026-09-06, had no automated mover at all.
 
 ## The incident (2026-09-06)
 
-Core [#3408](https://github.com/Systemorph/MeshWeaver/pull/3408) (`c8c7dd327`) fixed a FIFO
-ordering defect in `MessageService.OpenGate`. It was written *for* a MeshWeaver.Plugins `main` red —
-`ActivationBacklogFifoTest` observing `B, C, A` — and it merged at **13:06:47Z**.
+Core [#3408](https://github.com/Systemorph/MeshWeaver/pull/3408) fixed a FIFO ordering defect
+in `MessageService.OpenGate`. It was written *for* a MeshWeaver.Plugins `main` red —
+`ActivationBacklogFifoTest` observing `B, C, A` — and it merged at **13:10:47Z** as `7278d3d22`
+(`c8c7dd327` is the pull request's head, which is what the queue built).
 
-MeshWeaver.Plugins was still failing on that same test at **13:31Z**, because its `MW_PLATFORM_REF`
-— the core commit its `portal-hosts` job compiles `src/` against — was `bbcb22f25` (05:43:18Z),
-**49 commits before the fix**. The fix existed; the repo that needed it could not reach it.
+MeshWeaver.Plugins was still failing on that same test afterwards, because its `MW_PLATFORM_REF` —
+the core commit its `portal-hosts` job compiles `src/` against — was `bbcb22f25` (05:43:18Z). The
+fix's merge commit was the **49th commit after that pin** (`compare/bbcb22f25...7278d3d22` →
+`ahead_by: 49`). The fix existed; the repo that needed it could not reach it.
 
-🚨 **The staleness comment passed the whole time.** `bbcb22f25` was 10.3 hours and 102 commits
-behind, comfortably inside the 24 h / 120-commit bounds the pin's own comment describes as healthy.
-That is the lesson worth keeping: *"roughly current"* is not *"carries the fix we merged for this
-repo's red."* Age bounds catch neglect. They cannot catch a specific commit being needed.
+🚨 **The staleness gate passed throughout, and kept passing for hours.** At the moment the fix
+merged the pin was **7 h 27 m and 48 commits** behind — nowhere near the 24 h / 120-commit bounds it
+calls healthy. It first went RED at **17:11Z**, at 121 commits, seven hours after the fix landed;
+by 17:25Z it read 132. So the bound is real and it does fire — it simply cannot fire in time to
+protect a same-day fix, because it measures *drift*, not *reachability*. That is the lesson worth
+keeping: *"roughly current"* is not *"carries the fix we merged for this repo's red."*
 
 ### Why the gap existed
 

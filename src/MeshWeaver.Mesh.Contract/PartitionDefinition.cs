@@ -184,6 +184,37 @@ public record PartitionDefinition
            && segment.All(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '_');
 
     /// <summary>
+    /// 🚨 <b>THE definition of "this node IS a partition root", and it is STRUCTURAL — never a
+    /// NodeType.</b> A partition is the FIRST PATH SEGMENT, so the node whose namespace is empty
+    /// and whose path is just its id <i>is</i> the root of the partition named by that id,
+    /// whatever its NodeType happens to be.
+    ///
+    /// <para><b>Why the NodeType is the wrong key</b> (MeshWeaver#3436). Partition roots are NOT
+    /// only <c>Space</c> and <c>User</c>: the package installer provisions a partition for each
+    /// package it installs and writes a root typed by the package's OWN, IN-MESH NodeType
+    /// (<c>Store/Plugin</c>). That type is declared in mesh node content, not in <c>src/</c>, so
+    /// no compile-time list and no <c>NodeTypeDefinition.OwnsPartition</c> scan can enumerate it —
+    /// <c>Store/Plugin</c> does not even set <c>OwnsPartition</c>, because the installer, not
+    /// <c>OwnsPartitionProvisioningValidator</c>, provisioned its schema. Keying the teardown on a
+    /// NodeType string left four <c>Store/Plugin</c>-rooted partitions on the systemorph staff
+    /// portal with their Postgres schemas intact after the roots were deleted — invisible, and
+    /// un-deletable through the ordinary API once a fresh policy landed on the resurrected shell.
+    /// The structural test has no such blind spot: a NodeType that arrives from the mesh AFTER
+    /// boot is covered by construction, because nothing about the type is consulted.</para>
+    ///
+    /// <para><c>_</c>-prefixed and otherwise malformed segments are excluded by
+    /// <see cref="IsValidPartitionSegment"/>: a global satellite namespace (<c>_Access</c> →
+    /// <c>system_access</c>) is registered with an EXPLICIT schema and is never a partition
+    /// derived from its name, so it must never be torn down as one (#714).</para>
+    /// </summary>
+    /// <param name="node">The node to classify; may be null.</param>
+    /// <returns><c>true</c> when the node is the root of the partition named by its id.</returns>
+    public static bool IsPartitionRoot(MeshNode? node)
+        => node is not null
+           && string.IsNullOrEmpty(node.Namespace)
+           && IsValidPartitionSegment(node.Id);
+
+    /// <summary>
     /// Checks if a path contains the given segment as a complete path component.
     /// The segment must appear after a '/' and be followed by '/' or end of string.
     /// </summary>

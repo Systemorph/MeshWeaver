@@ -364,11 +364,12 @@ Four properties are load-bearing, and each is pinned by a case in
   fingerprint up by exact key; a GO for any other image reads as no GO and the door stays shut.
   Granting on a foreign GO would certify a build the process is not running — strictly worse than
   the refusal it replaces.
-- **Fail-closed is unchanged.** Neither door answering — including the two cases `ReadBuildGo`
-  deliberately folds into `null`, no durable store and a failed read — re-throws the ORIGINAL
-  `BuildCoordinationUnreachableException`, so the sweep still faults, readiness is still refused,
-  and `DescribesUnreachableCoordination` still separates "no verdict" from "a bad verdict" in the
-  health payload.
+- **Fail-closed is unchanged where the witness ANSWERS.** A witness that says "no GO for this
+  fingerprint" re-throws the ORIGINAL `BuildCoordinationUnreachableException`, so the sweep still
+  faults, readiness is still refused, and `DescribesUnreachableCoordination` still separates "no
+  verdict" from "a bad verdict" in the health payload — and it refuses even when this pod's own
+  share is fully baked, because a pod does not certify from its own volume a build the coordination
+  node never approved (`NoDurableGo_StillRefuses_EvenWhenTheShareIsFullyBaked`).
 - **The transport fault stays fully visible.** Nothing here widens a timeout, retries, polls or
   swallows. `RetryUnreachableCoordination` logs the unreachability at its own severity with its own
   diagnostic detail either way, and the grant logs a second `Warning` naming what could not be
@@ -382,6 +383,32 @@ Four properties are load-bearing, and each is pinned by a case in
   current state never computed a patch, so there is no candidate entry to hand back — and calling
   `WithdrawBuildClaim` would post a second write into the same unreachable hub. The two paths share
   the post-GO share probe; they deliberately do not share the stand-down.
+
+### 🚨 …and the second door was in the FIRST door's failure domain (#3404, second half)
+
+The first cut of that door had **two** branches — a GO, or no GO — while `ReadBuildGo` folds
+**three** outcomes into its `null`: the row carries no GO, there is no durable store, and *the read
+failed*. So a read that never completed was acted on **and narrated** as a definitive negative
+(*"the durable witness carries no GO for framework X"*).
+
+That is not a corner case here, because **the second door is not in a different failure domain from
+the first**. In the fleet's portal wiring `AddPartitionStorageHubs` replaces `IStorageAdapter` with
+`RoutingProxyAdapter`, whose `Read` is
+`hub.Observe<ReadNodeResponse>(new ReadNodeRequest(path, options), o => o.WithTarget(addr))` — the
+same hub transport under the same 60 s budget as the `SubscribeRequest`. Of the five candidates
+below, the first, fourth and fifth take **both** doors down together, and the durable read then
+fails with the same `TimeoutException`. On the very fault this door exists for, the expected
+reading is *undetermined*, not *no GO*.
+
+So the reading is now a three-state `BuildGoReading` (`Go` / `NoGo` / `Undetermined`, always with a
+`Detail` and, when there was a fault, its `Error`), read through `ReadBuildGoReading`; `ReadBuildGo`
+keeps its fold for the callers whose negative branch is *bake*, and its contract now says a caller
+that REFUSES on the negative must use the three-state read instead. On `Undetermined` the pod does
+not guess in either direction: it measures on the one witness the broken transport cannot touch —
+its own `IAssemblyStore` — and grants only when `NodeTypeBakeReport.GateRelevant` is empty, which is
+**stricter** than the GO branch (a still-pending type after a GO is non-gating, so a half-baked
+share passes *with* a GO and is refused *without* one). The full argument, and the general rule, is
+[Undetermined Is Not No](../UndeterminedIsNotNo).
 
 🚨 **The durable door is a FAIL-SAFE, not a cure — and the cause is still open.** The pod's own
 diagnostic names three candidates for the silence: the request never reached the target (routing),
