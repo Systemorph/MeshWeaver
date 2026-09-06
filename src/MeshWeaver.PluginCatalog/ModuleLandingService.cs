@@ -197,6 +197,34 @@ public sealed class ModuleLandingService : IDisposable
             .Where(e => !string.IsNullOrWhiteSpace(e.Directory))
             .Select(e => e.Directory!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // 🚨 #3395: the activation entries are NOT the whole reference set any more. The mesh's
+        // module set deliberately pins an OLDER generation than the entry while a wave's landings
+        // wait to be proposed — and that older generation is what every running replica LOADED. A
+        // sweep that trusted the entries alone would reclaim the bytes the whole mesh is executing:
+        // the 2026-08-27 outage from the other side. Both retained sets count (the one the mesh is
+        // on and the one it has proposed), and a set directory that cannot be read counts as a read
+        // fault for the same fail-closed reason the entries do.
+        var setIndex = ModuleSetStore.Read(baseDirectory,
+            msg =>
+            {
+                readFaults++;
+                logger?.LogError("{Message}", msg);
+            });
+        foreach (var generation in ModuleSetStore.ReferencedGenerations(setIndex))
+            referenced.Add(generation);
+        // Superseded set records are housekeeping like the rest of this pass — and only ever below
+        // the CURRENT set, so a record whose generations are still in the reference set above is
+        // never the one removed. Skipped entirely when anything was unreadable, for the same
+        // fail-closed reason the generation deletes are.
+        if (readFaults == 0 && setIndex.Current is { } onSet)
+        {
+            var prunedSets = ModuleSetStore.Prune(baseDirectory, onSet.Sequence,
+                msg => logger?.LogDebug("{Message}", msg));
+            if (prunedSets > 0)
+                logger?.LogInformation(
+                    "Modules GC: removed {Count} superseded module set record(s) below sequence "
+                    + "{Sequence}", prunedSets, onSet.Sequence);
+        }
         // 🚨 #2509: with any entry file unreadable, `referenced` is INCOMPLETE — an ACTIVE
         // generation would read as an orphan. Generation deletes are skipped wholesale this pass.
         var referencesReliable = readFaults == 0;
@@ -470,6 +498,41 @@ public sealed class ModuleLandingService : IDisposable
     public IObservable<ModuleActivationList> GetActivation()
         => pool.InvokeBlocking(_ => ModuleActivationSidecar.Read(baseDirectory,
             msg => logger?.LogError("{Message}", msg)));
+
+    /// <summary>
+    /// Proposes the module set the deployment's activation record now describes — the coordination
+    /// step that ENDS a landing wave (#3395), and the only thing that moves what the mesh runs.
+    ///
+    /// <para>🚨 <b>Call it when the WAVE is done, never after each module.</b> A wave lands its
+    /// modules one at a time; proposing per module would publish every intermediate combination as
+    /// a set the next boot could adopt, which is the torn half-landed mix this whole mechanism
+    /// exists to make unreachable. A wave that dies half-landed simply never proposes: the mesh
+    /// keeps running the set it was on, nothing half-landed is ever adopted, and the modules it did
+    /// land report as landed-but-unproposed
+    /// (<see cref="ModuleActivationBoot.ProjectOntoMeshSet"/>) — a named, visible failure rather
+    /// than drift.</para>
+    ///
+    /// <para>Idempotent: a wave that landed nothing new derives the set that is already proposed
+    /// and writes nothing, so sequences count waves that changed something rather than boots.
+    /// Runs on this service's cap-1 pool, so it never observes a landing halfway through.
+    /// Cold — nothing happens until Subscribe.</para>
+    /// </summary>
+    /// <returns>The set that was proposed, or null when the wave changed nothing.</returns>
+    public IObservable<ModuleSet?> ProposeModuleSet()
+        => pool.InvokeBlocking(_ =>
+        {
+            var landed = ModuleActivationSidecar.Read(baseDirectory,
+                msg => logger?.LogError("{Message}", msg));
+            var proposed = ModuleSetStore.Propose(baseDirectory, landed,
+                proposedBy: Environment.MachineName,
+                onCorrupt: msg => logger?.LogWarning("{Message}", msg));
+            if (proposed is not null)
+                logger?.LogInformation(
+                    "[ModuleSet] landing wave complete — the mesh's module set is now {Sequence} "
+                    + "('{Id}', {Count} module(s)). Replicas adopt it as they restart.",
+                    proposed.Sequence, proposed.Id, proposed.Generations.Count);
+            return proposed;
+        });
 
     /// <summary>
     /// Uninstalls a module landed by <see cref="LandModule"/>: disables its activation entry
