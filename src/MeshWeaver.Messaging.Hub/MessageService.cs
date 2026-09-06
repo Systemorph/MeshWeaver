@@ -335,16 +335,39 @@ public class MessageService : IMessageService
                         startupTimer?.Dispose();
                         hub.Start();
 
-                        // Link deferred buffer to main buffer to preserve FIFO order
-                        // This creates a chain: deferredBuffer → buffer → deliveryAction
-                        // All deferred messages will flow through the main buffer, ensuring they are
-                        // processed before any new messages that arrive after the gate opens
-                        // Move deferred turns into the main queue (FIFO preserved) so
-                        // they run before any message that arrives after the gate opens.
-                        logger.LogDebug("Draining deferred queue into main queue for hub {Address}", Address);
+                        // 🚨 Deferred turns go to the FRONT of the main queue, not the back.
+                        //
+                        // Deferral happens at TURN time, not at arrival: a message is dequeued,
+                        // found on-target with a gate closed, and pushed onto deferredQueue. The
+                        // turn loop is strictly FIFO, so everything in deferredQueue is by
+                        // construction OLDER than anything still waiting in mainQueue — a message
+                        // that has not been turned yet cannot have arrived first. Appending was
+                        // therefore always the wrong end, and it silently reordered whenever the
+                        // loop happened to be BUSY across the gate open: a message that arrived
+                        // while the parked one waited was already ahead of it in mainQueue, so the
+                        // parked message ran LAST (Plugins#1394 — observed as "B, C, A" where A was
+                        // posted and released first; load-sensitive on CI, green in isolation,
+                        // which is exactly what "the loop happened to be busy" looks like).
+                        //
+                        // The old comment claimed this preserved FIFO. It only did so against
+                        // messages arriving AFTER the open — the easy half.
+                        logger.LogDebug("Draining deferred queue to the front of the main queue for hub {Address}", Address);
                         lock (turnGate)
-                            while (deferredQueue.Count > 0)
-                                mainQueue.Enqueue(deferredQueue.Dequeue());
+                        {
+                            if (deferredQueue.Count > 0)
+                            {
+                                // Rebuild as deferred-then-waiting. Both runs keep their own order,
+                                // so the result is total arrival order across the two queues.
+                                var reordered = new Queue<Func<IObservable<IMessageDelivery>>>(
+                                    deferredQueue.Count + mainQueue.Count);
+                                while (deferredQueue.Count > 0)
+                                    reordered.Enqueue(deferredQueue.Dequeue());
+                                while (mainQueue.Count > 0)
+                                    reordered.Enqueue(mainQueue.Dequeue());
+                                while (reordered.Count > 0)
+                                    mainQueue.Enqueue(reordered.Dequeue());
+                            }
+                        }
                         // Gate opened + drained — the hub is no longer stuck, so re-arm the one-shot
                         // gate-stuck logger for any future episode.
                         Interlocked.Exchange(ref _deferralOverflowLogged, 0);
