@@ -660,11 +660,29 @@ public static class PreWarmServiceCollectionExtensions
         // because its absence is itself the signal: a host without the pre-warm has no bake to
         // wait for, and consumers proceed immediately.
         services.TryAddSingleton<PreWarmCompletion>();
-        // Install/push-time bundle consumption (#1707 slice 3) — same reasoning: a host without
-        // the pre-warm has no bundle sources to consume from, and callers resolving the consumer
-        // optionally fall straight through to compiling.
-        services.TryAddSingleton<IPrebuiltAssemblyConsumer, PrebuiltAssemblyConsumer>();
+        services.AddPrebuiltAssemblyConsumption();
         services.AddHostedService<DynamicTypePreWarmerHostedService>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers ONLY install/push-time prebuilt-bundle consumption (#1707 slice 3): the
+    /// <see cref="IPrebuiltAssemblyConsumer"/> the package installer, the git-push recompile and
+    /// the compile watcher resolve when content lands, so a NodeType whose bytes CI already built
+    /// is adopted instead of compiled.
+    ///
+    /// <para>🚨 Separate from <see cref="AddDynamicTypePreWarming"/> because the two answer
+    /// different questions and were fused (MeshWeaver#3429). Adoption at INSTALL is what a package
+    /// arriving AFTER boot depends on — the boot sweep cannot see types that do not exist yet — but
+    /// the only registration that existed also added a hosted service requiring
+    /// <c>IHostApplicationLifetime</c>. Any composition without a generic host therefore had NO
+    /// consumer, and the installer's <c>GetService</c> then answered null and adopted nothing,
+    /// silently. Splitting it lets a host opt into consumption alone; keeping
+    /// <c>AddDynamicTypePreWarming</c> a superset means every existing caller is unchanged.</para>
+    /// </summary>
+    public static IServiceCollection AddPrebuiltAssemblyConsumption(this IServiceCollection services)
+    {
+        services.TryAddSingleton<IPrebuiltAssemblyConsumer, PrebuiltAssemblyConsumer>();
         return services;
     }
 }

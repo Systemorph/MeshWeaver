@@ -2116,7 +2116,7 @@ public static class PackageInstaller
                 // cold, so a bare call would request no release at all, and an install that cannot
                 // order against the compiles it starts is the defect #1732 is about.
                 var releases = result.Written > 0
-                    ? SeedThenRequestReleases(hub, [nodeTypePath], logger)
+                    ? SeedThenRequestReleases(hub, manifest.Id, [nodeTypePath], logger)
                     : Observable.Return(System.Reactive.Unit.Default);
                 return releases
                     // 🚨 …and every NodeType OUTSIDE this package that compiles these sources into
@@ -2937,7 +2937,7 @@ public static class PackageInstaller
                 var retypedRoot = placeholderRoot is not null ? root?.Path : null;
                 var (firstWave, deferredWave) = ReleaseWaves(retypedRoot, nodeTypePaths, nodes);
                 var releases = result.Written > 0
-                    ? SeedPrebuiltAssemblies(hub, nodeTypePaths, logger)
+                    ? SeedPrebuiltAssemblies(hub, manifest.Id, nodeTypePaths, logger)
                     : Observable.Return(0);
                 // What the two waves below actually released — the input
                 // ReleaseDependentsOutsidePackage subtracts, so nothing is requested twice. When
@@ -3312,7 +3312,7 @@ public static class PackageInstaller
                 // nothing). A delta runs no placeholder dance, so there is no root recycle to split
                 // the waves around; one wave is the whole set.
                 var releases = releaseTargets.Length > 0
-                    ? SeedThenRequestReleases(hub, releaseTargets, logger)
+                    ? SeedThenRequestReleases(hub, manifest.Id, releaseTargets, logger)
                     : Observable.Return(System.Reactive.Unit.Default);
                 // 🚨 …then every NodeType OUTSIDE this package that compiles the changed files into
                 // its OWN assembly. `releaseTargets` above resolves a compile input to the prefix
@@ -3768,14 +3768,48 @@ public static class PackageInstaller
     /// <para>The bound is a STALL detector, sized by <see cref="SeedFloor"/> +
     /// <see cref="SeedPerType"/> × types — see the remarks on those fields for why a flat cap
     /// shorter than the fallback it guards was the bug, not a safety.</para>
+    ///
+    /// <para>🚨 <b>Its outcome is reported UNCONDITIONALLY, the zero included</b> (#3429). This used
+    /// to log only <c>adopted &gt; 0</c> and a timeout, so a pass that completed having adopted
+    /// NOTHING — because no consumer was registered, because the install wrote no NodeType
+    /// definitions, or because no mounted bundle named these types — was indistinguishable in the
+    /// log from a deployment that ships no bundles at all. Education's e2e paid Roslyn for ten types
+    /// whose bytes were sitting in <c>/bundles</c>, and the only evidence was an absence. The REASON
+    /// comes from the seeder (<c>ShippedPrebuiltBundles</c> knows which sources it consulted); this
+    /// line is the half that names the PACKAGE, which the seeder cannot.</para>
     /// </summary>
     /// <returns>A cold observable of the number of adopted assemblies; Subscribe to run.</returns>
     private static IObservable<int> SeedPrebuiltAssemblies(
-        IMessageHub hub, IReadOnlyCollection<string> nodeTypePaths, ILogger? logger)
+        IMessageHub hub, string packageId, IReadOnlyCollection<string> nodeTypePaths, ILogger? logger)
     {
         var consumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
-        if (consumer is null || nodeTypePaths.Count == 0)
+        if (consumer is null)
+        {
+            // 🚨 #3429 — the silent zero that is invisible from inside the seeder, because the
+            // seeder never runs. A host reaches this by composing WITHOUT
+            // AddPrebuiltAssemblyConsumption / AddDynamicTypePreWarming; every type this package
+            // ships then compiles in-mesh no matter how many bundles are mounted beside it.
+            if (nodeTypePaths.Count > 0)
+                logger?.LogWarning(
+                    "Install: {Package}: NO prebuilt assembly was adopted for {Count} installed "
+                    + "type(s) because this host registers no {Consumer} — it consumes no bundle "
+                    + "source at all, so every one of them compiles in-mesh. Call "
+                    + "IServiceCollection.AddPrebuiltAssemblyConsumption() (or "
+                    + "AddDynamicTypePreWarming()) on this composition if it is meant to consume a "
+                    + "bake",
+                    packageId, nodeTypePaths.Count, nameof(IPrebuiltAssemblyConsumer));
             return Observable.Return(0);
+        }
+        if (nodeTypePaths.Count == 0)
+        {
+            // Not a shortfall — there is nothing to adopt FOR — but it is the fact that separates
+            // "no bundle matched" from "the install recognised no types at all", which the
+            // install's own summary line cannot say and #3429 had to guess at.
+            logger?.LogInformation(
+                "Install: {Package}: the install recognised no NodeType definition among the nodes "
+                + "it wrote, so prebuilt adoption had nothing to look for", packageId);
+            return Observable.Return(0);
+        }
         var bound = SeedBound(nodeTypePaths.Count);
         return consumer.SeedForTypes(nodeTypePaths)
             .Take(1)
@@ -3783,22 +3817,39 @@ public static class PackageInstaller
             .Catch<int, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
-                    "Install: prebuilt adoption attempt failed after {Bound} for {Count} type(s) — "
-                    + "the installed types compile instead. This bound is the inner seed's own "
-                    + "per-assembly budget summed, so expiring it means the seed STALLED, not that "
-                    + "it was slow",
-                    bound, nodeTypePaths.Count);
-                return Observable.Return(0);
+                    "Install: {Package}: prebuilt adoption attempt failed after {Bound} for "
+                    + "{Count} type(s) — the installed types compile instead. This bound is the "
+                    + "inner seed's own per-assembly budget summed, so expiring it means the seed "
+                    + "STALLED, not that it was slow",
+                    packageId, bound, nodeTypePaths.Count);
+                return Observable.Return(StalledSeed);
             })
             .Do(adopted =>
             {
+                if (adopted == StalledSeed)
+                    return;   // the timeout arm above already said its piece, with its own reason
                 if (adopted > 0)
                     logger?.LogInformation(
-                        "Install: adopted {Adopted} prebuilt assembly(ies) for {Count} installed "
-                        + "type(s) — their release requests settle without compiling",
-                        adopted, nodeTypePaths.Count);
-            });
+                        "Install: {Package}: adopted {Adopted} prebuilt assembly(ies) for {Count} "
+                        + "installed type(s) — their release requests settle without compiling",
+                        packageId, adopted, nodeTypePaths.Count);
+                else
+                    logger?.LogWarning(
+                        "Install: {Package}: adopted NO prebuilt assembly for any of {Count} "
+                        + "installed type(s) — every one of them compiles in-mesh. The "
+                        + "ShippedPrebuiltBundles line above names which bundle source was "
+                        + "consulted and why nothing matched (#3429)",
+                        packageId, nodeTypePaths.Count);
+            })
+            // The stall sentinel never leaves this method: callers count ADOPTIONS, and a seed that
+            // stalled adopted nothing.
+            .Select(adopted => adopted == StalledSeed ? 0 : adopted);
     }
+
+    /// <summary>Sentinel the timeout arm of <see cref="SeedPrebuiltAssemblies"/> carries so the
+    /// reporting <c>Do</c> can tell "the seed stalled" (already logged, with its bound) from "the
+    /// seed completed and covered nothing" (the #3429 shortfall). Never observable to a caller.</summary>
+    private const int StalledSeed = -1;
 
     /// <summary>
     /// Flips the release trigger on each of <paramref name="nodeTypePaths"/> and completes once
@@ -3850,8 +3901,8 @@ public static class PackageInstaller
     /// Subscribe to run, and the completion means every release trigger has landed.
     /// </summary>
     private static IObservable<System.Reactive.Unit> SeedThenRequestReleases(
-        IMessageHub hub, IReadOnlyCollection<string> nodeTypePaths, ILogger? logger)
-        => SeedPrebuiltAssemblies(hub, nodeTypePaths, logger)
+        IMessageHub hub, string packageId, IReadOnlyCollection<string> nodeTypePaths, ILogger? logger)
+        => SeedPrebuiltAssemblies(hub, packageId, nodeTypePaths, logger)
             .SelectMany(_ => RequestReleases(hub, nodeTypePaths, logger));
 
     /// <summary>
@@ -3914,7 +3965,7 @@ public static class PackageInstaller
                     + "changed sources into their own assemblies (shared=@…) and are now stale — "
                     + "recompiling them too: {Types}",
                     packageId, extra.Length, string.Join(", ", extra));
-                return SeedThenRequestReleases(hub, extra, logger);
+                return SeedThenRequestReleases(hub, packageId, extra, logger);
             });
     }
 
