@@ -1842,9 +1842,19 @@ public static class PackageInstaller
         IObservable<ContentPublication> Publish() => syncs
             // Impersonated per post, like every other installer write: the pipeline hops schedulers
             // and an ambient impersonation does not survive those hops (see Upsert).
-            .Select(sync => Observable.Using(
-                    () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                    _ => hub.SyncContentFiles(sync.NodePath)
+            //
+            // 🚨 RunAsSystem, never `Observable.Using(access.ImpersonateAsSystem, …)` (#1790). Rx
+            // runs a Using's resource factory on the SUBSCRIBING thread and disposes it when the
+            // inner observable TERMINATES — for this cross-hub post, the owning root's response
+            // thread — so the subscriber was left latched as System, and everything composed
+            // downstream inherited it. RunAsSystem seals both ends: entered at Subscribe, left on
+            // the way out of that same Subscribe, and every notification reaches the subscriber
+            // under its OWN identity. The post is the only leaf that needs the identity (the
+            // projections below are pure), and a RetryWhen re-ask re-subscribes this same operator,
+            // so it re-enters the scope exactly as the Using did. Null-safe by construction: a host
+            // with no AccessService defers the work unimpersonated.
+            .Select(sync => accessService.RunAsSystem(
+                    () => hub.SyncContentFiles(sync.NodePath)
                         .To(sync.TargetCollection, sync.TargetPath)
                         .Add(sync.Files)
                         .Mirror(false)
