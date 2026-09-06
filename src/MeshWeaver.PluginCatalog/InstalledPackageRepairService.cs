@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -67,16 +68,7 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
             .SelectMany(records => records.Count == 0
                 ? Observable.Return(Unit.Default)
                 : records
-                    .Select(record => PackageInstaller
-                        .EnsureDeclaredAccess(hub, record.Manifest, record.Partition, logger)
-                        .Catch<Unit, Exception>(ex =>
-                        {
-                            logger?.LogWarning(ex,
-                                "[PackageRepair] re-asserting declared access for {Partition} failed",
-                                record.Partition);
-                            return Observable.Return(Unit.Default);
-                        })
-                        .SelectMany(_ => PackageInstaller.RunInstallHooks(hub, record.Partition, logger)))
+                    .Select(record => Reconcile(record, logger))
                     .ToObservable()
                     .Concat()
                     .DefaultIfEmpty(Unit.Default)
@@ -91,8 +83,126 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
         return Task.CompletedTask;
     }
 
-    /// <summary>One recorded install: its target partition and the manifest recorded for it.</summary>
-    private sealed record InstalledRecord(string Partition, PackageManifest Manifest);
+    /// <summary>
+    /// Reconciles ONE recorded install: re-assert its declared access and re-run its hooks — unless
+    /// the partition it names is GONE, in which case the record is a dangling reference and the
+    /// write is skipped and reported (#3451).
+    ///
+    /// <para>🚨 <b>Why a stale record must not be written to.</b> The record lives in the
+    /// <c>Plugins</c> partition and outlives the partition it points at, so deleting an installed
+    /// space used to leave this pass aiming <c>{partition}/_Policy</c> at nothing on every boot,
+    /// forever — a permanent per-boot error, and the writer that re-armed the resurrection race on
+    /// every restart. Going FORWARD there is nothing to skip:
+    /// <see cref="InstallRecordPartitionTeardownHandler"/> removes the record with the partition. This
+    /// arm is for the records that already dangle (the #3436 census counted 21 partition definitions
+    /// with no live root on one portal) and for a partition deleted by another replica or an older
+    /// build.</para>
+    ///
+    /// <para>🚨 <b>It reports; it does not delete.</b> The delete path knows exactly which partition
+    /// went, in-process, right now — so removing the record there is deterministic. Here the same
+    /// conclusion rests on three probes, and a boot pass that silently deletes install records on a
+    /// heuristic is a worse failure than the one it fixes. The remedy is the admin orphan list
+    /// (<c>CatalogLayoutAreas</c> → <see cref="PackageInstaller.RemoveInstalledRecord"/>), named in
+    /// the log line.</para>
+    /// </summary>
+    private IObservable<Unit> Reconcile(InstalledRecord record, ILogger? logger) =>
+        TargetPartitionIsGone(record.Partition, logger).SelectMany(gone =>
+        {
+            if (gone)
+            {
+                logger?.LogWarning(
+                    "[PackageRepair] SKIPPING install record '{Record}': its target partition "
+                    + "'{Partition}' no longer exists — no root node, no children, and no storage "
+                    + "provider reports a backing store. The record is a dangling reference; remove "
+                    + "it from the admin orphan list (Catalog → orphaned install records). Nothing "
+                    + "is written into a partition that is gone (#3451).",
+                    $"{PackageInstaller.InstalledPartition}/{record.PackageId}", record.Partition);
+                return Observable.Return(Unit.Default);
+            }
+
+            return PackageInstaller
+                .EnsureDeclaredAccess(hub, record.Manifest, record.Partition, logger)
+                .Catch<Unit, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[PackageRepair] re-asserting declared access for {Partition} failed",
+                        record.Partition);
+                    return Observable.Return(Unit.Default);
+                })
+                .SelectMany(_ => PackageInstaller.RunInstallHooks(hub, record.Partition, logger));
+        });
+
+    /// <summary>
+    /// Is <paramref name="partition"/> definitively gone? A CONJUNCTION of three signals, each of
+    /// which always answers, so the verdict has no arming condition and no silent skip:
+    /// <list type="number">
+    ///   <item>no storage provider reports the backing store present — the same global-OR fold
+    ///     <c>PartitionWriteGuardValidator</c> applies, where only a <c>true</c> is evidence of
+    ///     presence;</item>
+    ///   <item>the partition ROOT node does not read back;</item>
+    ///   <item>the partition has no child paths.</item>
+    /// </list>
+    ///
+    /// <para>The conjunction is what makes it safe. Any ONE of these alone has a legitimate negative:
+    /// a provider that cannot tell answers <c>null</c>, a root row can go missing while the space is
+    /// alive (#638 — the very state the bootstrap repairs), and a read can fault. Requiring all three
+    /// means a false "gone" needs a partition with no store, no root and no content — which is not a
+    /// partition. A fault anywhere is read as the SAFE answer (present), so an unreachable store
+    /// keeps its record.</para>
+    /// </summary>
+    private IObservable<bool> TargetPartitionIsGone(string partition, ILogger? logger)
+    {
+        // 🚨 Every leg ends in DefaultIfEmpty(present) as well as Catch(present). A probe that
+        // COMPLETES WITHOUT EMITTING is not caught by Timeout — Timeout faults on silence, not on a
+        // clean finish (#2901) — and a Zip leg that never emits would park this record's
+        // reconciliation forever inside a boot pass. Empty means "no answer", which reads as the
+        // SAFE answer here: the partition is present, so nothing is declared stale.
+        var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToList();
+        var storePresent = providers.Count == 0
+            ? Observable.Return(false)
+            : Observable.CombineLatest(providers.Select(p => p.PartitionExists(partition)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Catch<bool?, Exception>(_ => Observable.Return<bool?>(true))
+                    .DefaultIfEmpty(true)))
+                .Take(1)
+                .Select(results => results.Any(r => r == true))
+                .DefaultIfEmpty(true);
+
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var rootPresent = storage is null
+            ? Observable.Return(true)
+            : storage.Read(partition, hub.JsonSerializerOptions)
+                .Take(1)
+                .DefaultIfEmpty(null!)
+                .Select(node => node is not null)
+                .Catch<bool, Exception>(_ => Observable.Return(true))
+                .DefaultIfEmpty(true);
+
+        var childrenPresent = storage is null
+            ? Observable.Return(true)
+            : storage.ListChildPaths(partition)
+                .Take(1)
+                .Select(children => children.NodePaths.Any() || children.DirectoryPaths.Any())
+                .Catch<bool, Exception>(_ => Observable.Return(true))
+                .DefaultIfEmpty(true);
+
+        return Observable.Zip(storePresent, rootPresent, childrenPresent,
+                (store, root, children) => (store, root, children))
+            .Select(t =>
+            {
+                var gone = !t.store && !t.root && !t.children;
+                if (gone)
+                    logger?.LogDebug(
+                        "[PackageRepair] partition '{Partition}' is definitively gone "
+                        + "(store={Store}, root={Root}, children={Children})",
+                        partition, t.store, t.root, t.children);
+                return gone;
+            });
+    }
+
+    /// <summary>One recorded install: its id, its target partition and the manifest recorded for it.</summary>
+    private sealed record InstalledRecord(string PackageId, string Partition, PackageManifest Manifest);
 
     /// <summary>
     /// Every recorded install, one entry per partition. Reads the <c>Package</c> records the
@@ -111,7 +221,10 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                 .Select(node => (Node: node,
                     Manifest: node.ContentAs<PackageManifest>(hub.JsonSerializerOptions)))
                 .Where(x => x.Manifest is not null)
-                .Select(x => new InstalledRecord(PartitionOf(x.Node, x.Manifest!), x.Manifest!))
+                .Select(x => new InstalledRecord(
+                    x.Node.Id,
+                    PackageInstaller.TargetPartitionOf(x.Node.Id, x.Manifest!),
+                    x.Manifest!))
                 .Where(r => !string.IsNullOrWhiteSpace(r.Partition))
                 .GroupBy(r => r.Partition, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First())
@@ -121,15 +234,6 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                 logger?.LogWarning(ex, "[PackageRepair] listing installed packages failed");
                 return Observable.Return((IReadOnlyList<InstalledRecord>)[]);
             });
-
-    /// <summary>
-    /// The target partition of an install record. The record's id IS the package id, and the
-    /// installer targets a partition of that name — the recorded manifest's
-    /// <see cref="PackageManifest.TargetPartition"/> wins when present so a package whose partition
-    /// differs from its id still repairs correctly.
-    /// </summary>
-    private static string PartitionOf(MeshWeaver.Mesh.MeshNode node, PackageManifest manifest) =>
-        string.IsNullOrWhiteSpace(manifest.TargetPartition) ? node.Id : manifest.TargetPartition!;
 
     /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken)

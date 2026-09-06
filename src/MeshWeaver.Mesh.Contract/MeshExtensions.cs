@@ -1811,7 +1811,7 @@ public static class MeshExtensions
             : ReadNodeAuthoritative(hub, persistence, grantPath);
         // A GitSynced partition is SYSTEM-OWNED by definition — its content is rewritten from the
         // repo and only system-security writes it. That is the ownership signal the root itself
-        // does not carry (ProvisionAndCreateRoot writes the root as System, so root.CreatedBy is
+        // does not carry (HealPartitionRoot writes the root as System, so root.CreatedBy is
         // never the owner), and it is what distinguishes "I am creating my own partition" from
         // "I am a deploy touching somebody else's".
         var syncObs = ReadNodeAuthoritative(hub, persistence, $"{partition}/_GitSync");
@@ -1933,9 +1933,25 @@ public static class MeshExtensions
                                     t.sync, hub.JsonSerializerOptions),
                                 persistence, meshService, accessService, logger);
 
+                        // 🚨 A partition whose REMOVAL is in flight or on record is not healed —
+                        // neither its root nor its creator grant (#3451). The grant matters as much
+                        // as the root: `{P}/_Access/{creator}_Access` written into a partition that
+                        // is going away is the "fresh policy 67 ms later" half of the incident, and
+                        // it is what made the resurrected shells undeletable. Checked here, AFTER
+                        // the permission fold, so the decision is as close to the writes as it can
+                        // be; HealPartitionRoot re-asks at its own point of effect.
+                        if (PartitionRemovalOnRecord(hub, partition) is { } removal)
+                        {
+                            logger.LogWarning(
+                                "[PartitionBootstrap] NOT healing partition '{Partition}': {Reason}. "
+                                + "Neither a root nor a creator grant is written — a repair must never "
+                                + "bring a deleted partition back (#3451).", partition, removal);
+                            return Observable.Return(System.Reactive.Unit.Default);
+                        }
+
                         var healRoot = rootUsable
                             ? Observable.Return(System.Reactive.Unit.Default)
-                            : ProvisionAndCreateRoot(hub, partition, meshService, accessService, logger,
+                            : HealPartitionRoot(hub, partition, meshService, accessService, logger,
                                 // A DURABLE but unusable row is repaired in place; an absent root
                                 // (or a static/config one) takes the ordinary create path.
                                 ghost: t.root.Durable ? t.root.Node : null);
@@ -1977,8 +1993,8 @@ public static class MeshExtensions
     /// a served node, and it is the platform's only name-keyed home for the non-serialisable
     /// <c>HubConfiguration</c> delegate. Letting it answer here made
     /// <c>EnsurePartitionBootstrap</c> believe the partition root already existed, so
-    /// <c>ProvisionAndCreateRoot</c> never ran: no schema was provisioned and no durable root was
-    /// written, while every other seam correctly saw nothing. That is exactly the ghost partition
+    /// <c>HealPartitionRoot</c> never ran: no durable root was written, while every other seam
+    /// correctly saw nothing. That is exactly the ghost partition
     /// root of #902 — present to the existence check, absent to reads, un-creatable ("already
     /// exists"), with no version history — and it is why the platform's agent catalog could not be
     /// repaired by any route. See Doc/Architecture/NodeTypeCatalogs.md.</para>
@@ -2030,8 +2046,8 @@ public static class MeshExtensions
         && (!string.IsNullOrWhiteSpace(root.NodeType) || root.Content is not null);
 
     /// <summary>
-    /// Provisions every provider's backing store (PG schema + tables) then writes the partition's
-    /// <c>Space</c> root under System. Idempotent — a concurrent-create "already exists" is success.
+    /// Writes the partition's missing <c>Space</c> root under System. Idempotent — a
+    /// concurrent-create "already exists" is success.
     ///
     /// <para>When <paramref name="ghost"/> is supplied — a DURABLE row that exists but is not a
     /// usable root — the root is repaired IN PLACE instead (see <see cref="RepairGhostRoot"/>).
@@ -2039,35 +2055,42 @@ public static class MeshExtensions
     /// "already exists", which this method treats as success, so the ghost survived every
     /// bootstrap that ran over it.</para>
     ///
+    /// <para>🚨 <b>A REPAIR MUST NOT BE ABLE TO CREATE A PARTITION (#3451).</b> This method used
+    /// to open with <c>EnsurePartitionProvisioned</c> on every provider — the API whose own
+    /// contract calls it "the ONLY trigger for partition creation" — and #3436 tried to make that
+    /// safe by probing first and skipping the heal when every provider reported the backing store
+    /// gone. A probe is not an exclusion: it is read at one instant and acted on at another, and
+    /// the delete drops the store at step 5 (AFTER the drain), so a probe taken while the delete
+    /// was draining answered a truthful <c>true</c> and authorised a <c>CREATE SCHEMA</c> that ran
+    /// after the <c>DROP</c>. Neither the <see cref="RecentlyDeletedRegistry"/> subtree scope nor
+    /// <c>SubtreeDeletionGuardStorageAdapter</c> could see it: both guard <see cref="IStorageAdapter"/>
+    /// WRITES, and provisioning is a DDL side-channel that never crosses a storage adapter.</para>
+    ///
+    /// <para>So the call is gone. In every state where a heal is legitimate the provisioning was a
+    /// NO-OP by construction — a ghost row means the store it was read from exists, and an absent
+    /// root over a live store is exactly a store that is already provisioned — so removing it costs
+    /// nothing and removes the capability that made resurrection reachable. What is left is a plain
+    /// row write into whatever store already routes the partition: refused by the subtree guard
+    /// while the delete is in flight, and failing loudly (Postgres <c>42P01</c>) afterwards instead
+    /// of silently minting a shell over a schema it re-created itself.</para>
+    ///
     /// <para>🚨 <b>REPAIR, never RESURRECTION (#3436).</b> With NO root at all, this method is
-    /// only allowed to heal a partition whose backing store is still there. When every provider
-    /// definitively answers that the store is GONE, the partition was deleted — and creating a
-    /// <c>Space</c> root here would <c>EnsurePartitionProvisioned</c> the schema straight back,
-    /// making this a SECOND trigger for partition creation behind
-    /// <c>OwnsPartitionProvisioningValidator</c>'s back and laundering an implicit space creation
-    /// past <c>PartitionWriteGuardValidator</c>'s "no partition, no write" rule. That is exactly
-    /// how four deleted partitions came back on the systemorph staff portal as bare, differently
-    /// typed <c>Space</c> shells with a fresh <c>_Policy</c> 67 ms later — a policy that granted
-    /// Delete to nobody who could have deleted the original, so the shell was then undeletable
-    /// through the ordinary API. A ghost repair is exempt by construction: a durable row means the
-    /// store it was read from exists.</para>
+    /// additionally refused whenever the partition's removal is in flight or on record
+    /// (<see cref="PartitionRemovalOnRecord"/>) or every provider definitively answers that the
+    /// store is GONE. That is what four deleted partitions came back through on the systemorph
+    /// staff portal — bare, differently typed <c>Space</c> shells with a fresh <c>_Policy</c> 67 ms
+    /// later, whose policy granted Delete to nobody who could have deleted the original, so the
+    /// shell was then undeletable through the ordinary API. A ghost repair is exempt from the
+    /// store probe by construction: a durable row means the store it was read from exists.</para>
     /// </summary>
-    private static IObservable<System.Reactive.Unit> ProvisionAndCreateRoot(
+    private static IObservable<System.Reactive.Unit> HealPartitionRoot(
         IMessageHub hub, string partition, IMeshService meshService,
         AccessService? accessService, ILogger logger, MeshNode? ghost = null)
     {
-        // Reactive + pooled + promise-cached; the InMemory / FileSystem providers no-op. Merge +
-        // ToList so the chain always emits exactly once (even with no providers) before the write.
-        var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToArray();
-        var provision = providers.Length == 0
-            ? Observable.Return(System.Reactive.Unit.Default)
-            : Observable.Merge(providers.Select(p => p.EnsurePartitionProvisioned(partition)))
-                .ToList()
-                .Select(_ => System.Reactive.Unit.Default);
-
         if (ghost is not null)
-            return provision.SelectMany(_ => RepairGhostRoot(hub, partition, ghost, accessService, logger));
+            return RepairGhostRoot(hub, partition, ghost, accessService, logger);
 
+        var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToArray();
         var root = new MeshNode(partition)
         {
             NodeType = PartitionRootNodeTypeName,
@@ -2075,23 +2098,74 @@ public static class MeshExtensions
             Name = partition,
         };
 
-        return PartitionStoreConfirmedAbsent(providers, partition, logger).SelectMany(absent =>
-            absent
+        // 🚨 Evaluated at the POINT OF EFFECT (Observable.Defer + a probe subscribed here), not
+        // earlier in the chain: the whole defect class is a decision taken at one instant and acted
+        // on at another. The removal record is read first because it is synchronous, free, and
+        // always decides — the store probe can only ever REINFORCE it.
+        return Observable
+            .Defer(() => Observable.Return(PartitionRemovalOnRecord(hub, partition)))
+            .SelectMany(removal => removal is not null
+                ? Observable.Return<string?>(removal)
+                : PartitionStoreConfirmedAbsent(providers, partition, logger)
+                    .Select(absent => absent
+                        ? "every storage provider reports its backing store is gone"
+                        : null))
+            .SelectMany(refusal => refusal is not null
                 ? Observable.Return(System.Reactive.Unit.Default)
                     .Do(_ => logger.LogWarning(
-                        "[PartitionBootstrap] NOT creating a Space root for '{Partition}': every "
-                        + "storage provider reports its backing store is gone, so the partition was "
-                        + "deleted. Healing a root here would re-provision the schema and resurrect "
-                        + "the partition as an empty shell (#3436); the child write that triggered "
-                        + "this is refused by the partition write guard instead.", partition))
-                : provision.SelectMany(_ =>
-                    AsSystem(accessService, () => meshService.CreateNode(root).Take(1))
-                        .Select(_ => System.Reactive.Unit.Default)
-                        .Catch<System.Reactive.Unit, Exception>(ex => IsAlreadyExists(ex)
-                            ? Observable.Return(System.Reactive.Unit.Default)
-                            : Observable.Throw<System.Reactive.Unit>(ex))
-                        .Do(_ => logger.LogInformation(
-                            "[PartitionBootstrap] created missing Space root for partition '{Partition}'", partition))));
+                        "[PartitionBootstrap] NOT creating a Space root for '{Partition}': {Reason}, "
+                        + "so the partition was deleted. Healing a root here would resurrect it as an "
+                        + "empty shell (#3436/#3451); the child write that triggered this is refused "
+                        + "by the partition write guard instead.", partition, refusal))
+                : AsSystem(accessService, () => meshService.CreateNode(root).Take(1))
+                    .Select(_ => System.Reactive.Unit.Default)
+                    .Catch<System.Reactive.Unit, Exception>(ex => IsAlreadyExists(ex)
+                        ? Observable.Return(System.Reactive.Unit.Default)
+                        : Observable.Throw<System.Reactive.Unit>(ex))
+                    .Do(_ => logger.LogInformation(
+                        "[PartitionBootstrap] created missing Space root for partition '{Partition}'", partition)));
+    }
+
+    /// <summary>
+    /// Is this partition's REMOVAL in flight, or on record? The exclusion that
+    /// <c>SubtreeDeletionGuardStorageAdapter</c> enforces for node-row writes, asked here for the
+    /// one decision that is not a node-row write: whether the self-healing bootstrap may bring a
+    /// partition back (#3451). Returns the reason, or <c>null</c> when nothing about this partition
+    /// has been deleted.
+    ///
+    /// <para><b>Two records, two lifetimes, and both already exist</b> — this adds no new state and
+    /// no new timer:</para>
+    /// <list type="bullet">
+    ///   <item><see cref="RecentlyDeletedRegistry.IsUnderActiveDeletion"/> — the hard invariant with
+    ///     an exact lifetime: opened before the deletion plan is enumerated and released when the
+    ///     operation completes, which is AFTER the partition drop (step 5 runs inside the scope).</item>
+    ///   <item><see cref="RecentlyDeletedRegistry.IsRecentlyDeleted"/> — the "delete wins" tombstone,
+    ///     marked SYNCHRONOUSLY at the delete source for every path including the root, and cleared
+    ///     by a real re-create (<see cref="RecentlyDeletedRegistry.Supersede"/>, run by the storage
+    ///     write seam). This is the half that <b>outlives the drop</b>, which is what #3436 asked
+    ///     for: a probe-based decision taken before the drop is still refused when it lands after
+    ///     it, because the tombstone was already on record when the probe ran.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>It always decides.</b> The registry is registered unconditionally by
+    /// <c>MeshBuilder</c> at the mesh ROOT (deliberately — the delete handler and the persistence
+    /// container must share one instance), so this resolves with <c>GetRequiredService</c> and has
+    /// no arming condition. A guard that goes silent when its input is missing is the shape that
+    /// let #3436's first draft boot clean on a host whose providers were all read-only.</para>
+    ///
+    /// <para>A legitimate delete-then-recreate is unaffected: creating the partition again goes
+    /// through <c>OwnsPartitionProvisioningValidator</c> / the installer, whose root write crosses
+    /// the storage seam and supersedes the tombstone — after which this answers <c>null</c> and the
+    /// bootstrap heals that partition's children exactly as before.</para>
+    /// </summary>
+    private static string? PartitionRemovalOnRecord(IMessageHub hub, string partition)
+    {
+        var registry = hub.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
+        if (registry.IsUnderActiveDeletion(partition, out var deletionRoot))
+            return $"its deletion is in flight (subtree '{deletionRoot}')";
+        return registry.IsRecentlyDeleted(partition)
+            ? "it was just deleted and nothing has re-created it since"
+            : null;
     }
 
     /// <summary>
@@ -2121,12 +2195,20 @@ public static class MeshExtensions
                         "[PartitionBootstrap] existence probe failed for '{Partition}' via {Provider}; "
                         + "treating as indeterminate", partition, p.Name);
                     return Observable.Return<bool?>(null);
-                }))
+                })
+                // 🚨 A probe that COMPLETES WITHOUT EMITTING is not caught by the Timeout above —
+                // Timeout faults on silence, not on a clean finish (#2901). Without this the
+                // CombineLatest below would never emit and the whole create would hang unanswered;
+                // "no answer" is indeterminate, which is what null means.
+                .DefaultIfEmpty(null))
             .ToList();
 
         return Observable.CombineLatest(probes)
             .Take(1)
-            .Select(results => results.Count > 0 && results.All(r => r == false));
+            .Select(results => results.Count > 0 && results.All(r => r == false))
+            // Same rule one level up, and the same verdict: nothing observed ⇒ NOT confirmed absent
+            // ⇒ the heal is allowed. Fail OPEN, exactly as an indeterminate probe does.
+            .DefaultIfEmpty(false);
     }
 
     /// <summary>

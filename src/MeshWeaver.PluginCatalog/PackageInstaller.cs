@@ -41,6 +41,23 @@ public static class PackageInstaller
     /// <summary>The NodeType of an install record.</summary>
     public const string PackageNodeType = "Package";
 
+    /// <summary>
+    /// The partition an install record targets. The record's id IS the package id and the installer
+    /// targets a partition of that name, so <see cref="PackageManifest.TargetPartition"/> wins only
+    /// when the package declares one.
+    ///
+    /// <para>🚨 ONE definition, deliberately (#3451). Both the boot reconciliation
+    /// (<see cref="InstalledPackageRepairService"/>) and the partition-teardown handler
+    /// (<see cref="InstallRecordPartitionTeardownHandler"/>) decide "which partition is this record
+    /// about?", and two copies of that rule is how one of them would go on re-asserting into a
+    /// partition the other had just declared gone.</para>
+    /// </summary>
+    /// <param name="recordId">The install record's node id (the package id).</param>
+    /// <param name="manifest">The manifest recorded for that install.</param>
+    /// <returns>The target partition name.</returns>
+    internal static string TargetPartitionOf(string recordId, PackageManifest manifest) =>
+        string.IsNullOrWhiteSpace(manifest.TargetPartition) ? recordId : manifest.TargetPartition!;
+
     /// <summary>Bounded concurrency for the per-node upsert fan-out (mirrors <c>NodeCopyHelper</c>).</summary>
     public const int DefaultBatchSize = 8;
 
