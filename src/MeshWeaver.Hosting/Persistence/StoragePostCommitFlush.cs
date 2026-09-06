@@ -24,7 +24,23 @@ internal sealed class StoragePostCommitFlush(IMessageHub hub) : IPostCommitFlush
     {
         if (committed is not MeshNode node)
             return Observable.Return(true);
+        // 🚨 Three services are resolved on the ACK path, which can run while this hub's lifetime
+        // scope is closing; a closed scope throws ObjectDisposedException, and thrown synchronously
+        // out of the ack watcher's onNext that was a verdict never produced (MeshWeaver#2543 — CD
+        // 7937's bake host: 13 trails ending at PATCH_ECHO_SEEN; #3196's shape). Surface it as the
+        // observable's fault, which the watcher NACKs and names.
+        try
+        {
+            return Build(node);
+        }
+        catch (ObjectDisposedException ex)
+        {
+            return Observable.Throw<bool>(ex);
+        }
+    }
 
+    private IObservable<bool> Build(MeshNode node)
+    {
         var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (storage is null)
             return Observable.Return(true);
