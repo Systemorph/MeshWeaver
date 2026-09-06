@@ -298,7 +298,49 @@ keyVaultSecrets:
   #       key: Email__ClientSecret
   #     - vaultSecret: memexcloud-Authentication-Microsoft-ClientSecret
   #       key: Authentication__Microsoft__ClientSecret
+  #
+  # 🚨 ONE VAULT OBJECT MAY SERVE SEVERAL KEYS. A key has exactly one home; an
+  # object may be read under as many names as the portal looks for. `memex`
+  # reads its registry credential as BOTH `PluginCatalog__RegistryToken` (the
+  # legacy single-registry key) and `PluginCatalog__Registries__0__Token` (the
+  # per-registry key of the named registry) from the one object
+  # `PluginCatalog-RegistryToken` — that second mapping IS the fix for
+  # MeshWeaver#3201 / Memex#164, and it must stay expressible.
   secrets: []
+# ---- ADDITIONAL Key Vault secret classes (a namespace that reads more than one)
+# The block above holds ONE SecretProviderClass. A namespace whose pod reads two
+# vault-secret sets — `memex` runs the hand-made `memex-kv` (13 keys: the
+# connection string, the GitHub App key, the AI provider keys) alongside the
+# chart-owned `memex-portal-keyvault` (the plugin-registry token) — declares the
+# rest here. Same shape as `keyVaultSecrets`, one entry per class.
+#
+# 🚨 WHY IT EXISTS. With one slot, a record or overlay describing this namespace
+# had to CHOOSE which class to state, and whichever it chose, a re-render dropped
+# the other. On 2026-09-06 the `memex` record described `memex-kv` while the
+# deployed overlay described `memex-portal-keyvault`: a re-render would have
+# removed the class that had just fixed the registry poll AND rendered one for
+# `memex-kv` naming a vault object that does not exist — a failed mount, i.e. a
+# portal that cannot start.
+#
+# ORDER IS PRECEDENCE. The classes are appended to `envFrom` after the chart's
+# ConfigMap and Secret, in this order; Kubernetes keeps the LAST entry on a key
+# clash, so a later class wins over an earlier one for a shared key.
+#
+# `name`, `volumeName` and `mountPath` are REQUIRED on every entry — a second
+# class falling back to the first's defaults would collide on all three (two pod
+# volumes of one name is an invalid spec; two classes syncing into one Secret
+# race each other). `syncedSecret` still defaults to the class's own name, and
+# the vault coordinates fall back to `keyVaultSecrets` above.
+#
+#   keyVaultSecretClasses:
+#     - name: "memex-kv"
+#       syncedSecret: "memex-kv-secrets"
+#       volumeName: "kv-secrets"
+#       mountPath: "/mnt/kv-secrets"
+#       secrets:
+#         - vaultSecret: memex-connectionstring
+#           key: ConnectionStrings__memex
+keyVaultSecretClasses: []
 # ---- Extra env sources for the portal (verbatim EnvFromSource objects) ----
 # ⚠️ LEGACY ESCAPE HATCH — kept for environments whose SecretProviderClass is
 # still hand-made. Declare the secrets under `keyVaultSecrets` above instead;
