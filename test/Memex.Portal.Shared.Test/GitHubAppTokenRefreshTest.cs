@@ -115,6 +115,7 @@ public class GitHubAppTokenRefreshTest
             .SelectMany(_ => held.Take(1))
             .ToList()
             .FirstAsync()
+            .Timeout(Budget)
             .Await();
         Assert.All(tokens, t => Assert.Equal("ghs_2", t));
         Assert.Equal(2, handler.Mints);
