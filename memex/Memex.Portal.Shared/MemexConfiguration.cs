@@ -238,7 +238,13 @@ public static class MemexConfiguration
                 persistedActivation,
                 meshModuleSets.Proposed,
                 (module, reason) => Console.Error.WriteLine(
-                    $"[ModuleSet] DEFERRED store-installed module '{module}': {reason}"));
+                    $"[ModuleSet] DEFERRED store-installed module '{module}': {reason}"),
+                // The SAME existence check boot's own gate applies below — so the projection can
+                // never hand the gate a generation the gate would then skip, leaving the module
+                // absent when an older one is sitting right there.
+                entry => ModuleActivationBoot.LandedModuleDllExists(moduleRoot, entry),
+                (module, reason) => Console.Error.WriteLine(
+                    $"[ModuleSet] DEGRADED module '{module}': {reason}"));
             var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
                 moduleAssemblies,
                 activationOnMeshSet,

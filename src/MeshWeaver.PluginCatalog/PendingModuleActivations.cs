@@ -212,9 +212,17 @@ public sealed class PendingModuleActivations(string moduleRoot)
         // has not completed (a restart would not load it — a promise no restart can keep, the exact
         // false prompt the held-entry and missing-bytes rules exist to prevent), and it is what let
         // a pod 90 minutes behind answer Healthy in the first place.
-        var sets = ModuleSetStore.Read(ModuleRootPath, reason => corrupt ??= reason);
-        if (corrupt is not null)
-            return new ModuleActivationReport([], corrupt);
+        // 🚨 The set store's reports are NOT verdicts, and folding them into UndeterminedReason
+        // would make them into one. `ModuleSetStore.Read` reports a deterministically-RESOLVED
+        // conflict (two replicas proposed one sequence; every reader picks the same set) and a
+        // single unreadable record (skipped, the rest stand) through the same channel — both are
+        // handled conditions with a valid index behind them. Even the one genuinely blind case, a
+        // directory that cannot be listed, answers `Empty`, which projects as the IDENTITY: this
+        // pod then reports exactly what it reported before #3395, which is an answer, not an
+        // absence of one. So the notes go on the mesh-set LINE, where an operator sees them, and
+        // the verdict stays what the activation record supports.
+        var setNotes = new List<string>();
+        var sets = ModuleSetStore.Read(ModuleRootPath, setNotes.Add);
 
         var deferred = ImmutableList.CreateBuilder<PendingModuleActivation>();
         var onMeshSet = ModuleActivationBoot.ProjectOntoMeshSet(
@@ -225,7 +233,10 @@ public sealed class PendingModuleActivations(string moduleRoot)
                 activation.Entries.FirstOrDefault(e =>
                     string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase))?.PackagePath,
                 activation.Entries.FirstOrDefault(e =>
-                    string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase))?.Version)));
+                    string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase))?.Version)),
+            // The same existence check boot passes, so this report describes the set boot would
+            // actually load rather than the one on paper.
+            LandedDllExists);
 
         return new ModuleActivationReport(
             ModuleActivationStatus.NotYetLoaded(
@@ -237,7 +248,8 @@ public sealed class PendingModuleActivations(string moduleRoot)
                 ModulePlatformFloor.DeclineReason, LandedDllExists))
         {
             Deferred = deferred.ToImmutable(),
-            MeshModuleSet = ModuleSetStore.Describe(sets),
+            MeshModuleSet = ModuleSetStore.Describe(sets)
+                + (setNotes.Count > 0 ? " — " + string.Join("; ", setNotes) : string.Empty),
         };
     }
 

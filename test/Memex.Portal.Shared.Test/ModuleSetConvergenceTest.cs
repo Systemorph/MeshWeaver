@@ -249,6 +249,97 @@ public class ModuleSetConvergenceTest : IDisposable
             "the generation the mesh's module set pins was reclaimed — every replica is running it");
     }
 
+    /// <summary>
+    /// 🚨 The one degradation, and it is REPORTED. If the generation the mesh's set pins is not on
+    /// the volume — a pod on the PREVIOUS platform build sweeping by the entries alone during this
+    /// change's own rollout, a manual deletion, a partial restore — the two candidates are "run the
+    /// generation the entry names" and "run nothing", and running nothing is the WORSE half of
+    /// #3395: a missing module is what turns a healthy NodeType into a failed one. So it falls back
+    /// and says so, rather than handing boot's own existence gate a generation it would then skip.
+    /// </summary>
+    [Fact]
+    public async Task WhenTheSetsGenerationIsGone_ItFallsBackToTheEntryAndSaysSo()
+    {
+        await LandWave(ModuleA);
+        var pinned = ModuleSetStore.Read(root).Proposed!.Generations[ModuleA];
+
+        // A newer generation lands and is not proposed; then the pinned one is reclaimed.
+        await Land(ModuleA);
+        Directory.Delete(Path.Combine(root, "modules", pinned), recursive: true);
+
+        var degraded = new List<(string Module, string Reason)>();
+        var projected = ModuleActivationBoot.ProjectOntoMeshSet(
+            ModuleActivationSidecar.Read(root),
+            ModuleSetStore.Read(root).Proposed,
+            onDeferred: null,
+            landedDllExists: entry => ModuleActivationBoot.LandedModuleDllExists(root, entry),
+            onSetGenerationMissing: (module, reason) => degraded.Add((module, reason)));
+
+        var entry = Assert.Single(projected.Entries);
+        Assert.NotEqual(pinned, entry.Directory);
+        Assert.True(ModuleActivationBoot.LandedModuleDllExists(root, entry));
+        Assert.Equal(ModuleA, Assert.Single(degraded).Module);
+        Assert.Contains("whose bytes are NOT on the volume", degraded[0].Reason);
+    }
+
+    /// <summary>
+    /// 🚨 A LEGACY fixed-folder entry — one with no <c>Directory</c>, resolving to
+    /// <c>modules/&lt;name&gt;/</c> — names no generation, so <c>GenerationsOf</c> excludes it by
+    /// design and the set can say nothing about it. Asking "does the set name it?" would therefore
+    /// DEFER it, i.e. silently disable every such module on every deployment that still has one.
+    /// It must pass through, exactly as a disabled entry does. (Copilot review, #3444.)
+    /// </summary>
+    [Fact]
+    public async Task ALegacyFixedFolderEntry_IsNeverDeferredByTheMeshSet()
+    {
+        await LandWave(ModuleA);
+
+        // The pre-generation shape: an entry with no Directory, bytes in modules/<name>/.
+        Directory.CreateDirectory(Path.Combine(root, "modules", ModuleB));
+        File.WriteAllBytes(Path.Combine(root, "modules", ModuleB, ModuleB + ".dll"), [0x4D, 0x5A]);
+        ModuleActivationSidecar.WriteEntry(root, new ModuleActivationEntry { Name = ModuleB });
+
+        var deferred = new List<string>();
+        var projected = ModuleActivationBoot.ProjectOntoMeshSet(
+            ModuleActivationSidecar.Read(root),
+            ModuleSetStore.Read(root).Proposed,
+            (module, _) => deferred.Add(module),
+            entry => ModuleActivationBoot.LandedModuleDllExists(root, entry));
+
+        Assert.Empty(deferred);
+        var legacy = Assert.Single(projected.Entries, e => e.Name == ModuleB);
+        Assert.Null(legacy.Directory);
+        Assert.Contains(
+            ModuleActivationBoot.ComputeEffectiveModuleEntries(
+                baselineEntries: null, projected, ModulePlatformFloor.DeclineReason,
+                entry => ModuleActivationBoot.LandedModuleDllExists(root, entry)),
+            m => m.Landed?.Name == ModuleB);
+    }
+
+    /// <summary>
+    /// 🚨 A deterministically-RESOLVED set conflict is a handled condition with a valid index
+    /// behind it, not an absence of evidence. Folding the store's notes into
+    /// <c>UndeterminedReason</c> would make the whole activation report — and the health check
+    /// reading it — go unknown for a state every replica resolves identically. The notes belong on
+    /// the mesh-set line. (Copilot review, #3444.)
+    /// </summary>
+    [Fact]
+    public async Task AResolvedSetConflict_IsReportedWithoutMakingTheStateUndetermined()
+    {
+        await LandWave(ModuleA);
+        var landed = ModuleActivationSidecar.Read(root);
+        await Land(ModuleB);
+        var rival = ModuleSetStore.Propose(root, ModuleActivationSidecar.Read(root), "replica-2")!;
+        WriteRivalProposalAtSameSequence(rival.Sequence, landed);
+
+        var report = new PendingModuleActivations(root).Read(
+            loadedAssemblyNames: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            loadedModuleGenerations: ImmutableDictionary<string, string>.Empty);
+
+        Assert.False(report.IsUndetermined);
+        Assert.Contains("proposed by more than one replica", report.MeshModuleSet);
+    }
+
     // ───────────────────────────────────────────────────────────── harness
 
     /// <summary>Lands one module through the REAL landing service — a fresh generation plus the
@@ -279,7 +370,11 @@ public class ModuleSetConvergenceTest : IDisposable
     {
         var persisted = ModuleActivationSidecar.Read(root);
         var sets = ModuleSetStore.Read(root);
-        var onMeshSet = ModuleActivationBoot.ProjectOntoMeshSet(persisted, sets.Proposed);
+        var onMeshSet = ModuleActivationBoot.ProjectOntoMeshSet(
+            persisted,
+            sets.Proposed,
+            onDeferred: null,
+            landedDllExists: entry => ModuleActivationBoot.LandedModuleDllExists(root, entry));
         var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
             baselineEntries: null,
             onMeshSet,

@@ -122,6 +122,16 @@ ModuleSetStore.RecordAdoption(...)                // AFTER the install — see b
 - A **disabled** entry passes through untouched. An uninstall deletes the folder, so honouring it is
   not optional and never waits for a set.
 
+🚨 **One degradation, and it is reported.** The set can only pin what is on the volume. If the pinned
+generation's bytes are gone — a replica on the PREVIOUS platform build sweeping by the entries alone
+during this change's own rollout, a manual deletion, a partial restore — the two candidates are "run
+the generation the entry names" and "run nothing", and running nothing is the *worse* half of #3395:
+a missing module is what turns a healthy NodeType into a failed one. So the projection falls back to
+the entry and says so on its own channel (`onSetGenerationMissing`, separate from the deferred one,
+because that one means "running on no replica" and this module IS running). The next completed wave
+re-proposes a set whose bytes exist, and the state is unreachable once every replica sweeps with the
+GC change below.
+
 A deployment with **no** set records — every deployment until its first wave after this change —
 gets the list back unchanged. Pre-#3395 behaviour, byte for byte, is the migration path; the first
 completed wave proposes sequence 1 and the mechanism starts.

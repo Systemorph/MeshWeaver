@@ -469,22 +469,47 @@ public static class ModuleActivationBoot
     ///     wave proposes. Adopting it would be exactly the independent per-replica pin this
     ///     exists to remove, and adopting HALF a wave is the torn set.</item>
     ///   <item>A DISABLED entry passes through untouched. An uninstall deletes the folder, so
-    ///     honouring it is not optional and never waits for a set.</item>
+    ///     honouring it is not optional and never waits for a set. So does an entry with NO
+    ///     GENERATION — the legacy fixed <c>modules/&lt;name&gt;/</c> folder, which
+    ///     <see cref="ModuleSetStore.GenerationsOf"/> excludes by design because there is nothing
+    ///     to pin; deferring it would silently disable it.</item>
     /// </list>
     ///
     /// <para>A null <paramref name="meshSet"/> — a deployment on which no landing wave has ever
     /// completed, which is every deployment until the first wave after this change — returns the
     /// list UNCHANGED. Pre-#3395 behaviour, byte for byte, is the migration path.</para>
+    ///
+    /// <para>🚨 <b>One degradation, loud and deliberate: a set generation whose BYTES ARE GONE.</b>
+    /// The set can only pin what is on the volume, and the GC that could take it away is fixed in
+    /// the same change (the modules GC now counts the set's
+    /// generations as referenced). What remains is what no rule here controls — a pod still running
+    /// the PREVIOUS platform build sweeping by the entries alone during this change's own rollout, a
+    /// manual deletion, a partial volume restore. In that state the two candidates are "run the
+    /// generation the entry names" and "run nothing", and running nothing is the WORSE half of the
+    /// very defect this exists to fix: a missing module is what turns a healthy NodeType into a
+    /// failed one. So it falls back to the entry, reports it through
+    /// <paramref name="onDeferred"/>, and the next completed wave re-proposes a set whose bytes
+    /// exist. It is a REPORTED degradation, never a silent one, and it is unreachable once every
+    /// replica sweeps with this build.</para>
     /// </summary>
     /// <param name="landed">The activation record as <see cref="ModuleActivationSidecar.Read"/>
     /// answered it.</param>
     /// <param name="meshSet">The mesh's module set — <see cref="ModuleSetIndex.Proposed"/>.</param>
-    /// <param name="onDeferred">The loud channel for a landed-but-unproposed entry: (module name,
-    /// reason).</param>
+    /// <param name="onDeferred">The loud channel for a landed-but-UNPROPOSED entry: (module name,
+    /// reason). Exactly one meaning, so a surface can render it as one state.</param>
+    /// <param name="landedDllExists">Whether an entry's landed DLL is on the volume — production
+    /// passes <see cref="LandedModuleDllExists"/>, the SAME check boot's own gate applies. Null
+    /// skips the check entirely, which is the pure form this stays testable in.</param>
+    /// <param name="onSetGenerationMissing">The loud channel for the degradation above — the set's
+    /// generation is not on the volume and the entry's is used instead: (module name, reason).
+    /// SEPARATE from <paramref name="onDeferred"/> deliberately: that one means "running on no
+    /// replica", and this module IS running, just possibly not what the set says.</param>
     public static ModuleActivationList ProjectOntoMeshSet(
         ModuleActivationList landed,
         ModuleSet? meshSet,
-        Action<string, string>? onDeferred = null)
+        Action<string, string>? onDeferred = null,
+        Func<ModuleActivationEntry, bool>? landedDllExists = null,
+        Action<string, string>? onSetGenerationMissing = null)
     {
         ArgumentNullException.ThrowIfNull(landed);
         if (meshSet is null)
@@ -493,7 +518,15 @@ public static class ModuleActivationBoot
         var projected = ImmutableList.CreateBuilder<ModuleActivationEntry>();
         foreach (var entry in landed.Entries)
         {
-            if (!entry.Enabled || string.IsNullOrWhiteSpace(entry.Name))
+            // 🚨 An entry with NO GENERATION is the legacy fixed folder `modules/<name>/`, and a set
+            // has nothing to say about it: `ModuleSetStore.GenerationsOf` excludes it BY DESIGN
+            // (there is no `<name>@<id>` to pin), so asking whether the set names it would defer —
+            // i.e. silently DISABLE — every such module on every deployment that still has one.
+            // It passes through for the same reason a disabled entry does: this projection chooses
+            // between generations, and where there are none to choose between it must not choose.
+            if (!entry.Enabled
+                || string.IsNullOrWhiteSpace(entry.Name)
+                || string.IsNullOrWhiteSpace(entry.Directory))
             {
                 projected.Add(entry);
                 continue;
@@ -501,9 +534,26 @@ public static class ModuleActivationBoot
 
             if (meshSet.Generations.TryGetValue(entry.Name, out var generation))
             {
-                projected.Add(string.Equals(entry.Directory, generation, StringComparison.Ordinal)
-                    ? entry
-                    : entry with { Directory = generation });
+                if (string.Equals(entry.Directory, generation, StringComparison.Ordinal))
+                {
+                    projected.Add(entry);
+                    continue;
+                }
+
+                var onSet = entry with { Directory = generation };
+                if (landedDllExists is null || landedDllExists(onSet))
+                {
+                    projected.Add(onSet);
+                    continue;
+                }
+
+                onSetGenerationMissing?.Invoke(entry.Name,
+                    $"the mesh's module set {meshSet.Sequence} ('{meshSet.Id}') pins generation "
+                    + $"'{generation}', whose bytes are NOT on the volume — running '{entry.Directory}' "
+                    + "instead, which may differ from what other replicas run until the next landing "
+                    + "wave proposes a set whose bytes exist. A module that is simply ABSENT is the "
+                    + "worse half of #3395: it is what turns a healthy NodeType into a failed one.");
+                projected.Add(entry);
                 continue;
             }
 
