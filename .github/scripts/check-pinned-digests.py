@@ -106,8 +106,16 @@ ASSIGN_RE = re.compile(
 )
 
 # Shape 2 — a shell assignment whose key is pin-shaped, e.g. `image-digest=sha256:…`.
+#
+# 🚨 IT MATCHES AN ATTEMPTED DIGEST, NOT A WELL-FORMED ONE. Requiring `[0-9a-f]{64}` here made the
+# vacuity guard below a promise this shape did not keep: `image-digest=sha256:PLACEHOLDER` matched
+# NOTHING and read as "no pin present" — in the exact shape MeshWeaver.SocialMedia and
+# MeshWeaver.Crm write their tester pin, so two of the six pinning repositories were exempt from
+# the guard while the docstring said none were. Measured 2026-09-06 while building
+# check-pin-set-consistency.py (MeshWeaver#3454), whose first draft reproduced the same hole.
+# Classification into pin / MALFORMED happens once, below, for both shapes.
 OUTPUT_RE = re.compile(
-    r"(?P<name>[A-Za-z_][A-Za-z0-9_.-]*)=(?P<quote>['\"]?)(?P<value>sha256:[0-9a-f]{64})(?P=quote)"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_.-]*)=(?P<quote>['\"]?)(?P<value>sha256:[^\s'\"]*)(?P=quote)"
 )
 
 # Shape 3 — an image reference that binds an ACR repository to a digest, either literally or
@@ -345,10 +353,15 @@ def extract(gh_repo: str, filename: str, text: str) -> tuple[list[Pin], list[Mal
     # Shape 2 — a step output. `>> "$GITHUB_OUTPUT"` makes it an env value for later jobs, so it is
     # a pin in every sense that matters; it is simply not visible to a scan of `env:` blocks.
     for match in OUTPUT_RE.finditer(text):
-        name = match.group("name")
+        name, value = match.group("name"), match.group("value")
         if not PIN_NAME_RE.search(name):
             continue
-        add(f"{filename}:{name}", match.group("value"), candidates(name))
+        if DIGEST_RE.fullmatch(value):
+            add(f"{filename}:{name}", value, candidates(name))
+        else:
+            # Same verdict as the `env:` shape above, for the same reason: a pin-shaped name whose
+            # value ATTEMPTS to be a digest and is not one is a defect, never an absence.
+            malformed.append(Malformed(gh_repo, f"{filename}:{name}", value))
 
     return pins, malformed
 
@@ -600,6 +613,8 @@ jobs:
       - id: pin
         run: |
           echo "image-digest=sha256:d91d333f19f5b42d59fa76004b6904d5ff46a0d30952e6b854f9505e2c5cdd0d" >> "$GITHUB_OUTPUT"
+          echo "bake-image-digest=sha256:PLACEHOLDER" >> "$GITHUB_OUTPUT"
+          echo "image-digest=$RESOLVED" >> "$GITHUB_OUTPUT"
           echo "digest: $SOME_SHELL_VARIABLE"
       - env:
           BAKE_IMAGE: meshweaver.azurecr.io/mw-plugin-test@${{ env.MW_TEST_DIGEST }}
@@ -645,6 +660,11 @@ def self_test() -> int:
         failures.append("MISSING malformed: sha256:PLACEHOLDER read as an absence, not a defect")
     if not any(m.where == "ci.yml:MW_SHORT_DIGEST" for m in malformed):
         failures.append("MISSING malformed: a truncated digest accepted as well-formed")
+    # …and in the $GITHUB_OUTPUT shape too. Covering only the `env:` shape exempted SocialMedia and
+    # Crm — the two repositories that write their tester pin as a step output — from the guard
+    # entirely, while this self-test reported it proven (MeshWeaver#3454, 2026-09-06).
+    if not any(m.where == "ci.yml:bake-image-digest" for m in malformed):
+        failures.append("MISSING malformed: a placeholder in a $GITHUB_OUTPUT read as an absence")
 
     # …and stays silent on the four things that legitimately are not pins. The last two are what
     # keep a NIGHTLY sweep from crying wolf: the text scan reads `run:` shell and nested mappings
@@ -657,6 +677,8 @@ def self_test() -> int:
         failures.append("FALSE POSITIVE: a `${{ … }}` forward is neither a pin nor a defect")
     if any(m.value.startswith("$") for m in malformed):
         failures.append("FALSE POSITIVE: `digest: $SHELL_VARIABLE` inside a run: block")
+    if any(m.value.startswith("$") or m.value == "" for m in malformed):
+        failures.append("FALSE POSITIVE: a $GITHUB_OUTPUT carrying a resolved shell variable")
     if any(not m.value for m in malformed):
         failures.append("FALSE POSITIVE: a key whose value is the nested block beneath it")
 
