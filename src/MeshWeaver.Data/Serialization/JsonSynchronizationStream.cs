@@ -776,9 +776,27 @@ public static class JsonSynchronizationStream
                                 // along so the carrier below can tell a still-draining teardown
                                 // from a fresh one.
                                 if (isTransient)
+                                {
                                     rejectedByRecycle.OnNext(new RecycleRejection(
                                         "re-ask was itself rejected while the owner was still shutting down",
                                         tag));
+                                    return;
+                                }
+                                // 🚨 Everything else is a VERDICT about the owner, exactly as it is on the
+                                // initial SubscribeRequest above: NotFound says the address does not
+                                // exist (the node was deleted — the delete's own change-feed event is
+                                // what latched this re-ask), Failed says the owner broke. Until #3498
+                                // this arm logged the verdict and dropped it: no OnError, no teardown,
+                                // so the stream parked with no value and no error while its heartbeat
+                                // kept posting to the deleted owner every interval, and a reader of the
+                                // deleted node waited out its whole budget ("never reported the node gone
+                                // within 20s" — CD 7946, MeshPluginTest.FullCrudWorkflow) although the
+                                // authoritative NotFound had been in the log 0.1 s after the delete.
+                                // Only ShuttingDown is a promise to ride out (RidingOutAShuttingDownAddress);
+                                // a verdict faults the subscribers and stops the keep-alive, so the reader
+                                // learns "gone" now and re-asks fresh if the node ever comes back.
+                                reduced.OnError(ex);
+                                keepAlive.Dispose();
                             });
                 }
             }

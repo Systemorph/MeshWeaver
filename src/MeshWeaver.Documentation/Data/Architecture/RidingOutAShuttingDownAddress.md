@@ -204,3 +204,30 @@ If you write code that must survive a `ShuttingDown` answer:
 - [Error Propagation & Wedges](../ErrorPropagationAndWedges) — the wedge classes a mis-classified failure produces
 - [MeshNode Stream Cache](../MeshNodeStreamCache) — the transient-fault breaker that must never cache this one
 - [Debugging Message Flow](../DebuggingMessageFlow) — read this before re-running a timed-out test
+
+## A re-ask's verdict is a verdict too (#3498)
+
+The contract above has two arms in `JsonSynchronizationStream`, and until #3498 they disagreed. The
+INITIAL `SubscribeRequest` treats every classification but `ShuttingDown` as terminal: the subscribers
+are faulted with the error and the keep-alive (heartbeat + change-feed resubscribe) is disposed, so a
+stream opened on an absent path stops at once and re-asks fresh only if the node later appears. The
+RE-ASK arm — the one the change-feed latch and the recycle ride-out use — pushed a `ShuttingDown` back
+through the re-arm carrier, and logged everything else as `resubscribe failed`, cleared its in-flight
+flag, and did nothing more. No `OnError`, no teardown.
+
+That is the shape CD run 7946 died on (`MeshPluginTest.FullCrudWorkflow_CreateGetUpdateDelete`,
+*"never reported the node gone within 20s"*): the delete's own change-feed event latched a re-ask on
+the reader's cached stream, routing answered the authoritative `NotFound` 0.1 s after the delete, the
+arm logged it and dropped it, the heartbeat kept posting to the deleted owner every interval (the second
+`NotFound` five seconds later is that heartbeat), and the reader waited out its whole budget for an
+answer that was already in the log. It is #1029's silence on the door #1029 did not close, and it is
+intermittent only because the owner's own teardown notice usually reaches the reader before the
+change-feed event latches the re-ask.
+
+Since #3498 the re-ask arm mirrors the initial one: `ShuttingDown` is still the promise it rides out;
+any other classification faults the stream's subscribers with the classified error and disposes the
+keep-alive. A reader of a deleted node learns "gone" milliseconds after the delete, and a stream never
+parks with no value and no error. `AReAsksNotFoundIsAVerdictTest` pins the sequence with the framework's
+own parts: an initial subscribe refused by a real corpse (so the carrier re-asks), the re-ask answered
+with routing's `NotFound`, and the fault required within the convergence budget — unfixed, nothing else
+in that mesh can ever emit on the stream, so the test is red by construction rather than by chance.
