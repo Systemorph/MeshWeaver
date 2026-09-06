@@ -1892,6 +1892,18 @@ jobs:
     - name: "Every PR-reachable secret is asserted by a preflight"
       run: python3 .github/scripts/check-pr-secret-preflight.py --root .
 
+    # 🚨 The fleet pins platform images BY DIGEST, and ACR retention deletes what is pinned
+    # (MeshWeaver#3438: three satellite repos dead at `manifest unknown` at once, Education's own
+    # nightly among them). pinned-digests.yml sweeps the live registry on a schedule; that lane
+    # needs credentials, so it cannot run on a pull request — this is where the EXTRACTOR is proven
+    # instead. The self-test asserts all three shapes the fleet writes a pin in (an `env:`
+    # assignment, a `$GITHUB_OUTPUT` step output, an inline image reference), that a NON-HEX
+    # placeholder digest is a FAILURE rather than an absence — the `check-platform-pins.py` hole,
+    # where a loose `sha256:[0-9a-f]+` reads `sha256:PLACEHOLDER` as "no pin here" and passes — and
+    # that a git sha and a `${{ … }}` forward stay silent. An unproven gate is no gate.
+    - name: "Every fleet image pin is extractable — the gate can fail (self-test)"
+      run: python3 .github/scripts/check-pinned-digests.py --self-test
+
     # 🚨 THE GAP actionlint CLOSES (MeshWeaver#3228): every check above reads a workflow with
     # `yaml.safe_load`, and **PyYAML accepts a duplicate mapping key and silently keeps the last
     # one**. So a STRUCTURAL defect — the kind GitHub itself refuses — parses cleanly here, every
