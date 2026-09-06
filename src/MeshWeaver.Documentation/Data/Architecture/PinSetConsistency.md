@@ -169,6 +169,24 @@ The lesson generalises past this gate: **falsify against real production input, 
 fixture you wrote.** A fixture carries the shapes you already thought of; the fleet carries the one
 you did not.
 
+## 🚨 Where the extractor stops — an OMITTED input is invisible
+
+I3 compares LITERALS. A lane call that **omits** `platform-ref:` entirely takes the lane's own
+default, which is `main` — a floating ref, and the very thing the lane's documentation warns about
+("`main` floats and makes two runs of identical code able to disagree"). There is no literal to
+compare, so the gate says nothing.
+
+That is not a hypothetical corner. Measured 2026-09-06: MeshWeaver.SocialMedia's `validate`,
+`tag-modules` and `compile-check` calls carry no `with:` block at all, so all three run core's
+scripts at whatever `main` is at the instant the step executes, while the `uses:` refs are pinned.
+An *explicit* `platform-ref: main` against a pinned lane is **red** here; the same thing written by
+omission is **silent**. The asymmetry is real and it is not defended — it is recorded so the next
+reader does not mistake a green verdict for a claim about the calls that pass nothing.
+
+Closing it means deciding whether an omitted `platform-ref` is a defect at all, which is a policy
+question about the lane's default, not about this gate. Whoever answers it changes the lane's
+default or makes the input required; the gate then sees the literal like any other.
+
 ## What it never reads
 
 `.github/workflows/*.yml` and nothing else — structurally, not by an exclusion rule anyone has to
