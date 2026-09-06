@@ -844,3 +844,58 @@ public class CreateNodePermissionAttribute() : RequiresPermissionAttribute(Permi
         yield return (hubPath, permission);
     }
 }
+
+/// <summary>
+/// The bridge between a failed <see cref="CreateNodeResponse"/> and the exception the
+/// <c>IObservable&lt;MeshNode&gt;</c> create contract throws.
+///
+/// <para>🚨 <b>The typed reason used to be discarded at that boundary.</b> Both
+/// <c>MeshService.CreateNode</c> and <c>HubNodePersistence.CreateNode</c> mapped
+/// <see cref="NodeCreationRejectionReason.NodeAlreadyExists"/> to a bare
+/// <see cref="InvalidOperationException"/> carrying the reason only in its MESSAGE — so every
+/// caller that needed to tell "this path is already taken" from "validation failed" had to parse
+/// English. `MeshNodeExtensions.IsAlreadyExistsRace` does exactly that, and matches
+/// <c>"Node already exists:"</c> — which silently misses the third producer's wording,
+/// <c>"Node already exists at path:"</c> (MeshExtensions). Two of three.</para>
+///
+/// <para>The reason now rides on <see cref="Exception.Data"/> under
+/// <see cref="RejectionReasonKey"/>, so classification is typed. The message check remains as a
+/// fallback for any producer that throws directly, and is deliberately prefix-only so it covers
+/// BOTH wordings.</para>
+/// </summary>
+public static class NodeCreationFailure
+{
+    /// <summary>Key under which <see cref="CreateNodeResponse.RejectionReason"/> is carried on
+    /// <see cref="Exception.Data"/>.</summary>
+    public const string RejectionReasonKey = "MeshWeaver.NodeCreationRejectionReason";
+
+    /// <summary>
+    /// The exception for a failed create, with the typed reason attached. One place, so the two
+    /// create surfaces cannot drift in either the mapping or the stamping.
+    /// </summary>
+    public static Exception ToException(this CreateNodeResponse response, string path)
+    {
+        Exception ex = response.RejectionReason switch
+        {
+            NodeCreationRejectionReason.ValidationFailed =>
+                new UnauthorizedAccessException(response.Error ?? "Access denied"),
+            NodeCreationRejectionReason.NodeAlreadyExists =>
+                new InvalidOperationException($"Node already exists: {path}"),
+            _ => new InvalidOperationException(response.Error ?? "Node creation failed")
+        };
+        ex.Data[RejectionReasonKey] = response.RejectionReason;
+        return ex;
+    }
+
+    /// <summary>
+    /// Whether a create failed because the path was already taken — typed first, message second.
+    ///
+    /// <para>The prefix is <c>"Node already exists"</c> without a colon ON PURPOSE: the producers
+    /// word it two ways (<c>"…: {path}"</c> and <c>"…at path: {path}"</c>) and a caller classifying
+    /// this must not depend on which one it met.</para>
+    /// </summary>
+    public static bool IsNodeAlreadyExists(this Exception ex)
+        => (ex.Data[RejectionReasonKey] is NodeCreationRejectionReason reason
+            && reason == NodeCreationRejectionReason.NodeAlreadyExists)
+           || ex.Message.StartsWith("Node already exists", StringComparison.Ordinal);
+}
