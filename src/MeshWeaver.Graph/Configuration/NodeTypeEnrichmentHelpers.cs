@@ -529,9 +529,12 @@ internal static class NodeTypeEnrichmentHelpers
                     && d.CompilationStatus == CompilationStatus.Ok
                     && (string.IsNullOrEmpty(d.LatestAssemblyCollection)
                         || string.IsNullOrEmpty(d.LatestAssemblyPath))
+                        // THE Pending door (#3390): the self-heal dispatches against the live
+                        // inputs, so it records them — an unstamped flip made every release
+                        // request arriving during the heal park and re-fire, compiling twice.
                         ? curr with
                         {
-                            Content = d with { CompilationStatus = CompilationStatus.Pending }
+                            Content = NodeTypeCompilationHelpers.DispatchPending(d, meshHub)
                         }
                         : curr)))
             .Subscribe(
@@ -1504,7 +1507,8 @@ internal static class NodeTypeEnrichmentHelpers
                             is { CompilationStatus: CompilationStatus.Ok } cdef)
                         return curr with
                         {
-                            Content = cdef with { CompilationStatus = CompilationStatus.Pending }
+                            // THE Pending door (#3390) — same reason as the sibling stale-Ok heal.
+                            Content = NodeTypeCompilationHelpers.DispatchPending(cdef, meshHub)
                         };
                     return curr;
                 }))
