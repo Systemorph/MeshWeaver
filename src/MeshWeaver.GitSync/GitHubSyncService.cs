@@ -691,6 +691,17 @@ public sealed class GitHubSyncService
             problem = $"Failed to parse '{path}': {ex.Message} — file skipped.";
         });
         if (parsed is null) return Observable.Return(((MeshNode?)null, false, problem));
+        // #3474 — the repo→mesh half of the NodeType content ownership rule, at the seam where a
+        // repo file becomes a node: the file's MESH-OWNED compile bookkeeping never enters the
+        // mesh. An UPDATE keeps the live node's values regardless (PreserveLiveOperational); a
+        // CREATE has no live node, and until this line a first import wrote the file's verdict
+        // verbatim as the type's initial live state — a repo whose files predate the export strip
+        // (SerializeAll → StripOperational) is exactly the case the export side cannot reach.
+        // 🚨 This line also covers the STATIC-REPO path: ParseSnapshot builds the nodes an
+        // InMemoryStaticRepoSource serves (the serveFromPartition partitions — Agent, Model,
+        // Harness, Skill) by mapping every file through THIS method. Split the two and that path
+        // silently regains the file's verdict, with no test near it.
+        parsed = NodeTypeOperationalContent.WithoutOperational(parsed, hub.JsonSerializerOptions);
         if (isRoot)
         {
             var root = parsed with

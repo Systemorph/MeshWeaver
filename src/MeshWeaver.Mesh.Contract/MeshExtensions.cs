@@ -5233,7 +5233,10 @@ public static class MeshExtensions
     private static MeshNode UpdateAccordingToSourceNode(
         MeshNode state, MeshNode sourceNode, JsonSerializerOptions options)
     {
-        if (state is null) return sourceNode;
+        // A create is an import too: with no live state there is no operational value to prefer,
+        // so the source's embedded compile verdict is dropped rather than written as the type's
+        // initial live state (NodeTypeOperationalContent.PreserveLiveOperational, live: null).
+        if (state is null) return NodeTypeOperationalContent.WithoutOperational(sourceNode, options);
         sourceNode = PreserveMeshOwnedOperational(state, sourceNode, options);
         return state with
         {

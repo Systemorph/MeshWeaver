@@ -674,6 +674,28 @@ completely silent: nothing anywhere named a NodeType that is broken and will not
 > token that happened to match the importing deployment's live inputs would suppress precisely the
 > retry it exists to grant.
 
+> 🚨 **A CREATE is an import too.** The ownership rule (`NodeTypeOperationalContent`) used to run
+> only inside the owner's *update* merge, and the installer's bulk path writes to persistence with
+> no merge at all — so a type definition created from a file (a package installed into a fresh
+> mesh, a first import) landed with the file's embedded verdict as its INITIAL live state. Measured
+> 2026-09-06 (#3474): MeshWeaver.Plugins' node files, last written by GitSync before the export
+> strip existed, carried `compilationStatus: Ok`, a foreign `compiledFrameworkVersion` and
+> `latestAssemblyPath`, and for Store a standing `requestedReleaseForce: true`. Every fresh
+> disposable mesh framework-stale-kicked Store's core types into a FORCED live-source compile at
+> boot (#2824 honours the flag off the node), the boot sweep then adopted the shipped prebuilt over
+> that compile, and every `Edu/Exercise` instance came up bound to a foreign assembly path and never
+> answered. Now the two repo→mesh importers strip it where a repo file becomes a node — the
+> installer's `AsAuthored` (every package file, both parse sites) and GitSync's `ParseFile`
+> (every imported repo file, AND the static-repo snapshot: `ParseSnapshot` builds the nodes an
+> `InMemoryStaticRepoSource` serves for the `serveFromPartition` partitions by mapping every
+> file through `ParseFile`, so that path is covered only for as long as the two stay joined) — and
+> `PackageInstaller.BulkSave` and `PreserveLiveOperational(incoming, live: null)` strip as well:
+> with no live node there is nothing to prefer, and the operational members are ABSENT until this
+> mesh writes them. 🚨 Deliberately NOT in the owner's generic create handlers: an in-process
+> creator (a move, a restore, a test fixture) legitimately carries compile state, and the
+> file-backed persistence reads the mesh's OWN nodes back through the same parser registry —
+> the rule is about files that come from a repo, so it sits at the two seams where they enter.
+
 ### 🚨 An ADOPTED build must say whether it was ever checked against the source
 
 Adoption — taking a prebuilt assembly from a bundle instead of compiling — is what makes installs
