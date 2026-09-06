@@ -265,6 +265,31 @@ public class PatchAckTotalityTest
         h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null));
     }
 
+    /// <summary>
+    /// MeshWeaver#2543, CD 7937's bake host: thirteen stalls whose trails ended at PATCH_ECHO_SEEN with
+    /// no PATCH_FLUSH_SUBSCRIBED and an idle pool — the only code in between is this arm, and an
+    /// exception thrown in it ESCAPES the commit-echo subscription (Rx routes an onNext throw to the
+    /// producer, not to onError), so nothing is ever recorded or acked. Before this fix the throw
+    /// surfaced out of ArmPatchAckWatcher itself; now it is one NACK with the classified error and a
+    /// stage naming the exception.
+    /// </summary>
+    [Fact]
+    public void AFlushFactoryThatThrows_NacksOnceWithTheClassifiedError_AndNamesTheException()
+    {
+        using var h = new Harness();
+        var stages = new List<string>();
+        var subscribed = DataExtensions.ArmPatchAckWatcher<int>(
+            Observable.Return(42),
+            _ => throw new ObjectDisposedException("IServiceProvider", "the hub's lifetime scope is closed"),
+            FlushTimeout, h.AckOnce, h.Register, HubPath, () => false, logger: null, noteStage: stages.Add);
+        subscribed.Should().NotBeNull("the throw must not escape the watcher — it did, before this fix");
+        h.Acks.Should().ContainSingle().Which.Success.Should().BeFalse(
+            "a synchronous fault on the flush path is a NACK the writer can retry on — never silence");
+        stages.Should().ContainSingle(s => s.StartsWith("PATCH_FLUSH_FAULTED_SYNC building ObjectDisposedException"));
+        stages.Should().NotContain(s => s.StartsWith("PATCH_FLUSH_SUBSCRIBED"), "nothing was subscribed");
+    }
+
+
     /// <summary>A flush that faults AFTER the bound acked the commit must not re-verdict it: the gate
     /// is latched on the owner, so the fault is logged and the sampler stays the writer of record.</summary>
     [Fact]
