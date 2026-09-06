@@ -164,7 +164,11 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
             "Plugin update watcher: {Repo} built green at {Sha} ({Workflow} #{Run}) — checking installed modules.",
             build.RepositoryUrl, build.HeadSha, build.WorkflowName, build.RunNumber);
 
-        var source = PackageSources.FromRepo(hub, content.SourceRepoPath, content.SourceSubdir, logger, nodeRepo: true);
+        // The catalog node declares its own format; before #3384 this read `nodeRepo: true`
+        // unconditionally while the browse view read the same record as package.json.
+        var source = PackageSources.FromRepo(
+            hub, content.SourceRepoPath, content.SourceSubdir, logger,
+            nodeRepo: PackageSources.IsNodeRepoFormat(content.Format));
         if (source is null)
         {
             logger?.LogWarning(
