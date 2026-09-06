@@ -1837,6 +1837,20 @@ jobs:
     - name: "Every job is capped at 45 minutes"
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
 
+    # 🚨 A Dependabot run resolves `secrets.X` against a SECOND, SEPARATE store (Settings → Secrets
+    # and variables → **Dependabot**), which is a PARTIAL mirror of the Actions one — and there is no
+    # Dependabot *variables* store, so only `secrets.` is doubled. #3399 (a recurrence of #2249) had
+    # three satellite PRs red for six days on names sitting in plain sight on the Actions tab.
+    #
+    # The gate is STATIC and needs no credential: every `secrets.NAME` a pull-request-reachable job
+    # consumes must be asserted by a preflight, so an empty value is reported BY NAME at the first
+    # job instead of surfacing as, e.g., `compose-sealed-modules.sh: --registry-url needs
+    # --registry-key` eight minutes later (measured, MeshWeaver.Reinsurance#128). Self-test first.
+    - name: "Every PR-reachable secret is asserted by a preflight — the gate can fail (self-test)"
+      run: python3 .github/scripts/check-pr-secret-preflight.py --self-test
+    - name: "Every PR-reachable secret is asserted by a preflight"
+      run: python3 .github/scripts/check-pr-secret-preflight.py --root .
+
     # 🚨 THE GAP actionlint CLOSES (MeshWeaver#3228): every check above reads a workflow with
     # `yaml.safe_load`, and **PyYAML accepts a duplicate mapping key and silently keeps the last
     # one**. So a STRUCTURAL defect — the kind GitHub itself refuses — parses cleanly here, every

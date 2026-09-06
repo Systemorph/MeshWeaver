@@ -63,28 +63,65 @@ actively misleading on a Dependabot run.
 **No repository has a secret in the Dependabot store that is absent from Actions.** The mirror is
 always a subset — it drifts one way only, which is why nobody notices it drifting.
 
-### The raw diff is not the failure set
+### The raw diff is not the failure set — and neither is the preflight list
 
 Most of those secrets are consumed by push-only lanes (`publish-bake`, `tag-modules`) or by steps
-gated on `if: inputs.publish`, and are simply unused on a pull request. What actually reds a
-Dependabot PR is the intersection of the raw diff with **the set each repo's `preflight` asserts on
-a `pull_request` event** — and preflights here deliberately assert every input the *later lanes*
-consume, not only their own, so that a provisioning gap fails in one cheap job instead of twenty
-minutes into a bake:
+gated on `if: inputs.publish`, and are simply unused on a pull request. So the raw diff over-counts.
 
-| repo | asserted on a PR and missing from the Dependabot store | status |
+The first attempt at narrowing it intersected the raw diff with **the set each repo's `preflight`
+asserts**, and that denominator is wrong — it is the very defect this page documents, one level up.
+A preflight's list is hand-maintained and goes stale; a secret can be *consumed* by a pull-request
+job that no preflight ever asked about, and then the empty value surfaces deep in a later lane
+wearing a message that names no secret at all. Measured on MeshWeaver.Reinsurance#128 (run
+33354473532): `Required CI inputs` **passed**, and `compile-check` died one job later with
+
+```
+##[error]compose-sealed-modules.sh: --registry-url needs --registry-key
+```
+
+— an empty `secrets.MW_REGISTRY_KEY`. Using the preflight list as the denominator would have scored
+that run as *no gap*.
+
+The correct denominator is **what a pull-request-reachable job actually references**: every
+`secrets.NAME` in a job whose `if:` does not exclude a Dependabot pull request, including names the
+caller passes into a shared `workflow_call` lane. Measured that way on 2026-09-06 with
+`check-pr-secret-preflight.py --check-stores` (see below):
+
+| repo | consumed on a Dependabot PR and missing from the Dependabot store | status |
 |---|---|---|
 | MeshWeaver.Manufacturing | `ACR_USERNAME`, `ACR_PASSWORD`, `MW_REGISTRY_INSTANCE_KEY` | **measured red** — run 33357319017, `Required CI inputs` names all three |
-| MeshWeaver.SocialMedia | `REGISTRY_PUBLISH_TOKEN` | **measured red** — run 33354469022, `Secret source: Dependabot` in the same log |
-| MeshWeaver.Reinsurance | `MW_REGISTRY_KEY`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | **derived** from `main`'s preflight list × the store. Its one measured run (33354473532) predates that list and died one job later at `compile-check` with `compose-sealed-modules.sh: --registry-url needs --registry-key` — the same absent `MW_REGISTRY_KEY`, surfacing late and unrecognisably |
-| MeshWeaver.Crm | *none* | **control** — its preflight asserts exactly the four secrets its Dependabot store holds |
-| MeshWeaver.Education | *none* | **control** — PR-time preflight wants `MW_REGISTRY_USERNAME` + `MW_REGISTRY_PASSWORD`, both mirrored; its `AZURE_*` assertion lives in the push-only `publish-bake` |
-| MeshWeaver.Plugins | *none* — latent | preflight wants `MW_TEST_IMAGE` + `ACR_*`, all mirrored. `REGISTRY_PUBLISH_TOKEN` reaches `modules-floor`/`modules-rest`, whose publish step is `if: inputs.publish` (false on a PR) |
-| MeshWeaver | *none today* — **latent, and the store is empty** | `dotnet-test.yml`'s `shared-rules` and `cross-repo-pair` both assert `MESHWEAVER_APP_ID`/`MESHWEAVER_APP_PRIVATE_KEY`. They are exempted on the actor instead — see below |
-| Memex | not measured | store empty; no Dependabot PR open to measure against |
+| MeshWeaver.SocialMedia | `REGISTRY_PUBLISH_TOKEN`, `MW_REGISTRY_KEY` | `REGISTRY_PUBLISH_TOKEN` **measured red** (run 33354469022); `MW_REGISTRY_KEY` reaches `compile-check` and `test-repos` and no preflight asked for it |
+| MeshWeaver.Reinsurance | `MW_REGISTRY_KEY` | **measured red** at `compile-check` (above). Its `AZURE_*` triple was mirrored on 2026-09-06 |
+| MeshWeaver.Crm | `MW_REGISTRY_KEY` | **latent, not a control** — same `compile-check` / `test-repos` path as Reinsurance, same absent key. Its preflight does not assert it, which is why it looked clean |
+| MeshWeaver.Education | `MW_REGISTRY_KEY` | **latent** — the `e2e-*` jobs consume it whenever `changes.outputs.mesh` is true; its preflight asserts only the registry user/password |
+| MeshWeaver.Plugins | `REGISTRY_PUBLISH_TOKEN` | **latent** — passed into `modules-floor`/`modules-rest`, whose publish step is `if: inputs.publish` (false on a PR), so it is unused today and its emptiness is not yet fatal |
+| MeshWeaver | `MESHWEAVER_APP_PRIVATE_KEY` | **latent** — `auto-arm` and `merge-queue-steward` both run on a Dependabot PR and both assert the App credential. `dotnet-test.yml`'s two credentialed gates are actor-exempted instead (below) |
+| Memex | `MESHWEAVER_APP_PRIVATE_KEY` | **latent** — its `auto-arm` calls core's shared lane with the same pair |
 
-Crm and Education are the two controls that make the rest of the table credible: same shared
-workflows, same event, green — because their two stores agree.
+**There are no controls.** Under the correct denominator every repository in the fleet has or had a
+gap; Crm and Education only looked clean because their preflights were the *least* complete, which
+is the failure mode inverting the signal.
+
+### Two structural facts that shape any fix
+
+**There is no Dependabot *variables* store.** `GET /repos/{owner}/{repo}/dependabot/variables`
+answers 404; a Dependabot run reads ordinary repository variables. So `vars.X` is single-store and
+**only `secrets.X` is doubled** — which is why `vars.MW_TEST_IMAGE` resolves perfectly in the same
+run whose `secrets.ACR_USERNAME` is empty, and why a reader comparing the two concludes the
+workflow is broken. When a name has to be duplicated, check which namespace reads it.
+
+**No CI credential can read the Dependabot store.** The `permissions:` block has no `secrets` or
+`dependabot-secrets` key, so `GITHUB_TOKEN` cannot list either store; and the only GitHub App
+installed on the org (`meshweaver-cloud`, app id 4220566) holds `contents` / `metadata` /
+`pull_requests` only. A workflow that diffs the two stores therefore cannot exist today without a
+new credential.
+
+That matters less than it sounds, because **a name diff is the weaker instrument anyway**: no API
+returns a value, so a secret present with an EMPTY value is indistinguishable from a healthy one by
+name — and an empty value is exactly the failure mode this fleet has hit. The assertion that does
+catch it is the in-run one, `[ -n "${X:-}" ]`, which tests emptiness in whichever store *this event*
+resolves against. That is why the enforced gate below is static and credential-free, and the store
+diff is an operator command rather than a job.
 
 ## Why the answer is provisioning, not an actor exemption
 
@@ -136,8 +173,12 @@ remembering as the reason those two gates were exempted rather than fixed.
 ## The rule
 
 > **A secret that any `pull_request`-triggered lane requires is provisioned in BOTH stores.**
-> Adding a line to a preflight's `missing` array is a two-store act. There is no gate anywhere that
-> can see the second store, so nothing but this rule keeps them in step.
+> Adding a line to a preflight's `missing` array is a two-store act.
+>
+> **And every secret a pull-request-reachable job consumes is asserted by a preflight** — so that a
+> store gap is reported by NAME, in the first cheap job, instead of surfacing twenty minutes later
+> as a script complaining about an argument. This half is enforced (below); the first half cannot
+> be, because no CI credential can see the second store.
 
 That invisibility is why this recurred. #2249 (2026-08) was the same defect, closed after
 provisioning four names into two satellites. Since then Reinsurance added `MW_REGISTRY_KEY` and the
@@ -145,9 +186,53 @@ provisioning four names into two satellites. Since then Reinsurance added `MW_RE
 created — each into Actions only, each re-opening the hole, none visible to any review or gate.
 #3399 is the second occurrence.
 
-Two smaller things the audit surfaced, worth converging separately: the same credential is called
-`MW_REGISTRY_INSTANCE_KEY` in Manufacturing and `MW_REGISTRY_KEY` everywhere else, and core's and
-Memex's Dependabot stores are empty rather than partial.
+One smaller thing the audit surfaced, worth converging separately: the same credential is called
+`MW_REGISTRY_INSTANCE_KEY` in Manufacturing and `MW_REGISTRY_KEY` everywhere else.
+
+## The gate: every PR-reachable secret is asserted by a preflight
+
+`.github/scripts/check-pr-secret-preflight.py` is the enforced half of the rule. It is **static** —
+it reads workflow files, never a store — so it needs no credential and runs on every pull request in
+every repository.
+
+For each job that can run on a Dependabot `pull_request`, it collects every `secrets.NAME` the job
+references (including names the caller hands to a shared `workflow_call` lane) and requires that
+some pull-request-reachable job in the same repository binds that name to an env var and tests it
+with `[ -n "${NAME:-}" ]`. Deciding *"can this job run on a Dependabot PR"* is a three-valued
+evaluation of the job's `if:` against the facts of such a run: a condition that is provably false —
+`github.event_name == 'push'`, the `publish-bake` shape, `github.actor != 'dependabot[bot]'` — takes
+the job out; anything depending on run-time state (`needs.*`, `inputs.*`) is UNKNOWN and the job
+stays IN. Unknown means reachable, because a missed job is a missed gate.
+
+Where it runs:
+
+- **core** — two steps in `dotnet-test.yml`, beside `check-workflow-timeouts.py`: the self-test
+  first, then the tree.
+- **every satellite** — through `node-repo-validate.yml`, which fetches this script from the
+  platform at the caller's pinned `platform-ref` and runs it against the caller's tree. A satellite
+  adopts the gate when it next bumps that pin, and the message names exactly what to add.
+
+An exemption is a line in the caller's `.github/pr-secret-preflight-allow.txt`:
+
+```
+REGISTRY_PUBLISH_TOKEN  # passed to modules-*, whose publish step is `if: inputs.publish` — false on a PR
+```
+
+A reason is mandatory (at least 12 characters), and an entry whose name is no longer referenced by
+any pull-request job **fails the gate**: a stale allow entry is how an exemption outlives the thing
+it exempted. The other case the allow file covers is a name asserted inside a shared lane the repo
+only *calls* — the guard cannot follow a cross-repo `uses:`, so it says so rather than assuming.
+
+`secrets: inherit` into a reusable lane is refused outright: the guard cannot see which names the
+callee consumes, so completeness cannot be proven — and inherit hands the callee every secret the
+repo owns.
+
+The self-test (`--self-test`, 19 cases) proves each check fires on its defect and stays silent on
+its fix, and it runs *before* the real tree — an unproven gate is no gate. It was falsified both
+ways on real trees when it was written: breaking core's two `MESHWEAVER_APP_ID` assertions took core
+from 0 violations to 1 and exit 0 to exit 1, and restoring them returned it to 0; SocialMedia's real
+tree reported 4 violations (5 of 9 required names asserted) and its real preflight completion took
+it to 0 (9 of 9).
 
 ## Auditing it
 
@@ -174,11 +259,22 @@ And confirm the store a red run actually read, rather than inferring it:
 gh api repos/Systemorph/<repo>/actions/jobs/<job-id>/logs | grep -m1 'Secret source:'
 ```
 
+The whole audit in one command, from a checkout of the repo, with a credential that is admin on it:
+
+```bash
+python3 .github/scripts/check-pr-secret-preflight.py --root . \
+        --check-stores --repo Systemorph/MeshWeaver.SocialMedia
+```
+
+`--check-stores` diffs the *consumed* set against the Dependabot store **by name** and prints the
+exact `gh secret set` line per gap. It never reads a value, and it fails loudly rather than skipping
+when a store cannot be listed or the listing is truncated — a store that could not be read is a
+FAILED audit, not a clean one. Remember what it cannot see: a name present with an empty value.
+
 ## Remediating it
 
-One command per missing name, same value as the Actions secret. This is repository administration
-with fleet consequences — it needs the person who holds the values, and it cannot be done from a
-pull request:
+One command per missing name, same value as the Actions secret. `gh secret set` reads the value
+from **stdin** when `--body` is omitted — there is no `--body-file` flag:
 
 ```bash
 gh secret set <NAME> --app dependabot --repo Systemorph/MeshWeaver.<Repo>
@@ -186,6 +282,30 @@ gh secret set <NAME> --app dependabot --repo Systemorph/MeshWeaver.<Repo>
 
 Then re-run the Dependabot PR's workflow. The positive signal is the preflight's own success line,
 not merely a green wall.
+
+### Not everything on the list is a credential
+
+Some of these names are **identifiers**, recoverable from a source an operator is already entitled
+to read, and mirroring them needs nobody who holds a secret. Fourteen were mirrored this way on
+2026-09-06:
+
+| name | value established from | mirrored into |
+|---|---|---|
+| `AZURE_CLIENT_ID` | the `github-actions-bake` user-assigned identity — the only principal in the tenant with a federated credential for these repos (`repo:Systemorph/<repo>:ref:refs/heads/main`, in both the classic and the immutable subject format), holding exactly *Storage File Data Privileged Contributor* on the bake storage account | Reinsurance, SocialMedia, Crm, Education |
+| `AZURE_TENANT_ID` | that identity's tenant (`az account show`) | the same four |
+| `AZURE_SUBSCRIPTION_ID` | the subscription of the storage account each repo's own `vars.BAKE_PUBLISH_TARGETS` names | the same four |
+| `MESHWEAVER_APP_ID` | `gh api /apps/meshweaver-cloud` — a public App id, and the App `auto-arm.yml` names by slug | MeshWeaver, Memex |
+
+**Giving a Dependabot run the OIDC client id grants it nothing.** Federation is keyed on the token's
+*subject*, and a Dependabot pull-request run's subject matches no federated credential — so
+`azure/login` still refuses. The identifier is what lets the preflight get past *"this is not
+provisioned"* to the honest answer.
+
+What genuinely cannot be recovered is anything whose value is a secret: `*_PRIVATE_KEY`, `*_TOKEN`,
+`*_PASSWORD`, `MW_REGISTRY_KEY` / `MW_REGISTRY_INSTANCE_KEY`, `ACR_USERNAME` / `ACR_PASSWORD`.
+Do not guess one and do not copy one from a similarly-named secret in another repo — a wrong
+credential fails as an authentication error deep in a lane, which is strictly worse than the missing
+one it replaced.
 
 ## Related
 
