@@ -5,6 +5,7 @@ using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -55,9 +56,35 @@ namespace MeshWeaver.PluginCatalog;
 /// Full reference: <c>Doc/Architecture/DeploymentInventory</c>.
 /// </para>
 /// </remarks>
-public sealed class DeploymentReportService(IMessageHub hub, ILogger<DeploymentReportService> logger)
-    : IHostedService, IDisposable
+public sealed class DeploymentReportService : IHostedService, IDisposable
 {
+    private readonly IMessageHub hub;
+    private readonly ILogger<DeploymentReportService> logger;
+
+    /// <summary>
+    /// ONE channel for every report — the boot report, the hourly tick and an on-demand
+    /// <see cref="Report"/> all enqueue here and run one at a time, in request order. Two reports in
+    /// flight at once are a defect, not a race to tolerate: the older read can land LAST and the
+    /// record then says what the instance carried a moment ago, not now (measured on this test's
+    /// first CI run — the boot report read one seeded module, an explicit report read two, and the
+    /// boot report's write arrived second).
+    /// </summary>
+    private readonly ISubject<Guid> requests = Subject.Synchronize(new Subject<Guid>());
+    private readonly Subject<(Guid Id, Notification<DeploymentReportOutcome> Result)> results = new();
+
+    public DeploymentReportService(IMessageHub hub, ILogger<DeploymentReportService> logger)
+    {
+        this.hub = hub;
+        this.logger = logger;
+        httpPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
+        http = hub.ServiceProvider.GetService<IHttpClientFactory>()?.CreateClient(HttpClientName) ?? SharedHttp;
+        subscriptions.Add(requests
+            .ObserveOn(TaskPoolScheduler.Default)
+            .Select(id => Observable.Defer(RunOnce).Materialize().Select(result => (id, result)))
+            .Concat()
+            .Subscribe(results.OnNext, results.OnError));
+    }
+
     public const string DeploymentKey = "Hosting:Deployment";
     public const string ReportToKey = "Hosting:ReportTo";
     public const string SecretKey = "Hosting:ModuleReportSecret";
@@ -93,10 +120,8 @@ public sealed class DeploymentReportService(IMessageHub hub, ILogger<DeploymentR
     };
 
     private readonly CompositeDisposable subscriptions = new();
-    private readonly IIoPool httpPool =
-        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
-    private readonly HttpClient http =
-        hub.ServiceProvider.GetService<IHttpClientFactory>()?.CreateClient(HttpClientName) ?? SharedHttp;
+    private readonly IIoPool httpPool;
+    private readonly HttpClient http;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -110,7 +135,11 @@ public sealed class DeploymentReportService(IMessageHub hub, ILogger<DeploymentR
         return Task.CompletedTask;
     }
 
-    public void Dispose() => subscriptions.Dispose();
+    public void Dispose()
+    {
+        subscriptions.Dispose();
+        results.OnCompleted();
+    }
 
     private void Start()
     {
@@ -133,8 +162,8 @@ public sealed class DeploymentReportService(IMessageHub hub, ILogger<DeploymentR
 
         subscriptions.Add(defaultsDone
             .SelectMany(_ => Observable.Timer(TimeSpan.Zero, settings.Interval, TaskPoolScheduler.Default))
-            // One report at a time, and a failed tick is a WARNING with the fault — never a silent
-            // skip and never the end of the schedule: the next tick reports again.
+            // Through the one channel like every report. A failed tick is a WARNING with the fault —
+            // never a silent skip and never the end of the schedule: the next tick reports again.
             .Select(_ => Report().Catch((Exception exception) =>
             {
                 logger.LogWarning(exception,
@@ -154,10 +183,25 @@ public sealed class DeploymentReportService(IMessageHub hub, ILogger<DeploymentR
     }
 
     /// <summary>
-    /// Compose and deliver ONE report now. Cold: the read, the write and the POST run on subscribe.
+    /// Compose and deliver ONE report now. Cold: subscribing enqueues the request on the service's
+    /// single channel, so it runs after every report requested before it and never beside one.
     /// Emits the outcome — where the report went and the report itself — or errors with the fault.
     /// </summary>
-    public IObservable<DeploymentReportOutcome> Report()
+    public IObservable<DeploymentReportOutcome> Report() =>
+        Observable.Create<DeploymentReportOutcome>(observer =>
+        {
+            var id = Guid.NewGuid();
+            var subscription = results
+                .Where(r => r.Id == id)
+                .Select(r => r.Result)
+                .Dematerialize()
+                .Take(1)
+                .Subscribe(observer);
+            requests.OnNext(id);
+            return subscription;
+        });
+
+    private IObservable<DeploymentReportOutcome> RunOnce()
     {
         var settings = ReadSettings();
         if (settings.Deployment.Length == 0)

@@ -136,6 +136,45 @@ public class AnInstanceReportsWhatItRunsTest(ITestOutputHelper output) : Monolit
         content.GetProperty("commitSha").ValueKind.Should().BeOneOf(JsonValueKind.String, JsonValueKind.Null);
     }
 
+    /// <summary>
+    /// The shape this test's first CI run failed on: the service's own boot report read one seeded
+    /// module, an explicit report read two, and the boot report's write landed LAST. Every report
+    /// now goes through one channel in request order, so the later request — which read the later
+    /// state — is what the record says. Under overlapping reports this assertion can fail; under
+    /// the channel it cannot.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task TwoOverlappingRequests_LandInRequestOrder_SoTheRecordSaysWhatTheInstanceCarriesNow()
+    {
+        await Seed(new MeshNode(GitHubSyncService.ConfigId, "Course")
+        {
+            NodeType = GitHubSyncService.ConfigNodeType,
+            Name = "Course sync",
+            State = MeshNodeState.Active,
+            Content = new GitHubSyncConfig { RepositoryUrl = "https://github.com/Systemorph/MeshWeaver.Education", Branch = "main" },
+        });
+        // Request A is enqueued NOW, before the second seed; it may read one module or two.
+        var first = Reporter.Report().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        await Seed(new MeshNode("Sample", PackageInstaller.InstalledPartition)
+        {
+            NodeType = PackageInstaller.PackageNodeType,
+            Name = "Sample",
+            State = MeshNodeState.Active,
+            Content = new PackageManifest { Id = "Sample", Name = "Sample", ModuleVersion = "1.2.3" },
+        });
+        // Request B is enqueued after both seeds, so it must read both and its write must land last.
+        var second = await Reporter.Report().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        var earlier = await first;
+
+        earlier.Delivery.Should().Be(DeploymentReportDelivery.Written);
+        second.Delivery.Should().Be(DeploymentReportDelivery.Written);
+        second.Report!.Modules.Select(m => m.Id).Should().Equal(new[] { "Course", "Sample" });
+
+        var node = await Read($"{DeploymentReportService.DefaultOperationalSpace}/Modules/{Deployment}");
+        Element(node!.Content!).GetProperty("modules").GetArrayLength().Should().Be(2,
+            "the record is the LATER request's write — an earlier read landing last would say what the instance carried a moment ago");
+    }
+
     [Fact]
     public void TheSignature_IsGitHubsWebhookShape()
     {
