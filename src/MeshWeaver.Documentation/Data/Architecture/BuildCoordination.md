@@ -376,27 +376,53 @@ Four properties are load-bearing, and each is pinned by a case in
   changes the readiness VERDICT, never the visibility of the fault, and does not diagnose or repair
   it.
 
-🚨 **The durable door is a FAIL-SAFE, not a cure — and the cause is still open.** The pod's own
-diagnostic names three candidates for the silence: the request never reached the target (routing),
-the target received it and is wedged (a per-node hub that stops answering — the #2896 class), or the
-target answered and the reply was lost. There is a **fourth**, root-caused separately in #3408:
-`MessageService.OpenGate` drained the deferred queue by **appending** it to the main queue, so a
-message that arrived before the gate opened but had not yet been turned sat *ahead* of the deferred
-turns appended behind it — and the parked message ran last. Appending is always the wrong end:
-deferral happens at TURN time, not arrival, and the loop is strictly FIFO, so everything deferred is
-by construction older than everything still waiting. A `SubscribeRequest` is exactly the message
-that triggers a per-node hub's activation, so it is the one that loses its place — load-sensitive by
-construction, green in isolation, and capable of being processed after the requester's 60 s budget
-has already expired. That fits a requester measured healthy and idle against a target never observed
-dead better than a wedge does. **#3408 may reduce or remove these timeouts independently; the two
-fixes are separate and must not be read as one.** The durable door is correct whichever of the four
-it is, and is the only one of them that does not depend on diagnosing the transport first.
 - **No stand-down on this path.** The follower withdraws its claim before probing because it really
   registered one. This path did not: the registration is written by `RequestBuildClaim` through
   `GetMeshNodeStream(path).Update(current => …)`, and an `Update` whose stream never delivered
   current state never computed a patch, so there is no candidate entry to hand back — and calling
   `WithdrawBuildClaim` would post a second write into the same unreachable hub. The two paths share
   the post-GO share probe; they deliberately do not share the stand-down.
+
+🚨 **The durable door is a FAIL-SAFE, not a cure — and the cause is still open.** The pod's own
+diagnostic names three candidates for the silence: the request never reached the target (routing),
+the target received it and is wedged (a per-node hub that stops answering — the #2896 class), or the
+target answered and the reply was lost. Two more have since been measured, and **neither subsumes
+the other**:
+
+**Fourth — deferred-queue ordering (#3408).** `MessageService.OpenGate` drained the deferred queue by
+**appending** it to the main queue, so a message that arrived before the gate opened but had not yet
+been turned sat *ahead* of the deferred turns appended behind it — and the parked message ran last.
+Appending is always the wrong end, not merely unlucky: deferral happens at TURN time, not arrival,
+and the loop is strictly FIFO, so everything deferred is by construction older than everything still
+waiting. A `SubscribeRequest` is exactly the message that triggers a per-node hub's activation, so it
+is the one that loses its place — load-sensitive by construction, green in isolation, and capable of
+being processed after the requester's 60 s budget has expired. That fits a requester measured healthy
+and idle against a target never observed dead better than a wedge does.
+
+**Fifth — a granted-but-never-acted-on claim that emits nothing further (`MeshWeaver.Plugins#1193`).**
+A controlled load experiment on `BuildCoordinationTest.Follower_StandsDown_SoTheNextBuildCanStart` —
+18 cores, two arms of ten runs, same binary and same sha, only background load differing — passed
+10/10 under 12 burners (load ~31–39) and failed 1 of 10 under 64 burners (load 49–91+), at 32.9 s,
+with the CI signature. Instrumenting the wait recorded **exactly one** root state in 15 seconds and
+then nothing at all:
+
+```
+ClaimedBy=<machine-scoped id>  Status=Planning  RequestedClaims=[]  Ready=[fp]
+```
+
+Read it field by field: the build **completed** — `Ready` carries the fingerprint, the GO was
+published. `RequestedClaims` is **empty**, so this is *not* a pending registration outliving its
+candidate; it was consumed. And the holder sits at `Status=Planning` — **granted, never started,
+never released.** One emission in fifteen seconds is terminal, not slow. **A reader waiting on that
+state waits forever.** 🚨 It reproduced **with #3408 already in the core**, so #3408 does not remove
+it and #3131 did not close it: this is a second, independent hole.
+
+The fifth cause is the one this door most clearly answers. In that state the target is neither dead
+nor slow, so nothing about the transport is going to recover it — while the durable GO is already
+published and already readable. **The durable door is correct whichever of the five it is, it is the
+only one that does not depend on diagnosing the transport first, and for the fifth it is the only one
+of the fixes in flight that helps at all.** None of that makes it a cure: each cause is a separate
+change, owned separately, and this one must not be read as having addressed any of them.
 
 The probe semantics of `NodeTypeBakeGateState` are preserved unchanged — fail **closed**
 on a measured regression (the rollout stalls, the old image keeps serving), fail **open**
