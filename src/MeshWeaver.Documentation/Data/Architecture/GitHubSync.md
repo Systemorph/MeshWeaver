@@ -419,6 +419,20 @@ Server configuration for GitHub Sync — the first two are required, the rest op
    large-repo sync exhausted the App installation's hourly rate budget. Refs, PRs and issues
    stay on the Octokit REST client.
 
+   **Installation tokens live one hour, and the cache refreshes at subscription time.**
+   `GitHubAppTokenService.GetInstallationToken()` returns a *deferred* observable: every
+   subscription reads the current cached token, replays it while it is more than five minutes
+   from expiry, and otherwise mints a replacement that concurrent subscribers share. That is
+   the contract a long-lived consumer relies on — the Store's git poll loop holds ONE such
+   observable for the life of its feed and subscribes once per pass. Before 2026-09-06 the
+   promise was captured when the observable was *built*, so the refresh guard matched exactly
+   once: the first expiry minted a new token, every later expiry compared against the stale
+   capture and handed the expired token back. Two token lifetimes after boot every private
+   source read as `401 Bad credentials` until the process restarted (Systemorph/Memex#165 —
+   measured on memex-cloud as the first failure 2 h 01 min after the container started).
+   `GitHubAppTokenRefreshTest` in `Memex.Portal.Shared.Test` holds the invariant with an
+   injected clock: the second and third refresh mint, a fresh token replays.
+
 All GitHub HTTP and serialization run through the controlled I/O pool — see
 [ControlledIoPooling.md](/Doc/Architecture/ControlledIoPooling).
 
