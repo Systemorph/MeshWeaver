@@ -125,11 +125,12 @@ output:
 - **So the reflex cleanup re-identifies the deployment.** Deleting the inline entry would not have
   "switched onto an unverified token"; it would have made the portal authenticate as a *different
   instance*, silently widening what it may pull from 44 packages to 45.
-- **There was never a Key Vault copy.** `secret/memex-portal-secrets` is helm-rendered
-  (`app.kubernetes.io/managed-by=Helm`), not CSI-provisioned. The CSI-backed secrets in those
-  namespaces are `memex-kv-secrets` and `memexcloud-portal-ai-secrets`, neither of which carries
-  this key, and the `Systemorph` vault holds no `PluginCatalog-RegistryToken` entry for either
-  portal. `deployments/aks/secretproviderclass.reference.yaml` in `Systemorph/Memex` already
+- **There was never a Key Vault copy** *(as measured on 2026-09-04 — step 1 below has since
+  created one; see the dated note under "Clearing it")*. `secret/memex-portal-secrets` is
+  helm-rendered (`app.kubernetes.io/managed-by=Helm`), not CSI-provisioned. The CSI-backed secrets
+  in those namespaces were `memex-kv-secrets` and `memexcloud-portal-ai-secrets`, neither of which
+  carried this key, and the `Systemorph` vault held no `PluginCatalog-RegistryToken` entry for
+  either portal. `deployments/aks/secretproviderclass.reference.yaml` in `Systemorph/Memex` already
   templates that wiring; it was never applied to either live SecretProviderClass.
 
 The generalisable rule: **for a credential, "which value is live?" is not the whole question — "which
@@ -159,6 +160,24 @@ The order is forced by the fact that the live key is the correct one:
 3. **Then delete the inline `env:` entries** — a Deployment-spec edit, so a rollout on both portals.
 4. **Then rotate**, because both live keys sat in plaintext in a spec readable by anything that can
    `get deploy`.
+
+**Step 1 landed 2026-09-06** (`Systemorph/Memex` [#180](https://github.com/Systemorph/Memex/pull/180)):
+each portal's in-use key is now in the `Systemorph` vault — `PluginCatalog-RegistryToken` for `memex`
+and `memexcloud-PluginCatalog-RegistryToken` for `memex-cloud` — and both `values.<env>.public.yaml`
+declare a chart-owned `keyVaultSecrets` block that renders the SecretProviderClass, the CSI volume,
+its mount and the `envFrom` from one declaration.
+
+🚨 **That is inert on the pod, exactly as step 1 says, and it is worth restating because the PR
+first argued otherwise.** The pull request claimed the hand-applied inline `env:` would be dropped by
+the next `helm upgrade`, and inferred a latent credential outage on `memex-cloud` (the namespace
+where the inline entry is the only copy on the pod). **Both are false.** The upgrade does not delete
+it — helm removes only what it previously owned, measured 2026-09-03
+on v3.21.1 and v4.2.4 with a positive control — so the portal keeps authenticating exactly as it does
+today. What is true is the shadow: the inline entry outranks every `envFrom`, so the vault copy stays
+dead until **step 3** deletes it, and nothing an operator can observe on the pod changes before then.
+Step 1 makes the vault the declared source of truth and puts the value in a committed source; it is
+not urgent, and on its own it changes nothing. The correction is recorded in `Systemorph/Memex`'s
+`docs/inventory.md` and on MeshWeaver#3201.
 
 🚨 **Rotating an instance key needs no re-granting.** `PluginGrant` nodes are keyed by
 `instanceId` (`Admin/_PluginGrant/memex`, `…/memex-cloud`), and re-issuing a key replaces
