@@ -30,8 +30,8 @@ namespace MeshWeaver.PluginTester;
 ///
 /// <para><b>The xUnit-shaped surface a case may use.</b> There is no xUnit in this process, so the
 /// runner supplies the three things a migrated body actually reaches for, and nothing more:
-/// <see cref="Testing.TestContext"/><c>.Current</c> (the case's name and a token that trips just
-/// inside its budget), <see cref="Testing.SkipException"/> (reported as
+/// <see cref="Testing.TestContext"/><c>.Current</c> (the case's name and a token that trips once
+/// its budget is spent), <see cref="Testing.SkipException"/> (reported as
 /// <see cref="Outcome.Skipped"/> with its reason — never as passed and never as failed), and
 /// <see cref="Testing.TestLog"/> (captured PER CASE and attached to
 /// <see cref="Case.Log"/>, printed with the case when it fails). Deliberately not a second xUnit:
@@ -114,8 +114,10 @@ public static class StaticTestRunner
     /// <summary>
     /// Loads <paramref name="assemblyPath"/> with <paramref name="dependencyAssemblies"/>
     /// resolvable by simple name, discovers the test classes, invokes every runnable case and
-    /// unloads the context. The <paramref name="perCaseTimeout"/> is a hard cap: a case that
-    /// outlives it is reported failed with the timeout named, and the run continues.
+    /// unloads the context. The <paramref name="perCaseTimeout"/> is the BUDGET: a case that
+    /// outlives it is asked to stop on <c>TestContext.Current.CancellationToken</c> and given
+    /// <see cref="UnwindGrace"/> to terminate. Either way it is reported failed — by NAME if it
+    /// answered the ask, as an abandoned thread if it did not — and the run continues.
     /// </summary>
     public static Run Execute(
         string assemblyPath,
@@ -257,6 +259,14 @@ public static class StaticTestRunner
     /// <see cref="Testing.SkipException"/> as its own outcome — the only difference being that the
     /// case is handed the declared mesh and may answer with an <c>IObservable&lt;Unit&gt;</c>.
     /// The JOIN is deliberately looser than the stream budget so the INNER, named timeout reports.
+    ///
+    /// <para>🚨 <b>Why this lane still trips the token EARLY where <see cref="Invoke"/> no longer
+    /// does.</b> It has a second, INNER deadline that the pure lane has not: <c>suite.Run</c> bounds
+    /// the case's stream with the same <paramref name="timeout"/>. The <c>lead</c> here exists so a
+    /// case threading <c>TestContext.Current.CancellationToken</c> through its own waits still ends
+    /// on the token rather than losing a coin-toss with that inner wait — it is an ORDERING between
+    /// two named verdicts, not a slice of unwind time. The unwind allowance is separate and whole
+    /// (<c>lead</c> + <see cref="UnwindGrace"/> ≈ 11 s), which is why #3442 never surfaced here.</para>
     /// </summary>
     private static Case InvokeInSuite(
         string name, MethodInfo method, MeshTestSuite suite, TimeSpan timeout)
@@ -285,12 +295,12 @@ public static class StaticTestRunner
         thread.Start();
         if (timeout > TimeSpan.Zero)
             budget.CancelAfter(timeout - lead);
-        if (!thread.Join(timeout + JoinGrace))
+        if (!thread.Join(timeout + UnwindGrace))
         {
             // `budget` is deliberately NOT disposed — the abandoned thread still holds its token
             // (same reason as Invoke's hung-case path).
             return new Case(name, Outcome.Failed, clock.Elapsed,
-                $"did not return within {(timeout + JoinGrace).TotalSeconds:F0}s — a hung case "
+                $"did not return within {(timeout + UnwindGrace).TotalSeconds:F0}s — a hung case "
                 + "against the declared mesh; the thread is abandoned and the build continues")
             { Log = Captured() };
         }
@@ -313,10 +323,56 @@ public static class StaticTestRunner
     }
 
     /// <summary>
-    /// How much longer the JOIN waits than the stream budget, so the inner wait's NAMED timeout is
-    /// the one that reports rather than the outer "abandoned" one.
+    /// How long a case gets to TERMINATE once it has been asked to stop (<see cref="Invoke"/>), and
+    /// how much longer the suite lane's JOIN waits than its inner stream budget so that the inner,
+    /// NAMED timeout is the one that reports rather than the outer "abandoned" one
+    /// (<see cref="InvokeInSuite"/>).
+    ///
+    /// <para>🚨 <b>This is an unwind allowance, not headroom</b> — #3442. It answers a question the
+    /// budget does not: "having been asked, did the thread actually die?" <c>Thread.Join</c> returns
+    /// only on real TERMINATION, so everything on a case's way out lands inside this window —
+    /// unwinding through reflection, its own <c>finally</c>s, disposing the <c>[ThreadStatic]</c>
+    /// context, the OS reaping the thread. The pure lane used to allow exactly the slice it had
+    /// pulled the cancel forward by (<c>min(1s, budget/10)</c>, i.e. 200 ms for a 2 s budget) and
+    /// then reported a case that HAD cooperated as abandoned whenever the machine took longer than
+    /// that; the ask and the window now run in sequence instead of racing one clock.</para>
     /// </summary>
-    private static readonly TimeSpan JoinGrace = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan UnwindGrace = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Trips <paramref name="budget"/> — the cooperative ask — from a thread of its OWN, never
+    /// inline on the runner's.
+    ///
+    /// <para>🚨 <c>Cancel()</c> runs the token's registrations SYNCHRONOUSLY on whoever calls it,
+    /// and every registration on this token belongs to the case: a <c>Task</c> continuation, an Rx
+    /// subscription's disposal, a wait's cleanup. Running those on the runner's thread would let a
+    /// case's continuation execute on — or park — the very thread whose job is to declare that case
+    /// abandoned, which is how "the build continues" stops being true. <c>IoPool.Drain</c> cancels
+    /// off the caller's thread for exactly this reason and reports a residual when the cancel itself
+    /// never returns. A dedicated thread is also immune to thread-pool starvation, which is the
+    /// condition a loaded CI runner is in when this path is reached at all.</para>
+    /// </summary>
+    private static void AskToStop(CancellationTokenSource budget, string name, Action<string> capture)
+    {
+        new Thread(() =>
+        {
+            try
+            {
+                budget.Cancel();
+            }
+            catch (Exception ex)
+            {
+                // Cancel() aggregates whatever the case's own registrations threw. It is SURFACED
+                // into that case's log rather than swallowed — and it must not leave this thread
+                // unhandled, which would take the whole build process down with it.
+                capture($"      the case's cancellation callback threw: {Innermost(ex)}");
+            }
+        })
+        {
+            IsBackground = true,
+            Name = $"test-cancel:{name}",
+        }.Start();
+    }
 
     /// <summary>
     /// Writes one case's line to the build log, and — for a FAILURE only — whatever the case wrote
@@ -354,13 +410,9 @@ public static class StaticTestRunner
         ImmutableArray<string> Captured() { lock (log) return [.. log]; }
 
         // The budget as a token, so a case that threads TestContext.Current.CancellationToken
-        // through its waits ends with a NAMED cancellation instead of being abandoned. It trips a
-        // little before the join deadline for exactly that reason — a token that fires at the same
-        // instant Join gives up could never be acted on, and the hard cap stays at `timeout`.
+        // through its waits ends with a NAMED cancellation instead of being abandoned. NOTHING
+        // schedules it: it is tripped below, by hand, once the budget is measurably spent.
         var budget = new CancellationTokenSource();
-        var lead = timeout > TimeSpan.Zero
-            ? TimeSpan.FromMilliseconds(Math.Min(1000, timeout.TotalMilliseconds / 10))
-            : TimeSpan.Zero;
 
         var clock = Stopwatch.StartNew();
         // The case runs on its own thread so a hang can be reported by name rather than hanging
@@ -390,37 +442,49 @@ public static class StaticTestRunner
             Name = $"test:{name}",
         };
         thread.Start();
-        if (timeout > TimeSpan.Zero)
-            budget.CancelAfter(timeout - lead);
         // 🚨 Thread.Join(timeout), not a ManualResetEventSlim. It is the built-in primitive for
         // exactly this — "did that thread finish within the budget" — and it is STRICTER: the event
         // fired from a `finally` signalled before the thread had actually terminated, whereas Join
         // returns only on real termination, which is also what gives `failure` its happens-before.
         // A hand-woven gate here was flagged by HandWovenGateRatchetGuard; the fix is to delete the
         // gate rather than exempt it, because the standard library already has this one.
+        var overBudget = false;
         if (!thread.Join(timeout))
         {
-            // 🚨 `budget` is deliberately NOT disposed here. The abandoned thread is still running
-            // and still holds its token; disposing the source under it is a use-after-dispose, and
-            // in this estate that surfaces as an exit-139 nobody can reproduce. It is left to the
-            // GC, bounded by the timer CancelAfter already scheduled.
-            return new Case(name, Outcome.Failed, clock.Elapsed,
-                $"did not return within {timeout.TotalSeconds:F0}s — a hung case; the thread is "
-                + "abandoned and the build continues")
-            { Log = Captured() };
+            // The budget is spent — MEASURED, not predicted. Only now is the case asked to stop,
+            // and the window it gets to answer in starts here (see AskToStop / UnwindGrace).
+            overBudget = true;
+            AskToStop(budget, name, Capture);
+            if (!thread.Join(UnwindGrace))
+            {
+                // 🚨 `budget` is deliberately NOT disposed here. The abandoned thread is still
+                // running and still holds its token; disposing the source under it is a
+                // use-after-dispose, and in this estate that surfaces as an exit-139 nobody can
+                // reproduce. It is left to the GC.
+                return new Case(name, Outcome.Failed, clock.Elapsed,
+                    $"did not return within {timeout.TotalSeconds:F0}s and did not stop within "
+                    + $"{UnwindGrace.TotalSeconds:F0}s of being asked — a hung case; the thread is "
+                    + "abandoned and the build continues")
+                { Log = Captured() };
+            }
         }
         clock.Stop();
-        var expired = budget.IsCancellationRequested;
-        // Safe only because Join returned: the case thread has really terminated, so nothing holds
-        // the token any more.
-        budget.Dispose();
+        // 🚨 Disposed only on the path where nothing else can still be touching it: the case thread
+        // terminated inside its budget, so it never saw the token, and no canceller thread was ever
+        // started. On the over-budget path AskToStop's thread may still be inside Cancel() running
+        // the case's own registrations — disposing under it is the same use-after-dispose as above,
+        // and this source has no timer pending, so leaving it to the GC costs nothing.
+        if (!overBudget)
+            budget.Dispose();
         var captured = Captured();
         return failure switch
         {
             null => new Case(name, Outcome.Passed, clock.Elapsed, null) { Log = captured },
             // A case that DID observe its budget: say so, because `Innermost` would otherwise
-            // report the framework's "The operation was canceled." — true and useless.
-            OperationCanceledException when expired =>
+            // report the framework's "The operation was canceled." — true and useless. The
+            // predicate is whether THIS runner asked, not `budget.IsCancellationRequested`: the ask
+            // is the fact that makes the verdict true, and it is known here exactly.
+            OperationCanceledException when overBudget =>
                 new Case(name, Outcome.Failed, clock.Elapsed,
                     $"OperationCanceledException: the case budget ({timeout.TotalSeconds:F0}s) "
                     + "expired and the case ended on TestContext.Current.CancellationToken")
