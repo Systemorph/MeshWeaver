@@ -124,7 +124,19 @@ the next one. To find the pin deterministically, see the probe at
 1. In a `[MethodImpl(NoInlining)]` helper, build + exercise a mesh and return only a
    `WeakReference` to the mesh hub (the strong local dies with the frame).
 2. `Mesh.Dispose()`, dispose + **null out** the `ServiceProvider` (an undisposed/
-   still-referenced SP pins its singletons), force 12× blocking GCs.
+   still-referenced SP pins its singletons), **await `DisposalCompleted`**, then force
+   12× blocking GCs.
+
+   🚨 **The wait is not optional, and it is not the same thing as more GCs.** `Dispose()`
+   only STARTS a hub's teardown — it posts `ShutdownRequest(Quiescing)` and returns, and
+   every phase after that is a fresh message on the action block
+   ([Hub Disposal Model](/Doc/Architecture/HubDisposalModel)). Collect before the signal
+   and the hub is still rooted by its own in-flight shutdown, so the probe reports the
+   teardown's SPEED rather than the reference graph. In a *discovery* probe that costs a
+   false positive; in an assertion it costs the opposite — see
+   [Writing Tests](/Doc/Architecture/WritingTests) for the measured case where the same
+   omission produced a test that passed in its suite and failed alone on the same binary
+   (#3321).
 3. If the hub survives, attach ClrMD to the live process
    (`DataTarget.CreateSnapshotAndAttach(Environment.ProcessId)`) and BFS from
    **non-stack** GC roots to the first `MessageHub`, printing the type chain.

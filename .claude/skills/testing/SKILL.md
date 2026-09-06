@@ -39,6 +39,16 @@ there's no positive signal to filter for. See WritingTests.md → "Polling loops
 can race the initial-snapshot path. Filter on the emission shape (e.g.
 `.Where(c => c.ChangeType == QueryChangeType.Initial)`), not the count.
 
+🚨 **A reachability / GC assertion joins `DisposalCompleted` BEFORE it collects.** `Dispose()` only
+STARTS a hub's teardown — it posts `ShutdownRequest(Quiescing)` and returns — so on return the hub is
+still rooted by its own in-flight shutdown. `WeakReference` + `Dispose()` + `GC.Collect()` therefore
+measures the teardown's speed, not the reference graph, and it fails GREEN: #3321's version passed
+inside a 485-test project and failed alone on the same binary. Take the weak reference and drop the
+strong one inside a `[MethodImpl(NoInlining)]` helper, return the completion observable rather than
+the object, await it, then collect. **Suite-green / alone-red with nothing rebuilt is its own signal
+— and the PASSING run is the control**: it names the ambient wait the test was silently relying on.
+See WritingTests.md → "A reachability assertion that collects before teardown has finished".
+
 **🚨 NEVER re-run a test (single or suite) unless code under test has changed.** Re-running to "see
 if it was a flake" hides the bug — flakes are real races. Either fix the race or pin the failure
 with a smaller repro; do not retry. The only exceptions: (a) the test harness itself crashed
@@ -156,4 +166,5 @@ Custom types: `builder.AddMeshNodes(new MeshNode("MyType") { Name = "My Type" })
 - [ ] Every wait is on a condition (`Where(...).FirstAsync().Timeout(...)`), never a sleep.
 - [ ] No exact change-event count asserted on a change feed.
 - [ ] The project was built before `--no-build`, and the run produced a fresh `.trx`.
+- [ ] Any reachability / GC assertion awaits the owner's `DisposalCompleted` before collecting.
 - [ ] A failure was investigated, not re-run.

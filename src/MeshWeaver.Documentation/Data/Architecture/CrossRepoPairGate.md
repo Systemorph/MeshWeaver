@@ -213,6 +213,56 @@ Two rules follow, and they generalise past these two files:
 - **The marker goes on BOTH copies.** A one-sided note is addressed to the party who does not need
   it. Core's twins now name the guard that enforces them.
 
+### 🚨 Shape 7 in the by-hand sweep: a `!` on the WRONG receiver hides the site (#3321)
+
+Shape 7 has no gate, so the only control is a **by-hand sweep of the dependents**. This is about how
+to write that sweep, because #3321 found a shape that defeats the obvious way of doing it.
+
+Core's step 3 made `ISynchronizationStream.Hub` — a public property, declared **non-nullable** —
+start answering `null` once a stream releases it. Nothing was added or removed, so the gate saw
+nothing, correctly. The sweep found **11 production dereferences** in `MeshWeaver.Plugins`'s Blazor
+view layer, every one of them written like this:
+
+```csharp
+// BlazorView.Stream is `ISynchronizationStream<JsonElement>?`; Hub is declared non-nullable
+Stream!.Hub.Post(new ClickedEvent(Area, Stream.StreamId), …);
+je.Deserialize<TValue>(Stream!.Hub.JsonSerializerOptions);
+```
+
+🚨 **The `!` binds to `Stream`, not to `.Hub`.** It suppresses the warning about the receiver the
+compiler already knew was nullable, and says nothing whatever about the dereference one level to the
+right — which is the one that changed. So when `Hub` becomes absent, the NRE lands past the operator
+that looks like it was put there to handle exactly this, and **no `CS8602` is ever emitted**. A
+reviewer skimming for "unguarded dereference" reads `!` as due diligence.
+
+Two of the 11 were worse than silent:
+
+- one sat inside a bare `catch { }` (`RadzenChartView.razor`), where the new NRE would have been
+  swallowed and the chart rendered from **unconverted data** — wrong output, no exception, no log;
+- one in **core itself** (`WorkspaceExtensions.ApplyChanges`, `stream!.Hub.Version`) was missed by
+  the previous step's own site census for the same reason, and only a fresh sweep found it.
+
+**The rules for a shape-7 sweep, and they generalise past this property:**
+
+- **Resolve the RECEIVER's type; never grep the member textually.** `grep '\.Hub'` over
+  `MeshWeaver.Plugins` returns 2 051 lines, of which 1 552 survive a word-boundary filter and
+  **22** are actually a stream's. The rest are `IWorkspace.Hub`, `LayoutAreaHost.Hub`, the
+  `MeshWeaver.Messaging.Hub` *namespace*, and `.HubConfiguration`. A name heuristic cannot do this;
+  something has to read each distinct receiver's declaration.
+- **A `!` anywhere in the expression is a reason to look harder, not a reason to skip.** It is
+  evidence that *some* nullability was considered — which is not the same as the one you changed.
+- **Sweep every file type, not just `.cs`.** In-mesh C# lives inside `.json` node strings; 27 such
+  nodes carried `.Hub` (all benign here, but only reading them establishes that).
+- **Count at every stage, and treat a suspiciously round zero as a broken sweep.** The first pass of
+  #3321's sweep returned `0` in every repo because an unquoted glob killed the command under zsh.
+  The clean answer and the never-ran answer look identical.
+
+The measured blast radius — six satellite checkouts, every file, receiver-resolved — was **22
+occurrences in one repo and zero in the other five**, with the four content satellites clean
+*structurally* (`ISynchronizationStream` appears in zero files in four of them). The landing order
+that follows from shape 7 having no gate is in
+[Stream Liveness and the Hub Reference](/Doc/Architecture/StreamLivenessAndTheHubReference):
+**the dependent's guards are no-ops against the old core, so the dependent merges FIRST.**
 
 ### An eighth shape: a `PackageVersion` the satellite consumes VERSIONLESS (#3344)
 
