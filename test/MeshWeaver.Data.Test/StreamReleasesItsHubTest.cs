@@ -77,15 +77,31 @@ public class StreamReleasesItsHubTest(ITestOutputHelper output) : HubTestBase(ou
     /// test's own frame.</para>
     /// </summary>
     [HubFact]
-    public void ADisposedStream_ReleasesItsHub_SoTheHubBecomesCollectable()
+    public async Task ADisposedStream_ReleasesItsHub_SoTheHubBecomesCollectable()
     {
         var host = GetHost();
-        var (stream, hubRef) = CreateDisposeAndWeaklyReference(host);
+        var (stream, hubRef, disposalCompleted) = CreateDisposeAndWeaklyReference(host);
 
         stream.Hub.Should().BeNull(
             "the stream must drop the reference on disposal — until step 3 it kept the corpse and "
             + "everything the corpse had resolved reachable for the process's whole life");
         stream.TryGetHub().Should().BeNull("and the guarded accessor agrees");
+
+        // 🚨 WAIT FOR THE HUB'S OWN TEARDOWN TO FINISH BEFORE COLLECTING, and the reason is a
+        // measurement, not caution. `Hub.Dispose()` only STARTS the teardown — it posts a
+        // ShutdownRequest and returns — so the instant `Dispose()` returns, the hub is still rooted
+        // by its own in-flight shutdown (its action block, its scheduler, its registry entry). The
+        // first version of this test collected immediately and asserted unreachability. It PASSED
+        // in a full-suite run (where the surrounding tests happened to give the teardown time) and
+        // FAILED run in isolation — a lucky green over an assertion the test never actually
+        // observed, which is the one failure mode a reachability test must not have. Waiting on
+        // DisposalCompleted makes the claim deterministic: after it, the ONLY thing that could
+        // still hold the hub is a reference somebody kept — which is exactly what this asserts.
+        await disposalCompleted
+            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+            .FirstOrDefaultAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
 
         Collect();
 
@@ -117,7 +133,7 @@ public class StreamReleasesItsHubTest(ITestOutputHelper output) : HubTestBase(ou
         await hub.DisposalCompleted
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
             .FirstOrDefaultAsync()
-            .Timeout(30.Seconds())
+            .Timeout(TestTimeouts.Convergence)
             .Await(TestContext.Current.CancellationToken);
 
         stream.Hub.Should().BeNull(
@@ -198,7 +214,7 @@ public class StreamReleasesItsHubTest(ITestOutputHelper output) : HubTestBase(ou
 
         // Let the stream reach a state a patch could apply to, so the negative below is about the
         // RELEASE and not about a stream that never started.
-        var current = await stream!.Timeout(30.Seconds())
+        var current = await stream!.Timeout(TestTimeouts.Convergence)
             .FirstAsync()
             .Await(TestContext.Current.CancellationToken);
 
@@ -274,18 +290,25 @@ public class StreamReleasesItsHubTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     /// <summary>
-    /// Builds a stream, weakly references its hub and disposes the stream — all inside a frame that
-    /// is GONE by the time the caller collects, so no live local on the test's own stack can root
-    /// the hub and make a red test look green.
+    /// Builds a stream, weakly references its hub, captures the hub's completion signal, and
+    /// disposes the stream — all inside a frame that is GONE by the time the caller collects, so no
+    /// live local on the test's own stack can root the hub and make a red test look green.
+    ///
+    /// <para>The returned <c>DisposalCompleted</c> is safe to hold: it is the hub's
+    /// <c>AsObservable()</c> wrapper around a subject FIELD, and a subject does not reference the
+    /// object that owns it. Returning the hub itself, or any closure over it, would defeat the
+    /// whole test.</para>
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private (SynchronizationStream<Empty> Stream, WeakReference HubRef) CreateDisposeAndWeaklyReference(
-        IMessageHub host)
+    private (SynchronizationStream<Empty> Stream, WeakReference HubRef, IObservable<Unit> DisposalCompleted)
+        CreateDisposeAndWeaklyReference(IMessageHub host)
     {
         var stream = CreateStream(host);
-        var hubRef = new WeakReference(stream.Hub);
+        var hub = stream.Hub;
+        var hubRef = new WeakReference(hub);
+        var disposalCompleted = hub.DisposalCompleted;
         hubRef.IsAlive.Should().BeTrue("precondition: the stream owns a live sync hub");
         stream.Dispose();
-        return (stream, hubRef);
+        return (stream, hubRef, disposalCompleted);
     }
 }
