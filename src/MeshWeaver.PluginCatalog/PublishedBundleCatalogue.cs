@@ -189,6 +189,15 @@ public static class PublishedBundleCatalogue
     /// bundle under any identity — a module-only or NodeType-less package, which produces no
     /// bundle ever — is still not demanded, exactly as before. The exemption is preserved; only
     /// its EVIDENCE moved from "one identity's answer today" to "any identity's answer ever".</para>
+    ///
+    /// <para>🚨 <b>It reads each source's sentinel DECLARATION, not a per-bundle presence check</b>
+    /// (<see cref="DeclaredBundlesOf"/>). That is deliberate in both directions: inclusive, because
+    /// a torn publication that once listed a package should keep that package in the set the gate
+    /// asks about (which can only HOLD, never exempt); and cheap, because this reads EVERY identity
+    /// on a network share against a 60 s verdict budget, and a denominator expensive enough to time
+    /// out would answer <see cref="PackageAvailabilityKind.Indeterminate"/> and freeze every
+    /// environment. The full presence check stays exactly where it decides the verdict —
+    /// <see cref="ArtifactsForIdentity"/>, on the target identity.</para>
     /// </summary>
     public static SealedBundleFloor EverSealedBundles(string? publishedRoot, ILogger? logger = null)
     {
@@ -208,11 +217,18 @@ public static class PublishedBundleCatalogue
                     ReleaseMarkerDirectoryName,
                     StringComparison.Ordinal))
                 continue;
-            var sealedHere = SealedBundleNames(identityDirectory, logger).ToList();
-            if (sealedHere.Count == 0)
+            // The sentinel's DECLARATION, not a per-bundle presence check — see DeclaredBundlesOf
+            // for why the denominator must be both inclusive and cheap.
+            var declaredHere = Directory.EnumerateDirectories(identityDirectory)
+                .OrderBy(d => d, StringComparer.Ordinal)
+                .Select(DeclaredBundlesOf)
+                .Where(listing => listing is not null)
+                .SelectMany(listing => listing!)
+                .ToList();
+            if (declaredHere.Count == 0)
                 continue;
             identities++;
-            bundles.AddRange(sealedHere);
+            bundles.AddRange(declaredHere);
         }
         return new SealedBundleFloor(ReleaseArtifacts.Of(bundles).SealedBundles, identities);
     }
@@ -567,6 +583,41 @@ public static class PublishedBundleCatalogue
 
     private static bool IsComplete(string sourceDirectory, ILogger? logger) =>
         CompleteBundlesOf(sourceDirectory, logger) is not null;
+
+    /// <summary>
+    /// What a source directory's sentinel DECLARES was shipped, without verifying that each listed
+    /// bundle is still on disk. Null when there is no sentinel at all.
+    ///
+    /// <para>🚨 <b>Deliberately weaker than <see cref="CompleteBundlesOf"/>, and only ever used for
+    /// the DENOMINATOR (#3441).</b> Two reasons, and both point the same way:</para>
+    ///
+    /// <para><b>Semantics.</b> "Has this package ever shipped a bake?" is answered by the
+    /// publisher's own declaration. Whether every byte is still present is a question about what
+    /// can be ADOPTED NOW — the numerator — which <see cref="ArtifactsForIdentity"/> answers with
+    /// the full check, for the target identity, where it decides the verdict. Being INCLUSIVE here
+    /// is the safe direction: a publication that once listed a package keeps that package in the
+    /// set of things the gate asks about, which can only HOLD a roll, never exempt one.</para>
+    ///
+    /// <para><b>Cost, which is a correctness concern here.</b> The denominator reads EVERY identity
+    /// the root holds, and the published root is a network share (Azure Files over SMB on AKS).
+    /// Verifying presence would cost one stat per bundle per source per identity — on the order of
+    /// thousands of round trips per poll tick once identities accumulate — against a gate whose
+    /// whole verdict is bounded at 60 s. Blowing that bound answers
+    /// <see cref="PackageAvailabilityKind.Indeterminate"/>, which HOLDS: a denominator expensive
+    /// enough to time out would freeze every environment, turning this gate into the outage it
+    /// exists to prevent. Reading the sentinel alone is one file read per source.</para>
+    /// </summary>
+    private static IReadOnlyList<string>? DeclaredBundlesOf(string sourceDirectory)
+    {
+        var sentinel = Path.Combine(
+            sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+        if (!File.Exists(sentinel))
+            return null;
+        return File.ReadAllLines(sentinel)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToList();
+    }
 
     /// <summary>
     /// Which sources are COMPLETE under one identity — the BUILD gate's question (#1755), asked per

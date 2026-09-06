@@ -102,6 +102,33 @@ public class ReleaseGateDenominatorTest
         Assert.Empty(floor.Bundles);
     }
 
+    /// <summary>
+    /// 🚨 The denominator reads the sentinel's DECLARATION, so a publication that is sealed but has
+    /// LOST a bundle still counts that package as content-bearing.
+    ///
+    /// <para>Inclusive on purpose, and it is the safe direction: keeping the package in the set the
+    /// gate asks about can only HOLD a roll, never exempt one. Verifying presence here would also
+    /// cost one stat per bundle per source per identity on a network share, against a 60 s verdict
+    /// budget — and a denominator that times out answers Indeterminate, which freezes every
+    /// environment. The presence check stays where it decides the verdict: the target identity.</para>
+    /// </summary>
+    [Fact]
+    public void ASealedPublicationMissingABundle_StillCountsTowardTheDenominator()
+    {
+        var root = EducationRegressedRoot();
+        // The earlier identity's Education publication loses a bundle's bytes but keeps its seal.
+        File.Delete(Path.Combine(root, Earlier, "education", EducationPackages[0] + ".zip"));
+
+        var floor = PublishedBundleCatalogue.EverSealedBundles(root);
+        Assert.Contains(EducationPackages[0], floor.Bundles);
+
+        // The full presence rule is unchanged where it decides the verdict — that identity's
+        // Education source is torn and contributes NOTHING to what can be adopted.
+        var adoptable = PublishedBundleCatalogue.SealedBundlesForIdentity(root, Earlier);
+        Assert.DoesNotContain(EducationPackages[0], adoptable);
+        Assert.DoesNotContain(EducationPackages[1], adoptable);
+    }
+
     // ── the verdict, both ways, on the reconstructed Education state ─────────────────────────────
 
     /// <summary>

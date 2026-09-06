@@ -90,6 +90,26 @@ Three properties, and each is load-bearing:
 | **Monotone** | A package that has once shipped a bake can never silently leave the denominator. A bake that regresses to nothing is a HOLD, not an exemption. |
 | **Non-freezing** | A package that has *never* sealed a bundle under *any* identity — a module-only or NodeType-less package, which produces no bundle ever — is still not demanded. The exemption is preserved; only its evidence moved from "one identity's answer today" to "any identity's answer ever". |
 
+### It reads the seal's DECLARATION, not every bundle's bytes
+
+The denominator reads each source's `_complete` sentinel and takes the listing at face value. It
+does **not** re-check that every listed bundle is still on disk. That is deliberate in both
+directions, and the two reasons agree:
+
+- **Semantics.** *"Has this package ever shipped a bake?"* is answered by the publisher's own
+  declaration. Whether the bytes are still present is a question about what can be **adopted now** —
+  the numerator — and that full check stays exactly where it decides the verdict, on the target
+  identity. Being inclusive here is the safe direction: a torn publication that once listed a
+  package keeps that package in the set the gate asks about, which can only **hold** a roll, never
+  exempt one.
+- **Cost, which is a correctness concern.** The denominator reads *every* identity the root holds,
+  and that root is a network share (Azure Files over SMB on AKS). Verifying presence would cost one
+  stat per bundle, per source, per identity — thousands of round trips per poll tick once
+  identities accumulate — against a verdict bounded at 60 s. Blowing that bound answers
+  `Indeterminate`, which **holds**: a denominator expensive enough to time out would freeze every
+  environment, turning this gate into the outage it exists to prevent. Reading the sentinel alone is
+  one file read per source.
+
 ### "Serves no bakes" is stated, never inferred
 
 `SealedBundleFloor.Identities` counts how many identity directories carried at least one sealed
@@ -129,6 +149,10 @@ is a measurement rather than a claim:
 | **New** — ever sealed under any identity | `IsUpdatable = false` | 9, each `ContentBakeMissing`, naming the nine courses |
 | **New**, after Education re-bakes for the target | `IsUpdatable = true` | 0, over 13 content-bearing of 14 installed |
 | **New**, Education seals 4 of 9 | `IsUpdatable = false` | 5 — exactly the unsealed courses |
+
+A sixth test pins the declaration reading from both sides: a publication that keeps its seal but
+loses a bundle's bytes still counts toward the denominator, while the same source contributes
+**nothing** to what can be adopted.
 
 A gate nobody has watched fail is not a gate; the first row is that watch.
 
