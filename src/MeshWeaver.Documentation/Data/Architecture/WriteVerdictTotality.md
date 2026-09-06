@@ -285,8 +285,37 @@ Three shapes count, and they are the same fact in three vocabularies:
 **Why every `ObjectDisposedException`, not just the Autofac-scope shape.** Nothing on this path
 disposes anything as a way of *refusing* a patch, so on this path the exception has exactly one
 meaning. And the direction of a mistake is asymmetric — the same argument `MeshOperations.IsWriteDenial`
-makes for its own default: a false "retryable" costs at most two idempotent re-diffs; a false
-"terminal" loses a write and fails an install.
+makes for its own default: a false "terminal" loses a write and fails an install, every time; a false
+"retryable" costs an idempotent re-diff, capped at two.
+
+### 🚨 The cheap side of that asymmetry is not fully bounded — state it honestly
+
+The re-enqueue this classification feeds is `MeshNodeStreamExtensions`'s
+`OwnerDisposing / OwnerNotReady / Conflict` arm, and **#3477** is a measured, open, unreproduced case
+where that arm went **dark**: after
+
+```
+[UpdateRemote] LATE_NACK_REENQUEUE hub=cache/… target=TestData/late-nack-node attempt=1 code=OwnerDisposing
+```
+
+nothing landed and nothing logged for 45 s — no `LATE_ACK`, no second NACK, no error to the caller
+(1/330, `LateNackReenqueueTest`, MeshWeaver.Plugins shard 3). Sending more faults down that arm makes
+that class **more** likely, and it is silent when it happens.
+
+The two variants are the same mechanism reached two ways: the **direct** arm when the caller's
+`Observe` callback is still pending (inside `UpdateResponseWaitBound`, 2 s), and the **late** arm when
+the response arrives after that *or* when the owner's own `Post` is refused and `RoutePatchVerdict`
+falls through to `ILatePatchVerdictSink`. A closed-lifetime-scope fault takes the **late** half
+preferentially — `HostedHubsCollection` closes a hosted hub's scope on `DisposalCompleted`, by which
+point `PostImplGeneric` refuses that hub's post — and the late half is exactly where #3477 was
+measured.
+
+So the trade is *rarely and recoverably* against *always and fatally*, which is still the right way
+round, and it is not "at most two re-diffs". **A first candidate seal after this change should be
+read for #3477's signature** — a `LATE_NACK_REENQUEUE` with no terminal after it — because this
+change makes it more reachable and nothing yet makes it loud. #3477's own ask is the instrumentation
+that would: a `LATE_NACK_REENQUEUED requestId=<new>` stage linking the re-enqueued request's trail to
+the original.
 
 ### What this does not do
 

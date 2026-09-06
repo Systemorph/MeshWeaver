@@ -1181,8 +1181,24 @@ public static class DataExtensions
     /// disposed subject, a disposed CTS and the two typed teardown exceptions
     /// (<see cref="HubDisposingException"/>, <c>HubDisposedBeforeResponseException</c> — both derive
     /// from it) are all the same fact. And the direction of a mistake is asymmetric, exactly as
-    /// <c>MeshOperations.IsWriteDenial</c> argues for its own default: a false "retryable" costs at
-    /// most two idempotent re-diffs, while a false "terminal" loses a write and fails an install.</para>
+    /// <c>MeshOperations.IsWriteDenial</c> argues for its own default: a false "terminal" loses a
+    /// write and fails an install, every time; a false "retryable" costs an idempotent re-diff,
+    /// capped at two.</para>
+    ///
+    /// <para>🚨 <b>That asymmetry is real but the cheap side is NOT fully bounded, and this is the
+    /// honest statement of the cost.</b> The re-enqueue this classification feeds is
+    /// <c>MeshNodeStreamExtensions</c>'s <c>OwnerDisposing / OwnerNotReady / Conflict</c> arm, and
+    /// <b>#3477</b> is a measured, open, unreproduced case where that arm went DARK: after
+    /// <c>LATE_NACK_REENQUEUE … code=OwnerDisposing attempt=1</c>, nothing landed and nothing logged
+    /// for 45 s — no <c>LATE_ACK</c>, no second NACK, no error to the caller (1/330,
+    /// <c>LateNackReenqueueTest</c>, MeshWeaver.Plugins shard 3). Routing more faults here makes
+    /// that class MORE likely, not less, and it is silent when it happens. Traced end to end for
+    /// #3499: these faults take the SAME arm — and the closed-lifetime-scope shape takes its LATE
+    /// half preferentially, because a hosted hub's scope is closed on <c>DisposalCompleted</c>, by
+    /// which point <c>PostImplGeneric</c> refuses the owner's own post and <c>RoutePatchVerdict</c>
+    /// falls through to <c>ILatePatchVerdictSink</c> — which is exactly where #3477 was measured.
+    /// So the trade is <i>rarely and recoverably</i> against <i>always and fatally</i>, which is
+    /// still the right way round; it is not "at most two re-diffs".</para>
     ///
     /// <para>Everything else keeps its previous mapping; unknown exception types still fall through
     /// as <see cref="MeshNodeErrorCode.Unknown"/> with the exception type prefixed — visible at the
