@@ -572,6 +572,11 @@ secrets:
     # credential — it refuses rather than persisting one in plaintext. Every real
     # deployment must set it in an overlay / --set / Key Vault CSI.
     Ai__KeyProtection__MasterKey: ""
+    # Deployment inventory signing key (Doc/Architecture/DeploymentInventory): the reporter signs
+    # with it, the control instance verifies with it. Per-deployment keys on the control instance
+    # go in the map: {memex-cloud: "<key>"} → Hosting__ModuleReportSecret__memex-cloud.
+    Hosting__ModuleReportSecret: ""
+    Hosting__ModuleReportSecrets: {}
     # ---- Plugin catalog credentials -------------------------------------------
     # CONSUMER ONLY. There is no registry-side token allowlist here any more: the
     # `PluginCatalog__RegistryTokens` list this block used to advertise bound to nothing (no such
@@ -635,6 +640,14 @@ config:
     ASPNETCORE_HTTP_PORTS: "8080"
     Deployment__Backend: "Filesystem"
     Deployment__DataRoot: "/data"
+    # ---- Deployment inventory (Doc/Architecture/DeploymentInventory) -------------------------
+    # This instance's id in the fleet — MUST equal its Hosting/Deployment record id on the control
+    # instance. Empty = the instance reports nothing. The control instance sets its id and leaves
+    # Hosting__ReportTo empty (it files its own record); every other instance points ReportTo at
+    # the control instance's base URL and carries the signing key as a SECRET (below).
+    Hosting__Deployment: ""
+    Hosting__ReportTo: ""
+    Hosting__ReportInterval: "01:00:00"
     # The writable root for store-installed modules (ModuleRoot.ConfigKey). Empty here means
     # "follow Deployment__DataRoot", which the template applies — a deployment only sets this
     # when its module tree must live somewhere other than the data root.
