@@ -255,6 +255,11 @@ internal static class NodeTypeContractHandler
                                 {
                                     Content = def with
                                     {
+                                        // Terminal ⇒ no compile in flight (#3390). Unavailable is
+                                        // as settled as Error here: EnsureCompileDispatched treats
+                                        // it as "never determined" and dispatches a FRESH compile,
+                                        // so the stamp of the one that gave up must not survive.
+                                        DispatchedBuildInputs = null,
                                         CompilationStatus = CompilationStatus.Unavailable,
                                         CompilationError = response.Error
                                     }
@@ -380,9 +385,12 @@ internal static class NodeTypeContractHandler
                     if (NodeTypeCompilationHelpers.HasUsableBuild(
                             curr, def, NodeTypeCompilationHelpers.GuardsOf(hub))) return curr;
                     if (NodeTypeCompilationHelpers.IsStaticOnlyNodeType(curr, def)) return curr;
+                    // THE Pending door (#3390) — stamped with the inputs this dispatch is for,
+                    // so a release request arriving while this first build is in flight can be
+                    // absorbed instead of parked and re-fired on its terminal write-back.
                     return curr with
                     {
-                        Content = def with { CompilationStatus = CompilationStatus.Pending }
+                        Content = NodeTypeCompilationHelpers.DispatchPending(def, hub)
                     };
                 }))
             .Take(1);
