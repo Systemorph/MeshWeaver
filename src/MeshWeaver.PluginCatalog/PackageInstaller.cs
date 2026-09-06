@@ -187,8 +187,14 @@ public static class PackageInstaller
                     // …then the package's committed binaries, into the warmed root's content
                     // collection — the half of "publish" that merging used to leave undone (#848).
                     .SelectMany(_ => SyncPackageContent(hub, partition, sourceFolder, files, nodes, logger))
-                    .SelectMany(_ => RunInstallHooks(hub, partition!, logger))
-                    .Select(_ => result);
+                    .SelectMany(publication => RunInstallHooks(hub, partition!, logger)
+                        .Select(_ => publication))
+                    .Select(publication => result with
+                    {
+                        ContentRoot = publication.Root,
+                        ContentAssets = publication.Assets,
+                        ContentAssetsPublished = publication.Published,
+                    });
             });
     }
 
@@ -1790,12 +1796,12 @@ public static class PackageInstaller
     /// condition the warm consults. Gating INSIDE this method rather than at its three call sites
     /// is deliberate: a call site that forgot would silently reopen the door.</para>
     /// </summary>
-    private static IObservable<int> SyncPackageContent(
+    private static IObservable<ContentPublication> SyncPackageContent(
         IMessageHub hub, string? rootPath, string? sourceFolder,
         IReadOnlyList<PackageFile> files, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
     {
         if (string.IsNullOrWhiteSpace(rootPath))
-            return Observable.Return(0);
+            return Observable.Return(ContentPublication.None);
 
         // TryClassify is itself the path-only precheck: it invokes the bytes factory ONLY once it
         // has classified the path as content, so node files never materialize bytes. A separate
@@ -1806,7 +1812,17 @@ public static class PackageInstaller
             .Where(asset => asset is not null).Select(asset => asset!)
             .ToArray();
         if (assets.Length == 0)
-            return Observable.Return(0);
+            return Observable.Return(ContentPublication.None);
+
+        // 🚨 The syncs are built ONCE, and the CARRIED count is theirs — not `assets.Length`. The
+        // mapper de-duplicates by collection-relative path (case-insensitively), so two repo files
+        // that map onto one collection path are ONE publishable file; counting the pre-dedup assets
+        // would make a package with such a pair permanently report a shortfall it can never close.
+        // The comparison a caller holds a verdict on has to be over the SAME set both sides.
+        var syncs = ContentAssetMapper.ToContentSyncs(rootPath!, assets);
+        var carried = syncs.Sum(sync => sync.Files.Count);
+        if (carried == 0)
+            return Observable.Return(ContentPublication.None);
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         return MayPublishIntoRoot(hub, rootPath!, nodes, logger)
@@ -1818,22 +1834,49 @@ public static class PackageInstaller
                 // SettleRetypedRoot has normally already done this; the probe costs one ping when
                 // the root is up, and covers the call sites that do not run it.
                 ? WaitForRootReady(hub, rootPath!, logger).SelectMany(_ => Publish())
-                : Observable.Return(0));
+                // The skip is REPORTED, never rendered as "this package carries no assets": the
+                // assets exist and are not being served, which is the whole distinction
+                // ContentPublication exists to keep.
+                : Observable.Return(new ContentPublication(rootPath, carried, [])));
 
-        IObservable<int> Publish() => ContentAssetMapper.ToContentSyncs(rootPath!, assets)
+        IObservable<ContentPublication> Publish() => syncs
             // Impersonated per post, like every other installer write: the pipeline hops schedulers
             // and an ambient impersonation does not survive those hops (see Upsert).
-            .Select(sync => Observable.Using(
-                    () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                    _ => hub.SyncContentFiles(sync.NodePath)
+            //
+            // 🚨 RunAsSystem, never `Observable.Using(access.ImpersonateAsSystem, …)` (#1790). Rx
+            // runs a Using's resource factory on the SUBSCRIBING thread and disposes it when the
+            // inner observable TERMINATES — for this cross-hub post, the owning root's response
+            // thread — so the subscriber was left latched as System, and everything composed
+            // downstream inherited it. RunAsSystem seals both ends: entered at Subscribe, left on
+            // the way out of that same Subscribe, and every notification reaches the subscriber
+            // under its OWN identity. The post is the only leaf that needs the identity (the
+            // projections below are pure), and a RetryWhen re-ask re-subscribes this same operator,
+            // so it re-enters the scope exactly as the Using did. Null-safe by construction: a host
+            // with no AccessService defers the work unimpersonated.
+            .Select(sync => accessService.RunAsSystem(
+                    () => hub.SyncContentFiles(sync.NodePath)
                         .To(sync.TargetCollection, sync.TargetPath)
                         .Add(sync.Files)
                         .Mirror(false)
                         .Post())
-                .Select(response => response.Success
-                    ? response.FilesImported
-                    : throw new InvalidOperationException(
-                        response.Error ?? "content sync failed without an error message"))
+                // The PATHS, not merely the count. A caller that has to decide whether the package's
+                // binaries are actually being served needs to name them — a bare number cannot be
+                // read back, and the gate that now holds this verdict reads every one of them back
+                // through the content route (#3424).
+                .Select(response => !response.Success
+                    ? throw new InvalidOperationException(
+                        response.Error ?? "content sync failed without an error message")
+                    // 🚨 A SUCCESS that landed fewer files than it was handed is not a success —
+                    // it is a partial write nobody can name, and reporting every path as published
+                    // would hand the gate a green over assets that are not there. The handler
+                    // throws on every failure it can see (a missing staged blob, a truncated one),
+                    // so the two counts agree by construction; asserting it is what keeps a future
+                    // silent-skip from riding out as a full publish.
+                    : response.FilesImported < sync.Files.Count
+                        ? throw new InvalidOperationException(
+                            $"the content sync reported success for only {response.FilesImported} of "
+                            + $"{sync.Files.Count} file(s) — a partial write with no per-file reason")
+                        : sync.Files.Select(f => f.Path).ToImmutableList())
                 // 🚨 "The address may reactivate (recycle / restart); retry to get the
                 // authoritative answer" is not advice — it is the framework's TRANSIENT verdict,
                 // and this is the one consumer that used to throw it away and declare the
@@ -1855,20 +1898,46 @@ public static class PackageInstaller
                     .SelectMany(f => IsRootRecycling(f.fault) && f.attempt < RootRecycleReAsks
                         ? RootTeardownSettled(hub, sync.NodePath, logger)
                         : Observable.Throw<Unit>(f.fault)))
-                .Catch<int, Exception>(exception =>
+                .Catch<ImmutableList<string>, Exception>(exception =>
                 {
                     logger?.LogWarning(exception,
                         "[PackageInstaller] publishing {Count} content asset(s) to {Node} failed — the "
                         + "package's nodes are installed but its binaries are not being served",
                         sync.Files.Count, sync.NodePath);
-                    return Observable.Return(0);
+                    return Observable.Return(ImmutableList<string>.Empty);
                 }))
             .ToObservable()
             .Concat()
-            .Sum()
-            .Do(written => logger?.LogInformation(
+            .ToList()
+            .Select(batches => new ContentPublication(
+                rootPath, carried, batches.SelectMany(batch => batch).ToImmutableList()))
+            .Do(publication => logger?.LogInformation(
                 "[PackageInstaller] published {Written}/{Total} content asset(s) into {Root}'s "
-                + "content collection", written, assets.Length, rootPath));
+                + "content collection", publication.Published.Count, publication.Assets, rootPath));
+    }
+
+    /// <summary>
+    /// What an install's CONTENT half actually did: how many <c>content/**</c> assets the package
+    /// carries, and the collection-relative path of every one that was published.
+    ///
+    /// <para>🚨 The publish LOGS its failures and carries on (a half-written package is worse than
+    /// a package whose binaries lag), so before #3424 the ONLY report of a content shortfall was a
+    /// warning line — which is exactly how the plugin tester's gate came to install fifteen
+    /// packages' content assets into a host with no <c>SyncContentFilesRequest</c> handler on every
+    /// run, green, for months. A caller that wants to HOLD a verdict on the served binaries needs
+    /// the two numbers and the names; the gate reads each published path back through
+    /// <c>ContentFileResolver</c>, which is the one server-side reading of a content reference.</para>
+    /// </summary>
+    /// <param name="Root">The partition root whose <c>content</c> collection the assets belong in,
+    /// or null when the package carries none — so a caller never has to re-derive the installer's
+    /// own target rule to read an asset back.</param>
+    /// <param name="Assets">The <c>content/**</c> assets the package carries.</param>
+    /// <param name="Published">The collection-relative paths actually published.</param>
+    public readonly record struct ContentPublication(
+        string? Root, int Assets, ImmutableList<string> Published)
+    {
+        /// <summary>A package that carries no content assets at all.</summary>
+        public static ContentPublication None => new(null, 0, ImmutableList<string>.Empty);
     }
 
     /// <summary>
@@ -2923,7 +2992,12 @@ public static class PackageInstaller
                     .SelectMany(_ => SyncPackageContent(
                         hub, manifest.TargetPartition ?? manifest.Id,
                         manifest.SourceFolder ?? manifest.Id, files, nodes, logger))
-                    .Select(_ => result);
+                    .Select(publication => result with
+                    {
+                        ContentRoot = publication.Root,
+                        ContentAssets = publication.Assets,
+                        ContentAssetsPublished = publication.Published,
+                    });
             }));
             });
     }
@@ -3248,7 +3322,15 @@ public static class PackageInstaller
                     .SelectMany(_ => SyncPackageContent(
                         hub, manifest.TargetPartition ?? manifest.Id,
                         manifest.SourceFolder ?? manifest.Id, changedFiles, nodes, logger))
-                    .Select(_ => result);
+                    // 🚨 The INCREMENTAL path syncs only the CHANGED files, so its accounting is
+                    // over that delta — an unchanged asset is neither carried nor re-published, and
+                    // reporting it as missing would red a gate for a package that changed nothing.
+                    .Select(publication => result with
+                    {
+                        ContentRoot = publication.Root,
+                        ContentAssets = publication.Assets,
+                        ContentAssetsPublished = publication.Published,
+                    });
             });
     }
 
@@ -3846,5 +3928,27 @@ public readonly record struct InstallResult(int Total, int Written)
     public System.Collections.Immutable.ImmutableList<string> WrittenPaths { get; init; } =
         System.Collections.Immutable.ImmutableList<string>.Empty;
 
+    /// <summary>
+    /// The partition root whose <c>content</c> collection this install's assets belong in, or null
+    /// when it carried none. Handed over rather than re-derivable so a caller reading an asset back
+    /// cannot get the installer's own target rule subtly wrong.
+    /// </summary>
+    public string? ContentRoot { get; init; }
 
+    /// <summary>
+    /// How many <c>content/**</c> assets this install carried — the package's committed binaries
+    /// (course videos and their posters, og images, fonts), which are NOT nodes and are therefore
+    /// counted by neither <see cref="Total"/> nor <see cref="Written"/>.
+    /// </summary>
+    public int ContentAssets { get; init; }
+
+    /// <summary>
+    /// The collection-relative paths of the content assets actually PUBLISHED into the target
+    /// root's <c>content</c> collection. Fewer than <see cref="ContentAssets"/> means the package's
+    /// nodes landed and its binaries are not being served — a state the publish deliberately
+    /// LOGS-and-continues rather than throwing (a half-written package is worse), so this is the
+    /// only structural report of it. See <see cref="PackageInstaller.ContentPublication"/>.
+    /// </summary>
+    public System.Collections.Immutable.ImmutableList<string> ContentAssetsPublished { get; init; } =
+        System.Collections.Immutable.ImmutableList<string>.Empty;
 }
