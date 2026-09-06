@@ -105,6 +105,9 @@ jobs:
           gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-pr-secret-preflight.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-pr-secret-preflight.py" \
             || { echo "::error::could not fetch .github/scripts/check-pr-secret-preflight.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-pr-secret-preflight.py" | grep -q "check-pr-secret-preflight" || { echo "::error::the fetched check-pr-secret-preflight.py at ${PLATFORM_REF} does not look like the guard"; exit 1; }
+          # Do not lean on the timeout guard above having installed it — a reorder there would
+          # break this step with an ImportError instead of a verdict.
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
       - name: "Every PR-reachable secret is asserted by a preflight — the gate can fail (self-test)"
         run: python3 "$RUNNER_TEMP/check-pr-secret-preflight.py" --self-test
       - name: "Every PR-reachable secret in this repo is asserted by a preflight"
