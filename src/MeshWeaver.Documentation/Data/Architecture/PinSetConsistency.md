@@ -169,6 +169,14 @@ The lesson generalises past this gate: **falsify against real production input, 
 fixture you wrote.** A fixture carries the shapes you already thought of; the fleet carries the one
 you did not.
 
+## What it never reads
+
+`.github/workflows/*.yml` and nothing else — structurally, not by an exclusion rule anyone has to
+remember. MeshWeaver.Plugins' `clients/react/src/i18n/catalog-source.json` holds the **same core
+sha** as the platform pins and is **not one**: it is the commit the i18n mirror's drift guard
+compares VALUES against. A repo-wide grep-and-replace moves it silently, and a gate that read it
+would then demand it move *with* the platform set — the same mistake, with a red build attached.
+
 ## Adding a repository, or a new pin shape
 
 - A pin under a name nothing binds and no alias covers is **I5-red**, by design. Bind it in the file

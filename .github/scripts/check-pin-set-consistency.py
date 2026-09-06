@@ -431,6 +431,12 @@ def extract(filename: str, text: str) -> tuple[
 
 
 def scan_local(root: str, gh_repo: str) -> RepoScan:
+    # 🚨 `.github/workflows` AND NOTHING ELSE, structurally. MeshWeaver.Plugins'
+    # `clients/react/src/i18n/catalog-source.json` holds the SAME core sha as the platform pins and
+    # is NOT one: it is the commit the i18n mirror's drift guard compares VALUES against. A
+    # repo-wide grep-and-replace moves it silently; a gate that read it would then demand it move
+    # WITH the platform set, which is the same mistake with a red build attached. The exclusion is
+    # a property of where this scan looks, not a rule anyone has to remember.
     scan = RepoScan(gh_repo=gh_repo)
     wf_dir = os.path.join(root, ".github", "workflows")
     if not os.path.isdir(wf_dir):
