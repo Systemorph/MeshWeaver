@@ -1150,13 +1150,70 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// Maps owner-side patch exceptions to structured <see cref="MeshNodeError"/>
-    /// codes. Unknown exception types fall through as
-    /// <see cref="MeshNodeErrorCode.Unknown"/> with the exception type prefixed
-    /// — visible at the consumer GUI so the gap is diagnosable, not silent.
+    /// 🚨 TEARDOWN IS NOT A VERDICT ABOUT THE WRITE — issue #3499, and the reason a package
+    /// install could not survive its own root recycling.
+    ///
+    /// <para>An owner-side patch fault raised because something the answer needed had been
+    /// DISPOSED says exactly one thing: this activation went away. It says nothing about whether
+    /// the caller's patch is acceptable, and <see cref="HubDisposingException.IsDisposedContainer"/>
+    /// already writes the rule down — <i>"a hub whose scope has been closed cannot serve anything,
+    /// so a delivery that faults this way must be answered as RETRYABLE (the address reactivates)
+    /// rather than as a result."</i> This funnel — the ONE place every owner-side patch fault is
+    /// classified — did not consult it, so every such fault fell through to
+    /// <see cref="MeshNodeErrorCode.Unknown"/>, which is TERMINAL by the enum's own contract
+    /// (<see cref="MeshNodeErrorCode.OwnerDisposing"/> and <see cref="MeshNodeErrorCode.OwnerNotReady"/>
+    /// "are the only auto-retried NACK codes; every other code stays terminal").</para>
+    ///
+    /// <para><b>Measured.</b> CD 7937 / 7941 and the MeshWeaver.Plugins gate on 2026-09-06: a
+    /// package root recycles mid-install, its subtree hubs die owing acks for patches whose merge
+    /// had ALREADY committed (<c>PATCH_MERGE_STAMPED v=2 refused=0 → PATCH_ECHO_SEEN</c>, ten of
+    /// ten trails), and the writer was left either with 31 s of silence (fixed by #2543) or — once
+    /// that silence became a NACK — with a TERMINAL <c>Unknown</c> for a write it could simply
+    /// have re-applied. Both read at the gate as <c>GATE FAILED — install: Chess</c>. Classifying
+    /// the teardown correctly hands the writer the code its OWN machinery already acts on:
+    /// <c>MeshNodeStreamExtensions</c> re-enqueues an <c>OwnerDisposing</c> NACK against the fresh
+    /// activation, capped at <c>MaxOwnerDisposingReenqueues</c>, re-diffing each time — so a merge
+    /// that DID commit is a no-op and one that died with its hub lands. No bound moves.</para>
+    ///
+    /// <para>🚨 <b>Why every <see cref="ObjectDisposedException"/> in the graph counts</b>, not just
+    /// the Autofac-scope shape <see cref="HubDisposingException.IsDisposedContainer"/> matches.
+    /// Nothing on this path disposes anything as a way of REFUSING a patch: a disposed scope, a
+    /// disposed subject, a disposed CTS and the two typed teardown exceptions
+    /// (<see cref="HubDisposingException"/>, <c>HubDisposedBeforeResponseException</c> — both derive
+    /// from it) are all the same fact. And the direction of a mistake is asymmetric, exactly as
+    /// <c>MeshOperations.IsWriteDenial</c> argues for its own default: a false "terminal" loses a
+    /// write and fails an install, every time; a false "retryable" costs an idempotent re-diff,
+    /// capped at two.</para>
+    ///
+    /// <para>🚨 <b>That asymmetry is real but the cheap side is NOT fully bounded, and this is the
+    /// honest statement of the cost.</b> The re-enqueue this classification feeds is
+    /// <c>MeshNodeStreamExtensions</c>'s <c>OwnerDisposing / OwnerNotReady / Conflict</c> arm, and
+    /// <b>#3477</b> is a measured, open, unreproduced case where that arm went DARK: after
+    /// <c>LATE_NACK_REENQUEUE … code=OwnerDisposing attempt=1</c>, nothing landed and nothing logged
+    /// for 45 s — no <c>LATE_ACK</c>, no second NACK, no error to the caller (1/330,
+    /// <c>LateNackReenqueueTest</c>, MeshWeaver.Plugins shard 3). Routing more faults here makes
+    /// that class MORE likely, not less, and it is silent when it happens. Traced end to end for
+    /// #3499: these faults take the SAME arm — and the closed-lifetime-scope shape takes its LATE
+    /// half preferentially, because a hosted hub's scope is closed on <c>DisposalCompleted</c>, by
+    /// which point <c>PostImplGeneric</c> refuses the owner's own post and <c>RoutePatchVerdict</c>
+    /// falls through to <c>ILatePatchVerdictSink</c> — which is exactly where #3477 was measured.
+    /// So the trade is <i>rarely and recoverably</i> against <i>always and fatally</i>, which is
+    /// still the right way round; it is not "at most two re-diffs".</para>
+    ///
+    /// <para>Everything else keeps its previous mapping; unknown exception types still fall through
+    /// as <see cref="MeshNodeErrorCode.Unknown"/> with the exception type prefixed — visible at the
+    /// consumer GUI so the gap is diagnosable, not silent.</para>
     /// </summary>
     private static MeshNodeError ClassifyPatchException(Exception ex, string path)
     {
+        if (IsOwnerTeardown(ex))
+            return new MeshNodeError(
+                MeshNodeErrorCode.OwnerDisposing, path,
+                $"the owner went away while this patch was being answered ({ex.GetType().Name}: {ex.Message}) — "
+                + "the write is NOT confirmed; safe to retry against the fresh activation: a re-enqueue "
+                + "re-diffs against the freshest state, so a merge that did commit is a no-op",
+                ex.StackTrace);
+
         var (code, prefix) = ex switch
         {
             UnauthorizedAccessException => (MeshNodeErrorCode.AccessDenied, "Access denied"),
@@ -1168,6 +1225,26 @@ public static class DataExtensions
         };
         return new MeshNodeError(code, path, $"{prefix}: {ex.Message}", ex.StackTrace);
     }
+
+    /// <summary>
+    /// True when <paramref name="ex"/> is — or carries, at any depth and through any
+    /// <see cref="AggregateException"/> branch — the fact that the OWNER went away while this
+    /// patch was being answered. See the remarks on <see cref="ClassifyPatchException"/> for why
+    /// this is a retryable verdict and not a result.
+    ///
+    /// <para>The graph, never <c>InnerException</c> in a loop: a reactive ack path composes, so the
+    /// teardown can arrive at any index of an aggregate and a chain walker would classify by
+    /// arrival order (<see cref="ExceptionChain"/>'s own remarks).</para>
+    ///
+    /// <para><see cref="ErrorType.ShuttingDown"/> is the messaging layer's word for the same fact —
+    /// <c>MessageService.NackThroughParent</c> stamps it, <c>HubDisposingException</c>'s remarks
+    /// name it as the same contract, and <c>PackageInstaller</c> already retries on it — so a
+    /// delivery failure carrying it belongs here rather than in the <c>Unknown</c> bucket.</para>
+    /// </summary>
+    internal static bool IsOwnerTeardown(Exception? ex)
+        => ExceptionChain.Contains<ObjectDisposedException>(ex)
+           || ExceptionChain.Contains(ex, static e =>
+               e is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown });
 
     /// <summary>
     /// 🚨 Totality for a one-shot watcher: runs <paramref name="onEmptyCompletion"/> when

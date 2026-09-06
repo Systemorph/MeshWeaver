@@ -794,6 +794,32 @@ public static class PluginGateRunner
         /// </summary>
         public BakeSeedConsumer? SeedConsumer { get; init; }
 
+        /// <summary>
+        /// Log categories the gate raises to <see cref="LogLevel.Information"/> so a hub recycle
+        /// NAMES ITSELF in the job log — issue #3499. See the argument at the filter site.
+        ///
+        /// <list type="bullet">
+        ///   <item><c>MeshWeaver.Graph.Configuration</c> — the two framework recyclers, both of
+        ///     which announce the node, the old binding and the new one before they post the
+        ///     self-<c>DisposeRequest</c>: <c>NodeTypeRebindWatcher</c> (a node that acquired or
+        ///     changed its NodeType after its hub bound) and <c>NodeTypeEnrichmentHelpers</c>
+        ///     (stale-build convergence and the overlay self-heal).</item>
+        ///   <item><c>MeshWeaver.PluginCatalog.PackageInstaller</c> — the installer's own
+        ///     retyped-root recycle, and the "not recycling root X" line that says it declined.</item>
+        ///   <item><c>MeshWeaver.Messaging.MessageHub</c> — <c>[QUIESCE-START]</c>, which snapshots
+        ///     the pending callbacks AT dispose entry. A callback named there was taken on BEFORE
+        ///     the teardown; one absent there and named by <c>[QUIESCE-TIMEOUT]</c> two seconds
+        ///     later arrived DURING it. That is the whole discriminator, and neither the
+        ///     <c>Warning</c>-level timeout line nor the request-fate trail carries it.</item>
+        /// </list>
+        /// </summary>
+        private static readonly string[] RecycleAttributionCategories =
+        [
+            "MeshWeaver.Graph.Configuration",
+            "MeshWeaver.PluginCatalog.PackageInstaller",
+            "MeshWeaver.Messaging.MessageHub",
+        ];
+
         private readonly List<IHostedService> startedHostedServices = [];
         private readonly TextWriter output;
 
@@ -843,6 +869,29 @@ public static class PluginGateRunner
                 // per bundle (34 on that run) — the trace levels stay opt-in via MW_LOG_LEVEL.
                 if (seed is not null)
                     logging.AddFilter(BakeSeedConsumer.LogCategory, LogLevel.Information);
+                // 🚨 The RECYCLE-ATTRIBUTION categories, at Information — issue #3499's second
+                // acceptance criterion, and the same argument as the two raises above, a third
+                // seam over. On 2026-09-06 a package root recycled mid-install on three runs in
+                // six hours (CD 7937, CD 7941, MeshWeaver.Plugins #1422) and every one of them
+                // failed the gate with `install: <package> — TimeoutException`. Attributing it
+                // took a day of log archaeology and still could not answer WHICH recycle fired,
+                // because every candidate announces itself at Information and the gate runs at
+                // Warning: the rebind watcher ("node X is now typed Y but its hub activated on
+                // Z"), the stale-build convergence ("auto-recycling instance"), and the
+                // installer's own retyped-root recycle all logged into a sink that dropped them.
+                // The hub's [QUIESCE-START] is here for the other half of the same question —
+                // whether the callback that could not be answered was taken on BEFORE the
+                // teardown began or during it, which is the discriminator between a doomed
+                // in-flight request and the intake window (#3261) and is unanswerable from
+                // [QUIESCE-TIMEOUT] alone.
+                //
+                // COST: two lines per hub disposal ([QUIESCE-START] and its [QUIESCE-OK] /
+                // [QUIESCE-WAIT] / [DISPOSE-BUSY] partner) plus a handful per package from the
+                // installer, against a job log that is otherwise the gate report and a few dozen
+                // warnings. VALUE: the next occurrence is named in one read instead of costing a
+                // release wave. The trace levels stay opt-in through MW_LOG_LEVEL.
+                foreach (var category in RecycleAttributionCategories)
+                    logging.AddFilter(category, LogLevel.Information);
                 foreach (var category in (Environment.GetEnvironmentVariable("MW_LOG_CATEGORIES") ?? "")
                          .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     logging.AddFilter(category, minLevel);

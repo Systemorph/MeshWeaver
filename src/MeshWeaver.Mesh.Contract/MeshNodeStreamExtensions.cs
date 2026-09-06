@@ -1984,6 +1984,23 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     // OwnerDisposing / OwnerNotReady mean the patch never reached
                                     // a merge, so there is no newer version to wait for and
                                     // waiting would only burn the bound.
+                                    //
+                                    // 🚨 THAT PRECONDITION IS NO LONGER UNIVERSAL for OwnerDisposing
+                                    // (#3499). ClassifyPatchException now answers OwnerDisposing for
+                                    // ANY owner-side teardown fault, including one raised on the
+                                    // DURABILITY leg — after PATCH_MERGE_STAMPED and PATCH_ECHO_SEEN,
+                                    // i.e. for a patch whose merge DID land in the dying activation.
+                                    // `lateRebaseFrom = 0` stays right for it, and for the opposite
+                                    // reason to the one above: there is no version to WAIT for
+                                    // because the version we would wait for died unpersisted with
+                                    // its hub, so filtering on it would park until the bound. The
+                                    // re-attempt re-runs the caller's `update` FUNCTION against
+                                    // whatever the fresh activation serves — pre-merge state, so the
+                                    // patch is recomputed and lands; or, if the commit did survive,
+                                    // an identical value, so the re-diff is an empty no-op. Both are
+                                    // the outcome the caller asked for. Only Conflict needs the
+                                    // version, because only Conflict is the owner saying it is
+                                    // provably PAST the base we diffed against.
                                     var lateRebaseFrom = lateErr.Code == MeshNodeErrorCode.Conflict
                                         ? current.Version
                                         : 0;
@@ -2163,6 +2180,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                 // on state newer than it. OwnerDisposing /
                                                 // OwnerNotReady never reached a merge, so there
                                                 // is nothing newer to wait for — they pass 0.
+                                                //
+                                                // 🚨 Since #3499 OwnerDisposing ALSO covers a
+                                                // teardown fault raised on the durability leg, i.e.
+                                                // a patch whose merge DID land in the dying
+                                                // activation. Passing 0 is still right there — see
+                                                // the same 🚨 on the LATE arm above for why the
+                                                // conclusion survives the changed premise.
                                                 var rebaseFrom = err.Code == MeshNodeErrorCode.Conflict
                                                     ? current.Version
                                                     : 0;
