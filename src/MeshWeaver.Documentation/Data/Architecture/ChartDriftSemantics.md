@@ -149,11 +149,12 @@ out.
 
 The order is forced by the fact that the live key is the correct one:
 
-1. **Vault the LIVE key of each portal** — `memex-PluginCatalog-RegistryToken` and
-   `memexcloud-PluginCatalog-RegistryToken` in the `Systemorph` vault, then add the object plus its
-   `secretObjects.data` mapping to the namespace's SecretProviderClass (`memex-kv`,
-   `memexcloud-portal-ai-secrets`). Additive and inert: those CSI secrets sit *after*
-   `memex-portal-secrets` in `envFrom`, and the inline entry outranks both until it is deleted.
+1. **Vault the LIVE key of each portal** — `PluginCatalog-RegistryToken` (`memex`; no `memex-`
+   prefix, that is the name the vault actually carries) and `memexcloud-PluginCatalog-RegistryToken`
+   (`memex-cloud`) in the `Systemorph` vault, then declare the object plus its `secretObjects.data`
+   mapping so a SecretProviderClass in the namespace supplies it. Additive and inert: the CSI
+   secrets sit *after* `memex-portal-secrets` in `envFrom`, and the inline entry outranks both until
+   it is deleted.
 2. **Drop the foreign copy from the source that renders it.** `secret/memex-portal-secrets` is
    helm-rendered, so deleting the live Secret key alone is undone by the next `helm upgrade` — the
    env's (uncommitted) values file must stop setting `secrets.memex_portal.PluginCatalog__RegistryToken`.
@@ -162,10 +163,11 @@ The order is forced by the fact that the live key is the correct one:
    `get deploy`.
 
 **Step 1 landed 2026-09-06** (`Systemorph/Memex` [#180](https://github.com/Systemorph/Memex/pull/180)):
-each portal's in-use key is now in the `Systemorph` vault — `PluginCatalog-RegistryToken` for `memex`
-and `memexcloud-PluginCatalog-RegistryToken` for `memex-cloud` — and both `values.<env>.public.yaml`
-declare a chart-owned `keyVaultSecrets` block that renders the SecretProviderClass, the CSI volume,
-its mount and the `envFrom` from one declaration.
+each portal's in-use key is now in the `Systemorph` vault under the two names in step 1, and both
+`values.<env>.public.yaml` declare a chart-owned `keyVaultSecrets` block that renders a *new*
+SecretProviderClass (`memex-portal-keyvault`, `memexcloud-portal-keyvault`), the CSI volume, its
+mount and the `envFrom` from one declaration — rather than appending to the hand-made `memex-kv` /
+`memexcloud-portal-ai-secrets` classes, so the four objects cannot drift apart.
 
 🚨 **That is inert on the pod, exactly as step 1 says, and it is worth restating because the PR
 first argued otherwise.** The pull request claimed the hand-applied inline `env:` would be dropped by
