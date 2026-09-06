@@ -2541,8 +2541,16 @@ public static class PackageInstaller
             if (persistence is null)
                 return WriteAll(batch, ImmutableDictionary<string, MeshNode>.Empty);
             var now = DateTimeOffset.UtcNow;
+            // This path writes to persistence DIRECTLY — no owner merge runs — so the create-time
+            // ownership rule has to be applied here by hand: a NodeType file's embedded compile
+            // bookkeeping (compilationStatus, compiledFrameworkVersion, latestAssemblyPath,
+            // requestedReleaseForce, …) must not become the type's initial live state. Measured
+            // 2026-09-06 (Education mesh gates, portal bbcb22f25): the July verdicts GitSync had
+            // written into MeshWeaver.Plugins' node files installed verbatim into every fresh mesh,
+            // framework-stale-kicked Store's core types into a forced live-source compile at boot
+            // and left every Edu/Exercise instance bound to a foreign assembly path.
             var stamped = batch
-                .Select(n => n with
+                .Select(n => MeshWeaver.Mesh.NodeTypeOperationalContent.WithoutOperational(n, options) with
                 {
                     State = MeshNodeState.Active,
                     CreatedDate = n.CreatedDate == default ? now : n.CreatedDate,
@@ -3486,7 +3494,29 @@ public static class PackageInstaller
     /// the wrongly-installed materialised value is what the unchanged-skip then compared against.</para>
     /// </summary>
     // Internal for the InstallAuthoredContentTest pin (InternalsVisibleTo).
+    //
+    // 🚨 #3474 — the ONE seam every package file passes through on its way into a mesh (both
+    // ParseCanonical and ParseNode call it), which is why the repo→mesh half of the NodeType
+    // content ownership rule lives here: a NodeType file's MESH-OWNED compile bookkeeping
+    // (compilationStatus, compiledFrameworkVersion, latestAssemblyPath, requestedReleaseForce, …
+    // — NodeTypeOperationalContent.MemberNames) is stripped before the node is written. GitSync
+    // strips it on export, and an UPDATE keeps the live node's values — but a CREATE has no live
+    // node, and until this line a fresh install wrote the file's verdict verbatim as the type's
+    // initial live state. Measured 2026-09-06 (Education mesh gates, portal bbcb22f25):
+    // MeshWeaver.Plugins' node files, last written by GitSync on 2026-07-18 before the export
+    // strip existed, carried a July `compilationStatus: Ok`, a foreign framework + assembly path
+    // and for Store `requestedReleaseForce: true`; every fresh mesh framework-stale-kicked Store's
+    // core types into a FORCED live-source compile at boot (#2824 honours the flag) and left every
+    // Edu/Exercise instance bound to a foreign assembly path. NOT in the owner's create handlers:
+    // in-process creators (a move, a restore, a fixture) legitimately carry state, and the
+    // file-backed persistence reads the mesh's OWN nodes through the same parser registry — the
+    // rule is about FILES that come from a repo, so it sits where a package file becomes a node.
     internal static MeshNode AsAuthored(
+        MeshNode parsed, PackageFile file, ILogger? logger, JsonSerializerOptions? options = null)
+        => NodeTypeOperationalContent.WithoutOperational(
+            AsAuthoredContent(parsed, file, logger, options), options ?? JsonSerializerOptions.Default);
+
+    private static MeshNode AsAuthoredContent(
         MeshNode parsed, PackageFile file, ILogger? logger, JsonSerializerOptions? options = null)
     {
         if (parsed.Content is null || !parsed.Content.GetType().Assembly.IsCollectible)
