@@ -521,6 +521,53 @@ public class MirrorCacheTest : IDisposable
             thrown.Message);
     }
 
+    /// <summary>
+    /// 🚨 A cache read that FAILS PART-WAY THROUGH must not leak the handle it already opened.
+    ///
+    /// <para>The blob opens, then the media-type sidecar read throws — a real race with eviction,
+    /// a manual cleanup, or transient IO. The correct answer is a MISS (fall through to the
+    /// upstream, which is the source of truth), and the trap is that the answer is correct while
+    /// the descriptor stays open: the pull succeeds, nothing logs an error, and the process walks
+    /// toward its file-descriptor limit one degraded read at a time. Invisible until it is not.</para>
+    ///
+    /// <para>The leak is probed by re-opening the blob EXCLUSIVELY afterwards — .NET honours
+    /// <see cref="FileShare"/> on Unix as well as Windows, so a handle the cache still held would
+    /// refuse this open.</para>
+    /// </summary>
+    [Fact]
+    public async Task ACacheReadThatFailsMidwayDoesNotLeakTheHandleItOpened()
+    {
+        var directory = NewCacheDirectory();
+        var upstream = new FakeUpstreamRegistry();
+        using var app = await BuildMirror(upstream, directory);
+        var cache = app.Services.GetRequiredService<ContainerBlobCache>();
+
+        var bytes = new byte[64];
+        Array.Fill(bytes, (byte)7);
+        var digest = DigestOf(bytes);
+        Assert.True(
+            await cache.Store(digest, "application/vnd.oci.image.manifest.v1+json", bytes)
+                .FirstAsync().ObserveCompletion(_ => { }, CancellationToken.None));
+
+        var hex = digest["sha256:".Length..];
+        var blobPath = Path.Combine(directory, "sha256", hex[..2], hex);
+        var sidecarPath = blobPath + ".type";
+
+        ContainerCacheEntry? entry;
+        // Hold the SIDECAR exclusively, so the read of it inside Open throws after the blob has
+        // already been opened — the exact window the handle could escape through.
+        using (new FileStream(sidecarPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            entry = await cache.Open(digest).FirstAsync()
+                .ObserveCompletion(_ => { }, CancellationToken.None);
+        }
+
+        Assert.Null(entry);
+        // If the blob handle leaked, this exclusive open cannot succeed.
+        using var probe = new FileStream(blobPath, FileMode.Open, FileAccess.Read, FileShare.None);
+        Assert.Equal(bytes.Length, probe.Length);
+    }
+
     // ── eviction ──────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
