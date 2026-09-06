@@ -157,11 +157,11 @@ spec:
                    wins over a chart-rendered blank for the same key — k8s keeps the LAST envFrom
                    on a clash. Rendered only when secrets are declared; the values file says why
                    the declaration lives here and not on the cluster. */}}
-            {{- with .Values.keyVaultSecrets }}
-            {{- if .secrets }}
+            {{- /* One entry per declared class, in list order — and that order IS precedence:
+                   Kubernetes keeps the LAST envFrom on a key clash. */}}
+            {{- range $class := (include "memex.keyVaultClasses" . | fromYamlArray) }}
             - secretRef:
-                name: "{{ .syncedSecret | default (.name | default "memex-portal-keyvault") }}"
-            {{- end }}
+                name: "{{ $class.syncedSecret }}"
             {{- end }}
             {{- /* ⚠️ LEGACY: the block below is the escape hatch for an environment whose
                    SecretProviderClass is still HAND-MADE. Declare the secrets under
@@ -236,12 +236,10 @@ spec:
 {{- /* The mount of the DECLARED Key Vault CSI volume (.Values.keyVaultSecrets). The mount is what
        makes the driver fetch the vault objects, create the synced Secret and keep rotating it — a
        SecretProviderClass with no mounting pod syncs nothing, with no error anywhere. */}}
-{{- with .Values.keyVaultSecrets }}
-{{- if .secrets }}
-            - name: "{{ .volumeName | default "kv-secrets" }}"
-              mountPath: "{{ .mountPath | default "/mnt/secrets-store" }}"
+{{- range $class := (include "memex.keyVaultClasses" . | fromYamlArray) }}
+            - name: "{{ $class.volumeName }}"
+              mountPath: "{{ $class.mountPath }}"
               readOnly: true
-{{- end }}
 {{- end }}
 {{- /* ⚠️ LEGACY: extra mounts the chart does not own — the mount half of .Values.extraVolumes
        (typically a HAND-MADE secrets-store CSI volume, whose mount is what makes the driver sync
@@ -468,15 +466,13 @@ spec:
 {{- /* The DECLARED Key Vault CSI volume (.Values.keyVaultSecrets) — the volume half of the
        SecretProviderClass the chart renders in secretproviderclass.yaml. Same block, so the
        SecretProviderClass, the volume, its mount and the envFrom can never disagree on a name. */}}
-{{- with .Values.keyVaultSecrets }}
-{{- if .secrets }}
-        - name: "{{ .volumeName | default "kv-secrets" }}"
+{{- range $class := (include "memex.keyVaultClasses" . | fromYamlArray) }}
+        - name: "{{ $class.volumeName }}"
           csi:
             driver: "secrets-store.csi.k8s.io"
             readOnly: true
             volumeAttributes:
-              secretProviderClass: "{{ .name | default "memex-portal-keyvault" }}"
-{{- end }}
+              secretProviderClass: "{{ $class.name }}"
 {{- end }}
 {{- /* ⚠️ LEGACY: extra volumes the chart does not own — typically the secrets-store CSI volume
        behind a HAND-MADE SecretProviderClass. Prefer .Values.keyVaultSecrets, which renders the
