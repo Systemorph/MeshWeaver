@@ -715,6 +715,8 @@
   "ui.sendDocument.fromLabel": "From",
   "ui.sendDocument.connect": "Connect Microsoft 365",
   "ui.sendDocument.connectFirst": "Your Microsoft 365 mailbox is not connected yet. Connect it now to send from your own address — anything you have already typed is kept.",
+  "ui.sendDocument.connectUnknown": "We could not check whether your Microsoft 365 mailbox is connected just now. Your draft is safe, and you can send it either way — you will be asked which mailbox it goes out from.",
+  "ui.sendDocument.checkAgain": "Check again",
   "ui.sendDocument.signInTitle": "Sign in to share by email",
   "ui.sendDocument.signInBody": "Sharing a document by email needs a signed-in account, so replies reach you and your draft is kept privately.",
   "ui.sendDocument.fromSharedTitle": "Send from the shared mailbox?",
