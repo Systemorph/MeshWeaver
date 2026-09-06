@@ -195,14 +195,12 @@ public static class SpaceNodeType
                 new SpaceAdminInvariantValidator(
                     sp.GetRequiredService<IMessageHub>(),
                     sp.GetService<ILoggerFactory>()?.CreateLogger<SpaceAdminInvariantValidator>()));
-            // Deleting a Space removes the ENTIRE partition: after the recursive node
-            // delete, drop the backing store (Postgres schema incl. satellites) on every
-            // partition storage provider and remove the Admin/Partition/{id} definition.
-            services.AddSingleton<INodePostDeletionHandler>(sp =>
-                new PartitionDropPostDeletionHandler(
-                    sp.GetRequiredService<IMessageHub>(),
-                    NodeType,
-                    sp.GetService<ILoggerFactory>()?.CreateLogger<PartitionDropPostDeletionHandler>()));
+            // 🚨 NO per-type partition teardown here any more (#3436). Deleting a Space still
+            // drops the whole partition — PartitionDropPostDeletionHandler now matches every
+            // partition ROOT structurally and is registered ONCE by AddGraph. Registering it per
+            // NodeType was the defect: the two hand-written registrations (Space here, User in
+            // AddUserType) stood for "every partition-owning type", and four Store/Plugin-rooted
+            // partitions kept their Postgres schemas when they were deleted.
             return services;
         });
         // Space instances are NOT publicly readable — partition access controls visibility.
