@@ -1097,6 +1097,7 @@
   "versions.title": "Versionsverlauf",
   "versions.none": "Kein Versionsverlauf vorhanden.",
   "versions.unavailable": "Der Versionsverlauf ist nicht verfügbar.",
+  "versions.notRetained": "Auf dieser Installation wird kein Versionsverlauf aufbewahrt. Das ist eine Konfigurationseigenschaft, keine Eigenschaft dieses Knotens.",
   "versions.current": "Aktuell",
   "versions.from": "Von",
   "versions.to": "Bis",
