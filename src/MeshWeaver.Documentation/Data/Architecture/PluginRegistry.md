@@ -92,7 +92,13 @@ and they are independent:
   installation with **no install records yet** installs every catalog entry matching its
   `Source/Package` patterns, through the same path the Install button uses. Our deployments set
   `["Plugins/*"]`, so a new portal comes up with the platform plugins — the Store included — already
-  present and (per `AutoUpdateByDefault`) tracking their repo.
+  present and (per `AutoUpdateByDefault`) tracking their repo. 🚨 Over a **local checkout** — a
+  `PluginCatalog:Sources:N:RepoPath` that is a directory on the host, which is what a self-registry
+  `memex-local` mounts — the same patterns do NOT seed once: they are reconciled on every boot,
+  because a mounted working tree is standing operator intent and nothing else refreshes it (the
+  update watcher needs webhooks a local install never receives; the registry reconciler needs a
+  registry). Seeded once, a local portal silently served a week-old course (#3359). It costs
+  nothing when nothing changed, and a disabled feature flag still excludes.
 - **`Features:Flags:{name}:Packages`** *asserts* a per-environment policy, reconciled on **every**
   boot: what THIS deployment always has, with a declared-but-disabled flag EXCLUDING what it names.
   🚨 Use this, not `InstallByDefault`, whenever the portal already has install records — the seed is

@@ -59,6 +59,19 @@ public sealed record ConfiguredPackageSource(IPackageSource Source, string GitRe
     /// <see cref="AutoDiscover"/> is on: there is nothing to sync that was never discovered.
     /// </summary>
     public bool AutoSync { get; init; }
+
+    /// <summary>
+    /// Whether <see cref="RepoPath"/> is NOT a URL — a path read off this host's disk (whether it
+    /// exists is the fetch's business, reported at listing time), i.e. a MOUNTED WORKING TREE,
+    /// which is what a self-registry <c>memex-local</c> serves. Read by the default
+    /// install: a package an operator's <c>InstallByDefault</c> pattern selects out of a local
+    /// checkout is RECONCILED on every boot, not seeded once, because a mounted tree is standing
+    /// operator intent — the portal exists to mirror it — and no other mechanism refreshes it
+    /// (<c>PluginUpdateWatcher</c> needs GitHub webhooks a local install never receives,
+    /// <c>RegistryUpdateReconciler</c> does nothing without a registry; MeshWeaver#3359).
+    /// Cost when nothing changed: none — the install short-circuits on the content hash.
+    /// </summary>
+    public bool LocalCheckout { get; init; }
 }
 
 /// <summary>
@@ -147,6 +160,9 @@ public static class PackageSources
                 {
                     RepoPath = repo ?? "",
                     Subdir = subdir ?? "",
+                    // The same split FromRepo makes: a URL is fetched, anything else is read off
+                    // this host's disk — and is therefore a working tree this portal mirrors.
+                    LocalCheckout = repo is { Length: > 0 } && !IsUrl(repo),
                     // Both default to FALSE: an instance that configures nothing keeps today's
                     // behaviour exactly (no enumeration, no unattended Space creation). Opting in is
                     // a deliberate deployment decision, made in the same place the source itself is
