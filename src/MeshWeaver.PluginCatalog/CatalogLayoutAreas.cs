@@ -917,6 +917,28 @@ public static class CatalogLayoutAreas
             .SelectMany(_ => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId));
     }
 
+    /// <summary>
+    /// Closes an install's landing wave by proposing the module set the activation record now
+    /// describes (#3395) — the same step <c>RegistryUpdateReconciler</c> takes at the end of its
+    /// auto-update wave, so both lanes move the mesh's set the one way. A deployment with no
+    /// landing service (a consumer with no module store) proposes nothing, silently.
+    /// </summary>
+    private static IObservable<ModuleSet?> ProposeMeshModuleSet(IMessageHub hub, ILogger? logger)
+    {
+        var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
+        if (landing is null)
+            return Observable.Return<ModuleSet?>(null);
+        return landing.ProposeModuleSet()
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "The module landed but its module set could not be proposed — the mesh stays "
+                    + "on its current set and the next landing wave proposes again. Cause: {Cause}",
+                    ex.Message);
+                return Observable.Return<ModuleSet?>(null);
+            });
+    }
+
     private static IObservable<InstallResult> InstallOrUpdateCore(
         IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg, ILogger? logger,
         string? authorizingUserId)
@@ -936,6 +958,12 @@ public static class CatalogLayoutAreas
                 : install.SelectMany(result => bundles
                     .AdoptModule(pkg.Id, pkg.Module!,
                         $"{PackageInstaller.InstalledPartition}/{pkg.Id}")
+                    // 🚨 #3395 — a one-package install IS a landing wave, and a wave that does not
+                    // propose its module set never activates: boot loads the mesh's set, not the
+                    // activation record it was derived from. Never fails the install: an
+                    // unproposable set leaves the mesh on the one every replica already runs, and
+                    // the next wave proposes again.
+                    .SelectMany(_ => ProposeMeshModuleSet(hub, logger))
                     .Select(_ => result));
 
         IObservable<InstallResult> Full() =>
