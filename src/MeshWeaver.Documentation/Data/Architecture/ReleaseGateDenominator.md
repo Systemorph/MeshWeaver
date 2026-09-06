@@ -110,6 +110,22 @@ directions, and the two reasons agree:
   environment, turning this gate into the outage it exists to prevent. Reading the sentinel alone is
   one file read per source.
 
+### An ABSENT root is a refusal, not an exemption
+
+An empty floor has two causes that look identical and mean opposite things:
+
+| Cause | Answer |
+|---|---|
+| The root **was read** and holds no sealed publication | `NotEnforced` — the one stated applicability exemption |
+| The root is **absent or unreadable** (a volume that did not mount, a mistyped path, an IO fault) | **HOLD** — `Indeterminate`, with the reason |
+
+A deployment that configures `PreWarm:PrebuiltBundleRoot` *declares* that it consumes CI bakes, so a
+root that is not on disk is an availability incident, never evidence that nothing is published.
+`SealedBundleFloor.Refusal` carries that distinction and callers test it **first** — `ServesBakes` is
+false for both, which is exactly why the order matters. Collapsing them would let a mis-mounted
+volume clear the gate: the same vacuity this page is about, reintroduced one level up. (Caught in
+review on the PR that introduced it — the shape is easy to write by accident.)
+
 ### "Serves no bakes" is stated, never inferred
 
 `SealedBundleFloor.Identities` counts how many identity directories carried at least one sealed

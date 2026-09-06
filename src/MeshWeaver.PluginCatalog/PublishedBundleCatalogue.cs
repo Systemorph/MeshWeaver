@@ -201,11 +201,26 @@ public static class PublishedBundleCatalogue
     /// </summary>
     public static SealedBundleFloor EverSealedBundles(string? publishedRoot, ILogger? logger = null)
     {
-        if (string.IsNullOrWhiteSpace(publishedRoot) || !Directory.Exists(publishedRoot))
-            return SealedBundleFloor.Empty;
+        // 🚨 "I could not look" is NOT "there is nothing here", and the difference decides the
+        // verdict: an unreadable root must HOLD (Indeterminate), while a readable root that holds
+        // no publication is the one stated applicability exemption. A configured root that does not
+        // EXIST is the mis-mount / mistyped-path case — the deployment declares it consumes CI
+        // bakes and its storage is not there — so it is a refusal, never an exemption. Collapsing
+        // the two is the same vacuity this whole method exists to remove.
+        if (string.IsNullOrWhiteSpace(publishedRoot))
+            return SealedBundleFloor.Unreadable(
+                $"no published bundle root is configured ({ShippedPrebuiltBundles.PublishedRootConfigKey})");
+        if (!Directory.Exists(publishedRoot))
+            return SealedBundleFloor.Unreadable(
+                $"the configured published bundle root '{publishedRoot}' does not exist — this "
+                + "deployment declares that it consumes CI bakes, so an absent root is an "
+                + "unreadable one (a volume that did not mount, or a mistyped path), not evidence "
+                + "that nothing is published. Cannot determine ≠ clear to proceed.");
 
         var bundles = new List<string>();
         var identities = 0;
+        try
+        {
         foreach (var identityDirectory in Directory.EnumerateDirectories(publishedRoot)
                      .OrderBy(d => d, StringComparer.Ordinal))
         {
@@ -229,6 +244,17 @@ public static class PublishedBundleCatalogue
                 continue;
             identities++;
             bundles.AddRange(declaredHere);
+        }
+        }
+        catch (Exception ex)
+        {
+            // An IO fault against the share is an availability incident, and it must be
+            // distinguishable from an empty root for exactly the reason above.
+            logger?.LogWarning(ex,
+                "ReleaseAvailability: could not read the published bundle root {Root} while "
+                + "establishing which packages must carry a sealed bake", publishedRoot);
+            return SealedBundleFloor.Unreadable(
+                $"the published bundle root '{publishedRoot}' could not be read ({ex.Message})");
         }
         return new SealedBundleFloor(ReleaseArtifacts.Of(bundles).SealedBundles, identities);
     }
@@ -750,13 +776,24 @@ public sealed record ReleaseObservation(ReleaseTarget Target, ReleaseArtifacts A
 /// "package X has never been sealed" carries NO information about X and must not be read as an
 /// exemption. A caller that cannot tell that case apart is back to a denominator that can be
 /// vacuously empty.</param>
-public sealed record SealedBundleFloor(ImmutableHashSet<string> Bundles, int Identities)
+/// <param name="Refusal">Why the root could not be READ, or null when it was. 🚨 Non-null is a HOLD
+/// and never an exemption: an absent or unreadable root on a deployment that declares it consumes
+/// CI bakes is a mis-mount or an IO incident, not evidence that nothing is published. Collapsing
+/// "could not look" into "nothing here" is the vacuity this type exists to remove.</param>
+public sealed record SealedBundleFloor(
+    ImmutableHashSet<string> Bundles, int Identities, string? Refusal = null)
 {
-    /// <summary>A root that holds no sealed publication under any identity.</summary>
+    /// <summary>A root that was READ and holds no sealed publication under any identity.</summary>
     public static SealedBundleFloor Empty { get; } =
         new(ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase), 0);
 
+    /// <summary>An observation that could not be made — the fail-safe constructor.</summary>
+    public static SealedBundleFloor Unreadable(string reason) =>
+        new(ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase), 0, reason);
+
     /// <summary>Whether this root serves CI bakes at all — the precondition for reading an absent
-    /// bundle as "this package ships no content" rather than as "we have observed nothing".</summary>
-    public bool ServesBakes => Identities > 0;
+    /// bundle as "this package ships no content" rather than as "we have observed nothing".
+    /// False for an unreadable observation too, which is why callers must test
+    /// <see cref="Refusal"/> FIRST: the two share this answer and mean opposite things.</summary>
+    public bool ServesBakes => Refusal is null && Identities > 0;
 }

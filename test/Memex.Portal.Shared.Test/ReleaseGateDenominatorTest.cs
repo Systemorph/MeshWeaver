@@ -34,8 +34,27 @@ namespace Memex.Portal.Shared.Test;
 /// so the negative control is executed rather than asserted: a test that only showed the new
 /// reading holding could not distinguish "the fix works" from "the fixture was always red".</para>
 /// </summary>
-public class ReleaseGateDenominatorTest
+public class ReleaseGateDenominatorTest : IDisposable
 {
+    /// <summary>Every published root this test built, removed on teardown — a leaked temp tree
+    /// bloats the CI agent and is one more way for two runs to interfere.</summary>
+    private readonly List<string> roots = [];
+
+    public void Dispose()
+    {
+        foreach (var root in roots)
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best effort */ }
+        }
+        GC.SuppressFinalize(this);
+    }
+
+    private string Track(string root)
+    {
+        roots.Add(root);
+        return root;
+    }
+
     // Three framework identities: an EARLIER wave that baked everything, the identity the instance
     // is RUNNING (Education's publication already torn), and the TARGET the roll would move to.
     private const string Earlier = "s3441earlier00000000000000000000";
@@ -90,7 +109,7 @@ public class ReleaseGateDenominatorTest
         // A configured root holding no sealed publication under any identity. The old reading made
         // this the WORST case — every package non-content-bearing, the content half checking
         // nothing, and a green verdict over zero evidence.
-        var root = Path.Combine(Path.GetTempPath(), "mw-3441-empty-" + Guid.NewGuid().ToString("N"));
+        var root = Track(Path.Combine(Path.GetTempPath(), "mw-3441-empty-" + Guid.NewGuid().ToString("N")));
         Directory.CreateDirectory(Path.Combine(root, PublishedBundleCatalogue.ReleaseMarkerDirectoryName));
         // A torn publication contributes nothing — it is not evidence that the root serves bakes.
         Directory.CreateDirectory(Path.Combine(root, Live, "education"));
@@ -100,6 +119,41 @@ public class ReleaseGateDenominatorTest
         Assert.Equal(0, floor.Identities);
         Assert.False(floor.ServesBakes);
         Assert.Empty(floor.Bundles);
+    }
+
+    /// <summary>
+    /// 🚨 <b>An ABSENT root is a refusal, not an exemption</b> — the two produce the same empty
+    /// floor and mean opposite things.
+    ///
+    /// <para>A deployment that configures a bundle root DECLARES that it consumes CI bakes. If that
+    /// root is not on disk, the volume did not mount or the path is mistyped: an availability
+    /// incident. Reading it as "serves no bakes" would clear the gate on a mis-mount — the very
+    /// vacuity this change removes, reintroduced one level up. Caught in review on this PR.</para>
+    /// </summary>
+    [Fact]
+    public void AnAbsentRoot_Refuses_RatherThanReadingAsServesNoBakes()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), "mw-3441-absent-" + Guid.NewGuid().ToString("N"));
+        Assert.False(Directory.Exists(missing));
+
+        var floor = PublishedBundleCatalogue.EverSealedBundles(missing);
+
+        Assert.NotNull(floor.Refusal);
+        Assert.Contains(missing, floor.Refusal);
+        // 🚨 ServesBakes is false here TOO — which is exactly why a caller must test Refusal first.
+        Assert.False(floor.ServesBakes);
+
+        // And the refusal becomes the HOLD the service actually produces — never an exemption.
+        // 🚨 This is the SAME construction ReleaseAvailabilityService.Verdict uses, deliberately:
+        // IsUpdatable(target, [], Unreadable(...)) would answer IsUpdatable=false but
+        // IsIndeterminate=FALSE (that property reads the per-package verdicts, and an empty list
+        // has none), which surfaces an availability incident as a compatibility verdict.
+        var verdict = UpdatabilityVerdict.Unavailable(floor.Refusal!);
+        Assert.False(verdict.IsUpdatable);
+        Assert.True(verdict.IsIndeterminate);
+        Assert.Equal(floor.Refusal, verdict.HoldReason);
+        Assert.All(verdict.Packages, p =>
+            Assert.Equal(PackageAvailabilityKind.Indeterminate, p.Kind));
     }
 
     /// <summary>
@@ -243,9 +297,9 @@ public class ReleaseGateDenominatorTest
     /// directory, no <c>_complete</c> sentinel — a bake that died before sealing, which is exactly
     /// what the boot seeder and the gate both refuse to read).
     /// </summary>
-    private static string EducationRegressedRoot()
+    private string EducationRegressedRoot()
     {
-        var root = Path.Combine(Path.GetTempPath(), "mw-3441-" + Guid.NewGuid().ToString("N"));
+        var root = Track(Path.Combine(Path.GetTempPath(), "mw-3441-" + Guid.NewGuid().ToString("N")));
         Directory.CreateDirectory(Path.Combine(root, PublishedBundleCatalogue.ReleaseMarkerDirectoryName));
         File.WriteAllText(
             Path.Combine(root, PublishedBundleCatalogue.ReleaseMarkerDirectoryName, TargetVersion),

@@ -107,13 +107,7 @@ public class ReleaseAvailabilityService(
             // PublishedBundleCatalogue.EverSealedBundles.
             return pool
                 .InvokeBlocking(_ => PublishedBundleCatalogue.EverSealedBundles(publishedRoot, logger))
-                .SelectMany(floor => !floor.ServesBakes
-                    ? Observable.Return(UpdatabilityVerdict.NotEnforced(NoPublicationsReason(publishedRoot)))
-                    : RequiredPackages(floor)
-                        .SelectMany(required => PublishedBundleCatalogue
-                            .Observe(pool, publishedRoot, targetVersion, logger)
-                            .Select(observation => ReleaseAvailability.IsUpdatable(
-                                observation.Target, required, observation.Artifacts))));
+                .SelectMany(floor => Verdict(floor, publishedRoot, targetVersion));
         })
         // 🚨 The gate must ANSWER, always. Its two inputs can each stall indefinitely — a mesh
         // query that never emits its initial snapshot, an I/O pool slot that never frees — and a
@@ -136,6 +130,42 @@ public class ReleaseAvailabilityService(
     /// a stalled tick can never overlap the next one.
     /// </summary>
     private static readonly TimeSpan AnswerBudget = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// The verdict, given what the denominator observation turned out to be. Three outcomes, and
+    /// the ORDER is the whole point.
+    ///
+    /// <para>🚨 <b>An unreadable root is a HOLD, and it is tested FIRST.</b> A configured root that
+    /// does not exist, or that faults on read, produces a floor with no bundles — the same shape as
+    /// a root that genuinely serves no bakes. They mean opposite things: the first is a mis-mounted
+    /// volume or a mistyped path on a deployment that DECLARES it consumes CI bakes (an availability
+    /// incident: cannot determine, which is not clearance to proceed), the second is the one stated
+    /// applicability exemption. Collapsing them would let a mis-mount clear the gate — the exact
+    /// vacuity this change removes, reintroduced one level up.</para>
+    /// </summary>
+    private IObservable<UpdatabilityVerdict> Verdict(
+        SealedBundleFloor floor, string publishedRoot, string? targetVersion)
+    {
+        // 🚨 UpdatabilityVerdict.Unavailable, not IsUpdatable(target, [], Unreadable(...)): the
+        // latter answers IsUpdatable=false but IsIndeterminate=FALSE, because that property reads
+        // the per-package verdicts and an empty package list has none. Callers separate "I could
+        // not look" (an availability incident to fix) from "I looked and it is incompatible" (a
+        // release to re-bake) on exactly that flag, so an unreadable denominator reported without
+        // it would be surfaced as a compatibility verdict about the release — the conflation
+        // #1754 forbids.
+        if (floor.Refusal is { } refusal)
+            return Observable.Return(UpdatabilityVerdict.Unavailable(refusal));
+
+        if (!floor.ServesBakes)
+            return Observable.Return(
+                UpdatabilityVerdict.NotEnforced(NoPublicationsReason(publishedRoot)));
+
+        return RequiredPackages(floor)
+            .SelectMany(required => PublishedBundleCatalogue
+                .Observe(pool, publishedRoot, targetVersion, logger)
+                .Select(observation => ReleaseAvailability.IsUpdatable(
+                    observation.Target, required, observation.Artifacts)));
+    }
 
     /// <summary>
     /// Why the gate does not apply to a root that holds no sealed publication under ANY identity.
