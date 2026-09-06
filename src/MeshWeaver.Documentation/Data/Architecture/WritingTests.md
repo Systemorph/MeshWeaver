@@ -294,6 +294,58 @@ Fold the wait into `await ….Should().Match(...)` on the real stream. The only 
 
 ---
 
+### ❌ A reachability assertion that collects before teardown has finished
+
+```csharp
+var weak = new WeakReference(hub);
+owner.Dispose();
+GC.Collect(); GC.WaitForPendingFinalizers();
+weak.IsAlive.Should().BeFalse();              // ❌ green in the suite, red alone
+```
+
+🚨 **`Dispose()` only STARTS a hub's teardown.** It freezes hosted-hub creation, posts
+`ShutdownRequest(Quiescing)` and returns — every phase after that is a fresh message on the action
+block ([Hub Disposal Model](/Doc/Architecture/HubDisposalModel)). So the instant `Dispose()` returns,
+the hub is still rooted by its own in-flight shutdown: its action block, its scheduler, its registry
+entry. Collecting there measures the teardown's *speed*, not the reference graph.
+
+**The failure mode is the dangerous one, because the test goes GREEN.** Measured on
+`StreamReleasesItsHubTest` (#3321): the first version of that assertion **passed inside the
+485-test suite** — where the surrounding tests happened to give the teardown time — and **failed the
+moment it ran alone, on the same binary**. Suite-green / alone-red with nothing rebuilt is the
+signature; if you see it, suspect an assertion that is waiting on wall-clock luck rather than on a
+condition.
+
+Join the completion signal first, then collect:
+
+```csharp
+// captured BEFORE Dispose, inside a non-inlined helper — DisposalCompleted wraps a subject FIELD,
+// and a subject does not reference the object that owns it, so holding it cannot root the hub
+await disposalCompleted
+    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+    .FirstOrDefaultAsync()
+    .Timeout(TestTimeouts.Convergence)
+    .Await(TestContext.Current.CancellationToken);
+
+GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+GC.WaitForPendingFinalizers();
+weak.IsAlive.Should().BeFalse();              // ✅ after this, only a kept reference can hold it
+```
+
+That is not a bigger wait — it is a *different kind* of wait, and it is what turns the probe from a
+sample into a proof. [Negative Controls](/Doc/Architecture/NegativeControls) is right that a
+`WeakReference` whose truth depends on *when* it is evaluated pins nothing; gating it on
+`DisposalCompleted` is precisely what removes the *when*.
+
+Two details that decide whether the test can fail for the right reason:
+
+- **Take the weak reference, and drop the strong one, inside a `[MethodImpl(NoInlining)]` helper.**
+  A live local on the test's own frame roots the object and turns a red into a green.
+- **Return the completion observable, never the object.** Returning the hub — or any closure over
+  it — defeats the whole assertion.
+
+---
+
 ### ❌ Mocking core services
 
 ```csharp
@@ -430,6 +482,27 @@ on shared state.
 When a test fails on CI but passes locally, **don't label it a flake and skip it.** Every CI-only failure investigated in this repo traced to a real bug: an eventually-consistent index read too eagerly; a hot `Subject` that should have been a `ReplaySubject`; an `AccessContext` lost across the post-pipeline boundary; an init ping removed from a hub that doesn't self-activate. Skipping hides the bug; running it on CI is exactly what surfaced it.
 
 Fix the bug. Re-running a hung test "to see if it was a flake" hides the race — see [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow) for the trace tags to grep instead.
+
+### 🚨 The other axis: green in the SUITE, red ALONE, same binary
+
+CI-vs-local is not the only comparison that carries information, and the second one is easier to
+miss because it needs nothing rebuilt. **A test that passes inside its suite and fails when run
+alone is asserting something it never observed** — the suite was supplying, by accident, a wait the
+test does not contain.
+
+It is the sharper signal of the two: CI-vs-local can be blamed on the machine, whereas suite-vs-alone
+holds the binary, the machine and the code fixed and varies only *what else was running*. So the
+difference is the test, always.
+
+Measured instance: `StreamReleasesItsHubTest.ADisposedStream_ReleasesItsHub_SoTheHubBecomesCollectable`
+(#3321) — **485 passed** in the full project, **1 failed** with a `--filter` down to that one test,
+same `.dll`. The assertion collected immediately after `Dispose()`, which only *starts* a hub's
+teardown; the surrounding tests had been paying for the wait. See
+[❌ A reachability assertion that collects before teardown has finished](#-a-reachability-assertion-that-collects-before-teardown-has-finished).
+
+🚨 The reflex to resist is running the isolated case again and calling the green one real. **The
+PASSING run is the control**, not the weaker failure: it is the one that tells you which ambient
+condition the test is silently depending on.
 
 ---
 
