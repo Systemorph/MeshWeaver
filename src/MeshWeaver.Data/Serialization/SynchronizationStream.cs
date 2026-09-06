@@ -374,6 +374,30 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// PRE-EXISTING sub-hub, in which case the configuration lambda — and therefore
     /// <see cref="BindHub"/> — never runs (and no BuildupAction runs either, so nothing can
     /// observe the gap).</para>
+    ///
+    /// <para>🚨 <b>RELEASED when the hub dies — this field is what leaked</b>
+    /// (Systemorph/MeshWeaver#3321, step 3 of 3). A heap dump of a 26 h production replica found
+    /// 1 496 <c>MessageHub</c>s at <c>RunLevel=Dead</c> still reachable, and the ONLY thing holding
+    /// them was this property: 1 485 <c>SynchronizationStream&lt;MeshNode&gt;</c> + 11
+    /// <c>&lt;JsonElement&gt;</c>, one stream per corpse, exactly. Closing a DI scope does not null
+    /// the fields of an object that outlives it, so each dead hub kept its own Autofac
+    /// <c>ILifetimeScope</c> and <c>TypeRegistry</c> alive — ~390 KB apiece, ~580 MB of the 3.5 GB
+    /// live heap. <see cref="ReleaseHub"/> is now called from BOTH ends of that lifetime:
+    /// <see cref="Dispose"/>, and a hook on the sub-hub's own disposal for the far more common case
+    /// where the PARENT tears the sub-hub down while nobody ever disposes the stream (1 485 of the
+    /// 1 496).</para>
+    ///
+    /// <para>🚨 So <b>the declaration is non-nullable and the field is not</b>, deliberately.
+    /// Making it <c>IMessageHub?</c> is a breaking change to a public interface these assemblies
+    /// ship as packages; what makes it SAFE instead is that every dereference reachable
+    /// concurrently with teardown goes through
+    /// <see cref="SynchronizationStreamLiveness.TryGetHub"/> (answers <c>null</c>) or
+    /// <see cref="SynchronizationStreamLiveness.RequireHub"/> (throws the TRANSIENT
+    /// <see cref="HubDisposingException"/>), and every read inside this file resolves the field
+    /// ONCE into a local rather than re-reading it after its own guard. The predecessor of this
+    /// code nulled the field with neither of those in place and it cost a production NRE inside
+    /// <c>LayoutAreaHost</c>'s constructor that reached the subscriber as a TERMINAL
+    /// <c>DeliveryFailure</c>. See <c>Doc/Architecture/StreamLivenessAndTheHubReference</c>.</para>
     /// </summary>
     public IMessageHub Hub { get; private set; } = null!;
 
@@ -382,6 +406,36 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// on <see cref="Hub"/> for why this cannot wait for the constructor's return path.
     /// </summary>
     private void BindHub(IMessageHub syncHub) => Hub = syncHub;
+
+    /// <summary>
+    /// Drops the reference to the synchronization hub — the release half of #3321.
+    ///
+    /// <para>Idempotent and callable from any thread. It does NOT dispose anything: by the time it
+    /// runs the hub is either being disposed by us (<see cref="Dispose"/>) or has just finished
+    /// disposing itself (the constructor's hook), so there is nothing left to tear down — only a
+    /// reference to let go of. Everything that could still read the field is already guarded:
+    /// <see cref="TryGetActiveHub"/>, the <c>isDisposed || Hub is null</c> arms on
+    /// <see cref="OnNext"/> / <see cref="DeliverMessage"/> / <see cref="RegisterForDisposal"/>, and
+    /// <see cref="StreamLiveness.IsUsable"/>, which has always treated an absent hub as dead — so a
+    /// released stream reports itself unusable through the same predicate every cache already
+    /// consults.</para>
+    /// </summary>
+    private void ReleaseHub()
+    {
+        var released = Interlocked.Exchange(ref hubReleased, 1) == 0;
+        if (!released)
+            return;
+        // Read the address BEFORE dropping the reference — the log line is the only trace that a
+        // corpse was let go, and it is the counter a heap re-measurement is compared against.
+        var address = Hub?.Address;
+        Hub = null!;
+        logger.LogDebug(
+            "[SYNC_STREAM] Released hub {Address} from stream {StreamId} — the stream no longer "
+            + "retains it (#3321)", address, StreamId);
+    }
+
+    /// <summary>0 until <see cref="ReleaseHub"/> has run; CAS'd to 1 exactly once.</summary>
+    private int hubReleased;
 
     /// <summary>
     /// The host of the synchronization stream.
@@ -648,7 +702,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             var updated = valueUpdate(current);
             if (updated is null) return null;
             if (current is not null && Equals(current, updated)) return null;
-            return BuildChangeItem(current, updated);
+            // Resolve the hub ONCE, here on the turn (#3321 step 3). The transform runs inside the
+            // sync hub's UpdateStreamRequest handler, which a Dispose() on another thread can
+            // overtake — and `null` is this delegate's own documented no-op, so a stream that let
+            // its hub go answers with the absence it already models instead of NRE'ing on the way
+            // into BuildChangeItem.
+            if (!TryGetActiveHub(out var hub)) return null;
+            return BuildChangeItem(hub, current, updated);
         }, exceptionCallback);
 
     /// <inheritdoc cref="Update(System.Func{TStream,TStream},System.Action{System.Exception})"/>
@@ -670,7 +730,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         {
             var updated = valueUpdate(current);
             if (updated is null) return null;
-            return BuildFullChangeItem(current, updated);
+            // Hub resolved once on the turn — see Update above (#3321 step 3).
+            if (!TryGetActiveHub(out var hub)) return null;
+            return BuildFullChangeItem(hub, current, updated);
         }, exceptionCallback);
 
     /// <inheritdoc cref="SetFull(System.Func{TStream,TStream},System.Action{System.Exception})"/>
@@ -698,10 +760,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// never emitted its content (the DataChangeStreamUpdateTest count-view non-emission).
     /// </para>
     /// </summary>
-    private long OwnerVersion()
-        => Owner.Equals(Host.Address) ? Hub.Version : (Current?.Version ?? 0L);
+    /// <param name="hub">The stream's hub, ALREADY RESOLVED by the caller's guard — never
+    /// re-read from the field here, because a Dispose() on another thread can null it between the
+    /// guard and this line (#3321 step 3).</param>
+    private long OwnerVersion(IMessageHub hub)
+        => Owner.Equals(Host.Address) ? hub.Version : (Current?.Version ?? 0L);
 
-    private ChangeItem<TStream> BuildChangeItem(TStream? current, TStream updated)
+    private ChangeItem<TStream> BuildChangeItem(IMessageHub hub, TStream? current, TStream updated)
     {
         // 🚨 ChangedBy is the stream-echo-suppression key — the identity of the STREAM that
         // originated the change — and it must MATCH the value the echo-suppression filters
@@ -719,11 +784,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // an empty ChangedBy breaks both filters. ClientId is a non-empty Guid by construction.
         var changedBy = ClientId;
         // 🚨 ONLY the owning hub sets Version. Subscriber carries the base it read.
-        var version = OwnerVersion();
+        var version = OwnerVersion(hub);
 
         if (current is not null)
         {
-            var updatedJson = JsonSerializer.SerializeToElement(updated, Hub.JsonSerializerOptions);
+            var updatedJson = JsonSerializer.SerializeToElement(updated, hub.JsonSerializerOptions);
             // 1. PatchFunction (e.g. PatchMeshNode) derives the per-entity Updates
             //    from current→updated. Registered on the OWNER's reduce config; a
             //    lightweight subscriber may not have it, so this can be null.
@@ -737,7 +802,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             //    (ToDataChangeRequest) gets a well-formed Update. Without this the
             //    change shipped as a Full with empty Updates and the write-back's
             //    `Updates.Any()` filter dropped it, so the write never persisted.
-            var typeRegistry = Hub.ServiceProvider.GetService<MeshWeaver.Domain.ITypeRegistry>();
+            var typeRegistry = hub.ServiceProvider.GetService<MeshWeaver.Domain.ITypeRegistry>();
             if (typeRegistry is not null
                 && typeRegistry.TryGetCollectionName(typeof(TStream), out var collection)
                 && !string.IsNullOrEmpty(collection))
@@ -763,15 +828,15 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// clobbered by an older Full. See
     /// <see cref="SetFull(System.Func{TStream,TStream},System.Action{System.Exception})"/>.
     /// </summary>
-    private ChangeItem<TStream> BuildFullChangeItem(TStream? current, TStream updated)
+    private ChangeItem<TStream> BuildFullChangeItem(IMessageHub hub, TStream? current, TStream updated)
     {
         // ChangedBy = ClientId always (never empty; matches the echo-suppression filters,
         // never the per-instance StreamId). AccessContext is orthogonal. See BuildChangeItem.
         var changedBy = ClientId;
         // 🚨 ONLY the owning hub sets Version. Subscriber carries the base it read.
-        var version = OwnerVersion();
+        var version = OwnerVersion(hub);
 
-        var typeRegistry = Hub.ServiceProvider.GetService<MeshWeaver.Domain.ITypeRegistry>();
+        var typeRegistry = hub.ServiceProvider.GetService<MeshWeaver.Domain.ITypeRegistry>();
         if (typeRegistry is not null
             && typeRegistry.TryGetCollectionName(typeof(TStream), out var collection)
             && !string.IsNullOrEmpty(collection))
@@ -951,10 +1016,23 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             // stream whose Hub was never bound — but it must be LOUD: the silent version cost
             // #2625 two months of an unreproducible CI flake, because everything downstream
             // simply waited forever with nothing logged.
-            if (Hub is not null)
+            if (Hub is { } errorHub)
             {
-                Hub.FailStartup(error);
-                Hub.OpenGate(SynchronizationGate);
+                errorHub.FailStartup(error);
+                errorHub.OpenGate(SynchronizationGate);
+            }
+            else if (Volatile.Read(ref hubReleased) == 1)
+            {
+                // 🚨 A SECOND way to reach the branch above, introduced by #3321 step 3, and it is
+                // benign — so it must NOT borrow that branch's LogError. The hub was RELEASED
+                // because it died (this stream is undisposed, but its hosted sub-hub was torn down
+                // by its parent), which means there is no Started task left to settle: nothing is
+                // waiting on it, because the hub that owned it is already Dead. Levelling this at
+                // Error would ship a stack trace to Loki for every ordinary circuit teardown.
+                logger.LogDebug(error,
+                    "[SYNC_STREAM] OnError for {StreamId} (Reference={Reference}, Owner={Owner}) "
+                    + "after its hub was released — the sub-hub is already gone, so there is no "
+                    + "startup left to fault.", StreamId, Reference, Owner);
             }
             else
             {
@@ -1009,7 +1087,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// <param name="disposable">The disposable to dispose with the stream.</param>
     public void RegisterForDisposal(IDisposable disposable)
     {
-        if (isDisposed || Hub is null)
+        // ONE read of the field, used everywhere below — a Dispose() on another thread can null it
+        // between the guard and the use (#3321 step 3).
+        var hub = Hub;
+        if (isDisposed || hub is null)
         {
             // Disposed stream — no hub to register on. Dispose the registrant
             // immediately so the caller doesn't leak it. The caller's intent
@@ -1023,7 +1104,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // without Dispose() ever being called on the stream. Everything else rides the composite,
         // which Dispose() walks SYNCHRONOUSLY (see the field note).
         if (Interlocked.Exchange(ref hubDisposalHooked, 1) == 0)
-            Hub.RegisterForDisposal(streamDisposables);
+            hub.RegisterForDisposal(streamDisposables);
 
         // CompositeDisposable.Add disposes the registrant immediately if the composite is already
         // disposed, so a registration racing Dispose() cannot leak.
@@ -1037,12 +1118,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// <returns>The processed delivery, or a failed delivery if the stream is dead/disposed.</returns>
     public IMessageDelivery DeliverMessage(IMessageDelivery delivery)
     {
-        if (isDisposed || Hub is null)
+        // ONE read of the field — see RegisterForDisposal (#3321 step 3).
+        var hub = Hub;
+        if (isDisposed || hub is null)
         {
             logger.LogDebug("[SYNC_STREAM] DeliverMessage skipped for {StreamId} — stream is dead/disposed", StreamId);
             return delivery.Failed("Stream is disposed");
         }
-        return Hub.DeliverMessage(delivery.ForwardTo(Hub.Address));
+        return hub.DeliverMessage(delivery.ForwardTo(hub.Address));
     }
 
 
@@ -1055,7 +1138,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     {
         // A DISPOSED stream has no hub to post to; drop the value rather than
         // NRE'ing on Hub.Post. (Subscribers already saw Store.OnCompleted.)
-        if (isDisposed || Hub is null)
+        // ONE read of the field — see RegisterForDisposal (#3321 step 3).
+        var hub = Hub;
+        if (isDisposed || hub is null)
         {
             logger.LogDebug("[SYNC_STREAM] OnNext skipped for {StreamId} — stream is dead/disposed", StreamId);
             return;
@@ -1074,7 +1159,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             // delivery.AccessContext naturally. No ImpersonateAsHub stamping
             // here — hub addresses were polluting CreatedBy on user-driven
             // writes via the AsyncLocal leak (fixed 2026-05-22).
-            Hub.Post(new SetCurrentRequest(value));
+            hub.Post(new SetCurrentRequest(value));
         }
         catch (Exception ex)
         {
@@ -1216,6 +1301,29 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // The outstanding fresh-snapshot re-ask dies with the stream — a pending Observe callback
         // that outlives it is exactly the leaked callback the quiescing budget flags.
         RegisterForDisposal(resyncSubscription);
+
+        // 🚨 THE HOOK THAT ACTUALLY RECLAIMS THE LEAK (#3321 step 3). A sync sub-hub is a HOSTED
+        // hub: its parent disposes it during the parent's own teardown — a Blazor circuit ending, a
+        // DisposeRequest, a recycle — while this stream is owned by a workspace somewhere else and
+        // is never told. Measured on a 26 h production replica: 1 496 hubs at RunLevel=Dead, of
+        // which only 11 sat under a stream that had itself been disposed. So Dispose() clearing the
+        // field would have reclaimed 11 of 1 496; this hook is what reaches the other 1 485.
+        //
+        // Registered AFTER the line above on purpose: that call is what hooks `streamDisposables`
+        // onto the hub (RegisterForDisposal's one-shot `hubDisposalHooked`), and the hub's
+        // composite disposes in registration order — so the stream's own registrants run FIRST and
+        // still see a bound Hub, and this release runs after them.
+        syncHub.RegisterForDisposal(_ => ReleaseHub());
+
+        // A hub that was already past the point of accepting registrants disposes this one inline,
+        // so the release may ALREADY have happened. A stream with no hub is not a stream: refuse
+        // exactly as the null branch above does, rather than handing back one that can never work.
+        if (Hub is null)
+        {
+            isDisposed = true;
+            Store.OnCompleted();
+            throw new HubDisposingException(Host.Address, Reference);
+        }
 
         // 🚨 Capture the creating user's identity ONCE, here on the thread that constructs
         // the stream — in production that is the circuit thread (cache.GetMeshNodeStream)
@@ -1466,7 +1574,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                         // (far-higher) version made the monotonicity guard drop the lower-versioned
                         // render Fulls as stale, so a late layout-area subscriber stayed stuck on
                         // "Building layout…" and never emitted its content.
-                        SetCurrent(hub, new ChangeItem<TStream>(value, StreamId, OwnerVersion()));
+                        SetCurrent(hub, new ChangeItem<TStream>(value, StreamId, OwnerVersion(hub)));
                         observer.OnNext(System.Reactive.Unit.Default);
                     },
                     observer.OnError,
@@ -1484,7 +1592,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 {
                     // Same one-clock invariant as the observable-init path above: OwnerVersion(),
                     // never Host.Version, so the init frame can't outrank later owned writes.
-                    SetCurrent(hub, new ChangeItem<TStream>(init, StreamId, OwnerVersion()));
+                    SetCurrent(hub, new ChangeItem<TStream>(init, StreamId, OwnerVersion(hub)));
                     return System.Reactive.Unit.Default;
                 })
                 // 🚨 A faulted initial load must fault the STREAM, not only this hub's buildup.
@@ -1513,7 +1621,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         logger.LogDebug("[SYNC_STREAM] UpdateStream called for {StreamId}, ChangeType={ChangeType}, Version={Version}, MessageId={MessageId}",
             StreamId, delivery.Message.ChangeType, delivery.Message.Version, delivery.Id);
 
-        if (Hub is null || Hub.IsDisposing)
+        if (Hub is not { IsDisposing: false })
         {
             logger.LogDebug("[SYNC_STREAM] UpdateStream skipped for {StreamId} - hub is disposing/dead", StreamId);
             return;
@@ -2246,8 +2354,16 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 "[SYNC_STREAM] Registrant faulted while disposing stream {StreamId}", StreamId);
         }
 
-        if (Hub is not null && Hub.RunLevel <= MessageHubRunLevel.Started)
-            Hub.Dispose();
+        if (Hub is { RunLevel: <= MessageHubRunLevel.Started } ownHub)
+            ownHub.Dispose();
+
+        // 🚨 DROP THE REFERENCE — the whole point of #3321 step 3. Hub.Dispose() above only STARTS
+        // the hub's teardown (it posts ShutdownRequest and returns), and closing the hub's Autofac
+        // scope — which HostedHubsCollection does, correctly, several turns later — does not null
+        // the fields of an object that outlives it. Until this line the stream kept the corpse and
+        // everything it had resolved (its own ILifetimeScope, its own TypeRegistry) reachable
+        // forever. The hub-death hook registered in the constructor covers the other direction.
+        ReleaseHub();
     }
     private ConcurrentDictionary<string, object?> Properties { get; } = new();
     /// <summary>Reads a property bag value by key.</summary>

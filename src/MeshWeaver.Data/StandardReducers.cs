@@ -106,21 +106,31 @@ public static class StandardReducers
     // (UpdateStream re-stamps INCOMING OWNER frames with delivery.Message.Version before SetCurrent
     // — a subscriber's write keeps this stamp, floored at the owner's clock, so applying it can
     // never rewind the owner. This stamp matters for locally-originated updates.)
+    // 🚨 ONE hub read per reducer, through RequireHub() — #3321 step 3. A reducer's signature is
+    // `… → ChangeItem<T>`: it MUST return a change, so there is no absent value to hand back and no
+    // error channel but a throw. Since step 3 a disposed stream RELEASES its hub, so `stream.Hub`
+    // can be absent while the reducer runs (the transform executes on the sync hub's turn, which a
+    // Dispose() on another thread can overtake); reading the field four times, as the code below
+    // used to, is four chances to NRE. RequireHub() reads it once and refuses with the TRANSIENT
+    // HubDisposingException, which the single gateway (JsonSynchronizationStream.ToChangeItem)
+    // turns into the `null` its own signature already models — "no patch derived", not a fault.
     private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch? patch, string changedBy)
     {
-        var typeRegistry = stream.Hub.TypeRegistry;
-        return new(updated, changedBy, stream.StreamId, ChangeType.Patch, stream.Current?.Version ?? stream.Hub.Version, current.ToEntityUpdates(updated, patch!, stream.Hub.JsonSerializerOptions, typeRegistry));
+        var hub = stream.RequireHub();
+        var typeRegistry = hub.TypeRegistry;
+        return new(updated, changedBy, stream.StreamId, ChangeType.Patch, stream.Current?.Version ?? hub.Version, current.ToEntityUpdates(updated, patch!, hub.JsonSerializerOptions, typeRegistry));
     }
     private static ChangeItem<InstanceCollection> PatchInstanceCollectionJsonElement(ISynchronizationStream<InstanceCollection> stream, InstanceCollection current, JsonElement updated, JsonPatch? patch, string changedBy)
     {
-        var updatedInstances = updated.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions)!;
+        var hub = stream.RequireHub();
+        var updatedInstances = updated.Deserialize<InstanceCollection>(hub.JsonSerializerOptions)!;
         return new(
             updatedInstances,
             changedBy,
             stream.StreamId,
             ChangeType.Patch,
-            stream.Current?.Version ?? stream.Hub.Version,
-            current.ToEntityUpdates((CollectionReference)stream.Reference, updated, patch!, stream.Hub.JsonSerializerOptions));
+            stream.Current?.Version ?? hub.Version,
+            current.ToEntityUpdates((CollectionReference)stream.Reference, updated, patch!, hub.JsonSerializerOptions));
     }
 
     private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, InstanceReference reference, bool initial)
@@ -266,6 +276,10 @@ public static class StandardReducers
 
     private static ChangeItem<EntityStore> PatchEntityStore(ISynchronizationStream<EntityStore> stream, EntityStore currentStore, JsonElement updatedJson, JsonPatch? patch, string changedBy)
     {
+        // One hub read for the whole reduction, threaded into the two helpers below rather than
+        // re-read at each of the four sites this method used to touch it — see the note above
+        // (#3321 step 3). Reading it four times is four chances to catch a concurrent release.
+        var hub = stream.RequireHub();
         var updates = new List<EntityUpdate>();
         foreach (var g in
                  patch!.Operations
@@ -279,7 +293,7 @@ public static class StandardReducers
                 switch (change.Op)
                 {
                     case OperationType.Add:
-                        var addedCollection = stream.DeserializeCollection(updatedJson, change.Path);
+                        var addedCollection = DeserializeCollection(hub, updatedJson, change.Path);
                         if (addedCollection is null || !addedCollection.Instances.Any())
                             throw new ArgumentException("An invalid patch was supplied.");
                         updates.AddRange(addedCollection.Instances.Select(x => new EntityUpdate(collection, x.Key, x.Value)));
@@ -309,7 +323,7 @@ public static class StandardReducers
             }))
             {
                 var collection = allChanges.First().Path.GetSegment(0).ToString();
-                var id = JsonSerializer.Deserialize<object>(eg.Key.Id, stream.Hub.JsonSerializerOptions)!;
+                var id = JsonSerializer.Deserialize<object>(eg.Key.Id, hub.JsonSerializerOptions)!;
                 var currentCollection = currentStore.GetCollection(collection);
                 if (currentCollection == null)
                     throw new InvalidOperationException(
@@ -320,12 +334,12 @@ public static class StandardReducers
                 switch (eg.Key.Op)
                 {
                     case OperationType.Add:
-                        var entity = stream.GetEntity(entityPointer, updatedJson);
+                        var entity = GetEntity(hub, entityPointer, updatedJson);
                         currentCollection = currentCollection.Update(id, entity);
                         updates.Add(new(collection, id, entity));
                         break;
                     case OperationType.Replace:
-                        entity = stream.GetEntity(entityPointer, updatedJson);
+                        entity = GetEntity(hub, entityPointer, updatedJson);
                         var oldInstance = currentCollection.GetInstance(id);
                         currentCollection = currentCollection.Update(id, entity);
                         updates.Add(new(collection, id, entity) { OldValue = oldInstance });
@@ -343,17 +357,20 @@ public static class StandardReducers
 
         }
 
-        return new(currentStore, changedBy, stream.StreamId, ChangeType.Patch, stream.Hub.Version, updates);
+        return new(currentStore, changedBy, stream.StreamId, ChangeType.Patch, hub.Version, updates);
     }
 
-    private static object GetEntity(this ISynchronizationStream<EntityStore> stream, JsonPointer entityPointer, JsonElement updatedJson)
+    // Both take the RESOLVED hub rather than the stream: PatchEntityStore reads it once and
+    // threads it through, so there is exactly one point at which a released stream can be found
+    // (#3321 step 3).
+    private static object GetEntity(IMessageHub hub, JsonPointer entityPointer, JsonElement updatedJson)
     {
         var entity = entityPointer.Evaluate(updatedJson);
-        return entity?.Deserialize<object>(stream.Hub.JsonSerializerOptions)!;
+        return entity?.Deserialize<object>(hub.JsonSerializerOptions)!;
     }
-    private static InstanceCollection DeserializeCollection(this ISynchronizationStream<EntityStore> stream, JsonElement updatedJson, JsonPointer pointer)
+    private static InstanceCollection DeserializeCollection(IMessageHub hub, JsonElement updatedJson, JsonPointer pointer)
     {
-        return pointer.Evaluate(updatedJson)!.Value.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions)!;
+        return pointer.Evaluate(updatedJson)!.Value.Deserialize<InstanceCollection>(hub.JsonSerializerOptions)!;
     }
 
     /// <summary>

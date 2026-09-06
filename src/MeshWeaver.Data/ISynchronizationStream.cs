@@ -86,14 +86,22 @@ public interface ISynchronizationStream : IDisposable
 
     /// <summary>The message hub associated with this stream.
     ///
-    /// <para>🚨 <b>Non-nullable in the contract, but not in life.</b> A stream whose owner has been
-    /// torn down keeps answering this property, and the hub it hands back may already be winding
-    /// down — dereferencing it is how a recycle window produced an NRE inside
-    /// <c>LayoutAreaHost</c>'s constructor that escaped to the subscriber as a TERMINAL
-    /// <c>DeliveryFailure</c> (Systemorph/MeshWeaver#3321). On any path that can run concurrently
-    /// with teardown, prefer <see cref="SynchronizationStreamLiveness.TryGetHub"/>, which answers
-    /// <c>null</c> instead, or gate on
-    /// <see cref="SynchronizationStreamLiveness.IsUsable(ISynchronizationStream?)"/>.</para>
+    /// <para>🚨 <b>Non-nullable in the contract, but not in life — and since #3321 step 3 it is
+    /// ABSENT on a stream that has let its hub go.</b> A disposed stream, and a stream whose hosted
+    /// sub-hub was killed by its parent's teardown, both RELEASE this reference: that release is
+    /// what reclaims the <c>stream → dead hub → resolved state</c> graph that held ~580 MB of a
+    /// production replica's heap. The declaration stays non-nullable because these assemblies ship
+    /// as packages and changing it would break every downstream implementer.</para>
+    ///
+    /// <para><b>So never dereference this on a path that can run concurrently with teardown.</b> Use
+    /// <see cref="SynchronizationStreamLiveness.TryGetHub"/>, which answers <c>null</c>, or gate on
+    /// <see cref="SynchronizationStreamLiveness.IsUsable(ISynchronizationStream?)"/>. Where the
+    /// surface has no absent value to return — a patch reducer, whose signature is
+    /// <c>… → ChangeItem&lt;T&gt;</c> — use
+    /// <see cref="SynchronizationStreamLiveness.RequireHub"/>, which refuses with the TRANSIENT
+    /// <c>HubDisposingException</c> rather than an NRE. A raw dereference here is how a recycle
+    /// window produced an NRE inside <c>LayoutAreaHost</c>'s constructor that escaped to the
+    /// subscriber as a TERMINAL <c>DeliveryFailure</c>.</para>
     /// </summary>
     IMessageHub Hub { get; }
     /// <summary>The hub that hosts the underlying data source backing this stream.</summary>

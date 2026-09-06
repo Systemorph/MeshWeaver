@@ -98,13 +98,27 @@ namespace MeshWeaver.Data.Persistence
                 .Synchronize()
                 .Subscribe(changes =>
                 {
+                    // 🚨 #3321 step 3 — same shape as WorkspaceStreams' combined subscription: a
+                    // callback in flight when the stream is torn down finds `ret.Hub` released.
+                    // Dropping the frame is what `ret.OnNext` would do anyway on a released stream,
+                    // so it is the answer this void callback already models. PRESENCE, not liveness
+                    // (HubIfHeld, not TryGetHub): this guard must match OnNext's own
+                    // `isDisposed || Hub is null` exactly, so it refuses precisely when the
+                    // emission would be dropped and never a frame that would still have landed.
+                    if (ret.HubIfHeld() is not { } retHub)
+                    {
+                        Logger.LogDebug(
+                            "PartitionedHubDataSource: combined stream {StreamId} is torn down — "
+                            + "dropping this frame", ret.StreamId);
+                        return;
+                    }
                     if (!isInitialized)
                     {
                         var initialStore = changes
                             .Where(c => c.Value != null)
                             .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value!));
 
-                        ret.OnNext(new ChangeItem<EntityStore>(initialStore, ret.StreamId, ret.Hub.Version));
+                        ret.OnNext(new ChangeItem<EntityStore>(initialStore, ret.StreamId, retHub.Version));
 
                         foreach (var change in changes)
                             processedChangeItems.Add(change);
@@ -120,7 +134,7 @@ namespace MeshWeaver.Data.Persistence
                                 .Where(c => c.Value != null)
                                 .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value!));
 
-                            ret.OnNext(new ChangeItem<EntityStore>(updatedStore, ret.StreamId, ret.Hub.Version)
+                            ret.OnNext(new ChangeItem<EntityStore>(updatedStore, ret.StreamId, retHub.Version)
                             {
                                 ChangedBy = string.Join(", ", newChanges.Select(c => c.ChangedBy).Where(cb => !string.IsNullOrEmpty(cb))),
                                 Updates = newChanges.SelectMany(c => c.Updates).ToArray(),

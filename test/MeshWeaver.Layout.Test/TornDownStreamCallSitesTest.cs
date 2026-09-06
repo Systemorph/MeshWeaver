@@ -71,9 +71,17 @@ public class TornDownStreamCallSitesTest(ITestOutputHelper output) : HubTestBase
         stream.IsUsable().Should().BeTrue("precondition: the stream served the area before we kill it");
         stream.Dispose();
         stream.TryGetHub().Should().BeNull("precondition: the stream is a corpse now");
-        stream.Hub.Should().NotBeNull(
-            "and the non-nullable contract still holds — which is exactly why every site below "
-            + "looked safe while it was not");
+        // 🚨 This assertion INVERTED at step 3 (#3321). Through step 2 it read
+        // `Hub.Should().NotBeNull()` — "the non-nullable contract still holds, which is exactly why
+        // every site below looked safe while it was not". Step 3 is the change that makes it stop
+        // holding: a disposed stream now RELEASES the hub, which is what reclaims the leaked
+        // `stream → dead hub → resolved state` graph. Keeping the assertion (flipped) rather than
+        // deleting it is deliberate — it is the line that pins WHICH of the two contracts is in
+        // force, and a silent revert of step 3 turns it red here as well as in
+        // StreamReleasesItsHubTest.
+        stream.Hub.Should().BeNull(
+            "step 3 releases the reference on disposal — the declaration stays non-nullable for the "
+            + "packaged interface, and what makes that safe is that every site below can now ask");
 
         return stream;
     }

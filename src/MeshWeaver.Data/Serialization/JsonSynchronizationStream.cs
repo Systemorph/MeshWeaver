@@ -576,16 +576,37 @@ public static class JsonSynchronizationStream
         // Belt-and-suspenders: dispose the subscription when the HUB tears down too (idempotent).
         hub.RegisterForDisposal(observeSubscription);
 
-        reduced.RegisterForDisposal(
-            reduced.Hub.Register<UnsubscribeRequest>(
-                delivery =>
-                {
-                    reduced.DeliverMessage(delivery);
-                    return delivery.Forwarded();
-                },
-                d => reduced.StreamId.Equals(d.Message.StreamId)
-            )
-        );
+        // 🚨 The stream's hub is resolved ONCE here and reused for both owner-protocol
+        // registrations below (#3321 step 3). `reduced` was created a few lines up, but its host
+        // can be torn down underneath this setup — and since step 3 a RELEASED stream answers
+        // `Hub` with nothing, so `reduced.Hub.Register(…)` would NRE while EVALUATING the
+        // argument, i.e. before RegisterForDisposal could apply its own already-dead guard. Not
+        // registering is the honest "no": a handler on a hub that is gone can never fire, and
+        // RegisterForDisposal would have disposed the registration on the spot anyway. Nothing
+        // else in this method is skipped — the keep-alive and resubscribe arms below are
+        // independently guarded and must still be wired for a stream that recovers.
+        //
+        // PRESENCE (HubIfHeld), not liveness (TryGetHub): RegisterForDisposal's own guard is
+        // `isDisposed || Hub is null`, and this must match it — refusing to wire the owner
+        // protocol on a stream that is merely winding down would drop the UnsubscribeRequest and
+        // StreamEndedEvent handling for a stream that is still going to serve.
+        var reducedHub = reduced.HubIfHeld();
+        if (reducedHub is null)
+            logger.LogDebug(
+                "Stream {StreamId}: released its hub before the owner-protocol handlers could be "
+                + "registered — nothing to wire (#3321)", reduced.StreamId);
+
+        else
+            reduced.RegisterForDisposal(
+                reducedHub.Register<UnsubscribeRequest>(
+                    delivery =>
+                    {
+                        reduced.DeliverMessage(delivery);
+                        return delivery.Forwarded();
+                    },
+                    d => reduced.StreamId.Equals(d.Message.StreamId)
+                )
+            );
 
         // 🚨 THE OWNER ANNOUNCING THAT OUR SERVER-SIDE HALF HAS ENDED (#2191).
         //
@@ -605,27 +626,28 @@ public static class JsonSynchronizationStream
         //
         // NOT a watchdog — no timer, no poll, no backoff. One re-ask per real end event, and a
         // re-ask can never CAUSE an end, so there is nothing here to amplify.
-        reduced.RegisterForDisposal(
-            reduced.Hub.Register<StreamEndedEvent>(
-                delivery =>
-                {
-                    // Debug, not Information: Resubscribe already logs the re-ask at Information
-                    // WITH this reason string, so an Information line here would double the Loki
-                    // volume of one event.
-                    logger.LogDebug(
-                        "Stream {StreamId}: owner {Owner} ended the server-side subscription — re-asking once its teardown settles.",
-                        reduced.StreamId, owner);
-                    // No activation identity on this carrier — the owner ANNOUNCED the end rather
-                    // than NACKing, so there is no NACK text to read one from. A null tag is
-                    // treated as "a distinct activation" by the budget below, i.e. exactly the
-                    // pre-#2986 accounting: never guessed, never free.
-                    rejectedByRecycle.OnNext(new RecycleRejection(
-                        "ended our server-side subscription", null));
-                    return delivery.Processed();
-                },
-                d => reduced.StreamId.Equals(d.Message.StreamId)
-            )
-        );
+        if (reducedHub is not null)
+            reduced.RegisterForDisposal(
+                reducedHub.Register<StreamEndedEvent>(
+                    delivery =>
+                    {
+                        // Debug, not Information: Resubscribe already logs the re-ask at
+                        // Information WITH this reason string, so an Information line here would
+                        // double the Loki volume of one event.
+                        logger.LogDebug(
+                            "Stream {StreamId}: owner {Owner} ended the server-side subscription — re-asking once its teardown settles.",
+                            reduced.StreamId, owner);
+                        // No activation identity on this carrier — the owner ANNOUNCED the end
+                        // rather than NACKing, so there is no NACK text to read one from. A null
+                        // tag is treated as "a distinct activation" by the budget below, i.e.
+                        // exactly the pre-#2986 accounting: never guessed, never free.
+                        rejectedByRecycle.OnNext(new RecycleRejection(
+                            "ended our server-side subscription", null));
+                        return delivery.Processed();
+                    },
+                    d => reduced.StreamId.Equals(d.Message.StreamId)
+                )
+            );
 
         reduced.RegisterForDisposal(
             new AnonymousDisposable(
@@ -1802,7 +1824,8 @@ public static class JsonSynchronizationStream
     /// <param name="currentJson">The current state serialized as JSON.</param>
     /// <param name="patch">The JSON patch to apply, or null for a full update.</param>
     /// <param name="changedBy">Identifier of the principal that made the change.</param>
-    /// <returns>The resulting change item, or null when no patch function is registered.</returns>
+    /// <returns>The resulting change item, or null when no patch function is registered — or when
+    /// the stream has released its hub, which is the same "nothing to derive" answer.</returns>
     public static ChangeItem<TReduced>? ToChangeItem<TReduced>(
         this ISynchronizationStream<TReduced> stream,
         TReduced currentState,
@@ -1810,8 +1833,50 @@ public static class JsonSynchronizationStream
         JsonPatch? patch,
         string changedBy)
     {
-        return stream.ReduceManager.PatchFunction?.Invoke(stream, currentState, currentJson, patch, changedBy);
+        try
+        {
+            return stream.ReduceManager.PatchFunction?.Invoke(stream, currentState, currentJson, patch, changedBy);
+        }
+        catch (HubDisposingException)
+        {
+            // 🚨 THE ONE GATEWAY into every patch reducer, so this is the one place that has to
+            // translate their refusal (#3321 step 3). A reducer's signature is `… → ChangeItem<T>`:
+            // it must return a change, so when the stream has RELEASED its hub — step 3 drops the
+            // reference on disposal and on the hub's own death, which is what reclaims the leaked
+            // `stream → dead hub → resolved state` graph — its only channel is
+            // `RequireHub()`'s transient throw.
+            //
+            // This is NOT a swallow. `null` is this method's OWN modelled answer for "no change was
+            // derived" (it is what a stream with no PatchFunction registered already returns), and
+            // both callers handle it: SynchronizationStream.BuildChangeItem falls through to its
+            // type-registry path, and UpdateStream falls back to deserializing the patched JSON
+            // through Host.JsonSerializerOptions. Only THIS exception type is caught, by design —
+            // anything else a reducer throws is a real fault and still propagates.
+            //
+            // Debug, not Warning: the window is a teardown race on a stream that is already gone,
+            // it produces no user-visible effect (a dead stream's store is completed, so the change
+            // had nowhere to land), and it can fan out across every reduced stream of one dying hub.
+            LogPatchSkippedOnReleasedStream(stream);
+            return null;
+        }
     }
+
+    /// <summary>
+    /// Best-effort Debug line for the skip above.
+    ///
+    /// <para>🚨 Resolved through <see cref="GetLogger"/> rather than a bare
+    /// <c>ServiceProvider.GetService&lt;ILoggerFactory&gt;()</c>, and that matters here more than
+    /// anywhere else in this file: a stream whose hub was just released is very often one whose HOST
+    /// is winding down too, and Autofac throws <c>ObjectDisposedException</c> from a closed scope. A
+    /// raw resolution would turn a benign "no patch derived" into a fault raised BY THE DIAGNOSTIC,
+    /// on the exact teardown path this code exists to make quiet. <c>GetLogger</c> already answers
+    /// that with a <c>NullLogger</c> — losing the line is the correct price, and
+    /// <c>SynchronizationStream.ResolveLogger</c> carries the same guard for the same reason.</para>
+    /// </summary>
+    private static void LogPatchSkippedOnReleasedStream(ISynchronizationStream stream)
+        => GetLogger(stream.Host.ServiceProvider).LogDebug(
+            "[SYNC_STREAM] Patch reduction skipped for {StreamId} ({Reference}) — the stream "
+            + "released its hub before the reducer ran (#3321)", stream.StreamId, stream.Reference);
 
 
     /// <summary>
