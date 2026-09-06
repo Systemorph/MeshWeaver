@@ -106,6 +106,40 @@ The Content Indexing settings tab is the in-portal surface for the index. Beside
 
 The store reads (`GetChunk`, `GetChunkCount`) are on `IChunkedContentVectorStore`. Like every read in the indexing core they are reactive and cold (`IObservable<T>`), and the Postgres implementation runs the DB round-trip through the cap-1 `pg:vector` I/O pool (see [Controlled I/O Pooling](../ControlledIoPooling)) — never a bare `Observable.FromAsync`. When content indexing is not wired into a host, the store/embedder are absent and the tools degrade to a clear "not available" envelope instead of throwing.
 
+## Why a search failed — the four answers that must stay apart
+
+`search_chunks` has to embed the query before it can rank anything, so a refusal from the embeddings backend stops the search *after* it started. The tool has four genuinely different things to report, and **the envelope keeps them apart by construction**:
+
+| What happened | `searched` | `count` | `error` | Who fixes it |
+|---|---|---|---|---|
+| The backend refused the **credential** (401/403) | `false` | *absent* | `embedding-credential-rejected` | an operator — `Embedding:ApiKey` is wrong, expired, or has no source |
+| The backend rejected the **request** (400/404/422) | `false` | *absent* | `embedding-request-rejected` | a developer — `Embedding:Model` names something it does not serve, or the payload shape is wrong |
+| The backend **could not answer** (5xx, 429, unreachable, timeout) | `false` | *absent* | `embedding-unavailable` | nobody — retry, then check `Embedding:Endpoint` |
+| **No embedding provider is configured** | `false` | *absent* | `search-not-performed` | nobody — a legitimate state, not a failure |
+| The search **ran and matched nothing** | `true` | `0` | *absent* | nobody — this is a real answer |
+
+Two properties do the work, and both are load-bearing:
+
+- **`count` is present exactly when a search ran.** A consumer testing `count == 0` finds the field *missing* on every failure arm rather than a zero that means the opposite. This is the rule AGENTS.md leans on when it requires a live-mesh `search_chunks` sweep before deleting public framework surface: an answer carrying `"searched": false` is a **failed sweep**, not a clean one.
+- **`error` is a stable token, not prose.** The `message` beside it is the human sentence — it names the endpoint, the HTTP status and the backend's own words — but a caller branches on `error`. The constants are published on `ContentChunkSearch` (`NotSearchedError`, `EmbeddingCredentialRejectedError`, `EmbeddingRequestRejectedError`, `EmbeddingUnavailableError`, `SearchFailedError`).
+
+### Where the diagnosis is produced
+
+The classification happens at the only layer that can make it — the HTTP response — and is carried down, never re-derived:
+
+```
+OllamaEmbeddingProvider          reads the status AND the response body → EmbeddingRequestException(Failure, Endpoint, Model, StatusCode, ResponseBody)
+  → EmbeddingProviderChunkEmbedder   maps EmbeddingFailure → the error discriminator → ChunkEmbeddingException
+    → ContentChunkSearch             folds it into a `searched:false` result carrying that discriminator
+      → search_chunks / get_chunk / the Explore-index GUI   all three, because all three call the one engine
+```
+
+🚨 **`EnsureSuccessStatusCode()` is the wrong tool here** and is deliberately not used: it discards the response body — the only place an OpenAI-compatible server states what it objected to — along with the endpoint identity and any class a consumer could branch on. The bare `HttpRequestException` it throws instead escaped the MCP tool as *"'search_chunks' threw an unhandled exception"*, which left a caller unable to tell a rejected key from a rejected model name. Both statuses were in fact observed seconds apart from one deployment's two pods.
+
+🚨 **Nor may a refusal become an empty result.** Returning no hits would make "I could not search" byte-identical to "I searched and found nothing" — strictly worse than throwing, because it is silent. A provider that cannot embed therefore *throws a named failure*; only a provider that legitimately has no embeddings to offer returns null, and the node-level query path reads that null as its cue to fall back to ILIKE (see [Vector Search](../VectorSearch)).
+
+The failure is still reported to operators: `ChunkNavigation` logs the genuinely-broken arms once per call, at the same level the escaping exception used to be logged at. The "indexing is off" and "you passed no query text" arms are answers rather than incidents and are deliberately not logged.
+
 ## Source provenance (page + position)
 
 Every chunk carries **where it came from** in the source document, so a consumer can cite the page and *open the source page and mark the exact region* — not just quote text.
