@@ -17,17 +17,54 @@ name: Node repo platform-ref bump (reusable)
 # a red PR instead of as a silently-changed build input. Auto-MERGING would turn the pin back
 # into "always latest", which is exactly what the pin exists to prevent.
 #
+# 🚨🚨 …AND "THE FULL GATE SUITE RUNS ON IT" IS NOT FREE — IT IS A PROPERTY OF THE CREDENTIAL.
+# This lane opened its PRs with `${{ github.token }}` until 2026-09-06, and a pull request created
+# with GITHUB_TOKEN starts NO workflow runs at all: GitHub suppresses the `pull_request` event for
+# anything that token creates, by documented design, to stop workflows recursing. On a repo whose
+# `main` requires five contexts (MeshWeaver.Plugins does) the resulting PR can never merge, and it
+# does not read as broken — it reads as "checks haven't started yet", forever. That is the same
+# suppressed-trigger failure `auto-arm.yml`'s header documents one level down (#2916): the bump
+# would have looked automated while landing nothing, which is strictly worse than the manual bump
+# it replaces, because a person watching a PR pile up assumes the pile is in flight.
+#
+# So the lane mints a GitHub App installation token and opens the PR as the App. An App token is
+# not GITHUB_TOKEN: its pushes and its pull requests trigger workflows normally. There is
+# deliberately NO fallback to `github.token` — falling back would restore exactly the failure
+# above, silently, on the day the App loses a grant. `ArmedMergeMustTriggerMainsPushLanesGuard`
+# fails core's build if anyone puts it back.
+#
 # Caller contract:
 #
 #   name: Bump the platform pin
 #   on:
-#     schedule: [{cron: "23 5 * * *"}]
-#     repository_dispatch: {types: [meshweaver-framework-released]}
+#     schedule: [{cron: "17 4 * * *"}]
 #     workflow_dispatch:
 #   jobs:
 #     bump:
 #       permissions: {contents: write, pull-requests: write}
 #       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-platform-ref-bump.yml@<sha>
+#       with:
+#         workflow-file: .github/workflows/ci.yml
+#         pin-key: MW_PLATFORM_REF
+#         upstream-repo: Systemorph/MeshWeaver
+#       secrets:
+#         MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+#         MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+#
+# Pass every input explicitly even where it matches the default: a default read from a lane you
+# did not open is a value nobody in the calling repo has agreed to. Never `secrets: inherit` — that
+# hands this lane every secret the calling repo owns.
+#
+# 🚨 `repository_dispatch: {types: [meshweaver-framework-released]}` is deliberately NOT in the
+# contract above, and this is a measurement rather than a preference. Each dispatch carries a
+# DIFFERENT `client_payload.sha`, and the branch name is a function of the target commit, so every
+# dispatch opens its OWN pull request. On 2026-09-03 MeshWeaver.SocialMedia received nine of them
+# in one day (14:42, 16:34, 18:10, 19:06, 19:42, 20:43, 21:00, 21:08, 21:20Z) — nine bump PRs, nine
+# full gate suites, eight of them superseded within the hour. The schedule below is the floor the
+# lane exists to provide ("the pin is never silently days behind"); `workflow_dispatch` is the
+# same-day path when a specific core fix is being chased, and a hand-written bump PR remains
+# perfectly normal. A caller that genuinely wants per-release bumps must first answer what closes
+# the superseded PRs.
 #
 # 🔒 PIN THE REF — same reason as every other node-repo template.
 
@@ -43,9 +80,23 @@ on:
         type: string
         default: MW_PLATFORM_REF
       upstream-repo:
-        description: The repo whose default branch the pin tracks.
+        description: >-
+          The repo whose default branch the pin tracks. It must be readable by the token minted
+          below — public, or inside the same App installation. A read that fails stops the run red
+          rather than writing a pin it could not verify.
         type: string
         default: Systemorph/MeshWeaver
+    secrets:
+      MESHWEAVER_APP_ID:
+        description: >-
+          App id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet.
+          Required: a pull request opened with secrets.GITHUB_TOKEN starts no workflow runs, so the
+          bump would sit unmergeable behind required contexts that can never report (#2916's shape).
+        required: true
+      MESHWEAVER_APP_PRIVATE_KEY:
+        description: >-
+          That App's private key (PEM). Source of truth is Key Vault Systemorph/github-app-privatekey.
+        required: true
 
 jobs:
   bump:
@@ -56,12 +107,56 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # No `if:` on any step here. The assert and the mint ASSERT and fail; they never choose
+      # whether to run. A step asking "is the App id set?" and skipping would render exactly like
+      # a bump that found nothing to do — invariant #3 in AGENTS.md.
+      - name: The App credential, or a red run naming what to provision
+        env:
+          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        run: |
+          missing=()
+          [ -n "$MESHWEAVER_APP_ID" ]          || missing+=("secrets.MESHWEAVER_APP_ID           app id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet")
+          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the platform-ref bump cannot run — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "App credential present."
+
+      # 🚨 No `continue-on-error` here, and the contrast with `auto-arm.yml` is deliberate. There
+      # the tolerance is defensible because a missing grant is a property of the REPOSITORY and
+      # would paint the same red on every open pull request, saying nothing about any of them —
+      # so the assertion moved to a repo-scoped lane. This lane IS repo-scoped and runs once a
+      # day against nobody's branch: a red here is the actionable, once-per-day statement that the
+      # pin is not being maintained. Tolerating it would mean the bump silently stops happening,
+      # which is the exact state this lane was written to end.
+      - name: Mint an installation token whose pull requests actually start CI
+        id: bump-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          # Requested explicitly so an installation missing either fails HERE, on a step whose name
+          # says what it wanted, rather than degrading to a token that pushes fine and then opens a
+          # pull request nothing runs on.
+          permission-contents: write
+          permission-pull-requests: write
+
+      # The checkout carries the minted token, so the later `git push` is the App's push. With the
+      # default credential the push would be GITHUB_TOKEN's, and the branch would exist with no
+      # event attached to it.
       - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.bump-token.outputs.token }}
 
       - name: Work out the current pin and the target commit
         id: refs
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.bump-token.outputs.token }}
           PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
         run: |
           set -euo pipefail
@@ -116,16 +211,20 @@ jobs:
       - name: Open (or update) the bump PR
         if: steps.check.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.bump-token.outputs.token }}
           CURRENT: ${{ steps.refs.outputs.current }}
           TARGET: ${{ steps.refs.outputs.target }}
           SOURCE: ${{ steps.refs.outputs.source }}
+          APP_SLUG: ${{ steps.bump-token.outputs.app-slug }}
         run: |
           set -euo pipefail
           branch="chore/platform-ref-${TARGET:0:9}"
 
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Attributed to the identity that actually pushes. Naming github-actions[bot] here while
+          # the App pushes would put the one identity whose pushes start nothing on a commit that
+          # does start something — a misdirection for the next person reading the blame.
+          git config user.name  "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
 
           # A stable branch name per target commit makes a re-run idempotent: same target, same
           # branch, same PR updated in place rather than a pile of duplicates. On a re-run the
@@ -161,7 +260,7 @@ jobs:
           git add ${{ inputs.workflow-file }}
           git commit -q -m "chore: bump ${{ inputs.pin-key }} to ${TARGET:0:9}
 
-          The compiled module (src/MeshWeaver.Social) builds against a MeshWeaver checkout at this
+          This repo's src/ and its compiled modules build against a MeshWeaver checkout at this
           pin. Source: ${SOURCE}. Previous pin: ${CURRENT}.
 
           Opened automatically so the pin cannot silently lag behind the platform — a lagging pin
@@ -175,7 +274,7 @@ jobs:
             gh pr create --base main --head "$branch" \
               --title "chore: bump ${{ inputs.pin-key }} to ${TARGET:0:9}" \
               --body "$(printf '%s\n' \
-                "Bumps the platform pin the compiled module builds against." \
+                "Bumps the platform pin this repo builds against." \
                 "" \
                 "| | |" \
                 "|---|---|" \
