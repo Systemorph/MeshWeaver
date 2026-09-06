@@ -122,6 +122,17 @@ public static class PluginCatalogConfigurationExtensions
                 .AddSingleton<InstalledPackageRepairService>()
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
                     sp => sp.GetRequiredService<InstalledPackageRepairService>())
+                // 🚨 Referential integrity for install records (#3451). A record lives in the
+                // `Plugins` partition and therefore OUTLIVES the partition it points at, so deleting
+                // an installed space used to leave the repair pass above aiming at nothing on every
+                // boot, forever. Core deliberately knows nothing about `Plugins/Package`, so the
+                // discriminator comes from THIS side: the catalog registers its own structural
+                // post-deletion handler next to the platform's partition teardown.
+                .AddSingleton<Mesh.Services.INodePostDeletionHandler>(sp =>
+                    new InstallRecordPartitionTeardownHandler(
+                        sp.GetRequiredService<IMessageHub>(),
+                        sp.GetService<ILoggerFactory>()
+                            ?.CreateLogger<InstallRecordPartitionTeardownHandler>()))
                 // Auto-discovery of a configured repo's modules (#833). Registered LAST of the
                 // package services because its boot scan deliberately waits for
                 // InstanceAutoRegistrationService.Completed — both touch the same partitions. Inert
