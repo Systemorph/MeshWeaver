@@ -600,6 +600,32 @@ public static class PluginBundleEndpoints
                         accepted.Module, plugin, accepted.Files.Count,
                         accepted.Version ?? "(unversioned)", accepted.MinMeshVersion ?? "(none)");
 
+                // 🚨 #3395 — a publish is a landing wave of one module, and a wave that does not
+                // propose its module set never activates ANYWHERE: boot loads the mesh's set, not
+                // the activation record it was derived from. Held or not, the set has to name it:
+                // a held entry is skipped by the platform-floor gate at boot exactly as before,
+                // and it must still be in the set for the boot AFTER a platform update to be able
+                // to load it (which is the whole shelf contract). Never fails the publish — an
+                // unproposable set leaves this instance on the set it is already on, the bytes
+                // still serve to consumers, and the next wave proposes again.
+                try
+                {
+                    await landing.ProposeModuleSet()
+                        .ObserveCompletion(
+                            ex => logger?.LogWarning(ex,
+                                "Module publish for {Plugin}: proposing the module set after "
+                                + "'{Module}' faulted late", plugin, accepted.Module),
+                            ct);
+                }
+                catch (Exception exception)
+                {
+                    logger?.LogWarning(exception,
+                        "Module publish for {Plugin}: '{Module}' landed but its module set could "
+                        + "not be proposed — this instance stays on its current set and the next "
+                        + "landing wave proposes again; the bytes still serve to consumers",
+                        plugin, accepted.Module);
+                }
+
                 // held/holdReason let the publisher tell "shelved, will serve" apart from
                 // "activated here"; pendingRestart is honest for the held case — a restart of
                 // THIS instance would not load a held module, so nothing is pending on one.
