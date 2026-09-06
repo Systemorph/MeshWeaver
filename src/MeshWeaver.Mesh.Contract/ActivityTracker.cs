@@ -101,6 +101,13 @@ public sealed class ActivityTracker : IDisposable
     /// Registers one run as in flight. Dispose the returned handle when the run reaches a TERMINAL
     /// state (succeeded or failed) — not when it was merely dispatched. A double dispose does not
     /// double-decrement.
+    ///
+    /// <para>🚨 <b>The effect is QUEUED, not immediate.</b> The delta goes through
+    /// <c>ObserveOn(scheduler)</c> before <see cref="InFlightChanges"/> or <see cref="WhenIdle"/>
+    /// reflect it — that queueing is how this type serialises without locking. So a caller that
+    /// registers a run and immediately reads either observable can still see the PREVIOUS count:
+    /// <see cref="WhenIdle"/> subscribed right after <c>Track()</c> may fire on the replayed value.
+    /// Wait for <see cref="InFlightChanges"/> to show the run before depending on it.</para>
     /// </summary>
     public IDisposable Track() => TrackRun("(unlabelled run)", cancel: null);
 

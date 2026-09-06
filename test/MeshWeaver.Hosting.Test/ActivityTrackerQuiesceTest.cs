@@ -124,6 +124,24 @@ public class ActivityTrackerQuiesceTest
     {
         using var tracker = new ActivityTracker();
         var registration = tracker.Track();
+
+        // 🚨 Track() QUEUES its delta; it does not apply it. The count pipeline is
+        // `deltas.ObserveOn(scheduler).Scan(...).StartWith(0).Replay(1)`, so the +1 lands on the
+        // tracker's scheduler AFTER Track() has returned. Subscribing to WhenIdle before it lands
+        // sees the replayed 0 and fires at once — "a tracked run holds idle open" then reads False
+        // through no fault of the tracker.
+        //
+        // This test used to bridge that gap with a single `await Task.Yield()`, i.e. it asserted on
+        // a race and passed only while the scheduler happened to win. It is not theoretical: adding
+        // FIFTY-FIVE LINES OF UNCALLED CODE to MeshWeaver.Mesh.Contract (the assembly ActivityTracker
+        // itself lives in) moved the timing enough to fail this 4 runs in 5, against 0 in 15 on the
+        // unmodified tree. Any change to that assembly can do it.
+        //
+        // So wait for the condition the assertion depends on — the count actually reaching 1 —
+        // instead of for a scheduler turn.
+        await tracker.InFlightChanges.Where(running => running == 1).FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(5)).Await(TestContext.Current.CancellationToken);
+
         var idle = tracker.WhenIdle.FirstAsync().Timeout(TimeSpan.FromSeconds(5)).Await(TestContext.Current.CancellationToken);
         await Task.Yield();
         idle.IsCompleted.Should().BeFalse("a tracked run holds idle open");
