@@ -741,7 +741,7 @@ jobs:
           # was correct before the probe existed — the worst case is the duplicate set this guards
           # against, and the log names the reason instead of an empty answer.
           if INFLIGHT=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA&per_page=30" \
-                          --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id < $RUN_ID and (.status == \"in_progress\" or .status == \"queued\"))] | first // empty | .html_url"); then
+                          --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id < $RUN_ID and (.status == \"in_progress\" or .status == \"queued\"))] | .[0] // empty | .html_url"); then
             :
           else
             echo "::warning::the in-flight probe failed (exit $?) — cannot tell whether an older run is publishing $SHORT; proceeding as before MeshWeaver#3376 (a duplicate image set is the worst case)"
