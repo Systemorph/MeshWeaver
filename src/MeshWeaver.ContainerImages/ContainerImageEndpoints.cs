@@ -274,7 +274,24 @@ public static class ContainerImageEndpoints
 
         if (TryReadManifestForRecording(route, upstream, options, ct, out var manifest))
         {
-            var body = await manifest;
+            byte[] body;
+            try
+            {
+                body = await manifest;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException)
+            {
+                // 🚨 The upstream connection died mid-manifest. Nothing has been written to the
+                // caller yet, so this is a clean 502 — and the response MUST be disposed here:
+                // ownership normally passes to UpstreamPassthroughResult, which is never
+                // constructed on this path, so returning without disposing leaks the connection.
+                upstream.Dispose();
+                logger?.LogWarning(ex,
+                    "Container registry mirror: reading the manifest for {Path} failed mid-body",
+                    http.Request.Path);
+                return Results.StatusCode(StatusCodes.Status502BadGateway);
+            }
+
             Record(http, client.Upstream, route, body, options.ImageRoot!, logger);
             // Serving the bytes we already hold, rather than re-reading a consumed stream.
             return new UpstreamPassthroughResult(upstream, pool, body);
