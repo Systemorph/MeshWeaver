@@ -56,10 +56,23 @@ public static class ContainerImageEndpoints
     /// </summary>
     public const int TokenLifetimeSeconds = 300;
 
+    /// <summary>
+    /// Names where the bytes came from, on every pull response: <c>hit</c> (the read-through
+    /// cache, upstream not contacted), <c>miss</c> (fetched from the upstream and stored),
+    /// <c>bypass</c> (fetched and deliberately not stored — a tag, a range, an unsupported digest
+    /// algorithm) or <c>disabled</c> (no cache is configured).
+    ///
+    /// <para>Diagnostic, not contractual: an operator reading a log or a header can tell which of
+    /// the four happened without inferring it from timings.</para>
+    /// </summary>
+    public const string CacheStatusHeader = "X-MeshWeaver-Cache";
+
     /// <summary>Set by the auth gate so handlers can name the caller in logs and records.</summary>
     private const string CallerItemKey = "ContainerImages.Caller";
 
     private const string ManifestsKind = "manifests";
+
+    private const string BlobsKind = "blobs";
 
     /// <summary>
     /// Maps the pull surface. <c>AllowAnonymous</c> at the ASP.NET layer for the same reason the
@@ -70,6 +83,20 @@ public static class ContainerImageEndpoints
     /// <returns>The route builder, for chaining.</returns>
     public static IEndpointRouteBuilder MapContainerImages(this IEndpointRouteBuilder endpoints)
     {
+        // 🚨 A cache directory configured with no ContainerBlobCache registered would proxy every
+        // pull while the configuration says it caches — a silently half-configured service, which
+        // this file refuses everywhere else. Fail at STARTUP, naming the fix, rather than serving
+        // something that looks right.
+        var configured = endpoints.ServiceProvider
+            .GetService<IOptions<ContainerImageOptions>>()?.Value;
+        if (configured?.CacheDirectory is { Length: > 0 }
+            && endpoints.ServiceProvider.GetService<ContainerBlobCache>() is null)
+            throw new InvalidOperationException(
+                $"{ContainerImageOptions.SectionName}:CacheDirectory is set but "
+                + $"{nameof(ContainerBlobCache)} is not registered. Call "
+                + $"services.{nameof(ContainerImageServiceExtensions.AddContainerImageMirror)}() "
+                + "so the read-through cache actually exists, or clear the setting.");
+
         // 🚨 The token endpoint sits OUTSIDE the challenge filter, in its own group over the same
         // prefix. The filter answers "not authenticated" with a challenge that NAMES this route —
         // so putting this route behind it makes an unauthenticated client loop: challenge → token
@@ -109,15 +136,24 @@ public static class ContainerImageEndpoints
 
         // The spec's version probe. A client hits this first and reads the challenge from it, so
         // it must answer 200 (authenticated) or 401-with-challenge — never 404.
-        group.MapGet("/", (HttpContext http) =>
+        group.MapMethods("/", PullMethods, (HttpContext http) =>
         {
             http.Response.Headers[ApiVersionHeader] = ApiVersion;
             return Results.Ok(new { });
         });
 
-        group.MapGet("/{**rest}", (HttpContext http, CancellationToken ct) => Serve(http, ct));
+        group.MapMethods(
+            "/{**rest}", PullMethods, (HttpContext http, CancellationToken ct) => Serve(http, ct));
         return endpoints;
     }
+
+    /// <summary>
+    /// The two methods a PULL uses. <c>HEAD</c> is how containerd checks a manifest before it
+    /// downloads one, and a registry that answers 405 to it makes every such client take the slow
+    /// fallback path. Nothing else is mapped: this is a pull surface, and <c>PUT</c>/<c>PATCH</c>/
+    /// <c>POST</c>/<c>DELETE</c> are refused by never existing rather than by being handled.
+    /// </summary>
+    private static readonly string[] PullMethods = ["GET", "HEAD"];
 
     /// <summary>
     /// Resolves the caller through <see cref="IContainerImageAuthenticator"/>, normalising the
@@ -238,7 +274,8 @@ public static class ContainerImageEndpoints
             return Results.NotFound();
 
         // 🚨 The allowlist is the difference between a mirror and an open read proxy for the whole
-        // upstream. Empty means NONE.
+        // upstream. Empty means NONE — and it is checked BEFORE the cache, so a repository the
+        // mirror does not serve is refused whether or not its bytes happen to be resident.
         var options = http.RequestServices.GetRequiredService<IOptions<ContainerImageOptions>>().Value;
         if (!options.Repositories.Contains(route.Repository, StringComparer.Ordinal))
         {
@@ -248,12 +285,76 @@ public static class ContainerImageEndpoints
             return Results.NotFound();
         }
 
+        // 🚨 The bound on the layer transfer. IoPoolNames.Blob, not Http: `Http` is capped at 16
+        // for short API round-trips, and one 300 MB layer parked in that pool for a minute would
+        // starve every plugin-catalog and registration call the portal makes. `Blob` IS the
+        // large-async-binary resource class (cap 128), which is exactly what a layer transfer is.
+        var pool = ContainerImagePools.Resolve(http.RequestServices, IoPoolNames.Blob);
+        var cache = http.RequestServices.GetService<ContainerBlobCache>();
+        var isHead = HttpMethods.IsHead(http.Request.Method);
+        var range = http.Request.Headers.Range.ToString();
+
+        // 🚨 Only a DIGEST is a cache key. A tag is mutable — caching one would serve a stale
+        // image forever, and the symptom would look like a stale build rather than a stale cache.
+        // A RANGE request is excluded too: a partial body cannot be verified against the whole
+        // body's digest, and an unverified entry is worse than no entry.
+        var key = route.Kind is ManifestsKind or BlobsKind
+                  && ContainerBlobCache.IsSupportedDigest(route.Reference)
+            ? route.Reference
+            : null;
+        var cacheable = cache is { IsEnabled: true } && key is not null
+                        && string.IsNullOrEmpty(range);
+
+        if (cacheable)
+        {
+            var hit = await cache!.Open(key!)
+                .FirstAsync()
+                .ObserveCompletion(
+                    ex => logger?.LogWarning(ex,
+                        "Container registry mirror: the cache lookup for {Path} faulted after the "
+                        + "request had already been answered", http.Request.Path),
+                    ct);
+            if (hit is not null)
+            {
+                // Off the response path, with an explicit error arm: LRU bookkeeping must never be
+                // able to fail a pull that has already been answered correctly.
+                cache.Touch(key!).Subscribe(
+                    _ => { },
+                    ex => logger?.LogWarning(ex,
+                        "Container registry mirror: could not refresh the cache timestamp for "
+                        + "{Digest}; eviction order for this entry may be stale.", key));
+                logger?.LogDebug(
+                    "Container registry mirror: served {Digest} from the cache — the upstream was "
+                    + "not contacted.", key);
+                http.Response.Headers[CacheStatusHeader] = "hit";
+                return new CachedContentResult(hit, pool, isHead);
+            }
+        }
+
+        http.Response.Headers[CacheStatusHeader] =
+            cache is not { IsEnabled: true } ? "disabled" : cacheable ? "miss" : "bypass";
+
         HttpResponseMessage upstream;
         try
         {
             upstream = await client.OpenAsync(
-                HttpMethod.Get, route.Repository, "/v2/" + rest,
-                http.Request.Headers.Range.ToString(), ct);
+                isHead ? HttpMethod.Head : HttpMethod.Get, route.Repository, "/v2/" + rest,
+                range, ct);
+        }
+        catch (UpstreamUnreachableException ex)
+        {
+            // 🚨 504, and emphatically NOT 404. "I could not fetch it" and "it does not exist" are
+            // different answers, and a consumer that cannot tell them apart writes off an artefact
+            // that is still there — or retries one that is genuinely gone. The cache could not
+            // help here: nothing matching was resident, which is why we tried the upstream at all.
+            logger?.LogWarning(ex,
+                "Container registry mirror: {Path} could not be fetched — the upstream is "
+                + "unreachable. Answering 504 (unavailable), never 404 (absent).",
+                http.Request.Path);
+            return UpstreamError(
+                http, StatusCodes.Status504GatewayTimeout, "UPSTREAM_UNAVAILABLE",
+                "the upstream registry could not be reached; this is not a statement about "
+                + "whether the requested content exists");
         }
         catch (UpstreamRegistryException ex)
         {
@@ -261,18 +362,19 @@ public static class ContainerImageEndpoints
             // tell the caller to fix ITS token, which is not the broken thing.
             logger?.LogWarning("Container registry mirror: upstream refused {Path} — {Reason}",
                 http.Request.Path, ex.Message);
-            return Results.StatusCode(StatusCodes.Status502BadGateway);
+            return UpstreamError(
+                http, StatusCodes.Status502BadGateway, "UPSTREAM_UNAUTHORIZED",
+                "the mirror's own upstream credential was refused; the caller's token is not the "
+                + "problem");
         }
 
-        // 🚨 The bound on the layer transfer. IoPoolNames.Blob, not Http: `Http` is capped at 16
-        // for short API round-trips, and one 300 MB layer parked in that pool for a minute would
-        // starve every plugin-catalog and registration call the portal makes. `Blob` IS the
-        // large-async-binary resource class (cap 128), which is exactly what a layer transfer is.
-        var pool = http.RequestServices.GetService<IMessageHub>()?.ServiceProvider
-                       .GetService<IoPoolRegistry>()?.Get(IoPoolNames.Blob)
-                   ?? IoPool.Unbounded;
-
-        if (TryReadManifestForRecording(route, upstream, options, ct, out var manifest))
+        // A manifest is read whole when it must be RECORDED or CACHED — both need the bytes, and
+        // reading once serves both. Bounded by MaxRecordedManifestBytes; a blob never takes this
+        // path under any configuration.
+        var wantsRecord = route.Kind == ManifestsKind && options.ImageRoot is { Length: > 0 };
+        var wantsManifestCache = cacheable && route.Kind == ManifestsKind;
+        if (!isHead && (wantsRecord || wantsManifestCache)
+            && TryReadManifest(upstream, options, ct, out var manifest))
         {
             byte[] body;
             try
@@ -282,43 +384,91 @@ public static class ContainerImageEndpoints
             catch (Exception ex) when (ex is HttpRequestException or IOException)
             {
                 // 🚨 The upstream connection died mid-manifest. Nothing has been written to the
-                // caller yet, so this is a clean 502 — and the response MUST be disposed here:
-                // ownership normally passes to UpstreamPassthroughResult, which is never
-                // constructed on this path, so returning without disposing leaks the connection.
+                // caller yet, so this is a clean 504 — the upstream stopped answering, which is
+                // exactly "unreachable" and must not be reported as absent. And the response MUST
+                // be disposed here: ownership normally passes to UpstreamPassthroughResult, which
+                // is never constructed on this path, so returning without disposing leaks the
+                // connection.
                 upstream.Dispose();
                 logger?.LogWarning(ex,
                     "Container registry mirror: reading the manifest for {Path} failed mid-body",
                     http.Request.Path);
-                return Results.StatusCode(StatusCodes.Status502BadGateway);
+                return UpstreamError(
+                    http, StatusCodes.Status504GatewayTimeout, "UPSTREAM_UNAVAILABLE",
+                    "the upstream registry stopped answering mid-manifest");
             }
 
-            Record(http, client.Upstream, route, body, options.ImageRoot!, logger);
+            if (wantsRecord)
+                Record(http, client.Upstream, route, body, options.ImageRoot!, logger);
+            if (wantsManifestCache)
+                StoreManifest(cache!, key!, upstream, body, route, logger);
             // Serving the bytes we already hold, rather than re-reading a consumed stream.
             return new UpstreamPassthroughResult(upstream, pool, body);
+        }
+
+        // 🚨 A HEAD carries no body, so there is nothing to hash and nothing to store: caching one
+        // would file an empty entry under a real digest, which is the worst outcome this cache can
+        // have. Cacheable BLOB responses tee; everything else is the plain passthrough.
+        if (cacheable && !isHead && route.Kind == BlobsKind && upstream.IsSuccessStatusCode)
+        {
+            var mediaType = upstream.Content.Headers.ContentType?.ToString();
+            return new UpstreamPassthroughResult(
+                upstream, pool, downstream => cache!.BeginFill(key!, mediaType, downstream));
         }
 
         return new UpstreamPassthroughResult(upstream, pool);
     }
 
     /// <summary>
-    /// Whether this response is a MANIFEST small enough to hold in memory in order to record it.
+    /// An OCI-shaped error the mirror ITSELF produces — a failure to reach or use the upstream,
+    /// never a statement about the requested content.
+    /// </summary>
+    private static IResult UpstreamError(HttpContext http, int status, string code, string message)
+    {
+        http.Response.Headers[ApiVersionHeader] = ApiVersion;
+        return Results.Json(
+            new { errors = new[] { new { code, message } } }, statusCode: status);
+    }
+
+    /// <summary>
+    /// Stores a manifest the mirror already holds in memory, off the response path with an
+    /// explicit error arm. A store that fails costs a re-fetch next time and nothing else.
+    /// </summary>
+    private static void StoreManifest(
+        ContainerBlobCache cache, string digest, HttpResponseMessage upstream, byte[] body,
+        RegistryRoute route, ILogger? logger)
+    {
+        if (!upstream.IsSuccessStatusCode)
+            return;
+        cache.Store(digest, upstream.Content.Headers.ContentType?.ToString(), body)
+            .Subscribe(
+                stored => logger?.LogDebug(
+                    "Container registry mirror: manifest {Repository}@{Digest} {Outcome}.",
+                    route.Repository, digest, stored ? "cached" : "was not cached"),
+                ex => logger?.LogWarning(ex,
+                    "Container registry mirror: serving manifest {Repository}@{Digest} succeeded "
+                    + "but caching it failed. The pull is unaffected; the next one re-fetches.",
+                    route.Repository, digest));
+    }
+
+    /// <summary>
+    /// Whether this response is a MANIFEST small enough to hold in memory — for recording its
+    /// closure, for caching it, or both.
     ///
     /// <para>🚨 The size test is on the upstream's declared <c>Content-Length</c>, BEFORE
     /// anything is read — so a body that would not fit is never partially consumed, and streams
-    /// untouched. And it applies to manifests only: a blob is never buffered under any
-    /// configuration, which is the difference between recording an image and OOMing the portal.</para>
+    /// untouched. And the caller only reaches this for manifests: a blob is never buffered under
+    /// any configuration, which is the difference between recording an image and OOMing the
+    /// portal.</para>
     /// </summary>
-    private static bool TryReadManifestForRecording(
-        RegistryRoute route,
+    private static bool TryReadManifest(
         HttpResponseMessage upstream,
         ContainerImageOptions options,
         CancellationToken ct,
         out Task<byte[]> body)
     {
         body = Task.FromResult<byte[]>([]);
-        if (route.Kind != ManifestsKind
-            || !upstream.IsSuccessStatusCode
-            || options.ImageRoot is not { Length: > 0 }
+        if (!upstream.IsSuccessStatusCode
             || upstream.Content.Headers.ContentLength is not { } length
             || length <= 0
             || length > options.MaxRecordedManifestBytes)
