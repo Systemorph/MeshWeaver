@@ -668,17 +668,25 @@ def check_static(scan: RepoScan, require_pins: bool) -> list[str]:
         print("  repository that writes it. 'Not checked' must never read the same as 'consistent'.")
         failures.append("unclassified")
 
-    # I1 — same name, one value.
-    by_name: dict[str, dict[str, list[Site]]] = {}
+    # I1 — same name, one value, WITHIN ONE FILE.
+    #
+    # 🚨 Scoped to the file on purpose. Grouping by name across the whole repository would red a
+    # `platform-image:` that legitimately names the portal image in `ci.yml` and a different image
+    # in another workflow — two unrelated declarations that happen to share a key. The copies this
+    # invariant exists for are always in ONE file, because they are copies of one `env:` value that
+    # a `with:` block cannot read. Cross-file DIGEST disagreement is not lost: I2 catches it by
+    # image, which is the semantically correct grouping, and anything I2 cannot place is I5-red.
+    by_name: dict[tuple[str, str], dict[str, list[Site]]] = {}
     for site in scan.sites:
         if site.name == ":inline":
             continue
-        by_name.setdefault(site.name, {}).setdefault(site.value, []).append(site)
-    for name, values in sorted(by_name.items()):
+        by_name.setdefault((site.filename, site.name), {}).setdefault(site.value, []).append(site)
+    for (filename, name), values in sorted(by_name.items()):
         if len(values) < 2:
             continue
-        print(f"::error::{scan.gh_repo} — `{name}` is written {sum(len(v) for v in values.values())} "
-              f"times with {len(values)} DIFFERENT values. A pin move edited some and not others.")
+        print(f"::error::{scan.gh_repo} — `{name}` is written "
+              f"{sum(len(v) for v in values.values())} times in {filename} with {len(values)} "
+              "DIFFERENT values. A pin move edited some and not others.")
         for value, sites in sorted(values.items()):
             for site in sites:
                 print(f"    {value}   {site.filename}:{site.line}")
