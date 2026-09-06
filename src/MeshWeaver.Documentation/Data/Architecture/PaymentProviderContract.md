@@ -125,6 +125,39 @@ implementation bridges its HTTP leaf through the mesh's bounded `IIoPool`
 ([Controlled IO Pooling](../ControlledIoPooling)) and never `Observable.FromAsync`, which would run
 the prologue on the subscribing thread and bound nothing.
 
+## Landing an abstraction like this across the fleet
+
+🚨 **The contract has to be IN THE IMAGE before any consumer can bind it, and a dependent repo's
+compile gate proves that against the image rather than against core's source.** MeshWeaver.Plugins'
+`Compile every NodeType (vs core)` takes its whole reference set from the pinned platform image —
+
+```yaml
+- name: Take the framework assemblies from the platform image
+  run: docker cp "$id:/app/." refs/          # MW_IMAGE_DIGEST
+```
+
+— so `MW_PLATFORM_REF` (which core commit is *built and tested*) does not move it. A pinned digest is
+immutable and no CD run changes it. The consequence is a strict order, and skipping a step reads as a
+defect in the content rather than as a missing pin:
+
+1. the contract merges to core `main`;
+2. core's Continuous Delivery seals a platform set that contains it;
+3. the dependent repo moves its pins as **one gate** — `MW_PLATFORM_SET`, `MW_IMAGE_DIGEST`,
+   `MW_PORTAL_IMAGE_DIGEST`, `MW_PLATFORM_REF`, every `uses:` ref and every
+   `platform-image-digest:` / `tester-image-digest:` literal
+   (`check-platform-pins.py --check-tags` is what refuses a half-move);
+4. only then does the content that binds the contract compile there.
+
+Between (1) and (3) the dependent's PR is **structurally red**, which is the mechanism working. Hold
+it as a draft — draft is the opt-out from auto-arm, so it cannot enqueue while a required gate cannot
+pass — and say in the body which of the four steps it is waiting on.
+
+The verdict that *can* be had immediately is the one that matters most, and it needs no image at all:
+compile the dependent's node types against a **core-only** reference set
+(`compile-check.py --refs <core>/src`). That set is precisely "a mesh with no optional modules", so
+it answers the acceptance question — does this content compile where the module is absent? — before
+any pin moves.
+
 ## Adding a second provider
 
 Implement `IPaymentProvider` in a new module assembly, register it as a singleton from the module's
