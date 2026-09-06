@@ -223,11 +223,125 @@ Two identities exist, and the recipient can tell them apart — so the choice is
 The delegated scope needed is `Mail.Send`, and it is **already part of `EaGraphAuth.Scopes`** —
 connecting the personal assistant grants it, so there is no separate consent step for sending.
 
-- **Probe before composing**: `hub.CanSendAsUser(objectId)`, so the UI can STATE the identity rather
-  than the user discovering it in the recipient's inbox.
+- **Probe before composing**: `hub.ObserveSendAsCapability(objectId)`, so the UI can STATE the
+  identity rather than the user discovering it in the recipient's inbox.
 - **Never fall back silently.** If the user is not connected, offer `/auth/ea/connect`; the shared
   mailbox is only ever an explicitly chosen second option — and then set
   `EmailDelivery.AsSharedMailboxReplyingTo(userEmail)` so a reply still reaches the human.
+
+### 🚨 The probe has THREE answers, and only one of them may say "you have not connected"
+
+`IEmailSender.CanSendAsUser` returns `IObservable<bool>` — two answers for three states of the
+world. Both consumers wrapped it in `.Catch(_ => Observable.Return(false))`, so a probe that timed
+out or faulted became the same `false` as a probe that completed and found no credential. The send
+dialog renders `false` at open time as *"Your Microsoft 365 mailbox is not connected yet"* beside a
+Connect button — a sentence that is simply untrue on a transient fault, shown to a user who **had**
+connected. Nothing was logged, so the third state was not even greppable. That is
+[#3450](https://github.com/Systemorph/MeshWeaver/issues/3450), and it is
+[#3433](https://github.com/Systemorph/MeshWeaver/issues/3433) one layer down.
+
+`IEmailSender.ObserveSendAsCapability(userObjectId)` answers with `EmailSendAsCapability`:
+
+| `EmailSendAs` | Means | What the UI may say |
+|---|---|---|
+| `Available` | The check completed; this sender can act as the person | Name the address the mail leaves from |
+| `Unavailable` | The check completed and found nothing | *"Not connected yet"* + a Connect button — **the only truthful moment** |
+| `Undetermined` | The check produced **no answer** (timeout, transport fault, unreadable content) | *"We could not check just now"* + a retry. **Never** a claim about the mailbox |
+
+**The rendering rule lives on the answer, not in each UI.** `capability.OffersConnect` is true for
+`Unavailable` **alone** — deliberately not `!IsAvailable`, because that expression *is* the collapse
+written out. A consumer cannot re-derive the defect by accident.
+
+Faults route into the state rather than being swallowed: `hub.ObserveSendAsCapability(...)` maps a
+faulted **or silent** probe to `Undetermined` and logs it at Warning naming the user and the
+diagnostic, once, where the sender is resolved. A probe that completes without emitting is the same
+non-answer as one that threw — that is exactly how a dropped mesh read looks.
+
+**The send path is different, and is deliberately unchanged.** At send time the decision really is
+binary: send as the person, or show `AskWhichMailbox`. `hub.CanSendAsUser(...)` remains, folding
+`Undetermined` to `false`, and that is the *correct* answer there — the user is **asked** which
+mailbox rather than assumed connected. Only code that RENDERS A CLAIM must ask for the three-state
+answer.
+
+`IEmailSender.CanSendAsUser` itself is retained as the two-state shim so every existing implementer
+keeps compiling and answering exactly what it answered before. The two defaults point in opposite
+directions and never recurse: the interface's `ObserveSendAsCapability` folds `CanSendAsUser`, while
+the hub extension `CanSendAsUser` folds `ObserveSendAsCapability`. So an old sender is unchanged, and
+a sender that overrides only the new member is folded correctly at every consumer. It is not
+`[Obsolete]` for the reason given on `IEaGraphAuth`'s retiring surface — MeshWeaver.Plugins builds
+`-warnaserror` against a core checkout at a pinned ref, and the attribute would red that repo before
+its own half could land.
+
+---
+
+## Cc and Bcc — one message, not N
+
+A message with copied recipients **cannot be delivered as several mails**. Before
+[#3473](https://github.com/Systemorph/MeshWeaver/issues/3473) every `SendEmail` overload took a
+single `toAddress`, so `SendDocumentDispatch.ExportAndSend` did the only thing available to it —
+`emails.ToObservable().SelectMany(to => hub.SendEmail(to, …))`, one mail per recipient. A To with
+seven Cc, the ordinary shape of a business mail, went out as eight separate messages:
+
+- no recipient could see who else received it, because each message's visible header named one person;
+- Reply-All reached nobody but the sender, so the thread split into eight unrelated conversations;
+- **Bcc had no expressible form at all** — sending separately to a blind recipient produces a message
+  whose header does not match what anyone else got.
+
+`EmailMessage` carries the whole envelope — `To`, `Cc`, `Bcc`, `Subject`, `HtmlBody`, `Attachments`,
+`Delivery` — and `IEmailSender.SendEmail(EmailMessage)` sends it as ONE mail:
+
+```csharp
+hub.SendEmail(new EmailMessage
+    {
+        To = ["client@example.com"],
+        Cc = ["colleague@example.com", "manager@example.com"],
+        Bcc = ["archive@example.com"],
+        Subject = "Q3 review deck",
+        HtmlBody = "<p>Attached.</p>",
+        Delivery = EmailDelivery.AsUser(objectId),
+    })
+    .Subscribe(ok => Log.LogInformation("sent: {Ok}", ok),
+               ex => Log.LogError(ex, "send failed"));
+```
+
+`VisibleRecipients` is To ⧺ Cc (de-duplicated, case-insensitively) — the header every reader sees.
+`Bcc` is deliberately absent from it: a blind recipient appearing there is the disclosure the field
+exists to prevent. `AllRecipients` adds Bcc, for *"the send reached these addresses"* reporting only.
+
+🚨 **A sender that cannot carry copies REFUSES; it never drops them.** The default implementation
+forwards to the existing single-address overload when the message fits one (`To` of exactly one, no
+copies) — so every sender written before this member keeps serving every call it could already
+serve — and otherwise faults with a `NotSupportedException` naming the counts. Delivering to fewer
+people than the sender addressed is the same class of defect as stamping an undelivered mail `Sent`
+(#2023): the person is told the thing they asked for happened.
+
+The host's `NoOpEmailSender` is the one deliberate exception. It delivers nothing to anybody and
+says so, so there is no smaller message for it to deliver silently; it accepts the full envelope,
+names every count in its log line, and still refuses outright on a mail-enabled-but-unconfigured
+install.
+
+### 🚧 The consumers live in MeshWeaver.Plugins, and land after the pin moves
+
+Both seams above are **contract-side only** in this repository. Everything a person can SEE is in
+`MeshWeaver.Plugins`, which builds `-warnaserror` against a core checkout at `MW_PLATFORM_REF` — so
+the consuming half cannot compile until that pin carries these members. The order is therefore
+**core → pin → Plugins**, and it is the reason the members are additive rather than a signature
+change: an old sender at the old pin keeps compiling and answering exactly as before.
+
+What remains, precisely:
+
+| File (MeshWeaver.Plugins) | Change |
+|---|---|
+| `src/MeshWeaver.Mail.MicrosoftGraph/GraphEmailSender.cs` | Override `ObserveSendAsCapability` off `IEaGraphAuth.GetConnection`, mapping `EaConnection.Connected/NotConnected/Undetermined` straight through — it is the only implementation that can OBSERVE the third state. Override `SendEmail(EmailMessage)` to build one Graph `Message` with `ToRecipients`/`CcRecipients`/`BccRecipients` (the SDK already supports all three). |
+| `src/MeshWeaver.Markdown.Export/Layout/SendDocumentLayoutArea.cs` | At dialog open, replace the `CanSendAsUser` probe and its `.Catch(… => false)` with `host.Hub.ObserveSendAsCapability(...)`; render the Connect panel on `capability.OffersConnect`, and a third panel — `ui.sendDocument.connectUnknown` plus a `ui.sendDocument.checkAgain` retry — on `IsUndetermined`. **Leave `SubmitSend` alone**: asking which mailbox is already the right answer for an unknown. |
+| `src/MeshWeaver.Markdown.Export/Handlers/SendDocumentDispatch.cs` | Replace `SendToAll`'s per-recipient `SelectMany` with ONE `hub.SendEmail(EmailMessage)`, and give `ExportAndSend` `cc`/`bcc` parameters beside `rawEmails`. |
+
+The two localization keys the third panel needs (`ui.sendDocument.connectUnknown`,
+`ui.sendDocument.checkAgain`) ship in this change, in both `en` and `de`, so the consumer half adds
+no catalog entries of its own. They still need the mirror sync described in
+[Localization](/Doc/Architecture/Localization) — the plugins repo's React catalog compares against a
+PINNED core commit, so a key added here reddens nothing and leaves that mirror silently stale until
+`npm run sync:i18n -- --ref <merged core sha>` runs.
 
 🚨 **Mailbox data is queried LIVE from Graph and never replicated into the mesh.** Graph is the
 system of record and always current; a mirror would buy nothing and would leave personal
