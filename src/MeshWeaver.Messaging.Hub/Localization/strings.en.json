@@ -505,6 +505,8 @@
   "ui.compileTypesReady": "{0} of {1} types compiled",
   "ui.compileNowCompiling": "Now compiling: {0}",
   "ui.compileQueued": "{0} more queued",
+  "ui.compileForeignFramework": "Built for another platform build",
+  "ui.compileForeignFrameworkBody": "The last compile SUCCEEDED — for platform build `{0}`, while this portal runs `{1}`. Those bytes cannot be loaded here, so the pages of this type cannot render yet. **Nothing is wrong with the code.** This type is rebuilt against the running platform automatically.",
   "ui.noNodeTypeDefinition": "This node has no NodeTypeDefinition — nothing to compile.",
   "ui.noConfiguration": "No Configuration defined.",
   "ui.noConfigLambda": "No configuration lambda defined.",

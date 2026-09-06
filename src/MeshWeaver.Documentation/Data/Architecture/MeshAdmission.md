@@ -185,6 +185,19 @@ It is a **maintainer-level call and it is decidable now**: with admission derive
 predicate, "exit when `Admission is Refused`" is a single call in
 `DynamicTypePreWarmerHostedService`'s terminal handler. It is deliberately not taken here.
 
+## The other half: what a HEALTHY process must refuse to adopt
+
+This page is about **membership** — a refused process must not publish. Its counterpart is
+**adoption**: a healthy, admitted process must never *load* an assembly compiled for a framework
+build identity that is not its own, and must never report `compilationStatus: Ok` for a type whose
+hubs cannot activate. Neither subsumes the other — this one stops a refused process producing the
+foreign records, that one stops any process consuming them, whatever their origin (a peer replica,
+a node repo's committed record, a prebuilt bundle).
+
+See [Build Identity Admission](/Doc/Architecture/BuildIdentityAdmission) for the gate, for why
+`Ok` was a lie that no writer-side rule can fix alone, and for the derived-never-persisted
+`CompilationStatus.Foreign` that keeps a reader-relative verdict out of the shared record.
+
 ## What this does not fix
 
 - **It does not stop a bad image being CHOSEN.** That is roll selection —
@@ -199,6 +212,7 @@ predicate, "exit when `Admission is Refused`" is a single call in
 
 ## Related
 
+[Build Identity Admission](/Doc/Architecture/BuildIdentityAdmission) ·
 [Module Set Convergence](/Doc/Architecture/ModuleSetConvergence) ·
 [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation) ·
 [Modules](/Doc/Architecture/Modules) ·
