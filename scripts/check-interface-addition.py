@@ -96,7 +96,30 @@ from pathlib import Path
 MIN_PUBLIC_INTERFACES_AT_BASE = 50
 MIN_OBLIGATIONS_AT_BASE = 150
 
-TRIGGER_CATEGORY = "implementer-obliging-added"
+# 🚨 #3489 added two more ways to oblige an implementer, and each needs its OWN arm for the same
+# reason: `implementerObligationsAtBase` does not constrain either. A parser that found every
+# interface and every abstract member but stopped reading BASE LISTS would report healthy 132/452
+# and zero base edges forever. MEASURED 2026-09-07 on `main`: 26 interface base edges and 5
+# protected-abstract obligations under `src/`.
+#
+# The protected floor is 1, not "far below 5", and that is deliberate rather than lazy: with a true
+# value this small there is no room for a floor that is both meaningful and survivable, so it is
+# set to catch exactly the failure a floor CAN catch here — the scan returning nothing at all. The
+# differential control in `check-parser-delta.py` (#3492) is what catches a partial regression, and
+# it is the right instrument for it because it compares two parsers over one tree rather than one
+# parser against a guess about the codebase.
+MIN_INTERFACE_BASE_EDGES_AT_BASE = 5
+MIN_PROTECTED_OBLIGATIONS_AT_BASE = 1
+
+# 🚨 All three shapes are the SAME verdict — an outside implementer must now write code it did not
+# have to write — so they share one declaration mechanism and one gate. Splitting them would ask an
+# author to learn three spellings of one obligation.
+TRIGGER_CATEGORIES = frozenset({
+    "implementer-obliging-added",             # #3465 — a member on an interface / abstract class
+    "implementer-obliging-base-added",        # #3489a — an interface gains a BASE interface
+    "implementer-obliging-protected-added",   # #3489d — a `protected abstract` on a public abstract class
+})
+TRIGGER_CATEGORY = "implementer-obliging-added"  # kept: the self-test fixtures name it directly
 
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
@@ -273,8 +296,12 @@ def read_report(path: Path) -> tuple[list[dict], int, int]:
         )
     interfaces = payload.get("publicInterfacesAtBase")
     obligations = payload.get("implementerObligationsAtBase")
+    base_edges = payload.get("interfaceBaseEdgesAtBase")
+    protected = payload.get("protectedObligationsAtBase")
     for field, value in (("publicInterfacesAtBase", interfaces),
-                         ("implementerObligationsAtBase", obligations)):
+                         ("implementerObligationsAtBase", obligations),
+                         ("interfaceBaseEdgesAtBase", base_edges),
+                         ("protectedObligationsAtBase", protected)):
         if not isinstance(value, int):
             raise Undecidable(
                 f"{path} carries no integer `{field}`. That field IS this gate's denominator, so a "
@@ -295,7 +322,21 @@ def read_report(path: Path) -> tuple[list[dict], int, int]:
             "interface member — the interfaces were found and their obligations were not, which is "
             "this gate reporting a clean tree while blind"
         )
-    return [e for e in added if isinstance(e, dict) and e.get("category") == TRIGGER_CATEGORY], \
+    if base_edges < MIN_INTERFACE_BASE_EDGES_AT_BASE:
+        raise Undecidable(
+            f"the base tree declares {base_edges} interface base edge(s), below the floor of "
+            f"{MIN_INTERFACE_BASE_EDGES_AT_BASE}. The base-list reader has stopped reading base "
+            "lists — the interfaces were found and their inheritance was not, so an interface "
+            "gaining a base would pass unchallenged (#3489a)"
+        )
+    if protected < MIN_PROTECTED_OBLIGATIONS_AT_BASE:
+        raise Undecidable(
+            f"the base tree declares {protected} protected-abstract obligation(s), below the floor "
+            f"of {MIN_PROTECTED_OBLIGATIONS_AT_BASE}. That scan has returned nothing at all, which "
+            "is how it read before #3489d: `protected` is not in MEMBER_MODIFIERS, so a helper that "
+            "reads it will answer `set()` and the shape becomes invisible again"
+        )
+    return [e for e in added if isinstance(e, dict) and e.get("category") in TRIGGER_CATEGORIES], \
         interfaces, obligations
 
 
@@ -373,6 +414,7 @@ _INCIDENT = [
 ]
 
 _HEALTHY = {"publicInterfacesAtBase": 130, "implementerObligationsAtBase": 449,
+            "interfaceBaseEdgesAtBase": 26, "protectedObligationsAtBase": 5,
             "added": [], "removed": []}
 
 
@@ -527,6 +569,30 @@ def self_test() -> int:
     check("its denominators are returned", report_of(_report())[1:], (130, 449))
     check("a starved interface count raises", raises(_report(publicInterfacesAtBase=3)), True)
     check("a starved obligation count raises", raises(_report(implementerObligationsAtBase=9)), True)
+
+    # ── #3489's two shapes: same verdict, same declaration, their own arms ────────────────────
+    _BASE_ADDED = [{"key": "A:N.IStore:>IDisposable", "assembly": "A",
+                    "fullName": "N.IStore : IDisposable",
+                    "category": "implementer-obliging-base-added"}]
+    _PROT_ADDED = [{"key": "A:N.Handler::Slot", "assembly": "A", "fullName": "N.Handler.Slot",
+                    "category": "implementer-obliging-protected-added"}]
+    check("🚨 #3489a: a gained BASE INTERFACE is a trigger",
+          report_of(_report(added=list(_BASE_ADDED)))[0], _BASE_ADDED)
+    check("🚨 #3489d: a gained PROTECTED ABSTRACT member is a trigger",
+          report_of(_report(added=list(_PROT_ADDED)))[0], _PROT_ADDED)
+    check("#3489a: undeclared, it fails", evaluate(_BASE_ADDED, "no declaration here")[0], 1)
+    check("#3489d: undeclared, it fails", evaluate(_PROT_ADDED, "no declaration here")[0], 1)
+    check("#3489: one declaration mechanism covers all three shapes",
+          evaluate(_BASE_ADDED, "Implementers: N.IStore : IDisposable — nothing outside "
+                                "implements this seam, checked the four satellites")[0], 0)
+    # 🚨 An ORDINARY addition must still not trigger — otherwise these arms would score green on a
+    # classifier that had started calling everything obliging.
+    check("#3489: an ordinary member-added is still not a trigger",
+          report_of(_report(added=[{"key": "A:N.X::Y", "assembly": "A", "fullName": "N.X.Y",
+                                    "category": "member-added"}]))[0], [])
+    check("a starved base-edge count raises", raises(_report(interfaceBaseEdgesAtBase=1)), True)
+    check("a ZERO protected-obligation count raises — the pre-#3489 reading",
+          raises(_report(protectedObligationsAtBase=0)), True)
     check("a report predating this shape raises",
           raises({"added": [], "removed": [], "publicTypesAtBase": 1900}), True)
     check("a report with no `added` list raises",
