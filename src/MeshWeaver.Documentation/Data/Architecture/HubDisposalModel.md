@@ -641,6 +641,26 @@ never minted. Its writer heard nothing and burned the full 31 s `WriteVerdictBou
 reporting `OwnerUnreachable`. An acked write lost to a teardown that had truncated itself.
 Pinned by `DisposalRegistrantFaultIsolationTest`.
 
+## 🚨 Testing that something is UNREACHABLE after disposal
+
+The consequence of everything above, stated where the cause lives: **`Dispose()` returning is not
+the teardown having happened.** It freezes hosted-hub creation, posts `ShutdownRequest(Quiescing)`
+and returns; the phases run afterwards as fresh messages. So on return the hub is still rooted by
+its own in-flight shutdown — the action block, the scheduler, the registry entry.
+
+A test that takes a `WeakReference`, calls `Dispose()`, forces a GC and asserts unreachability is
+therefore not measuring the reference graph; it is measuring whether the teardown happened to finish
+first. That produces the worst available failure mode — **a green one**. Measured on
+`StreamReleasesItsHubTest` (#3321): it passed inside a 485-test project and failed the moment it ran
+alone, same binary, nothing rebuilt.
+
+Join `DisposalCompleted` and only then collect. After that signal the hub is `Dead` and its own
+machinery has let go, so the only thing that can still hold it is a reference somebody kept — which
+is the claim such a test exists to make. The mechanics (the non-inlined helper, and why holding
+`DisposalCompleted` itself cannot root the hub) are in
+[Writing Tests](/Doc/Architecture/WritingTests); the leak-hunting recipe is in
+[Debugging Disposal and Leaks](/Doc/Architecture/DebuggingDisposalAndLeaks).
+
 ## Adding disposal work — the rule
 
 - **Anything the clean-up needs from DI?** Resolve it at REGISTRATION time and close over
