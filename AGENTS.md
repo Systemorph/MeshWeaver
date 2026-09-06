@@ -33,7 +33,15 @@ it, not before.
 
 ### 🚨 Before you push: make CI green LOCALLY first
 
-CI builds **Release with warnings-as-errors**; a plain local Debug build passes while CI fails. **Build every touched project and its dependents with `dotnet build -c Release -warnaserror`, one project per invocation, and only push when that is clean.** The bar is MERGEABLE, not merged: a branch merely *behind* main merges fine here (`strict: false`, one required check — `Consolidate test results`), so do NOT re-sync just to catch up; merge main only when the PR is `DIRTY` or CI fails on something your diff cannot reach. 🚨 `strict` is **PER-REPO** and it FLIPS — `MeshWeaver.Plugins` was `strict: true` until 2026-08-29 and measured `false` on 2026-09-02; never trust a written value, run `gh api repos/Systemorph/<repo>/branches/main/protection --jq '.required_status_checks.strict'`.
+CI builds **Release with warnings-as-errors**; a plain local Debug build passes while CI fails. **Build every touched project and its dependents with `dotnet build -c Release -warnaserror`, one project per invocation, and only push when that is clean.** The bar is MERGEABLE, not merged: a branch merely *behind* main merges fine here (`strict: false`, one required check — `Consolidate test results`), so do NOT re-sync just to catch up; merge main only when the PR is `DIRTY` or CI fails on something your diff cannot reach. 🚨 `strict` is **PER-REPO** and it FLIPS — `MeshWeaver.Plugins` was `strict: true` until 2026-08-29 and measured `false` on 2026-09-02; never trust a written value, measure it. 🚨 **But `branches/main/protection` ALONE gives a FALSE NEGATIVE, including on THIS repo.** Protection lives in one of two places and the fleet is split between them: `MeshWeaver` and `Memex` are protected by **RULESETS**, for which the classic endpoint answers `Branch not protected (HTTP 404)` — read as "unprotected" it is simply wrong — while `MeshWeaver.Plugins` uses classic protection (5 contexts). So check BOTH, and treat a 404 from the first as "look in the second", never as an answer:
+
+```bash
+gh api repos/Systemorph/<repo>/branches/main/protection --jq '.required_status_checks'   # classic; 404 ⇒ not the answer
+gh api repos/Systemorph/<repo>/rulesets --jq '.[]|"\(.id) \(.name) \(.enforcement)"'      # rulesets
+gh api repos/Systemorph/<repo>/rulesets/<id> --jq '.rules[]|select(.type=="required_status_checks")'
+```
+
+Measured 2026-09-06: core is ruleset `2128472` (`main pr protection`, active, required context `Consolidate test results`); Memex is ruleset `21038115` with the single required context `config-key-coverage`, `required_approving_review_count: 0` — so its `Build (Release)` is ADVISORY and auto-merge lands PRs seconds after arming, with the build still running.
 
 ### 🚨 A verification step that cannot fail is not a verification step
 
