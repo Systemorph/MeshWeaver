@@ -672,12 +672,21 @@ jobs:
           # `platform-ref` while this workflow is pinned by the caller's `uses:`, so a shared file
           # would be a THIRD independently-pinned artefact — the exact skew that once let an old
           # workflow drive a new script and seal an empty module set. Change one, change both.
-          registry_get() { # <url> <out-file> → echoes the final HTTP status
-            local url="$1" out="$2" code="" attempt=0
+          registry_get() { # <url> <out-file> [generation] → echoes the final HTTP status
+            local url="$1" out="$2" generation="${3:-}" code="" attempt=0
             local -r delays="15 30 60 90"
+            # A publication being republished answers 503 + Retry-After (MeshWeaver#3401), so it
+            # lands in the transient arm below and is waited out — rather than read as a missing
+            # bundle, which is exactly how the 2026-09-06 Manufacturing red presented.
+            # An `if`, not `[ … ] && …`: bash exempts a non-final `&&` operand from `set -e`
+            # today, but only because this is not the function's last statement. An `if` cannot
+            # become a silent early return when someone moves it.
+            local -a precondition=()
+            if [ -n "$generation" ]; then precondition=(-H "If-Match: $generation"); fi
             while :; do
               code=$(curl -sS -o "$out" -w '%{http_code}' \
-                       -H "Authorization: Bearer $REGISTRY_KEY" "$url") || code="000"
+                       -H "Authorization: Bearer $REGISTRY_KEY" \
+                       ${precondition[@]+"${precondition[@]}"} "$url") || code="000"
               case "$code" in
                 # Transient: a roll window, a gateway blip, or a connection that never landed
                 # (curl reports 000). Everything else is the registry's decision — return it.
@@ -717,9 +726,22 @@ jobs:
                 echo "::error::$base answered 200 but not a publication index (starts: $(head -c 60 "$SEED_DIR/.index.json" | tr -d '\n\r')…). The registry does not serve /api/plugins/bundles/prebuilt — it runs a build without MeshWeaver#2487. Refusing to guess; retry once the registry has rolled."
                 exit 1
               fi
+              # 🚨 CARRY THE GENERATION (MeshWeaver#3401). Reading the index and then each bundle
+              # it names is N+1 reads of a directory the publisher may reseal underneath us: it
+              # deletes the sentinel, uploads, and re-seals LAST, deliberately. Pinning the
+              # generation we read makes the server refuse a fetch that would mix two publications
+              # instead of silently handing us half of each. A registry predating #3401 serves no
+              # generation; we then send no If-Match and behave exactly as before, so an older
+              # portal is unaffected.
+              generation=$(jq -r '.generation // empty' "$SEED_DIR/.index.json")
               for name in $(jq -r '.bundles[]' "$SEED_DIR/.index.json"); do
-                bcode=$(registry_get "$base/$name" "$SEED_DIR/$name")
-                [ "$bcode" = 200 ] || { echo "::error::could not fetch $name from $base — registry answered $bcode."; exit 1; }
+                bcode=$(registry_get "$base/$name" "$SEED_DIR/$name" "$generation")
+                case "$bcode" in
+                  200) ;;
+                  412) echo "::error::the '$src' publication was resealed while this fetch was in flight (we held generation $generation). The gate reads ONE publication or none — never half of two. Re-run once the publisher has settled."; exit 1 ;;
+                  404) echo "::error::'$name' is listed in the '$src' publication index but the registry will not serve it — the seal and the store disagree, and that needs a republish. This is NOT the republish window: that answers 503 and is waited out above."; exit 1 ;;
+                  *) echo "::error::could not fetch $name from $base — registry answered $bcode."; exit 1 ;;
+                esac
                 fetched=$((fetched+1))
               done
               rm -f "$SEED_DIR/.index.json"

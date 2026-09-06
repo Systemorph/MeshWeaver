@@ -754,3 +754,5 @@ whole protocol is [The Merge Queue](/Doc/Architecture/MergeQueue).
 
 [The Merge Queue](/Doc/Architecture/MergeQueue) · [Module Versioning](/Doc/Architecture/ModuleVersioning)
 · [Modules](/Doc/Architecture/Modules) · [Deploying Plugin Changes](/Doc/Architecture/DeployingPluginChanges)
+· [The Dependabot Secret Store](/Doc/Architecture/DependabotSecretStore) — a red that names a secret
+you can see provisioned, and why the exemption that would silence it is only safe in core
