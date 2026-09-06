@@ -137,9 +137,18 @@ public static class PublishedBundleCatalogue
     /// nothing (the seeder would skip it, so a gate that counted it would clear a release the
     /// portal then recompiles).
     ///
-    /// <para>Public because it is also the deployment gate's "what am I adopting TODAY" reading —
-    /// asked of the RUNNING identity to decide which installed packages are content-bearing at
-    /// all, which is what keeps the gate a regression check instead of a permanent freeze.</para>
+    /// <para>🚨 <b>This was the deployment gate's denominator, and it must never be that again
+    /// (#3441).</b> Asked of the RUNNING identity to decide which installed packages are
+    /// content-bearing, it made the expected set a function of the artifact store the gate was
+    /// about to judge: a package whose bake broke left the set and every later roll was green
+    /// about it. The gate now reads
+    /// <see cref="EverSealedBundles(string?, ILogger?)"/> instead. This overload answers the
+    /// narrower factual question — <i>what is sealed under THIS one identity</i> — which remains a
+    /// legitimate reading (it is what the boot seeder effectively resolves, and what
+    /// <c>ReleaseGateDenominatorTest</c> uses to reproduce the old verdict as its negative
+    /// control). It has no production caller today; kept public deliberately rather than deleted,
+    /// because a public surface here can have in-mesh and satellite callers the compiler cannot
+    /// see.</para>
     /// </summary>
     public static ImmutableHashSet<string> SealedBundlesForIdentity(
         string? publishedRoot, string? identity, ILogger? logger = null)
