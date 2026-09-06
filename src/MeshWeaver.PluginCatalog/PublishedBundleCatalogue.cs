@@ -190,6 +190,15 @@ public static class PublishedBundleCatalogue
     /// bundle ever — is still not demanded, exactly as before. The exemption is preserved; only
     /// its EVIDENCE moved from "one identity's answer today" to "any identity's answer ever".</para>
     ///
+    /// <para>🚨 <b>The cost of monotone, stated honestly.</b> A package that legitimately STOPS
+    /// shipping content — its last NodeType removed while it stays installed — produces no bundle
+    /// for the target identity and will hold, and keep holding; uninstalling it clears the hold
+    /// (the outer set is the environment's install records), re-baking does not. That is a
+    /// deliberate trade against the erosion bug, and the direction is chosen: the old failure was
+    /// SILENT (rolling onto content that was not there), this one is LOUD — named on the policy
+    /// node and re-evaluated every tick. A gate that is visibly wrong can be acted on; one that is
+    /// invisibly wrong cannot.</para>
+    ///
     /// <para>🚨 <b>It reads each source's sentinel DECLARATION, not a per-bundle presence check</b>
     /// (<see cref="DeclaredBundlesOf"/>). That is deliberate in both directions: inclusive, because
     /// a torn publication that once listed a package should keep that package in the set the gate

@@ -180,6 +180,15 @@ Naming the blind spot is worth more than overclaiming the coverage.
   it is the only thing standing between this gate and a permanently frozen environment — but it
   means a package whose bake has been broken *since before this root ever published* is invisible
   here. The bake lane, not the roll gate, is where that is caught.
+- 🚨 **A package that legitimately STOPS shipping content will hold, and keep holding.** Monotone
+  cuts both ways: once a package has sealed a bundle, dropping its last NodeType means it produces
+  no bundle for the target identity and the gate reads that as the regression it is designed to
+  catch. Uninstalling the package clears it (the outer set is the environment's install records,
+  so a removed package leaves the denominator with it); re-baking does not. This is a deliberate
+  trade against the erosion bug, and the direction is chosen on purpose: the old failure was
+  **silent** — rolling onto content that was not there — while this one is **loud**, named on the
+  policy node, and re-evaluated every tick. A gate that is visibly wrong can be acted on; one that
+  is invisibly wrong cannot.
 - **It gates the ROLL, not the BAKE.** It cannot make a bake complete; it can only refuse to roll
   onto an incomplete one. A satellite whose bake is torn still publishes nothing and still needs
   fixing at the source.
