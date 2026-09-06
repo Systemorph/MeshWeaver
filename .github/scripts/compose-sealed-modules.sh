@@ -74,12 +74,24 @@ work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 # that workflow is pinned by the caller's `uses:`, so a shared file would be a THIRD
 # independently-pinned artefact — the exact skew that once let an old workflow drive a new
 # script and seal an empty module set. Change one, change both.
-registry_get() { # <url> <out-file> → echoes the final HTTP status
-  local url="$1" out="$2" code="" attempt=0
+#
+# 🚨 <generation> PINS THE PUBLICATION INSTANCE (MeshWeaver#3401). Reading the module-set index
+# and then each bundle it names is N+1 reads of a directory the publisher may reseal underneath
+# us; sending it as If-Match makes the server answer 412 rather than silently handing back bytes
+# from a different publication than the index described. Opt-in: a registry predating #3401
+# publishes no generation, the header is then absent, and the behaviour is exactly as before.
+registry_get() { # <url> <out-file> [generation] → echoes the final HTTP status
+  local url="$1" out="$2" generation="${3:-}" code="" attempt=0
   local -r delays="15 30 60 90"
+  # An `if`, not `[ … ] && …`: bash exempts a non-final `&&` operand from `set -e` today, but
+  # only because this is not the function's last statement — an `if` cannot become a silent
+  # early return when someone moves it.
+  local -a precondition=()
+  if [ -n "$generation" ]; then precondition=(-H "If-Match: $generation"); fi
   while :; do
     code=$(curl -sS -o "$out" -w '%{http_code}' \
-             -H "Authorization: Bearer $registry_key" "$url") || code="000"
+             -H "Authorization: Bearer $registry_key" \
+             ${precondition[@]+"${precondition[@]}"} "$url") || code="000"
     case "$code" in
       # Transient: a roll window, a gateway blip, or a connection that never landed (000).
       408|429|5??|000) ;;
@@ -96,13 +108,16 @@ registry_get() { # <url> <out-file> → echoes the final HTTP status
 }
 
 # ── one upstream's sealed module set (an index), or a RED reason ──────────────────────────────
-# Writes the listed bundle names, one per line, into <list-file>. Exit 1 with ::error when the
-# upstream has no seal for this identity or the seal predates module sealing — both are stop
-# conditions, not misses. 🚨 The list goes to a FILE, never stdout: the first version returned it
-# on stdout and the caller captured it, so every ::error this function printed vanished into the
-# list file and a red gate showed nothing but "exit code 1" (Manufacturing run 33283588300).
-sealed_modules_of() { # <source> <list-file>
-  local src="$1" list="$2"
+# Writes the listed bundle names, one per line, into <list-file>, and the publication GENERATION
+# the index carried into <generation-file> (empty on a registry that predates MeshWeaver#3401, or
+# on the storage path, which reads the share directly). Exit 1 with ::error when the upstream has
+# no seal for this identity or the seal predates module sealing — both are stop conditions, not
+# misses. 🚨 The list goes to a FILE, never stdout: the first version returned it on stdout and
+# the caller captured it, so every ::error this function printed vanished into the list file and
+# a red gate showed nothing but "exit code 1" (Manufacturing run 33283588300).
+sealed_modules_of() { # <source> <list-file> <generation-file>
+  local src="$1" list="$2" genfile="$3"
+  : > "$genfile"
   case "$src" in */*|*..*|"") echo "::error::upstream '$src' is not a bare source name"; return 1 ;; esac
   if [ -n "$registry_url" ]; then
     local base="${registry_url%/}/api/plugins/bundles/prebuilt/$identity/$src"
@@ -122,6 +137,7 @@ sealed_modules_of() { # <source> <list-file>
     jq -e '.modules | type == "array"' "$work/$src.modules.json" > /dev/null 2>&1 \
       || { echo "::error::$base/modules answered 200 but not a module-set index (starts: $(head -c 80 "$work/$src.modules.json" | tr -d '\n\r')…)"; return 1; }
     jq -r '.modules[]' "$work/$src.modules.json" > "$list"
+    jq -r '.generation // empty' "$work/$src.modules.json" > "$genfile"
   else
     local account="${storage_target%%/*}" rest="${storage_target#*/}"
     local share="${rest%%/*}" base=""
@@ -141,13 +157,24 @@ sealed_modules_of() { # <source> <list-file>
   fi
 }
 
-fetch_module() { # <source> <bundle-name> <dest>
-  local src="$1" name="$2" dest="$3"
+# Returns 0 on success, 2 when the publication MOVED under this fetch (412 — the caller re-reads
+# the module set that now applies), 1 for every other refusal.
+fetch_module() { # <source> <bundle-name> <dest> [generation]
+  local src="$1" name="$2" dest="$3" generation="${4:-}"
   if [ -n "$registry_url" ]; then
     local code
     code=$(registry_get \
-      "${registry_url%/}/api/plugins/bundles/prebuilt/$identity/$src/modules/$name" "$dest")
-    [ "$code" = 200 ] || { echo "::error::could not fetch sealed module $name of '$src' for identity $identity — registry answered $code."; return 1; }
+      "${registry_url%/}/api/plugins/bundles/prebuilt/$identity/$src/modules/$name" "$dest" "$generation")
+    case "$code" in
+      200) return 0 ;;
+      # 🚨 The publication was resealed between the index read and this one (MeshWeaver#3401).
+      # Composing what we have would mix module bytes from two publications — the mvid mismatch
+      # that DECLINES every NodeType assembly at adoption, silently. Say so and let the caller
+      # re-read; never continue on the half we hold.
+      412) echo "::notice::the '$src' publication was resealed while its module set was being composed (we held generation ${generation:-<none>}) — re-reading the publication that now applies."; return 2 ;;
+      404) echo "::error::'$name' is listed in the '$src' sealed module set for identity $identity but the registry will not serve it — the seal and the store disagree, and that needs a republish. This is NOT the republish window: that answers 503 and is waited out above."; return 1 ;;
+      *) echo "::error::could not fetch sealed module $name of '$src' for identity $identity — registry answered $code."; return 1 ;;
+    esac
   else
     local account="${storage_target%%/*}" rest="${storage_target#*/}"
     local share="${rest%%/*}" base=""
@@ -159,29 +186,70 @@ fetch_module() { # <source> <bundle-name> <dest>
   fi
 }
 
-# Read every upstream's module set ONCE, in the order given; the first seal listing a package wins.
-# A seal that cannot be read stops the run — see sealed_modules_of.
-for src in $upstreams; do
-  sealed_modules_of "$src" "$work/$src.list"
-  echo "upstream '$src' sealed $(grep -c '[^[:space:]]' "$work/$src.list" || true) module bundle(s) for identity $identity"
-done
-
-composed=0
-for pkg in $packages; do
-  wanted="$(printf '%s' "$pkg" | tr '[:upper:]' '[:lower:]').module.nupkg"
-  found=""
+# ── one whole composition, against ONE publication instance per upstream ──────────────────────
+# Reads every upstream's module set (in the order given; the first seal listing a package wins),
+# then fetches each wanted package PINNED to the generation that listing came from. Returns 0 on
+# success, 2 when a publication moved mid-composition (the caller re-reads), 1 on any refusal.
+compose_once() {
+  local src pkg wanted name frc
   for src in $upstreams; do
-    name=$(awk -v w="$wanted" 'tolower($0) == w { print; exit }' "$work/$src.list")
-    if [ -n "$name" ]; then
-      fetch_module "$src" "$name" "$out/$name"
-      echo "composed $pkg from the sealed publication of '$src' for identity $identity ($name)"
-      found="$src"; break
-    fi
+    sealed_modules_of "$src" "$work/$src.list" "$work/$src.generation" || return 1
+    echo "upstream '$src' sealed $(grep -c '[^[:space:]]' "$work/$src.list" || true) module bundle(s) for identity $identity"
   done
-  if [ -z "$found" ]; then
-    echo "::error::no sealed upstream publication ($upstreams) for identity $identity carries module package '$pkg' (looked for $wanted). The upstream that owns it must compose it in its bake (module-artifacts / registry-modules) so its seal carries it; composing it from the registry here would be the decline this replaces."
+
+  composed=0
+  : > "$work/composed.list"
+  for pkg in $packages; do
+    wanted="$(printf '%s' "$pkg" | tr '[:upper:]' '[:lower:]').module.nupkg"
+    found=""
+    for src in $upstreams; do
+      name=$(awk -v w="$wanted" 'tolower($0) == w { print; exit }' "$work/$src.list")
+      if [ -n "$name" ]; then
+        frc=0
+        fetch_module "$src" "$name" "$out/$name" "$(cat "$work/$src.generation")" || frc=$?
+        if [ "$frc" = 2 ]; then
+          # 🚨 DISCARD THE HALF WE HOLD. A module bundle taken from the publication that has now
+          # been superseded must not survive into the compile surface: mixing two publications'
+          # module bytes is exactly the mvid mismatch that DECLINES every NodeType assembly at
+          # adoption, and a stale file in $out would be composed as a `--module` regardless.
+          rm -f "$out/$name"
+          while IFS= read -r stale; do rm -f "$stale"; done < "$work/composed.list"
+          return 2
+        fi
+        [ "$frc" = 0 ] || return "$frc"
+        printf '%s\n' "$out/$name" >> "$work/composed.list"
+        echo "composed $pkg from the sealed publication of '$src' for identity $identity ($name)"
+        found="$src"; break
+      fi
+    done
+    if [ -z "$found" ]; then
+      echo "::error::no sealed upstream publication ($upstreams) for identity $identity carries module package '$pkg' (looked for $wanted). The upstream that owns it must compose it in its bake (module-artifacts / registry-modules) so its seal carries it; composing it from the registry here would be the decline this replaces."
+      return 1
+    fi
+    composed=$((composed + 1))
+  done
+}
+
+# 🚨 A COMPOSITION READS ONE PUBLICATION, OR NONE (MeshWeaver#3401). The index and the N bundle
+# fetches are N+1 reads of a directory the publisher unseals, rewrites and re-seals — roughly a
+# minute and a half per target, per publish, and both core CD and the Plugins satellite publish
+# the `plugins` prefix. When that lands mid-composition the server answers 412 and this restarts
+# against the publication that now applies; it never keeps the half it holds, and it never
+# retries the read that failed. The bound is what makes it a read rather than a poll: a publisher
+# resealing faster than a composition completes is a real condition, and it goes RED naming
+# itself instead of spinning.
+RESTARTS=2
+composed=0
+attempt=0
+while :; do
+  rc=0
+  compose_once || rc=$?
+  [ "$rc" = 2 ] || break
+  attempt=$((attempt + 1))
+  if [ "$attempt" -gt "$RESTARTS" ]; then
+    echo "::error::the upstream publication(s) ($upstreams) for identity $identity were resealed under every one of $((RESTARTS + 1)) composition attempts — the publisher is republishing faster than a module set can be read. This is MeshWeaver#3401, not a fault of this repo's diff: re-run once the upstream's publish-bake has settled."
     exit 1
   fi
-  composed=$((composed + 1))
 done
+[ "$rc" = 0 ] || exit "$rc"
 echo "composed=$composed"

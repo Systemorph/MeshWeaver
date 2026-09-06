@@ -662,6 +662,13 @@ identity as its predecessor — the script skips with a notice instead of re-upl
 [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)
 for the job's preflight discipline and the dependent-repo dispatch.
 
+🚨 Replacing a publication **unseals it first**, on purpose, so nobody can read a mix of old and new
+bundles under a stale sentinel — which means the directory is deliberately unreadable for about a
+minute and a half, per target, per publish, and the `plugins` prefix has two writers.
+[Sealed Publication Reads](/Doc/Architecture/SealedPublicationReads) is the reader's half: the three
+answers that window produces (`404` / `503` / `412`), the generation that lets a multi-read consumer
+pin one publication instance, and what is still not closed.
+
 ### 🚨 CD compiles ONLY what the image embeds — everything else is adopted
 
 The bake is scoped to `src/MeshWeaver.Documentation/Data`, the one tree every portal ships inside
