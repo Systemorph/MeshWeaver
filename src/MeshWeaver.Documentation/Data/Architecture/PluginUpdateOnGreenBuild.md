@@ -324,6 +324,7 @@ install-time seed.
 | Nothing happens on a green build | The webhook does not send **Workflow runs**; or no catalog's `SourceRepoPath` matches the repo; or the run's conclusion was not `success` — only completed+successful runs are recorded; or the run's **trigger is not on the allow-list** (`push`, `repository_dispatch`, `schedule`, `workflow_dispatch` record; `pull_request`, `dynamic` and anything unknown do not — see *Which green runs count as a publish signal* above); or the run was **not on the repository's default branch** — a green PR-branch build is unmerged code and is deliberately never recorded (fail-closed: a payload with no readable branch records nothing either). |
 | A module never updates, and the log says it "has no module content identity" | The module's `manifest.lock` is missing or unparseable, so there is no `ModuleVersion` to compare and "has it changed" is unanswerable. A missing hash is the **absence of evidence**, not evidence of a change: treating it as changed would re-install the module on every green build of the repo *and* on every pod start, which is acting on the event rather than the content. It is refused, loudly, and the catalog card's manual **Update** stays available. Fix the module's CI to emit the sidecar. |
 | Nothing happens on a green build, **and the log says the delivery "matched NONE of the N sync config(s)"** | No `_GitSync` targets that repository — usually because the repository was **renamed** and the configs still store its old name. The matcher falls back to GitHub's canonical `full_name` (which follows the rename redirect) and repoints the config when it finds one, so this line surviving means the lookup could not be made either: the repository is unreachable with the config creator's credential, or the hook really is installed on a repository this mesh does not sync. The Warning names both sides — the incoming repository and everything it was compared against. |
+| A green build produced nothing, and the log says the fact is **NOT recorded AND the sync did not run** | The `Admin/_Build/{owner}.{repo}` write failed. GitHub was answered 200, so there is no redelivery. The payload is kept at `Admin/_MissedBuild/{owner}.{repo}` (#3374) — read it with `MissedBuildFact.WatchQuery`, and compare it against the current build record to see whether a later green run of the SAME workflow has already superseded it. If a second Warning says the miss could not be recorded either, the log line is the only witness and the fact must be replayed from GitHub. |
 | Build node updates but no installation reacts | The package is not installed on that instance. A catalog lists far more packages than any instance installs; only packages with an install record are considered. |
 | The same "Update available" reminder keeps reappearing, or the bell re-lights on one you dismissed | Before #3213 this was the norm — a new row per reconcile, forever. The reminder is now told once per candidate version: the install record carries `NotifiedModuleVersion`, and the notification's id is derived from *(record, kind, candidate)*. Seeing it again means the candidate genuinely moved (`ModuleVersion` differs from the one on the record's marker) — read the record and compare the two, rather than assuming a duplicate. |
 | The boot log says the feed of a registry could not be read after N attempts and was **recorded as PENDING**, and admins got a bell notification pointing at `Plugins/_RegistryReconcileLedger` | The registry stayed unavailable for longer than the boot's retry budget (#2888). Nothing is lost: the ledger entry for that registry reads `Pending: true`, and the reconcile runs on the next successful feed read — open the catalog page (or install anything from that registry) once the registry is back, then check the entry reads `LastReconciledVia: feed-read`. If the registry answers a *definite* refusal (401/403) instead, the entry is pending too, but no catalog open will drain it until the key or grant is fixed — the `LastFault` names which. |
@@ -331,6 +332,46 @@ install-time seed.
 The webhook **never throws** on a write failure: GitHub retries a non-2xx delivery, so an unhandled
 fault would turn one bad write into a delivery storm. Failures are logged and reported as "nothing
 recorded" instead.
+
+### 🚨 What a failed build-record write costs, and where the fact goes now (#3374)
+
+Answering 200 on a failed write is right — a non-2xx is the storm above — but on its own it made the
+event **gone for good**: the build record kept its previous value, the sync the green build
+authorises never ran (it hangs off the success branch), GitHub did not redeliver, and nothing else
+retried. A transient infrastructure fault became permanent data loss. Measured on `memex-cloud`:
+**154 of these in one week**, from two distinct inner causes — an owner that returned no verdict,
+and initial state that never arrived within 30 s.
+
+It was also **un-monitorable**, not merely broken. The *attempt* is logged at `Information`, and
+`Information` is not emitted on that deployment, so the failure line has no denominator: 154
+failures could be 5 % of deliveries or 100 % and nothing could tell them apart.
+
+So the fact is now KEPT. On a failed write the webhook records a `MissedBuildFact` node at
+`Admin/_MissedBuild/{owner}.{repo}` carrying the build payload **verbatim**, so the lost build can
+be replayed rather than reconstructed from a log line. The delivery still answers 200 and still
+reports "nothing recorded" — recording the miss must not change the delivery's outcome.
+
+Two properties are deliberate:
+
+- **There is no drain, no `Pending` flag and no timer.** A later green build of the same workflow
+  writes the build record and runs the sync, superseding the lost one outright — so "does this
+  record still matter?" is a **read** (`MissedBuildFact.IsSupersededBy`), comparing it against the
+  build record that exists now. The happy path therefore writes no extra node, opens no query, and
+  cannot fail in a new way. Same *end on a fact you can read* shape `RegistryUpdateReconciler`
+  settled on.
+- **Superseding is per WORKFLOW.** Run numbers are per-workflow counters, so a busy second workflow
+  on the same repository sits far ahead; comparing across workflows would retire every real gap
+  almost immediately and hand back the silent loss this record replaced.
+
+The record shares a failure domain with the write that just failed. It is a **different node with a
+different owning hub**, so it survives the per-node faults actually observed — but a cluster-wide
+fault takes both, and when it does the log says so explicitly ("recorded NOWHERE — this log line is
+the only remaining witness") rather than counting the miss as handled.
+
+🚨 Read these with `MissedBuildFact.WatchQuery`, never a bare `nodeType:MissedBuildFact`. Like build
+records, they live in the **Admin partition**, which an unscoped query does not reach — it answers
+empty however many exist, so "nothing has been missed" would be indistinguishable from "the query
+cannot see them".
 
 ## Related
 
