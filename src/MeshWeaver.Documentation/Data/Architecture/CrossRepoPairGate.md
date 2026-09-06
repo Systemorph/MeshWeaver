@@ -816,6 +816,127 @@ shape, `publicInterfacesAtBase` and `implementerObligationsAtBase` (floors 50 an
 request, so without them *"this diff changed nothing"* and *"the scan read nothing"* would produce
 the same JSON.
 
+### 🚨 A floor catches "read nothing". It cannot catch "reads LESS than it did" (#3492)
+
+Those three floors are the right instrument for the question they ask, and they were never able to
+ask this one. Measured on `origin/main`:
+
+| control arm | floor | measured | slack |
+|---|---:|---:|---:|
+| `publicTypesAtBase` | 500 | 1 971 | ~1 450 |
+| `publicInterfacesAtBase` | 50 | 132 | ~82 |
+| `implementerObligationsAtBase` | 150 | 452 | ~302 |
+
+The slack is deliberate — a floor must survive a carve-out wave without going red. It is also
+exactly what a UTF-8 BOM walked through. Three bytes before the first character defeat both
+`^`-anchored matchers:
+
+```
+﻿namespace MeshWeaver.Layout;      NAMESPACE_RE is `^namespace` — no match, so the file's
+                                   types are keyed with an EMPTY namespace…
+﻿public class ButtonControl        …and TYPE_RE's indent group is `[ \t]*`, which U+FEFF is not
+```
+
+`re.match(r"\s", "\ufeff")` is `None` and `"\ufeff".isspace()` is `False`, so neither pattern
+forgives it. **310 of 1 271** `.cs` files under `src/` carry a BOM. The damage splits in two, and
+the halves fail differently:
+
+- **16 types were in NO index at all.** A *block-scoped* namespace indents its types by four
+  columns; with the namespace lost, `expected` falls to `0`, the indent comparison rejects every
+  declaration, and `ButtonControl`, `HtmlControl`, `SplitterControl`, `INamed`, `MeshException` and
+  eleven others simply were not there.
+- **124 more were MISKEYED.** A *file-scoped* namespace leaves its types at column 0, so they were
+  indexed — under `Name` instead of `Namespace.Name`. The index also held **123 phantom keys**
+  naming nothing real.
+
+That is 0.9 % of the types and 0.8 % of the interfaces: far inside every floor's slack.
+
+**How long, and what it cost — both measured rather than assumed.** The blind set was
+**140 types (16 + 124), byte-identically the same set**, at the gate's first commit (`51adbeef3`,
+#2689) and 754 commits later. The detector was born blind. Whether anything escaped was then
+answered two ways, because one was not enough:
+
+| measurement | result |
+|---|---|
+| `truth(51adbeef3) − truth(HEAD)` — public types that left `src/` across the window | **0** |
+| every `--diff-filter=DR` event on `src/**/*.cs` in the window, re-parsed at its parent | **6 file events, 0 carrying a BOM, 0 blind** |
+| every in-place modification (460 file-commits): a BOM'd file losing or renaming a line-1 declaration, or a namespace rename the gate saw identically on both sides | **0** |
+| `src/**/*.cs` files that gained or lost a BOM (the one edit that can move a key) | **1**, and it moved nothing — `RegistryUpdateReconciler.cs` line 1 is `using System.Reactive;`, so the BOM had hidden neither a namespace nor a declaration |
+
+🚨 **The endpoint comparison alone would have been wrong to trust**, and that is the part worth
+keeping. It cannot see a type born and removed *inside* the window — and that happened: `780beff47`
+(#3361) renamed the whole `MeshWeaver.ContainerRegistry` assembly to `MeshWeaver.ContainerImages`,
+and the assembly exists at neither endpoint, so seven public types changed namespace invisibly to an
+endpoint diff. Same shape as the defect being investigated: *absence of a match read as absence of a
+subject.* The per-event pass is what closes it.
+
+**Verdict: zero escapes, and not by luck** — no public type left `src/` at all in the 754 commits
+the gate has existed. The gate was blind in 140 places and had not yet been asked the question it
+would have answered wrongly. A reprieve, not a defence.
+
+### The control that generalises: a DIFFERENTIAL over a fixed corpus
+
+`scripts/check-parser-delta.py` runs **the merge base's own copy of the detector** and **this
+diff's copy** over the **same tree** (the merge base), both in `--surface-json` report mode, and
+compares the denominators.
+
+```
+detector at the merge base  ─┐
+                             ├─→  ONE tree  ─→  two sets of denominators  ─→  delta
+detector in this diff       ─┘
+```
+
+The corpus is byte-identical for both runs, so **every difference is attributable to the parser and
+to nothing else**. The codebase can grow, shrink or be refactored without moving the number: the
+control is invariant under code change *by construction*, and moves only when the detector's
+behaviour moves — which is its subject. That is what a floor cannot be, because a floor is a
+statement about the codebase.
+
+The verdict is deliberately **asymmetric**, because the directions mean opposite things:
+
+| delta | meaning | verdict |
+|---|---|---|
+| **negative** | the detector sees less of the same tree; every gate downstream now guards a smaller set | **RED**, unless declared |
+| **positive** | the detector sees more of the same tree — a fix | printed loudly, **passes** |
+| zero | nothing changed | printed with both numbers, so a pass says something |
+
+An intended tightening declares itself in the pull-request body, in the shape `Pairs-with:` already
+established:
+
+```
+Parser-delta: publicTypesAtBase — nested records were counted as top-level; they are never
+independently bindable by simple name, so the old number was wrong upward.
+```
+
+The declaration names the **counter and a reason, never the number** — the corpus is the merge base,
+which moves while a pull request is open, so a written figure would go stale and train people to
+edit it without reading it. It is also **per counter**: declaring `publicTypesAtBase` does not
+silence `implementerObligationsAtBase`.
+
+🚨 **No skip-trapdoor.** The step runs unconditionally and asks nothing about its own inputs. A
+detector that exits non-zero, or exits 0 and writes no report, is a **failure** naming which side —
+never a zero delta. The one path that returns 0 without running anything is a *proof*: when every
+subject file is byte-identical between the merge base and the diff, the delta is zero by
+construction, and the two SHA-256 digests are printed to show it.
+
+**Both arms, measured on the real repository rather than argued:**
+
+| arm | result |
+|---|---|
+| `--self-test` | **13 cases, 0 failed** — including a stub reason, a declaration naming the *wrong* counter, a **withdrawn** counter, a counter that stops being an integer, a detector that exits 3, and one that exits 0 writing nothing |
+| base `cac18fd9c` (pre-#3487) vs merged `main` | `publicTypesAtBase` **+16**, `publicMembersAtBase` **+111** — #3487's `lstrip`, reproduced as a positive delta over an identical tree, and **passed** |
+| base merged `main` vs a working tree with that `lstrip` **reverted** | **RED, exit 1**, on all four counters: `-16` types, `-111` members, `-1` interface, `-1` obligation |
+
+The third row is the one that matters: the control was watched failing on the reintroduced defect,
+not merely reasoned about.
+
+**What it deliberately does NOT cover.** `check-record-signatures.py` shares this family's
+`^`-anchored parsing and had the same BOM hole (fixed in #3487; exposure was **zero files** at the
+time). It is not gated here, for a structural reason rather than an oversight: it scans **the files
+this diff changed**, not a whole-tree index, so it publishes no denominator that could shrink. Its
+blindness shows up as a missed finding on one file, which a differential over a fixed corpus cannot
+see. Giving it a whole-tree index would be a real change to that gate, not a wrapper around it.
+
 ## See also
 
 [Repository Dependency Direction](/Doc/Architecture/RepositoryDependencyDirection) ·
