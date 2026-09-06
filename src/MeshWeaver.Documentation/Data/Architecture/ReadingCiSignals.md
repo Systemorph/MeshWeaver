@@ -506,6 +506,28 @@ that **for a fault the trace log is the sink, and reaching it is a property of t
 level or the wording**. An `ILogger.LogError` about an exception that does not pass the exception is
 invisible there.
 
+🚨 **The same blind spot has a SECOND live instance, and it is the reason "the observable emitted
+nothing at all" is undiagnosable.** `LayoutAreaHost` carries two diagnostics written for exactly the
+wedge where a layout area never delivers a frame — `COMPLETED WITHOUT RENDERING` (`LogError`) and
+`was torn down having never rendered` (`LogWarning`). Both pass **no exception**, so both are
+refused by the trace sink's `exception is not null && logLevel >= Warning` gate, and both fire on a
+pool thread or during teardown, where `outputHelper` is null / `IsInTestMethod()` is false and the
+trx sink is closed too. Measured on the #3413 occurrence (run `34034828870`, shard 5): across all
+**450** trx results and the whole 4,050-line trace, `never rendered` → **0** and
+`COMPLETED WITHOUT` → **0**. In a `HubTestBase` test the disposal one is `LogDebug` regardless — the
+`Hub.IsDisposing` branch (#2679) — and mesh teardown is exactly how such a test disposes its layout
+host. So a layout area that renders nothing is silent in **every** sink, which is what made #1081
+cost four sessions and what leaves #3413 open.
+
+**The instrument that does answer it** is `MessageTrace`
+(`MeshWeaver.Messaging.Hub/MessageService.cs`): `MESHWEAVER_MSG_TRACE=1` makes every delivery write
+a `ROUTED` / `DEFERRED gates=[…]` / `GATE_FAILED` / `DROPPED_GATE_STUCK` line to
+`$TMPDIR/meshweaver-msg-trace.log` — enough to say whether the sync sub-hub processed its
+`InitializeHubRequest`, whether `PushRenderResult` ever posted an `UpdateStreamRequest`, and whether
+anything was deferred. It is off by default (a lock + file append per message). Both
+`node-repo-module-pack.yml` **and** `dotnet-test.yml` now copy the file into the shard artifact when
+it exists, so turning it on for a run is a one-variable change and needs no workflow edit.
+
 🚨 **And know which questions the sinks cannot answer.** *Neither* Plugins sink carries a compile
 **success**: `Compile success for …` is `LogInformation`, so the trace log (faults only) never sees
 it and the post-hoc job log never sees it either unless the test that logged it failed. Core's live

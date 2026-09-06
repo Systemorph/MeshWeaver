@@ -1374,6 +1374,23 @@ jobs:
         if [ -f /tmp/meshweaver-memory-delta.log ]; then
           cp /tmp/meshweaver-memory-delta.log collected-logs/_meshweaver-memory-delta.log
         fi
+        # Per-MESSAGE trace (MessageTrace, MeshWeaver.Messaging.Hub/MessageService.cs): the
+        # ROUTED / DEFERRED gates=[…] / GATE_FAILED / DROPPED_GATE_STUCK line for every delivery.
+        # OFF unless MESHWEAVER_MSG_TRACE=1 is set for the run, so this copy is a no-op on an
+        # ordinary shard and costs nothing — but when a wedge needs it, flipping ONE env var is
+        # then the whole job, instead of also having to change this workflow first.
+        #
+        # 🚨 It is the instrument the "observable emitted nothing at all" class actually needs, and
+        # it was reachable in node-repo-module-pack.yml and NOT here (#3413): a layout area that
+        # never renders is silent in every other sink, because LayoutAreaHost's two
+        # "delivered nothing" diagnostics carry no exception (so the fault sink's
+        # `exception is not null && level >= Warning` gate refuses them — the #890 shape) and fire
+        # outside the test-method window (so the trx never sees them either). This trace answers
+        # the question those cannot: was InitializeHubRequest processed, was an UpdateStreamRequest
+        # ever posted, was anything deferred. See Doc/Architecture/ReadingCiSignals.
+        if [ -f /tmp/meshweaver-msg-trace.log ]; then
+          cp /tmp/meshweaver-msg-trace.log collected-logs/_meshweaver-msg-trace.log
+        fi
         # Native-crash mini dumps (DOTNET_DbgEnableMiniDump) — present only when a
         # test host died on a signal; the exit-marker gate reds the shard, this is
         # the forensic payload.
