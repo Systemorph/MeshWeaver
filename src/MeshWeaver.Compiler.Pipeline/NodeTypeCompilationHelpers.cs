@@ -3395,9 +3395,21 @@ internal static class NodeTypeCompilationHelpers
                     // does not exist yet — a reader following the field right after the
                     // Ok write used to hit a hard path-resolution NotFound (the
                     // NodeTypeReleaseGateTest 2-core flake).
+                    // 🚨 ONE release identity per settle (#3407), minted HERE — before the first
+                    // attempt — and handed to BOTH the attempt and the post-condition's re-cut. The
+                    // id used to be computed from DateTime.UtcNow inside each attempt, so the re-cut
+                    // addressed a different node than the attempt it was retrying: a later second
+                    // duplicated the release, the SAME second collided with it ("Node already
+                    // exists" → swallowed → LatestReleasePath left on the previous build). Owning
+                    // the identity here is what makes the re-cut a retry.
+                    var releaseIdentity = ok
+                        ? NodeTypeBuildState.MintReleaseIdentity(outcome.Result!)
+                        : default;
+
                     var releasePathObservable = ok
                         ? NodeTypeBuildState.TryCreateReleaseNode(
-                            hub, hubPath, outcome.Result!, outcome.PendingNode, resolvedActivityPath, logger)
+                            hub, hubPath, outcome.Result!, outcome.PendingNode, resolvedActivityPath,
+                            releaseIdentity, logger)
                         : Observable.Return<string?>(null);
 
                     releasePathObservable
@@ -3421,7 +3433,7 @@ internal static class NodeTypeCompilationHelpers
                         .SelectMany(newReleasePath => ok
                             ? ReleasePostCondition.Restore(
                                 hub, hubPath, outcome.Result!, outcome.PendingNode,
-                                resolvedActivityPath, newReleasePath, logger)
+                                resolvedActivityPath, newReleasePath, releaseIdentity, logger)
                             : Observable.Return<(string? ReleasePath, string? Diagnosis)>(
                                 (newReleasePath, null)))
                         .Subscribe(settle =>

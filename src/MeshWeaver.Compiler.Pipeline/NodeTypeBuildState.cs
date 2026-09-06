@@ -28,25 +28,89 @@ namespace MeshWeaver.Graph;
 public static class NodeTypeBuildState
 {
     /// <summary>
+    /// 🚨 THE IDENTITY OF THE RELEASE ONE SETTLE OWNS (issue #3407) — minted ONCE, before the first
+    /// create attempt, and reused verbatim by every later attempt at that same release.
+    ///
+    /// <para><b>Why it is a value the caller holds rather than something each attempt mints.</b>
+    /// <see cref="TryCreateReleaseNode"/> used to compute <c>{yyyyMMddHHmmss}-{hash}</c> from
+    /// <c>DateTime.UtcNow</c> inside its own body. That made the release id a function of WHEN an
+    /// attempt ran, so <see cref="ReleasePostCondition"/>'s re-cut — a RETRY of the very same
+    /// operation, for the very same bytes — addressed a different node than the attempt it was
+    /// retrying. Wall-clock luck then decided which of two wrong outcomes you got: a retry in a
+    /// LATER second created a duplicate release for one build (measured on memex 2026-09-06,
+    /// <c>Hosting/InstanceAction/Release/20260906113905-cgZ9cItJ</c> and
+    /// <c>…113915-cgZ9cItJ</c>, byte-identical content 10.005 s apart), and a retry in the SAME
+    /// second minted the id its own first attempt had already created, so the create was refused
+    /// "Node already exists", swallowed to <c>null</c>, and <c>LatestReleasePath</c> was never
+    /// advanced — the type left advertising a build no release names.</para>
+    ///
+    /// <para>With the identity held by the settle, a retry is a retry: it targets the node the
+    /// first attempt targeted, and the write (an idempotent
+    /// <see cref="IMeshService.CreateOrUpdateNode"/>) converges on it whether or not the first
+    /// attempt landed. There is nothing left for a second to collide with.</para>
+    /// </summary>
+    /// <param name="Version">The release id — <c>{yyyyMMddHHmmss}-{8charContentHash}</c>, the
+    /// node's <c>Id</c> and the last segment of its path.</param>
+    /// <param name="Hash">The 8-char content hash alone, stored as
+    /// <see cref="NodeTypeRelease.Release"/>.</param>
+    /// <param name="CreatedAt">The instant stamped into <see cref="NodeTypeRelease.CreatedAt"/>.
+    /// Minted with the id so a re-attempt writes byte-identical content and the owner's no-op
+    /// upsert guard recognises it as one, rather than bumping the node's version for nothing.</param>
+    internal readonly record struct ReleaseIdentity(string Version, string Hash, DateTimeOffset CreatedAt);
+
+    /// <summary>
+    /// Mints the <see cref="ReleaseIdentity"/> for ONE settle. Call this exactly once per compile
+    /// settle (or per bake entry) and hand the result to every attempt at that release.
+    ///
+    /// <para>The hash is taken from the cross-silo durable reference (Collection/ContentPath) so the
+    /// id is stable across silos — different replicas compiling the same version produce the same
+    /// hash. It falls back to the process-local AssemblyLocation when the producer has not populated
+    /// the store fields yet (Null store path), and finally to a fresh GUID so the id is never
+    /// null.</para>
+    /// </summary>
+    internal static ReleaseIdentity MintReleaseIdentity(NodeCompilationResult result)
+    {
+        var hashSrc = (!string.IsNullOrEmpty(result.Collection) && !string.IsNullOrEmpty(result.ContentPath))
+            ? $"{result.Collection}/{result.ContentPath}"
+            : result.AssemblyLocation ?? Guid.NewGuid().ToString();
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        var hash = Convert.ToBase64String(
+            sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(hashSrc)))
+            .Replace('+', '-').Replace('/', '_').TrimEnd('=')[..8];
+        var now = DateTimeOffset.UtcNow;
+        // {yyyyMMddHHmmss}-{8charContentHash}: sortable chronologically, unique per content.
+        return new ReleaseIdentity($"{now.UtcDateTime:yyyyMMddHHmmss}-{hash}", hash, now);
+    }
+
+    /// <summary>
     /// Best-effort: write a <c>Release</c> MeshNode at
-    /// <c>{nodeTypePath}/Release/{version}</c> capturing the compiled assembly
+    /// <c>{nodeTypePath}/Release/{identity.Version}</c> capturing the compiled assembly
     /// path + the markdown release notes from the NodeType's
     /// <c>NodeTypeDefinition.ReleaseNotes</c> field.
     ///
+    /// <para>🚨 IDEMPOTENT PER <see cref="ReleaseIdentity"/> (issue #3407). The identity is the
+    /// caller's — see <see cref="MintReleaseIdentity"/> — and the write is
+    /// <see cref="IMeshService.CreateOrUpdateNode"/>, the verb whose own contract is "idempotent
+    /// writes that may run concurrently or re-run", decided create-vs-update by the OWNER. So
+    /// calling this twice for one settle converges on ONE node and emits ONE path both times; it
+    /// can neither duplicate the release nor collide with itself. A create-only write plus a
+    /// per-attempt id is what #3407 was.</para>
+    ///
     /// <para>🚨 OBSERVED + BOUNDED — never advertise a path before it exists. The
-    /// returned observable emits the new release path ONLY after the create has
-    /// LANDED (the <c>CreateNode</c> response), or <c>null</c> when it couldn't be
+    /// returned observable emits the release path ONLY after the write has
+    /// LANDED (the upsert response), or <c>null</c> when it couldn't be
     /// dispatched / didn't land within the bound. The old fire-and-forget shape
     /// returned the path immediately and the caller stamped it into
     /// <c>NodeTypeDefinition.LatestReleasePath</c> — a reader following that field
     /// right after the terminal Ok write then hit a hard path-resolution NotFound
     /// (the un-created node faulted the read stream — the NodeTypeReleaseGateTest
     /// 2-core flake). Same rule as RunCompile's activity-create guard: the stamp
-    /// follows the create; it is never a path that does not exist.</para>
+    /// follows the write; it is never a path that does not exist.</para>
     ///
     /// <para>Failures are swallowed (emit <c>null</c>): the release MeshNode is
-    /// observability + history. Compile correctness must not depend on the create
-    /// succeeding. See <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
+    /// observability + history. Compile correctness must not depend on the write
+    /// succeeding. See <c>Doc/Architecture/ReleaseRecutIdentity</c> and
+    /// <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
     /// </summary>
     internal static IObservable<string?> TryCreateReleaseNode(
         IMessageHub hub,
@@ -54,6 +118,7 @@ public static class NodeTypeBuildState
         NodeCompilationResult result,
         MeshNode pendingNode,
         string? activityPath,
+        ReleaseIdentity identity,
         ILogger? logger)
     {
         try
@@ -69,22 +134,7 @@ public static class NodeTypeBuildState
             // Status=Compiling write.
             var notes = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.ReleaseNotes;
 
-            // Auto-stamp version: {yyyyMMddHHmmss}-{8charContentHash}. Sortable
-            // chronologically + unique per content. Hash from the cross-silo
-            // durable reference (Collection/ContentPath) so the version is
-            // stable across silos — different replicas compiling the same
-            // version produce the same release version string. Falls back to
-            // the process-local AssemblyLocation when the producer hasn't
-            // populated the store fields yet (Null store path), and finally
-            // to a fresh GUID so the version is never null.
-            var hashSrc = (!string.IsNullOrEmpty(result.Collection) && !string.IsNullOrEmpty(result.ContentPath))
-                ? $"{result.Collection}/{result.ContentPath}"
-                : result.AssemblyLocation ?? Guid.NewGuid().ToString();
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = Convert.ToBase64String(
-                sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(hashSrc)))
-                .Replace('+', '-').Replace('/', '_').TrimEnd('=')[..8];
-            var version = $"{DateTime.UtcNow:yyyyMMddHHmmss}-{hash}";
+            var (version, hash, createdAt) = identity;
 
             var releaseNamespace = $"{nodeTypePath}/{GraphNodeTypeNames.ReleaseSegment}";
             var releasePath = $"{releaseNamespace}/{version}";
@@ -121,7 +171,10 @@ public static class NodeTypeBuildState
                     : null,
                 FrameworkVersion = typeof(NodeTypeRelease).Assembly
                     .GetName().Version?.ToString() ?? "0.0.0",
-                CreatedAt = DateTimeOffset.UtcNow,
+                // From the settle's identity, NOT UtcNow: a re-attempt must write byte-identical
+                // content so the owner's no-op upsert guard recognises it and adopts without a
+                // version bump (#3407).
+                CreatedAt = createdAt,
                 AssemblyPath = result.AssemblyLocation,
                 // Cross-silo durable assembly reference — denormalised from the
                 // IAssemblyStore upload that produced this compile. Other silos
@@ -172,17 +225,29 @@ public static class NodeTypeBuildState
             // (RequestedReleaseBy, who passed the Compile gate at the entry point) so the
             // release is attributable to its author (owner = caller). When no user requested it
             // (the System-driven Doc-release seed, or the first-build kickoff), RequestedReleaseBy
-            // is null and the create falls through under the ambient System scope.
-            // Observable.Using acquires the scope AT SUBSCRIBE so both the CreateNode call and
-            // its subscription run inside it — CreateNode captures the caller's identity for
-            // the stored MeshNode.CreatedBy.
+            // is null and the write falls through under the ambient System scope.
+            // Observable.Using acquires the scope AT SUBSCRIBE so both the CreateOrUpdateNode call
+            // and its subscription run inside it — the verb captures the caller's identity as
+            // RequestedBy, and its create branch pins that onto the inner CreateNodeRequest's
+            // CreatedBy, so attribution is what it always was.
             var requestedBy = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseBy;
             var accessService = hub.ServiceProvider.GetService<AccessService>();
 
-            // OBSERVED create: emit the path only once the create response lands.
-            // Bounded — a hung owner must never block the compile's terminal write;
-            // on timeout/fault emit null so the parent never advertises a phantom
-            // Release path (mirrors RunCompile's activity-create guard).
+            // 🚨 CreateOrUpdateNode, NOT CreateNode (#3407). This write is re-attempted by
+            // ReleasePostCondition whenever the first attempt's OUTCOME was not observed, and with
+            // the identity now owned by the settle the re-attempt addresses THIS node. A create-only
+            // verb turns that into "Node already exists" — swallowed to null below, leaving
+            // LatestReleasePath on the previous build. The upsert is the framework's own answer to
+            // exactly this (its doc: "for idempotent writes that may run concurrently or re-run …
+            // NOT a client-side CreateNode().Catch(already-exists → UpdateNode())"), the owner
+            // serialises create-vs-update so it is race-free, and its no-op guard means an adopt of
+            // identical content does not even reach the store.
+            //
+            // OBSERVED: emit the path only once the write's response lands. Bounded — a hung owner
+            // must never block the compile's terminal write; on timeout/fault emit null so the
+            // parent never advertises a phantom Release path (mirrors RunCompile's activity-create
+            // guard). 🚨 The bound abandons the OBSERVATION, never the write, which is why the
+            // retry above must be idempotent: the write it gave up on may well have landed.
             return Observable.Using(
                     () => !string.IsNullOrEmpty(requestedBy) && accessService is not null
                         ? accessService.SwitchAccessContext(new AccessContext
@@ -191,13 +256,13 @@ public static class NodeTypeBuildState
                             Name = requestedBy
                         })
                         : System.Reactive.Disposables.Disposable.Empty,
-                    _ => meshService.CreateNode(node).Take(1))
+                    _ => meshService.CreateOrUpdateNode(node).Take(1))
                 .Select(_ => (string?)releasePath)
                 .Timeout(TimeSpan.FromSeconds(10), Observable.Return<string?>(null))
                 .Catch<string?, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
-                        "CompileWatcher: failed to create Release node at {ReleasePath}",
+                        "CompileWatcher: failed to write Release node at {ReleasePath}",
                         releasePath);
                     return Observable.Return<string?>(null);
                 });

@@ -586,7 +586,11 @@ internal static class NodeTypeBatchBake
         // writes when the activation path's activity create doesn't land.
         var releaseObservable = ok
             ? NodeTypeBuildState.TryCreateReleaseNode(
-                mesh, typePath, result!, typeNode, activityPath: null, logger)
+                mesh, typePath, result!, typeNode, activityPath: null,
+                // One identity per bake entry (#3407). The batch path has no post-condition re-cut,
+                // so nothing re-attempts this write — but the identity is the caller's by contract,
+                // so it is minted here rather than inside the write.
+                NodeTypeBuildState.MintReleaseIdentity(result!), logger)
             : Observable.Return<string?>(null);
 
         return releaseObservable
