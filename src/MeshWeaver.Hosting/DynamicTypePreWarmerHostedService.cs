@@ -209,8 +209,23 @@ public sealed class DynamicTypePreWarmerHostedService(
         // (Memex.Portal.Distributed/Program.cs) so "the gate is on" and "the gate measures
         // something" cannot drift apart silently in an operator's head.
         var gate = services.GetService<NodeTypeBakeGateState>();
+        // 🚨 #3478 — the same verdict, gating MESH MEMBERSHIP as well as traffic. Resolved off the
+        // MESH hub's provider, not the host root, so it is the very instance the compile-stamp
+        // write-backs consult (NodeTypeBatchBake / NodeTypeCompilationHelpers both read
+        // `hub.ServiceProvider`). Every phase transition below calls Reconsider(): that is the EDGE
+        // the gate's own level-triggered read cannot supply, and it is what releases the stamps a
+        // passing sweep held and discards the ones a failing sweep produced.
+        var admission = mesh.ServiceProvider.GetService<Mesh.Services.MeshPublicationGate>();
         if (sweepEnabled)
             gate?.MarkRunning("enumerating dynamic NodeTypes");
+        if (gate is { GatesReadiness: true })
+            logger.LogInformation(
+                "DynamicTypePreWarmer: mesh admission is {Admission} — until this pod's bake "
+                + "PASSES, nothing it compiles is stamped onto a shared NodeType record and no "
+                + "module-set adoption is recorded. Readiness gates traffic; this gates membership "
+                + "(#3478).",
+                gate.Admission);
+        admission?.Reconsider();
 
         // Pacing: explicit config wins; otherwise a readiness-GATED pod sweeps at full speed (it
         // serves nobody while it bakes — the initial-bake case) and an ungated pod keeps the
@@ -402,7 +417,15 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // activating its hub at all, and one broken upstream would otherwise activate
                     // its whole fan-out and hold it for the pod's lifetime. Those are retracted
                     // through their blocker instead (NodeTypeBakeGateState.RetractRegression).
-                    if (gate?.MarkOutcome(outcome) == true)
+                    var gated = gate?.MarkOutcome(outcome) == true;
+                    // 🚨 #3478 — act on the verdict the moment it turns, mid-sweep. The first
+                    // regression makes this process Refused, so every stamp it has HELD so far is
+                    // discarded here and every later one is refused outright: the types compiled
+                    // before the regression was discovered must not reach the mesh either, which
+                    // is exactly what "validate before running" means for a sweep whose verdict
+                    // arrives at type 50 of 240.
+                    admission?.Reconsider();
+                    if (gate is not null && gated)
                     {
                         if (outcome.SourcesMovedDuringCompile)
                             logger.LogWarning(
@@ -477,6 +500,10 @@ public sealed class DynamicTypePreWarmerHostedService(
                             ? "the build coordination node could not be reached, so the sweep "
                               + "never started"
                             : "the warm-up stream faulted before the sweep could finish");
+                    // #3478 — a faulted sweep proved nothing, so this process is Refused unless the
+                    // operator set AllowUnprovenBake. Either way the held stamps are settled here
+                    // rather than left in limbo for the pod's lifetime.
+                    admission?.Reconsider();
                     if (gate is { GatesReadiness: true, Phase: BakePhase.Faulted })
                         logger.LogCritical(ex,
                             "DynamicTypePreWarmer: REFUSING READINESS — the warm-up stream FAULTED, "
@@ -520,6 +547,19 @@ public sealed class DynamicTypePreWarmerHostedService(
                     gate?.MarkComplete(
                         $"baked in {elapsed:hh\\:mm\\:ss} — compiled={Volatile.Read(ref compiled)} "
                         + $"alreadyBaked={Volatile.Read(ref alreadyBaked)}");
+                    // 🚨 #3478 — THE ADMISSION EDGE. A clean sweep makes this process a full
+                    // participant, and every compile stamp it held is written HERE, after the
+                    // verdict rather than before it. A sweep that ended Regressed or Faulted
+                    // discards them instead: the process stays up for diagnosis and its identity
+                    // never enters the shared mesh.
+                    admission?.Reconsider();
+                    if (gate is { GatesReadiness: true } armed && admission is { } published)
+                        logger.LogInformation(
+                            "DynamicTypePreWarmer: mesh admission is {Admission} after the sweep — "
+                            + "{Released} held publication(s) released, {Withheld} withheld "
+                            + "({Reason})",
+                            armed.Admission, published.ReleasedCount, published.WithheldCount,
+                            armed.AdmissionReason);
                     // 🚨 Say ONLY what is actually enforced. The gate STATE is registered
                     // unconditionally, so this branch runs whether or not a readiness probe consumes
                     // it. Claiming a stall that nothing enforces is worse than saying nothing: it was

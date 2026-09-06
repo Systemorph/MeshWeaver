@@ -1105,6 +1105,16 @@ public static class DynamicTypePreWarmer
     {
         var workspace = mesh.GetWorkspace();
         var accessService = mesh.ServiceProvider.GetService<AccessService>();
+        // 🚨 #3478 — THE SECOND WITNESS, and the reason gating publication does not break #1214.
+        // The question this watch asks is process-LOCAL — "has this condemned type since built on
+        // THIS image?" — and the record below was only ever a PROXY for it. On a pod whose bake
+        // refused it, the record can no longer move (its stamps are withheld, correctly, because
+        // they name an identity the serving replicas cannot load), so a record-only watch would
+        // wait forever and #1214's self-healing stall would become a permanent one. This observes
+        // the compile itself. The record watch stays alongside it: a type baked by a PEER on the
+        // same image is a real recovery this signal cannot see, and losing that would narrow the
+        // retraction rather than widen it.
+        var localBuilds = mesh.ServiceProvider.GetService<LocalNodeTypeBuilds>();
         // System-scoped for the same reason the sweep's reads are: watching a NodeType record
         // across partitions is infrastructure, not a user-attributable read. RunAsSystem, never
         // `Observable.Using(AccessContextScope.AsSystem, …)` — see WarmDynamicTypes (#1444/#1790).
@@ -1129,13 +1139,34 @@ public static class DynamicTypePreWarmer
                                 && NodeTypeCompilationHelpers.HasUsableBuild(
                                     n, d, NodeTypeCompilationHelpers.GuardsOf(mesh))
                                 && IsFreshSuccess(d.LastCompileSucceededAt, baseline))
+                            .Take(1)
+                            .Select(_ => "the record shows a fresh usable build")
+                            // Whichever witness answers first. The local one needs no freshness
+                            // heuristic — the compile happened here, after this subscription, so
+                            // it cannot be a replayed older success the way a record read can.
+                            .Merge(localBuilds is null
+                                ? Observable.Never<string>()
+                                : localBuilds.Built
+                                    .Where(p => string.Equals(
+                                        p, typePath, StringComparison.OrdinalIgnoreCase))
+                                    .Select(_ => "this process compiled it successfully"))
                             .Take(1));
                 })
             .Subscribe(
-                _ =>
+                witness =>
                 {
                     if (gate.RetractRegression(
-                            typePath, "rebuilt to a usable build on this image after the bake"))
+                            typePath,
+                            $"rebuilt to a usable build on this image after the bake ({witness})"))
+                    {
+                        // 🚨 #3478 — the retraction moves READINESS and MEMBERSHIP together. A
+                        // regression withdrawn because the type has since built on this image
+                        // leaves no evidence against the image, so the process may publish again;
+                        // re-reading the verdict here is what releases anything still held. The
+                        // gate is level-triggered, so this direction costs nothing to support and
+                        // is the same mechanism that answers "what if it becomes unhealthy AFTER
+                        // joining?" the other way round.
+                        mesh.ServiceProvider.GetService<MeshPublicationGate>()?.Reconsider();
                         logger?.LogWarning(
                             "DynamicTypePreWarmer: RETRACTING the regression recorded for "
                             + "{TypePath} — it has since reached a usable build on THIS image, so "
@@ -1143,6 +1174,7 @@ public static class DynamicTypePreWarmer
                             + "compile that sampled a half-applied content update — issue #1214). "
                             + "Gate now: {Detail}",
                             typePath, gate.Detail);
+                    }
                 },
                 ex => logger?.LogWarning(ex,
                     "DynamicTypePreWarmer: recovery watch for the regressed type {TypePath} "

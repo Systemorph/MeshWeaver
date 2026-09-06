@@ -238,7 +238,10 @@ this reason.
 live options on top of this design and neither is taken here: (b) empties a pod that is serving
 correctly, and both change deployment behaviour on evidence this change is the first to produce.
 They become *decidable* now that "behind" is a named state with a bounded window rather than an
-invisible one.
+invisible one. 🚨 One of them was decided by #3478 — a process whose own validation REFUSES it now
+publishes nothing at all, which is neither of these two: it neither empties a serving pod nor
+replaces it, it stops a pod that will never serve from writing what it compiled. See
+[Mesh Admission](/Doc/Architecture/MeshAdmission).
 
 **Decline to write NodeType compile records while behind.** This is option (c) from #3395's open
 item and it is now SAFE to build — the adoption record guarantees the mesh's `Current` set always
@@ -247,6 +250,7 @@ and belongs in its own change with its own falsification. It is not in this one.
 
 ## Related
 
+[Mesh Admission](/Doc/Architecture/MeshAdmission) ·
 [Modules](/Doc/Architecture/Modules) · [Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) ·
 [Module Versioning](/Doc/Architecture/ModuleVersioning) · [Plugins](/Doc/Architecture/Plugins) ·
 [Build Coordination](/Doc/Architecture/BuildCoordination) · [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation)
