@@ -122,11 +122,15 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
             (map, fp) => map.Add(fp, new BuildGo(fp, GoWrittenAt, Detail: "baked by a peer process")));
 
     private Task<IList<PreWarmOutcome>> DriveTheDoor(ILogger? logger = null) =>
+        DriveTheDoor(Definitions, logger);
+
+    private Task<IList<PreWarmOutcome>> DriveTheDoor(
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions, ILogger? logger = null) =>
         BuildProtocolDriver.WhenTheSubscriptionDoorIsShut(
                 Observable.Throw<PreWarmOutcome>(TheSubscriptionDoorIsShut()),
                 Mesh,
                 MyFingerprint,
-                Definitions,
+                definitions,
                 Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>(),
                 logger)
             .ToList()
@@ -201,6 +205,48 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
 
         await refuse.Should().ThrowAsync<BuildCoordinationUnreachableException>(
             "someone else's GO says nothing about whether THIS image's NodeTypes build");
+    }
+
+    /// <summary>
+    /// 🚨 A REAL NEGATIVE IS STILL FAIL-CLOSED, AND THE SHARE DOES NOT OVERTURN IT (#3404's second
+    /// half). The witness is READABLE and ANSWERS that it carries no GO for this fingerprint, while
+    /// this pod's own assembly store already holds a build for every NodeType asked about. Readiness
+    /// stays refused.
+    ///
+    /// <para>This is the arm that keeps <c>WhenTheWitnessCannotBeRead</c>'s grant honest. The share
+    /// probe settles the UNDETERMINED reading only — where nobody said anything at all — never a
+    /// coordination answer: <c>NoGo</c> means no process has certified a build for this image, which
+    /// is the protocol owner's call on the coordination node, not one a pod may overturn from its own
+    /// volume. An implementation that granted whenever the share looked complete passes every
+    /// <c>UndeterminedWitnessIsNotNoGoTest</c> case and fails this one.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task NoDurableGo_StillRefuses_EvenWhenTheShareIsFullyBaked()
+    {
+        await WriteTheDurableBuildRoot(ready: null);
+
+        const string bakedType = "TestData/BakedWidget";
+        const long stagedVersion = 11;
+        await Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>()
+            .Put(bakedType, stagedVersion, [0x4D, 0x5A, 0x00, 0x00], null)
+            .Await();
+
+        // Recorded assembly + bytes on the share ⇒ the probe classifies this Baked, so nothing is
+        // gate-relevant. The refusal below can therefore only come from the witness's answer.
+        var baked = ImmutableDictionary<string, NodeTypeDefinition?>.Empty
+            .Add(bakedType, new NodeTypeDefinition
+            {
+                CompilationStatus = CompilationStatus.Ok,
+                LatestAssemblyCollection = "nodetype-cache",
+                LatestAssemblyPath = "staged.dll",
+                LastCompiledVersion = stagedVersion,
+            });
+
+        var refuse = () => DriveTheDoor(baked);
+
+        await refuse.Should().ThrowAsync<BuildCoordinationUnreachableException>(
+            "a witness that ANSWERED 'no GO for this image' is a real negative, and a pod does not "
+            + "certify a build from its own volume that the coordination node never approved");
     }
 
     // ── the fault stays visible ─────────────────────────────────────────────────────────────────
