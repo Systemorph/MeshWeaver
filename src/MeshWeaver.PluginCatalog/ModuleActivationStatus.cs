@@ -27,8 +27,25 @@ public sealed record PendingModuleActivation(string Name, string? PackagePath, s
 /// asking. Comparing the persisted list against what THIS process actually loaded answers it
 /// exactly, per pod, and needs no extra state to stay true.</para>
 ///
-/// <para>Pure and total: the caller supplies both the list and the loaded set, so the rule is
-/// testable with no filesystem, no reflection and no host.</para>
+/// <para>🚨 <b>"Loaded" is a NAME <i>and</i> a GENERATION (#3395).</b> The rule above used to ask
+/// only whether an assembly of that simple name was loaded here, which answers the INSTALL case
+/// and misses the UPDATE case entirely — and update is what a deployment does continuously
+/// (<c>RegistryUpdateReconciler</c> lands a fresh generation, moves
+/// <see cref="ModuleActivationEntry.Directory"/>, and running pods keep the generation they pinned
+/// at THEIR boot). A replica hours behind therefore reported "no module activation pending" and
+/// <c>/health</c> reported it Healthy, so nothing anywhere could see that the replicas of one
+/// deployment were running DIFFERENT module sets.</para>
+///
+/// <para>Measured on memex-cloud 2026-09-06: three pods of one Deployment, one image
+/// (<c>3.0.0-rc9.ci.7693</c>), booted 11:33 / 11:41 / 12:51 around a landing wave at 12:18–12:27 —
+/// <b>39 of 40 pinned module generations differed</b> between the first two and the third, the
+/// sidecar named the newest, and both stale pods answered <c>/health</c> → <c>Healthy</c>. Two
+/// NodeType compiles 16 minutes apart landed on two of those pods and stamped two different module
+/// fingerprints into the ONE shared compile record, which is how a NodeType that was healthy
+/// becomes failed with no source change (#3395).</para>
+///
+/// <para>Pure and total: the caller supplies the list, the loaded set and what each loaded module's
+/// generation is, so the rule is testable with no filesystem, no reflection and no host.</para>
 /// </summary>
 public static class ModuleActivationStatus
 {
@@ -53,7 +70,9 @@ public static class ModuleActivationStatus
     /// never a second notion of the module platform requirement.</para>
     ///
     /// <para>🚨 And an entry whose LANDED BYTES ARE GONE is not pending either — it is
-    /// <see cref="Unresolvable"/> (#2093). Same reason, sharper: "pending" promises that a restart
+    /// <see cref="Unresolvable(ModuleActivationList, IReadOnlySet{string},
+    /// IReadOnlyDictionary{string, string}, Func{string, string}, Func{ModuleActivationEntry, bool})"/>
+    /// (#2093). Same reason, sharper: "pending" promises that a restart
     /// activates this, and boot skips an entry whose DLL is missing exactly as loudly as a held
     /// one. Reporting it as pending is a promise every restart breaks and none of them clears —
     /// and it is the state that took <c>/mcp</c> down for a pod's whole lifetime while every
@@ -72,9 +91,46 @@ public static class ModuleActivationStatus
         IReadOnlySet<string> loadedAssemblyNames,
         Func<string?, string?> platformGate,
         Func<ModuleActivationEntry, bool> landedDllExists)
+        => NotYetLoaded(activation, loadedAssemblyNames,
+            ImmutableDictionary<string, string>.Empty, platformGate, landedDllExists);
+
+    /// <summary>
+    /// As the four-argument overload, plus what GENERATION each module actually loaded from in this
+    /// process (#3395) — so an entry whose <see cref="ModuleActivationEntry.Directory"/> has moved
+    /// under a still-loaded name is pending, which is the case an auto-updating deployment is in
+    /// almost all the time.
+    ///
+    /// <para>🚨 <b>An overload, deliberately, not an extra parameter on the existing method</b> —
+    /// the same rule <c>RequiredModuleStatus.Classify</c> states: adding a parameter replaces the
+    /// signature, so a host compiled against the previous platform gets a
+    /// <see cref="MissingMethodException"/> at runtime. The four-argument form stays and forwards
+    /// an EMPTY map, which is exactly its old behaviour.</para>
+    ///
+    /// <para>🚨 <b>Absence of a generation is never a mismatch.</b> A name missing from
+    /// <paramref name="loadedModuleGenerations"/> means this process cannot say where that module
+    /// was loaded from — not that it is stale. Claiming a mismatch there would print a "restart
+    /// required" no restart can clear, the exact false promise the held-entry and missing-bytes
+    /// rules above exist to prevent. Nor is an entry with no recorded
+    /// <see cref="ModuleActivationEntry.Directory"/> (the legacy fixed <c>modules/&lt;name&gt;/</c>
+    /// folder) ever stale: it names no generation to compare against.</para>
+    /// </summary>
+    /// <param name="activation">The persisted activation list.</param>
+    /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process.</param>
+    /// <param name="loadedModuleGenerations">Module simple name → the generation DIRECTORY LEAF
+    /// (<c>&lt;name&gt;@&lt;id&gt;</c>) this process loaded it from — production passes
+    /// <see cref="LoadedModuleGenerations()"/>. A name absent from the map is "unknown", never
+    /// "stale".</param>
+    /// <param name="platformGate">The one platform floor gate.</param>
+    /// <param name="landedDllExists">Whether the entry's landed DLL is on the volume.</param>
+    public static ImmutableList<PendingModuleActivation> NotYetLoaded(
+        ModuleActivationList activation,
+        IReadOnlySet<string> loadedAssemblyNames,
+        IReadOnlyDictionary<string, string> loadedModuleGenerations,
+        Func<string?, string?> platformGate,
+        Func<ModuleActivationEntry, bool> landedDllExists)
     {
         ArgumentNullException.ThrowIfNull(landedDllExists);
-        return AwaitingLoad(activation, loadedAssemblyNames, platformGate)
+        return AwaitingLoad(activation, loadedAssemblyNames, loadedModuleGenerations, platformGate)
             .Where(landedDllExists)
             .Select(Describe)
             .ToImmutableList();
@@ -99,9 +155,31 @@ public static class ModuleActivationStatus
         IReadOnlySet<string> loadedAssemblyNames,
         Func<string?, string?> platformGate,
         Func<ModuleActivationEntry, bool> landedDllExists)
+        => Unresolvable(activation, loadedAssemblyNames,
+            ImmutableDictionary<string, string>.Empty, platformGate, landedDllExists);
+
+    /// <summary>
+    /// As the four-argument overload, with the generation map of #3395 — so a module whose
+    /// ACTIVATED generation directory is gone from the volume while an OLDER one is still loaded
+    /// here reports as unresolvable (re-install) rather than pending (wait for a restart), which is
+    /// the same distinction this pair has always drawn, now visible for an update as well as an
+    /// install.
+    /// </summary>
+    /// <param name="activation">The persisted activation list.</param>
+    /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process.</param>
+    /// <param name="loadedModuleGenerations">Module simple name → loaded generation directory leaf;
+    /// an absent name is "unknown", never "stale".</param>
+    /// <param name="platformGate">The one platform floor gate.</param>
+    /// <param name="landedDllExists">Whether the entry's landed DLL is on the volume.</param>
+    public static ImmutableList<PendingModuleActivation> Unresolvable(
+        ModuleActivationList activation,
+        IReadOnlySet<string> loadedAssemblyNames,
+        IReadOnlyDictionary<string, string> loadedModuleGenerations,
+        Func<string?, string?> platformGate,
+        Func<ModuleActivationEntry, bool> landedDllExists)
     {
         ArgumentNullException.ThrowIfNull(landedDllExists);
-        return AwaitingLoad(activation, loadedAssemblyNames, platformGate)
+        return AwaitingLoad(activation, loadedAssemblyNames, loadedModuleGenerations, platformGate)
             .Where(entry => !landedDllExists(entry))
             .Select(Describe)
             .ToImmutableList();
@@ -113,18 +191,38 @@ public static class ModuleActivationStatus
     private static IEnumerable<ModuleActivationEntry> AwaitingLoad(
         ModuleActivationList activation,
         IReadOnlySet<string> loadedAssemblyNames,
+        IReadOnlyDictionary<string, string> loadedModuleGenerations,
         Func<string?, string?> platformGate)
     {
         ArgumentNullException.ThrowIfNull(activation);
         ArgumentNullException.ThrowIfNull(loadedAssemblyNames);
+        ArgumentNullException.ThrowIfNull(loadedModuleGenerations);
         ArgumentNullException.ThrowIfNull(platformGate);
 
         return activation.Entries
             .Where(entry => entry.Enabled
                 && !string.IsNullOrWhiteSpace(entry.Name)
-                && !loadedAssemblyNames.Contains(entry.Name)
-                && platformGate(entry.MinMeshVersion) is null);
+                && platformGate(entry.MinMeshVersion) is null
+                && (!loadedAssemblyNames.Contains(entry.Name)
+                    || RunsAnOlderGeneration(entry, loadedModuleGenerations)));
     }
+
+    /// <summary>
+    /// Whether this process holds a DIFFERENT generation of <paramref name="entry"/> than the one
+    /// the activation record activates (#3395) — the update half of "not loaded here".
+    ///
+    /// <para>True only on positive evidence: the entry names a generation, this process knows which
+    /// generation it loaded that module from, and the two differ. Unknown is never a mismatch — see
+    /// the note on the five-argument <see cref="NotYetLoaded(ModuleActivationList, IReadOnlySet{string},
+    /// IReadOnlyDictionary{string, string}, Func{string, string}, Func{ModuleActivationEntry, bool})"/>.</para>
+    /// </summary>
+    private static bool RunsAnOlderGeneration(
+        ModuleActivationEntry entry,
+        IReadOnlyDictionary<string, string> loadedModuleGenerations) =>
+        !string.IsNullOrWhiteSpace(entry.Directory)
+        && loadedModuleGenerations.TryGetValue(entry.Name, out var loaded)
+        && !string.IsNullOrWhiteSpace(loaded)
+        && !string.Equals(loaded, entry.Directory, StringComparison.Ordinal);
 
     /// <summary>
     /// Whether the install record at <paramref name="packagePath"/> landed a module that is not
@@ -157,6 +255,74 @@ public static class ModuleActivationStatus
     /// <summary>Convenience for the live process.</summary>
     public static IReadOnlySet<string> LoadedAssemblyNames() =>
         LoadedAssemblyNames(AppDomain.CurrentDomain);
+
+    /// <summary>
+    /// Which GENERATION directory each loaded assembly came from in <paramref name="domain"/>:
+    /// simple name → the leaf of its containing directory (#3395). That leaf IS the generation
+    /// identity — landing writes <c>modules/&lt;name&gt;@&lt;id&gt;/</c> and
+    /// <c>ModuleGenerationPin</c> copies the directory WITH its leaf into process-local storage, so
+    /// a pinned module's location ends <c>…/&lt;name&gt;@&lt;id&gt;/&lt;name&gt;.dll</c> exactly as
+    /// the shared one does. Compared ordinally against
+    /// <see cref="ModuleActivationEntry.Directory"/>, which records the same string.
+    ///
+    /// <para>🚨 <b>Only unambiguous evidence is recorded.</b> An assembly with no location (loaded
+    /// from bytes — every NodeType build is) contributes nothing, and a simple name whose loaded
+    /// copies disagree on a leaf is DROPPED rather than guessed: the map's contract is "this is
+    /// where that module was loaded from", and a name absent from it means "unknown", which the
+    /// derivation treats as not-stale. Under-reporting a pending activation costs a signal;
+    /// over-reporting one prints a restart prompt no restart can clear.</para>
+    /// </summary>
+    /// <param name="domain">The app domain to read.</param>
+    public static IReadOnlyDictionary<string, string> LoadedModuleGenerations(AppDomain domain)
+    {
+        ArgumentNullException.ThrowIfNull(domain);
+        var generations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var ambiguous = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var assembly in domain.GetAssemblies())
+        {
+            var name = assembly.GetName().Name;
+            if (string.IsNullOrEmpty(name) || ambiguous.Contains(name))
+                continue;
+            var leaf = GenerationLeafOf(assembly);
+            if (leaf is null)
+                continue;
+            if (generations.TryGetValue(name, out var known))
+            {
+                if (!string.Equals(known, leaf, StringComparison.Ordinal))
+                {
+                    generations.Remove(name);
+                    ambiguous.Add(name);
+                }
+                continue;
+            }
+            generations[name] = leaf;
+        }
+        return generations;
+    }
+
+    /// <summary>Convenience for the live process.</summary>
+    public static IReadOnlyDictionary<string, string> LoadedModuleGenerations() =>
+        LoadedModuleGenerations(AppDomain.CurrentDomain);
+
+    /// <summary>The containing directory's leaf, or null when the assembly has no readable
+    /// on-disk location (loaded from bytes, or a single-file bundle).</summary>
+    private static string? GenerationLeafOf(Assembly assembly)
+    {
+        string? location;
+        try
+        {
+            location = assembly.Location;
+        }
+        catch (NotSupportedException)
+        {
+            // A dynamic assembly refuses the property outright — "unknown", like an empty location.
+            return null;
+        }
+        if (string.IsNullOrEmpty(location))
+            return null;
+        var directory = Path.GetDirectoryName(location);
+        return string.IsNullOrEmpty(directory) ? null : Path.GetFileName(directory);
+    }
 
     /// <summary>
     /// One human-readable line naming what is pending — shared by every surface so an operator and

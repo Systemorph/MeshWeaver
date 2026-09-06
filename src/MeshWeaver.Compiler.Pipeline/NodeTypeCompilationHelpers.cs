@@ -640,20 +640,13 @@ internal static class NodeTypeCompilationHelpers
                     // path (explicit user button, second kickoff for a Take(1)
                     // ordering race) already set status, leave as-is.
                     if (def.CompilationStatus is not null) return curr;
-                    return curr with
-                    {
-                        Content = def with
-                        {
-                            CompilationStatus = CompilationStatus.Pending, 
-                            // 🚨 CLEAR the watcher's stamp (#2544). This flip does not come from
-                            // the release watcher and records no inputs, so leaving a previous
-                            // dispatch's token behind would let a later request be absorbed
-                            // against a compile nobody can vouch for — and if that compile fails,
-                            // the absorbed release request is simply lost. Null means "unstamped",
-                            // and the absorber parks on it exactly as it did before this change.
-                            DispatchedBuildInputs = null,
-                        }
-                    };
+                    // 🚨 STAMPED, not unstamped (#3390). This flip used to write an explicit null
+                    // — honest about recording nothing, but it meant every release request
+                    // arriving during a first build PARKED and re-fired on the compile's own
+                    // terminal write-back, the very "one logical event → N sequential compiles"
+                    // shape #2544 removed for the release door only. The inputs ARE known here:
+                    // the watcher's own `guards` and the definition being committed.
+                    return curr with { Content = DispatchPending(def, guards.ModulesHash) };
                 }).Subscribe(_ => { },
                     ex => logger?.LogWarning(ex,
                         "First-build kickoff: Update failed for {HubPath}", hubPath));
@@ -710,10 +703,9 @@ internal static class NodeTypeCompilationHelpers
                     // Only recover if STILL Compiling — the genuine compile may
                     // have settled between the init emission and this lambda.
                     if (def.CompilationStatus != CompilationStatus.Compiling) return curr;
-                    return curr with
-                    {
-                        Content = def with { CompilationStatus = CompilationStatus.Pending, DispatchedBuildInputs = null }
-                    };
+                    // Stamped for the same reason as the first-build kickoff above (#3390) — the
+                    // recovery re-drive is dispatched against the live inputs, so say so.
+                    return curr with { Content = DispatchPending(def, guards.ModulesHash) };
                 }).Subscribe(_ => { },
                     ex => logger?.LogWarning(ex,
                         "Compile recovery: re-trigger Update failed for {HubPath}", hubPath));
@@ -831,10 +823,10 @@ internal static class NodeTypeCompilationHelpers
                     // Re-check staleness inside the lambda — a genuine rebuild may have refreshed
                     // CompiledFrameworkVersion between the outer Where and this write.
                     if (!HasStaleFrameworkBuild(def, guards)) return curr;
-                    return curr with
-                    {
-                        Content = def with { CompilationStatus = CompilationStatus.Pending, DispatchedBuildInputs = null }
-                    };
+                    // Stamped (#3390): the stale-framework re-drive dispatches against the LIVE
+                    // framework and module set — which is precisely what makes it different from
+                    // the build it is replacing, so the token is the honest record of it.
+                    return curr with { Content = DispatchPending(def, guards.ModulesHash) };
                 }).Subscribe(_ => { },
                     ex => logger?.LogWarning(ex,
                         "Framework-stale kickoff: Update failed for {HubPath}", hubPath));
@@ -1037,10 +1029,16 @@ internal static class NodeTypeCompilationHelpers
     /// <param name="snapshot">The owner's live source snapshot
     /// (<see cref="NodeTypeDefinition.CurrentSourceVersions"/>, or the value about to be written
     /// into it in this same update).</param>
+    /// <param name="modulesHash">The installed-module fingerprint the REFUSAL branch's Pending
+    /// dispatch is stamped with (#3390). Defaulted because the two verifying branches never
+    /// dispatch anything, and because omitting it degrades in the SAFE direction: the token then
+    /// reads <c>mod=(none)</c>, which cannot match a request's token built from a real hash, so the
+    /// request PARKS exactly as an unstamped flip made it park.</param>
     internal static NodeTypeDefinition ApplyAdoptedSourceStamp(
         NodeTypeDefinition def,
         IReadOnlyDictionary<string, long> snapshot,
-        bool canCompileLocally)
+        bool canCompileLocally,
+        string? modulesHash = null)
     {
         var stamped = def with
         {
@@ -1088,10 +1086,13 @@ internal static class NodeTypeCompilationHelpers
         //
         // The refusal is recorded on the node rather than only logged: a reader must be able to see
         // that the assembly currently serving was rejected, not merely that a compile is pending.
-        var refused = def with
+        // 🚨 The Pending flip goes through the ONE door (#3390) so the dispatch records what it is
+        // for. The source half is `snapshot` — the LIVE set this refusal is driving a compile of —
+        // never def.CurrentSourceVersions, which on the sources-watcher path is still the value
+        // this same write is replacing.
+        var refused = DispatchPending(def, modulesHash, snapshot) with
         {
             RequestedSourceStampAt = null,
-            CompilationStatus = CompilationStatus.Pending,
             BuildProvenance = BuildProvenance.AdoptionRefused,
             // 🚨 CLEARED, not merely "not stamped". Seed does NOT clear CompiledSources, so a type
             // that had previously COMPILED here carries a snapshot matching CurrentSourceVersions
@@ -1179,7 +1180,10 @@ internal static class NodeTypeCompilationHelpers
         }
 
         var canCompileLocally = !PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider);
-        var result = ApplyAdoptedSourceStamp(def, snapshot, canCompileLocally);
+        // The hub is in hand here, so the refusal branch's Pending dispatch is stamped with the
+        // REAL module fingerprint rather than the safe-but-blind default (#3390).
+        var result = ApplyAdoptedSourceStamp(
+            def, snapshot, canCompileLocally, ModulesHashOf(hub));
 
         if (result.BuildProvenance is not BuildProvenance.AdoptionRefused)
             return result;
@@ -1528,18 +1532,24 @@ internal static class NodeTypeCompilationHelpers
                                 if (curr.Content is not NodeTypeDefinition def) return curr;
                                 // Never clobber an in-flight compile (Pending/Compiling) — only
                                 // refresh the snapshot; a settled state re-drives to Pending.
-                                var status =
-                                    def.CompilationStatus is CompilationStatus.Pending
-                                        or CompilationStatus.Compiling
-                                        ? def.CompilationStatus
-                                        : CompilationStatus.Pending;
+                                //
+                                // 🚨 …and the in-flight branch also leaves DispatchedBuildInputs
+                                // ALONE, which is the whole point of the stamp (#3390): that
+                                // compile was dispatched for the OLD source set, so a request
+                                // arriving now — whose token is built from this NEW snapshot —
+                                // must still PARK. Re-stamping here would claim the running
+                                // compile produces the new sources, which it will not.
+                                var refreshed = def with { CurrentSourceVersions = snapshot };
                                 return curr with
                                 {
-                                    Content = def with
-                                    {
-                                        CurrentSourceVersions = snapshot,
-                                        CompilationStatus = status
-                                    }
+                                    Content =
+                                        def.CompilationStatus is CompilationStatus.Pending
+                                            or CompilationStatus.Compiling
+                                            ? refreshed
+                                            // The snapshot is applied FIRST so the dispatch is
+                                            // stamped for the sources it is actually re-driving.
+                                            : DispatchPending(
+                                                refreshed, ModulesHashOf(hub), snapshot)
                                 };
                             }).Subscribe(
                                 _ => { },
@@ -1925,16 +1935,15 @@ internal static class NodeTypeCompilationHelpers
                         // LastReleaseRequestHandledAt — advance the in-memory
                         // high-water in the same breath so the two marks never diverge.
                         dispatchHighWater.Advance(triggerAt);
+                        // Stamp WHAT this dispatch is for, on the same commit that flips to
+                        // Pending, so a later trigger for the same inputs can be recognised as
+                        // already satisfied instead of queued behind it. Since #3390 that is the
+                        // ONE Pending door every flipper goes through, not a courtesy this one
+                        // site pays.
                         return curr with
                         {
-                            Content = def with
+                            Content = DispatchPending(def, GuardsOf(hub).ModulesHash) with
                             {
-                                CompilationStatus = CompilationStatus.Pending,
-                                // Stamp WHAT this dispatch is for, on the same commit that flips to
-                                // Pending, so a later trigger for the same inputs can be recognised
-                                // as already satisfied instead of queued behind it.
-                                DispatchedBuildInputs = BuildInputsToken(
-                                    GuardsOf(hub).ModulesHash, def.CurrentSourceVersions),
                                 // Stamp the CARRIED trigger value, never the
                                 // (possibly flapped-back) live value, and never
                                 // below the existing stamp — the on-node stamp is
@@ -2491,6 +2500,64 @@ internal static class NodeTypeCompilationHelpers
         string? modulesHash, IReadOnlyDictionary<string, long>? sources) =>
         $"fw={FrameworkVersion};mod={modulesHash ?? "(none)"};src={SourceToken(sources)}";
 
+    /// <summary>
+    /// 🚨 <b>THE Pending door (#3390)</b> — the ONE place a <see cref="NodeTypeDefinition"/> may be
+    /// flipped to <see cref="CompilationStatus.Pending"/>, so a dispatch can never happen without
+    /// recording WHAT it dispatched for.
+    ///
+    /// <para><b>Why one door and not a rule to remember.</b> Twelve production sites flip to
+    /// Pending; before this, exactly ONE stamped
+    /// <see cref="NodeTypeDefinition.DispatchedBuildInputs"/>. The other eleven either wrote an
+    /// explicit <c>null</c> (four) or did not mention the field at all (seven) — and a write site
+    /// that simply does not mention a field is invisible on review, which is how the hole got
+    /// there. A stamp added at eleven call sites is a rule the twelfth must remember; routing
+    /// every flip through this function makes forgetting a compile error's worth of visible
+    /// instead: <c>DispatchedBuildInputsInvariantGuard</c> asserts that the initializer below is
+    /// the only <c>CompilationStatus = …Pending</c> write in <c>src/</c>.</para>
+    ///
+    /// <para><b>Why stamping is safe where absorbing eagerly would not be.</b> The token is a
+    /// statement about the INPUTS THIS DISPATCH WAS MADE AGAINST, computed from the very
+    /// definition being committed — the identical derivation the release watcher has used since
+    /// #2544. It is not a promise about the future: if the sources, framework or module set move
+    /// after the dispatch, a later request's token differs and
+    /// <see cref="IsSatisfiedByInFlightCompile"/> PARKS it, which is the safe failure and stays
+    /// the behaviour. That is also the answer to a module set that can legitimately differ between
+    /// two compiles seconds apart (#3395): an accurate <c>mod=</c> at dispatch makes the mismatch
+    /// visible to the absorb read, where an absent stamp merely hides it behind a park.</para>
+    ///
+    /// <para>Every terminal write clears the stamp again, so non-null means <i>in flight</i> and
+    /// nothing else — see <see cref="ApplyCompileSuccess"/>, <see cref="ApplyCompileFailure"/> and
+    /// <see cref="ApplyGateSettle"/>.</para>
+    /// </summary>
+    /// <param name="def">The definition being committed — its
+    /// <see cref="NodeTypeDefinition.CurrentSourceVersions"/> is the source half of the token, so a
+    /// caller that also refreshes the snapshot must apply that FIRST (or use the overload that
+    /// takes the snapshot explicitly).</param>
+    /// <param name="modulesHash">The installed-module fingerprint half of the compile inputs
+    /// (<see cref="ModulesHashOf"/> / <see cref="BuildGuards.ModulesHash"/>).</param>
+    internal static NodeTypeDefinition DispatchPending(
+        NodeTypeDefinition def, string? modulesHash)
+        => DispatchPending(def, modulesHash, def.CurrentSourceVersions);
+
+    /// <summary>The Pending door for a caller that publishes a NEWER source snapshot in the SAME
+    /// write — the sources watcher's parked auto-retry does exactly that. Stamping
+    /// <c>def.CurrentSourceVersions</c> there would record the set the dispatch is REPLACING.</summary>
+    internal static NodeTypeDefinition DispatchPending(
+        NodeTypeDefinition def, string? modulesHash,
+        IReadOnlyDictionary<string, long>? sources)
+        => def with
+        {
+            CompilationStatus = CompilationStatus.Pending,
+            DispatchedBuildInputs = BuildInputsToken(modulesHash, sources),
+        };
+
+    /// <summary>The Pending door for a caller that holds a hub rather than a resolved
+    /// <see cref="BuildGuards"/> — the module fingerprint is a mesh-scoped singleton, so the
+    /// per-NodeType hub and the mesh hub answer the same value.</summary>
+    internal static NodeTypeDefinition DispatchPending(
+        NodeTypeDefinition def, IMessageHub hub)
+        => DispatchPending(def, ModulesHashOf(hub));
+
     /// <summary>The source snapshot folded to a short, order-insensitive token. A <c>null</c>
     /// snapshot (the sources watcher has not seeded yet) is deliberately DISTINCT from an empty
     /// one (the mesh answered "this type has no sources"): those are different facts, and
@@ -2646,16 +2713,19 @@ internal static class NodeTypeCompilationHelpers
             parkRegistry.AdmitOneRetry(hubPath);
         return curr with
         {
-            Content = d with
+            // 🚨 The bookkeeping and the flip land TOGETHER. Stamping the live
+            // inputs here — not only in ApplyCompileFailure — is what makes the
+            // re-drive unable to schedule another pass even if the compile
+            // never writes back at all (process death mid-compile, the parked
+            // re-settle, a poisoned content read).
+            //
+            // The two stamps are DIFFERENT facts over the same token: FailedBuildInputs is what
+            // the standing FAILURE was formed under, DispatchedBuildInputs is what THIS dispatch
+            // is for (#3390). They coincide here — the re-drive fires precisely because the live
+            // inputs moved past the failure — and diverge again the moment either side moves.
+            Content = DispatchPending(d, modulesHash) with
             {
-                // 🚨 The bookkeeping and the flip land TOGETHER. Stamping the live
-                // inputs here — not only in ApplyCompileFailure — is what makes the
-                // re-drive unable to schedule another pass even if the compile
-                // never writes back at all (process death mid-compile, the parked
-                // re-settle, a poisoned content read).
                 FailedBuildInputs = BuildInputsToken(modulesHash, d.CurrentSourceVersions),
-                CompilationStatus = CompilationStatus.Pending,
-                DispatchedBuildInputs = null
             }
         };
     }
@@ -2962,6 +3032,10 @@ internal static class NodeTypeCompilationHelpers
         string? modulesHash = null)
         => def with
         {
+            // 🚨 Terminal ⇒ no compile in flight (#3390). Missed by the first half of #3390
+            // because the status here is a TERNARY, not the literal the guard matched on — the
+            // guard now classifies the assigned expression instead of the spelling.
+            DispatchedBuildInputs = null,
             CompilationStatus = IsAvailabilityNonVerdict(error)
                 ? CompilationStatus.Unavailable
                 : CompilationStatus.Error,

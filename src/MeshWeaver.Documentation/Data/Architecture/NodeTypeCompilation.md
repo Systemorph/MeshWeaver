@@ -151,6 +151,45 @@ status-guarded flip to `Pending`, which the watcher turns into the one activity 
 **waits** for that compile to settle before hydrating the answer. The status field is the
 single-flight lock.
 
+### 🚨 There is exactly ONE door to `Pending`, and it records what the dispatch is for
+
+A trigger arriving while a compile is in flight is **absorbed** when that compile will produce
+byte-for-byte what the trigger asks for, and **parked** otherwise. The discriminator is
+`NodeTypeDefinition.DispatchedBuildInputs` — a `fw=…;mod=…;src=…` token
+(`NodeTypeCompilationHelpers.BuildInputsToken`) written **in the same update that flips `Pending`**,
+recording the framework identity, the installed-module fingerprint and the source snapshot that
+dispatch was made against. `IsSatisfiedByInFlightCompile` absorbs only on an exact match.
+
+Two rules keep the field meaningful, and both are mechanical rather than conventions to remember:
+
+1. **Non-null means *in flight*, and nothing else.** Every terminal write — `Ok`, `Error` and
+   `Unavailable` alike — clears it. A stamp that outlives its compile makes non-null mean "in
+   flight **or** finished at some point", and the absorb read branches on exactly that field.
+2. **Every flip to `Pending` goes through `NodeTypeCompilationHelpers.DispatchPending`.** Twelve
+   production sites dispatch a compile — the first-build kickoff, the persisted-`Compiling`
+   recovery, the framework-stale re-drive, the adoption refusal, the sources watcher's parked
+   auto-retry, the release watcher, the failed-verdict re-drive, `EnsureCompileDispatched`, two
+   enrichment self-heals, `CreateReleaseRequest`, and the pre-warmer's missing-bytes rebuild — and
+   `DispatchPending` is the only place any of them may write the status.
+
+Rule 2 is what makes rule 1 hold. Before #3390 the stamp was a call each door had to remember:
+eleven of the twelve did not, so a compile started by any of them was **unstamped**, every request
+arriving during it parked, and the parked trigger re-fired on that compile's own terminal
+write-back — one logical event, two compiles, each invalidating the type's instance hubs and raising
+a *newer build available* adornment (#2544 measured pairs 65 ms apart and seven compiles for one
+merge). A write site that simply does not mention a field is invisible on review, which is why
+`DispatchedBuildInputsInvariantGuard` now asserts both halves over `src/` — one Pending write, all
+terminal writes clearing — classifying the assigned expression rather than matching a spelling, so a
+status written as a ternary cannot slip past it.
+
+🚨 **Stamping accurately is not the same as absorbing eagerly, and the difference is the safety
+property.** The token describes the inputs the dispatch was made *against*; it promises nothing
+about the future. If the sources, the framework or the module set move afterwards, the next
+request's token differs and it **parks** — which is also the right answer when one boot resolves two
+different module sets seconds apart (#3395): an accurate `mod=` makes that mismatch visible to the
+absorb read, where an absent stamp merely hid it behind a park that happened to be correct. Force
+(`RequestedReleaseForce`) is never absorbed.
+
 ### The store address is a TRIPLE, and it moves together or not at all
 
 `LatestAssemblyCollection`, `LatestAssemblyPath` and `LastCompiledVersion` are not three independent
@@ -204,6 +243,26 @@ intends to *write* to the node. With one driver there is exactly one terminal wr
 last word; with two, the first `Ok` opens a window in which a concurrent writer's field is
 overwritten by the tail. Readers are safe either way (both writes describe a real build); writers
 must not treat the first `Ok` as "the pipeline is finished".
+
+### The bake ships from a SETTLED record, never from the first one it sees
+
+The record and the store are two states, and a reader that takes them at different moments can
+name bytes that are gone. The package installer requests a **release** for every type it installs
+(the idempotence re-install too), and `ObserveNodeTypeRelease` completes when the
+`RequestedReleaseAt` trigger has been **written**, not when the compile it starts has finished — so a
+gate's report, and the bake behind it, can run while that compile is still in flight. The compile's
+upload then lands under a newer store version, the file-system store evicts superseded versions at
+write (it keeps the newest three), and the record the bake already read names a version the store
+no longer holds: *"claims a usable build at v7 but the run's assembly store has NO bytes for it"*
+(#3370, #3333 — measured on a tree that already carried the triple fix above).
+
+`BakeOutput.CollectOne` therefore waits for the record to **settle** before it names the bytes —
+`CompilationStatus == Ok`, `DispatchedBuildInputs` cleared (a terminal status clears it, #3390),
+and no release request the watcher has not handled (the watcher's own pending test:
+`RequestedReleaseAt` newer than `LastReleaseRequestHandledAt`) — and, if it never settles inside
+the read budget, fails naming what was still in flight. The claim and the payload are read as one
+state; no bound was raised. `BakeOutput.NotYetSettled` is the predicate, pinned by
+`BakeReadsASettledRecordTest`.
 
 ### Explicit — Create Release
 

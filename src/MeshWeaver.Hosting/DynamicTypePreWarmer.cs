@@ -908,9 +908,15 @@ public static class DynamicTypePreWarmer
                                     // and only ever reinterprets a claim that has provably expired.
                                     if (IsLiveCompileClaim(def, budget))
                                         return node;
+                                    // THE Pending door (#3390): the rebuild is dispatched against
+                                    // the live inputs, so it says so instead of leaving the field
+                                    // untouched — an untouched field meant a release request
+                                    // arriving during the rebuild parked and compiled a second
+                                    // time on the first one's terminal write-back.
                                     return node with
                                     {
-                                        Content = def with { CompilationStatus = CompilationStatus.Pending }
+                                        Content = NodeTypeCompilationHelpers.DispatchPending(
+                                            def, workspace.Hub)
                                     };
                                 })
                                 .IgnoreElements()

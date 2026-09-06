@@ -287,6 +287,62 @@ that had landed long ago, on both prods at once:
    The pin is protection, not a gate: a boot that cannot copy warns loudly and falls back to the
    shared path.
 
+### 🚨 Replicas of ONE deployment can run DIFFERENT module sets — and it used to be invisible (#3395)
+
+The pin above is correct and it has a consequence the rest of the platform has to reckon with: a
+process holds the generation it pinned **at its own boot**, for its whole life. Landing is
+continuous (`RegistryUpdateReconciler`), restarts are not synchronised, and a Deployment's replicas
+therefore boot on either side of a landing wave. Two pods of one Deployment, on one image, run two
+module sets — indefinitely, until both restart.
+
+**Measured on memex-cloud, 2026-09-06.** Three portal pods, one ReplicaSet, one image
+(`3.0.0-rc9.ci.7693`), started 11:33:39, 11:41:04 and 12:51:21 around a landing wave at
+12:18–12:27. Comparing `/tmp/meshweaver-pinned-modules/*/` across them: **39 of 40 pinned module
+generations differed** between the two older pods and the newest one — e.g.
+`MeshWeaver.Payments.Stripe@8f251f57` versus `…@458afe55`, while the shared sidecar
+(`/data/modules/activation.d/MeshWeaver.Payments.Stripe.json`) named `…@458afe55`. Only
+`MeshWeaver.Social@c000a138` was common to all three.
+
+**Why it matters beyond features.** A NodeType compile stamps the module set it resolved onto the
+NodeType node — `CompiledModulesHash` plus the per-assembly `CompiledDependencies` entries — and
+every replica shares that ONE node. On the same day, `Store/Order` compiled at 12:53:21 on the
+12:51 pod (`MeshWeaver.Payments.Stripe: mvid:83042436…`) and `Store/Plugin` at 13:09:01 on the
+11:41 pod (`mvid:344e6654…`). Each replica then reads the other's stamp, `HasUsableBuild` /
+`CompiledDependencies.FindMismatch` correctly declares the build stale for *its* environment, and
+rebuilds — so the pair ping-pongs. When a replica's set genuinely LACKS a module the sources need,
+the type does not merely rebuild, it FAILS: healthy → failed with no source change, which is
+exactly the transition the readiness gate refuses. Issue #3395 recorded that shape and asked why
+ONE process resolved two module sets; it does not — two processes do.
+
+**The defect that made it silent.** `ModuleActivationStatus` — the per-process
+restart-as-activation seam, and what `/health`'s `PendingModuleActivationHealthCheck` reads —
+compared the activation record against the loaded assembly **simple names**. That answers the
+INSTALL case (a name absent here) and is blind to the UPDATE case (name present, generation moved),
+which is the case a deployment is in almost all the time. Both stale pods answered `/health` →
+`Healthy` with *"no module activation pending"* while running a 90-minute-old module set. A promise
+that never fires for the change that actually happens is the gate-that-cannot-fail shape.
+
+`ModuleActivationStatus` now compares the GENERATION as well: `NotYetLoaded` / `Unresolvable` take
+a `name → loaded generation directory leaf` map (`LoadedModuleGenerations()`, read off each loaded
+assembly's own directory leaf — which is why the pin copies a generation directory *with* its
+`<name>@<id>` leaf), and an entry whose `Directory` differs from what this process loaded is
+pending. The name-only overloads stay and forward an empty map, because replacing a signature is
+what `MissingMethodException`-aborts a pod compiled against the previous platform. Two honesty
+rules are preserved verbatim: an entry with **no recorded generation** (the legacy fixed
+`modules/<name>/` folder) names nothing to compare against, and a module whose loaded generation
+this process **cannot determine** is *unknown*, never *stale* — over-reporting would print a
+restart prompt no restart can clear, which is the same false promise the held-entry and
+missing-bytes rules exist to prevent. A superseded pod whose ACTIVATED generation's bytes are gone
+reports **unresolvable** (re-install), not pending (wait for a restart).
+
+> **OPEN — convergence is a policy decision, not a detection one.** Detecting the divergence does
+> not end it. Whether a replica whose pinned set no longer matches the sidecar should (a) be
+> restarted automatically, (b) flip readiness so the rollout replaces it, or (c) decline to write
+> NodeType compile records while it is behind, is a deliberate trade — (b) empties a pod that is
+> serving correctly; (c) changes who compiles. Until one is chosen, the divergence is *reported*
+> (Degraded on `/health`, per pod, naming the modules) and an operator or the self-update lane
+> acts on it.
+
 ### 🚨 GC is OFF the readiness path (#2684)
 
 Where the pass runs is as load-bearing as what it deletes. It used to run synchronously in the

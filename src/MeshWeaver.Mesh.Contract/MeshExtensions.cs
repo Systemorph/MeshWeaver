@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -2744,26 +2745,51 @@ public static class MeshExtensions
                                             Name = WellKnownUsers.System
                                         };
 
-                                        return DeleteSubtreeUntilDrained(
-                                                meshHub, issuingHub, storage, path, collected.ToDelete,
-                                                capturedRequest, executionContext,
-                                                recentlyDeleted, logger, collectedMessages,
-                                                deletedProgress)
+                                        // 🚨 THE BOUND MEASURES THE GAP BETWEEN REMOVALS, NOT THE
+                                        // OPERATION'S DURATION (issue #3392). DeleteSubtreeUntilDrained
+                                        // emits exactly ONCE, at the very end of a multi-pass drain, so
+                                        // an inter-emission Timeout over it degenerates into a
+                                        // total-duration cap: a delete that was removing nodes steadily
+                                        // was killed at `budget` purely for taking `budget`, and the
+                                        // message then compared the removals against the pre-drain
+                                        // SNAPSHOT — which is how "did not drain … 162 of 161 planned
+                                        // path(s) were already removed" happened. (Whether an operation
+                                        // fitted was decided by how the CALLER chunked it: 36 chunked
+                                        // calls of a 1394-node Space each got a fresh budget, while a
+                                        // 106-node Space on the single-call path did not.) Merging the
+                                        // per-path progress ticks in restores what Timeout is for — a
+                                        // NO-PROGRESS watchdog. A drain that keeps removing rows keeps
+                                        // resetting the clock; one that stops removing for `budget`
+                                        // still fails, and MaxDeleteDrainPasses still bounds the passes.
+                                        var drainProgress = new Subject<string>();
+                                        return drainProgress
+                                            .Select(_ => (IReadOnlyList<string>?)null)
+                                            .Merge(DeleteSubtreeUntilDrained(
+                                                    meshHub, issuingHub, storage, path, collected.ToDelete,
+                                                    capturedRequest, executionContext,
+                                                    recentlyDeleted, logger, collectedMessages,
+                                                    deletedProgress, drainProgress)
+                                                .Select(d => (IReadOnlyList<string>?)d))
                                             .TimeoutAtStage(budget, () =>
                                             {
                                                 var done = SnapshotProgress();
                                                 var ex = DeleteStageTimeout(
                                                     DeleteStage.Commit,
-                                                    $"the bottom-up delete of '{path}' did not drain within "
-                                                    + $"{budget.TotalSeconds:0}s — {done.Count} of "
-                                                    + $"{collected.ToDelete.Count} planned path(s) were already "
-                                                    + "removed from storage");
+                                                    $"the bottom-up delete of '{path}' made no progress for "
+                                                    + $"{budget.TotalSeconds:0}s — {done.Count} path(s) removed "
+                                                    + "from storage so far");
                                                 // Carry the REAL progress: the timeout discards the fan-out's
                                                 // own bookkeeping, and reporting 0 here is what made #1198 look
                                                 // like a pre-commit failure.
                                                 ex.Data[DeletedPathsDataKey] = done;
                                                 return ex;
                                             })
+                                            // Only the drain's own emission carries a result; the ticks are
+                                            // timer resets. Take(1) then tears the merge down — the ticks
+                                            // never complete on their own.
+                                            .Where(d => d is not null)
+                                            .Take(1)
+                                            .Select(d => d!)
                                             // 5. Post-deletion side effects for the ROOT node — e.g.
                                             //    dropping the backing partition store when a
                                             //    partition-owning Space root is deleted. The subtree
@@ -3127,10 +3153,11 @@ public static class MeshExtensions
         RecentlyDeletedRegistry? recentlyDeleted,
         ILogger logger,
         ImmutableList<LogMessage>.Builder collectedMessages,
-        ImmutableList<string>.Builder deletedProgress)
+        ImmutableList<string>.Builder deletedProgress,
+        IObserver<string> progress)
         => RunDeletePass(
             meshHub, issuingHub, storage, rootPath, plannedPaths, baseRequest, callerAccessContext,
-            recentlyDeleted, logger, collectedMessages, deletedProgress,
+            recentlyDeleted, logger, collectedMessages, deletedProgress, progress,
             pass: 1, deletedSoFar: ImmutableList<string>.Empty);
 
     private static IObservable<IReadOnlyList<string>> RunDeletePass(
@@ -3145,6 +3172,7 @@ public static class MeshExtensions
         ILogger logger,
         ImmutableList<LogMessage>.Builder collectedMessages,
         ImmutableList<string>.Builder deletedProgress,
+        IObserver<string> progress,
         int pass,
         ImmutableList<string> deletedSoFar)
     {
@@ -3162,7 +3190,7 @@ public static class MeshExtensions
 
         return FanOutDeleteSubtree(
                 meshHub, issuingHub, storage, rootPath, toDelete, baseRequest, callerAccessContext,
-                logger, collectedMessages, deletedProgress, rootAlreadyDeleted: pass > 1)
+                logger, collectedMessages, deletedProgress, progress, rootAlreadyDeleted: pass > 1)
             .Catch<IReadOnlyList<string>, Exception>(ex =>
             {
                 // Fold this pass's partial deletions into the accumulated total so
@@ -3178,37 +3206,63 @@ public static class MeshExtensions
 
                 // VERIFY against storage — the plan was a point-in-time snapshot;
                 // only an empty re-enumeration proves the subtree is actually gone.
+                //
+                // 🚨 TWO reads, because ONE cannot see the whole subtree (issue #3392).
+                // ListDescendantPaths is STRICT descendants by contract, so the root — the one
+                // path the operation is actually FOR — was outside the check entirely, and the
+                // `.Remove(rootPath)` below took it out a second time for any backend that does
+                // surface it. A root whose own delete removed nothing (PersistenceService.Delete
+                // completes successfully when no WRITABLE provider's containment read matched —
+                // "already gone" and "I could not see it" are the same answer there) therefore
+                // reported a fully drained subtree with one node still in storage: exactly the
+                // seven Spaces logged `deleted` and found with one node left. Success now requires
+                // BOTH halves — no descendants AND no root — and a surviving root is fed straight
+                // back into the next pass, where the root branch's DeleteIfExists removes it.
                 return storage.ListDescendantPaths(rootPath)
                     .Take(1)
-                    .SelectMany(survivors =>
+                    .SelectMany(survivors => storage
+                        // Writable-only: a path a READ-ONLY provider still serves is not a
+                        // survivor of a delete that was never allowed to touch it.
+                        .ExistsInWritableStorage(rootPath)
+                        .Take(1)
+                        .Select(rootSurvives => (survivors, rootSurvives)))
+                    .SelectMany(verified =>
                     {
-                        var survivorSet = survivors
+                        var survivorSet = verified.survivors
                             .Where(p => !string.IsNullOrEmpty(p))
                             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase)
                             .Remove(rootPath);
-                        if (survivorSet.IsEmpty)
+                        if (survivorSet.IsEmpty && !verified.rootSurvives)
                             return Observable.Return((IReadOnlyList<string>)acc);
 
                         if (pass >= MaxDeleteDrainPasses)
                         {
+                            var what = survivorSet.IsEmpty
+                                ? "the root node itself is still present in writable storage"
+                                : $"{survivorSet.Count} descendant(s) still present "
+                                  + $"(e.g. '{survivorSet.First()}')"
+                                  + (verified.rootSurvives
+                                      ? ", and so is the root node itself"
+                                      : string.Empty);
                             var ex = new InvalidOperationException(
                                 $"Recursive delete of '{rootPath}' could not drain the subtree after "
-                                + $"{pass} pass(es): {survivorSet.Count} descendant(s) still present "
-                                + $"(e.g. '{survivorSet.First()}'). A writer keeps re-creating nodes "
-                                + "under the subtree faster than they can be deleted.");
+                                + $"{pass} pass(es): {what}. Either a writer keeps re-creating nodes "
+                                + "under the subtree faster than they can be deleted, or a storage "
+                                + "provider is accepting the delete without removing the row.");
                             ex.Data["DeletedPaths"] = (IReadOnlyList<string>)acc;
                             return Observable.Throw<IReadOnlyList<string>>(ex);
                         }
 
                         logger.LogInformation(
-                            "[DeleteNode] drain pass {Pass} path={Path} survivors={Count} — "
-                            + "nodes appeared mid-flight; deleting them too",
-                            pass + 1, rootPath, survivorSet.Count);
+                            "[DeleteNode] drain pass {Pass} path={Path} survivors={Count} "
+                            + "rootSurvives={RootSurvives} — still present after the pass; "
+                            + "deleting them too",
+                            pass + 1, rootPath, survivorSet.Count, verified.rootSurvives);
 
                         return RunDeletePass(
                             meshHub, issuingHub, storage, rootPath, survivorSet, baseRequest,
                             callerAccessContext, recentlyDeleted, logger, collectedMessages,
-                            deletedProgress, pass + 1, acc);
+                            deletedProgress, progress, pass + 1, acc);
                     });
             });
     }
@@ -3254,6 +3308,7 @@ public static class MeshExtensions
         ILogger logger,
         ImmutableList<LogMessage>.Builder collectedMessages,
         ImmutableList<string>.Builder deletedProgress,
+        IObserver<string> progress,
         bool rootAlreadyDeleted = false)
     {
         // 🚨 Record each commit AS IT LANDS, not at the end. The caller bounds this whole fan-out
@@ -3264,6 +3319,11 @@ public static class MeshExtensions
         void RecordDeleted(string deleted)
         {
             lock (deletedProgress) deletedProgress.Add(deleted);
+            // 🚨 Publish the removal OUTSIDE the lock. This tick is what the commit stage's bound
+            // measures the gap between, so it turns that bound into a NO-PROGRESS watchdog
+            // (issue #3392); calling into the downstream operators under the progress lock would
+            // put an unrelated pipeline inside it.
+            progress.OnNext(deleted);
         }
 
         return HierarchicalPathDeletion.DeleteSubtree(

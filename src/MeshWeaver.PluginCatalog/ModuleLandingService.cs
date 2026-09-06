@@ -95,7 +95,9 @@ public sealed class ModuleLandingService : IDisposable
     /// <c>WriteEntry</c> lands, pointing a real, enabled activation entry at bytes that no longer
     /// exist. Nothing throws anywhere: the landing reports success (its own two writes both
     /// succeeded), and the entry only reveals itself as unresolvable the next time something reads
-    /// it — <see cref="ModuleActivationStatus.Unresolvable"/>'s loud report, or a boot that skips
+    /// it — <see cref="ModuleActivationStatus.Unresolvable(ModuleActivationList,
+    /// IReadOnlySet{string}, IReadOnlyDictionary{string, string}, Func{string, string},
+    /// Func{ModuleActivationEntry, bool})"/>'s loud report, or a boot that skips
     /// the module outright. That is the exact shape #2303 reported for
     /// <c>MeshWeaver.Blazor.EntityViews</c>: an ACTIVATED entry whose landed assembly was gone,
     /// with no exception or stack frame naming why.</para>
@@ -418,7 +420,9 @@ public sealed class ModuleLandingService : IDisposable
     /// separate reconcile is needed). The one deliberate difference in the record:
     /// <c>PendingRestart</c> is NOT raised for a held landing — a restart cannot activate it, and
     /// a "restart required" no restart can clear is a false prompt
-    /// (<see cref="ModuleActivationStatus.NotYetLoaded"/> excludes held entries for the same
+    /// (<see cref="ModuleActivationStatus.NotYetLoaded(ModuleActivationList,
+    /// IReadOnlySet{string}, IReadOnlyDictionary{string, string}, Func{string, string},
+    /// Func{ModuleActivationEntry, bool})"/> excludes held entries for the same
     /// reason).</para>
     ///
     /// <para>Every other refusal is unchanged — in particular the app-closure same-identity

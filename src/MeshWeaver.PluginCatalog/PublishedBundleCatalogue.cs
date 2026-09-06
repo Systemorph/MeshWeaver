@@ -413,6 +413,64 @@ public static class PublishedBundleCatalogue
     public static IReadOnlyList<string>? SealedBundlesOf(string sourceDirectory, ILogger? logger = null)
         => CompleteBundlesOf(sourceDirectory, logger);
 
+    /// <summary>
+    /// The same reading as <see cref="SealedBundlesOf"/>, but it also says WHY a publication is
+    /// unreadable and WHICH publication a readable one is (#3401).
+    ///
+    /// <para>🚨 Torn and "no such bundle" are different facts and a consumer must be able to tell
+    /// them apart. The publisher UNSEALS before it republishes — <c>publish-bake-bundles.sh</c>
+    /// deletes the sentinel first, uploads, and re-seals LAST, deliberately, so nobody can read a
+    /// mix of old and new bundles. A reader whose request lands inside that window is looking at a
+    /// publication that is being replaced right now, which is transient and self-healing; a reader
+    /// asking for a name the seal does not list is making a permanent mistake. Collapsing both to
+    /// 404 is what made MeshWeaver.Manufacturing's 2026-09-06 red read as "the bundle is gone"
+    /// when the bundle was served intact 20 minutes later.</para>
+    ///
+    /// <para><b>The generation</b> identifies one publication INSTANCE. A consumer that reads the
+    /// index and then fetches N bundles is doing N+1 reads of a directory that can be resealed
+    /// underneath it; carrying the generation lets the server refuse a fetch that would silently
+    /// mix bytes from two publications. It folds the seal's listing together with the moment the
+    /// seal was written, so any reseal changes it even when the bundle NAMES are identical.</para>
+    /// </summary>
+    public static SealedPublicationReading SealedPublicationOf(
+        string sourceDirectory, ILogger? logger = null)
+    {
+        var sentinel = Path.Combine(
+            sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+        if (!File.Exists(sentinel))
+            return new SealedPublicationReading(
+                null, null,
+                "the publication is being republished right now (no completion sentinel) — the "
+                + "publisher removes it before uploading and restores it last, so this is a "
+                + "transient window, not a missing publication");
+
+        var listed = File.ReadAllLines(sentinel)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToList();
+        if (listed.FirstOrDefault(name => !File.Exists(Path.Combine(sourceDirectory, name)))
+            is { } missing)
+            return new SealedPublicationReading(
+                null, null,
+                $"the publication is torn — its seal lists '{missing}', which is not on disk");
+
+        return new SealedPublicationReading(listed, GenerationOf(sentinel, listed), null);
+    }
+
+    /// <summary>
+    /// A short, stable token for one publication INSTANCE: the seal's listing plus the instant the
+    /// seal was written. The timestamp is what makes a reseal to an identical bundle list a
+    /// DIFFERENT generation — which it is, because the bytes behind those names may have changed.
+    /// </summary>
+    private static string GenerationOf(string sentinel, IReadOnlyList<string> listed)
+    {
+        var material =
+            $"{File.GetLastWriteTimeUtc(sentinel).Ticks}\n{string.Join("\n", listed)}";
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(material));
+        return Convert.ToHexStringLower(hash.AsSpan(0, 8));
+    }
+
     private static IReadOnlyList<string>? CompleteBundlesOf(string sourceDirectory, ILogger? logger)
     {
         var sentinel = Path.Combine(
@@ -533,6 +591,14 @@ public static class PublishedBundleCatalogue
 /// <summary>One reading of a sealed publication's module set: the listed bundle names, or
 /// <c>null</c> with the reason a consumer must not compose from it.</summary>
 public sealed record ModuleSetReading(IReadOnlyList<string>? Modules, string? Refusal);
+
+/// <summary>
+/// One reading of a source's sealed publication (#3401): the bundle names and the generation that
+/// identifies this publication instance, or <c>null</c> bundles with the reason it cannot be read.
+/// <paramref name="TornReason"/> is non-null exactly when <paramref name="Bundles"/> is null.
+/// </summary>
+public sealed record SealedPublicationReading(
+    IReadOnlyList<string>? Bundles, string? Generation, string? TornReason);
 
 /// <summary>
 /// One <c>MeshWeaver.*</c> assembly a sealed module bundle carries, and the build it is
