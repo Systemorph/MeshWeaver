@@ -446,6 +446,81 @@ public sealed record EffectiveModule(string Entry, ModuleActivationEntry? Landed
 public static class ModuleActivationBoot
 {
     /// <summary>
+    /// Rewrites the activation list onto THE module set the mesh runs (#3395) — the convergence
+    /// step, applied before <see cref="ComputeEffectiveModuleEntries"/> so the union it computes is
+    /// the mesh's set rather than this process's own snapshot of a moving record.
+    ///
+    /// <para>🚨 <b>Why the raw record is not what a boot should load.</b> Landing moves each
+    /// module's entry the instant that module's bytes are on disk, so the record is a MOVING
+    /// TARGET: two replicas booting seconds apart read two different answers, and a replica
+    /// booting mid-wave reads a TORN one — some modules of the new wave, the rest of the old — a
+    /// combination no wave ever intended and nothing ever tested. Every replica pinning its own
+    /// answer is how three pods of one ReplicaSet came to differ in 39 of 40 module generations
+    /// (memex-cloud, 2026-09-06). The set is proposed ONCE per completed wave
+    /// (<see cref="ModuleSetStore.Propose"/>), so every boot between two waves converges on the
+    /// same bytes.</para>
+    ///
+    /// <para>Three rules, and each one is a deliberate refusal to guess:</para>
+    /// <list type="bullet">
+    ///   <item>An enabled entry whose module the set names loads the SET's generation, even when
+    ///     the entry has since moved past it. That is the convergence.</item>
+    ///   <item>An enabled entry the set does NOT name is LANDED BUT UNPROPOSED — a wave that has
+    ///     not completed (or died half-landed). It is deferred, loudly, and activates when the
+    ///     wave proposes. Adopting it would be exactly the independent per-replica pin this
+    ///     exists to remove, and adopting HALF a wave is the torn set.</item>
+    ///   <item>A DISABLED entry passes through untouched. An uninstall deletes the folder, so
+    ///     honouring it is not optional and never waits for a set.</item>
+    /// </list>
+    ///
+    /// <para>A null <paramref name="meshSet"/> — a deployment on which no landing wave has ever
+    /// completed, which is every deployment until the first wave after this change — returns the
+    /// list UNCHANGED. Pre-#3395 behaviour, byte for byte, is the migration path.</para>
+    /// </summary>
+    /// <param name="landed">The activation record as <see cref="ModuleActivationSidecar.Read"/>
+    /// answered it.</param>
+    /// <param name="meshSet">The mesh's module set — <see cref="ModuleSetIndex.Proposed"/>.</param>
+    /// <param name="onDeferred">The loud channel for a landed-but-unproposed entry: (module name,
+    /// reason).</param>
+    public static ModuleActivationList ProjectOntoMeshSet(
+        ModuleActivationList landed,
+        ModuleSet? meshSet,
+        Action<string, string>? onDeferred = null)
+    {
+        ArgumentNullException.ThrowIfNull(landed);
+        if (meshSet is null)
+            return landed;
+
+        var projected = ImmutableList.CreateBuilder<ModuleActivationEntry>();
+        foreach (var entry in landed.Entries)
+        {
+            if (!entry.Enabled || string.IsNullOrWhiteSpace(entry.Name))
+            {
+                projected.Add(entry);
+                continue;
+            }
+
+            if (meshSet.Generations.TryGetValue(entry.Name, out var generation))
+            {
+                projected.Add(string.Equals(entry.Directory, generation, StringComparison.Ordinal)
+                    ? entry
+                    : entry with { Directory = generation });
+                continue;
+            }
+
+            // 🚨 Not a skip we can be quiet about: the module IS installed and its bytes ARE on
+            // disk. What is missing is the wave's completion, and until that lands, activating it
+            // here would put this replica on a set no other replica has.
+            onDeferred?.Invoke(entry.Name,
+                $"it landed after module set {meshSet.Sequence} ('{meshSet.Id}') was proposed, so "
+                + "the landing wave that brought it has not completed — it activates on the first "
+                + "restart after the wave proposes its set. Running it here would put this replica "
+                + "on a module set no other replica has (#3395).");
+        }
+
+        return landed with { Entries = projected.ToImmutable() };
+    }
+
+    /// <summary>
     /// Computes the effective module list the boot loader feeds to
     /// <c>MeshBuilder.InstallAssemblies</c> (after per-module <see cref="ResolveLoadPath"/>).
     ///

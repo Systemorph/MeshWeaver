@@ -221,9 +221,27 @@ public static class MemexConfiguration
             builder.ConfigureServices(services => services.AddModuleGenerationsGc(moduleRoot));
             var persistedActivation = ModuleActivationSidecar.Read(moduleRoot,
                 msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"));
+
+            // 🚨 #3395 — CONVERGE ON THE MESH'S MODULE SET, never on this process's own snapshot of
+            // the activation record. The record moves per module, the instant each landing finishes,
+            // so reading it directly makes the module set a function of WHEN this pod happened to
+            // boot: three pods of one ReplicaSet differed in 39 of 40 generations on memex-cloud
+            // (2026-09-06), and a pod booting mid-wave pinned a TORN mix no wave ever intended.
+            // The set is proposed ONCE per completed landing wave (ModuleSetStore.Propose), so
+            // every boot between two waves loads identical bytes. A deployment that has never
+            // completed a wave has no set, and the projection is then the identity — pre-#3395
+            // behaviour, which is what makes this inert until the first wave.
+            var meshModuleSets = ModuleSetStore.Read(moduleRoot,
+                msg => Console.Error.WriteLine($"[ModuleSet] {msg}"));
+            Console.WriteLine($"[ModuleSet] {ModuleSetStore.Describe(meshModuleSets)}");
+            var activationOnMeshSet = ModuleActivationBoot.ProjectOntoMeshSet(
+                persistedActivation,
+                meshModuleSets.Proposed,
+                (module, reason) => Console.Error.WriteLine(
+                    $"[ModuleSet] DEFERRED store-installed module '{module}': {reason}"));
             var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
                 moduleAssemblies,
-                persistedActivation,
+                activationOnMeshSet,
                 // The ONE module platform gate (ModulePlatformFloor) — never a second notion of
                 // the module platform requirement.
                 ModulePlatformFloor.DeclineReason,
@@ -313,6 +331,17 @@ public static class MemexConfiguration
             builder.WithConfiguration(configuration);
             if (resolvedModules.Length > 0)
                 builder.InstallAssemblies(resolvedModules);
+
+            // 🚨 #3395 — say, once and durably, that a replica came up on the mesh's set. Written
+            // AFTER the assemblies are installed, because the claim is "this set is running", not
+            // "this set was read": a boot that dies before InstallAssemblies must not close the
+            // convergence window it never entered. Create-if-absent, so the second and every later
+            // replica writes nothing, and best-effort — a read-only volume costs the mesh-level
+            // signal and nothing else.
+            if (meshModuleSets.Proposed is { } adoptedSet)
+                ModuleSetStore.RecordAdoption(moduleRoot, adoptedSet,
+                    adoptedBy: Environment.MachineName,
+                    onWarn: msg => Console.Error.WriteLine($"[ModuleSet] {msg}"));
             // Restart-as-activation: this boot IS the restart the sidecar was waiting for —
             // consume the pending flag so the step-10 signal reads current. Best-effort: on a
             // read-only app filesystem the flag simply stays set (cosmetic), and boot proceeds.

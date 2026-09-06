@@ -29,6 +29,33 @@ public sealed record ModuleActivationReport(
     /// <summary>The activated modules whose bytes are gone. Never null.</summary>
     public ImmutableList<PendingModuleActivation> Unresolvable { get; init; } = Unresolvable ?? [];
 
+    /// <summary>
+    /// 🚨 The modules that have LANDED on the volume but are in no proposed module set (#3395) —
+    /// a landing wave that has not completed. A restart does NOT activate them, because boot loads
+    /// the mesh's set and they are not in it, so they are a THIRD state and never folded into
+    /// <see cref="Pending"/>.
+    ///
+    /// <para>Two causes, one report. While a wave is running this is the wave's own progress and
+    /// clears when it proposes, in seconds. A wave that DIED leaves it standing — and that is the
+    /// honest failure: the module's bytes are on the volume and it is running on NO replica, said
+    /// out loud, instead of the old behaviour where it silently ran on whichever pods happened to
+    /// boot after its own landing and not on the others.</para>
+    ///
+    /// <para>An init-only property rather than a fourth positional parameter: replacing
+    /// the constructor signature is what <see cref="MissingMethodException"/>-aborts a host
+    /// compiled against the previous platform — the same rule the
+    /// <see cref="ModuleActivationStatus"/> overloads follow.</para>
+    /// </summary>
+    public ImmutableList<PendingModuleActivation> Deferred { get; init; } = [];
+
+    /// <summary>One line naming which module set the mesh is on and whether a replica has booted
+    /// onto it yet (<see cref="ModuleSetStore.Describe"/>), or null on a deployment with no set
+    /// records. The mesh-level half of the report; <see cref="Pending"/> is the per-pod half.</summary>
+    public string? MeshModuleSet { get; init; }
+
+    /// <summary>True when the state is KNOWN and a landing wave has not proposed its set.</summary>
+    public bool HasDeferred => !IsUndetermined && !Deferred.IsEmpty;
+
     /// <summary>True when this process could not establish the activation state at all.</summary>
     public bool IsUndetermined => UndeterminedReason is not null;
 
@@ -65,10 +92,35 @@ public sealed record ModuleActivationReport(
     public string Describe() =>
         UndeterminedReason is { } reason
             ? "module activation state could not be determined — " + reason
-            : HasUnresolvable
+            : (HasUnresolvable
                 ? ModuleActivationStatus.DescribeUnresolvable(Unresolvable)
                     + (HasPending ? "; " + ModuleActivationStatus.Describe(Pending) : string.Empty)
-                : ModuleActivationStatus.Describe(Pending);
+                : ModuleActivationStatus.Describe(Pending))
+              + (HasDeferred ? "; " + DescribeDeferred(Deferred) : string.Empty);
+
+    /// <summary>
+    /// One human-readable line naming the modules a landing wave landed but never proposed
+    /// (#3395) — kept separate from both other lines because the remedy differs again: nothing an
+    /// operator does to THIS pod helps, the wave has to complete.
+    /// </summary>
+    /// <param name="deferred">The landed-but-unproposed modules.</param>
+    /// <param name="maxNamed">How many are named before the line truncates.</param>
+    public static string DescribeDeferred(
+        IReadOnlyCollection<PendingModuleActivation> deferred, int maxNamed = 10)
+    {
+        ArgumentNullException.ThrowIfNull(deferred);
+        if (deferred.Count == 0)
+            return "no module is waiting on a landing wave";
+        var names = deferred
+            .Select(p => p.Name)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return $"{names.Length} module(s) have landed but are in NO proposed module set — the "
+            + "landing wave that brought them has not completed, so they are running on no replica "
+            + "and a restart will not change that; the next completed wave activates them: "
+            + string.Join(", ", names.Take(Math.Max(1, maxNamed)))
+            + (names.Length > maxNamed ? $", …(+{names.Length - maxNamed})" : string.Empty);
+    }
 }
 
 /// <summary>
@@ -153,14 +205,40 @@ public sealed class PendingModuleActivations(string moduleRoot)
         bool LandedDllExists(ModuleActivationEntry entry) =>
             ModuleActivationBoot.LandedModuleDllExists(ModuleRootPath, entry);
 
+        // 🚨 #3395 — compare against THE MESH'S MODULE SET, which is what a restart of this process
+        // would actually load, not against the raw activation record, which is a moving target no
+        // boot resolves any more. Getting this wrong in either direction breaks the report's one
+        // promise: comparing against the record would call a pod "pending" for a landing whose wave
+        // has not completed (a restart would not load it — a promise no restart can keep, the exact
+        // false prompt the held-entry and missing-bytes rules exist to prevent), and it is what let
+        // a pod 90 minutes behind answer Healthy in the first place.
+        var sets = ModuleSetStore.Read(ModuleRootPath, reason => corrupt ??= reason);
+        if (corrupt is not null)
+            return new ModuleActivationReport([], corrupt);
+
+        var deferred = ImmutableList.CreateBuilder<PendingModuleActivation>();
+        var onMeshSet = ModuleActivationBoot.ProjectOntoMeshSet(
+            activation,
+            sets.Proposed,
+            (module, _) => deferred.Add(new PendingModuleActivation(
+                module,
+                activation.Entries.FirstOrDefault(e =>
+                    string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase))?.PackagePath,
+                activation.Entries.FirstOrDefault(e =>
+                    string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase))?.Version)));
+
         return new ModuleActivationReport(
             ModuleActivationStatus.NotYetLoaded(
-                activation, loadedAssemblyNames, loadedModuleGenerations,
+                onMeshSet, loadedAssemblyNames, loadedModuleGenerations,
                 ModulePlatformFloor.DeclineReason, LandedDllExists),
             UndeterminedReason: null,
             ModuleActivationStatus.Unresolvable(
-                activation, loadedAssemblyNames, loadedModuleGenerations,
-                ModulePlatformFloor.DeclineReason, LandedDllExists));
+                onMeshSet, loadedAssemblyNames, loadedModuleGenerations,
+                ModulePlatformFloor.DeclineReason, LandedDllExists))
+        {
+            Deferred = deferred.ToImmutable(),
+            MeshModuleSet = ModuleSetStore.Describe(sets),
+        };
     }
 
     /// <summary>

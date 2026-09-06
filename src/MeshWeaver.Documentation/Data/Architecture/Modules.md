@@ -335,13 +335,17 @@ restart prompt no restart can clear, which is the same false promise the held-en
 missing-bytes rules exist to prevent. A superseded pod whose ACTIVATED generation's bytes are gone
 reports **unresolvable** (re-install), not pending (wait for a restart).
 
-> **OPEN — convergence is a policy decision, not a detection one.** Detecting the divergence does
-> not end it. Whether a replica whose pinned set no longer matches the sidecar should (a) be
-> restarted automatically, (b) flip readiness so the rollout replaces it, or (c) decline to write
-> NodeType compile records while it is behind, is a deliberate trade — (b) empties a pod that is
-> serving correctly; (c) changes who compiles. Until one is chosen, the divergence is *reported*
-> (Degraded on `/health`, per pod, naming the modules) and an operator or the self-update lane
-> acts on it.
+> **DECIDED — force convergence on a landing wave: one module set per mesh at a time.** Detection
+> does not end the divergence, and the policy call is the maintainer's: the stamp stays ONE per
+> NodeType (never fanned out per environment) and the SETS converge instead. A landing wave no
+> longer moves what the mesh runs — it stages bytes and, when the whole wave is done, PROPOSES one
+> immutable sequenced set; **boot loads the mesh's newest proposal, never its own read of the
+> per-module entries**. So every replica booting between two wave completions loads identical bytes,
+> and a boot mid-wave cannot see a half-landed mix at all. The residual window (a replica that has
+> not restarted since the last wave) is now singular, bounded and named — `ConvergencePending` is
+> open exactly while the mesh has proposed a set no replica has booted onto. The full design, the
+> record layout, the GC consequence and the rejected alternatives are in
+> [Module Set Convergence](/Doc/Architecture/ModuleSetConvergence).
 
 ### 🚨 GC is OFF the readiness path (#2684)
 
