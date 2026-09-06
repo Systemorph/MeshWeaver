@@ -1,0 +1,235 @@
+name: Lock pinned image digests
+
+# Protect every manifest the fleet PINS, by locking it in the registry — so retention cannot delete
+# what CI and the deployments depend on.
+#
+# WHY (MeshWeaver#3438, requirement 1). ACR's `purge-old-images` deleted the manifests
+# MeshWeaver.Education's `main` pinned. Every run of that repo's `Disposable-mesh gate` then died at
+# `manifest unknown` before a single content gate executed — including `main`'s OWN NIGHTLY, so the
+# repository lost its gate and its green baseline in the same instant. Education, Manufacturing and
+# SocialMedia went down together at 2026-09-05T15:29Z.
+#
+# `pinned-digests.yml` (#3462) is the GUARD half: it reports, at 05:20, which pins are already dead.
+# THIS is the half that stops the deletion:
+#
+#     `acr purge` SKIPS LOCKED MANIFESTS BY DEFAULT. `--include-locked` is the documented opt-in to
+#     delete them and NEITHER STEP of `purge-old-images` passes it (verified against the live task
+#     definition, recorded in .github/acr-retention/). So `deleteEnabled: false` is a hard
+#     protection against this exact configuration, not a hint.
+#
+# Five manifests were locked BY HAND on 2026-09-06 to stop the bleeding. A hand list is the defect,
+# not the fix — it is only ever correct on the day it is written. This derives the set nightly.
+#
+# 🚨 IT LOCKS. IT DOES NOT UNLOCK. Releasing is the only direction that can DESTROY data, and it is
+# unsafe in exactly the case where the extractor is wrong: a pin the scan cannot see is spelled
+# identically to a pin that is not there. The release arm is COMPUTED and PRINTED on every run — so
+# the stale-lock debt is visible — and acted on only when a person sets the repository variable
+# `MW_ACR_RELEASE_UNPINNED` to `true` AND the run is free of every blocker. That is not a hypothetical
+# guard: on 2026-09-07 three of the five hand-locked manifests were release candidates, because they
+# are the set MeshWeaver.Education's PENDING pin bump will name. An enabled release arm would have
+# unlocked the fix for #3438's own victim.
+#
+# 🛡️ THIS WORKFLOW MAY NOT SKIP (AGENTS.md — "a gate NEVER tests its own inputs"). GitHub paints a
+# skipped job with the same grey tick as a passed one, so:
+#   * `preflight` asserts EVERY external input and fails RED naming what to provision. It never asks
+#     "is the credential set?" in order to decide whether to check.
+#   * `protect` runs `needs: [preflight]` with NO input-shaped `if:` and NO `continue-on-error:`.
+#   * The script probes the registry with a CONTROL first and fails closed on an unreadable
+#     repository, a truncated git tree, an unclassifiable pin, an indeterminate registry answer, or
+#     a lock that did not take.
+#   * It PRINTS THE DENOMINATOR — per axis: repositories scanned, repositories that pin, pin sites
+#     found — and a ZERO on either axis is RED, because both were non-zero when this was written.
+#
+# 🚨 WHY THE `push` TRIGGER IS REPORT-ONLY. It is not a skip: the script runs in full, prints both
+# denominators, and reds on every blocker — only the `az` WRITE is withheld. A change to the
+# extractor should prove itself against the live fleet before it starts mutating a shared registry,
+# and the scheduled run two hours later applies whatever it found. The gate is live on push; the
+# mutation is not.
+#
+# WHY THERE IS NO `pull_request` TRIGGER. The live state of a registry is not a property of a pull
+# request, and a credentialed PR-reachable job would put both secrets into the Dependabot store's
+# blast radius for no gain (#3399). The script's own falsification runs on every PR instead —
+# `lock-pinned-digests.py --self-test` in dotnet-test.yml's workflow-shell lane.
+
+on:
+  schedule:
+    # 01:00 UTC — TWO HOURS before `purge-old-images` runs at 03:00, and three before the disabled
+    # `purge-old-ci-releases` slot at 04:00. The margin is deliberate: a run that overlaps the purge
+    # would race it on the one manifest that matters most. The 05:20 guard then reports, after both,
+    # whatever this could not protect.
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "apply = write the locks; report-only = say what it would do"
+        type: choice
+        options: [apply, report-only]
+        default: apply
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/lock-pinned-digests.yml'
+      - '.github/scripts/lock-pinned-digests.py'
+      - '.github/scripts/check-pin-set-consistency.py'
+      - '.github/scripts/check-pinned-digests.py'
+
+permissions:
+  contents: read
+  id-token: write     # azure/login OIDC — no long-lived registry secret in this repo
+
+jobs:
+  preflight:
+    name: Assert the inputs exist
+    runs-on: ubuntu-latest
+    # Five emptiness tests, a mint and one API call. The fleet cap is 45
+    # (check-workflow-timeouts.py) and nothing here has any business approaching it.
+    timeout-minutes: 10
+    steps:
+      # No `if:` anywhere in this job. It asserts, it does not decide whether to assert.
+      - name: Every external input, or a red build naming what to provision
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        run: |
+          missing=()
+          [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID        OIDC app registration for azure/login. 🚨 LOCKING IS A WRITE: it needs the data action Microsoft.ContainerRegistry/registries/repositories/metadata/write, which is in 'Container Registry Repository Writer' (and Contributor/Owner) and in NEITHER AcrPull NOR AcrPush — measured 2026-09-07, AcrPush is pull/read + push/write and nothing else. If this identity only has the read-only grant the pinned-digest sweep uses, the lock step reds naming the exact 'az role assignment create'")
+          [ -n "$AZURE_TENANT_ID" ]       || missing+=("secrets.AZURE_TENANT_ID        the Systemorph AAD tenant")
+          [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID  the subscription holding meshweaver.azurecr.io")
+          [ -n "$MESHWEAVER_APP_ID" ]     || missing+=("secrets.MESHWEAVER_APP_ID          app id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet — it is how the satellites' workflows and the deployment overlays are read")
+          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the pinned-manifest lock job cannot run — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "All external inputs are present."
+
+      # 🚨 PRESENT is not VALID, and chart-drift.yml learned that the hard way (2026-08-17): a
+      # provisioned-but-worthless credential passed an emptiness test and every job downstream died
+      # at "Bad credentials", with the preflight above it reporting that all inputs were present.
+      # So assert the CAPABILITY the job needs — enumerating the installation's repositories —
+      # against the real API. That is also the job's fleet list: it is discovered, never committed,
+      # so a repository added to the org is protected the day the App reaches it.
+      - name: Mint an installation token for the fleet
+        id: fleet-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+
+      - name: The token can enumerate the fleet it is meant to protect
+        env:
+          GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          # No `2>/dev/null` and no `|| true`: a failed enumeration must print WHY. Swallowing it
+          # would turn "the token cannot read the org" into "the fleet is empty", which is the one
+          # answer this job must never produce (check-workflow-shell.py's `swallow` class).
+          if ! reachable=$(gh api --paginate /installation/repositories \
+                             --jq '.repositories[].full_name'); then
+            echo "::error::the minted installation token could not enumerate its own repositories."
+            echo "  /installation/repositories is the endpoint an installation token answers about"
+            echo "  itself, so this is the token, not the network. Confirm the meshweaver-cloud App"
+            echo "  is installed on the Systemorph org and holds Contents: Read."
+            exit 1
+          fi
+          count=$(printf '%s\n' "$reachable" | grep -c . || true)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::the installation reaches ZERO repositories."
+            echo "  Deriving a lock set from an empty fleet protects NOTHING while reporting success."
+            echo "  Add the fleet repositories to the meshweaver-cloud installation."
+            exit 1
+          fi
+          echo "The App reaches $count repository(ies); those are what the job will read."
+
+  protect:
+    name: Every pinned manifest is locked
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    # ~34 repositories × (a workflow listing, a recursive tree, a handful of file reads), plus one
+    # manifest listing per ACR repository (15, ~2,800 manifests on 2026-09-07) and one `az` write
+    # per manifest newly locked. Minutes, not tens of minutes; measured end-to-end well inside this.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 1 }
+
+      # Cross-repo reads are a GitHub App installation token minted per run, never a stored PAT — a
+      # PAT rots exactly as PATs do (chart-drift.yml carried one; HTTP 401 on all nine runs after it
+      # was provisioned, so the check never ran once, #1709). This one is minted fresh, expires in an
+      # hour, and holds Contents: Read and nothing else.
+      - name: Mint an installation token for the fleet
+        id: fleet-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+
+      - name: Ensure Azure CLI
+        # GitHub's ubuntu-latest no longer ships the Azure CLI on PATH for azure/login@v3
+        # ("Unable to locate executable file: az"). Install it if missing (idempotent).
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ONE step, ALWAYS run. No `if:`, no `continue-on-error:`.
+      #
+      # The two policy dials are passed as VALUES the script prints, never as conditions on whether
+      # the step executes — the difference between a decision that is visible in the log and a job
+      # that is grey for a reason nobody can see:
+      #
+      #   MW_ACR_LOCK_MODE          `apply` on the schedule and on a manual run; `report-only` on a
+      #                             push, so a change to the extractor proves itself against the
+      #                             live fleet before it mutates a shared registry.
+      #   MW_ACR_RELEASE_UNPINNED   the unlock arm. SHIPS DISABLED. Unset unless a maintainer sets
+      #                             the repository variable to `true`; the script prints which it
+      #                             saw either way, and refuses to release anything at all on a run
+      #                             that carries a blocker.
+      - name: Lock every manifest the fleet pins
+        env:
+          GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
+          MW_ACR_RELEASE_UNPINNED: ${{ vars.MW_ACR_RELEASE_UNPINNED }}
+          MW_ACR_LOCK_MODE: >-
+            ${{ (github.event_name == 'push' && 'report-only')
+             || (github.event.inputs.mode || 'apply') }}
+        run: |
+          set -uo pipefail
+          echo "mode: $MW_ACR_LOCK_MODE (event: ${{ github.event_name }})"
+          args=(--discover --registry meshweaver)
+          if [ "$MW_ACR_LOCK_MODE" = "apply" ]; then
+            args+=(--apply)
+          fi
+          python3 .github/scripts/lock-pinned-digests.py "${args[@]}"
+
+      # 🚨 THE PREMISE THE LOCK RESTS ON, ASSERTED RATHER THAN ASSUMED. A lock protects only
+      # because `acr purge` skips locked manifests unless `--include-locked` is passed. If a purge
+      # step ever gains that flag, every lock above becomes decoration — silently, with this job
+      # still reporting that it protected N manifests. This reads the COMMITTED record of the
+      # cloud-only task definitions (.github/acr-retention/) and needs no credential at all, so it
+      # runs here AND on every pull request in dotnet-test.yml's workflow-shell lane.
+      #
+      # It deliberately does NOT compare against the live registry: that needs
+      # `registries/tasks/read`, a strictly larger grant than the lock itself, and a step that is
+      # always red for a missing grant is a step that gets ignored. The live drift comparison is a
+      # maintainer's manual instrument — `.github/scripts/acr-retention-tasks.sh verify`.
+      #
+      # `if: ${{ !cancelled() }}` is NOT a skip-trapdoor: it asks whether the RUN was cancelled,
+      # never whether an input exists. Without it this step would be dead behind the lock step's
+      # red, and the lock step is red right now for a reason that has nothing to do with the
+      # retention record (MeshWeaver.Education's three purged pins). The job's conclusion is still
+      # the AND of both steps.
+      - name: The purge still skips locked manifests
+        if: ${{ !cancelled() }}
+        run: python3 .github/scripts/lock-pinned-digests.py --check-retention-record .

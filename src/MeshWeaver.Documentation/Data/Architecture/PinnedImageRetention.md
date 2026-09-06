@@ -1,7 +1,7 @@
 ---
 Name: Pinned Image Retention
 Category: Architecture
-Description: Registry retention deletes what CI pins, and republishing frequency is what destroys a pin rather than what protects it — the second clause the purge rule was missing, the guard that names a dead pin before a repo discovers it, and the retention design that stops the deletion.
+Description: Registry retention deletes what CI pins, and republishing frequency is what destroys a pin rather than what protects it — the second clause the purge rule was missing, the guard that names a dead pin, and the nightly job that locks every pinned manifest so the purge skips it.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
 ---
 
@@ -179,19 +179,35 @@ gone left a Job in `ImagePullBackOff` 639 times in 146 minutes, with the portal 
 That one covers tags in helm overlays; this one covers digests in CI workflows. **It is not wired
 into CI** — its header says so — which is a gap on that axis, not this one.
 
-## The retention half — stop the deletion
+## The retention half — the deletion is stopped, not reported
 
-🚨 **The purge task definitions are CLOUD-ONLY. They are not infrastructure-as-code, and nothing in
-any repository describes them.** Measured 2026-09-06 three ways: `az acr task show` returns an
-`EncodedTask` with `contextPath: null` (the YAML is stored base64-encoded in Azure, with no source
-repository); an org-wide code search for `acr purge` finds only doc pages; and the deployment repo's
-tree carries no bicep, terraform or task definition for them. The shared registry itself is
-out-of-band — `deploy/aks/infra/main.bicep` treats `meshweaver.azurecr.io` as an existing
-`sharedAcrLoginServer` and only creates a registry when that is empty.
+🚨 **The purge task definitions are CLOUD-ONLY.** Established three ways rather than assumed:
+`az acr task show` returns an `EncodedTask` with **`contextPath: null`** — the YAML is stored
+base64-encoded inside Azure, with no source repository; an org-wide code search for
+`purge-old-images` returns zero hits outside this page; and the deployment repo's tree carries no
+bicep, terraform or task definition for them. The shared registry itself is out-of-band —
+`deploy/aks/infra/main.bicep` treats `meshweaver.azurecr.io` as an existing `sharedAcrLoginServer`
+and only creates a registry when that is empty.
 
-Consequence: **changing retention is a live change to shared registry infrastructure that every
-deployment depends on, applied by hand, by whoever holds the registry.** It is deliberately not
-something CI does.
+So the reasoning that keeps two incidents from recurring lived in comments that existed in exactly
+one place, that nobody diffs, and that any `az acr task update` from any laptop replaces silently
+and completely. **`.github/acr-retention/` is now the record**: the decoded task YAML byte for byte,
+plus `tasks.json` for the schedule, status and timeout that the YAML does not carry. Nothing deploys
+from it — `.github/scripts/acr-retention-tasks.sh` is the only thing that relates it to the live
+registry:
+
+```bash
+.github/scripts/acr-retention-tasks.sh show     # the live definitions, decoded        (read-only)
+.github/scripts/acr-retention-tasks.sh record   # overwrite the record FROM the cloud  (read-only)
+.github/scripts/acr-retention-tasks.sh verify   # diff live against the record         (read-only)
+.github/scripts/acr-retention-tasks.sh apply    # push the record onto the registry    (MUTATES)
+```
+
+`verify` is deliberately **not** wired into CI: it needs `registries/tasks/read`, a strictly larger
+grant than the lock job itself holds, and a step that is permanently red for a missing grant is a
+step that gets ignored. The half a pull request can actually break — the record — *is* gated, with
+no credential at all, by `lock-pinned-digests.py --check-retention-record .` in the workflow-shell
+lane.
 
 ### What must NOT be the fix
 
@@ -200,154 +216,221 @@ quarter walks off a 30-day window exactly as it walked off a 7-day one, and the 
 rarer, later and harder to attribute. The numbers are not the defect — the absence of any relation
 between retention and the pin set is.
 
-### The two tasks having diverged is itself the defect
+### One task, two steps — as applied 2026-09-06
 
-There are two purge tasks and only one of them learned Memex#122:
+There were two purge tasks and only one of them had learned Memex#122. They are now one:
+`purge-old-images` (`0 3 * * *`) carries **two steps**, and `purge-old-ci-releases` is **Disabled**,
+not deleted, so that re-enabling it is a visible act rather than a rediscovery.
 
-| Task | Schedule | Filters | Window |
-|---|---|---|---|
-| `purge-old-ci-releases` | `0 4 * * *` | `memex-migration`, `memex-bake`, `memex-portal-next`, `memex-portal`, `memex-portal-ai` | `--ago 30d --untagged` |
-| `purge-old-images` | `0 3 * * *` | `mw-plugin-test`, `memex-migration`, `memex-portal-ai`, `memex-portal-next`, `memex-bake` | `--ago 7d --keep 10 --untagged` |
+| Step | Filters | Window |
+|---|---|---|
+| CI images | `mw-plugin-test`, `memex-migration`, `memex-portal-ai`, `memex-portal-next`, `memex-bake` | `--ago 7d --keep 10 --untagged` |
+| Production portal | `memex-portal` | `--ago 30d --untagged` |
 
-Read the overlap: four of the five repositories the 30-day task names are already swept an hour
-earlier by the strictly more aggressive 7-day one, so for those four **the 30-day task is a no-op** —
-everything it would delete was deleted at 03:00. The only repository unique to it is `memex-portal`;
-the only one unique to the aggressive task is `mw-plugin-test`, and that is the one that broke.
+🚨 **Two steps, not one, and that is the point.** Unioning the filters under the stricter window
+would have dragged `memex-portal` from 30 days to `7d --keep 10` with nobody deciding to. The merge
+removed the second *task* — the "which of two lists?" question — while preserving each repository's
+effective window exactly. Both steps share **one 3600 s task budget**; the per-step `timeout` is a
+per-step ceiling, not a second hour.
 
-That is what "diverged" costs: the hardened task's reasoning does not apply to the repositories that
-matter, and a maintainer adding a repository has to know which of two lists is the one that governs.
-**One task, one filter list** removes the choice by construction. Note what that must *not* quietly
-become: see the next section before writing the merged window.
+🚨 **A correction to the reasoning recorded in that task, measured 2026-09-07.** The task's own
+comment justifies the split by saying `memex-portal` "is pinned on the OTHER axis (committed tags in
+the deployment overlays, Memex#141)". **It is not — not today.** The overlays pin `memex-portal-ai`,
+`memex-migration`, `memex-portal-next` and `hosting-operator`; an org-wide code search for
+`meshweaver.azurecr.io/memex-portal:` returns **zero** hits, and the repository's newest tag is
+`3.0.0-rc13`. The split is still right, on the plainer ground that tightening a low-churn production
+image repository is a separate decision with its own evidence — but the *stated* reason is no longer
+true, and a reason that is quietly false is how a future merge talks itself into the union.
 
-### 🚨 Merging the tasks must not tighten `memex-portal` as a side effect
-
-The two lists differ by exactly two repositories, and they are not symmetric:
-
-- `mw-plugin-test` is unique to the **7-day** task. It is the one that broke.
-- **`memex-portal` is unique to the 30-day task**, and it is the **production portal** image
-  repository.
-
-So the obvious merge — union the filters, keep the stricter window — would move `memex-portal` from
-`--ago 30d` to `--ago 7d --keep 10` **without anyone deciding to**. That is a real tightening on the
-one repository where it is least affordable, and this page's own guard cannot cover it:
-
-🚨 **`memex-portal` is pinned on the OTHER axis — committed image TAGS in the deployment overlays,
-not digests in CI workflows** (Memex#141, where a portal tag that still resolved while its migration
-twin was gone left a Job in `ImagePullBackOff` 639 times in 146 minutes). `check-pinned-digests.py`
-reads `.github/workflows` and would enumerate **none** of those, so a lock set derived from it alone
-would leave every overlay-pinned manifest unlocked while the window that deletes them got shorter.
-Memex#122's victim was pinned exactly that way.
-
-Therefore the merge below is **behaviour-preserving by design**: it removes the second *task*, not
-the second *window*. One task, one place to edit, two steps whose windows are each what they already
-are today. Changing `memex-portal`'s window is a separate decision that must be taken on its own
-evidence — never as a side effect of tidying two task definitions into one.
-
-### The mechanism that protects a pin: lock the manifest
+### The mechanism: lock the manifest
 
 `acr purge` **skips locked manifests by default** — those with `deleteEnabled` or `writeEnabled` set
-to `false` — and deleting them requires the explicit `--include-locked` flag, which neither task
-passes. So a lock is a hard protection against this exact purge configuration, not a hint.
+to `false` — and deleting them requires the explicit `--include-locked`, which **neither step
+passes** (verified against the live definitions, 2026-09-07, and asserted on every pull request
+against the committed record). So a lock is a hard protection against this exact configuration, not
+a hint.
 
-The self-maintaining shape is:
+🚨 **Lock `deleteEnabled` only. Do not also clear `writeEnabled`.** `deleteEnabled: false` is exactly
+and only what the purge skips on. `writeEnabled: false` additionally refuses a manifest PUT for that
+digest — and the release pipeline PROMOTES by retagging in ACR (`release.yml`:
+`docker buildx imagetools create --tag $ACR/$repo:$VERSION $ACR/$repo:$SHORT`), which is a manifest
+PUT of an already-present digest under a new tag. A write-lock therefore buys no extra purge
+protection and puts a promotion at risk. The five manifests locked by hand on 2026-09-06 carry
+**both** flags; two of them (`mw-plugin-test@642f686f…`, `memex-portal-ai@31aab07d…`) are the
+`3.0.0-ci.7917` wave, which is the set a `3.0.0` promotion would retag. **This is reasoned from the
+mechanism, not measured** — confirming it needs an actual retag against a write-locked manifest, and
+the change that wrote this page held read-only access to the registry. It is **worth confirming
+before the next promotion and cheap to undo either way**: `az acr repository update …
+--write-enabled true` leaves the delete-lock, and therefore the purge protection, untouched.
 
-1. Derive the live pin set. 🚨 **It is the UNION of two axes, and the guard above supplies only the
-   first**: digests pinned in the satellites' CI workflows (`check-pinned-digests.py`) *and* image
-   tags pinned in the deployment overlays (`Systemorph/Memex`'s `scripts/check-image-pins.py`). A
-   lock set built from either axis alone leaves the other axis's manifests unprotected, which is how
-   `memex-portal` and `memex-website` get deleted while every CI pin looks after itself.
-2. Lock every currently-pinned manifest.
-3. Report every locked manifest that nothing pins any more, so a pin move releases the old one.
+🚨 **The OCI read-through mirror is not this.** Core #3353/#3495/#3497 put a local content-addressed
+cache in front of ACR; its store is a **bounded LRU against `CacheMaxBytes`**, so any entry can be
+evicted at any time and a miss simply falls through upstream. It can add availability; it can never
+preserve a manifest ACR has deleted. A digest is protected by its lock alone.
 
-Step 3 is a **report, not an automatic unlock**, and the asymmetry is the reason: a wrong unlock
-costs an outage, a stale lock costs one manifest's unshared layers. A lock placed by a person for a
-reason the pin scan cannot see must not be silently removed by a scheduled job.
+## The lock job — protection is derived, not remembered
 
-### The exact commands, for the maintainer to run
+`.github/workflows/lock-pinned-digests.yml`, running `.github/scripts/lock-pinned-digests.py` at
+**01:00 UTC** — two hours before the 03:00 purge — plus `workflow_dispatch`, and report-only on any
+push to `main` that touches the script or its two extractor dependencies.
 
-Read-only first — this is the current definition, and it is worth capturing before changing it:
+It reads the fleet's live pin set and locks every manifest it names. **A hand-maintained keep-list is
+the defect, not the fix**: it is only ever correct on the day it is written, and the five hand locks
+of 2026-09-06 were already two-fifths stale a day later (see below).
 
-```bash
-az acr task show --registry meshweaver --name purge-old-images \
-  --query "step.encodedTaskContent" -o tsv | base64 -d
-az acr task show --registry meshweaver --name purge-old-ci-releases \
-  --query "step.encodedTaskContent" -o tsv | base64 -d
+### The pin set is the UNION of two axes
+
+| Axis | What it is | Read from | Measured 2026-09-07 |
+|---|---|---|---|
+| 1 | a **digest** pinned in CI | every repository's `.github/workflows` | 20 sites, 6 repositories, 5 distinct manifests |
+| 2 | an image **TAG** pinned in a deployment overlay | `values*.y{a}ml` under a `deploy/` or `deployments/` path | 11 sites, 2 repositories, 7 distinct manifests |
+
+A lock set built from axis 1 alone leaves every overlay-pinned manifest unprotected — and
+**Memex#122's victim was pinned exactly that way**. Axis 2 reads two shapes, because both occur:
+the whole reference on one line (`image: "…/memex-portal-ai:3.0.0-ci.7926"`) and helm's split
+convention (`repository:` plus a sibling `tag:`), which is how both whisper charts in the fleet
+write theirs. A reader that saw only the first would report those overlays as pinning nothing.
+
+**Axis 1 has no second extractor.** The script *imports* `check-pin-set-consistency.py` and uses its
+`extract()`, so there is one definition in this repository of what a digest pin is; the self-test
+additionally asserts that it and `check-pinned-digests.py` still **agree** on a shared fixture, so a
+future edit that diverges them reddens rather than quietly splitting the fleet's idea of a pin in
+two.
+
+**Axis 2's scope is narrow, and the boundary was measured rather than guessed.** Widening it to
+every YAML/JSON under `deploy/` was tried and rejected: this repository's
+`deploy/aks/operator/test/fixtures/**` carry image references to tags that never existed
+(`memex-portal-ai:3.0.0-rc8.ci.5000`), which would red the job nightly over test fixtures, and
+`deploy/aks/manifests/observability/log-watcher.yaml` names the floating tag `:latest`, which has no
+fixed manifest to protect. Floating tags are reported and never locked, for the same reason.
+
+### What makes it RED
+
+Fail-closed throughout — an unswept repository must never read as a swept one:
+
+- a repository whose workflows or whose git tree could not be read (a GitHub 404 has two causes and
+  they are opposite verdicts, so the repository itself is probed before any absence is believed);
+- a **truncated** recursive tree listing — an unknown number of paths were never seen, and an
+  absence read off a truncated listing is not a measured zero;
+- a pin-shaped declaration whose value is not a digest (I4 — placeholder vacuity);
+- a digest whose ACR repository cannot be determined (**I5**; for locking this is worse than
+  unchecked — there is no manifest to lock);
+- an overlay tag that does not resolve, or a pinned digest that is already gone;
+- an INDETERMINATE registry answer: `az` failing for any reason other than the registry's own
+  `manifest unknown`;
+- **ZERO pins on either axis**. Both were non-zero when this was written, so a zero means the
+  extractor stopped matching, not that pinning stopped;
+- a lock that was requested and did not take.
+
+The report prints the denominator **per axis** — repositories scanned, repositories that pin,
+repositories that do not, sites found, sites unclassified — because "0 unprotected" has two causes
+and only one of them is good news.
+
+### 🚨 It locks. It does not unlock.
+
+The unlock half is designed, implemented and **shipped disabled**. It is enabled only by a person
+setting the repository variable `MW_ACR_RELEASE_UNPINNED` to `true`, and even then it releases
+nothing on a run that carries any blocker above.
+
+The asymmetry is the whole safety argument, and it is not theoretical:
+
+> **Unlocking is the only direction that can destroy data, and it is unsafe in exactly the case where
+> the extractor is wrong** — because a pin the scan cannot see is spelled identically to a pin that
+> is not there. "Nothing pins this any more" and "I failed to read the thing that pins it" produce
+> the same answer.
+
+**The first live report-only run proved it.** Of the five manifests locked by hand, the job would
+have protected **two** and listed the other **three as release candidates**:
+
+```
+RELEASE CANDIDATE  memex-migration@sha256:7f5b6ad2…   tags=['staging-bbcb22f-34015096490-linux-x64']
+RELEASE CANDIDATE  memex-portal-ai@sha256:eb9ffcf4…   tags=['staging-bbcb22f-34015096490-linux-x64']
+RELEASE CANDIDATE  mw-plugin-test@sha256:c91d6f29…    tags=['staging-bbcb22f-34015096490-linux-x64']
 ```
 
-Lock one pinned manifest (idempotent; repeat per pinned digest — the guard's report lists them):
+That is **not an extractor defect**. Those three are the `staging-bbcb22f-…` set that
+MeshWeaver.Education's *pending* pin bump will name — locked **pre-emptively**, to protect a pin that
+does not exist yet. No derivation from the live pin set can see a pin nobody has committed. An
+enabled release arm would have unlocked the fix for #3438's own victim, on its first run, and
+`--ago 7d` would have finished the job. **A pre-emptive lock is therefore a legitimate reason for a
+lock this job cannot derive** — which is precisely why a scheduled job must never silently remove
+one, and why the release candidates are a *report* a person reads.
+
+Correspondingly, locks are applied **even on a degraded run** — a lock cannot destroy anything, so
+protecting what was found beats protecting nothing — while releases are not. Both facts are printed.
+
+### What a real run would do, measured 2026-09-07
+
+```
+    AXIS 1 — digest pins in .github/workflows
+      repositories scanned                     34
+      …declaring at least one digest pin        6
+      …declaring NO digest pin                 28
+      …whose workflows could not be read        0
+      digest pin SITES found                   20
+      …UNCLASSIFIED (I5 — not checked)          0
+
+    AXIS 2 — image TAG pins in deployment overlays
+      repositories scanned                     34
+      …carrying an overlay that pins            2   (Systemorph/Memex, Systemorph/MeshWeaver)
+      …whose tree could not be read             0
+      overlay files considered                 15
+      tag pin SITES found                      11
+
+    UNION — manifests the fleet pins
+      distinct manifests wanted                12
+      …already protected (deleteEnabled false)  2
+      …TO LOCK                                  7
+      …that could NOT be protected              3
+
+    REGISTRY
+      manifests in the registry              2831
+      …currently locked (deleteEnabled false)   5
+      …locked and pinned by NOTHING             3
+```
+
+**Seven manifests are pinned and unprotected right now**, and four of them sit in repositories the
+7-day step sweeps: the `3.0.0-ci.7926` portal/migration pair both live deployments run,
+`memex-portal-next:3.0.0-next.43`, and the pearl overlay's `3.0.0-rc9.ci.7601` pair.
+`hosting-operator:1.0.0` and `whisper-swiss-german:1.7.4` are in no filter today, so locking them is
+protection against a future filter addition rather than against tonight.
+
+**The three that could not be protected are #3438 itself** — MeshWeaver.Education's
+`memex-portal-ai@dab2a7b3…`, `memex-migration@d81df6cc…` and `mw-plugin-test@df19f10a…`, already
+deleted. The job reds on them, by construction, on the same fact the 05:20 guard reds on. Education's
+bump must move all three.
+
+🚨 **Locking is a WRITE, and the read-only sweep's credential cannot do it.**
+`az acr repository update` needs the data action
+`Microsoft.ContainerRegistry/registries/repositories/metadata/write`, which is in
+**`Container Registry Repository Writer`** (and in Contributor/Owner) and in **neither `AcrPull` nor
+`AcrPush`** — measured 2026-09-07: `AcrPush` is `pull/read` + `push/write` and nothing else. If the
+OIDC identity carries only the read grant the pinned-digest sweep uses, the job reds **once**, naming
+the exact assignment rather than repeating one refusal per manifest:
+
+```bash
+az role assignment create --assignee <the AZURE_CLIENT_ID app's object id> \
+  --role 'Container Registry Repository Writer' \
+  --scope /subscriptions/<sub>/resourceGroups/meshweaver-shared/providers/Microsoft.ContainerRegistry/registries/meshweaver
+```
+
+That is a provisioning task, not a workflow defect.
+
+### The exact commands, by hand
+
+Lock one pinned manifest (idempotent):
 
 ```bash
 az acr repository update --name meshweaver \
-  --image mw-plugin-test@sha256:<digest> \
-  --delete-enabled false --write-enabled false
+  --image mw-plugin-test@sha256:<digest> --delete-enabled false
 ```
 
-Release one that nothing pins any more:
+Release one that nothing pins any more — **a person's decision, never a scheduled job's**:
 
 ```bash
 az acr repository update --name meshweaver \
-  --image mw-plugin-test@sha256:<digest> \
-  --delete-enabled true --write-enabled true
+  --image mw-plugin-test@sha256:<digest> --delete-enabled true
 ```
-
-Collapse the two tasks into one. `az acr task update` replaces the task's inline YAML; keep the
-reasoning **in the task** as the hardened one already does, and delete the redundant task in the same
-sitting so there is only ever one list to edit.
-
-🚨 **Two steps, not one, and that is deliberate.** Unioning the filters under the stricter window
-would drag `memex-portal` from 30 days to `7d --keep 10` as a side effect — see the section above.
-This removes the second TASK while preserving each repository's current effective window exactly, so
-the change is reviewable as "one list instead of two" and nothing else:
-
-```bash
-cat > purge.yaml <<'YAML'
-version: v1.1.0
-# ONE retention task. Two diverged (MeshWeaver#3438): the hardened one's reasoning did not reach
-# `mw-plugin-test`, and for four of its five repositories it was a no-op behind a stricter task
-# running an hour earlier. A second list is a second place to forget.
-#
-# Memex#122 — if nothing would recreate a tag, never age-purge it. `memex-website` is DELIBERATELY
-# absent for that reason: its only tag is a pinned `v1` nothing rebuilds, and deleting it served the
-# public brand site 503 for ~11 hours.
-#
-# MeshWeaver#3438 — a repository that IS continuously republished still holds PINNED digests, and
-# `--keep` is counted in newer builds, so republishing is what destroys a pin. Protection is per
-# MANIFEST, not per repository: pinned manifests are locked (delete-enabled false) and `acr purge`
-# skips locked manifests unless `--include-locked` is passed. NEVER pass it here.
-#
-# TWO STEPS ON PURPOSE. Merging the lists must not silently retune a window. `memex-portal` is the
-# production portal image and was only ever on the 30-day window; it is also pinned on the OTHER
-# axis (committed tags in the deployment overlays, Memex#141), which the CI-workflow pin scan does
-# not enumerate. Tightening it is a separate decision with its own evidence.
-steps:
-  # CI images: rebuilt many times a day, pinned by digest from the satellites' workflows.
-  - cmd: acr purge --filter 'mw-plugin-test:.*' --filter 'memex-migration:.*' --filter 'memex-portal-ai:.*' --filter 'memex-portal-next:.*' --filter 'memex-bake:.*' --ago 7d --keep 10 --untagged
-    disableWorkingDirectoryOverride: true
-    timeout: 3600
-  # Production portal image: unchanged 30-day window, no --keep. Do not fold into the step above.
-  - cmd: acr purge --filter 'memex-portal:.*' --ago 30d --untagged
-    disableWorkingDirectoryOverride: true
-    timeout: 3600
-YAML
-
-az acr task update --registry meshweaver --name purge-old-images \
-  --file purge.yaml --schedule "0 3 * * *"
-az acr task delete --registry meshweaver --name purge-old-ci-releases --yes
-```
-
-🚨 Confirm the merged task on a **dry run** before trusting it, and confirm that a locked manifest is
-in fact skipped rather than reported for deletion:
-
-```bash
-az acr task update --registry meshweaver --name purge-old-images --file purge-dryrun.yaml   # same, with --dry-run
-az acr task run   --registry meshweaver --name purge-old-images
-```
-
-One dimension to check while you are in there: the per-step `timeout: 3600` is a ceiling **per
-step**, while the task's own `timeout` bounds the whole run — and both existing tasks are at 3600 s
-(measured 2026-09-06). Two steps therefore share one hour, not two. Each purge completes in minutes
-today, so this is a thing to confirm on the dry run rather than a number to change pre-emptively;
-`az acr task update --timeout <seconds>` is where it lives if it ever binds.
 
 Note what `--ago` measures: a manifest's `lastUpdateTime`, which a re-push refreshes. A digest that
 happens to be republished stays young; a digest that is merely *pinned* does not. That asymmetry is
@@ -361,3 +444,4 @@ the whole failure in one sentence.
 - [The Continuous Delivery Contract](../ContinuousDeliveryContract) — all-or-nothing publication; verify the image, never the tick
 - [A Container Registry in Memex](../ContainerRegistryInMemex) — why the boot image stays on ACR
 - [Reading CI Signals](../ReadingCiSignals) — what a green wall does and does not attest to
+- [Pin Set Consistency](../PinSetConsistency) — the other question about the same pins, and the extractor this page's lock job imports

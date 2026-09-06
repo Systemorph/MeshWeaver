@@ -1,0 +1,64 @@
+{
+  "_comment": [
+    "The `meshweaver` ACR retention tasks, as they exist in Azure. Read back with",
+    "`az acr task show`, 2026-09-07 (MeshWeaver#3438).",
+    "",
+    "🚨 THESE TASKS ARE CLOUD-ONLY. `az acr task show` returns an `EncodedTask` with",
+    "`contextPath: null` — the YAML is stored base64-encoded inside Azure with no source",
+    "repository — and an org-wide code search for `purge-old-images` returns zero hits outside",
+    "this repository's doc pages. This directory is the record, NOT the source of truth: nothing",
+    "deploys from it. `.github/scripts/acr-retention-tasks.sh verify` is what relates the two, and",
+    "`… apply` is a maintainer-run command that pushes this record back onto the registry.",
+    "",
+    "Why the record exists at all: the definitions carry the reasoning from two incidents",
+    "(Memex#122, MeshWeaver#3438) in comments that live in exactly one place — inside a base64",
+    "blob in a cloud resource nobody diffs. A `az acr task update` from any laptop replaces them",
+    "silently and completely.",
+    "",
+    "`schedule`/`status`/`timeout` here are ASSERTED by `verify`; the remaining fields are",
+    "provenance and are printed, not compared."
+  ],
+  "registry": "meshweaver",
+  "resourceGroup": "meshweaver-shared",
+  "recordedAt": "2026-09-07",
+  "recordedFrom": "az acr task show --registry meshweaver --name <task>",
+  "tasks": [
+    {
+      "name": "purge-old-images",
+      "file": "purge-old-images.yaml",
+      "status": "Enabled",
+      "schedule": "0 3 * * *",
+      "timeout": 3600,
+      "stepType": "EncodedTask",
+      "contextPath": null,
+      "platform": { "os": "linux", "architecture": "amd64" },
+      "agentConfiguration": { "cpu": 2 },
+      "creationDate": "2026-08-31T20:33:48.969331+00:00",
+      "notes": [
+        "ONE task, TWO steps: a 7d --keep 10 step over the CI image repositories, and a separate",
+        "30d step for memex-portal. The split is behaviour-preserving — merging the filter lists",
+        "under the stricter window would retune memex-portal without anyone deciding to.",
+        "Both steps share ONE 3600 s task budget; the per-step `timeout` is a per-step ceiling.",
+        "🚨 NEITHER STEP PASSES `--include-locked`, and that is the whole of the pin protection:",
+        "`acr purge` skips locked manifests by default. Adding that flag would delete every",
+        "manifest `lock-pinned-digests.py` protects."
+      ]
+    },
+    {
+      "name": "purge-old-ci-releases",
+      "file": "purge-old-ci-releases.yaml",
+      "status": "Disabled",
+      "schedule": "0 4 * * *",
+      "timeout": 3600,
+      "stepType": "EncodedTask",
+      "contextPath": null,
+      "platform": { "os": "linux", "architecture": "amd64" },
+      "notes": [
+        "SUPERSEDED and DISABLED, not deleted — its filter list was folded into",
+        "purge-old-images's two steps. Kept as the record of the Memex#122 reasoning it carries,",
+        "and so that re-enabling it is a visible act rather than a rediscovery.",
+        "Do not re-enable it: two divergent lists is the defect #3438 named."
+      ]
+    }
+  ]
+}

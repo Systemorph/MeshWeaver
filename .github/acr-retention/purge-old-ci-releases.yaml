@@ -1,0 +1,11 @@
+version: v1.1.0
+# memex-website is DELIBERATELY absent from these filters (Memex#122, 2026-08-26).
+# Its only tag is a pinned `v1` that nothing rebuilds, so `--ago 30d` deleted the entire
+# repository; the pods kept serving from their node image cache until they were rescheduled,
+# and the public brand site then served 503 for ~11 hours.
+# The test for adding any repository here: if this tag were deleted tonight, would anything
+# recreate it? The repositories below are continuously republished. A pinned tag is not.
+steps: 
+  - cmd: acr purge --filter 'memex-migration:.*' --filter 'memex-bake:.*' --filter 'memex-portal-next:.*' --filter 'memex-portal:.*' --filter 'memex-portal-ai:.*' --ago 30d --untagged
+    disableWorkingDirectoryOverride: true
+    timeout: 3600
