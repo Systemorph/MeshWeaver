@@ -149,26 +149,46 @@ public record LayoutAreaHost : IDisposable
                     context, isDefaultArea, resolvedArea, accessService, capturedAccessContext, ctorLogger))
                 .WithExceptionCallback(FailRendering));
         Reference = reference;
-        logger = Stream.Hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaHost>>();
+
+        // 🚨 THIS IS THE LINE THAT NRE'd IN PRODUCTION (Systemorph/MeshWeaver#3321) — the whole
+        // reason `TryGetHub()` exists. `Stream.Hub` is declared non-nullable, so `Stream.Hub
+        // .ServiceProvider…` read as safe; on the overlay self-heal recycle window it was not, and
+        // the NullReferenceException escaped this constructor as a TERMINAL DeliveryFailure. A page
+        // that subscribed mid-recycle was told "this failed forever" instead of "ask again".
+        //
+        // The stream's own constructor already refuses (HubDisposingException) when it cannot host
+        // its sub-hub, so a LIVE workspace reaches the next line exactly as before — nothing here
+        // changes for a healthy stream. What this closes is the window BETWEEN that refusal check
+        // and these reads: the host hub can begin winding down in between, and a stream whose
+        // reduce chain is already dead answers `Hub` with a corpse.
+        //
+        // Answering with the SAME HubDisposingException the stream constructor throws is what makes
+        // the difference: it is an ObjectDisposedException, so the Blazor circuit's existing
+        // catch around BindStream() keeps working, and escaping a handler it classifies as
+        // ErrorType.ShuttingDown — the transient "the address may reactivate, retry" answer.
+        if (Stream.TryGetHub() is not { } streamHub)
+            throw new HubDisposingException(workspace.Hub.Address, reference);
+
+        logger = streamHub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaHost>>();
 
         // Manually trigger initialization now that Stream property is assigned
         // This resolves the circular dependency where initialization lambda uses 'this'
-        Stream.Hub.Post(new InitializeHubRequest());
+        streamHub.Post(new InitializeHubRequest());
         Stream.RegisterForDisposal(this);
         Stream.RegisterForDisposal(
-            Stream.Hub.Register<ClickedEvent>(
+            streamHub.Register<ClickedEvent>(
                 OnClick,
                 delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
             )
         );
         Stream.RegisterForDisposal(
-            Stream.Hub.Register<CloseDialogEvent>(
+            streamHub.Register<CloseDialogEvent>(
                 OnCloseDialog,
                 delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
             )
         );
         Stream.RegisterForDisposal(
-            Stream.Hub.Register<BlurEvent>(
+            streamHub.Register<BlurEvent>(
                 OnBlur,
                 delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
             )
@@ -658,7 +678,10 @@ public record LayoutAreaHost : IDisposable
                 "[LAH-RENDER] Render depth {Depth} exceeded limit {Max} at area={Area} on hub {Hub} — " +
                 "aborting to avoid a stack-overflow crash. The layout is almost certainly recursive " +
                 "(a control or area that embeds its own area).",
-                context.Depth, MaxRenderDepth, context.Area, Stream.Hub.Address);
+                // A diagnostic field only — a torn-down stream has no address left to name, and
+                // saying so beats printing "(null)" next to a recursion report.
+                context.Depth, MaxRenderDepth, context.Area,
+                (object?)Stream.TryGetHub()?.Address ?? "(stream torn down)");
             var recursionError = new MarkdownControl(
                 $"**Layout recursion detected**\n\nRendering of `{context.Area}` was stopped at depth " +
                 $"{context.Depth} to protect the server from a stack-overflow crash. This layout appears " +
@@ -1220,7 +1243,22 @@ public record LayoutAreaHost : IDisposable
     /// <param name="exceptionCallback">Called with any exception thrown by <paramref name="action"/>.</param>
     public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback)
     {
-        Stream.Hub.InvokeAsync(action, exceptionCallback);
+        // A torn-down stream has no action block left to schedule on. Say so — the work is
+        // DROPPED and the log names it. Deliberately NOT routed to exceptionCallback: that
+        // callback is `Func<Exception, Task>`, and invoking it here would leave a fire-and-forget
+        // Task on a Blazor-reachable path, which is the very shape AsynchronousCalls.md forbids.
+        // Its contract is also narrower than this case — it reports what `action` threw, and
+        // `action` never ran.
+        if (Stream.TryGetHub() is not { } hub)
+        {
+            logger.LogWarning(
+                "Dropping scheduled work for area {Area}: stream {StreamId} is torn down, so its "
+                + "hub has no action block left to run it on.",
+                resolvedArea, Stream.StreamId);
+            return;
+        }
+
+        hub.InvokeAsync(action, exceptionCallback);
     }
 
     /// <summary>
@@ -1614,14 +1652,24 @@ public record LayoutAreaHost : IDisposable
     private void PostNavigation(NavigationRequest request)
     {
         var subscriber = Viewer;
-        if (subscriber != null)
-        {
-            Stream.Hub.Post(request, o => o.WithTarget(subscriber));
-        }
-        else
+        if (subscriber == null)
         {
             logger.LogWarning("Cannot navigate: no subscriber address found for stream {StreamId}", Stream.StreamId);
+            return;
         }
+
+        // Same "no" as the branch above, for the other way this can fail: the stream that would
+        // carry the navigation is gone. Naming it separately matters — "no subscriber" and "the
+        // stream died" look identical from the page (nothing happens) and have opposite causes.
+        if (Stream.TryGetHub() is not { } hub)
+        {
+            logger.LogWarning(
+                "Cannot navigate to {Request}: stream {StreamId} is torn down.",
+                request, Stream.StreamId);
+            return;
+        }
+
+        hub.Post(request, o => o.WithTarget(subscriber));
     }
 
     internal IEnumerable<LayoutAreaDefinition> GetLayoutAreaDefinitions()

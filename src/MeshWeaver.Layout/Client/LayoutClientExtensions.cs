@@ -56,8 +56,15 @@ public static class LayoutClientExtensions
                 },
                     ex =>
                     {
-                        stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
-                            .CreateLogger(typeof(LayoutClientExtensions)).LogWarning(ex, "Cannot update layout");
+                        // Best effort BY CONSTRUCTION: this callback fires when the write was
+                        // refused, and the commonest reason is that the stream is dead — in which
+                        // case the thing that died is the very hub holding the log sink. There is
+                        // no other channel here (a static extension, no injected logger), so a
+                        // hub-less stream leaves the report nowhere to go. It must not NRE on the
+                        // way, which is what the guard buys; the write's refusal is still reported
+                        // to the producer by SynchronizationStream.SignalDisposedToProducer.
+                        stream.TryGetHub()?.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger(typeof(LayoutClientExtensions)).LogWarning(ex, "Cannot update layout");
                     });
 
         }
@@ -77,7 +84,14 @@ public static class LayoutClientExtensions
                 ? null
                 : new JsonPatch(PatchOperation.Remove(pointer));
 
-        var valueSerialized = JsonSerializer.SerializeToNode(value, stream.Hub.JsonSerializerOptions);
+        // "No patch" is already this method's modelled absent answer — every caller tests the
+        // result for null before applying it — so a stream whose hub is gone (no serializer
+        // options to serialize WITH, and no live store to patch) answers with it rather than
+        // dereferencing a corpse.
+        if (stream.TryGetHub() is not { } hub)
+            return null;
+
+        var valueSerialized = JsonSerializer.SerializeToNode(value, hub.JsonSerializerOptions);
 
         return existing == null
                 ? new JsonPatch(PatchOperation.Add(pointer, valueSerialized))
@@ -104,9 +118,18 @@ public static class LayoutClientExtensions
         T? defaultValue = default(T)) =>
         stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext ?? "")))
             .Select(x =>
-                conversion is not null
-                    ? conversion.Invoke(x, defaultValue)
-                    : stream.Hub.ConvertSingle(x, null, defaultValue!))
+            {
+                if (conversion is not null)
+                    return conversion.Invoke(x, defaultValue);
+                // A dead stream can still hand a LATE subscriber its replayed last frame (its
+                // store is a ReplaySubject), so this lambda can run after teardown. There is no
+                // hub left to convert with; `default` is the pipeline's existing absent value and
+                // the .Where below drops it, so the binding gets no emission — the truth — rather
+                // than an NRE inside the circuit.
+                return stream.TryGetHub() is { } hub
+                    ? hub.ConvertSingle(x, null, defaultValue!)
+                    : default;
+            })
             .Where(x => x is not null)
             .Select(x => (T)x!)
             .DistinctUntilChanged();
@@ -199,7 +222,12 @@ public static class LayoutClientExtensions
         var ret = jsonPointer.Evaluate(stream.Current.Value);
         if (ret == null)
             return default;
-        return ret.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
+        // `default` is this method's existing "the value is not there" answer (two lines above
+        // say so twice). A stream whose hub is gone has no serializer options to read WITH, and
+        // its Current is a frozen last frame; answering absent is the truth.
+        if (stream.TryGetHub() is not { } hub)
+            return default;
+        return ret.Value.Deserialize<T>(hub.JsonSerializerOptions);
     }
 
     /// <summary>
@@ -219,7 +247,11 @@ public static class LayoutClientExtensions
         return stream.Select(s =>
         {
             var ret = jsonPointer.Evaluate(s.Value);
-            return ret is null ? default : ret.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
+            if (ret is null)
+                return default;
+            // Replayed frames can reach a late subscriber after teardown — see DataBind. No hub,
+            // no deserializer: emit the pipeline's existing absent value, which the .Where drops.
+            return stream.TryGetHub() is { } hub ? ret.Value.Deserialize<T>(hub.JsonSerializerOptions) : default;
         })
         .Where(x => x is not null)
         .Select(x => x!);
@@ -655,7 +687,24 @@ public static class LayoutClientExtensions
     /// </summary>
     public static IObservable<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter<JsonElement> data)
     {
-        var delivery = stream.Hub.Post(
+        // A failed submit is ALREADY modelled here as an ActivityLog carrying an error message —
+        // see the no-route branch below. A torn-down stream is the same class of answer and gets
+        // the same shape, so the form's existing error surface reports "the page went away, submit
+        // again" instead of the circuit taking an NRE on a non-nullable Hub.
+        if (stream.TryGetHub() is not { } hub)
+        {
+            return Observable.Return(new ActivityLog(ActivityCategory.DataUpdate)
+            {
+                End = DateTime.UtcNow,
+                Messages =
+                [
+                    new LogMessage("The connection to this page was closed; nothing was submitted.", LogLevel.Error)
+                        .WithKey("activity.dataUpdate.streamClosed")
+                ]
+            });
+        }
+
+        var delivery = hub.Post(
             new DataChangeRequest { Updates = [data.Submit()] },
             o => o.WithTarget(stream.Owner));
 
@@ -672,7 +721,7 @@ public static class LayoutClientExtensions
             });
         }
 
-        return stream.Hub.Observe(delivery)
+        return hub.Observe(delivery)
             .FirstAsync()
             .Select(callbackResponse =>
             {
