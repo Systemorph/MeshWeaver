@@ -83,12 +83,30 @@ public sealed record ConfiguredPackageSource(IPackageSource Source, string GitRe
 public static class PackageSources
 {
     /// <summary>
+    /// Reads a configured/declared <c>Format</c>. Defaults to the node-native repo format (what
+    /// MeshWeaver.Plugins ships); a <c>package.json</c> manifest repo opts in with
+    /// <c>package-json</c>.
+    ///
+    /// <para>This is deliberately the ONE place the default lives. It used to be an inline literal
+    /// on the configuration path only, so the two readers of a <c>PluginCatalog</c> node disagreed
+    /// about the same repository — see <see cref="PluginCatalogContent.Format"/>.</para>
+    /// </summary>
+    public static bool IsNodeRepoFormat(string? format) =>
+        !string.Equals(format ?? "node-repo", "package-json", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Builds a package source for <paramref name="sourceRepoPath"/> (a URL or local path), or
     /// <c>null</c> when the path is empty / a URL source has no <see cref="IGitHubRepoClient"/>.
-    /// <paramref name="nodeRepo"/> selects the format for a URL source: <c>true</c> (the default the
-    /// registry uses) reads a node-native repo — <c>&lt;Plugin&gt;/index.json</c> Space roots, node-per-file
+    /// <paramref name="nodeRepo"/> selects the format for BOTH a URL and a local path: <c>true</c>
+    /// (what the registry, the catalog node and its watcher all use by default) reads a node-native
+    /// repo — <c>&lt;Plugin&gt;/index.json</c> Space roots, node-per-file
     /// (<see cref="NodeRepoPackageSource"/>); <c>false</c> reads a <c>package.json</c>-manifest repo
-    /// (<see cref="GitHubPackageSource"/>). A local path always uses the git-CLI package.json source.
+    /// (<see cref="GitHubPackageSource"/> for a URL, <see cref="GitPackageSource"/> via the git CLI
+    /// for a local path).
+    ///
+    /// <para>Resolve it with <see cref="IsNodeRepoFormat"/> rather than defaulting the
+    /// <c>bool</c> — the parameter defaults to <c>false</c>, which is the WRONG default for a
+    /// declared source and is exactly how #3384 happened.</para>
     /// </summary>
     public static IPackageSource? FromRepo(
         IMessageHub hub, string? sourceRepoPath, string? sourceSubdir, ILogger? logger = null, bool nodeRepo = false)
@@ -150,10 +168,7 @@ public static class PackageSources
             string? repo, string? subdir, string? gitRef, string? format, string? name,
             string? autoDiscover, string? autoSync)
         {
-            // Default to the node-native repo format (what MeshWeaver.Plugins ships); a package.json
-            // repo can opt in with Format=package-json.
-            var nodeRepo = !string.Equals(format ?? "node-repo", "package-json", StringComparison.OrdinalIgnoreCase);
-            var source = FromRepo(hub, repo, subdir, logger, nodeRepo);
+            var source = FromRepo(hub, repo, subdir, logger, IsNodeRepoFormat(format));
             return source is null
                 ? null
                 : new ConfiguredPackageSource(source, gitRef ?? "HEAD", name ?? repo ?? "")

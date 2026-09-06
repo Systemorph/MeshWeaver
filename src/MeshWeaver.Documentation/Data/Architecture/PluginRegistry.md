@@ -156,6 +156,14 @@ contribution (logged), never a broken catalog. The legacy single-source keys
 is advisory. The wire shapes are produced by `PluginRegistryPayloads` and parsed by
 `RegistryPackageSource`, one place each, so producer and consumer cannot drift.
 
+🚨 **A `PluginCatalog` node carries the same `Format` knob, with the same default** — a browse page
+over a repository is the same question as a configured source over one, and it must answer it the
+same way. It did not until #3384: the node's content had no format field, so the browse view always
+built a `package.json` source while `PluginUpdateWatcher` read the identical record as a node repo.
+A catalog node over a local node-repo checkout therefore rendered *"No installable packages found."*
+while its own watcher listed those packages happily. One record with two readers must have one rule;
+that rule is `PackageSources.IsNodeRepoFormat`, and both readers call it.
+
 ## The sync licence — what a grant now carries
 
 A `PluginGrant` IS the **sync licence**: the right of a registered instance to REPLICATE a package
