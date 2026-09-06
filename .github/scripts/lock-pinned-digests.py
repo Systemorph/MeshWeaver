@@ -754,7 +754,8 @@ def apply_locks(plan: Plan, registry: Registry) -> list[str]:
             # reason, and N identical errors bury the ONE line that says which role to grant.
             remaining = plan.to_lock[index:]
             failures.append(
-                "the credential is not allowed to lock a manifest, so NOTHING was protected. "
+                "the credential is not allowed to lock a manifest. "
+                f"{plan.locked_now} of {len(plan.to_lock)} were locked before the refusal. "
                 f"az said: {detail}"
             )
             failures.extend(GRANT_HELP)
