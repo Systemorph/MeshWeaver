@@ -148,7 +148,8 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
     /// alive (#638 — the very state the bootstrap repairs), and a read can fault. Requiring all three
     /// means a false "gone" needs a partition with no store, no root and no content — which is not a
     /// partition. A fault anywhere is read as the SAFE answer (present), so an unreachable store
-    /// keeps its record.</para>
+    /// keeps its record — and so does a host that registers no partition providers at all, where
+    /// signal 1 cannot be evaluated and must therefore not be counted as evidence of absence.</para>
     /// </summary>
     private IObservable<bool> TargetPartitionIsGone(string partition, ILogger? logger)
     {
@@ -158,8 +159,14 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
         // reconciliation forever inside a boot pass. Empty means "no answer", which reads as the
         // SAFE answer here: the partition is present, so nothing is declared stale.
         var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToList();
+        // 🚨 NO providers ⇒ PRESENT, not absent (Copilot catch). A host on non-partitioned
+        // persistence registers none, so a "false" here would leave the verdict resting on
+        // root-absent + no-children alone — and an empty, rootless partition is precisely the #638
+        // state the bootstrap exists to REPAIR, not a partition that is gone. Same fail-open rule
+        // PartitionWriteGuardValidator applies (`providers.Count == 0 ⇒ allow`): a host that cannot
+        // tell must never declare a record stale.
         var storePresent = providers.Count == 0
-            ? Observable.Return(false)
+            ? Observable.Return(true)
             : Observable.CombineLatest(providers.Select(p => p.PartitionExists(partition)
                     .Take(1)
                     .Timeout(TimeSpan.FromSeconds(5))
