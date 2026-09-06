@@ -3008,6 +3008,71 @@ internal static class NodeTypeCompilationHelpers
             && EmitPipeline.IsProcessEmitFailure(error.Data[EmitPipeline.EmitCanaryDataKey]));
 
     /// <summary>
+    /// Reports a terminal compile outcome that reached NO VERDICT — the two shapes
+    /// <see cref="IsAvailabilityNonVerdict"/> admits, told apart because only one of them is a
+    /// statement about the whole PROCESS.
+    ///
+    /// <para>Extracted from <see cref="RunCompile"/>'s terminal handler so the record this writes
+    /// is assertable. The thing worth asserting is not the wording: it is that the #890 line
+    /// carries the EXCEPTION OBJECT, because that is what decides which CI sink can ever see
+    /// it.</para>
+    ///
+    /// <para>🚨 <b>An attribution line that reaches no durable sink is not attribution.</b> A CI
+    /// shard has two sinks and they are not equivalent. The job log is written post-hoc and
+    /// carries only the output of tests that FAILED — and #890's first canary record is routinely
+    /// printed under a test that PASSED (measured: <c>CreateLayoutAreaIntegrationTest…</c> in the
+    /// calibrated core occurrence, which was not one of that shard's five failures). The complete
+    /// sink is the phase trace <c>_meshweaver-test-trace.log</c>, and it takes a record if and only if
+    /// <c>exception is not null &amp;&amp; logLevel &gt;= Warning</c>
+    /// (<c>XUnitFileLogger.Log</c> → <c>TestTraceLog.AppendFault</c>). This line was logged with
+    /// no exception, so it could not reach the trace <b>by construction</b> — while its quieter
+    /// sibling, <c>"Compile failure for {HubPath}"</c>, passes <c>outcome.Error</c> and always
+    /// does. The loudest statement this defect produces was the least durable one, and the
+    /// documented detector pattern <c>PROCESS CANNOT EMIT</c> was a guaranteed zero on the sink
+    /// the triage docs call authoritative. Passing the exception is the whole fix, and it is the
+    /// same one #612 already applied to the sibling call three lines away.</para>
+    ///
+    /// <para>The <see cref="LogLevel.Information"/> branch is deliberately left as it is: an
+    /// availability fact about one node is not an error, its level is a production cost contract,
+    /// and it is not a statement about the process that anyone needs to find later.</para>
+    /// </summary>
+    /// <param name="logger">The pipeline's logger; <c>null</c> in the unit-test shape.</param>
+    /// <param name="hubPath">The node whose compile aborted.</param>
+    /// <param name="error">The terminal exception — never <c>null</c> on this path.</param>
+    internal static void LogTerminalNonVerdict(ILogger? logger, string hubPath, Exception error)
+    {
+        // 🚨 ATTRIBUTION for the emit-dead case (#890). One poisoned process reports as up to ten
+        // unrelated test names — 23 % of all distinct failing test names in the 08-22→08-29 sweep —
+        // and each occurrence has cost a fresh, always-identical misdiagnosis. The canary already
+        // KNOWS the process is the broken thing at the first throw; nothing said so in a form the
+        // next reader could act on. This line is that statement, and it is deliberately louder than
+        // its sibling: an Information line about one node does not describe a process that can no
+        // longer compile anything, and every compile after it in this process will fail the same
+        // way for the same reason.
+        if (EmitPipeline.IsProcessEmitFailure(error.Data[EmitPipeline.EmitCanaryDataKey]))
+            logger?.LogError(
+                // The exception OBJECT, not just its message: it is the sole reason this record
+                // reaches `_meshweaver-test-trace.log`, the one sink that does not depend on
+                // whichever test happened to be running having FAILED. See the class remark above.
+                error,
+                "PROCESS CANNOT EMIT (#890) — the compile of {HubPath} aborted inside "
+                + "Roslyn's emit, and the canary's control compilation (trivial, freshly "
+                + "parsed, known-good) could not emit either. This says NOTHING about that "
+                + "type's code: it is left at Unavailable, no verdict is recorded and the "
+                + "park budget is untouched. 🚨 EVERY LATER COMPILE IN THIS PROCESS WILL "
+                + "FAIL THE SAME WAY — attribute the failures that follow to this line, not "
+                + "to the change under test, and do not re-diagnose them one by one. "
+                + "Verdict: {Verdict}",
+                hubPath, error.Data[EmitPipeline.EmitCanaryDataKey]);
+        else
+            logger?.LogInformation(
+                "Compile for {HubPath} reached NO VERDICT ({Type}) — an availability fact, "
+                + "not a compile failure: it does not count towards the park budget and the "
+                + "type is left at Unavailable for the automatic re-drive to retry. {Error}",
+                hubPath, error.GetType().Name, error.Message);
+    }
+
+    /// <summary>
     /// THE terminal stamp of a FAILED compile — the exact field set <see cref="RunCompile"/>'s
     /// write-back has always applied on failure, extracted for the same one-stamp-shape reason
     /// as <see cref="ApplyCompileSuccess"/>.
@@ -3403,34 +3468,10 @@ internal static class NodeTypeCompilationHelpers
                             parkRegistry.OnCompileSucceeded(hubPath);
                         else if (IsAvailabilityNonVerdict(outcome.Error))
                         {
-                            // 🚨 ATTRIBUTION for the emit-dead case (#890). One poisoned process
-                            // reports as up to ten unrelated test names — 23 % of all distinct
-                            // failing test names in the 08-22→08-29 sweep — and each occurrence has
-                            // cost a fresh, always-identical misdiagnosis. The canary already KNOWS
-                            // the process is the broken thing at the first throw; nothing said so in
-                            // a form the next reader could act on. This line is that statement, and
-                            // it is deliberately louder than its sibling: an Information line about
-                            // one node does not describe a process that can no longer compile
-                            // anything, and every compile after it in this process will fail the
-                            // same way for the same reason.
-                            if (EmitPipeline.IsProcessEmitFailure(
-                                    outcome.Error!.Data[EmitPipeline.EmitCanaryDataKey]))
-                                logger?.LogError(
-                                    "PROCESS CANNOT EMIT (#890) — the compile of {HubPath} aborted inside "
-                                    + "Roslyn's emit, and the canary's control compilation (trivial, freshly "
-                                    + "parsed, known-good) could not emit either. This says NOTHING about that "
-                                    + "type's code: it is left at Unavailable, no verdict is recorded and the "
-                                    + "park budget is untouched. 🚨 EVERY LATER COMPILE IN THIS PROCESS WILL "
-                                    + "FAIL THE SAME WAY — attribute the failures that follow to this line, not "
-                                    + "to the change under test, and do not re-diagnose them one by one. "
-                                    + "Verdict: {Verdict}",
-                                    hubPath, outcome.Error.Data[EmitPipeline.EmitCanaryDataKey]);
-                            else
-                                logger?.LogInformation(
-                                    "Compile for {HubPath} reached NO VERDICT ({Type}) — an availability fact, "
-                                    + "not a compile failure: it does not count towards the park budget and the "
-                                    + "type is left at Unavailable for the automatic re-drive to retry. {Error}",
-                                    hubPath, outcome.Error!.GetType().Name, outcome.Error.Message);
+                            // Both no-verdict shapes report through ONE extracted, assertable
+                            // funnel — the #890 attribution line has to carry the exception object
+                            // or it reaches no durable CI sink at all. See LogTerminalNonVerdict.
+                            LogTerminalNonVerdict(logger, hubPath, outcome.Error!);
                         }
                         else
                         {

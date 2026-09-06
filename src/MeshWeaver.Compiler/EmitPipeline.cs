@@ -458,15 +458,47 @@ public static class EmitPipeline
     ///     Cci explicit interface implementation does not, called DIRECTLY. #890 then reproduces in
     ///     one property call with no emit, no metadata writer and no PE stream: the smallest repro
     ///     this defect has ever had, and the one a <c>dotnet/runtime</c> report needs.</item>
-    ///   <item><c>dissect=READS-HEALTHY</c> — BOTH reads return the right answer, on freshly bound
-    ///     symbols, microseconds after <c>Emit</c> threw on exactly this shape. A corrupted object
-    ///     graph does not predict that; code that is only wrong when reached from
-    ///     <c>MetadataWriter</c>'s own call site does — which is what the split-arm
-    ///     <c>DOTNET_TieredPGO=0</c> re-run tests.</item>
+    ///   <item><c>dissect=GUARD-READ-BROKEN</c> — the TOP-LEVEL type's <c>ContainingType</c> reads
+    ///     NON-null when it is null by construction. That is the read
+    ///     <c>AsNestedTypeDefinitionImpl</c>'s guard makes, and a wrong TRUE there is on its own
+    ///     sufficient to produce #890 — see the polarity note below.</item>
+    ///   <item><c>dissect=READS-HEALTHY</c> — ALL THREE reads return the right answer, on freshly
+    ///     bound symbols, microseconds after <c>Emit</c> threw on exactly this shape. Neither a
+    ///     corrupted object graph nor a broken guard read predicts that; code that is only wrong
+    ///     when reached from <c>MetadataWriter</c>'s own call site does — which is what the
+    ///     split-arm <c>DOTNET_TieredPGO=0</c> re-run tests.</item>
     ///   <item><c>dissect=UNAVAILABLE(…)</c> — the probe could not run (a Roslyn shape change, an
     ///     unbindable canary). Its OWN verdict, never folded into the others: the
     ///     <c>INCONCLUSIVE</c> lesson one layer further in.</item>
     /// </list>
+    ///
+    /// <para>🚨 <b>BOTH POLARITIES, because the read that fails is a NULL that must stay null.</b>
+    /// This leg shipped reading only <c>Leaf.ContainingType</c> and <c>Inner.ContainingType</c> —
+    /// two reads that must come back NON-null — and the first two readings it ever produced
+    /// (2026-09-05 and 2026-09-06, both <c>READS-HEALTHY</c>) were earned on that half alone. But
+    /// look at what the metadata writer actually does:
+    /// <code>
+    /// // AsNestedTypeDefinitionImpl — the GUARD
+    /// if ((object)ContainingType != null &amp;&amp; IsDefinition &amp;&amp; ContainingModule == …) return this;
+    /// // ITypeDefinitionMember.ContainingTypeDefinition — reached ONLY when the guard said TRUE
+    /// return ContainingType.GetCciAdapter();          // NRE iff ContainingType is null
+    /// </code>
+    /// <c>getConsolidatedTypeParameters</c> recurses up the containing chain and calls these two
+    /// back to back on the same object, so it walks Leaf → Inner → <c>MwEmitCanary</c> — and at the
+    /// TOP-LEVEL type the guard is supposed to answer FALSE and stop the recursion. If that read
+    /// answers TRUE, the property is then called on a type whose <c>ContainingType</c> is null
+    /// <i>correctly</i>, and it throws the #890 NRE at the #890 frame. <b>No corrupted symbol and
+    /// no pair of disagreeing reads is required for that</b> — which is the framing this issue has
+    /// carried since 2026-08-13. A probe that only ever asks "does a non-null read come back
+    /// non-null" cannot see it, and would report a process broken in exactly that way as
+    /// <c>symbol:OK</c>. So the top-level read is made too, and it must come back NULL.</para>
+    ///
+    /// <para>🚨 The Cci leg stays on the NESTED type on purpose. On a perfectly healthy process,
+    /// <c>get_ContainingTypeDefinition</c> called on a TOP-LEVEL type throws a
+    /// <see cref="NullReferenceException"/> at the exact frame every #890 stack names — correctly,
+    /// because the containing type really is null. Probing it there would manufacture this
+    /// defect's signature on every healthy run. The frame is not the finding; the metadata writer
+    /// having REACHED it is.</para>
     ///
     /// <para>🚨 A local control (our own nested generic + explicit interface implementation) was
     /// considered and deliberately left out. Its failing branch would be informative, but its
@@ -499,9 +531,24 @@ public static class EmitPipeline
             // The ordinary, public route to the very property the NRE is thrown from.
             var inner = leaf.ContainingType;
             var outer = inner?.ContainingType;
-            symbolLeg = inner is null ? "symbol:NULL@Leaf.ContainingType"
-                : outer is null ? "symbol:NULL@Inner.ContainingType"
-                : "symbol:OK";
+
+            // 🚨 THE THIRD READ, AND IT IS THE OPPOSITE POLARITY. The two reads above assert that a
+            // non-null containing type reads non-null. The read `MetadataWriter` actually dies
+            // behind is the other one: `AsNestedTypeDefinitionImpl`'s guard asks
+            // `(object)ContainingType != null` on a type whose ContainingType is legitimately NULL
+            // — the TOP-LEVEL one — and only calls `get_ContainingTypeDefinition` when that answers
+            // TRUE. A guard that wrongly answers TRUE for a top-level type sends the writer
+            // straight into `return this.ContainingType.GetCciAdapter()` on a genuine null, which
+            // IS the #890 NRE, at the #890 frame, with no "two reads disagree" needed at all.
+            // Omitting this read made `READS-HEALTHY` unearned: a process whose null-reads-non-null
+            // is broken would still answer `symbol:OK` on the two reads above and be reported
+            // healthy. Same defect as a control that only ever exercises the populated case.
+            var topLevel = outer?.ContainingType;
+
+            symbolLeg = ClassifySymbolReads(
+                leafContainer: inner is not null,
+                innerContainer: outer is not null,
+                topLevelContainer: topLevel is not null);
         }
         catch (Exception bindError)
         {
@@ -509,7 +556,23 @@ public static class EmitPipeline
                 + "binding the canary source, so no read was attempted)";
         }
 
+        // 🚨 The Cci leg is probed on LEAF — a genuinely NESTED type — and never on the top-level
+        // one. On a HEALTHY process `get_ContainingTypeDefinition` throws exactly the #890
+        // NullReferenceException at exactly the #890 frame when called on a top-level type, because
+        // its ContainingType is correctly null. The frame is therefore NOT diagnostic on its own;
+        // what is diagnostic is that the METADATA WRITER reached it. Probing the top-level type
+        // here would manufacture that stack on every healthy process.
         var cciLeg = ProbeCciContainingTypeDefinition(leaf);
+
+        if (symbolLeg.StartsWith("symbol:NON-NULL", StringComparison.Ordinal))
+            return $"dissect=GUARD-READ-BROKEN {symbolLeg} {cciLeg} — the TOP-LEVEL source type's "
+                + "ContainingType reads NON-NULL when it is null by construction, on a compilation "
+                + "created AFTER the fault, with no emit involved. That is precisely the read "
+                + "AsNestedTypeDefinitionImpl's guard makes, and a wrong TRUE there hands "
+                + "MetadataWriter a top-level type to call ITypeDefinitionMember."
+                + "ContainingTypeDefinition on — whose NRE on a genuine null IS #890, needing no "
+                + "corrupted symbol and no divergent pair of reads. #890 reproduces here in ONE "
+                + "property read: take this to dotnet/runtime";
 
         if (symbolLeg != "symbol:OK")
             return $"dissect=SYMBOL-GRAPH-BROKEN {symbolLeg} {cciLeg} — ContainingType reads NULL "
@@ -523,18 +586,45 @@ public static class EmitPipeline
                 + "Cci leg could not be reached, so the discriminator did not run";
 
         if (cciLeg.StartsWith("cci:OK", StringComparison.Ordinal))
-            return $"dissect=READS-HEALTHY {symbolLeg} {cciLeg} — BOTH reads, including the exact "
-                + "ITypeDefinitionMember.ContainingTypeDefinition frame every #890 stack dies in, "
-                + "return the right answer when called DIRECTLY on symbols bound after the fault. "
-                + "A corrupted object graph does not predict that; code that is wrong only when "
-                + "reached from MetadataWriter's call site does — run the split-arm "
-                + "DOTNET_TieredPGO=0 re-run";
+            return $"dissect=READS-HEALTHY {symbolLeg} {cciLeg} — ALL of it reads correctly on "
+                + "symbols bound after the fault: nested ContainingType reads non-null, TOP-LEVEL "
+                + "ContainingType reads NULL (the read AsNestedTypeDefinitionImpl's guard makes), "
+                + "and the exact ITypeDefinitionMember.ContainingTypeDefinition frame every #890 "
+                + "stack dies in answers correctly when called DIRECTLY. Neither a corrupted object "
+                + "graph nor a wrong guard read predicts that; code that is wrong only when reached "
+                + "from MetadataWriter's own call site — where both of those are INLINED into "
+                + "getConsolidatedTypeParameters — does. That is what the split-arm "
+                + "DOTNET_TieredPGO=0 re-run tests";
 
         return $"dissect=REPRODUCED-OUTSIDE-EMIT {symbolLeg} {cciLeg} — the public ContainingType "
             + "reads correctly while the Cci explicit interface implementation on the SAME symbol "
             + "does not, called directly. #890 reproduces here in ONE property call, with no emit, "
             + "no metadata writer and no PE stream: take these two readings to dotnet/runtime";
     }
+
+    /// <summary>
+    /// Reduces leg 3's three <c>ContainingType</c> reads on <c>MwEmitCanary&lt;T&gt;.Inner&lt;U&gt;.Leaf&lt;V&gt;</c>
+    /// to one token. Pure, so every branch — including the two polarities — is unit-testable
+    /// without a poisoned process, which is the only way the <c>NON-NULL</c> branch can be covered
+    /// at all: a healthy Roslyn cannot be made to produce it.
+    ///
+    /// <para>🚨 <b>The third parameter is the whole point.</b> Two of the reads must come back
+    /// PRESENT and the third must come back ABSENT, because a top-level type has no containing
+    /// type — and that absent read is the one <c>AsNestedTypeDefinitionImpl</c>'s guard makes
+    /// before the metadata writer calls the property that #890 dies in. A classification that took
+    /// only the first two would answer <c>symbol:OK</c> for a process broken in exactly the
+    /// direction that produces this defect.</para>
+    /// </summary>
+    /// <param name="leafContainer"><c>Leaf&lt;V&gt;.ContainingType</c> resolved — expected TRUE.</param>
+    /// <param name="innerContainer"><c>Inner&lt;U&gt;.ContainingType</c> resolved — expected TRUE.</param>
+    /// <param name="topLevelContainer"><c>MwEmitCanary&lt;T&gt;.ContainingType</c> resolved —
+    /// expected FALSE: its container is the global namespace, which is not a type.</param>
+    internal static string ClassifySymbolReads(
+        bool leafContainer, bool innerContainer, bool topLevelContainer)
+        => !leafContainer ? "symbol:NULL@Leaf.ContainingType"
+            : !innerContainer ? "symbol:NULL@Inner.ContainingType"
+            : topLevelContainer ? "symbol:NON-NULL@MwEmitCanary.ContainingType"
+            : "symbol:OK";
 
     /// <summary>
     /// Calls <c>NamedTypeSymbol.Microsoft.Cci.ITypeDefinitionMember.get_ContainingTypeDefinition()</c>

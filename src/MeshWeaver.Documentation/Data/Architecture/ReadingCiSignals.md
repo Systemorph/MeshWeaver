@@ -483,6 +483,29 @@ Plugins shard"* — with a real occurrence rather than an argument.
 occurrence's own report published. A detector that cannot reproduce those numbers is not entitled to
 report a zero.
 
+🚨 **One of those four patterns was a guaranteed ZERO on the authoritative sink, and the loudest line
+was the least durable one.** The trace log takes a record if and only if
+`exception is not null && logLevel >= Warning` (`XUnitFileLogger.Log` → `TestTraceLog.AppendFault`).
+`PROCESS CANNOT EMIT (#890)` — the `LogError` whose entire job is *"attribute the failures that
+follow to this line, not to the change under test"* — was logged with **no exception object**, so it
+could never reach the trace **by construction**, while its quieter `LogWarning` sibling
+(`Compile failure for {HubPath}`, which passes the error and carries the whole `canary=`/`dissect=`
+verdict in brackets) always did. Measured on both 2026-09-05/06 occurrences:
+
+| pattern | job log | `_meshweaver-test-trace.log` |
+|---|---|---|
+| `PROCESS CANNOT EMIT` | 25 · 25 | **0 · 0** |
+| `canary=` | 78 · 62 | 55 · 28 |
+| `Compile failure for` | — | 54 · 31 |
+
+Since the job log carries only FAILED tests' output and this defect's first canary record is
+routinely logged under a test that PASSED, an occurrence could reach **neither** sink with its
+attribution intact. Fixed by passing the exception (the same thing #612 already did to the sibling
+call three lines away), so the record now satisfies the trace sink's gate — the general lesson being
+that **for a fault the trace log is the sink, and reaching it is a property of the CALL, not of the
+level or the wording**. An `ILogger.LogError` about an exception that does not pass the exception is
+invisible there.
+
 🚨 **And know which questions the sinks cannot answer.** *Neither* Plugins sink carries a compile
 **success**: `Compile success for …` is `LogInformation`, so the trace log (faults only) never sees
 it and the post-hoc job log never sees it either unless the test that logged it failed. Core's live

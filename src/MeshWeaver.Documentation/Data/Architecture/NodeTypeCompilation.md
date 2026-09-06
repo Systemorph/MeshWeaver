@@ -1036,9 +1036,40 @@ directly, on symbols bound **after** the fault, with no emit, no metadata writer
 | verdict | what it means | where it sends triage |
 |---|---|---|
 | `dissect=SYMBOL-GRAPH-BROKEN` | the ordinary `ContainingType` property reads **null** for a nested source type | the broken read is the property, not emit — every consumer of a nested symbol in the process is affected |
+| `dissect=GUARD-READ-BROKEN` | the **top-level** type's `ContainingType` reads **non-null**, when it is null by construction | that is the read `AsNestedTypeDefinitionImpl`'s guard makes — #890 in ONE property read, needing no corrupted symbol at all (see the polarity note below) |
 | `dissect=REPRODUCED-OUTSIDE-EMIT` | the public property reads correctly, the Cci explicit interface implementation on the **same symbol** does not | #890 in ONE property call — the smallest repro it has ever had, and what a `dotnet/runtime` report needs |
-| `dissect=READS-HEALTHY` | **both** reads answer correctly, microseconds after `Emit` threw on this exact shape | a corrupted object graph does not predict that; code that is wrong only when reached from `MetadataWriter`'s call site does — run the split-arm `DOTNET_TieredPGO=0` re-run |
+| `dissect=READS-HEALTHY` | **all three** reads answer correctly, microseconds after `Emit` threw on this exact shape | neither a corrupted object graph nor a wrong guard read predicts that; code that is wrong only when reached from `MetadataWriter`'s call site — where both reads are INLINED into `getConsolidatedTypeParameters` — does. Run the split-arm `DOTNET_TieredPGO=0` re-run |
 | `dissect=UNAVAILABLE(…)` | the probe could not run | its **own** verdict, never folded into the others |
+
+##### 🚨 Both polarities — the read that fails is a NULL that must stay null
+
+Leg 3 shipped reading only `Leaf<V>.ContainingType` and `Inner<U>.ContainingType`, **two reads that
+must come back NON-null**, and the first two readings it ever produced were earned on that half
+alone. Look at what the metadata writer actually does, though:
+
+```csharp
+// AsNestedTypeDefinitionImpl — the GUARD
+if ((object)ContainingType != null && IsDefinition && ContainingModule == …) return this;
+// ITypeDefinitionMember.ContainingTypeDefinition — reached ONLY when the guard answered TRUE
+return ContainingType.GetCciAdapter();          // NRE iff ContainingType is null
+```
+
+`getConsolidatedTypeParameters` recurses **up the containing chain**, calling those two back to back
+on the same object, so it walks `Leaf` → `Inner` → `MwEmitCanary` — and at the **top-level** type the
+guard is supposed to answer FALSE and stop. **If that read answers TRUE, the property is then called
+on a type whose `ContainingType` is null *correctly*, and it throws the #890 NRE at the #890 frame.**
+No corrupted symbol, and no pair of disagreeing reads, is required — which is the framing this issue
+had carried since 2026-08-13 (*"two reads of a readonly reference field, no writer in between,
+different answers"*). A probe that only asks *"does a non-null read come back non-null"* cannot see
+that shape and reports it as `symbol:OK`. The top-level read is now made too, and it must come back
+NULL; the classification is a pure function so the branch a healthy Roslyn can never produce is still
+covered by a test.
+
+🚨 **The Cci leg deliberately stays on the NESTED type.** On a perfectly healthy process,
+`get_ContainingTypeDefinition` called on a top-level type throws a `NullReferenceException` at the
+exact frame every #890 stack names — correctly, because the containing type really is null. Probing
+it there would manufacture this defect's signature on every healthy run. **The frame is not the
+finding; the metadata writer having REACHED it is.**
 
 🚨 **`UNAVAILABLE` is the branch that has to stay impossible on a healthy process.** Leg 3 reaches
 Roslyn's internal symbol model by reflection (`PublicModel.Symbol.UnderlyingSymbol`, then the
@@ -1058,6 +1089,48 @@ green means nothing is the shape this canary keeps having to remove.
 `DOTNET_TieredPGO=0` (sharper) or `DOTNET_TieredCompilation=0`, and read it together with the
 `dissect=` line. At ~1 % per run a single clean arm proves nothing — that caveat is part of the
 instruction, because an experiment stated without it gets read as a fix.
+
+#### The first `dissect=` readings, 2026-09-06 — and what they do and do not settle
+
+Leg 3 landed 2026-09-04 and its first readings arrived immediately. Two occurrences, both in
+MeshWeaver.Plugins `Plugin Catalog CI`, both on platform commits that carry leg 3:
+
+| occurrence | run / job | shard | first poisoned type | ending |
+|---|---|---|---|---|
+| 2026-09-05 19:34Z | [`33986905290`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/33986905290) / `101362087452` | 3 | `type/CleanType12835552…` | `exit=124` |
+| 2026-09-06 05:50Z | [`34014658302`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34014658302) attempt 1 / `101436270797` | 2 | `TestData/SelfHeal4b9026c1…` | `17 failing tests` |
+
+**Every reading, in both sinks of both occurrences, is `dissect=READS-HEALTHY symbol:OK cci:OK`** —
+78/78 and 53/53 for the first, 62/62 and 28/28 for the second; **zero** `SYMBOL-GRAPH-BROKEN`,
+`REPRODUCED-OUTSIDE-EMIT`, `UNAVAILABLE` or `NOT-RUN`. All faults in each occurrence carry one pid
+(`3033`, `2800`).
+
+🚨 **Read that verdict against what leg 3 measured at the time, not against what it names.** Those
+readings were produced by the two NON-null reads only — the top-level, null-polarity read is added by
+this change, and a process broken in that direction would have answered `symbol:OK` too. So the two
+`READS-HEALTHY` readings **exclude a symbol graph whose nested containers read null**, and they do
+**not yet** exclude a guard read that answers TRUE for a top-level type. The next occurrence, on a
+platform commit carrying the third read, is the first one whose `READS-HEALTHY` means what the word
+says.
+
+**Two things the readings do settle**, and they are worth having:
+
+- `get_ContainingTypeDefinition` **called directly** — the exact frame every #890 stack dies in —
+  answers correctly on symbols bound microseconds after `Emit` threw on that very shape. The
+  method's own compiled body is not the broken thing.
+- Combined with `BELOW-ROSLYN` (references, mappings and source already excluded), what is left is
+  code that is wrong only where `MetadataWriter` reaches it — i.e. the **inlined** copies of the
+  guard and the property inside `getConsolidatedTypeParameters`. **That is the split-arm
+  `DOTNET_TieredPGO=0` hypothesis, and it remains UNTESTED.**
+
+🚨 **Two sweep traps this measurement walked into, both worth inheriting.** `GET
+/actions/runs/{id}/jobs` defaults to `filter=latest`, so attempt-1 shard jobs of a re-run run are
+invisible — the 2026-09-06 occurrence is on attempt 1 of a run whose **overall conclusion is
+`success`**, because attempt 2 re-ran that shard and passed. A sweep over non-success jobs of the
+latest attempt finds only the first occurrence. And the trace artifact is written only when a suite
+FAILED (measured: 29 of 609 `teardown-stragglers-*` artifacts carry
+`_meshweaver-test-trace.log`), so **both** known sinks are failure-gated: an occurrence that reddened
+no test would be invisible to either.
 
 #### The rate has not moved — a null here is worth ~half a coin toss
 
