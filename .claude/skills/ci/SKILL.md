@@ -260,6 +260,42 @@ is open, draft, closed-unmerged, or **merged into anything but its repo's defaul
 - **The `none` escape is a declaration, not a skip** — printed into the log, and refused without a
   reason. Core cannot see a private repo's callers; what the gate removes is nobody being asked.
 
+### 🚨 ADDING an interface member is the OTHER half, and its gate is the mirror image (#3465)
+
+**A forwarder rescues a CALLER. It cannot rescue an IMPLEMENTER.** Core #3446 added three members to
+`IEaGraphAuth` *with* default-implemented forwarders for the retiring `…Async` surface — so every
+caller kept compiling, `Cross-repo pair` was correctly silent (nothing was removed) and core merged
+clean. The satellite's pin move then hit `CS0535: 'FakeEaGraphAuth' does not implement interface
+member 'IEaGraphAuth.ExchangeAndStore(…)'`, ×3, and the two halves DEADLOCKED on the release
+critical path: the pin move could not compile without the adaptation, and the adaptation could not
+compile without the pin. That repo's `main` was dark for hours. #3446's forwarder strategy was
+**correct** — the gap is that callers and implementers have different compatibility rules.
+
+`Interface additions (implementers declared)` fires when the diff adds a member an outside
+implementer would have to write: a member on a **public interface** that already existed at the merge
+base, with **no body** (no `=>`, no block, an accessor list of bare `get;`/`set;`/`init;` only) and
+not `static` unless also `abstract`; or an **`abstract`** member on a public **abstract** class.
+
+```text
+Implementers: IFoo.Bar — <who implements it, where their update lands>
+```
+
+- **A DEFAULT IMPLEMENTATION silences it, and that is the intended fix** — it is the one change on
+  this side that keeps every implementer compiling, so the gate must never tax it.
+- 🚨 **The ordering is INVERTED from `Pairs-with:`.** The core half lands **first** — the dependent
+  cannot compile its adaptation until this is pinned — so the gate wants the coupling PREDICTED, not
+  a merged counterpart. Demanding one would recreate the deadlock. There is no blanket form: name
+  each member, and a reason citing a live-mesh sweep must quote `searched: true`.
+- **Core-only: no checkout, no API read, no credential, no ledger entry** — so unlike
+  `Cross-repo pair` it also runs on FORK pull requests.
+- **Ordinary PRs never meet it.** Measured 2026-09-06: over the last 40 first-parent merges, 15
+  change the public declaration set and **one** meets this gate — #3446 itself. `main~100 → main`
+  adds 91 public types and members, of which **3** oblige an implementer: the same three.
+- **Two extra control arms**, because `publicTypesAtBase` does not constrain this shape at all:
+  `publicInterfacesAtBase` and `implementerObligationsAtBase` (131 and 450 on `main`), with floors
+  the gate refuses to pass below. Cross-checking the first against `grep` is what found that a
+  **UTF-8 BOM** hid 16 public types from the removal gate outright and miskeyed 128 more.
+
 Full reference:
 [CrossRepoPairGate.md](../../../src/MeshWeaver.Documentation/Data/Architecture/CrossRepoPairGate.md)
 · [RepositoryDependencyDirection.md](../../../src/MeshWeaver.Documentation/Data/Architecture/RepositoryDependencyDirection.md) § C.

@@ -2417,6 +2417,95 @@ jobs:
           --base "$base" \
           --pr-body-file "$RUNNER_TEMP/pr-body.md"
 
+  interface-addition:
+    name: "Interface additions (implementers declared)"
+    # 🚨 THE GAP THIS CLOSES (#3465, measured on #3446 and the pin move that followed it).
+    # `cross-repo-pair` above triggers on a REMOVAL. This is the mirror image, and it is the half
+    # nothing covered: A FORWARDER RESCUES A CALLER, IT CANNOT RESCUE AN IMPLEMENTER.
+    #
+    # #3446 added `GetConnection`, `GetAccessToken` and `ExchangeAndStore` to `IEaGraphAuth` and
+    # kept default-implemented forwarders for the retiring `…Async` surface, so every CALLER kept
+    # compiling, the pair gate was correctly silent (nothing was removed) and core merged clean.
+    # Then the satellite moved its platform pin onto the sealed set carrying it:
+    #
+    #   src/MeshWeaver.Mail.MicrosoftGraph.Test/ExecutiveAssistantDraftLifecycleTests.cs(438,44):
+    #     error CS0535: 'FakeEaGraphAuth' does not implement interface member
+    #                   'IEaGraphAuth.ExchangeAndStore(string, string, string)'   … and ×2 more
+    #
+    # `FakeEaGraphAuth` IMPLEMENTS the interface. It then produced a CIRCULAR block on the release
+    # critical path — the pin move could not compile without the adaptation, and the adaptation
+    # could not compile without the pin — and that repo's main was dark for hours.
+    #
+    # 🚨 WHY THIS IS A DECLARATION AND NOT `cross-repo-pair`'s MERGED-COUNTERPART VERDICT. The
+    # ordering is INVERTED. For a removal the deleting half lands LAST, so demanding a merged
+    # counterpart is exactly right. For an addition the core half lands FIRST: the dependent's
+    # adaptation cannot compile until core's change is pinned, which is why #3446's counterpart was
+    # correctly held as a DRAFT. A gate demanding a merged counterpart here would have demanded the
+    # very deadlock it exists to prevent. So it asks for a statement, not a precondition — and
+    # therefore needs no credential, no API read and no ledger entry, which is also why it runs on
+    # FORK pull requests where the credentialed gates cannot.
+    #
+    # 🚨 SUPPLYING A DEFAULT IMPLEMENTATION SILENCES IT, deliberately: that is the one change on
+    # this side that genuinely keeps every implementer compiling, so the gate must never tax it.
+    #
+    # 🚨 NO SKIP-TRAPDOOR:
+    #   * both self-tests run FIRST and fail this job — an unproven gate is no gate;
+    #   * no path filter — an unrelated pull request would otherwise "pass" by not running;
+    #   * no `continue-on-error:` and no `if:` asking whether a secret is set — this gate needs NO
+    #     credential at all. The one exemption is on the EVENT: `merge_group` carries no
+    #     pull-request body, and a pull request cannot reach the queue without this job green,
+    #     since it is a `needs:` of the required check;
+    #   * TWO control arms, because `publicTypesAtBase` does not constrain this shape: the report
+    #     carries `publicInterfacesAtBase` and `implementerObligationsAtBase` (131 and 450 on main,
+    #     2026-09-06) and the gate REFUSES a report where either has collapsed, or that predates
+    #     the shape. "Could not tell" and "nothing was added" are never one colour.
+    #
+    # Ordinary work does not meet it: over the last 40 first-parent merges, ONE does — #3446.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        # The detector compares HEAD against the merge base, so the base commit must be present.
+        fetch-depth: 0
+
+    - name: "Prove the surface detector is not vacuous (self-test)"
+      run: python3 scripts/check-type-forwards.py --self-test
+    - name: "Prove the interface-addition gate is not vacuous (self-test)"
+      run: python3 scripts/check-interface-addition.py --self-test
+
+    # A pull-request body is attacker-controlled text: it goes to a FILE through the environment,
+    # never interpolated into a shell command.
+    - name: Capture the pull-request body
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: |
+        set -euo pipefail
+        printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
+        echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
+
+    - name: "Report the public surface this diff adds"
+      run: |
+        set -euo pipefail
+        git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
+        # 🚨 The MERGE BASE, not the base branch tip — the same reasoning as every other diff gate
+        # here. Against the tip, a member somebody else added on main while this pull request is
+        # open reads as THIS pull request adding it, and the gate would demand a declaration for a
+        # change it did not make.
+        base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+        echo "Comparing against merge base $base"
+        python3 scripts/check-type-forwards.py --base "$base" --surface-json "$RUNNER_TEMP/surface.json"
+
+    - name: "Every implementer-obliging addition is declared"
+      run: |
+        set -euo pipefail
+        python3 scripts/check-interface-addition.py \
+          --surface-json "$RUNNER_TEMP/surface.json" \
+          --pr-body-file "$RUNNER_TEMP/pr-body.md"
+
   collect-results:
     name: "Consolidate test results"
     # plugin-gate is a NEEDS so this required check cannot go green while the plugins are
@@ -2450,7 +2539,14 @@ jobs:
     # hours after the merge that causes it (#2689 records five incidents). Nothing on the causing
     # pull request goes red, so if this gate could not fail the required check it would be a
     # notification rather than a gate — and a notification is what the fleet already had.
-    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal]
+    # interface-addition is a NEEDS on the same principle as cross-repo-pair, applied to the
+    # OPPOSITE direction of the same boundary: adding a member to a public interface breaks every
+    # external IMPLEMENTER (CS0535), a forwarder cannot rescue one, and a dependent that PINS the
+    # platform does not find out until somebody moves the pin (#3465, measured on #3446 — a
+    # circular block on the release critical path and a satellite's main dark for hours). Nothing
+    # on the causing pull request goes red, so a gate that could not fail the required check would
+    # be a notification rather than a gate.
+    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -2813,6 +2909,21 @@ jobs:
         echo "::error::The 'Satellite package pins (removal declared)' gate concluded '${{ needs.package-pin-removal.result }}' — see that job, which names every PackageVersion this diff removes and whether it was declared."
         echo "::error::A satellite consumes 47 of this repo's central pins VERSIONLESS, so removing one here stops MeshWeaver.Plugins restoring (NU1010) while both repos stay green — #3344 sealed nothing for ~80 minutes and reintroduced a CVE."
         echo "::error::Check each removal with: grep -rn 'PackageReference Include=\"<id>\"' ../MeshWeaver.Plugins/src/*/*.csproj — then declare it in the PR BODY as 'Satellite-pins: <id> — what you checked'. Rationale: Doc/Architecture/CrossRepoPairGate."
+        exit 1
+
+    # ── …and an UNDECLARED IMPLEMENTER-OBLIGING ADDITION decides it too ─────────────────────
+    # `!= 'success'` rather than `== 'failure'`, for the same reason as every gate above: a job that
+    # was skipped or cancelled produced no verdict, and no verdict must never read as passed. The
+    # event predicate is kept IDENTICAL to the gate's own `if:` so the two can never disagree —
+    # `pull_request` because this gate's second input is the pull-request BODY, which a merge_group
+    # event does not carry. No fork/dependabot clause: this gate needs no credential, so it runs
+    # there too.
+    - name: Fail if an implementer-obliging addition was not declared
+      if: github.event_name == 'pull_request' && needs.interface-addition.result != 'success'
+      run: |
+        echo "::error::The 'Interface additions (implementers declared)' gate concluded '${{ needs.interface-addition.result }}' — see that job, which names every member this diff adds that an outside implementer would have to write."
+        echo "::error::A FORWARDER RESCUES A CALLER, IT CANNOT RESCUE AN IMPLEMENTER. Adding a member to a public interface (or an abstract member to a public abstract class) with no default implementation is CS0535/CS0534 in every implementer outside this repo — and a dependent that PINS the platform does not find out until somebody moves the pin. #3446 did exactly this and produced a circular block on the release critical path (#3465)."
+        echo "::error::Fix it EITHER by giving the member a default implementation — which keeps every implementer compiling and silences the gate — OR by declaring it in the PR BODY: 'Implementers: IFoo.Bar — what you checked and what you found'. Note the ordering is INVERTED from 'Pairs-with:': the core half lands FIRST here, so the gate wants the coupling predicted, not a merged counterpart. Rationale: Doc/Architecture/CrossRepoPairGate."
         exit 1
 
     - name: Fail if the clients gate failed
