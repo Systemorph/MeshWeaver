@@ -510,6 +510,7 @@ from the name.
 ## See also
 
 - [The Release Gate's Denominator](../ReleaseGateDenominator) — why "which packages must be baked" may never be read from the artifact under judgement
+- [Roll Selection](../RollSelection) — the same predicate applied when CHOOSING the target rather than approving one, and the measured boundary of what a published set can be asked
 - [CI Content Bake](../CiContentBake) — where the sealed bundles and the framework identity come from
 - [The Continuous Delivery Contract](../ContinuousDeliveryContract) — the publication this gate reads
 - [Release & Self-Update Strategy](../ReleaseStrategy) — the poll, the policy node, the roll
