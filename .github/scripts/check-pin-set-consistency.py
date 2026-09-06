@@ -597,12 +597,16 @@ def emit(text: str) -> None:
             handle.write(text + "\n")
 
 
-def _where(scan: RepoScan, site: Site) -> str:
+def _where(site: Site) -> str:
     return f"{site.filename}:{site.line}:{site.name}"
 
 
 def check_static(scan: RepoScan, require_pins: bool) -> list[str]:
-    """I1-I6 over one repository. Returns the failure lines; prints the denominator either way."""
+    """I1-I6 and I8 over one repository — every arm that needs no registry.
+
+    Returns the failure verdicts; prints the DENOMINATOR either way, because a report that only
+    appears when something is wrong cannot distinguish a clean repository from an unread one.
+    """
     failures: list[str] = []
     digests = [s for s in scan.sites if s.kind == "digest"]
     classified = [s for s in digests if s.role]
@@ -659,7 +663,7 @@ def check_static(scan: RepoScan, require_pins: bool) -> list[str]:
 
     # I5 — an unplaceable pin has not been checked.
     for site in unclassified:
-        print(f"::error::{scan.gh_repo} — {_where(scan, site)} pins {site.value} but nothing says "
+        print(f"::error::{scan.gh_repo} — {_where(site)} pins {site.value} but nothing says "
               "WHICH image it names, so its consistency was never checked.")
         print("  Bind it in the file — write the reference as")
         print("  `meshweaver.azurecr.io/<repo>@${{ env.<NAME> }}`, or declare the sibling that")
