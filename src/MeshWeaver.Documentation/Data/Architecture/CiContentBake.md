@@ -67,6 +67,11 @@ shipped image ever contains those (see "The identity rule" below), so `doc-gate`
 What the portals adopt is baked **inside the shipped image** for the platform's content, and
 **published by each plugin repo's own `publish-bake`** for plugins — see "The delivery" below.
 
+🚨 **The gate's verdict is not assemblies alone.** A package's committed `content/**` binaries —
+course videos, posters, og cards, fonts — are installed and read back on the same run; see
+[Gate Content Assets](/Doc/Architecture/GateContentAssets) for the host shape that made them
+invisible to the gate for months, and the `content` check that now covers them.
+
 ## BAKE is a build step; GATE is a mesh run that CONSUMES one
 
 This is how the bake worked until issue #1763: `mw-plugin-test` stood up an in-process mesh
