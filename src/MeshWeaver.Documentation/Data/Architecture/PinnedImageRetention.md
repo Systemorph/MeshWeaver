@@ -404,9 +404,13 @@ bump must move all three.
 `az acr repository update` needs the data action
 `Microsoft.ContainerRegistry/registries/repositories/metadata/write`, which is in
 **`Container Registry Repository Writer`** (and in Contributor/Owner) and in **neither `AcrPull` nor
-`AcrPush`** — measured 2026-09-07: `AcrPush` is `pull/read` + `push/write` and nothing else. If the
-OIDC identity carries only the read grant the pinned-digest sweep uses, the job reds **once**, naming
-the exact assignment rather than repeating one refusal per manifest:
+`AcrPush`** — measured 2026-09-07: `AcrPush` is `pull/read` + `push/write` and nothing else.
+
+The registry's three service principals hold, between them, only `AcrPull`, `AcrPush` and
+`Container Registry Data Importer and Data Reader` — measured with `--include-inherited`, and that
+third role is `metadata/**read**` only. So on the evidence the lock will be refused until a grant is
+added. **The job's first run is the decisive measurement**, and it reds **once**, naming the exact
+assignment rather than repeating one refusal per manifest:
 
 ```bash
 az role assignment create --assignee <the AZURE_CLIENT_ID app's object id> \

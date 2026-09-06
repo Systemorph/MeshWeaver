@@ -201,12 +201,22 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
           MW_ACR_RELEASE_UNPINNED: ${{ vars.MW_ACR_RELEASE_UNPINNED }}
+          MW_EVENT: ${{ github.event_name }}
           MW_ACR_LOCK_MODE: >-
             ${{ (github.event_name == 'push' && 'report-only')
              || (github.event.inputs.mode || 'apply') }}
         run: |
           set -uo pipefail
-          echo "mode: $MW_ACR_LOCK_MODE (event: ${{ github.event_name }})"
+          # 🚨 AN UNRECOGNISED MODE IS A RED, NEVER A FALL-THROUGH TO REPORT-ONLY. A typo in the
+          # expression above would otherwise make the nightly run stop mutating the registry while
+          # staying green — a job that protects nothing and says it protected everything, which is
+          # the failure this whole workflow exists to remove.
+          case "$MW_ACR_LOCK_MODE" in
+            apply|report-only) ;;
+            *) echo "::error::MW_ACR_LOCK_MODE is '$MW_ACR_LOCK_MODE'; expected apply|report-only."
+               exit 1 ;;
+          esac
+          echo "mode: $MW_ACR_LOCK_MODE (event: $MW_EVENT)"
           args=(--discover --registry meshweaver)
           if [ "$MW_ACR_LOCK_MODE" = "apply" ]; then
             args+=(--apply)
