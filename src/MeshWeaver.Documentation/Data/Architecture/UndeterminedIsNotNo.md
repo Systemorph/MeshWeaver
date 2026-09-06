@@ -128,6 +128,32 @@ it re-throws the original `BuildCoordinationUnreachableException` (so `Describes
 still separates *no verdict* from *a bad verdict* in the health payload), and it says the witness
 was **unreadable**, quoting why — never that there is no GO.
 
+### 🚨 On `memex-cloud` the hold is LATENT, not live — and that is why this must land first
+
+The refusals are real; the *rollout hold* in #3404's title did not happen on 2026-09-06. The
+pre-warmer logs its fault two ways, and which one it picks is the evidence:
+
+| Branch | Line | Condition |
+|---|---|---|
+| Gate ARMED | `REFUSING READINESS — the warm-up stream FAULTED…` (Critical) | `gate is { GatesReadiness: true, Phase: BakePhase.Faulted }` |
+| Gate NOT armed | `…**Nothing gates on this state here**; the bake is recorded as unproven rather than complete.` (Error) | otherwise |
+
+All **three** logged occurrences in #3404 carry the second line and **none** carries the first. So on
+those pods the bake gate was disarmed, and the pods went Ready having verified nothing.
+
+That matches what the deployment was measured to be doing: `memex-cloud`'s ConfigMap, values file
+and rendered manifest all say `PreWarm__GateReadiness: "true"`, while the pods run `false` from an
+inline `env:` entry set on the Deployment on 2026-09-03T17:32:45Z. **An inline `env:` overrides
+`envFrom`**, so every artefact reads armed and the process is not — and the state can only be read
+with `printenv` *inside the pod* plus the pod's own registration log, never from the ConfigMap,
+the values file or `helm get manifest`.
+
+The consequence for this page is the important one: **the defect is not currently costing a rollout,
+because the gate that would enforce it is off — and arming it is exactly what is waiting on #3404.**
+Arming a gate whose "I could not determine" branch is wired to a witness in the failing transport's
+own domain would turn every transport blip into a held rollout, reported as a build nobody approved.
+The third state has to be modelled *before* the gate is armed, not after the first stalled deploy.
+
 ## The rule, generalised
 
 1. **Model the third state in the type.** A `T?` can carry an answer but not its provenance.
