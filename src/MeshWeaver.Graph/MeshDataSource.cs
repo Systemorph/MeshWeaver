@@ -1710,9 +1710,12 @@ public static class MeshDataSourceExtensions
                 if (def.CompilationStatus == CompilationStatus.Pending
                     || def.CompilationStatus == CompilationStatus.Compiling)
                     return curr;
+                // THE Pending door (#3390) — the CreateReleaseRequest dispatch records what it is
+                // for, so a second request for the same inputs arriving while this compile runs is
+                // absorbed rather than parked behind it.
                 return curr with
                 {
-                    Content = def with { CompilationStatus = CompilationStatus.Pending }
+                    Content = NodeTypeCompilationHelpers.DispatchPending(def, hub)
                 };
             })
             .Subscribe(
