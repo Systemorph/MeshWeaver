@@ -1,7 +1,9 @@
 ---
 Name: A catalog over a local checkout lists its plugins
 Category: Fix
-Date: 2026-09-06
+Description: A plugin catalog pointed at a local checkout showed "No installable packages found." while its own update watcher listed those same packages — the node can now declare its repository format, and both readers honour it.
+Icon: PackageImport
+Order: -20260906
 ---
 
 A `PluginCatalog` node pointed at a local node-repo checkout showed **"No installable packages
