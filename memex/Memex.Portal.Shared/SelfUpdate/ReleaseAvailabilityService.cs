@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.SelfUpdate;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
@@ -132,6 +133,218 @@ public class ReleaseAvailabilityService(
     private static readonly TimeSpan AnswerBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>
+    /// 🚨 <b>The roll SELECTOR (#3479): which release should this environment be on?</b>
+    ///
+    /// <blockquote>Maintainer, 2026-09-06: <i>"Whenever a new platform / plugin is published, check
+    /// for each environment which is the latest platform version shipping all plugins, if different
+    /// from current version ⇒ update."</i></blockquote>
+    ///
+    /// <para><see cref="IsUpdatable"/> answers a question you must already know the answer to —
+    /// <i>may I roll to THIS version?</i> — so every caller still has to choose the version itself,
+    /// and the only choice available was "the newest". This inverts it: completeness becomes the
+    /// SELECTION criterion, so an environment never targets a release that does not ship all of its
+    /// plugins and there is nothing left for a readiness gate to refuse.</para>
+    ///
+    /// <para><b>The predicate is the same one.</b> Each candidate is judged by exactly the code
+    /// <see cref="IsUpdatable"/> runs — <see cref="ReleaseAvailability.IsUpdatable"/> over
+    /// <see cref="PublishedBundleCatalogue"/>'s observation — and the walk itself lives in
+    /// <see cref="RollSelection"/>. There is deliberately no second copy of "does this release ship
+    /// all plugins" to drift from the first.</para>
+    ///
+    /// <para><b>It costs ONE inventory read per selection, not one per candidate.</b> The mesh query
+    /// and the monotone denominator are read once, before the walk; only the per-candidate
+    /// observation is repeated, and only until one candidate clears.</para>
+    ///
+    /// <para>Cold and total, like <see cref="IsUpdatable"/>: every failure resolves to an outcome
+    /// carrying its reason, so a caller can subscribe without a <c>Catch</c> that would turn an
+    /// incident into a selection.</para>
+    /// </summary>
+    /// <param name="currentVersion">What this environment runs — <c>different from current ⇒
+    /// update</c> is the algorithm's own comparison, so it has to be given.</param>
+    /// <param name="candidatesNewestFirst">The releases to choose from, newest first. Null ⇒ every
+    /// release the published root carries a marker for, ordered by <see cref="VersionSelect"/> under
+    /// <paramref name="policy"/> — which lets an environment answer for itself without listing a
+    /// container registry.</param>
+    /// <param name="policy">Which releases are eligible when the candidates are derived. Default
+    /// <see cref="UpdatePolicyKind.Continuous"/>: the question "which release ships all plugins" is
+    /// about the PUBLICATIONS, and whether this install would apply the answer is a separate
+    /// decision that stays with the poller.</param>
+    /// <param name="condemned">Optional second opinion applied to each candidate BEFORE it can be
+    /// selected — in production the combo gate's recorded refusal, which answers the question an
+    /// artifact cannot: whether the candidate's assemblies can still serve the modules this
+    /// instance has landed. Returns the refusal, or null when it has nothing against the candidate.
+    /// 🚨 Only a REFUSAL removes a candidate; "not verified" is neither preferred nor condemned, so
+    /// an unwired verifier can never empty the candidate list.</param>
+    /// <param name="requireCiGreen">Exclude unverified <c>edge</c> builds when deriving candidates.</param>
+    public virtual IObservable<RollSelectionOutcome> SelectRollTarget(
+        string? currentVersion,
+        IReadOnlyList<string>? candidatesNewestFirst = null,
+        Func<string, string?>? condemned = null,
+        UpdatePolicyKind policy = UpdatePolicyKind.Continuous,
+        bool requireCiGreen = true) =>
+        Observable.Defer(() =>
+        {
+            var environment = EnvironmentName();
+
+            // The ONE applicability rule, shared with IsUpdatable and the poller's unwired path.
+            // A deployment that consumes no CI bakes has nothing to select ON: it compiles its
+            // content at every boot, so every release ships all its plugins in the only sense that
+            // can be observed here. Saying so is not the same as selecting the newest.
+            if (NotApplicableReason(configuration) is { } notApplicable)
+                return Observable.Return(NotEnforced(environment, currentVersion, notApplicable));
+
+            var publishedRoot = PublishedRoot!;
+
+            return pool
+                .InvokeBlocking(_ => PublishedBundleCatalogue.EverSealedBundles(publishedRoot, logger))
+                .SelectMany(floor =>
+                    // 🚨 Tested FIRST, and separately from ServesBakes: a configured root that does
+                    // not exist or faults on read produces a floor with no bundles — the SAME SHAPE
+                    // as a root that genuinely serves none — and they mean opposite things. See
+                    // Verdict() for the full reasoning; this is the same order, one level up.
+                    floor.Refusal is { } refusal
+                        ? Observable.Return(Indeterminate(environment, currentVersion, refusal))
+                        : !floor.ServesBakes
+                            ? Observable.Return(NotEnforced(
+                                environment, currentVersion, NoPublicationsReason(publishedRoot)))
+                            : Select(environment, currentVersion, publishedRoot, floor,
+                                candidatesNewestFirst, condemned, policy, requireCiGreen))
+                .Do(outcome => logger?.LogInformation("[RollSelect] {Summary}", outcome.Summary));
+        })
+        // 🚨 The selector must ANSWER, always — same reasoning as IsUpdatable's budget. A selector
+        // that hangs is worse than one that declines: the tick never completes, so the environment
+        // neither updates NOR records why, and freezes with nothing anywhere saying so.
+        .Timeout(AnswerBudget)
+        .Catch((Exception ex) => Observable.Return(Indeterminate(
+            EnvironmentName(),
+            currentVersion,
+            ex is TimeoutException
+                ? $"the roll selection did not answer within {AnswerBudget.TotalSeconds:0}s"
+                : ex.Message)));
+
+    /// <summary>
+    /// The selection proper, once the gate is known to apply and the denominator's floor has been
+    /// read: list the candidates, read the inventory ONCE, then walk.
+    /// </summary>
+    private IObservable<RollSelectionOutcome> Select(
+        string environment,
+        string? currentVersion,
+        string publishedRoot,
+        SealedBundleFloor floor,
+        IReadOnlyList<string>? candidatesNewestFirst,
+        Func<string, string?>? condemned,
+        UpdatePolicyKind policy,
+        bool requireCiGreen) =>
+        Candidates(publishedRoot, candidatesNewestFirst, policy, requireCiGreen)
+            .SelectMany(candidates => candidates.Refusal is { } listing
+                // 🚨 An unlistable candidate universe is an "I could not look", never an empty
+                // choice: reporting it as "no releases to choose from" would read as a healthy
+                // up-to-date environment when the storage is simply unreachable.
+                ? Observable.Return(Indeterminate(environment, currentVersion, listing))
+                : RequiredPackages(floor).SelectMany(required => RollSelection.Select(
+                    new RollSelectionInputs(
+                        environment,
+                        currentVersion,
+                        candidates.Versions,
+                        PluginInventory.Of(required, InventorySource)),
+                    version => Observe(publishedRoot, required, version, condemned))));
+
+    /// <summary>
+    /// One candidate's verdict, produced by exactly the code <see cref="IsUpdatable"/> runs — the
+    /// SHARED predicate, handed the inventory the walk already read rather than re-reading it per
+    /// candidate — and then, only if it cleared, the caller's second opinion.
+    /// </summary>
+    private IObservable<UpdatabilityVerdict> Observe(
+        string publishedRoot,
+        ImmutableArray<RequiredPackage> required,
+        string version,
+        Func<string, string?>? condemned) =>
+        PublishedBundleCatalogue
+            .Observe(pool, publishedRoot, version, logger)
+            .Select(observation => ReleaseAvailability.IsUpdatable(
+                observation.Target, required, observation.Artifacts))
+            .Select(verdict => verdict.IsUpdatable && condemned?.Invoke(version) is { } refusal
+                // Folded into the SAME verdict shape rather than kept beside it, so the walk has
+                // one notion of "this candidate is out" and the refusal travels with its reason.
+                ? verdict with
+                {
+                    IsUpdatable = false,
+                    Packages = verdict.Packages.Add(new PackageAvailability(
+                        "(combo)", PackageAvailabilityKind.ComboVerificationFailed, refusal)),
+                    HoldReason = refusal,
+                }
+                : verdict);
+
+    /// <summary>
+    /// The candidate universe: what the caller supplied, or every release the published root has a
+    /// marker for, ordered newest-first by <see cref="VersionSelect"/>. A caller-supplied list is
+    /// taken AS ORDERED — it already applied its own policy.
+    /// </summary>
+    private IObservable<PublishedReleaseCatalogue> Candidates(
+        string publishedRoot,
+        IReadOnlyList<string>? supplied,
+        UpdatePolicyKind policy,
+        bool requireCiGreen) =>
+        supplied is not null
+            ? Observable.Return(new PublishedReleaseCatalogue([.. supplied], null))
+            : PublishedBundleCatalogue
+                .ObserveReleases(pool, publishedRoot, logger)
+                .Select(catalogue => catalogue.Refusal is not null
+                    ? catalogue
+                    : catalogue with
+                    {
+                        Versions =
+                        [
+                            .. VersionSelect.PickTargets(
+                                catalogue.Versions, policy, requireCiGreen),
+                        ],
+                    });
+
+    /// <summary>
+    /// 🚨 <b>WHAT "this environment's plugins" means, answered once and named in every outcome.</b>
+    ///
+    /// <para>It is the <b>install records</b> — <c>Plugins/*</c>, <c>nodeType:Package</c> — and the
+    /// reason is not that they are the only reading available. They are not: an instance's modules
+    /// also arrive as per-Space <c>_GitSync</c> entries, and <see cref="InstanceComboReader"/> folds
+    /// both because a reader of one alone under-reports (measured on memex 2026-08-10: 42 sync
+    /// entries, ZERO install records). Two things nonetheless decide it here:</para>
+    /// <list type="number">
+    /// <item><description>The gate already reads them, and the predicate is SHARED. A selector whose
+    /// denominator differs from the gate's could choose a release the gate then holds — two
+    /// completeness answers about one environment, which is the drift this change exists to
+    /// prevent.</description></item>
+    /// <item><description>Only an install record carries the <b>package id the bake names its bundle
+    /// by</b>. A sync entry names a PARTITION; the published root holds <c>&lt;bundle&gt;.zip</c>.
+    /// Folding sync entries in would add names that can never match a bundle and hold every
+    /// environment forever.</description></item>
+    /// </list>
+    ///
+    /// <para>🚨 The failure mode of that source — a read that answers EMPTY — is no longer a pass:
+    /// <see cref="RollSelectionKind.NoPluginsKnown"/> refuses it by name. That is the whole point of
+    /// stating the source rather than assuming it.</para>
+    /// </summary>
+    private const string InventorySource =
+        "the install records (Plugins/*, nodeType:Package)";
+
+    /// <summary>The environment being selected FOR. The algorithm's quantifier is per environment,
+    /// so an outcome that cannot name one says so rather than pretending to be global.</summary>
+    private string EnvironmentName() =>
+        configuration[DeploymentReportService.DeploymentKey] is { Length: > 0 } deployment
+            ? deployment
+            : "this deployment (Hosting:Deployment is not configured)";
+
+    private static RollSelectionOutcome NotEnforced(
+        string environment, string? currentVersion, string reason) =>
+        new(RollSelectionKind.NotEnforced, null, currentVersion, 0, 0, [],
+            $"{environment}: no release is selected — {reason}");
+
+    private static RollSelectionOutcome Indeterminate(
+        string environment, string? currentVersion, string reason) =>
+        new(RollSelectionKind.Indeterminate, null, currentVersion, 0, 0, [],
+            $"{environment}: the roll selection could not be made ({reason}) — cannot determine "
+            + "which release ships all plugins, which is not clearance to roll to the newest one.");
+
+    /// <summary>
     /// The verdict, given what the denominator observation turned out to be. Three outcomes, and
     /// the ORDER is the whole point.
     ///
@@ -161,11 +374,33 @@ public class ReleaseAvailabilityService(
                 UpdatabilityVerdict.NotEnforced(NoPublicationsReason(publishedRoot)));
 
         return RequiredPackages(floor)
-            .SelectMany(required => PublishedBundleCatalogue
-                .Observe(pool, publishedRoot, targetVersion, logger)
-                .Select(observation => ReleaseAvailability.IsUpdatable(
-                    observation.Target, required, observation.Artifacts)));
+            .SelectMany(required => required.IsEmpty
+                // 🚨 THE VACUITY REFUSAL (#3479). With no packages required, every release is
+                // vacuously available and this gate answers a confident green having compared two
+                // empty sets — the SAME shape #3441 removed from HasContent, reappearing at the
+                // package LIST itself. It is a HOLD, and Unavailable rather than a
+                // compatibility verdict because the remedy is to fix the read (or to stop
+                // declaring that this deployment consumes CI bakes), never to re-bake a release.
+                //
+                // The case is not hypothetical: this environment's install records measured ZERO
+                // on 2026-08-10 while it carried 42 modules. It is also self-clearing — the
+                // verdict is re-evaluated from scratch on every tick, so a portal that has not yet
+                // written its records holds for one interval and then proceeds.
+                ? Observable.Return(UpdatabilityVerdict.Unavailable(VacuousDenominatorReason))
+                : PublishedBundleCatalogue
+                    .Observe(pool, publishedRoot, targetVersion, logger)
+                    .Select(observation => ReleaseAvailability.IsUpdatable(
+                        observation.Target, required, observation.Artifacts)));
     }
+
+    /// <summary>Why an empty denominator is a hold rather than a pass — see the call site.</summary>
+    private const string VacuousDenominatorReason =
+        "this deployment consumes CI bakes and its published root serves them, yet it reports ZERO "
+        + "installed packages — so every release would 'ship all' of nothing and this gate would "
+        + "pass having compared two empty sets. Cannot determine availability, which is not "
+        + "clearance to proceed. Either the install records (Plugins/*, nodeType:Package) are not "
+        + "being read, or this deployment genuinely deploys no packages — in which case "
+        + $"{ShippedPrebuiltBundles.PublishedRootConfigKey} should not be configured for it.";
 
     /// <summary>
     /// Why the gate does not apply to a root that holds no sealed publication under ANY identity.

@@ -39,14 +39,92 @@ public static class ReleaseGateEndpoints
     /// <summary>Route the gate is mounted at.</summary>
     public const string Route = "/api/plugins/is-updatable";
 
+    /// <summary>
+    /// 🚨 Route the SELECTOR is mounted at (#3479): <c>GET /api/plugins/roll-target</c> — <i>which
+    /// release should this environment be on?</i>
+    ///
+    /// <para><see cref="Route"/> can only confirm or deny a version the caller already chose, so
+    /// every path that rolls had to choose "the newest" by itself and discover completeness
+    /// afterwards. This answers the choice, which is the inversion #3479 asks for. Same auth, same
+    /// scope, same shared predicate — this is the walk over it, not a second one.</para>
+    /// </summary>
+    public const string SelectRoute = "/api/plugins/roll-target";
+
     /// <summary>Maps the instance-key-gated release gate. Call alongside <c>MapPluginBundles</c>.</summary>
     public static IEndpointRouteBuilder MapReleaseGate(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet(Route, (HttpContext http, string? version, CancellationToken ct) =>
                 Verdict(http, version, ct))
             .AllowAnonymous();
+        endpoints.MapGet(SelectRoute, (HttpContext http, string? current, CancellationToken ct) =>
+                Selection(http, current, ct))
+            .AllowAnonymous();
         return endpoints;
     }
+
+    /// <summary>
+    /// The roll SELECTION for this instance. Authenticated exactly like <see cref="Verdict"/> and
+    /// for the same reason: the answer names installed packages and the releases that cannot serve
+    /// them, which is deployment inventory rather than public information.
+    /// </summary>
+    private static Task<IResult> Selection(HttpContext http, string? current, CancellationToken ct)
+    {
+        var authenticator = http.RequestServices
+            .GetRequiredService<InstanceRegistryAuthenticator>();
+
+        var logger = http.RequestServices.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(ReleaseGateEndpoints));
+
+        return authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
+            .SelectMany(outcome => outcome.IsUnavailable
+                ? Observable.Return(InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger))
+                : outcome.Instance is null
+                    ? Observable.Return(Results.Json(
+                        new { error = "A registered instance key is required (Authorization: Bearer mwi_… or Basic)." },
+                        statusCode: StatusCodes.Status401Unauthorized))
+                    : Choose(http, current))
+            .FirstAsync()
+            .ObserveCompletion(
+                ex => logger?.LogWarning(ex,
+                    "Roll selection faulted after the response had already been sent"),
+                ct)!;
+    }
+
+    private static IObservable<IResult> Choose(HttpContext http, string? current) =>
+        http.RequestServices.GetRequiredService<ReleaseAvailabilityService>()
+            // 🚨 The running version is READ HERE, not taken from the caller: "different from
+            // current ⇒ update" is a claim about what this instance runs, and a caller that could
+            // assert it could ask for a rollback by lying. The query parameter is a diagnostic
+            // override for an operator asking "what would you pick from there", never the default.
+            .SelectRollTarget(
+                string.IsNullOrWhiteSpace(current)
+                    ? ShippedReleaseSeed.InstalledPlatformVersion
+                    : current)
+            .Select(outcome => Results.Json(new
+            {
+                environment = outcome.Summary,
+                kind = outcome.Kind.ToString(),
+                current = outcome.CurrentVersion,
+                selected = outcome.SelectedVersion,
+                shouldUpdate = outcome.ShouldUpdate,
+                // 🚨 Distinguishes an availability failure from "we looked and nothing is
+                // complete" — the same split IsUpdatable's `indeterminate` makes.
+                indeterminate = outcome.IsIndeterminate,
+                // 🚨 THE DENOMINATOR, always. A completeness answer whose expected count nobody can
+                // read is one nobody can tell from a vacuous one.
+                requiredPlugins = outcome.RequiredPlugins,
+                satisfiedPlugins = outcome.SatisfiedPlugins,
+                declined = outcome.Declined
+                    .Select(d => new
+                    {
+                        version = d.Version,
+                        reason = d.Reason,
+                        blockers = d.Blockers
+                            .Select(b => new { package = b.Package, status = b.Kind.ToString(), reason = b.Reason })
+                            .ToArray(),
+                    })
+                    .ToArray(),
+            }));
 
     private static Task<IResult> Verdict(HttpContext http, string? version, CancellationToken ct)
     {

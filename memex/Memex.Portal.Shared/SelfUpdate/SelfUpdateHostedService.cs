@@ -566,6 +566,13 @@ public class SelfUpdateHostedService : IHostedService
     /// in a HOLD — with the newest tag's reason, which is the one that explains why the fleet is
     /// not moving. Reporting the OLDEST candidate's reason instead would be true and useless.</para>
     /// </summary>
+    /// <remarks>
+    /// 🚨 The walk itself is <see cref="RollSelection"/> (#3479), reached through
+    /// <see cref="ReleaseAvailabilityService.SelectRollTarget"/> — <b>the algorithm is stated once,
+    /// and the poller is one of its callers, not a second copy of it.</b> The endpoint
+    /// (<c>/api/plugins/roll-target</c>) that answers for CD and for an operator rolling by hand
+    /// asks the same method, so the three roll paths cannot select differently.
+    /// </remarks>
     private IObservable<string?> FirstRollable(UpdatePolicyContent policy, string[] candidates)
     {
         if (candidates.Length == 0)
@@ -578,45 +585,54 @@ public class SelfUpdateHostedService : IHostedService
         if (gate is null && combo is null)
             return Observable.Return<string?>(candidates[0]);
 
-        return candidates
-            .Select(tag => Observable.Defer(() => Rollable(gate, combo, policy, tag)))
-            .Concat()
-            .FirstOrDefaultAsync(x => x.rollable)
-            .Select(x => x.tag ?? candidates[0])
+        // 🚨 The combo half reads only what is RECORDED (ComboVerificationGate.Recorded) — a pure
+        // read of the policy content this tick already holds, so the walk costs neither an extra
+        // mesh touch nor a docker run per candidate. A verdict is PRODUCED exactly once, in
+        // GateThenApply, about the candidate actually chosen; if that comes back Red the tick holds,
+        // and the now-recorded Red makes the very next walk step past it.
+        //
+        // 🚨 Only a REFUSAL removes a candidate. One with no verdict, or one whose verdict could not
+        // answer, is neither preferred nor condemned — treating "unknown" as disqualifying would
+        // empty the candidate list on every instance in the fleet, which is the freeze this gate
+        // exists to avoid causing, not to cause.
+        var condemned = combo is null
+            ? null
+            : (Func<string, string?>)(tag => combo.Recorded(policy, tag).Refuses
+                ? $"the combo gate has already recorded {tag} as RED for this instance's modules"
+                : null);
+
+        // The availability gate not being wired leaves no completeness question to ask, so what is
+        // left of the walk is the combo half alone — the same rule, minus the half nobody wired.
+        if (gate is null)
+            return Observable.Return<string?>(FirstNotCondemned(candidates, condemned));
+
+        return gate
+            .SelectRollTarget(ShippedReleaseSeed.InstalledPlatformVersion, candidates, condemned)
+            .Select(outcome => outcome.SelectedVersion ?? (
+                // 🚨 The completeness question does not APPLY to this deployment (it consumes no CI
+                // bakes), so the walk that is left is the combo half — exactly what this method did
+                // before the selector existed, and the state in which a combo Red must still remove
+                // a candidate.
+                outcome.Kind == RollSelectionKind.NotEnforced
+                    ? FirstNotCondemned(candidates, condemned)
+                    // 🚨 Falling back to the NEWEST when the gate applies and selected nothing is
+                    // deliberate, not a fallback that rolls something unwanted: the caller re-gates
+                    // whatever comes back, so an all-declined list still ends in a HOLD — with the
+                    // newest tag's reason, which is the one that explains why the fleet is not
+                    // moving. Reporting the OLDEST candidate's reason instead would be true and
+                    // useless.
+                    : candidates[0]))
             // A gate that faults must not kill the tick: fall back to the head and let
             // GateThenApply take the fail-safe hold it already knows how to take.
             .Catch((Exception _) => Observable.Return<string?>(candidates[0]));
     }
 
-    /// <summary>
-    /// Whether ONE candidate survives the walk: the availability gate accepts it AND the combo gate
-    /// has not already CONDEMNED it.
-    ///
-    /// <para>🚨 The combo half reads only what is RECORDED
-    /// (<see cref="ComboVerificationGate.Recorded"/>) — a pure read of the policy content this tick
-    /// already holds, so the walk costs neither an extra mesh touch nor a docker run per candidate.
-    /// A verdict is PRODUCED exactly once, in <see cref="GateThenApply"/>, about the candidate
-    /// actually chosen; if that comes back Red the tick holds, and the now-recorded Red makes the
-    /// very next walk step past it. The two halves converge in one extra check instead of paying a
-    /// full gate run per tag.</para>
-    ///
-    /// <para>🚨 Only a REFUSAL removes a candidate. One with no verdict, or one whose verdict could
-    /// not answer, is neither preferred nor condemned here — treating "unknown" as disqualifying
-    /// would empty the candidate list on every instance in the fleet, which is the freeze this gate
-    /// exists to avoid causing, not to cause.</para>
-    /// </summary>
-    private static IObservable<(string tag, bool rollable)> Rollable(
-        ReleaseAvailabilityService? gate,
-        ComboVerificationGate? combo,
-        UpdatePolicyContent policy,
-        string tag)
-    {
-        var notCondemned = combo is null || !combo.Recorded(policy, tag).Refuses;
-        return (gate is null
-                ? Observable.Return(true)
-                : gate.IsUpdatable(tag).Select(verdict => verdict.IsUpdatable))
-            .Select(available => (tag, rollable: available && notCondemned));
-    }
+    /// <summary>The newest candidate the combo gate has not already condemned, or the newest one
+    /// when it has condemned them all — the caller re-gates either way.</summary>
+    private static string FirstNotCondemned(string[] candidates, Func<string, string?>? condemned) =>
+        condemned is null
+            ? candidates[0]
+            : candidates.FirstOrDefault(tag => condemned(tag) is null) ?? candidates[0];
 
     private IObservable<SelfUpdateVerdict> GateThenApply(UpdatePolicyContent policy, string target) =>
         Observable.Defer(() =>

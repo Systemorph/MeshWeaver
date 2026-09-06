@@ -202,5 +202,7 @@ also what clears a stale `Red`.
 - [Candidate Release Protocol](/Doc/Architecture/CandidateReleaseProtocol) — producing a verdict,
   the `--platform` rule, and the operator runbook.
 - [Deployment](/Doc/Architecture/Deployment) — the routes a version actually rolls along.
+- [Roll Selection](/Doc/Architecture/RollSelection) — how the candidate walk chooses, why a
+  recorded Red removes a candidate, and why an instance-side failure is outside a selector's reach.
 - [Guards and Unknown States](/Doc/Architecture/GuardsAndUnknownStates) — the general form of "an
   unanswered check is not a passing one".
