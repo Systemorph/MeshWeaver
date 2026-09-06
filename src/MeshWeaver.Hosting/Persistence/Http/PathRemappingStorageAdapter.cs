@@ -108,6 +108,10 @@ public sealed class PathRemappingStorageAdapter : IStorageAdapter
         => _inner.Exists(Remap(path));
 
     /// <inheritdoc />
+    public IObservable<bool> ExistsInWritableStorage(string path)
+        => _inner.ExistsInWritableStorage(Remap(path));
+
+    /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => _inner.ListChildPaths(parentPath is null ? null : Remap(parentPath));
 

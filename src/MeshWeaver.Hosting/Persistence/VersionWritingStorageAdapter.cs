@@ -105,6 +105,10 @@ internal class VersionWritingStorageAdapter(
 
     public IObservable<bool> Exists(string path) => inner.Exists(path);
 
+    /// <inheritdoc />
+    public IObservable<bool> ExistsInWritableStorage(string path)
+        => inner.ExistsInWritableStorage(path);
+
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
         => inner.FindBestPrefixMatch(fullPath, options);
