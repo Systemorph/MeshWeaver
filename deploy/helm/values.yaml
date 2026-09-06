@@ -187,6 +187,34 @@ hostingOperator:
   #   PAYWALL_URL:           https://<control instance>/suspended
   #   CATALOG_CONFIG:        /tmp/hosting-catalog-config
   #   HOSTING_VALUES_FILE:   /tmp/hosting-values.yaml   (where run.sh materialises the RECORD-rendered values)
+  # ── The SECRET half of that environment (Memex#132) ────────────────────────────────────────
+  # `environment` above renders into the portal's ConfigMap, one plaintext key each. That is right
+  # for AZ_RESOURCE_GROUP or INGRESS_IP and WRONG for a credential: PGPASSWORD is the shared
+  # `memexadmin` password for the flexible server, i.e. the one credential that reaches EVERY
+  # instance database on it. Putting it in `environment` means a ConfigMap readable by anything with
+  # configmap read in the namespace, and git if committed. Declaring it here instead renders a
+  # SecretProviderClass and a CSI-synced Secret in the OPERATOR's namespace (memex-ops), which is
+  # where the Jobs run and where a portal-namespace Secret is not visible.
+  #
+  # NAMES ONLY — `<ENV KEY>: <Key Vault object name>`. No value ever enters values or the render.
+  secretEnvironment: {}
+  #   PGPASSWORD: memex-postgres-password
+  #
+  # Vault coordinates. Each falls back to the portal's .Values.keyVaultSecrets, so an environment
+  # that already declares those needs only `secretEnvironment` above.
+  keyVault: {}
+  #   vaultName:        Systemorph
+  #   tenantId:         <tenant guid>
+  #   identityClientId: <the Key Vault Secrets Provider add-on's user-assigned identity>
+  #   name:             hosting-operator-keyvault   (the SecretProviderClass; also the synced Secret)
+  #   syncedSecret:     hosting-operator-keyvault
+  #   mountPath:        /mnt/operator-secrets
+  #
+  # 🚨 The Job must MOUNT the class — a SecretProviderClass with no mounting pod syncs nothing, with
+  # no error anywhere. The three coordinates are published as Hosting__Operator__SecretProviderClass
+  # / __SecretName / __SecretMountPath so HostingOperator.Resolve can attach volume, mount and env.
+  # Reading the file under the mount path is the ordering-safe form; an envFrom on the synced Secret
+  # only works once something has already mounted the class at least once.
 # ---- Fixed replica count (portal) ------------------------------------------
 # Read ONLY when keda.enabled is false — with KEDA on, the HPA owns spec.replicas and the chart
 # deliberately renders no such field (see templates/memex-portal/deployment.yaml).
