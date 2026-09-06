@@ -61,8 +61,9 @@ public sealed record ConfiguredPackageSource(IPackageSource Source, string GitRe
     public bool AutoSync { get; init; }
 
     /// <summary>
-    /// Whether <see cref="RepoPath"/> is a directory on this host — a MOUNTED WORKING TREE, which is
-    /// what a self-registry <c>memex-local</c> serves — rather than a URL. Read by the default
+    /// Whether <see cref="RepoPath"/> is NOT a URL — a path read off this host's disk (whether it
+    /// exists is the fetch's business, reported at listing time), i.e. a MOUNTED WORKING TREE,
+    /// which is what a self-registry <c>memex-local</c> serves. Read by the default
     /// install: a package an operator's <c>InstallByDefault</c> pattern selects out of a local
     /// checkout is RECONCILED on every boot, not seeded once, because a mounted tree is standing
     /// operator intent — the portal exists to mirror it — and no other mechanism refreshes it

@@ -68,8 +68,8 @@ public class MountedCheckoutReassertsOnEveryBootTest(ITestOutputHelper output) :
 
     public override async ValueTask DisposeAsync()
     {
-        await base.DisposeAsync();
-        MountedRepo.Delete(checkout);
+        try { await base.DisposeAsync(); }
+        finally { MountedRepo.Delete(checkout); }
     }
 
     private InstanceAutoRegistrationService Installer =>
@@ -144,8 +144,8 @@ public class FetchedSourceStillSeedsOnceTest(ITestOutputHelper output) : Monolit
 
     public override async ValueTask DisposeAsync()
     {
-        await base.DisposeAsync();
-        MountedRepo.Delete(checkout);
+        try { await base.DisposeAsync(); }
+        finally { MountedRepo.Delete(checkout); }
     }
 
     private InstanceAutoRegistrationService Installer =>
@@ -219,7 +219,10 @@ internal static class MountedRepo
             .Select(p => new MeshWeaver.GitSync.RepoFile(
                 Path.GetRelativePath(root, p).Replace('\\', '/'), File.ReadAllText(p)))
             .ToList();
-        var sha = string.Join(";", files.Select(f => $"{f.Path}:{f.Content.Length}"));
+        // The snapshot id is a hash of paths AND contents, so any change — even one that keeps a
+        // file's length — is a new snapshot.
+        var sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(string.Join("\n", files.Select(f => f.Path + "\0" + f.Content)))));
         return Observable.Return(new MeshWeaver.GitSync.RepoSnapshot(sha, files));
     }
 
