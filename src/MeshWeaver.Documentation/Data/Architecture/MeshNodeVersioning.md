@@ -237,6 +237,26 @@ A freshly created node gets `Version = 1` unless the caller explicitly supplied 
 | Owning hub recycled and reactivated | unchanged — the durable value is loaded verbatim |
 | Persisted via `HandleSaveMeshNode` | verbatim — no synthetic bump |
 
+## 🚨 A Version Row's Timestamp Is Not the Write's Clock
+
+`GetVersions` reports each row's `lastModified`, and that column is the node's **`LastModified`
+field** — not when the row was written. Only `IMeshService.UpdateNode` re-stamps it
+(`NodeUpdatePipeline` sets `LastModified = DateTimeOffset.UtcNow` inside the apply lambda, and only
+when the write really changes something). **`workspace.GetMeshNodeStream(path).Update(...)` does
+not.** A caller writing `node with { Content = … }` carries the field through untouched.
+
+So a burst of control-plane writes — the shape every `RequestedX` watcher has, where each pass
+stamps progress onto the node it watches — produces several versions that all carry the timestamp
+of whichever earlier write last went through `UpdateNode`. Measured on a production request
+(Systemorph/MeshWeaver.Plugins#1320): versions 3–6 all read `11:15:32`, while the content those
+versions carry says `startedAt: 15:59:11` and the child node the same pass created carries
+`createdDate: 15:59:11.286Z`. Four hours and forty-four minutes of the story are invisible in the
+version list, and reading it as a write log says the opposite of what happened.
+
+**To date a write, read something the framework stamps at write time**: the content's own
+timestamps, or a node the pass CREATED (`CreateNodeRequest` always stamps `CreatedDate`). Use the
+version list for *what changed and in what order*, never for *when*.
+
 ## What This Is Not
 
 This is in-mesh change tracking for the live `MeshNode` graph. It is entirely unrelated to **data versioning** of the *content* held by NodeTypes — historical queries, time-travel, and the `{path}@V{n}` snapshot convention are a separate concern covered in [DataVersioning](/Doc/Architecture/DataVersioning) (which is a guide to backend mechanisms, not a framework API).
