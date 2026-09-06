@@ -520,6 +520,39 @@ B) — the bytes a portal actually installs. The availability gate saw it from #
 rolling onto it; **the serve side now resolves it** (#3244, below), so the two producers can no
 longer disagree in the archive a consumer installs.
 
+### The third shape: `live is absent` — ZERO producers, not two (2026-09-06)
+
+A bake-consumption decline reads almost identically whether a module has **two** producers or
+**none**, and the three fixes are different. Read the TAIL of the line first:
+
+| tail of the decline | shape | what is wrong | fix |
+|---|---|---|---|
+| `live is ref:<X>` | two producers in SPACE | the host ships the assembly in its app closure *and* the bake composes it as a module | take it out of the host's closure (above) |
+| `live is mvid:<Y>` | two producers in TIME | the seal's prebuilt assemblies and the module bytes shipped beside them are different builds | consume ONE sealed publication; re-target an identity whose seal is self-consistent |
+| **`live is absent`** | **no producer at all** | the module was never composed into the reference set — the repo's `registry-modules` does not name the package that ships it | name the package in `registry-modules` |
+
+**`registry-modules` says WHAT to compose; `upstream-seed` / `upstream-sources` say WHERE the bytes
+come from.** A repo can have the WHERE exactly right — identity-addressed, sealed, no floating
+registry reads — and still decline every assembly binding a module it forgot to name. `live is
+absent` is therefore a **declaration gap in the consuming repo**, not a producer conflict in the
+publication, and looking for a second producer will find nothing.
+
+Measured 2026-09-06: MeshWeaver.SocialMedia and MeshWeaver.Manufacturing each declared
+`registry-modules: AI Essentials` while their content binds four modules. Both gates declined the
+same eight assemblies — the three `*/Gallery` types against `MeshWeaver.Maps`, and
+`Cornerstone/Pricing` plus four `Store/*` types against `MeshWeaver.Payments.Stripe` — each with
+`0 new failure(s), 0 stale allow entr(ies)`: everything compiled, every test passed, and the *only*
+defect was the missing declarations. Naming all four took them to **114/114** and **103/103**
+adopted with zero declines. MeshWeaver.Crm already declared all four and never showed the shape —
+the control that makes the reading conclusive.
+
+🚨 **The set is not "the modules we started with".** Core CD's `plugins-modules` packs every module
+the content can bind (today `AI`, `Essentials`, `Maps`, `Stripe`) and says so in its own comment:
+*"THE SET IS 'EVERY MODULE THE CONTENT BINDS', not 'the two we started with'"*. A satellite whose
+list lags that one does not fail loudly — each declined assembly falls back to a **local compile**,
+so the bytes the bake shipped are never judged. The gate's `adopted N of M` fatal is what turns that
+silence into a red; without it the repo would publish a bake nobody had verified.
+
 ### The three controls
 
 1. **The bake refuses a double by name** (`BakeHost.ShippedByHostProblem`, run by `compile` /
