@@ -188,24 +188,29 @@ against synthetic answers, because a substring assertion cannot tell "classifies
 "classifies two and guesses" — which is precisely the defect that shipped. That is also why both
 steps read their response file through `RESP="${RESP:-/tmp/resp}"`.
 
-### The declaration has no typed home, and it has already been lost once
+### Register is not persist: the declaration has already been lost once
 
-`SecretConfigKey` is not a field on the `Hosting/Deployment` record — it rides in the free-form
-`extraPortalConfig` bag, which every writer of that record replaces **wholesale**. Measured on the
-control instance's own record:
+`SecretConfigKey` is not a field on `DeploymentContent` — it can only ride in the free-form
+`extraPortalConfig` bag. And a `Hosting/Deployment` record is **git-synced**: the control instance's
+lives in the private `Systemorph/Memex` repo as `mesh/Deployments/memex-cloud.json`, so an edit made
+on the *live node* that is not committed there is reverted by the next sync. Measured on that
+record's own version history:
 
-| version | when | by | `WebhookInbox__Targets__1__SecretConfigKey` |
+| version | when (UTC) | by | `WebhookInbox__Targets__1__SecretConfigKey` |
 |---|---|---|---|
-| 25 | 2026-09-05 07:42Z | a person | `Hosting:PlatformWebhookSecret` |
-| 26 | 2026-09-05 09:24Z | `system-security` | **gone** — every other key in the bag survived |
-| 32 | 2026-09-06 17:03Z | `system-security` | still gone |
+| 25 | 2026-09-05 07:42 | a person, on the live node | `Hosting:PlatformWebhookSecret` |
+| 26 | 2026-09-05 09:24 | `system-security` | **gone** — every other key in the bag survived |
+| 32 | 2026-09-06 17:03 | `system-security` | still gone |
 
-So the declaration was provisioned by hand and removed by the next automated write, 1 h 42 min
-later, with nothing red anywhere — the shape this whole page exists to end, arriving one level
-further up than the last time. Until it is set again the receiver has nothing to verify with, and
-the escalation above is what will say so: it fires the first time that portal answers a verdict at
-all. When re-provisioning it, set it on slot **`__1`** (its `__0` is `Store/Payments`), and expect
-the next unrelated record rewrite to drop it again until the key has a typed home.
+The key appears **nowhere in `Systemorph/Memex`** — not in a record, not in an overlay — so it was
+never persisted at all. It was set by hand 2026-09-05, round-tripped away 1 h 42 min later, and
+nothing anywhere went red: the shape this page exists to end, arriving one level further up than
+last time.
+
+Until it is committed the receiver has nothing to verify with, and the escalation above is what will
+say so — it fires the first time that portal answers a verdict at all. So: set it in the **repo**
+(never only on the node), on slot **`__1`**, because this instance's `__0` is `Store/Payments` and
+demanding `X-Hub-Signature-256` from Stripe would 401 every payment delivery.
 
 ### The two shapes that were rejected, so they are not re-derived
 
