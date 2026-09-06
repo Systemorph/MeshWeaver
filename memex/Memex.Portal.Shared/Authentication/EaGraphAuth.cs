@@ -5,9 +5,10 @@ using System.Text.Json;
 using MeshWeaver.Hosting.AspNetCore.Portal;     // PortalApplication
 using MeshWeaver.Data;                       // IWorkspace.GetMeshNodeStream
 using MeshWeaver.Graph.Configuration;        // EaCredentialNodeType
-using MeshWeaver.Mesh;                        // EaCredential, MeshNode
+using MeshWeaver.Mesh;                        // EaCredential, EaGraphAccess, MeshNode
 using MeshWeaver.Mesh.Services;               // IMeshService
-using MeshWeaver.Messaging;                   // AccessService
+using MeshWeaver.Mesh.Threading;              // IIoPool, IoPoolNames, IoPoolRegistry
+using MeshWeaver.Messaging;                   // AccessService, RunAsSystem
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -21,8 +22,28 @@ namespace Memex.Portal.Shared.Authentication;
 /// <see cref="EaCredential"/> node, and mint short-lived access tokens from it on demand. No standing
 /// application-wide Graph permission is used.
 ///
-/// <para>This sits at the OAuth/HTTP boundary (called from the consent controller and the async EA tool),
-/// so <c>async</c>/<c>await</c> is appropriate here — it is not hub-reachable reactive code.</para>
+/// <para>🚨 <b>Reactive end to end — #3433, and the reason is not style.</b> An earlier revision of
+/// this class was <c>async</c>/<c>await</c>/<c>Task&lt;T&gt;</c> throughout, and its own class
+/// comment recorded the reason as a design note: <i>"this sits at the OAuth/HTTP boundary (called
+/// from the consent controller and the async EA tool), so async is appropriate here"</i>. The second
+/// half of that sentence was the bug. The consent controller IS an HTTP boundary; the EA tool is
+/// <b>not</b> — it runs inside an agent round, on a hub. Awaiting a mesh read from a hub turn parks
+/// the single-threaded action block that has to process the reply to that very read, so the read
+/// cannot complete, its <c>Timeout</c> fires, and a blanket <c>catch</c> returned the same value as
+/// "this user never connected". A connected user was shown the re-consent link.</para>
+///
+/// <para>So: every entry point returns <see cref="IObservable{T}"/> and is COLD — nothing happens
+/// until <c>Subscribe</c>. The Entra token POST, the one genuinely-async leaf, goes through
+/// <see cref="IIoPool"/> and never <c>Observable.FromAsync</c>. The consent controller keeps its
+/// <c>Task</c> shape at its OWN edge (one <c>ObserveCompletion</c> bridge per action), which is what
+/// it always should have done instead of forcing the shape onto the hub-facing path.</para>
+///
+/// <para>🚨 <b>Every failure is <see cref="EaConnection.Undetermined"/>, never
+/// <see cref="EaConnection.NotConnected"/>.</b> The three sites that used to collapse into "never
+/// connected" — a blanket <c>catch</c> returning <c>(null, null)</c>, a bare
+/// <c>catch { return null; }</c> around the deserialization, and the <c>_ =&gt; null</c> arm of a
+/// hand-rolled content shape test — are gone: the read is classified, the deserialization is
+/// <c>ContentAs&lt;T&gt;</c>, and there is no shape switch left to have an arm.</para>
 ///
 /// <para><b>Azure setup (one-time):</b> on the sign-in app registration add the <i>delegated</i> scopes
 /// <c>Mail.ReadWrite Mail.Send Calendars.ReadWrite offline_access</c> and the redirect URI
@@ -39,6 +60,18 @@ public sealed class EaGraphAuth(
     public const string Scopes =
         "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send " +
         "https://graph.microsoft.com/Calendars.ReadWrite offline_access";
+
+    /// <summary>
+    /// How long a single credential-node read may take before the answer becomes
+    /// <see cref="EaConnection.Undetermined"/>.
+    ///
+    /// <para>🚨 This is a BOUND, not a knob to widen (#3433 says so explicitly). It exists as a
+    /// settable property for exactly one reason: a test needs to reach the undetermined branch
+    /// deterministically, the same way <c>ApiTokenService.ValidationReadTimeout</c> and
+    /// <c>UserRoleResolver</c>'s <c>budget</c> parameter are reachable. Production never sets it.
+    /// If this fires in production the read is WEDGED — find what is not completing.</para>
+    /// </summary>
+    internal TimeSpan CredentialReadTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
     // The tenant and the authority are composed by MicrosoftTenant, which treats blank as UNSET and
     // refuses a value that cannot form a single authority segment — a configMap / env var cannot
@@ -66,66 +99,169 @@ public sealed class EaGraphAuth(
         $"&scope={Uri.EscapeDataString(Scopes)}" +
         $"&state={Uri.EscapeDataString(state)}&prompt=consent";
 
-    /// <summary>Exchanges the consent auth-code for tokens and stores the (encrypted) refresh token for the user.</summary>
-    public async Task<bool> ExchangeAndStoreAsync(string code, string redirectUri, string userObjectId, CancellationToken ct)
+    /// <inheritdoc />
+    public IObservable<bool> ExchangeAndStore(string code, string redirectUri, string userObjectId)
     {
-        if (!IsConfigured) return false;
-        var json = await PostTokenAsync(new Dictionary<string, string>
-        {
-            ["client_id"] = ClientId!,
-            ["client_secret"] = ClientSecret!,
-            ["grant_type"] = "authorization_code",
-            ["code"] = code,
-            ["redirect_uri"] = redirectUri,
-            ["scope"] = Scopes
-        }, ct);
-        if (json is null) return false;
-        using var doc = JsonDocument.Parse(json);
-        var refresh = doc.RootElement.TryGetProperty("refresh_token", out var r) ? r.GetString() : null;
-        if (string.IsNullOrEmpty(refresh)) { logger?.LogWarning("EaGraphAuth: no refresh_token in code exchange"); return false; }
-        await StoreAsync(userObjectId, refresh!, ct);
-        return true;
+        if (!IsConfigured) return Observable.Return(false);
+
+        return PostToken(new Dictionary<string, string>
+            {
+                ["client_id"] = ClientId!,
+                ["client_secret"] = ClientSecret!,
+                ["grant_type"] = "authorization_code",
+                ["code"] = code,
+                ["redirect_uri"] = redirectUri,
+                ["scope"] = Scopes
+            })
+            .SelectMany(json =>
+            {
+                if (json is null) return Observable.Return(false);
+                string? refresh;
+                try
+                {
+                    // Synchronous parse of a value already in hand — the try covers this statement
+                    // and nothing in the stream around it (/async Rule 1b).
+                    refresh = RefreshTokenIn(json);
+                }
+                catch (JsonException ex)
+                {
+                    logger?.LogWarning(ex, "EaGraphAuth: the code-exchange response was not JSON");
+                    return Observable.Return(false);
+                }
+                if (string.IsNullOrEmpty(refresh))
+                {
+                    logger?.LogWarning("EaGraphAuth: no refresh_token in code exchange");
+                    return Observable.Return(false);
+                }
+                return Store(userObjectId, refresh!).Select(_ => true);
+            });
     }
 
-    /// <summary>Returns a fresh access token for the user, or null when they have not connected (no stored credential).</summary>
-    public async Task<string?> GetAccessTokenAsync(string userObjectId, CancellationToken ct)
+    /// <inheritdoc />
+    public IObservable<EaGraphAccess> GetAccessToken(string userObjectId)
     {
-        if (!IsConfigured) return null;
-        var (_, cred) = await LoadAsync(userObjectId, ct);
-        var refresh = protector.Unprotect(cred?.RefreshTokenEncrypted);
-        if (string.IsNullOrEmpty(refresh)) return null;
+        if (!IsConfigured) return Observable.Return(NotConfigured);
 
-        var json = await PostTokenAsync(new Dictionary<string, string>
-        {
-            ["client_id"] = ClientId!,
-            ["client_secret"] = ClientSecret!,
-            ["grant_type"] = "refresh_token",
-            ["refresh_token"] = refresh!,
-            ["scope"] = Scopes
-        }, ct);
-        if (json is null) return null;
-        using var doc = JsonDocument.Parse(json);
-        // Rotate the stored refresh token if Entra issued a new one.
-        if (doc.RootElement.TryGetProperty("refresh_token", out var nr) && nr.GetString() is { Length: > 0 } rotated)
-            await StoreAsync(userObjectId, rotated, ct);
-        return doc.RootElement.TryGetProperty("access_token", out var at) ? at.GetString() : null;
+        return Load(userObjectId)
+            .SelectMany(read =>
+            {
+                // A read that did not answer stays unanswered. It is NOT "no token": minting is
+                // impossible either way, but the two are different things to tell a user, and
+                // conflating them is the whole of #3433.
+                if (read.Access.Connection != EaConnection.Connected)
+                    return Observable.Return(read.Access);
+
+                var refresh = protector.Unprotect(read.Credential?.RefreshTokenEncrypted);
+                if (string.IsNullOrEmpty(refresh))
+                    return Observable.Return(EaGraphAccess.NotConnected(
+                        "the stored credential carries no refresh token"));
+
+                return PostToken(new Dictionary<string, string>
+                    {
+                        ["client_id"] = ClientId!,
+                        ["client_secret"] = ClientSecret!,
+                        ["grant_type"] = "refresh_token",
+                        ["refresh_token"] = refresh!,
+                        ["scope"] = Scopes
+                    })
+                    .SelectMany(json => json is null
+                        // 🚨 Entra refusing the redemption is UNDETERMINED, not "never connected".
+                        // The credential IS stored; whether the grant is still good is precisely
+                        // what we failed to find out. PostToken has already logged the status.
+                        ? Observable.Return(EaGraphAccess.Unknown(
+                            "the Microsoft token endpoint refused the refresh-token redemption"))
+                        : MintFrom(json, userObjectId));
+            });
     }
 
-    /// <summary>True when the user already connected (has a stored credential) — lets callers skip the consent prompt.</summary>
-    public async Task<bool> IsConnectedAsync(string userObjectId, CancellationToken ct)
-        => (await LoadAsync(userObjectId, ct)).cred?.RefreshTokenEncrypted is { Length: > 0 };
+    /// <inheritdoc />
+    public IObservable<EaGraphAccess> GetConnection(string userObjectId) =>
+        !IsConfigured
+            ? Observable.Return(NotConfigured)
+            : Load(userObjectId).Select(read => read.Access);
 
-    private async Task<string?> PostTokenAsync(Dictionary<string, string> form, CancellationToken ct)
+    /// <summary>
+    /// A deployment with no sign-in app credentials has no delegated flow at all. That is a static
+    /// configuration FACT, not a failed read — <see cref="EaConnection.NotConnected"/> is the honest
+    /// answer, and <see cref="IsConfigured"/> is the property callers gate the connect link on.
+    /// </summary>
+    private static EaGraphAccess NotConfigured =>
+        EaGraphAccess.NotConnected("the delegated Microsoft Graph integration is not configured");
+
+    /// <summary>
+    /// Turns the token response into the caller's answer, rotating the stored refresh token first
+    /// when Entra issued a new one. The rotation write is composed INTO the chain rather than fired
+    /// beside it: a cold write nobody subscribes to silently does nothing, and a rotation that is
+    /// dropped leaves the next round redeeming a token Entra may already have retired.
+    /// </summary>
+    private IObservable<EaGraphAccess> MintFrom(string json, string userObjectId)
     {
-        using var resp = await http.PostAsync($"{Authority}/token", new FormUrlEncodedContent(form), ct);
-        var body = await resp.Content.ReadAsStringAsync(ct);
-        if (resp.IsSuccessStatusCode) return body;
-        logger?.LogWarning("EaGraphAuth: token endpoint returned {Status}", (int)resp.StatusCode);
-        return null;
+        string? access;
+        string? rotated;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            access = doc.RootElement.TryGetProperty("access_token", out var at) ? at.GetString() : null;
+            rotated = doc.RootElement.TryGetProperty("refresh_token", out var r) ? r.GetString() : null;
+        }
+        catch (JsonException ex)
+        {
+            // Synchronous parse of a value we already hold — a try/catch is correct here and covers
+            // exactly this statement, not the stream around it (/async Rule 1b).
+            logger?.LogWarning(ex, "EaGraphAuth: the token endpoint response for {User} was not JSON", userObjectId);
+            return Observable.Return(EaGraphAccess.Unknown(
+                "the Microsoft token endpoint returned a response that could not be read"));
+        }
+
+        var answer = string.IsNullOrEmpty(access)
+            ? EaGraphAccess.Unknown("the Microsoft token endpoint returned no access token")
+            : EaGraphAccess.Connected(access);
+
+        return string.IsNullOrEmpty(rotated)
+            ? Observable.Return(answer)
+            : Store(userObjectId, rotated!).Select(_ => answer);
+    }
+
+    /// <summary>The rotated refresh token in a token-endpoint response, or null when there is none.</summary>
+    private static string? RefreshTokenIn(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty("refresh_token", out var r) ? r.GetString() : null;
+    }
+
+    /// <summary>
+    /// The Entra token POST — the one genuinely-async leaf in this class, and therefore the one
+    /// thing that goes through <see cref="IIoPool"/>.
+    ///
+    /// <para>🚨 Never <c>Observable.FromAsync</c>: that runs the prologue on the SUBSCRIBING thread
+    /// (a hub action block, when the EA tool subscribes mid-round) with no concurrency bound. The
+    /// pool is the single sealed boundary between the turn-based schedulers and real I/O — it hops
+    /// off-hub, bounds concurrency per resource class, and hands the result back as an observable.
+    /// Resolved from the mesh-scoped <see cref="IoPoolRegistry"/>, per subscribe, so a host without
+    /// a mesh still works.</para>
+    /// </summary>
+    private IObservable<string?> PostToken(Dictionary<string, string> form) =>
+        Observable.Defer(() => HttpPool().Invoke<string?>(async ct =>
+        {
+            using var resp = await http
+                .PostAsync($"{Authority}/token", new FormUrlEncodedContent(form), ct)
+                .ConfigureAwait(false);
+            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (resp.IsSuccessStatusCode) return body;
+            logger?.LogWarning("EaGraphAuth: token endpoint returned {Status}", (int)resp.StatusCode);
+            return null;
+        }));
+
+    private IIoPool HttpPool()
+    {
+        using var scope = rootServices.CreateScope();
+        var hub = HubFrom(scope.ServiceProvider);
+        return hub?.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
+               ?? IoPool.Unbounded;
     }
 
     // The single canonical PATH of a user's EA-credential node — the ONE place read and write must
-    // agree. LoadAsync subscribes here; NewCredentialNode below builds a node whose Path resolves to
+    // agree. Load subscribes here; NewCredentialNode below builds a node whose Path resolves to
     // exactly this. A mismatch here silently reports "mailbox not connected" (the token is stored but
     // never found on load) — see the regression test.
     internal static string PathFor(string userObjectId) =>
@@ -133,10 +269,10 @@ public sealed class EaGraphAuth(
 
     // Builds the credential node AT PathFor(userObjectId): Id = userObjectId, Namespace =
     // Auth/_EaCredential ⇒ Path = Auth/_EaCredential/{user}, and NodeType set so the node's hub
-    // activates with the EaCredential data source (WithContentType&lt;EaCredential&gt;). StoreAsync
+    // activates with the EaCredential data source (WithContentType&lt;EaCredential&gt;). Store
     // fills in Content. The previous form — `new MeshNode(NodeType, PathFor(...))` — misused the
     // MeshNode(Id, Namespace) ctor: it created Auth/_EaCredential/{user}/EaCredential (Id="EaCredential",
-    // NodeType unset), one level deeper than LoadAsync reads, so the stored token was never loaded.
+    // NodeType unset), one level deeper than Load reads, so the stored token was never loaded.
     internal static MeshNode NewCredentialNode(string userObjectId) =>
         new(userObjectId, $"Auth/{EaCredentialNodeType.UserSegment}")
         {
@@ -144,82 +280,188 @@ public sealed class EaGraphAuth(
             Name = "EA Credential",
         };
 
-    private async Task StoreAsync(string userObjectId, string refreshToken, CancellationToken ct)
-    {
-        using var scope = rootServices.CreateScope();
-        // Portal hub when the Blazor shell registered one; the mesh root hub otherwise.
-        var hub = scope.ServiceProvider.GetService<PortalApplication>()?.Hub
-                  ?? scope.ServiceProvider.GetRequiredService<IMessageHub>();
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
-
-        var (existing, _) = await LoadAsync(userObjectId, ct, hub);
-        var content = new EaCredential
+    /// <summary>
+    /// Writes (or rewrites) the user's encrypted refresh token. Cold — subscribe or nothing happens.
+    ///
+    /// <para>🚨 <b>No read-before-write.</b> This used to load the node, then branch
+    /// <c>existing is null ? CreateNode : UpdateNode</c> — a client-side split that decides
+    /// create-vs-update from a read that can be wrong. With the read now classified, the wrongness
+    /// is explicit: a read that came back <see cref="EaConnection.Undetermined"/> carries no node,
+    /// so the branch would pick <c>Create</c> over a node that exists and lose the rotation. The
+    /// mesh has one atomic verb for exactly this — <c>CreateOrUpdateNode</c>, where the OWNING hub
+    /// decides by existence and serialises concurrent writers — and a token rotation is the textbook
+    /// idempotent, concurrently-re-run write. The node's other fields are re-derived from
+    /// <see cref="NewCredentialNode"/> rather than carried over from a read, because they are
+    /// constants (path, NodeType, Name) and the read that supplied them was the unreliable part.
+    /// </para>
+    /// </summary>
+    private IObservable<MeshNode> Store(string userObjectId, string refreshToken) =>
+        Observable.Defer(() =>
         {
-            UserObjectId = userObjectId,
-            RefreshTokenEncrypted = protector.Protect(refreshToken),
-            Scopes = Scopes,
-            AcquiredAt = DateTimeOffset.UtcNow
-        };
-        var node = (existing ?? NewCredentialNode(userObjectId))
-            with { Content = content };
-
-        using (access.ImpersonateAsSystem())
-            await (existing is null ? meshService.CreateNode(node) : meshService.UpdateNode(node))
-                .FirstAsync()
-                .ObserveCompletion(
-                    ex => logger?.LogWarning(ex,
-                        "EaGraphAuth: storing the credential for {User} faulted after the write had "
-                        + "already been reported complete", userObjectId),
-                    ct);
-    }
-
-    private Task<(MeshNode? node, EaCredential? cred)> LoadAsync(string userObjectId, CancellationToken ct)
-        => LoadAsync(userObjectId, ct, hub: null);
-
-    private async Task<(MeshNode? node, EaCredential? cred)> LoadAsync(
-        string userObjectId, CancellationToken ct, MeshWeaver.Messaging.IMessageHub? hub)
-    {
-        IServiceScope? owned = null;
-        try
-        {
+            var scope = rootServices.CreateScope();
+            var hub = HubFrom(scope.ServiceProvider);
             if (hub is null)
             {
-                owned = rootServices.CreateScope();
-                // Portal hub when the Blazor shell registered one; the mesh root hub otherwise.
-                hub = owned.ServiceProvider.GetService<PortalApplication>()?.Hub
-                      ?? owned.ServiceProvider.GetRequiredService<IMessageHub>();
+                // Dispose before faulting: a throw out of the Defer factory becomes an OnError, and
+                // the Finally below is never attached because there is no chain to attach it to.
+                scope.Dispose();
+                return Observable.Throw<MeshNode>(new InvalidOperationException(
+                    "EaGraphAuth: no message hub is available to store the credential."));
             }
-            var ws = hub.GetWorkspace();
-            var access = hub.ServiceProvider.GetRequiredService<AccessService>();
-            MeshNode? node;
-            using (access.ImpersonateAsSystem())
-                node = await ws.GetMeshNodeStream(PathFor(userObjectId))
-                    .Take(1).Timeout(TimeSpan.FromSeconds(10)).FirstAsync()
-                    .ObserveCompletion(
-                        ex => logger?.LogWarning(ex,
-                            "EaGraphAuth: the credential read for {User} faulted after the load had "
-                            + "already settled", userObjectId),
-                        ct);
-            var cred = node?.Content switch
+            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+            var access = hub.ServiceProvider.GetService<AccessService>();
+
+            var node = NewCredentialNode(userObjectId) with
             {
-                EaCredential e => e,
-                JsonElement je => Safe(je, hub.JsonSerializerOptions),
-                _ => null
+                Content = new EaCredential
+                {
+                    UserObjectId = userObjectId,
+                    RefreshTokenEncrypted = protector.Protect(refreshToken),
+                    Scopes = Scopes,
+                    AcquiredAt = DateTimeOffset.UtcNow
+                }
             };
-            return (node, cred);
-        }
-        catch (Exception ex)
+
+            // 🚨 RunAsSystem, never a `using` around a Subscribe that happens elsewhere and never
+            // Observable.Using (#1790): impersonation is an AsyncLocal store/restore pair, and this
+            // write's Subscribe may land on any thread. RunAsSystem opens the scope AT Subscribe and
+            // closes it on the way out of that same Subscribe, so the cold write is issued as System
+            // and no caller is left latched. System because the consent callback and the rotation
+            // both write a node the acting user does not own.
+            return access.RunAsSystem(() => meshService.CreateOrUpdateNode(node))
+                .Finally(scope.Dispose);
+        });
+
+    /// <summary>What one credential read found: the node, its content, and the modelled answer.</summary>
+    private readonly record struct CredentialRead(MeshNode? Node, EaCredential? Credential, EaGraphAccess Access);
+
+    private IObservable<CredentialRead> Load(string userObjectId) => Load(userObjectId, hub: null);
+
+    /// <summary>
+    /// Reads the user's credential node and CLASSIFIES the outcome. Cold, single-emission, and it
+    /// never faults: every terminal — a value, an absent node, a timeout, a transport error — comes
+    /// out as one <see cref="CredentialRead"/>, because a caller that has to catch is a caller that
+    /// can swallow.
+    ///
+    /// <para>🚨 The classification is the fix, and it turns on ONE distinction: did the read tell us
+    /// the node is not there, or did it fail to tell us anything? Absence arrives by two transports
+    /// depending on how the path routes — a <c>null</c> emission through
+    /// <c>IMeshNodeStreamCache</c> (measured: this is what the monolith does), or a routing
+    /// not-found on the Rx ERROR channel when the read goes remote, the shape
+    /// <c>DevAuthController</c> documents. Both are positive evidence and both produce
+    /// <see cref="EaConnection.NotConnected"/>. Everything else — the
+    /// <see cref="CredentialReadTimeout"/>, any other transport fault, content that will not
+    /// deserialize — is <see cref="EaConnection.Undetermined"/>.</para>
+    /// </summary>
+    private IObservable<CredentialRead> Load(string userObjectId, IMessageHub? hub) =>
+        Observable.Defer(() =>
         {
-            logger?.LogWarning(ex, "EaGraphAuth: load failed for {User}", userObjectId);
-            return (null, null);
-        }
-        finally { owned?.Dispose(); }
+            var owned = hub is null ? rootServices.CreateScope() : null;
+            var resolved = hub ?? HubFrom(owned!.ServiceProvider);
+            if (resolved is null)
+            {
+                owned?.Dispose();
+                return Observable.Return(new CredentialRead(null, null,
+                    EaGraphAccess.Unknown("no message hub is available to read the credential")));
+            }
+
+            var ws = resolved.GetWorkspace();
+            var access = resolved.ServiceProvider.GetService<AccessService>();
+            var path = PathFor(userObjectId);
+
+            // System because the credential node lives outside the acting user's partition and the
+            // consent controller reads it PRE-token; RunAsSystem seals both ends of the scope
+            // (see Store above for why the `using`/Observable.Using shapes are wrong here).
+            return access.RunAsSystem(() => ws.GetMeshNodeStream(path).Take(1))
+                .Timeout(CredentialReadTimeout)
+                .Select(node => Classify(node, resolved))
+                .Catch((Exception ex) => Observable.Return(Classify(ex, userObjectId)))
+                // A node stream that COMPLETES without emitting is the same information as a
+                // not-found: nothing was there to read. Never an empty completion to the caller —
+                // SelectMany over an empty source silently drops the whole chain.
+                .DefaultIfEmpty(new CredentialRead(null, null,
+                    EaGraphAccess.NotConnected("the credential node stream completed with no node")))
+                .Finally(() => owned?.Dispose());
+        });
+
+    private CredentialRead Classify(MeshNode? node, IMessageHub hub)
+    {
+        if (node is null)
+            return new CredentialRead(null, null,
+                EaGraphAccess.NotConnected("the credential node does not exist"));
+
+        // 🚨 ContentAs, never `node.Content is EaCredential` plus a JsonElement arm plus a
+        // `_ => null` fallthrough. That hand-rolled shape test had THREE outcomes and only two of
+        // them were answers: the untyped-JSON case went through a bare `catch { return null; }`
+        // with no exception variable and no log, and the "neither shape" arm — the as-written
+        // JsonObject DOM, or a same-named type from another collectible assembly — produced a
+        // silent null that read as "never connected". ContentAs handles every shape and logs the
+        // one it cannot.
+        var cred = node.ContentAs<EaCredential>(hub.JsonSerializerOptions, logger);
+        if (cred is null)
+            // The node EXISTS. Whatever is wrong with its content, "you never connected" is a
+            // statement we have positive evidence against.
+            return new CredentialRead(node, null, EaGraphAccess.Unknown(
+                $"the credential node at {node.Path} exists but its content could not be read as an "
+                + $"{nameof(EaCredential)}"));
+
+        return new CredentialRead(node, cred,
+            string.IsNullOrEmpty(cred.RefreshTokenEncrypted)
+                ? EaGraphAccess.NotConnected("the stored credential carries no refresh token")
+                : EaGraphAccess.Connected());
     }
 
-    private static EaCredential? Safe(JsonElement je, JsonSerializerOptions opts)
+    /// <summary>
+    /// Classifies a read FAULT. Exactly one fault shape means "absent": the owning hub answering
+    /// that there is no node at the path. Everything else is <see cref="EaConnection.Undetermined"/>
+    /// — and it is logged at Warning naming the user, so an undetermined answer is always
+    /// greppable rather than merely inferred.
+    /// </summary>
+    private CredentialRead Classify(Exception ex, string userObjectId)
     {
-        try { return JsonSerializer.Deserialize<EaCredential>(je.GetRawText(), opts); }
-        catch { return null; }
+        if (IsNodeNotFound(ex))
+            return new CredentialRead(null, null,
+                EaGraphAccess.NotConnected("the credential node does not exist"));
+
+        logger?.LogWarning(ex,
+            "EaGraphAuth: the credential read for {User} did not complete — reporting the connection "
+            + "state as undetermined, NOT as 'not connected'", userObjectId);
+        return new CredentialRead(null, null, EaGraphAccess.Unknown(
+            ex is TimeoutException
+                ? $"the credential read did not complete within {CredentialReadTimeout.TotalSeconds:0.##}s"
+                : $"the credential read faulted: {ex.GetType().Name}"));
     }
+
+    /// <summary>
+    /// "There is no node at this path", as it actually arrives. The owning per-node hub never
+    /// activates for a path with no node, so routing NACKs the read and the failure surfaces as a
+    /// <c>DeliveryFailureException</c> whose message says so.
+    ///
+    /// <para>Matched by TYPE NAME rather than by a reference: <c>DeliveryFailureException</c> lives
+    /// in the messaging assembly this host does reference, but the same shape reaches here wrapped
+    /// by the stream cache, and the wrapper is not part of any contract. The message check is what
+    /// keeps a genuinely different delivery failure — a dead route, a refused post — out of the
+    /// "absent" bucket, where it would become the very lie this method exists to stop.</para>
+    /// </summary>
+    private static bool IsNodeNotFound(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is AggregateException agg)
+                return agg.InnerExceptions.Any(IsNodeNotFound);
+            if (e.GetType().Name == "DeliveryFailureException"
+                && e.Message.Contains("no node", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The portal hub when the Blazor shell registered one; the mesh root hub otherwise; null on a
+    /// host that has neither (a unit-test service provider). Null is an answer here, not a throw:
+    /// the credential read turns it into <see cref="EaConnection.Undetermined"/> rather than a fault
+    /// the caller has to catch.
+    /// </summary>
+    private static IMessageHub? HubFrom(IServiceProvider services) =>
+        services.GetService<PortalApplication>()?.Hub ?? services.GetService<IMessageHub>();
 }
