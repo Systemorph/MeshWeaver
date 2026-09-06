@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Reactive.Testing;
 using Xunit;
 
@@ -283,10 +284,75 @@ public class PatchAckTotalityTest
             _ => throw new ObjectDisposedException("IServiceProvider", "the hub's lifetime scope is closed"),
             FlushTimeout, h.AckOnce, h.Register, HubPath, () => false, logger: null, noteStage: stages.Add);
         subscribed.Should().NotBeNull("the throw must not escape the watcher — it did, before this fix");
-        h.Acks.Should().ContainSingle().Which.Success.Should().BeFalse(
+        var ack = h.Acks.Should().ContainSingle().Subject;
+        ack.Success.Should().BeFalse(
             "a synchronous fault on the flush path is a NACK the writer can retry on — never silence");
+        // 🚨 #3499. The line above claims "a NACK the writer can retry on", and until this pin the
+        // verdict it actually carried was MeshNodeErrorCode.Unknown — TERMINAL by the enum's own
+        // contract, so the writer retried nothing and the install reported a lost write for a merge
+        // that had already committed (CD 7937 / 7941, MeshWeaver.Plugins gate, 2026-09-06).
+        ack.Error!.Code.Should().Be(MeshNodeErrorCode.OwnerDisposing,
+            "a disposal fault is the OWNER going away, not a verdict about the patch — and only "
+            + "OwnerDisposing / OwnerNotReady are auto-retried against the fresh activation");
         stages.Should().ContainSingle(s => s.StartsWith("PATCH_FLUSH_FAULTED_SYNC building ObjectDisposedException"));
         stages.Should().NotContain(s => s.StartsWith("PATCH_FLUSH_SUBSCRIBED"), "nothing was subscribed");
+    }
+
+    /// <summary>
+    /// 🚨 THE #3499 REGRESSION, on the ASYNC arm — the one CD 7937 actually rode. The merge has
+    /// committed (<c>PATCH_MERGE_STAMPED</c>, echo seen), the flush is running, and the owner's
+    /// subtree is then torn down under a package-root recycle: the durable write faults with the
+    /// teardown. RED before the fix: the writer got <c>Unknown</c>, a terminal verdict, and the
+    /// install reported a failed write for a patch it could have re-applied — <c>GATE FAILED —
+    /// install: Chess</c>. GREEN: <c>OwnerDisposing</c>, which <c>MeshNodeStreamExtensions</c>
+    /// re-enqueues against the fresh activation (capped, and re-diffing, so it is idempotent).
+    /// </summary>
+    [Fact]
+    public void FlushThatFaultsOnTeardown_NacksAsTheRetryableOwnerDisposing_NotTerminalUnknown()
+    {
+        using var h = new Harness();
+        var flush = new Subject<bool>();
+
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Return(42), _ => flush, FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
+
+        h.Acks.Should().BeEmpty("the flush is still in flight");
+        flush.OnError(new ObjectDisposedException(
+            "MessageHub", "Hub Chess/_Policy was disposed before the response arrived."));
+
+        var ack = h.Acks.Should().ContainSingle().Subject;
+        ack.Success.Should().BeFalse("the durable write never landed");
+        ack.Error!.Code.Should().Be(MeshNodeErrorCode.OwnerDisposing,
+            "the owner was disposed under the write — the one fact the writer can act on");
+        ack.Error.Message.Should().Contain("safe to retry against the fresh activation");
+    }
+
+    /// <summary>
+    /// The messaging layer's word for the same fact. A hub that is going away NACKs its senders as
+    /// the transient <see cref="MeshWeaver.Messaging.ErrorType.ShuttingDown"/>; when that reaches the
+    /// owner-side patch path as a delivery failure it is the same teardown, so it must carry the same
+    /// retryable code rather than the terminal <c>Unknown</c> the type name would otherwise produce.
+    /// </summary>
+    [Fact]
+    public void ShuttingDownDeliveryFailure_IsAlsoTheRetryableOwnerDisposing()
+    {
+        using var h = new Harness();
+        var flush = new Subject<bool>();
+
+        using var sub = DataExtensions.ArmPatchAckWatcher(
+            Observable.Return(42), _ => flush, FlushTimeout, h.AckOnce, h.Register, HubPath, () => false);
+
+        flush.OnError(new AggregateException(
+            new InvalidOperationException("an unrelated fault, at index 0"),
+            new DeliveryFailureException(new DeliveryFailure(null!, "Hub is shutting down")
+            {
+                ErrorType = MeshWeaver.Messaging.ErrorType.ShuttingDown,
+            })));
+
+        h.Acks.Should().ContainSingle().Subject.Error!.Code.Should().Be(
+            MeshNodeErrorCode.OwnerDisposing,
+            "the classification walks the exception GRAPH, so a teardown at any aggregate index "
+            + "still decides it — a chain walker would classify by arrival order");
     }
 
 

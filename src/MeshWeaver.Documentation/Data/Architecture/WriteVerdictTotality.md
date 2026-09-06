@@ -192,6 +192,94 @@ Missing both routes is then a checked fact (nobody in this mesh is armed, and th
 and is logged rather than swallowed, because the remaining case — a caller in another process — is
 one the registry cannot see.
 
+## Totality is not enough — the verdict's CODE decides whether the write survives
+
+A terminal that reaches the writer can still be the wrong terminal, and the difference is not
+cosmetic: `MeshNodeErrorCode` splits every NACK into two populations, and its own doc says so.
+
+> `OwnerDisposing` and `OwnerNotReady` "are the only auto-retried NACK codes; every other code stays
+> terminal."
+
+So a NACK carrying `Unknown` is not a weaker version of `OwnerDisposing` — it is the opposite
+instruction. `MeshNodeStreamExtensions` re-enqueues the two retryable codes against the fresh
+activation (capped at `MaxOwnerDisposingReenqueues`, re-diffing on each attempt, so a merge that did
+commit becomes a no-op); everything else it hands straight to the caller as a failed write.
+
+### The case: a package root recycles mid-install (#3499)
+
+Measured on 2026-09-06 across three independent runs — core `main-cd` **#7937** (`85ab1dfbe`), core
+`main-cd` **#7941** (`b8accc2b2`) and the MeshWeaver.Plugins gate on **#1422** — on two different
+packages (`Chess`, `Hosting`), with a run in between that sealed cleanly. All three ended the same
+way: `GATE FAILED — install: <package>` with `[install] TimeoutException`, and `main-cd` could not
+produce a sealed set for the release.
+
+The subtree hubs of a package root are hosted hubs of that root. When the root recycles — the
+NodeType rebind watcher, stale-build convergence, or the installer's own retyped-root recycle, all
+of which are legitimate — every hub under it goes down with it. In ten of ten `VERDICT_TIMEOUT`
+trails on the gate run, the patches those hubs were answering had **already committed**:
+
+```
+HANDLER_ENTER → PATCH_MERGE_DISPATCHED → HANDLER_EXIT Processed
+→ PATCH_MERGE_TURN entered → PATCH_MERGE_STAMPED v=2 refused=0 → PATCH_ECHO_SEEN  ⇒ (nothing)
+```
+
+The merge landed; only the durability leg was still owed, and it faulted on a lifetime scope that
+was closing. That fault reached `ClassifyPatchException` — the ONE funnel every owner-side patch
+fault passes through — and fell out of its `_ =>` arm as `Unknown`. The writer therefore reported a
+**lost write for a patch that had committed**, and the installer failed the package.
+
+Fixing only the silence makes this *worse-looking, not better*: before the fault was caught at all
+(#2543) the writer burned the full 31 s `WriteVerdictBound` and reported `OwnerUnreachable`; after,
+it got a prompt `Unknown`. Same failed install, 31 seconds sooner.
+
+### The rule
+
+> **A disposal fault is the OWNER going away, not a verdict about the write.**
+
+The predicate was already written down, one layer over, in
+`HubDisposingException.IsDisposedContainer`:
+
+> *"a hub whose scope has been closed cannot serve anything, so a delivery that faults this way must
+> be answered as RETRYABLE (the address reactivates) rather than as a result."*
+
+`ClassifyPatchException` now consults it first, ahead of every type-shaped arm, and answers
+`OwnerDisposing` with a message that says what the writer may do. The classification walks the
+exception **graph** (`ExceptionChain`), not `InnerException` in a loop, so a teardown sitting at any
+index of an aggregate still decides it — a chain walker would classify by arrival order, which is a
+race.
+
+Three shapes count, and they are the same fact in three vocabularies:
+
+| shape | where it comes from |
+|---|---|
+| any `ObjectDisposedException` in the graph | a closed DI scope, a disposed subject, a disposed CTS |
+| `HubDisposingException` / `HubDisposedBeforeResponseException` | the two typed teardown exceptions — both **derive** from `ObjectDisposedException`, so they are covered by the line above |
+| `DeliveryFailureException` with `ErrorType.ShuttingDown` | the messaging layer's word for it (`MessageService.NackThroughParent`) |
+
+**Why every `ObjectDisposedException`, not just the Autofac-scope shape.** Nothing on this path
+disposes anything as a way of *refusing* a patch, so on this path the exception has exactly one
+meaning. And the direction of a mistake is asymmetric — the same argument `MeshOperations.IsWriteDenial`
+makes for its own default: a false "retryable" costs at most two idempotent re-diffs; a false
+"terminal" loses a write and fails an install.
+
+### What this does not do
+
+It does not stop the recycle, and it should not: recycling a root whose NodeType changed is the fix
+for [a hub bound to the wrong configuration](../NodeTypeCompilation), and a package install that
+cannot survive one is the defect. It also widens no bound — not the 2 s quiesce budget, not the 31 s
+`WriteVerdictBound`, not the install timeout. The retry it enables already existed and is already
+capped; all that changed is that the writer is now told which of the two things happened.
+
+### Sibling defect, still open
+
+A hub that has logged `[QUIESCE-OK]` still **accepts new correlated requests** — the intake gate only
+refuses from `DisposeHostedHubs` onward (`MessageService.ScheduleNotify`), so a request taken on in
+that window can never be answered. Measured on the same three runs: of nine `[QUIESCE-TIMEOUT]`
+trails, six show `RECEIVED runLevel=Quiescing` at the issuing hub, i.e. the callback was registered
+*after* teardown began. That is a different bug from this one (here the request was accepted while
+the hub was `Started`), it is not fixed by this page's rule, and it is benign in every occurrence
+measured so far — the requester gets `HubDisposedBeforeResponseException`, which is a real answer.
+
 ## What this is NOT
 
 **It is not a timeout, a retry, or a watchdog.** No bound moves; nothing is re-attempted; no poller is
