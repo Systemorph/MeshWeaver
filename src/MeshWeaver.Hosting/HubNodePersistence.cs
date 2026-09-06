@@ -45,14 +45,8 @@ internal sealed class HubNodePersistence(
                 var r = d.Message;
                 if (r.Success && r.Node != null)
                     return Observable.Return(r.Node);
-                return Observable.Throw<MeshNode>(r.RejectionReason switch
-                {
-                    NodeCreationRejectionReason.ValidationFailed =>
-                        new UnauthorizedAccessException(r.Error ?? "Access denied"),
-                    NodeCreationRejectionReason.NodeAlreadyExists =>
-                        new InvalidOperationException($"Node already exists: {node.Path}"),
-                    _ => new InvalidOperationException(r.Error ?? "Node creation failed")
-                });
+                // Typed reason preserved on Exception.Data — see NodeCreationFailure.
+                return Observable.Throw<MeshNode>(r.ToException(node.Path));
             });
     }
 
