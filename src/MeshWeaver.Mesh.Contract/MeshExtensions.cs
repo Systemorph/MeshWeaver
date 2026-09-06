@@ -4390,21 +4390,27 @@ public static class MeshExtensions
             existing =>
             {
                 answered = true;
+                // Trail stages (MeshWeaver#2543): after HANDLER_EXIT this handler owes its reply from
+                // detached work, and the pending-callback report could only say "no reply yet".
                 if (existing is null)
                 {
+                    hub.NoteRequestStage(request.Id, "UPSERT_READ absent → create");
                     DispatchInnerCreate();
                     return;
                 }
                 if (IsNoOpUpsert(existing, node, hub.JsonSerializerOptions, upsertMeshConfig))
                 {
+                    hub.NoteRequestStage(request.Id, "UPSERT_READ existing → no-op probe");
                     SkipNoOpIfAuthorized(existing);
                     return;
                 }
+                hub.NoteRequestStage(request.Id, "UPSERT_READ existing → update");
                 ApplyUpdateViaStream(existing, existing.NodeType);
             },
             ex =>
             {
                 answered = true;
+                hub.NoteRequestStage(request.Id, "UPSERT_READ faulted");
                 logger.LogWarning(ex,
                     "[CreateOrUpdate] persistence read failed for {Path}", node.Path);
                 PostFail($"Persistence read failed: {ex.Message}",
@@ -4631,6 +4637,9 @@ public static class MeshExtensions
 
         void WriteThroughStream(MeshNode existing)
         {
+            // From here the reply rides the per-node owner's PatchDataResponse (its own trail
+            // carries the PATCH_* stages); a trail ending at this stage is waiting on that owner.
+            hub.NoteRequestStage(request.Id, $"UPSERT_WRITE_THROUGH_STREAM path={existing.Path}");
             // Apply the update through the canonical mesh-node stream write API
             // (UpdateNodeRequest retired). hub.GetMeshNodeStream(path).Update routes
             // to the owning per-node hub via the IMeshNodeStreamCache (RFC 7396 merge
@@ -4708,6 +4717,7 @@ public static class MeshExtensions
         // viewer's language at render time while `logLine` stays the fallback (#3236).
         void PostOk(MeshNode result, bool isCreate, string logLine, string logKey)
         {
+            hub.NoteRequestStage(request.Id, isCreate ? "UPSERT_REPLY ok created" : "UPSERT_REPLY ok updated");
             var okLog = baseActivity.Append(
                 new LogMessage(logLine, Microsoft.Extensions.Logging.LogLevel.Information)
                     .WithKey(logKey, ("path", node.Path))) with
@@ -4724,6 +4734,7 @@ public static class MeshExtensions
 
         void PostFail(string error, NodeUpsertRejectionReason reason)
         {
+            hub.NoteRequestStage(request.Id, $"UPSERT_REPLY fail reason={reason}");
             var failLog = baseActivity.Append(
                 new LogMessage(error, Microsoft.Extensions.Logging.LogLevel.Error)) with
             {
