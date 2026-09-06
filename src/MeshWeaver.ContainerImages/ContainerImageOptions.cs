@@ -28,4 +28,27 @@ public sealed class ContainerImageOptions
     /// open read proxy for the whole registry.
     /// </summary>
     public string[] Repositories { get; set; } = [];
+
+    /// <summary>
+    /// The mesh path observed images are recorded under, e.g. <c>Platform/Images</c>. That node
+    /// must already exist — a record is a CHILD of it, and creating a parent chain from a pull
+    /// path is how a write lane NotFound-storms itself (#2229).
+    ///
+    /// <para>🚨 EMPTY MEANS RECORDING IS OFF, and the mirror still proxies normally. Recording is
+    /// observational: it answers "what is in this image, and where did it come from" without a
+    /// <c>docker run</c>, and it must never be able to fail a pull. Turning it off — like turning
+    /// the whole mirror off — is a configuration change, never a migration.</para>
+    /// </summary>
+    public string? ImageRoot { get; set; }
+
+    /// <summary>
+    /// Largest manifest the mirror will hold in memory in order to record it. Manifests are
+    /// small — the OCI spec caps them at 4 MiB and ACR's are single-digit KB — so this is a
+    /// sanity bound, not a tuning knob.
+    ///
+    /// <para>🚨 It applies to MANIFESTS ONLY. A blob (a layer, hundreds of megabytes) is NEVER
+    /// buffered under any setting: it streams upstream → socket → client. A manifest larger than
+    /// this is still served, streamed, and simply not recorded.</para>
+    /// </summary>
+    public int MaxRecordedManifestBytes { get; set; } = 4 * 1024 * 1024;
 }
