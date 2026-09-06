@@ -132,6 +132,15 @@ re-deriving the set — one detector, proven by one set of self-tests.
 `--surface-json` writes the removals as JSON and ALWAYS exits 0: it is a report, not a verdict.
 See `surface_removals` for why its set is deliberately WIDER than the forwarder verdict's, and
 why the allow file is not consulted for it.
+
+It carries the ADDITIONS too, and since #3465 one of their categories is a trigger in its own
+right: `implementer-obliging-added`. Removing surface breaks a CALLER; ADDING a member to a public
+interface breaks an IMPLEMENTER, which a forwarder cannot rescue — `CS0535`, in a repository core
+cannot see, and only when somebody moves its platform pin. `scripts/check-interface-addition.py`
+consumes that category, and the report publishes `publicInterfacesAtBase` /
+`implementerObligationsAtBase` beside `publicTypesAtBase` as its control arms, because a parser
+that stopped recognising the word `interface` would otherwise report a healthy tree and zero
+obligations forever. See `_obliges_implementer`.
 """
 
 from __future__ import annotations
@@ -218,6 +227,36 @@ def _assembly_of(path: str) -> str:
     return path.split("/")[1]
 
 
+def _strip_bom(text: str) -> str:
+    """🚨 A UTF-8 BOM is not a line start, and `NAMESPACE_RE` anchors on one.
+
+    Measured 2026-09-06 on `main`: 310 files under `src/` carry a BOM and in 91 of them it sits
+    immediately before `namespace`, so `^namespace` never matched and the file was indexed with NO
+    namespace in force. Two different failures came out of that, and neither is visible from
+    outside — the report simply says nothing:
+
+      * a BLOCK-scoped file (`namespace N {`) declares its types at column 4, which without a
+        namespace reads as NESTED, so **16 public types were absent from the index entirely** —
+        `ButtonControl`, `HtmlControl`, `SplitterControl`, `NamedAreaControl`, `INamed` among them.
+        Deleting one triggered no pair gate at all;
+      * a FILE-scoped file (`namespace N;`) still indexed its types, under the WRONG KEY — 128 of
+        them, `MeshWeaver.Data:IDataStorage` where the type is `MeshWeaver.Data.IDataStorage`. An
+        allow-file entry written with the real full name never matches such a key, and a namespace
+        rename is invisible because both sides carry the same wrong one.
+
+    Found by cross-checking this script's public-interface DENOMINATOR against `grep` while adding
+    the implementer shape (#3465): the parser said 130 and grep said 131, and the one it could not
+    see was `INamed`. A count nobody compares against anything is not a control arm.
+
+    🚨 `\\ufeff` is written as an ESCAPE here and in the two fixtures, never as the literal
+    character. A literal U+FEFF is invisible in every diff and every editor, so any tool that
+    strips BOMs — or a careless edit — would silently disable both the strip and the cases that
+    prove it, and the guard would then pass having checked nothing. That is the same
+    can't-tell-from-clean failure this function exists to remove.
+    """
+    return text.lstrip("\ufeff")
+
+
 def _indent_width(raw: str) -> int:
     return sum(4 if ch == "\t" else 1 for ch in raw)
 
@@ -225,6 +264,7 @@ def _indent_width(raw: str) -> int:
 def parse_declarations(path: str, text: str) -> list[Decl]:
     """Public TOP-LEVEL types declared by one file, with the namespace in force."""
     assembly = _assembly_of(path)
+    text = _strip_bom(text)
     namespaces = [
         (m.start(), m.group("ns"), TOP_LEVEL_INDENT[m.group("form") or ""])
         for m in NAMESPACE_RE.finditer(text)
@@ -374,14 +414,154 @@ def _positional_parameters(statement: str) -> list[str]:
     return names
 
 
-def parse_members(path: str, text: str) -> dict[str, set[str]]:
+# ───── implementer OBLIGATIONS — the tenth shape (#3465), measured on #3446 ─────
+#
+# 🚨 A forwarder rescues a CALLER. It cannot rescue an IMPLEMENTER. MeshWeaver#3446 added three
+# members to `IEaGraphAuth` — `GetConnection`, `GetAccessToken`, `ExchangeAndStore` — and kept
+# default-implemented forwarders for the old `…Async` surface, so every CALLER kept compiling, the
+# removal detector above was correctly silent (nothing left), and core merged clean. Then
+# MeshWeaver.Plugins moved its platform pin onto the sealed set carrying it:
+#
+#   src/MeshWeaver.Mail.MicrosoftGraph.Test/ExecutiveAssistantDraftLifecycleTests.cs(438,44):
+#     error CS0535: 'FakeEaGraphAuth' does not implement interface member
+#                   'IEaGraphAuth.ExchangeAndStore(string, string, string)'     … and ×2 more
+#
+# `FakeEaGraphAuth` IMPLEMENTS the interface, so adding a member OBLIGES it to supply one. The two
+# halves then deadlocked on the release critical path: the pin move could not compile without the
+# adaptation, and the adaptation could not compile without the pin.
+#
+# A member is an OBLIGATION when an implementer OUTSIDE this repository would have to write it:
+#   * on a public INTERFACE — it is public by default and carries NO body (no `=>`, no `{ … }`
+#     block, an accessor list of bare `get;`/`set;`/`init;` only), and it is not `static` unless it
+#     is also `abstract` (C# 11 static abstract). `virtual`, `sealed`, `const` and a plain `static`
+#     member each carry a body by construction, so none of them obliges anybody;
+#   * on a public ABSTRACT class that is not `sealed` — the member says `abstract` literally, which
+#     is `CS0534` in an external subclass instead of `CS0535`. Same break, same declaration.
+#
+# 🚨 Supplying a DEFAULT IMPLEMENTATION is the automatic escape, and that is deliberate: it is the
+# one change on the core side that genuinely keeps every implementer compiling, so the detector
+# must be SILENT on it or it would tax the fix. #3446's `…Async` forwarders are exactly that shape
+# — and their `=>` sits two lines BELOW the parameter list, which is why the classifier reads the
+# whole declaration statement rather than the one line the member's name is on.
+
+_OBLIGATION_BLOCKERS = frozenset({"virtual", "sealed", "const"})
+# Everything a BARE accessor list may contain. Anything else in the braces is a body.
+_ACCESSOR_TOKENS = frozenset({"get", "set", "init", "add", "remove",
+                              "public", "private", "protected", "internal", "readonly"})
+
+
+def _leading_modifiers(declaration: str) -> tuple[set[str], str]:
+    """`static abstract T Parse(string s)` → ({"static", "abstract"}, "T Parse(string s)")."""
+    tokens = declaration.split()
+    modifiers: set[str] = set()
+    while tokens and tokens[0] in MEMBER_MODIFIERS:
+        modifiers.add(tokens.pop(0))
+    return modifiers, " ".join(tokens)
+
+
+def _brace_delta(text: str) -> int:
+    return text.count("{") - text.count("}")
+
+
+def _declaration_statement(lines: list[str], start: int, member_indent: int) -> str:
+    """The member declaration at `lines[start]`, joined with its continuation lines and its body.
+
+    Three shapes have to be visible to the classifier or it reads a default implementation as an
+    obligation, which would fire the gate on the very fix it should reward:
+
+      * a signature that WRAPS — #3446's forwarders put their `=>` two lines below the parameter
+        list;
+      * a block body whose `{` sits on the member's OWN column, one line down;
+      * an accessor list spread over several lines, where `{ get; set; }` and `{ return …; }` are
+        the difference between an obligation and an implementation and only the CONTENT says which.
+
+    So once a brace opens the scan reads to its close, whatever the indentation; otherwise a
+    continuation is a deeper-indented line, and the scan stops at the next line on the member's own
+    column.
+    """
+    parts = [lines[start]]
+    depth = _brace_delta(lines[start])
+    for i in range(start + 1, min(start + 60, len(lines))):
+        raw = lines[i]
+        if depth > 0:  # inside a body or an accessor list — read it to its close
+            parts.append(raw)
+            depth += _brace_delta(raw)
+            if depth <= 0:
+                break
+            continue
+        stripped = raw.strip()
+        if not stripped:
+            break
+        indent = _indent_width(raw[: len(raw) - len(raw.lstrip())])
+        if indent > member_indent or (indent == member_indent and stripped.startswith("{")):
+            parts.append(raw)
+            depth += _brace_delta(raw)
+            if depth > 0:
+                continue
+            joined = " ".join(parts)
+            if stripped.endswith(";") and joined.count("(") <= joined.count(")"):
+                break
+            continue
+        break
+    return " ".join(p.strip() for p in parts)
+
+
+def _has_implementation(statement: str) -> bool:
+    """True when the declaration carries a body — an expression body, a block, or an accessor list
+    that is more than bare `get;`/`set;`/`init;`.
+
+    🚨 A bare accessor list is NOT a body. `int X { get; }` on an interface is abstract and obliges
+    every implementer, so a naive "contains a brace" test would be wrong in the direction that
+    matters: it would read an obligation as an implementation and report nothing. An EMPTY brace
+    pair is the other way round — `void M() { }` is a default implementation, and an accessor list
+    is never empty — so a braced section with no tokens at all counts as a body.
+    """
+    if "=>" in statement:
+        return True
+    at = statement.find("{")
+    if at == -1:
+        return False
+    after = _skip_balanced(statement[at:], "{", "}")
+    body = statement[at + 1 :] if after is None else statement[at + 1 : len(statement) - len(after) - 1]
+    tokens = [t.casefold() for t in re.findall(r"[^\s;]+", body)]
+    return not tokens or any(t not in _ACCESSOR_TOKENS for t in tokens)
+
+
+def _obliges_implementer(
+    kind: str, type_is_abstract: bool, type_is_sealed: bool, declaration: str, statement: str
+) -> bool:
+    """Would an implementer OUTSIDE this repository have to write this member itself?"""
+    modifiers, rest = _leading_modifiers(declaration)
+    if NESTED_TYPE_RE.match(rest):
+        return False  # a nested TYPE is not a member anybody has to implement
+    if modifiers & _OBLIGATION_BLOCKERS:
+        return False
+    if kind == "interface":
+        if "static" in modifiers and "abstract" not in modifiers:
+            return False
+        return not _has_implementation(statement)
+    if kind in ("class", "record") and type_is_abstract and not type_is_sealed:
+        # `CS0534` in an external subclass. The `abstract` keyword is written out, so there is
+        # nothing to infer: a member without it has a body and obliges nobody.
+        return "abstract" in modifiers
+    return False
+
+
+def parse_members(path: str, text: str) -> tuple[dict[str, set[str]], dict[str, set[str]], set[str]]:
     """Public members per public TOP-LEVEL type in one file, keyed by the type's `Decl.key`.
 
     Body members sit exactly one indent level (4 columns) inside the type; a class/record/struct
     member must say `public`, an interface member is public unless it says otherwise, and every
     enum constant is public. The body ends at the closing brace on the type's own column.
+
+    Returns three things about the same scan: the public member names, the subset of them that
+    OBLIGE an outside implementer (`_obliges_implementer` — the tenth shape, #3465), and the keys
+    of the public interfaces found. The third is the DENOMINATOR: a run that reports no obligations
+    because it located no interfaces has not checked, and "not checked" must never be spelled the
+    same way as "clean".
     """
     assembly = _assembly_of(path)
+    text = _strip_bom(text)
     namespaces = [
         (m.start(), m.group("ns"), TOP_LEVEL_INDENT[m.group("form") or ""])
         for m in NAMESPACE_RE.finditer(text)
@@ -393,6 +573,8 @@ def parse_members(path: str, text: str) -> dict[str, set[str]]:
         line_starts.append(offset)
         offset += len(line) + 1
     out: dict[str, set[str]] = {}
+    obligations: dict[str, set[str]] = {}
+    interfaces: set[str] = set()
     for m in TYPE_RE.finditer(text):
         ns, expected = "", 0
         for start, candidate, indent in namespaces:
@@ -405,8 +587,15 @@ def parse_members(path: str, text: str) -> dict[str, set[str]]:
             continue
         key = Decl(assembly, ns, m.group("name")).key
         members = out.setdefault(key, set())
-        kind_match = TYPE_KIND_RE.search(text[m.start() : m.end()])
+        declared = text[m.start() : m.end()]
+        kind_match = TYPE_KIND_RE.search(declared)
         kind = kind_match.group(1) if kind_match else "class"
+        type_modifiers = set(declared.split())
+        type_is_abstract = "abstract" in type_modifiers
+        type_is_sealed = "sealed" in type_modifiers
+        if kind == "interface":
+            interfaces.add(key)
+        obliged = obligations.setdefault(key, set())
         # `import bisect` is not worth it for ~1500 files: locate the declaration's line linearly.
         line_no = next(i for i in range(len(lines) - 1, -1, -1) if line_starts[i] <= m.start())
         # The declaration STATEMENT runs to the body's `{` or to a `;` (positional record, delegate).
@@ -457,7 +646,12 @@ def parse_members(path: str, text: str) -> dict[str, set[str]]:
             if name == m.group("name"):
                 name = ".ctor"  # a constructor is spelled like its type; keep it distinct from a nested type
             members.add(name)
-    return out
+            if _obliges_implementer(
+                kind, type_is_abstract, type_is_sealed, declaration,
+                _declaration_statement(lines, i, member_indent),
+            ):
+                obliged.add(name)
+    return out, obligations, interfaces
 
 
 def parse_forwards(text: str) -> set[str]:
@@ -501,7 +695,23 @@ def _merge_members(into: Members, more: Members) -> None:
         into.setdefault(key, set()).update(names)
 
 
-def read_base_tree(base: str) -> tuple[dict[str, Decl], set[str], set[str], Members]:
+@dataclass
+class Surface:
+    """One tree's public surface, as the three scans below produce it together.
+
+    Bundled rather than returned as a widening tuple because every caller needs all of it and a
+    positional fifth element is exactly how a new field gets dropped at one call site.
+    """
+
+    decls: dict[str, Decl]
+    forwards: set[str]
+    assemblies: set[str]
+    members: Members
+    obligations: Members
+    interfaces: set[str]
+
+
+def read_base_tree(base: str) -> Surface:
     # ONE `git cat-file --batch` for the whole base tree rather than a `git show` per file: the
     # scanned set is ~1500 files, and a subprocess each turns a 2-second gate into a 25-second one.
     wanted: list[tuple[str, str]] = []
@@ -514,9 +724,11 @@ def read_base_tree(base: str) -> tuple[dict[str, Decl], set[str], set[str], Memb
     decls: dict[str, Decl] = {}
     forwards: set[str] = set()
     members: Members = {}
+    obligations: Members = {}
+    interfaces: set[str] = set()
     assemblies = {_assembly_of(path) for _, path in wanted}
     if not wanted:
-        return decls, forwards, assemblies, members
+        return Surface(decls, forwards, assemblies, members, obligations, interfaces)
 
     proc = subprocess.run(
         ["git", "cat-file", "--batch"],
@@ -534,16 +746,21 @@ def read_base_tree(base: str) -> tuple[dict[str, Decl], set[str], set[str], Memb
         text = body.decode("utf-8", errors="replace")
         for d in parse_declarations(path, text):
             decls[d.key] = d
-        _merge_members(members, parse_members(path, text))
+        file_members, file_obligations, file_interfaces = parse_members(path, text)
+        _merge_members(members, file_members)
+        _merge_members(obligations, file_obligations)
+        interfaces |= file_interfaces
         forwards |= {f"{_assembly_of(path)}:{t}" for t in parse_forwards(text)}
-    return decls, forwards, assemblies, members
+    return Surface(decls, forwards, assemblies, members, obligations, interfaces)
 
 
-def read_work_tree(root: Path) -> tuple[dict[str, Decl], set[str], set[str], Members]:
+def read_work_tree(root: Path) -> Surface:
     decls: dict[str, Decl] = {}
     forwards: set[str] = set()
     assemblies: set[str] = set()
     members: Members = {}
+    obligations: Members = {}
+    interfaces: set[str] = set()
     for file in sorted((root / "src").rglob("*.cs")):
         path = file.relative_to(root).as_posix()
         if not _is_scanned(path):
@@ -552,9 +769,12 @@ def read_work_tree(root: Path) -> tuple[dict[str, Decl], set[str], set[str], Mem
         assemblies.add(_assembly_of(path))
         for d in parse_declarations(path, text):
             decls[d.key] = d
-        _merge_members(members, parse_members(path, text))
+        file_members, file_obligations, file_interfaces = parse_members(path, text)
+        _merge_members(members, file_members)
+        _merge_members(obligations, file_obligations)
+        interfaces |= file_interfaces
         forwards |= {f"{_assembly_of(path)}:{t}" for t in parse_forwards(text)}
-    return decls, forwards, assemblies, members
+    return Surface(decls, forwards, assemblies, members, obligations, interfaces)
 
 
 def read_sibling_tree(path: Path) -> dict[str, list[Decl]]:
@@ -776,16 +996,27 @@ def surface_additions(
     after: dict[str, Decl],
     members_before: Members | None = None,
     members_after: Members | None = None,
+    obligations_after: Members | None = None,
 ) -> list[dict]:
     """Public types and members declared at HEAD and not at BASE.
 
-    Not a pair trigger — nothing downstream stops compiling because core grew — but it is worth
-    reporting: an ADDED overload made a dependent's `<see cref>` ambiguous (`CS0419`, an error under
-    -warnaserror) in the very incident that opened #2689, and only the dependent's own build (in ITS
-    repository, when its platform-ref moves) can see that.
+    Most of it is not a pair trigger — nothing downstream stops compiling because core grew — but it
+    is worth reporting: an ADDED overload made a dependent's `<see cref>` ambiguous (`CS0419`, an
+    error under -warnaserror) in the very incident that opened #2689, and only the dependent's own
+    build (in ITS repository, when its platform-ref moves) can see that.
+
+    🚨 ONE category IS a trigger, and it is the tenth shape (#3465): `implementer-obliging-added` —
+    a member added to a public INTERFACE that a kept type still declares, with no default
+    implementation, or an `abstract` member added to a public abstract class. An outside
+    IMPLEMENTER must then supply it (`CS0535` / `CS0534`), and no forwarder on this side can help,
+    because a forwarder rescues a CALLER. `scripts/check-interface-addition.py` consumes it.
+
+    A member added to a type that is itself NEW at HEAD is deliberately an ordinary `member-added`:
+    nothing outside this repository can implement an interface that did not exist at the base.
     """
     members_before = members_before or {}
     members_after = members_after or {}
+    obligations_after = obligations_after or {}
     added: list[dict] = []
     for key, new in sorted(after.items()):
         if key not in before:
@@ -795,8 +1026,13 @@ def surface_additions(
         if key not in before or key not in after:
             continue
         for name in sorted(members_after[key] - members_before.get(key, set())):
-            added.append({"key": f"{key}::{name}", "assembly": after[key].assembly,
-                          "fullName": f"{after[key].full_name}.{name}", "category": "member-added"})
+            obliging = name in obligations_after.get(key, set())
+            added.append({
+                "key": f"{key}::{name}",
+                "assembly": after[key].assembly,
+                "fullName": f"{after[key].full_name}.{name}",
+                "category": "implementer-obliging-added" if obliging else "member-added",
+            })
     return added
 
 
@@ -822,10 +1058,11 @@ def check(
     resolve=_no_resolver,
     this_pr: int | None = None,
 ) -> int:
-    before, _, _, members_before = read_base_tree(base)
-    after, forwards, head_assemblies, members_after = (
-        read_base_tree(head) if head else read_work_tree(root)
-    )
+    base_surface = read_base_tree(base)
+    head_surface = read_base_tree(head) if head else read_work_tree(root)
+    before, members_before = base_surface.decls, base_surface.members
+    after, members_after = head_surface.decls, head_surface.members
+    forwards, head_assemblies = head_surface.forwards, head_surface.assemblies
 
     if surface_json is not None:
         # ── REPORT MODE, not a verdict ──────────────────────────────────────────────────────
@@ -837,6 +1074,12 @@ def check(
         # `publicTypesAtBase` is the CONTROL ARM the consumer asserts on. Every other field can
         # legitimately be empty on an ordinary pull request, so "no removals" and "the scan read
         # nothing" would otherwise be the same JSON — the green-on-zero-evidence shape.
+        #
+        # 🚨 The tenth shape gets its OWN two control arms, because `publicTypesAtBase` does not
+        # constrain them: a parser that located every public type but stopped recognising the word
+        # `interface` would report a healthy 1900 types and zero obligations forever. So
+        # `publicInterfacesAtBase` and `implementerObligationsAtBase` are published beside it, and
+        # check-interface-addition.py refuses a report where either has collapsed.
         payload = {
             "base": base,
             "head": head or "<working tree>",
@@ -844,8 +1087,14 @@ def check(
             "publicTypesAtHead": len(after),
             "publicMembersAtBase": sum(len(v) for v in members_before.values()),
             "publicMembersAtHead": sum(len(v) for v in members_after.values()),
+            "publicInterfacesAtBase": len(base_surface.interfaces),
+            "publicInterfacesAtHead": len(head_surface.interfaces),
+            "implementerObligationsAtBase": sum(len(v) for v in base_surface.obligations.values()),
+            "implementerObligationsAtHead": sum(len(v) for v in head_surface.obligations.values()),
             "removed": surface_removals(before, after, head_assemblies, members_before, members_after),
-            "added": surface_additions(before, after, members_before, members_after),
+            "added": surface_additions(
+                before, after, members_before, members_after, head_surface.obligations
+            ),
         }
         Path(surface_json).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         print(
@@ -853,6 +1102,12 @@ def check(
             f"top-level type(s) / {payload['publicMembersAtBase']} public member(s) under src/ at "
             f"{base}, {payload['publicTypesAtHead']} / {payload['publicMembersAtHead']} at "
             f"{payload['head']}; {len(payload['removed'])} removed, {len(payload['added'])} added."
+        )
+        print(
+            f"  Denominator for the implementer shape: {payload['publicInterfacesAtBase']} public "
+            f"interface(s) and {payload['implementerObligationsAtBase']} implementer obligation(s) "
+            f"at {base}; {payload['publicInterfacesAtHead']} / "
+            f"{payload['implementerObligationsAtHead']} at {payload['head']}."
         )
         for entry in payload["removed"][:40]:
             print(f"  [{entry['category']}] {entry['assembly']} :: {entry['fullName']}")
@@ -1401,6 +1656,121 @@ IFACE_1 = "namespace N;\npublic interface IStore\n{\n    IObservable<int> Read(s
 BLOCK_NS_MEMBERS = "namespace N\n{\n    public class Old\n    {\n        public int Value { get; }\n        public void Go() { }\n    }\n}\n"
 BLOCK_NS_MEMBERS_LESS = "namespace N\n{\n    public class Old\n    {\n        public int Value { get; }\n    }\n}\n"
 
+# ── the TENTH shape (#3465): an addition that obliges an outside IMPLEMENTER ──
+#
+# #3446's own text in miniature. `Auth` starts with a `…Async` surface; the change adds the three
+# reactive members (abstract → an obligation) and turns the old three into DEFAULT-IMPLEMENTED
+# forwarders (→ not an obligation), with the `=>` two lines below the parameter list, exactly as it
+# is written in `src/MeshWeaver.Mesh.Contract/IEaGraphAuth.cs`.
+EA_BEFORE = (
+    "namespace N;\n"
+    "public interface IAuth\n"
+    "{\n"
+    "    bool IsConfigured { get; }\n"
+    "}\n"
+)
+EA_AFTER = (
+    "namespace N;\n"
+    "public interface IAuth\n"
+    "{\n"
+    "    bool IsConfigured { get; }\n"
+    "    /// <summary>The reactive member every implementer now has to write.</summary>\n"
+    "    IObservable<bool> ExchangeAndStore(string code);\n"
+    "    /// <summary>Deprecated forwarder — default-implemented, so it obliges nobody.</summary>\n"
+    "    Task<bool> ExchangeAndStoreAsync(\n"
+    "        string code, CancellationToken ct)\n"
+    "        => ExchangeAndStore(code)\n"
+    "            .ObserveCompletion(LateFault(nameof(ExchangeAndStoreAsync)), ct);\n"
+    "}\n"
+)
+# The same addition, given a default implementation. THE GATE MUST BE SILENT: a default interface
+# member keeps every implementer compiling, so it is the fix, not the defect.
+EA_AFTER_DEFAULTED = (
+    "namespace N;\n"
+    "public interface IAuth\n"
+    "{\n"
+    "    bool IsConfigured { get; }\n"
+    "    IObservable<bool> ExchangeAndStore(string code) => Observable.Return(false);\n"
+    "}\n"
+)
+IFACE_SHAPES = (
+    "namespace N;\n"
+    "public interface IStore\n"
+    "{\n"
+    "    int Existing { get; }\n"
+    "}\n"
+)
+IFACE_SHAPES_GROWN = (
+    "namespace N;\n"
+    "public interface IStore\n"
+    "{\n"
+    "    int Existing { get; }\n"
+    "    int Bare { get; }\n"                            # abstract accessor list -> obliges
+    "    int Defaulted => 1;\n"                          # expression body        -> does not
+    "    string Blocked(int i)\n"                        # block body on the next line
+    "    {\n"
+    "        return i.ToString();\n"
+    "    }\n"
+    "    static string Helper() => \"\";\n"              # static with a body     -> does not
+    "    static abstract IStore Parse(string s);\n"      # static abstract        -> obliges
+    "    virtual void Hook() { }\n"                      # virtual                -> does not
+    "    event EventHandler? Changed;\n"                 # abstract event         -> obliges
+    "    internal void Plumbing();\n"                    # not public surface at all
+    "    public enum Kind { A }\n"                       # a nested TYPE          -> does not
+    "}\n"
+)
+ABSTRACT_BASE = (
+    "namespace N;\n"
+    "public abstract class Handler\n"
+    "{\n"
+    "    public abstract void Handle();\n"
+    "}\n"
+)
+ABSTRACT_BASE_GROWN = (
+    "namespace N;\n"
+    "public abstract class Handler\n"
+    "{\n"
+    "    public abstract void Handle();\n"
+    "    public abstract void HandleTwo();\n"            # CS0534 in an outside subclass -> obliges
+    "    public virtual void Hook() { }\n"               # has a body                    -> does not
+    "}\n"
+)
+# 🚨 The pair the classifier's brace-reading exists for: `{ get; set; }` and `{ return …; }` open
+# identically and differ only in their CONTENT. Reading the declaration LINE alone said "abstract"
+# for both — which called a default implementation an obligation and fired the gate on the fix.
+IFACE_SPREAD = (
+    "namespace N;\n"
+    "public interface ISpread\n"
+    "{\n"
+    "    int Existing { get; }\n"
+    "}\n"
+)
+IFACE_SPREAD_GROWN = (
+    "namespace N;\n"
+    "public interface ISpread\n"
+    "{\n"
+    "    int Existing { get; }\n"
+    "    int Split\n"
+    "    {\n"
+    "        get;\n"
+    "        set;\n"
+    "    }\n"
+    "    int Computed\n"
+    "    {\n"
+    "        get { return 1; }\n"
+    "    }\n"
+    "}\n"
+)
+# 🚨 A UTF-8 BOM sits before `namespace`, and `^namespace` does not match after one. 310 files
+# under src/ carry a BOM; in 91 it precedes the namespace. Both consequences are silent, and both
+# are here as fixtures because the fix is one `lstrip` that nothing else would notice going away.
+BOM_BLOCK_NS = "\ufeffnamespace N\n{\n    public class Btn\n    {\n        public int A { get; }\n    }\n}\n"
+BOM_FILE_NS = "\ufeffnamespace N;\npublic class Cfg\n{\n    public int A { get; }\n}\n"
+SEALED_CLASS = "namespace N;\npublic sealed class Box\n{\n    public int A { get; }\n}\n"
+SEALED_CLASS_GROWN = (
+    "namespace N;\npublic sealed class Box\n{\n    public int A { get; }\n    public int B { get; }\n}\n"
+)
+
 SURFACE_TESTS: list[tuple] = [
     (
         # MeshWeaver#2678, in miniature: the nine Graph view classes left for a plugin module.
@@ -1462,7 +1832,7 @@ SURFACE_TESTS: list[tuple] = [
         {"src/A/Keep.cs": KEEP_A},
         {"src/A/Keep.cs": KEEP_A, "src/A/Foo.cs": FOO_N},
         {},
-        {"A:N.Foo"},  # a NEW type is one addition; its members do not pile on
+        {"A:N.Foo": "type-added"},  # a NEW type is one addition; its members do not pile on
     ),
     # ── the SIXTH shape: a public MEMBER leaving a type that stays (#3103, fired by #3137) ──
     (
@@ -1473,21 +1843,21 @@ SURFACE_TESTS: list[tuple] = [
         {IRA_PATH: IRA_AFTER},
         {f"{IRA_KEY}::CacheDuration": "member-removed",
          f"{IRA_KEY}::NegativeCacheDuration": "member-removed"},
-        set(),
+        {},
     ),
     (
         "a RENAMED public method is a removal (plus an addition) — the old name no longer binds",
         {"src/A/Svc.cs": MEMBERS_A},
         {"src/A/Svc.cs": MEMBERS_A_RENAMED},
         {"A:N.Svc::Start": "member-removed"},
-        {"A:N.Svc::Begin"},
+        {"A:N.Svc::Begin": "member-added"},
     ),
     (
         "a public member made internal is a removal",
         {"src/A/Svc.cs": MEMBERS_A},
         {"src/A/Svc.cs": MEMBERS_A_NARROWED},
         {"A:N.Svc::Changed": "member-removed"},
-        set(),
+        {},
     ),
     (
         "every member shape is indexed: generic method, property, event, indexer, operator, "
@@ -1495,63 +1865,63 @@ SURFACE_TESTS: list[tuple] = [
         {"src/A/Svc.cs": MEMBERS_A},
         {"src/A/Svc.cs": MEMBERS_A_BODY_CHANGED},
         {},
-        set(),
+        {},
     ),
     (
         "removing ONE overload while the name still binds is below member granularity",
         {"src/A/Svc.cs": MEMBERS_A},
         {"src/A/Svc.cs": MEMBERS_A_OVERLOAD_GONE},
         {},
-        set(),
+        {},
     ),
     (
         "adding a public member is reported as an addition, never as a removal",
         {"src/A/Svc.cs": MEMBERS_A},
         {"src/A/Svc.cs": MEMBERS_A_GROWN},
         {},
-        {"A:N.Svc::Extra"},
+        {"A:N.Svc::Extra": "member-added"},
     ),
     (
         "a RENAMED positional record parameter is a removed public property",
         {"src/A/Point.cs": RECORD_XY},
         {"src/A/Point.cs": RECORD_XZ},
         {"A:N.Point::Y": "member-removed"},
-        {"A:N.Point::Z"},
+        {"A:N.Point::Z": "member-added"},
     ),
     (
         "a record's positional parameters and its body members are both its surface",
         {"src/A/Env.cs": RECORD_WITH_BODY},
         {"src/A/Env.cs": RECORD_WITH_BODY_LESS},
         {"A:N.Envelope::Kind": "member-removed"},
-        set(),
+        {},
     ),
     (
         "a removed ENUM constant is a removal — CS0117 exactly",
         {"src/A/Status.cs": ENUM_ABC},
         {"src/A/Status.cs": ENUM_AB},
         {"A:N.Status::Done": "member-removed"},
-        set(),
+        {},
     ),
     (
         "an interface member is public without saying so; an `internal` one is not surface",
         {"src/A/IStore.cs": IFACE_2},
         {"src/A/IStore.cs": IFACE_1},
         {"A:N.IStore::Write": "member-removed"},
-        set(),
+        {},
     ),
     (
         "block-scoped namespaces index members one level deeper",
         {"src/A/Old.cs": BLOCK_NS_MEMBERS},
         {"src/A/Old.cs": BLOCK_NS_MEMBERS_LESS},
         {"A:N.Old::Go": "member-removed"},
-        set(),
+        {},
     ),
     (
         "a removed TYPE is reported once — its members do not pile on as member-removed",
         {"src/A/Svc.cs": MEMBERS_A, "src/A/Keep.cs": KEEP_A},
         {"src/A/Keep.cs": KEEP_A},
         {"A:N.Svc": "departed"},
-        set(),
+        {},
     ),
     (
         "a member of an in-mesh doc sample is content, never surface",
@@ -1560,45 +1930,147 @@ SURFACE_TESTS: list[tuple] = [
         {"src/MeshWeaver.Documentation/Data/X/Source/Svc.cs": MEMBERS_A_RENAMED,
          "src/MeshWeaver.Documentation/Doc.cs": DOC_KEEP},
         {},
-        set(),
+        {},
+    ),
+    # ── the TENTH shape: an addition that obliges an outside IMPLEMENTER (#3465, from #3446) ──
+    (
+        "#3446 in its own words: the ABSTRACT addition obliges every implementer, and the "
+        "forwarder it default-implements in the same diff — with its `=>` two lines below the "
+        "parameter list — obliges nobody",
+        {"src/A/IAuth.cs": EA_BEFORE},
+        {"src/A/IAuth.cs": EA_AFTER},
+        {},
+        {"A:N.IAuth::ExchangeAndStore": "implementer-obliging-added",
+         "A:N.IAuth::ExchangeAndStoreAsync": "member-added"},
+    ),
+    (
+        "🚨 the same addition GIVEN a default implementation obliges nobody — the gate must never "
+        "tax the one change that actually keeps implementers compiling",
+        {"src/A/IAuth.cs": EA_BEFORE},
+        {"src/A/IAuth.cs": EA_AFTER_DEFAULTED},
+        {},
+        {"A:N.IAuth::ExchangeAndStore": "member-added"},
+    ),
+    (
+        "every interface member shape is classified: a bare `{ get; }` and an abstract event "
+        "oblige, an expression body, a block body, a `static` helper, a `virtual` member and a "
+        "nested type do not, `static abstract` does, and an `internal` one is not surface",
+        {"src/A/IStore.cs": IFACE_SHAPES},
+        {"src/A/IStore.cs": IFACE_SHAPES_GROWN},
+        {},
+        {"A:N.IStore::Bare": "implementer-obliging-added",
+         "A:N.IStore::Changed": "implementer-obliging-added",
+         "A:N.IStore::Parse": "implementer-obliging-added",
+         "A:N.IStore::Defaulted": "member-added",
+         "A:N.IStore::Blocked": "member-added",
+         "A:N.IStore::Helper": "member-added",
+         "A:N.IStore::Hook": "member-added",
+         "A:N.IStore::Kind": "member-added"},
+    ),
+    (
+        "an accessor list SPREAD over several lines still obliges, and one whose accessor has a "
+        "body does not — the two open identically and only the content decides",
+        {"src/A/ISpread.cs": IFACE_SPREAD},
+        {"src/A/ISpread.cs": IFACE_SPREAD_GROWN},
+        {},
+        {"A:N.ISpread::Split": "implementer-obliging-added",
+         "A:N.ISpread::Computed": "member-added"},
+    ),
+    (
+        "an ABSTRACT member added to a public abstract class obliges too — CS0534 rather than "
+        "CS0535, same break, same declaration; a virtual one does not",
+        {"src/A/Handler.cs": ABSTRACT_BASE},
+        {"src/A/Handler.cs": ABSTRACT_BASE_GROWN},
+        {},
+        {"A:N.Handler::HandleTwo": "implementer-obliging-added",
+         "A:N.Handler::Hook": "member-added"},
+    ),
+    (
+        "a member added to an ordinary sealed class obliges nobody — an ordinary PR is not taxed",
+        {"src/A/Box.cs": SEALED_CLASS},
+        {"src/A/Box.cs": SEALED_CLASS_GROWN},
+        {},
+        {"A:N.Box::B": "member-added"},
+    ),
+    (
+        "a member of a BRAND-NEW interface obliges nobody: nothing outside this repo can implement "
+        "a type that did not exist at the base",
+        {"src/A/Keep.cs": KEEP_A},
+        {"src/A/Keep.cs": KEEP_A, "src/A/IStore.cs": IFACE_SHAPES_GROWN},
+        {},
+        {"A:N.IStore": "type-added"},
+    ),
+    # ── the BOM, which hid 16 public types from this gate outright and miskeyed 128 more ──
+    (
+        "a BOM before a BLOCK-scoped namespace does not hide the type — without the strip its "
+        "column-4 declaration reads as NESTED and the departure is reported as nothing at all",
+        {"src/A/Btn.cs": BOM_BLOCK_NS, "src/A/Keep.cs": KEEP_A},
+        {"src/A/Keep.cs": KEEP_A},
+        {"A:N.Btn": "departed"},
+        {},
+    ),
+    (
+        "a BOM before a FILE-scoped namespace does not cost the type its NAMESPACE — the key is "
+        "`A:N.Cfg`, and an allow entry written for the real full name has to match it",
+        {"src/A/Cfg.cs": BOM_FILE_NS, "src/A/Keep.cs": KEEP_A},
+        {"src/A/Keep.cs": KEEP_A},
+        {"A:N.Cfg": "departed"},
+        {},
     ),
 ]
 
 
-def _index(files: dict[str, str]) -> tuple[dict[str, Decl], set[str], Members]:
+def _index(files: dict[str, str]) -> tuple[dict[str, Decl], set[str], Members, Members, set[str]]:
     decls: dict[str, Decl] = {}
     assemblies: set[str] = set()
     members: Members = {}
+    obligations: Members = {}
+    interfaces: set[str] = set()
     for path, text in files.items():
         if not _is_scanned(path):
             continue
         assemblies.add(_assembly_of(path))
         for d in parse_declarations(path, text):
             decls[d.key] = d
-        _merge_members(members, parse_members(path, text))
-    return decls, assemblies, members
+        file_members, file_obligations, file_interfaces = parse_members(path, text)
+        _merge_members(members, file_members)
+        _merge_members(obligations, file_obligations)
+        interfaces |= file_interfaces
+    return decls, assemblies, members, obligations, interfaces
 
 
 def surface_self_test() -> int:
+    """Every case is (label, base files, head files, expected removals[, expected additions]).
+
+    🚨 The additions arm is a DICT of key → category, not a set, because the tenth shape (#3465)
+    lives entirely in the category: `implementer-obliging-added` and `member-added` are the same
+    key, and a classifier that collapsed the first into the second would score identically against
+    a set. That is the falsification the fixtures below are built to make possible.
+    """
     failed = 0
     for entry in SURFACE_TESTS:
         label, base_files, head_files, expected = entry[:4]
-        expected_added: set[str] | None = entry[4] if len(entry) > 4 else None
-        before, _, members_before = _index(base_files)
-        after, head_assemblies, members_after = _index(head_files)
+        expected_added: dict[str, str] | None = entry[4] if len(entry) > 4 else None
+        before, _, members_before, _, _ = _index(base_files)
+        after, head_assemblies, members_after, obligations_after, _ = _index(head_files)
         got = {
             e["key"]: e["category"]
             for e in surface_removals(before, after, head_assemblies, members_before, members_after)
         }
-        got_added = {e["key"] for e in surface_additions(before, after, members_before, members_after)}
+        got_added = {
+            e["key"]: e["category"]
+            for e in surface_additions(
+                before, after, members_before, members_after, obligations_after
+            )
+        }
         if got != expected or (expected_added is not None and got_added != expected_added):
             failed += 1
             print(f"SURFACE SELF-TEST FAILED: {label}")
             print(f"  expected {expected}")
             print(f"  got      {got}")
             if expected_added is not None:
-                print(f"  expected added {sorted(expected_added)}")
-                print(f"  got      added {sorted(got_added)}")
+                print(f"  expected added {expected_added}")
+                print(f"  got      added {got_added}")
         else:
             print(f"ok: {label}")
     return failed

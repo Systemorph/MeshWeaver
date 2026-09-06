@@ -161,8 +161,32 @@ def parse_param(raw: str) -> Param | None:
     return Param(re.sub(r"\s+", " ", type_), name, has_default)
 
 
+# 🚨 A UTF-8 BOM is not whitespace and it is not a line start. `RECORD_RE` anchors on `^` and
+# opens with `\s*`, and Python's `\s` does NOT match U+FEFF (measured: `re.match(r"\s", "\ufeff")`
+# is None, `"\ufeff".isspace()` is False). So in a file whose BOM sits immediately before a public
+# record — a record on LINE 1 — the declaration matches nothing and its primary constructor can
+# change unchallenged, which is the one thing this gate exists to refuse.
+#
+# 🚨 READING A FILE WITHOUT ERROR IS NOT READING IT CORRECTLY. `run()` reads with
+# `errors="replace"`, which guarantees no exception — a DIFFERENT property, and an easy one to
+# mistake for robustness. It neither throws nor corrupts; it silently hands back U+FEFF as the
+# first character. `encoding="utf-8-sig"` would strip it, but the BEFORE side of every comparison
+# comes from `git show`, not from `read_text`, so a fix at the read site would cover only half the
+# diff. The strip therefore lives HERE, where both sides pass through.
+#
+# Measured on `main`, 2026-09-06: 1281 scanned files under `src/`, 310 carrying a BOM, 522 public
+# records — and ZERO files where the BOM currently hides one. The hole is LATENT, not live: no
+# record is on line 1 of a BOM'd file today. It is fixed anyway, because its sibling gate
+# (`check-type-forwards.py`, where the same blindness WAS live — 16 public types invisible, 128
+# miskeyed) learned about BOMs in the same change, and one gate knowing what its neighbour does
+# not is exactly how this survived unnoticed in both.
+def _strip_bom(text: str) -> str:
+    return text.lstrip("\ufeff")
+
+
 def records_in(source: str) -> dict[str, list[Param]]:
     """Every public record's primary-constructor parameter list, by record name."""
+    source = _strip_bom(source)
     found: dict[str, list[Param]] = {}
     for m in RECORD_RE.finditer(source):
         open_idx = source.index("(", m.end() - 1)
@@ -288,6 +312,18 @@ def self_test() -> int:
         if not cond:
             failures.append(label)
 
+    # 🚨 THE CANARY, and it runs FIRST. Every case below indexes `records_in(...)` by record name,
+    # so a `RECORD_RE` that has stopped matching does not FAIL them — it raises `KeyError` and
+    # buries the verdict in a traceback, which is harder to read than the defect it found. One
+    # cheap assertion up front turns "the self-test crashed" into "the classifier sees nothing",
+    # which is the sentence a reader needs. It is the same lesson this file learned about reading a
+    # file without error: not throwing and being correct are different properties.
+    if "Canary" not in records_in("public sealed record Canary(int A);"):
+        check("RECORD_RE still matches a plain public record — nothing below means anything "
+              "if it does not", False)
+        print("\nself-test: 1 FAILURE(S)")
+        return 1
+
     # ── the two real incidents ────────────────────────────────────────────────────────────
     before = "public sealed record LanguageModelCatalogSource(string A, string B, int C, string D, string E, ImmutableArray<string> F, bool G, ProviderKind H);"
     after = before.replace("bool G, ProviderKind H)", "bool G, ProviderKind H, string I)")
@@ -352,8 +388,63 @@ def self_test() -> int:
             print("       --- what the gate actually printed ---\n       "
                   + evidence.strip().replace("\n", "\n       "))
 
+    # ── the BOM, and the DENOMINATOR that would have caught it without anyone looking ──
+    bom = "﻿"
+    on_line_one = "public sealed record Solo(int A);\n"
+    check("a BOM does not hide a record declared on LINE 1",
+          "Solo" in records_in(bom + on_line_one))
+    check("…and a record on a later line was never at risk",
+          "Bar" in records_in(bom + "namespace N;\npublic sealed record Bar(int A);\n"))
+    # 🚨 Both sides are looked up DEFENSIVELY. If the strip regresses, this case must report a
+    # clean FAIL naming itself — not blow up with a KeyError, which would bury the verdict in a
+    # traceback and make the self-test's own failure harder to read than the defect it found.
+    solo_before = records_in(bom + "public sealed record Solo(int A);\n").get("Solo")
+    solo_after = records_in(bom + "public sealed record Solo(int A, int B);\n").get("Solo")
+    check("the BOM is stripped on BOTH sides, so a BOM'd file still COMPARES",
+          solo_before is not None and solo_after is not None
+          and [x.kind for x in compare("Solo", solo_before, solo_after, "x.cs")] == ["arity"])
+
+    for label, cond in _denominator_case():
+        check(label, cond)
+
     print("\nself-test: " + ("PASSED" if not failures else f"{len(failures)} FAILURE(S)"))
     return 1 if failures else 0
+
+
+# 🚨 THE DENOMINATOR. The BOM blindness survived in two gates at once because nothing anywhere
+# stated how much either of them was seeing: a matcher that stops matching reports a clean tree
+# forever, and "the codebase shrank" and "the parser broke" produce the identical output. This gate
+# is worse off than its sibling for that, because it scans only the files a diff CHANGED — so its
+# per-run count is legitimately zero on most pull requests and can never be a floor.
+#
+# So the floor is asserted against the WHOLE tree, in the self-test that runs first in CI: index
+# every `src/**/*.cs` and refuse to certify the gate if the public-record count has collapsed.
+# MEASURED on `main`, 2026-09-06: 522 public records across 1281 scanned files. The floor sits far
+# below that and far above zero, so it survives a carve-out wave and still fails outright on a
+# `RECORD_RE` that has stopped matching.
+MIN_PUBLIC_RECORDS_IN_TREE = 200
+
+
+def _denominator_case() -> list[tuple[str, bool]]:
+    root = Path(__file__).resolve().parent.parent
+    src = root / "src"
+    if not src.is_dir():
+        # Refuse to report a pass having found no tree to count. Absent is not clean.
+        return [(f"the tree denominator could not be read ({src} is not a directory)", False)]
+
+    files = records = 0
+    for f in src.rglob("*.cs"):
+        rel = f.relative_to(root).as_posix()
+        if "/bin/" in rel or "/obj/" in rel:
+            continue
+        files += 1
+        records += len(records_in(f.read_text(encoding="utf-8", errors="replace")))
+
+    return [(
+        f"the tree declares {records} public record(s) across {files} scanned file(s) — at or "
+        f"above the floor of {MIN_PUBLIC_RECORDS_IN_TREE}",
+        records >= MIN_PUBLIC_RECORDS_IN_TREE,
+    )]
 
 
 _RAIL_BEFORE = "namespace N;\npublic sealed record Rail(int A);\n"
