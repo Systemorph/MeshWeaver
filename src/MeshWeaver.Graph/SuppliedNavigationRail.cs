@@ -82,7 +82,26 @@ public static class SuppliedNavigationRail
     /// <param name="Items">The supplied entries, IN THE ORDER SUPPLIED — a childless entry as a
     /// <see cref="RailLink"/>, one with children as a <see cref="RailGroup"/>. One sequence, not a
     /// bucket per kind: see the class remarks, defect 4.</param>
-    public sealed record Rail(RailLink Home, IReadOnlyList<RailItem> Items);
+    public sealed record Rail(RailLink Home, IReadOnlyList<RailItem> Items)
+    {
+        /// <summary>
+        /// The flat entries, in rail order. <b>A filter, never the render order</b> — reading this
+        /// and <see cref="Groups"/> in turn is precisely how #3406 put every leaf page ahead of
+        /// every folder. Kept because an in-mesh caller compiles at RUNTIME and is invisible to
+        /// both <c>dotnet build</c> and a repo grep, so the two former buckets are retired as
+        /// forwarders rather than deleted.
+        /// </summary>
+        [Obsolete("The rail is ONE ordered sequence now — walk Items. Pages and Groups are filters "
+                  + "over it, and concatenating them re-creates the #3406 ordering bug.")]
+        public IReadOnlyList<RailLink> Pages => [.. Items.OfType<RailLink>()];
+
+        /// <summary>
+        /// The collapsible entries, in rail order. A filter — see <see cref="Pages"/>.
+        /// </summary>
+        [Obsolete("The rail is ONE ordered sequence now — walk Items. Pages and Groups are filters "
+                  + "over it, and concatenating them re-creates the #3406 ordering bug.")]
+        public IReadOnlyList<RailGroup> Groups => [.. Items.OfType<RailGroup>()];
+    }
 
     /// <summary>
     /// The rail a page shows, from the navigation its module supplied. Pure — see the class remarks

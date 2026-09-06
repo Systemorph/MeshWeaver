@@ -10,3 +10,4 @@
 #
 # Example:
 #   BurstAggregation  #2234 — bundles republished in the same wave, image rolled after
+Rail  #3406 — SuppliedNavigationRail.Rail: the two order-losing buckets (Pages, Groups) become one ordered Items sequence. Nothing outside core binds it: `SuppliedNavigationRail` has 3 org-wide code-search hits, all in this repo, and 0 in MeshWeaver.Plugins' whole origin/main tree (node sources included), so there is no module to rebuild and the atomic move is already complete. Pages/Groups survive as [Obsolete] computed properties for in-mesh callers no grep can see; only the PRIMARY constructor, which nothing can be shown to call, changes. DELETE THIS LINE in the change right after #3414 merges.
