@@ -102,6 +102,16 @@ here in some form:
   | a `$GITHUB_OUTPUT` step output | `echo "image-digest=sha256:…"` | SocialMedia, Crm — invisible to any scan of `env:` blocks |
   | an inline image reference | `…azurecr.io/mw-plugin-test@sha256:…` | anywhere a job names the image directly |
 
+- **Know where the extractor stops, and treat a fourth shape as a defect.** Those three are what the
+  fleet writes *today*, measured — not a proof that no other shape exists. A digest declared under a
+  name that does not say `digest` **and** never written beside its `…azurecr.io/<repo>@` reference
+  matches neither rule, and its absence would look exactly like a repository that pins nothing. That
+  is why the report prints a **per-repository** pin count and not only the fleet total: a repo whose
+  count silently drops from three to two is visible, where a single fleet number would not be. A
+  satellite adopting a new pin shape must extend `extract()` and the self-test in the same change —
+  a pin the sweep cannot see is spelled identically to a repository that has none, which is the very
+  confusion this page exists to remove.
+
 - **Discover the fleet, never commit it.** The repository list comes from the App installation
   (`/installation/repositories`), so a repository added to the org is swept the day the App reaches
   it. `MeshWeaver.Crm` pins the same tester digest as three other repos and is absent from
