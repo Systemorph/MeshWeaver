@@ -263,6 +263,7 @@ internal static class NodeTypeContractHandler
                         {
                             Content = def with
                             {
+                                DispatchedBuildInputs = null,   // terminal ⇒ no compile in flight (#3390)
                                 CompilationStatus = CompilationStatus.Error,
                                 CompilationError = response.Error ?? "Compilation failed"
                             }
@@ -613,6 +614,7 @@ internal static class NodeTypeContractHandler
         MeshNode curr)
         => def with
         {
+            DispatchedBuildInputs = null,   // terminal ⇒ no compile in flight (#3390)
             CompilationStatus = CompilationStatus.Ok,
             CompilationError = null,
             // 🚨 A HYDRATE IS NOT A COMPILE (#2895). Handle's published-release

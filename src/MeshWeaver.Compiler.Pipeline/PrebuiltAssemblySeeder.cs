@@ -480,6 +480,7 @@ public static class PrebuiltAssemblySeeder
                     {
                         Content = def with
                         {
+                            DispatchedBuildInputs = null,   // terminal ⇒ no compile in flight (#3390)
                             CompilationStatus = CompilationStatus.Ok,
                             CompilationError = null,
                             CompilationDiagnostics = null,
