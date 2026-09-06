@@ -61,6 +61,20 @@ public class DispatchedBuildInputsStampedAtEveryDoorTest
         CurrentSourceVersions = LiveSources,
     };
 
+    /// <summary>
+    /// A definition with a compile genuinely in flight, written OUT — never taken from
+    /// <see cref="NodeTypeCompilationHelpers.DispatchPending(NodeTypeDefinition, string?)"/>.
+    /// The three terminal-write tests below assert that a stamp is CLEARED, so seeding them from
+    /// the door would make them pass for free the moment the door stopped stamping: they would be
+    /// asserting <c>null == null</c> about a state the defect never produces.
+    /// </summary>
+    private static NodeTypeDefinition InFlight() => NeverCompiled() with
+    {
+        CompilationStatus = CompilationStatus.Pending,
+        DispatchedBuildInputs =
+            NodeTypeCompilationHelpers.BuildInputsToken(ModulesHash, LiveSources),
+    };
+
     // ── The door itself ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -149,7 +163,7 @@ public class DispatchedBuildInputsStampedAtEveryDoorTest
     [Fact]
     public void After_a_SUCCESSFUL_compile_the_stamp_reports_nothing_in_flight()
     {
-        var dispatched = NodeTypeCompilationHelpers.DispatchPending(NeverCompiled(), ModulesHash);
+        var dispatched = InFlight();
         var token = RequestedToken(dispatched);
 
         var settled = NodeTypeCompilationHelpers.ApplyCompileSuccess(
@@ -181,7 +195,7 @@ public class DispatchedBuildInputsStampedAtEveryDoorTest
     [Fact]
     public void After_a_FAILED_compile_the_stamp_reports_nothing_in_flight()
     {
-        var dispatched = NodeTypeCompilationHelpers.DispatchPending(NeverCompiled(), ModulesHash);
+        var dispatched = InFlight();
         var token = RequestedToken(dispatched);
 
         var settled = NodeTypeCompilationHelpers.ApplyCompileFailure(
@@ -200,7 +214,7 @@ public class DispatchedBuildInputsStampedAtEveryDoorTest
     [Fact]
     public void A_REFUSED_dispatch_clears_the_stamp_when_it_settles()
     {
-        var dispatched = NodeTypeCompilationHelpers.DispatchPending(NeverCompiled(), ModulesHash);
+        var dispatched = InFlight();
 
         var settled = NodeTypeCompilationHelpers.ApplyGateSettle(
             dispatched, reason: "parked", formedUnderLiveInputs: true, modulesHash: ModulesHash);
