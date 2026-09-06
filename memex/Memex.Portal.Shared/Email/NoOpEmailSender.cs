@@ -41,7 +41,35 @@ public sealed class NoOpEmailSender(EmailOptions options, ILogger<NoOpEmailSende
 
     public IObservable<bool> SendEmail(
         string toAddress, string subject, string htmlBody, IReadOnlyCollection<EmailAttachment> attachments)
+        => SendEmail(new EmailMessage
+        {
+            To = [toAddress],
+            Subject = subject,
+            HtmlBody = htmlBody,
+            Attachments = attachments,
+        });
+
+    /// <summary>
+    /// 🚨 Overridden so a message with <b>Cc/Bcc</b> is handled by this sender rather than refused
+    /// by the interface default (#3473).
+    ///
+    /// <para>The default refusal exists to stop a single-address transport from quietly delivering
+    /// a DIFFERENT message than the one it was handed. That reasoning does not apply here: this
+    /// sender delivers nothing at all, to anybody, and says so. Refusing copied recipients would
+    /// break every local-dev and test send that carries one, while protecting a delivery that is
+    /// not happening either way.</para>
+    ///
+    /// <para>What it does still do is name the FULL envelope in its log line — To, Cc and Bcc
+    /// counts — so a developer reading the log sees the message that would have gone out, copies
+    /// included, instead of a line that silently describes fewer recipients than were asked for.
+    /// The <c>Email:Enabled=true</c> refusal (#2023) is unchanged and applies to the whole
+    /// envelope.</para>
+    /// </summary>
+    /// <param name="message">The message, its recipients, its attachments and its sender identity.</param>
+    public IObservable<bool> SendEmail(EmailMessage message)
     {
+        var recipients = string.Join(", ", message.AllRecipients);
+
         if (options.Enabled)
         {
             // ExplainRefusal, not Explain: this install may have the module and be missing only a
@@ -50,14 +78,18 @@ public sealed class NoOpEmailSender(EmailOptions options, ILogger<NoOpEmailSende
             var explanation = EmailDeliveryGuard.ExplainRefusal(
                 options, "This send is REFUSED rather than reported as delivered.");
             logger?.LogError(
-                "Refusing to send to {To} (subject: {Subject}, attachments: {Attachments}). {Explanation}",
-                toAddress, subject, attachments.Count, explanation);
+                "Refusing to send to {To} (subject: {Subject}, to: {ToCount}, cc: {CcCount}, "
+                + "bcc: {BccCount}, attachments: {Attachments}). {Explanation}",
+                recipients, message.Subject, message.To.Length, message.Cc.Length,
+                message.Bcc.Length, message.Attachments.Count, explanation);
             return Observable.Throw<bool>(new InvalidOperationException(explanation));
         }
 
         logger?.LogInformation(
-            "Email disabled (Email:Enabled=false) — skipping send to {To} (subject: {Subject}, attachments: {Attachments})",
-            toAddress, subject, attachments.Count);
+            "Email disabled (Email:Enabled=false) — skipping send to {To} (subject: {Subject}, "
+            + "to: {ToCount}, cc: {CcCount}, bcc: {BccCount}, attachments: {Attachments})",
+            recipients, message.Subject, message.To.Length, message.Cc.Length,
+            message.Bcc.Length, message.Attachments.Count);
         return Observable.Return(true);
     }
 }
