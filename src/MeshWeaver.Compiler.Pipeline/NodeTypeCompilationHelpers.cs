@@ -2699,6 +2699,13 @@ internal static class NodeTypeCompilationHelpers
         NodeTypeDefinition parkedDef, string? reason, bool formedUnderLiveInputs, string? modulesHash) =>
         parkedDef with
         {
+            // 🚨 The stamp describes a compile IN FLIGHT (#3390). A terminal status means there is
+            // no longer one, so leaving the token set makes a non-null value mean "in flight OR
+            // finished some time ago" — and IsSatisfiedByInFlightCompile absorbs a release request
+            // against it. Today the Pending/Compiling gate ahead of that read hides the lie; the
+            // invariant is `non-null ⇔ Pending/Compiling`, and it is cheaper to keep than to rely on
+            // a caller checking status first forever.
+            DispatchedBuildInputs = null,
             CompilationStatus = CompilationStatus.Error,
             CompilationError = reason
                 ?? parkedDef.CompilationError
@@ -2766,6 +2773,7 @@ internal static class NodeTypeCompilationHelpers
         string? modulesHash = null)
         => def with
         {
+            DispatchedBuildInputs = null,   // terminal ⇒ no compile in flight (#3390)
             CompilationStatus = CompilationStatus.Ok,
             CompilationError = null,
             CompilationDiagnostics = null,
