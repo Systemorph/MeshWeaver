@@ -372,9 +372,25 @@ Four properties are load-bearing, and each is pinned by a case in
 - **The transport fault stays fully visible.** Nothing here widens a timeout, retries, polls or
   swallows. `RetryUnreachableCoordination` logs the unreachability at its own severity with its own
   diagnostic detail either way, and the grant logs a second `Warning` naming what could not be
-  reached. That fault is the only signal the pod↔`Admin/Build`-hub path is broken (routing loss, a
-  wedged per-node hub of the #2896 class, or a lost reply); the durable door changes the readiness
-  VERDICT, never the visibility of the fault, and does not diagnose or repair it.
+  reached. That fault is the only signal the pod↔`Admin/Build`-hub path is broken; the durable door
+  changes the readiness VERDICT, never the visibility of the fault, and does not diagnose or repair
+  it.
+
+🚨 **The durable door is a FAIL-SAFE, not a cure — and the cause is still open.** The pod's own
+diagnostic names three candidates for the silence: the request never reached the target (routing),
+the target received it and is wedged (a per-node hub that stops answering — the #2896 class), or the
+target answered and the reply was lost. There is a **fourth**, root-caused separately in #3408:
+`MessageService.OpenGate` drained the deferred queue by **appending** it to the main queue, so a
+message that arrived before the gate opened but had not yet been turned sat *ahead* of the deferred
+turns appended behind it — and the parked message ran last. Appending is always the wrong end:
+deferral happens at TURN time, not arrival, and the loop is strictly FIFO, so everything deferred is
+by construction older than everything still waiting. A `SubscribeRequest` is exactly the message
+that triggers a per-node hub's activation, so it is the one that loses its place — load-sensitive by
+construction, green in isolation, and capable of being processed after the requester's 60 s budget
+has already expired. That fits a requester measured healthy and idle against a target never observed
+dead better than a wedge does. **#3408 may reduce or remove these timeouts independently; the two
+fixes are separate and must not be read as one.** The durable door is correct whichever of the four
+it is, and is the only one of them that does not depend on diagnosing the transport first.
 - **No stand-down on this path.** The follower withdraws its claim before probing because it really
   registered one. This path did not: the registration is written by `RequestBuildClaim` through
   `GetMeshNodeStream(path).Update(current => …)`, and an `Update` whose stream never delivered
