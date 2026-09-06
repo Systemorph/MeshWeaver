@@ -741,6 +741,16 @@ public sealed class InstanceAutoRegistrationService(
     ///     not fought by the next restart. 🚨 Deliberately UNCHANGED by the flag lane — the two
     ///     coexist, and an already-populated installation is exactly the case the seed cannot
     ///     express and the flags can.</item>
+    ///   <item><b>The operator's patterns over a LOCAL CHECKOUT</b>
+    ///     (<see cref="ConfiguredPackageSource.LocalCheckout"/>) — the same patterns, but the
+    ///     source is a working tree mounted into this host, which is what a self-registry
+    ///     <c>memex-local</c> serves. Reconciled on EVERY boot: a mounted tree is standing operator
+    ///     intent, the portal exists to MIRROR it, and nothing else refreshes it — the update
+    ///     watcher needs GitHub webhooks a local install never receives and the registry
+    ///     reconciler does nothing without a registry. Seeded once, the portal silently served a
+    ///     week-old course while every boot logged "0 written, 0 unchanged" (MeshWeaver#3359).
+    ///     Costs nothing when nothing changed (the content-hash gate), and a disabled feature flag
+    ///     still excludes — the exclusion outranks this lane like every other.</item>
     /// </list>
     ///
     /// <para>Installs run SEQUENTIALLY (<c>Concat</c>) — each one writes a partition's worth of
@@ -1215,10 +1225,10 @@ public sealed class InstanceAutoRegistrationService(
                     .ToList();
                 bool IsIncluded(InstallCandidate c) =>
                     included.Any(i => i.Entry.Matches(c.Package.Source ?? "", c.Package.Id));
+                bool IsWanted(InstallCandidate c) =>
+                    wanted.Any(w => w.Matches(c.Package.Source ?? "", c.Package.Id));
                 var selected = catalog
-                    .Where(c => (baseline && c.Package.PreInstalled)
-                                || IsIncluded(c)
-                                || wanted.Any(w => w.Matches(c.Package.Source ?? "", c.Package.Id)))
+                    .Where(c => (baseline && c.Package.PreInstalled) || IsIncluded(c) || IsWanted(c))
                     .ToList();
                 // Judge the FLAG lane on its own too, for the same reason the operator's patterns
                 // are judged on their own below: with a baseline selected, "matched something" is
@@ -1234,8 +1244,7 @@ public sealed class InstanceAutoRegistrationService(
                 // baseline: with 8 baseline packages selected, "matched something" is true while
                 // every InstallByDefault pattern matched nothing — which is exactly how a local
                 // registry came up with no plugins and no warning.
-                if (wanted.Count > 0
-                    && !selected.Any(c => wanted.Any(w => w.Matches(c.Package.Source ?? "", c.Package.Id))))
+                if (wanted.Count > 0 && !selected.Any(IsWanted))
                     logger.LogWarning(
                         "The default install matched no packages for the operator's patterns "
                         + "(wanted [{Wanted}]; {Baseline} pre-installed package(s) were still "
@@ -1291,13 +1300,15 @@ public sealed class InstanceAutoRegistrationService(
                                 + "stop selecting the dependent.", c.Package.Id, flag);
                         return false;
                     })
-                    // Whether this candidate belongs to a RECONCILED lane (the platform baseline or
-                    // this environment's flags) rather than the seed-once one. Read by the ledger
-                    // filter: a reconciled package re-asserts on every boot, a seeded one never
-                    // does.
+                    // Whether this candidate belongs to a RECONCILED lane (the platform baseline,
+                    // this environment's flags, or the operator's patterns over a LOCAL CHECKOUT)
+                    // rather than the seed-once one. Read by the ledger filter: a reconciled
+                    // package re-asserts on every boot, a seeded one never does.
                     .Select(c => c with
                     {
-                        Reconciled = (baseline && c.Package.PreInstalled) || IsIncluded(c),
+                        Reconciled = (baseline && c.Package.PreInstalled)
+                                     || IsIncluded(c)
+                                     || (c.Source.LocalCheckout && IsWanted(c)),
                     })
                     .ToList();
             }));
@@ -1597,11 +1608,13 @@ public sealed class InstanceAutoRegistrationService(
     private sealed record InstallCandidate(ConfiguredPackageSource Source, PackageManifest Package)
     {
         /// <summary>
-        /// Whether a RECONCILED lane selected it — the platform's own <c>preInstalled</c> baseline or
-        /// this environment's feature flags — as opposed to the seed-once
-        /// <see cref="PluginCatalogOptions.InstallByDefault"/>. A reconciled candidate is exempt from
-        /// the seed ledger: it re-asserts on every boot, which is the entire difference between a
-        /// per-environment policy and a seed.
+        /// Whether a RECONCILED lane selected it — the platform's own <c>preInstalled</c> baseline,
+        /// this environment's feature flags, or the operator's
+        /// <see cref="PluginCatalogOptions.InstallByDefault"/> patterns over a
+        /// <see cref="ConfiguredPackageSource.LocalCheckout"/> — as opposed to those same patterns
+        /// over a fetched source, which seed once. A reconciled candidate is exempt from the seed
+        /// ledger: it re-asserts on every boot, which is the entire difference between a policy
+        /// (or a mirrored working tree) and a seed.
         /// </summary>
         public bool Reconciled { get; init; }
     }
