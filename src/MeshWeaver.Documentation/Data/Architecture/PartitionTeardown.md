@@ -165,7 +165,8 @@ needs the delete to hold a partition-scoped exclusion that outlives its own drop
 `RecentlyDeletedRegistry` subtree scope covers the drain but is released with the operation. It is
 also worth noting what re-arms the write in the first place: `InstalledPackageRepairService` re-asserts
 `EnsureDeclaredAccess` for **every recorded install** on every boot, and a package's install record
-lives in the `Plugins` partition, so deleting the installed partition does not remove it.
+lives in the `Plugins` partition, so deleting the installed partition does not remove it. Both gaps
+are tracked as MeshWeaver#3451.
 
 ## Auditing a portal for orphans
 
