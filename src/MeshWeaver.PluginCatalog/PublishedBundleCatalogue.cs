@@ -153,6 +153,62 @@ public static class PublishedBundleCatalogue
     }
 
     /// <summary>
+    /// 🚨 <b>The deployment gate's DENOMINATOR, and it must not come from the artifact under
+    /// judgement (#3441).</b> Every bundle id this root has EVER sealed, across every framework
+    /// identity it holds — plus how many identities actually carried a sealed publication, so a
+    /// caller can tell "this root serves no bakes" from "this root serves bakes and this package
+    /// is not among them".
+    ///
+    /// <para><b>Why not simply ask the LIVE identity.</b> That is what the gate used to do, and it
+    /// is the vacuous-denominator shape this repo forbids elsewhere: a package counted as
+    /// content-bearing exactly when it had a sealed bundle under the identity running NOW, read
+    /// from the same store the gate was about to judge. So a package whose bake BROKE silently
+    /// left the denominator and every later roll was green about it — the gate stopped asking
+    /// about precisely the package that had stopped being baked. In the limit, an identity with no
+    /// publication at all made every installed package non-content-bearing and the content half of
+    /// the gate checked NOTHING while reporting a pass, which is "0 expected, 0 found, green".
+    /// That is the state the maintainer named: <i>"we kept rolling without edu being properly
+    /// baked"</i>.</para>
+    ///
+    /// <para><b>Why this is independent.</b> The judgement is about the TARGET release's identity
+    /// directory; the denominator is read from the OTHER identity directories — publications made
+    /// by earlier CD waves, which the run under judgement cannot have written. And it is MONOTONE:
+    /// a package that has once shipped a bake can never silently leave the denominator, so a bake
+    /// that regresses to nothing is a HOLD rather than an exemption.</para>
+    ///
+    /// <para><b>Why it still cannot freeze an environment.</b> A package that has never sealed a
+    /// bundle under any identity — a module-only or NodeType-less package, which produces no
+    /// bundle ever — is still not demanded, exactly as before. The exemption is preserved; only
+    /// its EVIDENCE moved from "one identity's answer today" to "any identity's answer ever".</para>
+    /// </summary>
+    public static SealedBundleFloor EverSealedBundles(string? publishedRoot, ILogger? logger = null)
+    {
+        if (string.IsNullOrWhiteSpace(publishedRoot) || !Directory.Exists(publishedRoot))
+            return SealedBundleFloor.Empty;
+
+        var bundles = new List<string>();
+        var identities = 0;
+        foreach (var identityDirectory in Directory.EnumerateDirectories(publishedRoot)
+                     .OrderBy(d => d, StringComparer.Ordinal))
+        {
+            // The release-marker directory holds version→identity FILES, never a publication.
+            // Skipping it by name keeps "how many identities published" honest — it would
+            // contribute no bundles either way, but it would not be an identity.
+            if (string.Equals(
+                    Path.GetFileName(identityDirectory),
+                    ReleaseMarkerDirectoryName,
+                    StringComparison.Ordinal))
+                continue;
+            var sealedHere = SealedBundleNames(identityDirectory, logger).ToList();
+            if (sealedHere.Count == 0)
+                continue;
+            identities++;
+            bundles.AddRange(sealedHere);
+        }
+        return new SealedBundleFloor(ReleaseArtifacts.Of(bundles).SealedBundles, identities);
+    }
+
+    /// <summary>
     /// 🚨 The FULL observation of one identity (#3175): the sealed bundle ids, the module set every
     /// complete source sealed (each module bundle read for the MVID of every <c>MeshWeaver.*</c>
     /// assembly it CARRIES, spelt as the dependency records spell it), and every sealed bundle's
@@ -618,3 +674,29 @@ public readonly record struct SealedModuleAssembly(string Name, string Mvid, boo
 /// <param name="Target">The release, with its framework identity resolved (or not).</param>
 /// <param name="Artifacts">What is sealed for it.</param>
 public sealed record ReleaseObservation(ReleaseTarget Target, ReleaseArtifacts Artifacts);
+
+/// <summary>
+/// 🚨 The deployment gate's DENOMINATOR (#3441) — what a published root has ever demonstrably been
+/// able to serve, read across every framework identity it holds rather than from the one identity
+/// the gate is about to judge. See
+/// <see cref="PublishedBundleCatalogue.EverSealedBundles(string?, Microsoft.Extensions.Logging.ILogger?)"/>
+/// for why the denominator may not be taken from the artifact under judgement.
+/// </summary>
+/// <param name="Bundles">Every bundle id sealed under ANY identity in the root, extension
+/// stripped and case-insensitive — the same spelling <see cref="ReleaseArtifacts.SealedBundles"/>
+/// uses, so the two sets compare directly.</param>
+/// <param name="Identities">How many framework-identity directories carried at least one SEALED
+/// source. 🚨 ZERO is the load-bearing value: it means this root serves no bakes at all, so
+/// "package X has never been sealed" carries NO information about X and must not be read as an
+/// exemption. A caller that cannot tell that case apart is back to a denominator that can be
+/// vacuously empty.</param>
+public sealed record SealedBundleFloor(ImmutableHashSet<string> Bundles, int Identities)
+{
+    /// <summary>A root that holds no sealed publication under any identity.</summary>
+    public static SealedBundleFloor Empty { get; } =
+        new(ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase), 0);
+
+    /// <summary>Whether this root serves CI bakes at all — the precondition for reading an absent
+    /// bundle as "this package ships no content" rather than as "we have observed nothing".</summary>
+    public bool ServesBakes => Identities > 0;
+}
