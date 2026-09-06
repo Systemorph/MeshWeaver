@@ -28,6 +28,13 @@ and a denominator taken from there **cannot fail**:
 That is the same shape as a skipped job wearing a passing tick, and this repo forbids it in
 [CI gates](../ReadingCiSignals) for exactly this reason. The deployment gate had it in the runtime.
 
+> 🚨 **The limiting case is now refused outright** (#3479). Fixing where `HasContent` comes from made
+> the denominator independent of the artifact; it did not stop the denominator being *empty*. An
+> install-record read that answers zero on a deployment whose root serves bakes still compared two
+> empty sets and passed — and that read has measurably answered zero on a live portal carrying 42
+> modules (memex, 2026-08-10). The verdict now HOLDS on it, naming the two possible causes, and
+> [Roll Selection](../RollSelection) refuses to select on it. Zero expected is never green.
+
 ## The defect
 
 `ReleaseAvailabilityService.RequiredPackages` built the gate's input list from the environment's
@@ -211,4 +218,6 @@ Naming the blind spot is worth more than overclaiming the coverage.
 - [Release Availability Gates](../ReleaseGates) — the predicate, the marker, the three roll paths
 - [CI Content Bake](../CiContentBake) — where the sealed bundles and the framework identity come from
 - [Reading CI Signals](../ReadingCiSignals) — the same vacuity trap on the CI side
+- [Roll Selection](../RollSelection) — the same vacuity trap one level up, where an empty
+  denominator would make every release complete and turn the selector back into "take the newest"
 - [The Continuous Delivery Contract](../ContinuousDeliveryContract) — the publication this gate reads
