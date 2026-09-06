@@ -106,10 +106,19 @@ stop believing.
 
 THE ESCAPE HATCH
 ----------------
-`scripts/type-forwards.allow` takes one `Assembly:Namespace.Type` per line with a reason. An
-entry is a statement that no shipped module can be holding that TypeRef — not a way to make the
-gate quiet. A STALE entry (listed, but the type did not move in this diff) FAILS, exactly like
-the repo's other ratchets, so it cannot outlive its change and hide the next break.
+`scripts/type-forwards.allow` takes one `Assembly:Namespace.Type` per line, then the PULL REQUEST
+the entry travels with, then a reason:
+
+    MeshWeaver.Foo:MeshWeaver.Foo.Widget  #1234 — added and moved inside one unreleased wave
+
+An entry is a statement that no shipped module can be holding that TypeRef — not a way to make
+the gate quiet — and it is TRANSITIONAL. `scripts/transitional_allow.py` scopes it to the diff
+that INTRODUCES it and resolves the pull request it names, so it expires on merge by mechanism
+rather than by a comment asking a future reader to delete the line (#3422: that comment was
+ignored once, and for ~40 minutes every C#-touching pull request in the fleet was red on somebody
+else's merge). An entry that permits nothing in the diff carrying it still FAILS; an entry the
+merge base already holds is INERT — it permits nothing, so it cannot hide the next break, and it
+fails nothing, so it cannot red anybody else.
 
 THE REPORT MODE: `--surface-json <path>` (#2689)
 ------------------------------------------------
@@ -134,6 +143,8 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+import transitional_allow as ta
 
 ALLOW_FILE = "scripts/type-forwards.allow"
 
@@ -567,20 +578,6 @@ def read_sibling_tree(path: Path) -> dict[str, list[Decl]]:
     return by_simple_name
 
 
-def read_allow(root: Path) -> dict[str, str]:
-    file = root / ALLOW_FILE
-    if not file.exists():
-        return {}
-    entries: dict[str, str] = {}
-    for line in file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        key, _, reason = line.partition(" ")
-        entries[key.strip()] = reason.strip()
-    return entries
-
-
 # ─────────────────────────────── the check ───────────────────────────────
 
 
@@ -803,12 +800,27 @@ def surface_additions(
     return added
 
 
+def _no_resolver(number: int) -> dict:
+    """The default resolver REFUSES rather than answering.
+
+    A caller that forgot to hand one in gets UNRESOLVED — a red gate — never an allowance it
+    never checked. There is deliberately no shape of this function that returns a permissive
+    answer on missing input.
+    """
+    raise ta.AllowResolutionError(
+        "no reference resolver was supplied to check(), so the pull request this allow entry "
+        "names was never read"
+    )
+
+
 def check(
     root: Path,
     base: str,
     head: str | None = None,
     sibling_paths: list[str] | None = None,
     surface_json: str | None = None,
+    resolve=_no_resolver,
+    this_pr: int | None = None,
 ) -> int:
     before, _, _, members_before = read_base_tree(base)
     after, forwards, head_assemblies, members_after = (
@@ -852,7 +864,17 @@ def check(
             print(f"  … and {len(payload['added']) - 40} more (all of them are in the JSON).")
         return 0
 
-    allow = read_allow(root)
+    # 🚨 #3422: an allow entry is TRANSITIONAL. It is in force only in the diff that ADDS it,
+    # and the pull request it names must still be open — so it expires on merge by mechanism
+    # rather than by a comment asking a future reader to delete the line. An entry the merge base
+    # already carries is INERT: it permits nothing (so it cannot hide the next break) and fails
+    # nothing (so it cannot red every other pull request in the fleet, which is what it did).
+    judgements, landed = ta.judge(root, ALLOW_FILE, base, resolve, head=head, this_pr=this_pr)
+    allow = ta.in_force(judgements)
+    allow_failures = ta.failures(judgements)
+    for line in ta.report(ALLOW_FILE, judgements, landed):
+        print(line)
+
     siblings = {Path(p).resolve().name: read_sibling_tree(Path(p)) for p in (sibling_paths or [])}
     for label, index in siblings.items():
         print(f"Sibling checkout {label}: {sum(len(v) for v in index.values())} public types.")
@@ -877,7 +899,7 @@ def check(
         )
         print("\n\n".join(deletions))
 
-    if not remaining and not unmatched and not departures_failing:
+    if not remaining and not unmatched and not departures_failing and not allow_failures:
         print(f"OK — no unguarded public-type move against {base}.")
         return 0
 
@@ -906,8 +928,9 @@ def check(
         )
     for key in sorted(unmatched):
         print(
-            f"STALE ALLOW ENTRY: {ALLOW_FILE} lists `{key}`, but nothing of that name moved in this\n"
-            f"  diff. Delete the line — an entry that outlives its change hides the next break."
+            f"ALLOW ENTRY PERMITS NOTHING: {ALLOW_FILE} entry `{key}` is added by this diff, but\n"
+            f"  nothing of that name moved in it. An entry that permits nothing hides the next\n"
+            f"  break — delete the line, or make the move it was written for."
         )
     return 1
 
@@ -1575,6 +1598,129 @@ def surface_self_test() -> int:
     return failed
 
 
+
+# ─────────────────────── the transitional allowance, end to end ───────────────────────
+#
+# 🚨 These drive check() on a real repository rather than exercising the classifier in
+# isolation, because the SCOPE half — "already in the merge base" — is a fact about history and
+# cannot be expressed in a fixture of file contents. If check() ever stopped consulting
+# transitional_allow, or went back to reading the allow file whole, the INERT case would go red
+# and the LIVE case would go green: the guard cannot pass having checked nothing.
+
+_WIDGET = "namespace N;\npublic class Widget\n{\n}\n"
+_KEEP = "namespace N;\npublic class Keep\n{\n}\n"
+_TF_ENTRY = "A:N.Widget  #3414 — nothing shipped can bind this TypeRef\n"
+
+
+def allowance_self_test() -> int:
+    import contextlib
+    import io
+    import os
+    import tempfile
+
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    failed = 0
+    here = Path.cwd()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "src" / "A").mkdir(parents=True)
+        (root / "scripts").mkdir()
+        allow = root / ALLOW_FILE
+
+        def g(*args: str) -> None:
+            done = subprocess.run(["git", "-C", str(root), *args], capture_output=True,
+                                  text=True, env=env)
+            if done.returncode != 0:
+                raise RuntimeError(f"git {' '.join(args)}: {done.stderr}")
+
+        def rev() -> str:
+            return subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True).stdout.strip()
+
+        def commit(message: str) -> str:
+            g("add", "-A")
+            g("commit", "-qm", message)
+            return rev()
+
+        def case(label: str, base: str, resolve, expected: int, this_pr: int | None = None) -> None:
+            nonlocal failed
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = check(root, base, resolve=resolve, this_pr=this_pr)
+            if code == expected:
+                print(f"ok: {label}")
+                return
+            failed += 1
+            print(f"SELF-TEST FAILED: {label}\n  expected exit {expected}, got {code}")
+            print("  ---\n  " + buffer.getvalue().strip().replace("\n", "\n  "))
+
+        try:
+            os.chdir(root)
+            g("init", "-q", "-b", "main")
+            (root / "src" / "A" / "Widget.cs").write_text(_WIDGET, encoding="utf-8")
+            (root / "src" / "A" / "Keep.cs").write_text(_KEEP, encoding="utf-8")
+            allow.write_text("# header only\n", encoding="utf-8")
+            base = commit("base")
+
+            # The pull request moves a public type between assemblies with no forwarder.
+            g("checkout", "-q", "-b", "the-move")
+            (root / "src" / "B").mkdir()
+            (root / "src" / "A" / "Widget.cs").unlink()
+            (root / "src" / "B" / "Widget.cs").write_text(_WIDGET, encoding="utf-8")
+            commit("move Widget to B")
+            case("an unforwarded move with no allow entry FAILS", base,
+                 ta._resolver(ta._state()), 1)
+
+            allow.write_text("# header only\n" + _TF_ENTRY, encoding="utf-8")
+            commit("declare the allowance")
+            case("…with an entry naming an OPEN pull request it PASSES", base,
+                 ta._resolver(ta._state()), 0)
+            case("…naming a MERGED pull request it FAILS as stale", base,
+                 ta._resolver(ta._state(merged=True, state="closed")), 1)
+            case("…naming an ISSUE it FAILS", base,
+                 ta._resolver(ta._state(isPullRequest=False)), 1)
+            case("…with an UNRESOLVABLE reference it FAILS rather than passing", base,
+                 ta._raising("could not reach api.github.com"), 1)
+            case("…naming a DIFFERENT pull request than the one under test it FAILS", base,
+                 ta._resolver(ta._state()), 1, this_pr=3415)
+            case("…and naming THIS pull request it PASSES", base,
+                 ta._resolver(ta._state()), 0, this_pr=3414)
+
+            # It merges. Every later pull request now carries the line in its merge base.
+            g("checkout", "-q", "main")
+            g("merge", "-q", "--no-ff", "-m", "merge the move", "the-move")
+            merged = rev()
+
+            # THE #3422 INCIDENT, in this gate's own currency.
+            g("checkout", "-q", "-b", "somebody-else", merged)
+            (root / "src" / "A" / "Other.cs").write_text(
+                "namespace N;\npublic class Other\n{\n}\n", encoding="utf-8")
+            commit("an unrelated change")
+            case("a LATER pull request is NOT reddened by the landed entry", merged,
+                 ta._raising("must not be called"), 0)
+
+            # …and the landed entry allows NOTHING: the SAME key breaking again still fails.
+            # Widget has to be back in A for `A:N.Widget` to be movable a second time, so that
+            # restoration is committed first and becomes the merge base of the next move — the
+            # landed entry sits in that base, exactly as it would on main.
+            g("checkout", "-q", "-b", "restored", merged)
+            (root / "src" / "B" / "Widget.cs").unlink()
+            (root / "src" / "A" / "Widget.cs").write_text(_WIDGET, encoding="utf-8")
+            restored = commit("Widget is back in A")
+            g("checkout", "-q", "-b", "the-next-move", restored)
+            (root / "src" / "A" / "Widget.cs").unlink()
+            (root / "src" / "B" / "Widget.cs").write_text(_WIDGET, encoding="utf-8")
+            commit("move Widget to B again")
+            case("…and the landed entry does NOT hide the next unforwarded move of the SAME type",
+                 restored, ta._raising("must not be called"), 1)
+        finally:
+            os.chdir(here)
+
+    return failed
+
+
 def self_test() -> int:
     failed = 0
     for entry in SELF_TESTS:
@@ -1628,11 +1774,13 @@ def self_test() -> int:
         else:
             print(f"ok: {label}")
     failed += surface_self_test()
+    failed += allowance_self_test()
     if failed:
         print(f"\n{failed} self-test(s) failed — the gate cannot be trusted.")
         return 1
-    print(f"\nAll {len(SELF_TESTS) + len(SURFACE_TESTS)} self-tests passed "
-          f"({len(SELF_TESTS)} forwarder verdict, {len(SURFACE_TESTS)} surface report).")
+    print(f"\nAll {len(SELF_TESTS) + len(SURFACE_TESTS) + 10} self-tests passed "
+          f"({len(SELF_TESTS)} forwarder verdict, {len(SURFACE_TESTS)} surface report, "
+          f"10 transitional allowance).")
     return 0
 
 
@@ -1663,11 +1811,26 @@ def main() -> int:
         "scripts/check-cross-repo-pair.py, which asks a different question of the same set — "
         "did the other half of this cross-repo change land first?",
     )
+    ap.add_argument(
+        "--pr",
+        type=int,
+        default=None,
+        help="the pull request under test. When given, an allow entry must name IT — an entry is "
+        "transitional for ONE change, the one it travels with. A merge_group build has no single "
+        "pull request, so it is omitted there and the weaker rule (the entry must name an OPEN "
+        "pull request) applies; nothing reaches the queue without the pull_request run being green.",
+    )
+    ap.add_argument(
+        "--repo",
+        default=None,
+        help="owner/name whose pull requests an allow entry may name "
+        "(default: $GITHUB_REPOSITORY, else Systemorph/MeshWeaver)",
+    )
     ap.add_argument("--self-test", action="store_true", help="prove the matcher is not vacuous")
     args = ap.parse_args()
 
     if args.self_test:
-        return self_test()
+        return max(ta.self_test(), self_test())
     if not args.base:
         ap.error("--base is required unless --self-test is given")
 
@@ -1681,7 +1844,8 @@ def main() -> int:
             # A typo'd sibling path would silently turn every cross-repo move into a "proven
             # deletion" — the flag's one dangerous failure mode, since it RELAXES the verdict.
             ap.error(f"--sibling {path}: no src/ directory there")
-    return check(root, args.base, args.head, args.sibling, args.surface_json)
+    return check(root, args.base, args.head, args.sibling, args.surface_json,
+                 ta.resolver_from_env(args.repo), args.pr)
 
 
 if __name__ == "__main__":
