@@ -1339,7 +1339,18 @@ public class Workspace : IWorkspace
                 // sync hub (SynchronizationStream assigns its own sync/{clientId} sub-hub to
                 // .Hub — never the owner hub). The stream's own disposal registration then finds
                 // the entry already gone and does nothing.
-                kv.Value.Stream.Hub.Dispose();
+                // 🚨 A NULL check, deliberately NOT a liveness check (#3321 step 3). Guarding this
+                // with IsUsable would SKIP a disposal — a reduced stream whose PARENT died first is
+                // unusable while its own hub is still very much alive, and leaving that one
+                // undisposed is the leak this whole issue is about. `Hub is { }` only skips when
+                // the stream has already RELEASED the reference, which since step 3 means the hub
+                // is disposed: there is nothing left to dispose and nothing left to leak.
+                if (kv.Value.Stream.Hub is { } streamHub)
+                    streamHub.Dispose();
+                else
+                    _logger.LogDebug(
+                        "Workspace {WorkspaceId}: server-side stream {StreamId} for {Subscriber} had "
+                        + "already released its hub — nothing to dispose", Id, kv.Key.StreamId, subscriberPath);
                 evicted++;
             }
             catch (Exception ex)

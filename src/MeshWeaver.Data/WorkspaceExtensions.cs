@@ -92,6 +92,11 @@ public static class WorkspaceExtensions
     /// <param name="stream">The stream the change is attributed to (provides id and version).</param>
     /// <param name="storeAndUpdates">The new store together with the list of entity updates that produced it.</param>
     /// <returns>A patch change item ready to be pushed into the stream.</returns>
+    /// <exception cref="MeshWeaver.Messaging.HubDisposingException">The stream has released its hub
+    /// (#3321 step 3). Like a patch reducer, this helper MUST return a change, so a throw is its
+    /// only refusal channel — and this one is transient (<c>ErrorType.ShuttingDown</c>), so a caller
+    /// inside a <c>stream.Update(…)</c> lambda routes it to its own <c>exceptionCallback</c>
+    /// instead of NRE'ing on a released field.</exception>
     public static ChangeItem<EntityStore> ApplyChanges(
         this ISynchronizationStream<EntityStore>? stream,
         EntityStoreAndUpdates storeAndUpdates) =>
@@ -99,7 +104,7 @@ public static class WorkspaceExtensions
             storeAndUpdates.ChangedBy ?? stream!.StreamId,
             stream!.StreamId,
             ChangeType.Patch,
-            stream!.Hub.Version,
+            stream!.RequireHub().Version,
             storeAndUpdates.Updates.ToArray()
             );
 

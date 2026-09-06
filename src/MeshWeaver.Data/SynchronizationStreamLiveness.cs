@@ -34,11 +34,14 @@ namespace MeshWeaver.Data;
 /// <c>JsonSynchronizationStream</c> and <c>StreamNotConvergingException</c> already point readers at
 /// "StreamLiveness.IsUsable", and a consumer following one of them must find the thing it names.</para>
 ///
-/// <para>🚨 <b>This is step 1 alone, and it changes no behaviour.</b> Steps 2 and 3 of #3321 —
-/// migrating the 47 dereference sites onto <see cref="TryGetHub"/>, and only THEN dropping the
-/// <c>Hub</c> reference on disposal so the leaked hub graph is released — are deliberately NOT done
-/// here. Dropping the reference before the call sites can answer "no" is precisely the production
-/// incident above, in the same order it happened.</para>
+/// <para>🚨 <b>All three steps of #3321 have landed, in the only order that works.</b> Step 1
+/// (#3380) added these two methods and changed no behaviour. Step 2 (#3386) migrated the consumer
+/// dereference sites onto <see cref="TryGetHub"/>. Step 3 then released the reference — from BOTH
+/// ends, because only 11 of the 1 496 corpses in the production dump sat under a stream that had
+/// itself been disposed; the other 1 485 were hosted sub-hubs killed by their parent's teardown
+/// under a stream nobody ever disposed. Dropping the reference before the call sites could answer
+/// "no" is precisely the production incident above, in the same order it happened — which is why
+/// this file came first. See <c>Doc/Architecture/StreamLivenessAndTheHubReference</c>.</para>
 /// </summary>
 public static class SynchronizationStreamLiveness
 {
@@ -78,4 +81,71 @@ public static class SynchronizationStreamLiveness
     /// mirrors something that is.</returns>
     public static IMessageHub? TryGetHub(this ISynchronizationStream? stream)
         => stream.IsUsable() ? stream!.Hub : null;
+
+    /// <summary>
+    /// The stream's hub if it still HOLDS one, otherwise <c>null</c> — the PRESENCE accessor, and
+    /// the migration target for an OWNER-SIDE <c>stream.Hub.Something</c> whose previous behaviour
+    /// was unconditional (Systemorph/MeshWeaver#3321, step 3 of 3).
+    ///
+    /// <para>🚨 <b>Presence is a different question from liveness, and using the wrong one is a
+    /// behaviour change — measured, not theorised.</b> Migrating
+    /// <c>DataSource.Initialized</c> (<c>Task.WhenAll(streams.Select(s =&gt; s.Hub.Started))</c>) onto
+    /// <see cref="TryGetHub"/> silently BROKE
+    /// <c>DataContextFaultedInitBeforeStreamHubBoundTest</c>: a stream whose initial load faults is
+    /// not <see cref="IsUsable"/> — that is the whole point of <c>IsFaulted</c> — so the guard
+    /// excluded it from the WhenAll, <c>Initialized</c> completed SUCCESSFULLY, and a hub whose
+    /// data source had thrown started answering requests as though nothing had happened. Faulting
+    /// that <c>Started</c> task is exactly what must still be awaited.</para>
+    ///
+    /// <para>So the rule is: <b><see cref="TryGetHub"/> where the site is asking "should I use this
+    /// stream?" (a consumer, a cache, a read); this one where the site is asking "is the reference
+    /// still there?" (an owner writing into its own stream, where refusing a merely winding-down
+    /// hub would change what the code does).</b> Step 2 declined to tighten already-working sites
+    /// for the same reason, and this method is what lets step 3 make them null-safe without
+    /// tightening them either.</para>
+    ///
+    /// <para>Answers <c>null</c> for a <c>null</c> stream, so a nullable stream can be tested
+    /// directly. It reads the field ONCE — which is the other half of the point: a caller that
+    /// re-reads <c>stream.Hub</c> after its own guard is check-then-act across threads, because a
+    /// <c>Dispose()</c> elsewhere can land in between.</para>
+    /// </summary>
+    /// <param name="stream">The stream to read the hub from, or <c>null</c>.</param>
+    /// <returns>The hub, or <c>null</c> when the stream is <c>null</c> or has released it.</returns>
+    public static IMessageHub? HubIfHeld(this ISynchronizationStream? stream)
+        => stream?.Hub;
+
+    /// <summary>
+    /// The stream's hub, or a TRANSIENT <see cref="HubDisposingException"/> when the stream has
+    /// RELEASED it — the same PRESENCE question as <see cref="HubIfHeld"/>, for a surface whose
+    /// signature admits no absent value (Systemorph/MeshWeaver#3321, step 3 of 3).
+    ///
+    /// <para>🚨 <b>This is NOT a liveness predicate and must never grow into one.</b>
+    /// <see cref="IsUsable"/> is the ONE liveness answer — it walks the reduce chain, counts a
+    /// faulted store, and refuses a hub that has merely begun winding down. This method asks a
+    /// strictly narrower and purely factual question: <b>is the reference still there?</b> Step 3
+    /// made <c>Hub</c> clearable — <c>SynchronizationStream.Dispose()</c> and the stream's
+    /// hub-death hook both drop it, which is what releases the leaked
+    /// <c>stream → dead hub → resolved state</c> graph — so "absent" became a state the field can
+    /// really be in. Tightening this to <see cref="IsUsable"/> would refuse a WINDING-DOWN or
+    /// FAULTED but still-present hub and so change behaviour on live paths (see
+    /// <see cref="HubIfHeld"/> for the measured instance); keeping them separate is also what stops
+    /// this from becoming the fourth hand-copied liveness predicate (#1455).</para>
+    ///
+    /// <para><b>Why a throw is the right refusal here.</b> The callers are patch reducers
+    /// (<c>StandardReducers</c>, <c>MeshDataSource.PatchMeshNode</c>) whose signature is
+    /// <c>… → ChangeItem&lt;T&gt;</c>: they MUST return a change, so a throw is the only channel
+    /// they have, and inventing a sentinel change would be worse than saying so.
+    /// <see cref="HubDisposingException"/> is an <see cref="System.ObjectDisposedException"/>, so
+    /// it classifies as <c>ErrorType.ShuttingDown</c> — the transient "ask again" answer — instead
+    /// of the terminal <c>DeliveryFailure</c> the predecessor's raw NRE produced. Their single
+    /// gateway, <c>JsonSynchronizationStream.ToChangeItem</c>, catches exactly this type and
+    /// answers with the <c>null</c> its own signature already models, so a reducer racing a
+    /// disposal degrades to "no patch derived" rather than to a fault.</para>
+    /// </summary>
+    /// <param name="stream">The stream to read the hub from.</param>
+    /// <returns>The stream's hub; never <c>null</c>.</returns>
+    /// <exception cref="HubDisposingException">The stream has released its hub.</exception>
+    public static IMessageHub RequireHub(this ISynchronizationStream stream)
+        => stream.HubIfHeld()
+           ?? throw new HubDisposingException(stream.Host.Address, stream.Reference);
 }

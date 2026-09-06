@@ -309,13 +309,27 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 
     /// <summary>
     /// A task that completes once every created stream's hub has started.
+    ///
+    /// <para>🚨 A stream that has RELEASED its hub contributes nothing to wait for (#3321 step 3):
+    /// the hub is gone, so its <c>Started</c> task cannot be reached, let alone settle.</para>
+    ///
+    /// <para>🚨 <b>And the guard is PRESENCE (<c>HubIfHeld</c>), never liveness
+    /// (<c>TryGetHub</c>) — measured.</b> Writing this with <c>TryGetHub()</c> broke
+    /// <c>DataContextFaultedInitBeforeStreamHubBoundTest</c>: a stream whose initial load FAULTS is
+    /// not <c>IsUsable</c>, so it was excluded from the WhenAll, this task completed
+    /// SUCCESSFULLY, and a hub whose data source had thrown went on answering requests as though
+    /// nothing had happened. A faulted stream's <c>Started</c> task is the very thing that must
+    /// still be awaited — it is how the fault reaches <c>DataContext</c>'s gate.</para>
     /// </summary>
     public Task Initialized
     {
         get
         {
             lock (Streams)
-                return Task.WhenAll(Streams.Values.Select(s => s.Hub.Started));
+                return Task.WhenAll(Streams.Values
+                    .Select(s => s.HubIfHeld())
+                    .Where(h => h is not null)
+                    .Select(h => h!.Started));
         }
     }
     /// <summary>

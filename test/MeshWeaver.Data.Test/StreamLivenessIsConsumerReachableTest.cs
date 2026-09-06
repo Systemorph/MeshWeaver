@@ -97,11 +97,16 @@ public class StreamLivenessIsConsumerReachableTest(ITestOutputHelper output) : H
 
         stream.Dispose();
 
-        // 🚨 The assertion that names the defect. Hub is NOT null here — the contract's promise is
-        // kept to the letter — so nothing about `stream.Hub.Anything` looks wrong at a call site.
-        stream.Hub.Should().NotBeNull(
-            "the non-nullable contract still holds after disposal, which is precisely why a "
-            + "consumer needed a separate way to ask");
+        // 🚨 This assertion INVERTED at step 3 (#3321), and the inversion is the whole point of the
+        // three-step order. Through steps 1 and 2 it read `Hub.Should().NotBeNull()` — the
+        // non-nullable contract was kept to the letter, so nothing about `stream.Hub.Anything`
+        // looked wrong at a call site, which is precisely why a consumer needed a separate way to
+        // ask. Step 3 is what made "absent" a state the field can be in, and it was only safe to
+        // ship BECAUSE steps 1 and 2 had landed: the accessor below existed, and every call site
+        // that could race a teardown had been migrated onto it.
+        stream.Hub.Should().BeNull(
+            "step 3 releases the hub on disposal — that release is what reclaims the leaked "
+            + "stream → dead hub → resolved state graph");
         stream.IsUsable().Should().BeFalse("a disposed stream is a corpse");
         stream.TryGetHub().Should().BeNull("the accessor is the way a consumer finds that out");
     }
