@@ -213,8 +213,8 @@ public static class BakeOutput
             .Timeout(ReadBudget, Observable.Defer(() => Observable.Throw<(MeshNode Node, NodeTypeDefinition? Def)>(
                 new InvalidOperationException(
                     $"bake: '{typePath}' did not settle within {ReadBudget.TotalSeconds:0}s — last seen: "
-                    + $"{lastReason ?? "no record"}. The bake ships only a record whose compile has reached "
-                    + "its terminal state and whose release requests are handled (MeshWeaver#3370)."))))
+                    + $"{lastReason ?? "no record"}. The bake ships only a record at CompilationStatus.Ok "
+                    + "with no compile in flight and every release request handled (MeshWeaver#3370)."))))
             .SelectMany(x =>
             {
                 var node = x.Node;
