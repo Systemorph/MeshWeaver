@@ -58,8 +58,56 @@ public class EmitCanaryDissectionTest
             + "answers UNAVAILABLE for ever and #890's discriminator is gone with nothing red");
 
         dissection.Should().StartWith("dissect=READS-HEALTHY",
-            "both legs resolved and answered, so the verdict must be the one that says the reads "
+            "every leg resolved and answered, so the verdict must be the one that says the reads "
             + "work — never UNAVAILABLE, which would mean the probe never ran");
+
+        dissection.Should().Contain("TOP-LEVEL",
+            "READS-HEALTHY must state that the null-polarity read was made. Leg 3 shipped reading "
+            + "only the two containers that must be NON-null, and the first two readings it ever "
+            + "produced (2026-09-05, 2026-09-06) were earned on that half alone — while the read "
+            + "the metadata writer's guard actually makes is the TOP-LEVEL one, which must come "
+            + "back NULL. A verdict that claims health without naming that read is claiming more "
+            + "than it measured");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The branch a healthy process can never produce, and therefore the one only a pure
+    /// function can cover.</b>
+    ///
+    /// <para><c>getConsolidatedTypeParameters</c> recurses up the containing chain calling
+    /// <c>AsNestedTypeDefinition</c> (whose guard reads <c>ContainingType != null</c>) and then
+    /// <c>ITypeDefinitionMember.ContainingTypeDefinition</c> (which dereferences the same
+    /// <c>ContainingType</c>) back to back. At the TOP-LEVEL type the guard must answer FALSE and
+    /// stop the walk. If that read answers TRUE, the property is called on a type whose
+    /// <c>ContainingType</c> is null <i>correctly</i> — and throws the #890 NRE at the #890 frame,
+    /// with no corrupted symbol and no pair of disagreeing reads. That path is invisible to a probe
+    /// that only asks whether non-null reads come back non-null.</para>
+    /// </summary>
+    [Theory]
+    // leaf   inner  topLevel      expected token
+    [InlineData(true, true, false, "symbol:OK")]
+    [InlineData(true, true, true, "symbol:NON-NULL@MwEmitCanary.ContainingType")]
+    [InlineData(false, true, false, "symbol:NULL@Leaf.ContainingType")]
+    [InlineData(true, false, false, "symbol:NULL@Inner.ContainingType")]
+    public void TheClassification_ReadsBOTHPolarities(
+        bool leaf, bool inner, bool topLevel, string expected)
+        => EmitPipeline.ClassifySymbolReads(leaf, inner, topLevel).Should().Be(expected,
+            "a top-level type has no containing type, so a NON-null read there is a fault of the "
+            + "opposite polarity to the two above — and it is the polarity #890's own stack sits "
+            + "on. Collapsing it into symbol:OK would report a broken process as healthy");
+
+    /// <summary>
+    /// The verdict the new polarity produces has to send triage somewhere different from
+    /// SYMBOL-GRAPH-BROKEN: nothing about the symbol graph is wrong in that case — the graph is
+    /// right and the READ of it is wrong, which is a one-property-call reproduction.
+    /// </summary>
+    [Fact]
+    public void AGuardReadThatAnswersTrueForATopLevelType_IsItsOwnVerdict()
+    {
+        EmitPipeline.ClassifySymbolReads(true, true, topLevelContainer: true)
+            .Should().NotBe("symbol:OK")
+            .And.NotStartWith("symbol:NULL",
+                "it is not a NULL read — it is a read that should have been null and was not");
     }
 
     /// <summary>
