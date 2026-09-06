@@ -84,7 +84,17 @@ public interface ISynchronizationStream : IDisposable
     /// reference cannot be reduced.</returns>
     ISynchronizationStream<TReduced>? ReduceShared<TReduced>(WorkspaceReference<TReduced> reference);
 
-    /// <summary>The message hub associated with this stream.</summary>
+    /// <summary>The message hub associated with this stream.
+    ///
+    /// <para>🚨 <b>Non-nullable in the contract, but not in life.</b> A stream whose owner has been
+    /// torn down keeps answering this property, and the hub it hands back may already be winding
+    /// down — dereferencing it is how a recycle window produced an NRE inside
+    /// <c>LayoutAreaHost</c>'s constructor that escaped to the subscriber as a TERMINAL
+    /// <c>DeliveryFailure</c> (Systemorph/MeshWeaver#3321). On any path that can run concurrently
+    /// with teardown, prefer <see cref="SynchronizationStreamLiveness.TryGetHub"/>, which answers
+    /// <c>null</c> instead, or gate on
+    /// <see cref="SynchronizationStreamLiveness.IsUsable(ISynchronizationStream?)"/>.</para>
+    /// </summary>
     IMessageHub Hub { get; }
     /// <summary>The hub that hosts the underlying data source backing this stream.</summary>
     IMessageHub Host { get; }
