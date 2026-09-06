@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -289,7 +290,8 @@ public static class PluginGateRunner
                         options.Output.WriteLine(
                             $"── {package.Id}: installed ({install.Written} written, " +
                             $"{install.Unchanged} unchanged); checking {types.Count} NodeType(s)…");
-                        return types
+                        return VerifyContentAssets(harness, options, install)
+                            .SelectMany(content => types
                             .Select(type => TestNodeType(harness, options, type))
                             .ToObservable().Concat().ToList()
                             // The idempotence pin: a SECOND install of the same snapshot must write
@@ -308,6 +310,9 @@ public static class PluginGateRunner
                                     Upstream = upstream,
                                     Support = support,
                                     NodeCount = install.Total,
+                                    ContentAssets = content.Assets,
+                                    ContentAssetsServed = content.Served,
+                                    ContentError = content.Error,
                                     IdempotenceError = second.Written == 0
                                         ? null
                                         : $"re-install of the unchanged snapshot wrote {second.Written} node(s) " +
@@ -323,9 +328,12 @@ public static class PluginGateRunner
                                     Upstream = upstream,
                                     Support = support,
                                     NodeCount = install.Total,
+                                    ContentAssets = content.Assets,
+                                    ContentAssetsServed = content.Served,
+                                    ContentError = content.Error,
                                     IdempotenceError = $"re-install failed: {ex.GetType().Name}: {ex.Message}",
                                     NodeTypes = typeResults.ToImmutableList(),
-                                })));
+                                }))));
                     });
             })
             .Catch((Exception ex) => Observable.Return(new PackageResult(package.Id)
@@ -338,6 +346,125 @@ public static class PluginGateRunner
                 InstallError = $"[{stage}] {ex.GetType().Name}: {ex.Message}",
             }));
     }
+
+    /// <summary>
+    /// 🚨 <b>THE CONTENT-ASSET CHECK (#3424) — the gate's verdict on a package's committed
+    /// binaries.</b> Every <c>content/**</c> asset the install carried must have been PUBLISHED
+    /// into its root's <c>content</c> collection, and every published one must READ BACK through
+    /// the content route. Returns the failure detail, or null when the package is clean (and null
+    /// outright for a package that carries no assets).
+    ///
+    /// <para><b>Why the read-back, and not just the count.</b> The publish deliberately
+    /// logs-and-continues — a package whose nodes landed and whose binaries did not is better than
+    /// a half-written package — so a count alone tells the gate only what the installer believed.
+    /// The route is what a course's <c>&lt;video src&gt;</c> actually resolves through:
+    /// <see cref="ContentFileResolver.Resolve"/> is the ONE server-side reading of a content
+    /// reference (the owning node's own hub answers with its collection config, gated by an
+    /// ordinary node Read), and the collection then either has the bytes at that path or does not.
+    /// A wrong path publishes "successfully" into the wrong place and fails here.</para>
+    ///
+    /// <para>Reads the SIZE, never the bytes: a course video is tens of megabytes and existence is
+    /// the whole question. Errors are reported per asset with the path named — an unnamed content
+    /// failure is undiagnosable, exactly as the idempotence pin's unnamed count was.</para>
+    /// </summary>
+    private static IObservable<ContentCheck> VerifyContentAssets(
+        GateMesh harness, GateOptions options, InstallResult install)
+    {
+        var carried = install.ContentAssets;
+        if (carried == 0)
+            return Observable.Return(ContentCheck.NoAssets);
+        if (install.ContentRoot is not { Length: > 0 } root)
+            return Observable.Return(new ContentCheck(carried, 0,
+                $"the install carried {carried} content asset(s) but named no target root, so none "
+                + "of them could be published"));
+
+        var published = install.ContentAssetsPublished ?? [];
+        if (published.Count < carried)
+            return Observable.Return(new ContentCheck(carried, 0,
+                $"only {published.Count} of {carried} content asset(s) reached '{root}'s content "
+                + "collection — the package's nodes are installed and its binaries are not being "
+                + "served. The installer logs the refusal at Warning; the usual cause is a host "
+                + "whose partition roots carry no content collection at all (\"No handler found "
+                + "for message type SyncContentFilesRequest\")."));
+
+        // 🚨 The MESH HUB's provider, not the mesh's root DI container: AddContentCollections()
+        // registers IContentService through the hub configuration's WithServices, so the root
+        // container never sees it (measured — "The requested service … has not been registered").
+        var contentService = harness.Mesh.ServiceProvider.GetRequiredService<IContentService>();
+        options.Output.WriteLine(
+            $"── {root}: verifying {published.Count} published content asset(s) read back…");
+        return published
+            .Select(path => ReadContentAssetBack(harness, contentService, root, path))
+            .ToObservable()
+            .Concat()
+            .ToList()
+            // The whole check shares the install budget — it is a handful of resolves and stat
+            // calls, so exceeding it means something is wedged, not slow.
+            .Timeout(options.InstallTimeout)
+            .Select(reads =>
+            {
+                var unserved = reads.Where(r => r.Reason is not null).ToArray();
+                return new ContentCheck(carried, reads.Count - unserved.Length,
+                    unserved.Length == 0
+                        ? null
+                        : $"{unserved.Length} of {published.Count} published content asset(s) do "
+                          + $"not read back from '{root}'s content collection: "
+                          + string.Join("; ", unserved.Select(r => $"'{r.Path}' — {r.Reason}")));
+            })
+            .Catch((Exception ex) => Observable.Return(new ContentCheck(carried, 0,
+                $"the content read-back did not complete: {ex.GetType().Name}: {ex.Message}")));
+    }
+
+    /// <summary>
+    /// The content-asset verdict for one package: how many binaries it carried, how many are
+    /// actually SERVED, and the detail when those differ. A count, not just an absent error — a
+    /// green check has to say what it verified (see <c>PackageResult.CountsMeasured</c> for the
+    /// same rule one column over).
+    /// </summary>
+    /// <param name="Assets">The <c>content/**</c> assets the package carried.</param>
+    /// <param name="Served">Assets published AND read back through the content route.</param>
+    /// <param name="Error">Why they differ, or null.</param>
+    private sealed record ContentCheck(int Assets, int Served, string? Error)
+    {
+        /// <summary>A package shipping no binaries — nothing to publish, nothing to verify.</summary>
+        public static ContentCheck NoAssets { get; } = new(0, 0, null);
+    }
+
+    /// <summary>
+    /// One published asset, read back exactly as the content route reads it: resolve the reference
+    /// on the owning node, register the resolved config under its qualified name (two nodes
+    /// inheriting one ancestor collection must not share a cache entry), then probe the file.
+    /// </summary>
+    private static IObservable<ContentReadBack> ReadContentAssetBack(
+        GateMesh harness, IContentService contentService, string root, string path)
+    {
+        var reference =
+            $"{root}/{ContentCollectionsExtensions.DefaultCollectionName}/{path}";
+        return ContentFileResolver.Resolve(harness.Mesh, reference)
+            .SelectMany(result =>
+            {
+                if (result.Resolution is not { } resolution)
+                    return Observable.Return(new ContentReadBack(
+                        path, result.Reason ?? "the reference could not be resolved"));
+                contentService.AddConfiguration(resolution.QualifiedConfig);
+                return contentService.GetCollection(resolution.QualifiedName)
+                    .SelectMany(collection => collection is null
+                        ? Observable.Return(new ContentReadBack(path,
+                            $"content collection '{resolution.Collection.Name}' could not be opened"))
+                        : collection.GetContentSize(resolution.FilePath)
+                            .Select(size => new ContentReadBack(path, size is null
+                                ? $"nothing is served at '{resolution.FilePath}' in collection "
+                                  + $"'{resolution.Collection.Name}'"
+                                : null)));
+            })
+            .Catch((Exception ex) => Observable.Return(
+                new ContentReadBack(path, $"{ex.GetType().Name}: {ex.Message}")));
+    }
+
+    /// <summary>One published content asset's read-back: the path, and why it is not served.</summary>
+    /// <param name="Path">The collection-relative path of the asset.</param>
+    /// <param name="Reason">Why it does not read back, or null when it does.</param>
+    private sealed record ContentReadBack(string Path, string? Reason);
 
     /// <summary>One NodeType of one package, as parsed from its file (pre-install).</summary>
     internal sealed record NodeTypeUnderTest(
@@ -806,6 +933,47 @@ public static class PluginGateRunner
                 .InstallConfiguredModules(gateModules,
                     msg => output.WriteLine($"[gate modules] {msg}"))
                 .AddPluginCatalog()
+                // 🚨 THE CONTENT-COLLECTION MOUNT — the PORTAL's shape, on the gate's own per-node
+                // hubs (#3424). A package publishes its committed `content/**` binaries by posting
+                // one SyncContentFilesRequest to its partition ROOT's hub, and the handler for that
+                // message is registered by AddContentCollections() and by nothing else. A portal
+                // has it on EVERY per-node hub because MemexConfiguration's own
+                // ConfigureDefaultNodeHub maps a collection there; AddGraph()'s default node chain
+                // does not, and neither does the `Store/Plugin` NodeType most package roots
+                // declare. So the tester's roots answered "No handler found for message type
+                // SyncContentFilesRequest" — the publish was refused BEFORE the collection question
+                // was even asked, ~30 DeliveryFailures per run (measured: the same 15 packages on
+                // every Education bake, and on Reinsurance's test-repos job), and the gate never
+                // once exercised the path that serves a package's binaries. A course whose video
+                // never lands passed.
+                //
+                // Same rule as production, both halves: the handler + service go on EVERY node hub
+                // (a child reads its Space's collection through its own hub), and the WRITABLE
+                // `content` collection is mounted ONCE per Space — on the partition root, gated on
+                // a single-segment path — with ExposeInChildren so children inherit it. Backed by
+                // this run's own temp root, so two concurrent gate runs cannot see each other's
+                // bytes and the whole thing dies with the container.
+                .ConfigureDefaultNodeHub(config =>
+                {
+                    var nodePath = config.Address.ToString();
+                    if (nodePath.Contains('/'))
+                        return config.AddContentCollections();
+                    var basePath = Path.Combine(runRoot, "content", nodePath);
+                    return config.AddContentCollection(_ => new ContentCollectionConfig
+                    {
+                        Name = ContentCollectionsExtensions.DefaultCollectionName,
+                        SourceType = "FileSystem",
+                        BasePath = basePath,
+                        Address = config.Address,
+                        IsEditable = true,
+                        ExposeInChildren = true,
+                        // Published on the access-controlled content route, exactly as a portal
+                        // mounts it: the gate's read-back resolves through ContentFileResolver,
+                        // which reports the collection's real IsStatic.
+                        IsStatic = true,
+                        Settings = new Dictionary<string, string> { ["BasePath"] = basePath },
+                    });
+                })
                 .AddMeshNodes(RootAdminAccess())
                 // Per-run isolated assembly store + compilation cache (AddInMemoryPersistence
                 // TryAdds a process-pid-scoped store — REPLACE it, mirroring the test base).

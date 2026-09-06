@@ -52,6 +52,12 @@ public class GateRunReportContractTest
                 NodeCount = 1,
                 InstallError = "import faulted",
                 IdempotenceError = "second install wrote 2 node(s)",
+                // #3424: the content-asset verdict is verdict-bearing, so it crosses the process
+                // boundary with the other two. A package whose ONLY red is its unserved binaries
+                // must not read as green to the combo verifier.
+                ContentAssets = 3,
+                ContentAssetsServed = 0,
+                ContentError = "only 0 of 3 content asset(s) reached 'Store's content collection",
             },
         ]);
 
@@ -77,7 +83,23 @@ public class GateRunReportContractTest
         var store = read.Packages.Single(p => p.Id == "Store");
         store.InstallError.Should().Be("import faulted");
         store.IdempotenceError.Should().Be("second install wrote 2 node(s)");
+        store.ContentError.Should().Be(
+            "only 0 of 3 content asset(s) reached 'Store's content collection");
         store.Success.Should().BeFalse();
+
+        // …and the content verdict ALONE is enough to fail a package on the far side.
+        var contentOnly = Roundtrip(new GateReport(
+        [
+            new PackageResult("Assets")
+            {
+                NodeCount = 1,
+                ContentAssets = 2,
+                ContentAssetsServed = 1,
+                ContentError = "1 of 2 published content asset(s) do not read back",
+            },
+        ]));
+        contentOnly.Packages.Single().Success.Should().BeFalse(
+            "an unserved binary is a red package, with nothing else wrong");
     }
 
     [Fact]

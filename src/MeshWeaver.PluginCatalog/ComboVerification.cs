@@ -265,6 +265,14 @@ public sealed record GateRunPackage
     /// <summary>Re-install idempotence failure detail; null when the re-install wrote nothing.</summary>
     public string? IdempotenceError { get; init; }
 
+    /// <summary>
+    /// Content-asset failure detail: the package's committed <c>content/**</c> binaries were not
+    /// published into its root's content collection, or were published and cannot be read back
+    /// through the content route. Null when every asset it carries is being served (and when it
+    /// carries none). See <c>PackageInstaller.ContentPublication</c> — issue #3424.
+    /// </summary>
+    public string? ContentError { get; init; }
+
     /// <summary>Per-NodeType gate results.</summary>
     public ImmutableList<GateRunNodeType> NodeTypes { get; init; } = [];
 
@@ -273,6 +281,7 @@ public sealed record GateRunPackage
     public bool Success =>
         InstallError is null
         && IdempotenceError is null
+        && ContentError is null
         && NodeTypes.All(t => t.Success);
 }
 

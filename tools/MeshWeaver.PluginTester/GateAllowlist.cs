@@ -11,7 +11,7 @@ namespace MeshWeaver.PluginTester;
 /// <para>File format: one entry per line, <c>#</c> comments, blank lines ignored:</para>
 /// <code>
 /// &lt;scope&gt; &lt;check&gt;
-/// Claims idempotence          # package-level checks: install, idempotence
+/// Claims idempotence          # package-level checks: install, idempotence, content
 /// Edu/Exercise tests          # type-level checks: compile, render, tests
 /// </code>
 /// </summary>
@@ -42,7 +42,7 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
     /// <summary>The valid check names, package-level and type-level.</summary>
     public static readonly IReadOnlySet<string> Checks =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "install", "idempotence", "compile", "render", "tests" };
+            { "install", "idempotence", "content", "compile", "render", "tests" };
 
     /// <summary>Parses the allow file, throwing on a malformed line — a typo that silently
     /// allowed nothing (or everything) would defeat the ratchet.</summary>
@@ -289,7 +289,7 @@ public sealed record GateVerdict(
 
     /// <summary>The checks in pipeline order — the order <see cref="Headline"/> lists them in.</summary>
     private static readonly string[] CheckOrder =
-        ["install", "idempotence", "compile", "render", "tests"];
+        ["install", "idempotence", "content", "compile", "render", "tests"];
 
     /// <summary>
     /// The not-passing kinds, most-conclusive first — so a run carrying a REAL compile error and a
@@ -309,6 +309,8 @@ public sealed record GateVerdict(
                 yield return new GateFailure(package.Id, "install", package.InstallError);
             if (package.IdempotenceError is not null)
                 yield return new GateFailure(package.Id, "idempotence", package.IdempotenceError);
+            if (package.ContentError is not null)
+                yield return new GateFailure(package.Id, "content", package.ContentError);
             foreach (var type in package.NodeTypes)
             {
                 // 🚨 .Fails(), never `== Failed`. An equality test here would have DROPPED every
@@ -341,6 +343,9 @@ public sealed record GateVerdict(
                 {
                     "install" => package.InstallError is null,
                     "idempotence" => package.InstallError is null && package.IdempotenceError is null,
+                    // An install that never reported cannot have exercised the content publish, so
+                    // its silence is not a pass — the same rule the idempotence entry follows.
+                    "content" => package.InstallError is null && package.ContentError is null,
                     _ => false,
                 };
             foreach (var type in package.NodeTypes)

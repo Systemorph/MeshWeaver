@@ -220,11 +220,48 @@ public sealed record PackageResult(string Id)
     /// </summary>
     public string? IdempotenceError { get; init; }
 
+    /// <summary>
+    /// Content-asset failure detail: the package's committed <c>content/**</c> binaries — course
+    /// videos and their posters, og images, fonts — are not being served after the install. Null
+    /// when every asset it carries was published AND reads back through the content route, and
+    /// null for a package that carries none.
+    ///
+    /// <para>🚨 Why this is a CHECK and not a log line (#3424). The publish deliberately
+    /// logs-and-continues, so a host on which it cannot land at all — the tester's own mesh, whose
+    /// package roots had no <c>SyncContentFilesRequest</c> handler and no <c>content</c> collection
+    /// — produced 30 warnings a run and a GREEN verdict, for every satellite, for months. A package
+    /// whose <c>content/**</c> is broken (a wrong path, a video its course's <c>&lt;video src&gt;</c>
+    /// points at that never lands) passed the gate. The gate now MOUNTS the collection the way a
+    /// portal does and reads every published asset back, so the assets are exercised and the
+    /// verdict says so.</para>
+    /// </summary>
+    public string? ContentError { get; init; }
+
+    /// <summary>
+    /// How many <c>content/**</c> assets the package carried — a MEASUREMENT, so a green content
+    /// check says <i>what it verified</i> rather than merely "nothing complained". Zero is the
+    /// honest reading for a package that ships no binaries, which is why the check is also
+    /// reported as a count and not only as an absent error.
+    /// </summary>
+    public int ContentAssets { get; init; }
+
+    /// <summary>
+    /// How many of those assets were published AND read back through the content route. Equal to
+    /// <see cref="ContentAssets"/> on a clean run; anything less has a <see cref="ContentError"/>
+    /// naming the paths.
+    /// </summary>
+    public int ContentAssetsServed { get; init; }
+
     /// <summary>Per-NodeType gate results.</summary>
     public IReadOnlyList<NodeTypeResult> NodeTypes { get; init; } = [];
 
-    /// <summary>True when the install, the re-install idempotence pin and every NodeType gate passed.</summary>
-    public bool Success => InstallError is null && IdempotenceError is null && NodeTypes.All(t => t.Success);
+    /// <summary>
+    /// True when the install, the re-install idempotence pin, the content-asset check and every
+    /// NodeType gate passed.
+    /// </summary>
+    public bool Success =>
+        InstallError is null && IdempotenceError is null && ContentError is null
+        && NodeTypes.All(t => t.Success);
 }
 
 /// <summary>The whole run's outcome: per-package results and the process exit code.</summary>
@@ -257,6 +294,7 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
                 NodeCount = package.NodeCount,
                 InstallError = package.InstallError,
                 IdempotenceError = package.IdempotenceError,
+                ContentError = package.ContentError,
                 NodeTypes = package.NodeTypes
                     .Select(type => new GateRunNodeType
                     {
@@ -308,12 +346,17 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
                              (package.CountsMeasured
                                  ? $"({package.NodeCount} node(s), {package.NodeTypes.Count} type(s))"
                                  : "(counts unavailable — the pipeline threw before the install reported)") +
+                             (package.ContentAssets == 0
+                                 ? string.Empty
+                                 : $" [{package.ContentAssetsServed}/{package.ContentAssets} content asset(s) served]") +
                              (package.Upstream ? " [upstream: installed, not gated here]" : "") +
                              (package.Support ? " [support: installed, gated on another shard]" : ""));
             if (package.InstallError is not null)
                 output.WriteLine($"    install{Debt(verdict, package.Id, "install")}: {package.InstallError}");
             if (package.IdempotenceError is not null)
                 output.WriteLine($"    idempotence{Debt(verdict, package.Id, "idempotence")}: {package.IdempotenceError}");
+            if (package.ContentError is not null)
+                output.WriteLine($"    content{Debt(verdict, package.Id, "content")}: {package.ContentError}");
             foreach (var type in package.NodeTypes)
             {
                 output.WriteLine(
@@ -368,6 +411,7 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
         var allKnown =
             (package.InstallError is null || verdict.IsKnownDebt(package.Id, "install"))
             && (package.IdempotenceError is null || verdict.IsKnownDebt(package.Id, "idempotence"))
+            && (package.ContentError is null || verdict.IsKnownDebt(package.Id, "content"))
             && package.NodeTypes.All(t =>
                 (!t.Compile.Fails() || verdict.IsKnownDebt(t.Path, "compile"))
                 && (!t.Render.Fails() || verdict.IsKnownDebt(t.Path, "render"))
