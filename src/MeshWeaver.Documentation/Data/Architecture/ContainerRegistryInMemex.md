@@ -1,7 +1,7 @@
 ---
 Name: A Container Registry in Memex
 Category: Architecture
-Description: Serving OCI images from the mesh — what it buys us that ACR cannot, the bootstrap circularity that decides the shape, and why the first increment is a read-through mirror rather than a replacement. The pull surface, the bearer handshake and closure-as-data are built; the cache, GC and the /app assembly closure are not.
+Description: Serving OCI images from the mesh — what it buys us that ACR cannot, the bootstrap circularity that decides the shape, and why the first increment is a read-through mirror rather than a replacement. The pull surface, the bearer handshake, closure-as-data and the digest-keyed read-through cache are built; push, GC, pin-protected retention and the /app assembly closure are not.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="9" width="20" height="11" rx="2"/><path d="M6 9V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v3"/><line x1="7" y1="14" x2="7" y2="14"/><line x1="11" y1="14" x2="11" y2="14"/><line x1="15" y1="14" x2="15" y2="14"/></svg>
 ---
 
@@ -16,10 +16,12 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > one-producer FATAL by name; two identical fully-qualified types is `CS0433`; two identical
 > extension signatures is `CS0121`. The config section moved to `ContainerImages:` for the same
 > reason. Renamed in #3361 while nothing referenced it yet — which is the only cheap moment.
-> **Built:** `GET /v2/`, the bearer token exchange at `GET /v2/token`, `…/manifests/{reference}`,
-> `…/blobs/{digest}` (Range included) and `…/tags/list`, proxied to the upstream with the mirror's
-> own credential while the caller authenticates against memex — plus the OCI-level **closure and
-> provenance of every manifest served, recorded as `ContainerImage` nodes**.
+> **Built:** `GET`/`HEAD` on `/v2/`, `…/manifests/{reference}`, `…/blobs/{digest}` (Range included)
+> and `…/tags/list`, plus the bearer token exchange at `GET /v2/token` — proxied to the upstream
+> with the mirror's own credential while the caller authenticates against memex — plus the
+> OCI-level **closure and provenance of every manifest served, recorded as `ContainerImage`
+> nodes**, and the **digest-keyed read-through cache**: a miss fetches, serves and stores; the next
+> pull of that digest is served without the upstream being contacted at all.
 >
 > 🚨 The token exchange arrived one increment LATE, and the gap is worth recording: the first cut
 > emitted a correct-looking `WWW-Authenticate` challenge naming a realm at `/v2/token`, and **nothing
@@ -28,9 +30,10 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > challenge, token, pull — could see it, which is why `PullSurfaceTest` is written as one
 > conversation rather than per-endpoint assertions.
 >
-> **Not built:** no push, **no cache** (every pull still goes to the upstream), no GC, and no
-> **/app assembly** closure — see "What v1 records" below for exactly where that line falls. The
-> boot image comes from the upstream, permanently. Container images live in Azure Container
+> **Not built:** no push or upload, no `/v2/_catalog`, no referrers API, no delete, no
+> pin-protected retention, and no **/app assembly** closure — see "What v1 records" below for
+> exactly where that line falls, and "The pull surface, exactly" for the endpoint-by-endpoint list.
+> The boot image comes from the upstream, permanently. Container images live in Azure Container
 > Registry (`meshweaver.azurecr.io`), named by `ACR:` in `main-cd.yml` and referenced by eight
 > workflows. This page exists so the decision is a decision rather than a recurring conversation.
 
@@ -156,9 +159,9 @@ entirely in CI and in other installations — exactly where the constraint is si
 ## The shape: a read-through mirror first
 
 ```
-   docker pull ──▶  memex /v2/…  ──▶  blob in mesh storage?
-                         │                 │ hit → stream it
-                         │                 │ miss → fetch from ACR, store, stream
+   docker pull ──▶  memex /v2/…  ──▶  digest in the cache?
+                         │                 │ hit  → stream it from disk, upstream NOT contacted
+                         │                 │ miss → fetch from ACR, verify, store, stream
                          ▼
                     closure + provenance recorded as mesh nodes
 
@@ -169,6 +172,34 @@ entirely in CI and in other installations — exactly where the constraint is si
 Pull-side only, to begin with. Pushes keep going to ACR, so CD is unchanged and the mirror can be
 turned off without a migration. Every benefit above except (4) is available from the pull side
 alone, because they all derive from *reading* manifests and layers.
+
+### The pull surface, exactly
+
+A partial surface that looks complete is worse than an obviously small one, so this is the whole
+list — what answers, and what does not.
+
+| route | methods | v1 |
+|---|---|---|
+| `/v2/` | `GET`, `HEAD` | **served** — the version probe, and where a client reads the challenge |
+| `/v2/token` | `GET` | **served** — the realm the challenge names; `Basic` in, bearer out |
+| `/v2/<name>/manifests/<tag or digest>` | `GET`, `HEAD` | **served**; cached only when the reference is a digest |
+| `/v2/<name>/blobs/<digest>` | `GET`, `HEAD` | **served**, `Range` forwarded; cached on a whole-body `GET` |
+| `/v2/<name>/tags/list` | `GET`, `HEAD` | **served**, never cached |
+
+**Not implemented, deliberately** — each of these simply has no route, so it 404s rather than
+half-working:
+
+* **the entire push family** — `POST`/`PATCH`/`PUT` `blobs/uploads/…`, manifest `PUT`. Refused *by
+  shape*: a blob reference must be a content digest, so `blobs/uploads/` never parses as a pull.
+* **`DELETE`** of anything. The mirror owns no lifecycle.
+* **`/v2/_catalog`** — repository enumeration. The allowlist already says what may be served, and a
+  catalog would be a second, drifting answer to the same question.
+* **the referrers API** (`/v2/<name>/referrers/<digest>`) — signatures and attestations. Nothing in
+  the fleet consumes it through the mirror yet.
+* **pagination on `tags/list`** (`?n=`/`?last=`) — the query string is not forwarded.
+* **serving a `Range` FROM the cache.** A range request bypasses the cache entirely: a partial body
+  cannot be verified against the whole body's digest, and an unverified entry is worse than none.
+  It is proxied, and resumable, but not accelerated.
 
 ### What v1 actually enforces
 
@@ -199,6 +230,79 @@ alone, because they all derive from *reading* manifests and layers.
   the heap; the pool is what stops a hundred concurrent pulls — a rolling restart of a large
   deployment — from each holding a socket and a buffer at once. `Http` (cap 16) would have been
   wrong: one layer parked there for a minute starves every plugin-catalog call the portal makes.
+
+### The cache: what is stored, where, and what evicts it
+
+`ContainerImages:CacheDirectory` turns it on; **empty means off, and the mirror then proxies every
+pull exactly as it did before the cache existed.** Turning it on or off is a configuration change,
+never a migration — nothing in the cache is authoritative, so discarding the whole directory costs
+a re-fetch and nothing else. 🚨 A directory configured with no cache *registered*
+(`services.AddContainerImageMirror()`) fails at STARTUP naming the fix, rather than quietly
+proxying while the configuration claims otherwise.
+
+**Keyed by content digest, and only by content digest.** A blob route is a digest by construction;
+a manifest route is cached only when the reference IS a digest.
+
+🚨 **A tag is never cached.** A tag is mutable, so a cached one would serve yesterday's image
+forever — and the symptom would read as a stale *build* rather than a stale cache. Because every
+key is a content hash, an entry can never go stale: **there is no invalidation, no TTL, and no
+coherence protocol to get wrong.** The price is stated plainly rather than hidden: a `pull
+repo:tag` always needs the upstream for the tag → digest step, while a `pull repo@sha256:…` — which
+is what every pinned CI consumer does — can be served entirely from cache.
+
+**Every entry is verified.** Bytes are hashed as they stream past, and an entry is filed only if the
+finished hash equals the digest it would be filed under. A body that hashes to something else is
+**served to the caller and discarded** — the cache cannot be poisoned by a wrong answer upstream,
+and a resident entry is provably the bytes its digest names. That is what makes serving one during
+an upstream outage safe rather than hopeful. Two independent mechanisms stop a truncated layer
+becoming an entry: the hash cannot match, and an abandoned fill's temporary file is deleted on
+dispose.
+
+**On disk**, sharded `<CacheDirectory>/sha256/<first two hex>/<hex>`, with a one-line `.type`
+sidecar carrying the media type — essential for a manifest, which a client parses by its
+`Content-Type`. A fill writes to a temporary in the same directory and `File.Move`s it into place,
+so a crash leaves a temporary (swept after an hour), never a truncated file that reads as complete.
+
+**Eviction is a bounded LRU sweep.** `ContainerImages:CacheMaxBytes` (default 20 GiB) is the budget;
+a sweep runs after roughly an eighth of it has been added, and evicts least-recently-*used* entries
+until the directory is back under 90 % of the budget. Last-use is tracked by touching the file on a
+hit, because filesystem access times are unreliable (`noatime` records none). An explicit `Sweep()`
+always sweeps; only the automatic one behind a store stands down behind a sweep already running.
+
+🚨 **The cache is NOT an archive, and this design deliberately does not claim it is one.** It is
+bounded, so any entry can be evicted — including one a pinned deployment names. Its guarantee is
+one-directional: **a hit avoids the upstream, a miss falls through to it, so it can only ever ADD
+availability and never subtract it.** That is exactly why it is safe to ship before any retention
+policy exists, and exactly why it must not be sold as protection against an upstream purge (gain
+(5) above). Making it refuse to evict a digest a live `Deployment` node names is a separate,
+later increment — and doing it *before* that would mean a second store that can lose a pinned
+digest while looking like insurance, which is worse than no insurance at all.
+
+**And nothing negative is cached.** A 404 is never stored: a remembered absence would outlive the
+push that fixed it, and the symptom would be an image that "does not exist" long after it does.
+
+#### Four outcomes, and they stay distinguishable
+
+This is the part that has to be right, because the failure mode is a *confident wrong answer*.
+
+| situation | answer | upstream contacted |
+|---|---|---|
+| digest resident in the cache | `200` + the bytes, `X-MeshWeaver-Cache: hit` | **no** |
+| digest not resident, upstream has it | `200` + the bytes, `…: miss`, entry stored | yes |
+| digest genuinely absent upstream | `404`, nothing stored | yes |
+| upstream unreachable, nothing resident | `504` + `UPSTREAM_UNAVAILABLE` | attempted |
+| upstream refused the *mirror's own* credential | `502` + `UPSTREAM_UNAUTHORIZED` | yes |
+
+🚨 **404 and 504 are never merged.** A mirror that answered "not found" when it could not reach the
+registry would tell a CI job that a pinned digest had been purged while the truth was a network
+blip — and after this fleet's own ACR retention incident, that is precisely the wrong answer to
+give confidently. The 504 body says so in words as well as in its code. `502` stays separate again:
+an upstream that *answers* and refuses our credential is an operator's problem, not a network one,
+and telling them apart is the difference between rotating a secret and waiting.
+
+`X-MeshWeaver-Cache` (`hit` / `miss` / `bypass` / `disabled`) is a diagnostic, not a contract — the
+tests assert the upstream's own request counter, because "served from cache" only means anything as
+"the upstream was not asked", and a header cannot prove that.
 
 ### What v1 records, and the line it does not cross
 
@@ -245,10 +349,12 @@ budget of its own.
 
 So acceptance (2) is *"half of it, after one more increment"* — not "done", and not "impossible".
 
-**v1 is the proxy WITHOUT the cache, deliberately.** The credential goal is met by authenticating
-the caller against memex and using the mirror's credential upstream; caching is an optimisation on
-top that can be added without changing the surface. Shipping it first would have meant storage,
-eviction and correctness work before anything was usable.
+**v1 landed in two increments, and the order mattered.** The proxy shipped first: the credential
+goal is met by authenticating the caller against memex and using the mirror's credential upstream,
+and that needed no storage at all. The cache came second, as an optimisation on top of an already
+usable surface rather than storage, eviction and correctness work in front of one. Its surface is
+additive — the routes, the handshake and the recording are unchanged, and turning the cache off
+returns the mirror to exactly the shape the first increment shipped.
 
 **The first consumer to move is satellite CI, not any cluster.** It is where the duplicated
 credentials are, it is unaffected by the bootstrap constraint, and a mirror that is wrong there
@@ -272,11 +378,19 @@ verb list.
   server-side, because anonymous pull is off. What changes is *who* needs one: a viewer authenticates
   to memex and is authorised by `AccessContext`, instead of holding registry credentials. That is the
   access-control gain in (4) — state it that way, not as "no credentials".
-- **Content addressing is a natural fit.** Digests are immutable ids, so layer dedup across
-  repositories is free if blobs are keyed by digest — the mesh is already content-addressed for
-  module builds.
-- **Garbage collection.** Untagged manifests and orphaned layers accumulate. Eviction must be
-  refused for any digest a live deployment names.
+- **Content addressing is a natural fit — and v1 takes it.** Digests are immutable ids, so layer
+  dedup across repositories is free: the cache keyspace is global, not per-repository, and two
+  allowlisted images sharing a base layer share the entry. 🚨 That is safe *because* only bytes
+  fetched through an allowlisted repository ever enter the cache, so a global keyspace grants
+  nothing the allowlist does not already grant. The visible consequence is small and worth writing
+  down: asking repository B for a digest only repository A holds is a cache HIT here where the
+  upstream would 404 — harmless while every allowlisted repository is at the same trust level, and
+  **the thing that must change first if per-repository authorization (gain (4)) is ever added.**
+  The key would then have to carry the repository, at the cost of dedup.
+- **Garbage collection.** Untagged manifests and orphaned layers accumulate. v1 evicts by a
+  least-recently-used byte budget, which bounds the directory but protects nothing. Eviction that
+  is REFUSED for any digest a live deployment names is the separate increment gain (5) describes —
+  and until it exists, the cache is explicitly not a second copy of anything.
 
 ## What would say this is working
 
@@ -288,13 +402,17 @@ Not "images pull". The measurable claims, with where each one actually stands:
 | #3334's gate can be re-expressed as an assertion over that data | **half, and the other half never** — see the mapping above: one-producer becomes data once the layer scan lands; the resolve half RUNS MSBuild and cannot be modelled |
 | a pin bump moves **one** reference instead of six literals | **the data supports it** — a tag is resolved to a digest at a deterministic node path, so a consumer carries the tag. Nothing has been converted to use it yet; `ci.yml` still carries its six literals |
 | an ACR outage still costs us nothing at boot | **yes, structurally** — the boot image never moved, and switching the mirror off is a configuration change |
+| an ACR outage is DISTINGUISHABLE from a purged digest | **yes** — `504 UPSTREAM_UNAVAILABLE` against `404`, never merged, and asserted as one experiment rather than inferred |
+| a pull survives an ACR outage | **only for a resident digest, by digest** — a cache hit never contacts the upstream, so a fully-cached `repo@sha256:…` pull completes. A `repo:tag` pull cannot: the tag → digest step has no immutable key. And nothing is guaranteed resident |
 
-🚨 **And one that is NOT yet measured: pull latency.** The mirror adds a hop, and no number for it
-against a real upstream exists. The streaming and pool behaviour are tested (a client receives the
-first bytes while the upstream is still producing the rest), but that is a correctness property, not
-a latency measurement. Nothing should DEPEND on the mirror until pull latency through it is measured
-against ACR directly — which is also what would settle whether the mirror *improves* pull
-availability, the open question the single-zone measurement above raised.
+🚨 **And one that is STILL not measured: pull latency.** The mirror adds a hop, and no number for it
+against a real upstream exists — the cache changes the shape of that question (a hit is a local disk
+read, a miss is the old hop plus a disk write) without answering it. The streaming and pool
+behaviour are tested (a client receives the first bytes while the upstream is still producing the
+rest), but that is a correctness property, not a latency measurement. Nothing should DEPEND on the
+mirror until pull latency through it is measured against ACR directly — which is also what would
+settle whether the mirror *improves* pull availability, the open question the single-zone
+measurement above raised.
 
 ## Related
 

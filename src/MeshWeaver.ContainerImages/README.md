@@ -15,16 +15,54 @@ registry, and consumers present a registry token.
 
 ## What it serves
 
-| route | |
-|---|---|
-| `GET /v2/` | version probe; answers the bearer challenge when unauthenticated |
-| `GET /v2/token` | the bearer exchange the challenge's `realm` names |
-| `GET /v2/{name}/manifests/{reference}` | tag or digest; multi-arch indexes included |
-| `GET /v2/{name}/blobs/{digest}` | streamed, range-capable, bounded by `IIoPool` |
-| `GET /v2/{name}/tags/list` | |
+| route | methods | |
+|---|---|---|
+| `/v2/` | `GET` `HEAD` | version probe; answers the bearer challenge when unauthenticated |
+| `/v2/token` | `GET` | the bearer exchange the challenge's `realm` names |
+| `/v2/{name}/manifests/{reference}` | `GET` `HEAD` | tag or digest; multi-arch indexes included |
+| `/v2/{name}/blobs/{digest}` | `GET` `HEAD` | streamed, range-capable, bounded by `IIoPool` |
+| `/v2/{name}/tags/list` | `GET` `HEAD` | |
 
 **Pull only.** No push, no upload, no delete — those keep going to the upstream, so this can be
-switched off without a migration. There is **no cache**: every pull reaches the upstream.
+switched off without a migration. Also NOT implemented: `/v2/_catalog`, the referrers API,
+`tags/list` pagination, and serving a `Range` from the cache.
+
+## The read-through cache
+
+With `CacheDirectory` set, a miss fetches from the upstream, serves the bytes and stores them; the
+next pull of that digest is served from disk **without contacting the upstream at all**.
+
+- **Keyed by content digest, only.** A blob always; a manifest only when the reference IS a digest.
+  🚨 A **tag is never cached** — a tag is mutable, so a cached one would serve yesterday's image
+  forever. Every key being a content hash means there is no invalidation, no TTL and no staleness
+  by construction. The price: `pull repo:tag` always needs the upstream for the tag → digest step,
+  while `pull repo@sha256:…` can be served entirely from cache.
+- **Every entry is verified** against the digest it is filed under, hashed as the bytes stream past.
+  A mismatch is served to the caller and discarded, so the cache cannot be poisoned and a resident
+  entry is provably the bytes its digest names.
+- **Nothing negative is cached.** A 404 is never stored: a remembered absence would outlive the push
+  that fixed it.
+- **Eviction** is a least-recently-used sweep against `CacheMaxBytes`. 🚨 **This is a cache, not an
+  archive** — any entry can be evicted, so it must never be treated as protection against an
+  upstream purge. Its guarantee is one-directional: a hit avoids the upstream, a miss falls through
+  to it, so it can only ever ADD availability.
+
+`X-MeshWeaver-Cache` on every pull response reads `hit`, `miss`, `bypass` (not cacheable) or
+`disabled`.
+
+### Four outcomes, kept distinguishable
+
+| situation | answer |
+|---|---|
+| resident in the cache | `200` + bytes, upstream **not** contacted |
+| not resident, upstream has it | `200` + bytes, stored |
+| genuinely absent upstream | `404`, nothing stored |
+| upstream unreachable | `504` `UPSTREAM_UNAVAILABLE` |
+| upstream refused the mirror's OWN credential | `502` `UPSTREAM_UNAUTHORIZED` |
+
+🚨 **404 and 504 are never merged.** A mirror that answered "not found" when it could not reach the
+registry would tell a CI job that a pinned digest had been purged while the truth was a network
+blip.
 
 ### The token exchange
 
@@ -65,13 +103,19 @@ those names live inside a layer tarball and reaching them is a separate incremen
     "Repositories": [ "memex-portal-ai", "mw-plugin-test" ],
     // Where observed images are recorded. The node must already exist.
     // EMPTY MEANS RECORDING IS OFF — the mirror still proxies normally.
-    "ImageRoot": "Platform/Images"
+    "ImageRoot": "Platform/Images",
+    // EMPTY MEANS THE CACHE IS OFF — the mirror proxies every pull, as before.
+    "CacheDirectory": "/var/lib/meshweaver/container-images",
+    "CacheMaxBytes": 21474836480
   }
 }
 ```
 
 The mirror is **off** unless `Upstream`, `Username` and `Password` are all present: every route
-answers 404 rather than serving partially.
+answers 404 rather than serving partially. 🚨 And `CacheDirectory` set without
+`AddContainerImageMirror()` fails at STARTUP naming the fix — a portal whose configuration says it
+caches while it quietly proxies everything is the same half-configured failure this package refuses
+elsewhere.
 
 ## Wiring
 
@@ -80,6 +124,7 @@ services.AddSingleton<IContainerImageAuthenticator, MyAuthenticator>();
 // 🚨 A SINGLETON: the upstream token cache is an INSTANCE field on this client, so a transient
 // registration silently re-fetches a token on every request.
 services.AddSingleton<UpstreamRegistryClient>();
+services.AddContainerImageMirror();  // the read-through cache (a singleton for the same reason)
 services.Configure<ContainerImageOptions>(config.GetSection(ContainerImageOptions.SectionName));
 
 meshBuilder.AddContainerImages();   // the ContainerImage node type (recording half)

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -60,7 +61,7 @@ public sealed class UpstreamRegistryClient(
         if (!string.IsNullOrEmpty(range))
             request.Headers.TryAddWithoutValidation("Range", range);
 
-        var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        var response = await Send(request, HttpCompletionOption.ResponseHeadersRead, ct);
 
         // A 401 here means OUR token went stale mid-flight, not that the caller is unauthorised —
         // drop it and try once, so a token expiring between issue and use is invisible rather than
@@ -76,9 +77,46 @@ public sealed class UpstreamRegistryClient(
                 retry.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(media));
             if (!string.IsNullOrEmpty(range))
                 retry.Headers.TryAddWithoutValidation("Range", range);
-            response = await http.SendAsync(retry, HttpCompletionOption.ResponseHeadersRead, ct);
+            response = await Send(retry, HttpCompletionOption.ResponseHeadersRead, ct);
         }
         return response;
+    }
+
+    /// <summary>
+    /// Sends one request, translating a TRANSPORT failure into
+    /// <see cref="UpstreamUnreachableException"/>.
+    ///
+    /// <para>🚨 This is the distinction the whole mirror rests on: <b>"I could not reach the
+    /// upstream" must never be answerable as "this does not exist".</b> Left unhandled, a DNS
+    /// failure or a refused connection escapes as a bare exception and the pull ends in a generic
+    /// 500 — indistinguishable, to a CI job reading a status code, from a registry that has purged
+    /// the digest. One says retry, the other says the artefact is gone; a consumer that confuses
+    /// them acts on a confident wrong answer.</para>
+    ///
+    /// <para>The caller's OWN cancellation is deliberately let through as cancellation: a client
+    /// that hung up is not an unreachable upstream.</para>
+    /// </summary>
+    private async Task<HttpResponseMessage> Send(
+        HttpRequestMessage request, HttpCompletionOption completion, CancellationToken ct)
+    {
+        try
+        {
+            return await http.SendAsync(request, completion, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException
+                                       or SocketException or OperationCanceledException)
+        {
+            logger.LogWarning(ex,
+                "Container registry mirror: the upstream {Upstream} could not be reached for "
+                + "{Path}. This is reported as unreachable, never as not-found.",
+                opts.Upstream, request.RequestUri?.AbsolutePath);
+            throw new UpstreamUnreachableException(
+                $"could not reach the upstream registry {opts.Upstream}", ex);
+        }
     }
 
     /// <summary>Every manifest media type a client may ask for, including the multi-arch
@@ -105,7 +143,7 @@ public sealed class UpstreamRegistryClient(
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", basic);
 
-        using var response = await http.SendAsync(request, ct);
+        using var response = await Send(request, HttpCompletionOption.ResponseContentRead, ct);
         if (!response.IsSuccessStatusCode)
         {
             // 🚨 Never log the credential, and never log the body — an upstream token endpoint can
@@ -142,6 +180,21 @@ public sealed class UpstreamRegistryClient(
     }
 }
 
-/// <summary>The upstream registry could not be reached or refused the mirror's own credential.
-/// Distinct from a caller-facing 401, which is about the CALLER's instance key.</summary>
+/// <summary>The upstream registry ANSWERED and refused the mirror's own credential. Distinct from
+/// a caller-facing 401, which is about the CALLER's instance key, and distinct from
+/// <see cref="UpstreamUnreachableException"/>, which is about not getting an answer at all.</summary>
 public sealed class UpstreamRegistryException(string message) : Exception(message);
+
+/// <summary>
+/// The upstream registry could not be reached: DNS, a refused connection, a dropped socket, a
+/// transport timeout.
+///
+/// <para>🚨 Its whole purpose is to stay DISTINCT from "not found". A caller that cannot tell
+/// "the registry is down" from "that digest was purged" will act on the wrong one — retrying a
+/// deletion, or writing off an artefact that is still there. The mirror answers the first with a
+/// 504 and the second with a 404, and never blurs them into a single failure.</para>
+/// </summary>
+/// <param name="message">What could not be reached.</param>
+/// <param name="innerException">The transport failure underneath.</param>
+public sealed class UpstreamUnreachableException(string message, Exception innerException)
+    : Exception(message, innerException);

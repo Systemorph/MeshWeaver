@@ -27,6 +27,7 @@ public sealed class UpstreamPassthroughResult(HttpResponseMessage upstream) : IR
 {
     private readonly IIoPool? pool;
     private readonly byte[]? body;
+    private readonly Func<Stream, ContainerBlobFill?>? fill;
 
     /// <summary>
     /// A passthrough whose body copy is bounded by <paramref name="ioPool"/>, optionally serving
@@ -42,6 +43,27 @@ public sealed class UpstreamPassthroughResult(HttpResponseMessage upstream) : IR
     {
         pool = ioPool;
         body = preRead;
+    }
+
+    /// <summary>
+    /// A passthrough that also FILLS the read-through cache as it streams — the miss half of the
+    /// mirror.
+    ///
+    /// <para>The fill is created from the response body rather than handed in ready-made, so the
+    /// temporary file is opened inside the pool slot that bounds the transfer and never before the
+    /// transfer starts. A null return from <paramref name="cacheFill"/> means "not cacheable", and
+    /// the copy is then exactly the uncached one.</para>
+    /// </summary>
+    /// <param name="upstream">The upstream response; this result owns its disposal.</param>
+    /// <param name="ioPool">The pool bounding the transfer, or null for an unbounded copy.</param>
+    /// <param name="cacheFill">Opens the tee over the response body, or returns null to skip
+    /// caching this response.</param>
+    public UpstreamPassthroughResult(
+        HttpResponseMessage upstream, IIoPool? ioPool, Func<Stream, ContainerBlobFill?> cacheFill)
+        : this(upstream)
+    {
+        pool = ioPool;
+        fill = cacheFill;
     }
 
     /// <summary>Headers an OCI client depends on. <c>Docker-Content-Digest</c> is how a client
@@ -110,6 +132,22 @@ public sealed class UpstreamPassthroughResult(HttpResponseMessage upstream) : IR
     private async Task Copy(HttpContext httpContext, CancellationToken ct)
     {
         await using var source = await upstream.Content.ReadAsStreamAsync(ct);
-        await source.CopyToAsync(httpContext.Response.Body, ct);
+        // 🚨 The tee is opened HERE, inside the pool slot, and only when the response is
+        // cacheable. Everything else is the copy this method has always been.
+        var tee = fill?.Invoke(httpContext.Response.Body);
+        if (tee is null)
+        {
+            await source.CopyToAsync(httpContext.Response.Body, ct);
+            return;
+        }
+
+        await using (tee)
+        {
+            await source.CopyToAsync(tee, ct);
+            // CommitAsync never throws: by now the caller holds every byte, so a cache failure has
+            // nothing left to break. An abort before this line leaves the temporary, which
+            // DisposeAsync removes.
+            await tee.CommitAsync(ct);
+        }
     }
 }
