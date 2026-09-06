@@ -113,6 +113,13 @@ def fixture(tagged: bool) -> list[dict]:
 # will still be there after someone edits the other.
 GH_STUB = """#!/usr/bin/env bash
 echo "gh $*" >> "$GH_CALLS"
+# The ONE read the decide step makes through gh: "is an older run of this workflow on this sha
+# still running?" (MeshWeaver#3376). A case supplies the answer the real `--jq` would have
+# produced (the older run's URL, or nothing) in GH_RUNS_RESULT; every other invocation stays
+# silent, exactly as before.
+case "$*" in
+  *actions/runs*) printf '%s' "${GH_RUNS_RESULT:-}" ;;
+esac
 exit 0
 """
 
@@ -175,6 +182,12 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
         e["GITHUB_OUTPUT"] = str(out)
         e["GITHUB_STEP_SUMMARY"] = str(summary)
         e.setdefault("GITHUB_REPOSITORY", "Systemorph/MeshWeaver")
+        # The decide step reads these from `env:` on the runner (MeshWeaver#3376); a case may
+        # override them, and GH_RUNS_RESULT is what the stub `gh` answers for the in-flight probe.
+        e.setdefault("SHA", "abc1234000000000000000000000000000000000")
+        e.setdefault("RUN_ID", "1000")
+        e.setdefault("WORKFLOW_NAME", "Continuous Delivery (main)")
+        e.pop("GH_RUNS_RESULT", None)
         e["GH_CALLS"] = str(calls)
         # Belt AND braces: the stub above shadows `gh` on PATH, and these leave a real `gh` — if one
         # is ever reached another way — with no credential to write with.
@@ -263,6 +276,22 @@ def run_decide_cases(root, case) -> None:
     rc, log, outputs = run_step(body, {**reconcile, "FORCE_REBUILD": "false"}, None)
     case("rebuild=false leaves the bake-only branch exactly as it was",
          rc == 0 and "bake_only=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    # 🚨 ONE COMMIT, ONE IMAGE SET (MeshWeaver#3376). The reconcile tick that fires while the
+    # push-triggered run is still building must defer to it, on BOTH event paths, before any
+    # other verdict — and it must say which run it deferred to.
+    older = "https://example.invalid/actions/runs/999"
+    for reason, extra in (("reconcile", {"COMPLETE": "false"}),
+                          ("push", {"COMPLETE": "false", "FRESH_AGE_MIN": "999999"})):
+        rc, log, outputs = run_step(body, {**reconcile, "REASON": reason, **extra, "GH_RUNS_RESULT": older}, None)
+        case(f"an OLDER run still publishing this sha defers the {reason} path (#3376)",
+             rc == 0 and "publish=false" in outputs and older in log and "bake_only=true" not in outputs,
+             f"rc={rc} out={outputs!r} log={log}")
+    # And the probe must be inert when nothing is in flight: the same inputs with an empty answer
+    # publish exactly as they did before the probe existed. Without this, "defers" would also
+    # pass if the step deferred unconditionally.
+    rc, log, outputs = run_step(body, {**reconcile, "REASON": "reconcile", "COMPLETE": "false", "GH_RUNS_RESULT": ""}, None)
+    case("...and with nothing in flight the same reconcile still builds",
+         rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
 
 
 def main() -> int:
