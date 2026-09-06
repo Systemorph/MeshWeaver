@@ -28,12 +28,19 @@ name: Pinned image digests
 #   * It PRINTS THE DENOMINATOR — repos scanned, repos that pin, repos that do not, pins found,
 #     pins resolved — because "0 unresolved" has two causes and only one of them is good news.
 #
+# TWO ARMS, TWO QUESTIONS, ONE CREDENTIAL. `check-pinned-digests.py` asks whether each pinned
+# manifest still EXISTS; `check-pin-set-consistency.py --check-tags` asks whether the manifests one
+# repository pins are ONE PROMOTED BUILD (MeshWeaver#3454). Neither answers the other: a half-moved
+# set is two manifests that both exist. The second arm also runs as a PR gate inside each satellite,
+# statically and with no credential; here it adds the registry round trip and reaches repositories
+# that have no local gate at all.
+#
 # WHY THERE IS NO `pull_request` TRIGGER. The subject is the live state of a registry, which is not
 # a property of a pull request; and a credentialed PR-reachable job would put both secrets into the
 # Dependabot store's blast radius for no gain (#3399). The script's own falsification runs on every
-# PR instead, as `check-pinned-digests.py --self-test` in dotnet-test.yml's workflow-shell lane —
-# an unproven gate is no gate. The `push` trigger below re-asserts against the real registry the
-# moment a change to either file lands.
+# PR instead — both scripts' `--self-test` in dotnet-test.yml's workflow-shell lane — because an
+# unproven gate is no gate. The `push` trigger below re-asserts against the real registry the moment
+# a change to any of the three files lands.
 
 on:
   schedule:
@@ -47,6 +54,7 @@ on:
     paths:
       - '.github/workflows/pinned-digests.yml'
       - '.github/scripts/check-pinned-digests.py'
+      - '.github/scripts/check-pin-set-consistency.py'
 
 permissions:
   contents: read
@@ -166,3 +174,39 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
         run: python3 .github/scripts/check-pinned-digests.py --discover --registry meshweaver
+
+      # 🚨 THE OTHER HALF OF THE SAME SUBJECT (MeshWeaver#3454). The step above asks whether each
+      # pinned manifest still EXISTS; this one asks whether the manifests one repository pins are
+      # ONE PROMOTED BUILD. Both can be true of a set that is broken in the other's terms: two
+      # manifests that exist perfectly satisfy the sweep and are still the whole defect when one is
+      # `ci.7917` and the other `ci.7574`, which is the shape that took core CD down for an hour
+      # with every check green (#3344).
+      #
+      # It runs HERE as well as in each satellite's own CI because the two catch different things:
+      # a satellite's gate catches a bad pin BEFORE it merges, in that repository only; this catches
+      # a repository that never gains one — and it is discovered, not committed, so a repository
+      # added to the org is swept the day the App reaches it. Same token, same credential, same
+      # `preflight`, so there is no new external input to provision and nothing new to skip on.
+      #
+      # A digest carries no tag, so relating two of them needs the registry: the arm reads each
+      # manifest's tags and requires the repository's pins to SHARE one. It therefore works for the
+      # four repositories that declare no `MW_PLATFORM_SET` at all, and where a set NAME is
+      # declared it must be among the shared tags — which turns that name from a comment into an
+      # assertion. No `if:`, no `continue-on-error:`: a tag it cannot read is a red naming the az
+      # output, never a pass.
+      #
+      # 🚨 `if: ${{ !cancelled() }}` — NOT a skip-trapdoor, and the difference is worth stating.
+      # A skip-trapdoor asks whether an INPUT exists in order to decide whether to check; this asks
+      # only whether the RUN was cancelled. Without it this step would never execute at all while
+      # the sweep above is red, and the sweep above is red RIGHT NOW for a reason that has nothing
+      # to do with set consistency (Education's three purged digests, #3438). A gate that is dead
+      # behind another gate's red is a gate that does not run, which is the whole subject of #3454.
+      # The job's conclusion is still the AND of both steps: neither verdict can hide the other, and
+      # both denominators reach the step summary.
+      - name: Every repository's pins name ONE promoted build
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
+        run: |
+          python3 .github/scripts/check-pin-set-consistency.py \
+            --discover --registry meshweaver --check-tags

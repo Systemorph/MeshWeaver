@@ -65,6 +65,11 @@ It does not prevent the deletion. It converts *"an entire repository's CI is ine
 including its nightly"* into one red naming the repository, the declaration and the digest. That is
 worth having whichever retention change lands, because it also catches the next variant.
 
+🚨 **It answers EXISTENCE only.** Whether the digests one repository pins name the *same promoted
+build* is a different question with a different answer, and two manifests that both exist satisfy
+this sweep completely while being a half-moved set — see [Pin Set Consistency](../PinSetConsistency),
+whose tag arm runs beside this one in the same workflow, under the same credential.
+
 ```
     repositories scanned                  8
     …declaring at least one digest pin    6
@@ -107,6 +112,15 @@ here in some form:
   placeholder such as `sha256:PLACEHOLDER` as "no literal pin present" and passes. Here, a
   declaration whose NAME says digest and whose VALUE is neither a well-formed `sha256:` + 64
   lowercase hex nor a `${{ … }}` forward is a **failure**, never an absence.
+
+  🚨 **That claim was true of one shape and not the other until 2026-09-06** (#3454). The
+  `$GITHUB_OUTPUT` pattern required a well-formed digest to match at all, so
+  `image-digest=sha256:PLACEHOLDER` matched *nothing* and read as an absence — exempting SocialMedia
+  and Crm, the two repositories that write their tester pin that way, from the guard while this page
+  said none were exempt. Both shapes now classify through one predicate and the self-test asserts
+  both. The way it was found is the transferable part: falsifying a *different* gate against the
+  **real** `ci.yml` of the three repositories, rather than against a fixture — see
+  [Pin Set Consistency](../PinSetConsistency).
 
 - **Find pins by SHAPE, not by name.** A check keyed on the two common variable names would report
   four of the six pinning repositories clean while verifying none of their pins. The fleet writes a
