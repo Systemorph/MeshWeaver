@@ -304,15 +304,21 @@ public static class BuildCoordinationExtensions
     /// it answers where <see cref="ObserveBuildGo"/> can only wait (#1440).
     ///
     /// <para>Emits the GO record, or <c>null</c>. 🚨 <c>null</c> is deliberately NOT a claim that
-    /// there is no GO — it is "this call has no GO to give you", which covers three cases the
-    /// caller treats identically: the row carries no GO for that fingerprint; there is no durable
-    /// store at all (the mirror IS the whole world there, and <see cref="ObserveBuildGo"/> is
-    /// complete on its own); or the read FAILED, which is logged loudly. Collapsing them is safe
-    /// only because every caller's <c>null</c> branch is the conservative one — it bakes, into
+    /// there is no GO — it is "this call has no GO to give you", which covers three cases this
+    /// overload's callers treat identically: the row carries no GO for that fingerprint; there is
+    /// no durable store at all (the mirror IS the whole world there, and <see cref="ObserveBuildGo"/>
+    /// is complete on its own); or the read FAILED, which is logged loudly. Collapsing them is safe
+    /// only because THIS overload's <c>null</c> branch is the conservative one — it bakes, into
     /// content-addressed stores, which costs at worst one redundant build and can never corrupt.
     /// Fail OPEN, the same asymmetry <c>BuildNodeType.ArbitrateDurably</c> applies, and the reason
     /// no caller may read <c>null</c> as evidence that a build has not happened. Emits exactly once
     /// and completes.</para>
+    ///
+    /// <para>🚨 <b>A caller whose <c>null</c> branch is NOT "bake" must use
+    /// <see cref="ReadBuildGoReading"/> instead</b> (#3404). The collapse above is licensed by what
+    /// the caller DOES with it; a caller that refuses readiness on <c>null</c> would be turning a
+    /// read it never completed into a definitive negative, which is the one reading this method's
+    /// contract forbids.</para>
     /// </summary>
     /// <param name="hub">The calling hub.</param>
     /// <param name="frameworkVersion">The fingerprint whose GO is wanted.</param>
@@ -320,26 +326,84 @@ public static class BuildCoordinationExtensions
     /// <returns>Cold observable emitting the GO record or <c>null</c>, then completing.</returns>
     public static IObservable<BuildGo?> ReadBuildGo(
         this IMessageHub hub, string frameworkVersion, ILogger? logger = null)
+        => hub.ReadBuildGoReading(frameworkVersion, logger).Select(reading => reading.Go);
+
+    /// <summary>
+    /// <see cref="ReadBuildGo"/>, with the THIRD STATE kept (#3404): whether the durable witness
+    /// ANSWERED "no GO for this fingerprint" or could not be read at all.
+    ///
+    /// <para><b>Why the distinction is load-bearing.</b> "The witness says there is no GO" and "the
+    /// witness could not be asked" are different facts about the world, and <see cref="ReadBuildGo"/>
+    /// renders both as <c>null</c>. That is sound for a caller whose <c>null</c> branch is to BAKE —
+    /// a redundant build into a content-addressed store costs one compile and can never corrupt. It
+    /// is unsound for a caller whose <c>null</c> branch REFUSES: refusing on
+    /// <see cref="BuildGoWitness.Undetermined"/> is refusing on a read that never happened, and
+    /// SAYING it refused because there is no GO is a claim the process is not entitled to make.</para>
+    ///
+    /// <para>🚨 <b>The witness is not necessarily in a different failure domain from the
+    /// subscription.</b> In the fleet's portal wiring <see cref="IStorageAdapter"/> is
+    /// <c>RoutingProxyAdapter</c>, which serves this read as
+    /// <c>hub.Observe&lt;ReadNodeResponse&gt;(…)</c> over the same hub transport a
+    /// <c>SubscribeRequest</c> travels on. So the fault that shuts the subscription door can shut
+    /// this one too, and it arrives here as the SAME <see cref="TimeoutException"/> — which is
+    /// exactly why it must not be laundered into "no GO recorded".</para>
+    ///
+    /// <para>Emits exactly once and completes. Never throws: a failed read becomes
+    /// <see cref="BuildGoWitness.Undetermined"/> carrying its exception, and is still logged here at
+    /// Warning because this is the only place the storage fault is seen.</para>
+    /// </summary>
+    /// <param name="hub">The calling hub.</param>
+    /// <param name="frameworkVersion">The fingerprint whose GO is wanted.</param>
+    /// <param name="logger">Diagnostics — a failed witness read is reported here.</param>
+    /// <returns>Cold observable emitting the reading, then completing.</returns>
+    public static IObservable<BuildGoReading> ReadBuildGoReading(
+        this IMessageHub hub, string frameworkVersion, ILogger? logger = null)
     {
         var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (storage is null)
-            return Observable.Return<BuildGo?>(null);
+            return Observable.Return(BuildGoReading.Undetermined(
+                $"no {nameof(IStorageAdapter)} is registered in this process, so there is no "
+                + "durable witness to ask — this cluster's mirror is the whole world here"));
 
         var options = hub.JsonSerializerOptions;
         return storage.Read(BuildNodeType.RootPath, options)
             .Take(1)
-            .Select(node => node?.ContentAs<BuildState>(options)?.Ready is { } ready
-                && ready.TryGetValue(frameworkVersion, out var go)
-                ? go
-                : null)
+            .Select(node =>
+            {
+                if (node is null)
+                    return BuildGoReading.NotRecorded(
+                        $"the durable row at '{BuildNodeType.RootPath}' does not exist — no build "
+                        + "has ever been recorded on this store");
+
+                // 🚨 .ContentAs, never a cast — and a content that does NOT materialize is a read
+                // that did not answer, not a row that says "no". An untyped JsonElement here would
+                // otherwise read exactly like an empty Ready map.
+                var state = node.ContentAs<BuildState>(options);
+                if (state is null)
+                    return BuildGoReading.Undetermined(
+                        $"the durable row at '{BuildNodeType.RootPath}' exists but its content did "
+                        + $"not materialize as {nameof(BuildState)} — the witness was read, but it "
+                        + "did not answer");
+
+                return state.Ready is { } ready && ready.TryGetValue(frameworkVersion, out var go)
+                    ? BuildGoReading.Found(go)
+                    : BuildGoReading.NotRecorded(
+                        $"the durable row carries no GO for framework {frameworkVersion} "
+                        + $"({state.Ready?.Count ?? 0} other fingerprint(s) recorded)");
+            })
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex,
                     "Build GO: could not read the durable witness at {Path} for {Fingerprint} — "
-                    + "answering 'no GO to give you'. That is NOT evidence the build has not "
-                    + "happened; the caller's null branch is the conservative one (it bakes)",
+                    + "the reading is UNDETERMINED, which is NOT evidence that the build has not "
+                    + "happened. A caller that bakes on this is conservative; a caller that "
+                    + "refuses readiness on it must say the witness was unreadable, never that "
+                    + "there is no GO",
                     BuildNodeType.RootPath, frameworkVersion);
-                return Observable.Return<BuildGo?>(null);
+                return Observable.Return(BuildGoReading.Undetermined(
+                    $"the durable witness at '{BuildNodeType.RootPath}' could not be read: "
+                    + ex.Message,
+                    ex));
             });
     }
 
