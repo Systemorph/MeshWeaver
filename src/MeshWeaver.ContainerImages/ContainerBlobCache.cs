@@ -162,12 +162,19 @@ public sealed class ContainerBlobCache
 
         return fileSystem.InvokeBlocking<ContainerCacheEntry?>(_ =>
         {
+            // 🚨 Declared OUTSIDE the try so every failure path can dispose it. Ownership of this
+            // handle transfers to the caller ONLY on the successful return; until then it is ours,
+            // and the sidecar read below can still throw. A leaked descriptor here would be
+            // invisible — the pull falls through to the upstream and looks entirely healthy —
+            // while the process quietly walks toward its file-descriptor limit, one degraded cache
+            // read at a time.
+            FileStream? content = null;
             try
             {
                 // FileShare.Delete so a concurrent eviction can unlink the file while this handle
                 // holds it open: the reader keeps reading the bytes it already opened, and the
                 // name simply stops resolving for the next caller.
-                var content = new FileStream(blobPath, new FileStreamOptions
+                content = new FileStream(blobPath, new FileStreamOptions
                 {
                     Mode = FileMode.Open,
                     Access = FileAccess.Read,
@@ -175,9 +182,11 @@ public sealed class ContainerBlobCache
                     Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
                 });
                 var mediaType = File.Exists(typePath) ? File.ReadAllText(typePath).Trim() : null;
-                return new ContainerCacheEntry(
+                var entry = new ContainerCacheEntry(
                     content, content.Length,
                     string.IsNullOrEmpty(mediaType) ? null : mediaType, digest);
+                content = null; // handed to the caller, who disposes it
+                return entry;
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
@@ -186,10 +195,16 @@ public sealed class ContainerBlobCache
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 logger.LogWarning(ex,
-                    "Container registry mirror: the cache entry for {Digest} could not be opened, "
+                    "Container registry mirror: the cache entry for {Digest} could not be read, "
                     + "so this pull falls through to the upstream. Check {Directory}.",
                     digest, root);
                 return null;
+            }
+            finally
+            {
+                // Non-null only when we did NOT return the entry — a sidecar read that threw after
+                // the blob opened, or any other unwind.
+                content?.Dispose();
             }
         });
     }
