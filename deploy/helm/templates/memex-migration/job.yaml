@@ -49,4 +49,28 @@ spec:
                 name: "memex-migration-config"
             - secretRef:
                 name: "memex-migration-secrets"
+            {{- /* The Key Vault CSI-synced secrets, exactly as the portal consumes them
+                   (memex-portal/deployment.yaml). WITHOUT this the migration cannot receive
+                   `Embedding__ApiKey`, and `MeshNodeEmbeddingBackfill` — which is the ONLY thing
+                   that embeds rows written before a provider existed — skips every row.
+
+                   Measured on the `memex` release 2026-09-06, migration job memex-migration-32:
+                       [DocBackfill] 1242 documentation pages found (embeddings OFF — FTS only)
+                       [DocBackfill] done: 161 upserted (0 embedded), 1081 unchanged, 1242 total
+                       [EmbeddingBackfill] no embedding provider configured — skipped
+                       Database migration completed. Version: 55
+                   A green migration that embedded nothing: search stays lexical-only for every
+                   pre-existing row, and nothing in the run says the index is empty.
+
+                   `optional: true` because the CSI driver only materialises the synced Secret
+                   while a pod mounts the SecretProviderClass volume — on a FIRST install no portal
+                   pod has started yet, and a missing non-optional secretRef would keep the Job
+                   from starting at all. Skipping is safe there and only there: a first install has
+                   no pre-existing rows to backfill, and the run still says so out loud via
+                   `[EmbeddingBackfill] … skipped` plus EmbeddingCapabilityReporter. */}}
+            {{- range $class := (include "memex.keyVaultClasses" . | fromYamlArray) }}
+            - secretRef:
+                name: "{{ $class.syncedSecret }}"
+                optional: true
+            {{- end }}
           imagePullPolicy: "IfNotPresent"
