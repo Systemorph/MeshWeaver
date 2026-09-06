@@ -173,6 +173,10 @@ cards over `catalog/<id>/package.json`). The rule, in `PackageSources.IsNodeRepo
 layout — node-repo roots, both shapes at once, an absent or unreadable directory, a URL (nothing to
 inspect before the fetch) — is the shipped `node-repo`. Unambiguous evidence for the manifest shape
 is the only thing that overrides the default.
+The scan looks exactly ONE level down (`<child>/index.json` at the repo root and under the subdir — Space
+roots, not any `index.json` anywhere) and never deeper, and it is deliberately not more general than
+that: a repository that carries node-repo Space roots BESIDE a `package.json` catalog reads as both
+shapes, falls to the default, and must declare `package-json` on the node.
 
 ## The sync licence — what a grant now carries
 
