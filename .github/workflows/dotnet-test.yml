@@ -1926,6 +1926,38 @@ jobs:
     - name: "…and this repository's own pin set is consistent"
       run: python3 .github/scripts/check-pin-set-consistency.py --root .
 
+    # 🚨 AND THE HALF THAT STOPS THE DELETION RATHER THAN REPORTING IT (MeshWeaver#3438,
+    # requirement 1). lock-pinned-digests.yml locks every manifest the fleet pins, nightly, at
+    # 01:00 — two hours before the 03:00 purge — because `acr purge` skips locked manifests and
+    # neither purge step passes `--include-locked`. That lane needs a credential and a live
+    # registry, so it cannot run on a pull request; this is where its decision path is FALSIFIED.
+    #
+    # The self-test drives the real planner through a fake registry and asserts both arms of every
+    # rule: a pin on either axis produces a lock (including helm's split `repository:`/`tag:`
+    # shape, which both whisper charts in the fleet use); an already-locked manifest is not
+    # re-locked; and an unreadable repository, a truncated git tree, zero pins on either axis, an
+    # unclassified pin (I5), a placeholder digest (I4), a manifest that is gone, an unresolvable
+    # overlay tag, an indeterminate registry answer and an unreadable registry each go RED **with
+    # nothing released**. It also asserts that the two existing pin extractors still AGREE about
+    # what a pin is — the property they were written with, now held by a test rather than by
+    # review.
+    #
+    # 🚨 The release arm's assertions run against an inventory that HOLDS a release candidate. The
+    # first draft used a clean one, where there was nothing to release however broken the guard
+    # was; sabotaging the guard left the whole self-test green. Found by falsifying this file
+    # rather than reading it, 2026-09-07.
+    - name: "Every pinned manifest gets locked, and nothing gets unlocked — the gate can fail (self-test)"
+      run: python3 .github/scripts/lock-pinned-digests.py --self-test
+
+    # The premise the lock rests on, asserted with NO credential: a lock protects only because
+    # `acr purge` skips locked manifests unless `--include-locked` is passed. The purge tasks are
+    # CLOUD-ONLY (`az acr task show` returns an EncodedTask with `contextPath: null`), so
+    # `.github/acr-retention/` is a committed record of them — and this is the half of that record
+    # a pull request can break. A step that gained `--include-locked` would turn every lock into
+    # decoration while the lock job kept reporting success.
+    - name: "…and the recorded purge still skips locked manifests"
+      run: python3 .github/scripts/lock-pinned-digests.py --check-retention-record .
+
     # 🚨 THE GAP actionlint CLOSES (MeshWeaver#3228): every check above reads a workflow with
     # `yaml.safe_load`, and **PyYAML accepts a duplicate mapping key and silently keeps the last
     # one**. So a STRUCTURAL defect — the kind GitHub itself refuses — parses cleanly here, every

@@ -1,0 +1,44 @@
+version: v1.1.0
+# 🚨 ONE task, TWO steps. Do NOT merge the filter lists into a single `acr purge`.
+#
+# The two lists are NOT symmetric and the difference is load-bearing:
+#   * mw-plugin-test  is unique to the 7d step  — the CI tester, republished many times a day.
+#   * memex-portal    is unique to the 30d step — the PRODUCTION portal image.
+# A union-merge silently moves memex-portal to `--ago 7d --keep 10`. It is pinned on the OTHER axis
+# (committed tags in the deployment overlays, Memex#141), which the pinned-digest guard cannot see —
+# exactly how Memex#122's victim was pinned, where purging a pinned tag took the public brand site
+# down for ~11 h and nothing alerted.
+#
+# 🚨 memex-website is DELIBERATELY absent from every filter (Memex#122, 2026-08-26). Its only tag is a
+# pinned `v1` that nothing rebuilds, so `--ago 30d` deleted the entire repository.
+#
+# 🚨 TWO tests before adding any repository to either step:
+#   1. If this tag were deleted tonight, would anything RECREATE it?           (Memex#122)
+#   2. Does anything PIN a digest of it?                                        (#3438)
+# Test 2 is the one mw-plugin-test passes on test 1 and fails in practice: it republishes constantly,
+# and `--keep 10` counts NEWER BUILDS, so frequent republishing is what DESTROYS a pin rather than
+# protecting it. Every satellite pins the tester and portal by digest for WEEKS at a time
+# (Doc/Architecture/ModuleBuildArchitecture) — the retention window and the intended pin lifetime are
+# in direct contradiction, and nothing but the lock reconciles them.
+#
+# 🚨 Raising --ago / --keep is NOT a fix: it moves the cliff. A pin left stable for a quarter walks
+# off the new one just the same.
+#
+# PROTECTION IS THE MANIFEST LOCK, not this policy. Live pinned digests carry
+# `--delete-enabled false`; `acr purge` skips locked manifests by default and neither step passes
+# `--include-locked`. Locking a digest is what makes a pin survive; this file only decides what is
+# eligible in the first place. Lock a digest BEFORE it is pinned, and release it when the pin moves.
+# Current locks (2026-09-06, the 3.0.0-ci.7917 wave):
+#   mw-plugin-test@sha256:642f686f…   memex-portal-ai@sha256:31aab07d…
+#
+# Both steps share one 3600 s task budget.
+#
+# Doc: Doc/Architecture/PinnedImageRetention. Incidents: Memex#122, MeshWeaver#3438 (Education,
+# Manufacturing and SocialMedia CI down simultaneously 2026-09-05T15:29Z on a purged tester digest).
+steps:
+  - cmd: acr purge --filter 'mw-plugin-test:.*' --filter 'memex-migration:.*' --filter 'memex-portal-ai:.*' --filter 'memex-portal-next:.*' --filter 'memex-bake:.*' --ago 7d --keep 10 --untagged
+    disableWorkingDirectoryOverride: true
+    timeout: 3600
+  - cmd: acr purge --filter 'memex-portal:.*' --ago 30d --untagged
+    disableWorkingDirectoryOverride: true
+    timeout: 3600
