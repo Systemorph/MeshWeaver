@@ -336,6 +336,107 @@ on durable state, exactly like the arbiter (and see #1366 for why the poll clock
 clusters instead of at the arbiter's next pass, but it changes behaviour for every partitioned-PG
 deployment and wants its own justification and measurement. The follower is correct without it.
 
+### The PRE-WARMER has the same two doors — and it did not, until #3404
+
+The follower's two doors only ever opened once a process had already got *inside*. Everything the
+pre-warmer knew about the build arrived through ONE door: `BuildProtocolDriver.Run` opens with a
+claim handshake, and a claim handshake is a `SubscribeRequest` to `Admin/Build`. Exhaust its
+attempts and the driver threw `BuildCoordinationUnreachableException`, the sweep faulted, readiness
+was refused, and the rollout held the previous image.
+
+🚨 **A pod can therefore refuse a build that was already approved.** Measured on `memex-cloud`,
+2026-09-06: two pods of one deployment refused at 11:44:32Z and 11:49:37Z for a fingerprint whose GO
+had been written on an already-`Ready` build root at **11:28:56Z** — sixteen minutes earlier. Their
+own hubs were healthy and idle throughout (`RunLevel=Started`, empty queue); the silence was between
+them and the hub that owns `Admin/Build`. They could not open a subscription to read a verdict that
+was already durable — and the verdict was the only thing they needed.
+
+So `Run`'s subscription-borne composition is now treated as ONE DOOR, and when it cannot be opened
+at all the **durable witness is asked** (`WhenTheSubscriptionDoorIsShut`). Same read as door 1 of
+the follower — `ReadBuildGo` on the durable row, the record the claim arbiter itself decides on —
+at the one point in the protocol that never had it.
+
+Four properties are load-bearing, and each is pinned by a case in
+`PreWarmerReadsTheDurableGoTest`:
+
+- **Per-fingerprint, never "a GO exists".** The `Ready` map is keyed by framework version precisely
+  so an old-image pod stays ready while a new image is unproven. `ReadBuildGo` looks the pod's own
+  fingerprint up by exact key; a GO for any other image reads as no GO and the door stays shut.
+  Granting on a foreign GO would certify a build the process is not running — strictly worse than
+  the refusal it replaces.
+- **Fail-closed is unchanged.** Neither door answering — including the two cases `ReadBuildGo`
+  deliberately folds into `null`, no durable store and a failed read — re-throws the ORIGINAL
+  `BuildCoordinationUnreachableException`, so the sweep still faults, readiness is still refused,
+  and `DescribesUnreachableCoordination` still separates "no verdict" from "a bad verdict" in the
+  health payload.
+- **The transport fault stays fully visible.** Nothing here widens a timeout, retries, polls or
+  swallows. `RetryUnreachableCoordination` logs the unreachability at its own severity with its own
+  diagnostic detail either way, and the grant logs a second `Warning` naming what could not be
+  reached. That fault is the only signal the pod↔`Admin/Build`-hub path is broken; the durable door
+  changes the readiness VERDICT, never the visibility of the fault, and does not diagnose or repair
+  it.
+
+- **No stand-down on this path.** The follower withdraws its claim before probing because it really
+  registered one. This path did not: the registration is written by `RequestBuildClaim` through
+  `GetMeshNodeStream(path).Update(current => …)`, and an `Update` whose stream never delivered
+  current state never computed a patch, so there is no candidate entry to hand back — and calling
+  `WithdrawBuildClaim` would post a second write into the same unreachable hub. The two paths share
+  the post-GO share probe; they deliberately do not share the stand-down.
+
+🚨 **The durable door is a FAIL-SAFE, not a cure — and the cause is still open.** The pod's own
+diagnostic names three candidates for the silence: the request never reached the target (routing),
+the target received it and is wedged (a per-node hub that stops answering — the #2896 class), or the
+target answered and the reply was lost. Two more have since been measured, and **neither subsumes
+the other**:
+
+**Fourth — deferred-queue ordering (#3408).** `MessageService.OpenGate` drained the deferred queue by
+**appending** it to the main queue, so a message that arrived before the gate opened but had not yet
+been turned sat *ahead* of the deferred turns appended behind it — and the parked message ran last.
+Appending is always the wrong end, not merely unlucky: deferral happens at TURN time, not arrival,
+and the loop is strictly FIFO, so everything deferred is by construction older than everything still
+waiting. A `SubscribeRequest` is exactly the message that triggers a per-node hub's activation, so it
+is the one that loses its place — load-sensitive by construction, green in isolation, and capable of
+being processed after the requester's 60 s budget has expired. That fits a requester measured healthy
+and idle against a target never observed dead better than a wedge does.
+
+**Fifth — a root that STOPS EMITTING with a holder still set (`MeshWeaver.Plugins#1193`).** A
+controlled load experiment on `BuildCoordinationTest.Follower_StandsDown_SoTheNextBuildCanStart` —
+18 cores, two arms of ten runs, same binary and same sha, only background load differing — passed
+10/10 under 12 burners (load ~31–39) and failed 1 of 10 under 64 burners (load 49–91+), at 32.9 s,
+with the CI signature. Instrumenting the wait recorded **exactly one** root emission in 15 seconds
+and nothing after it.
+
+🚨 **The control is what makes the reading honest.** The PASSING state was captured at the same
+point in the same test (by temporarily making the predicate unsatisfiable — a diagnostic never seen
+to run reads exactly like one that works). The two states differ in **one field**:
+
+```
+FAIL:  ClaimedBy=<machine-scoped id>   Status=Planning  RequestedClaims=[]  Ready=[fp]
+PASS:  ClaimedBy=<null>                Status=Planning  RequestedClaims=[]  Ready=[fp]
+```
+
+So `Status=Planning` and the empty `RequestedClaims` are **not symptoms** — the healthy run carries
+both, and the build completed in both (`Ready` holds the fingerprint either way). Any account
+resting on those two fields rests equally on the passing run. What is measured is exactly this:
+**`ClaimedBy` stays set, one root emission in 15 s, nothing after.** A reader waiting on such a root
+waits forever.
+
+**The mechanism is open.** Whether the holder cannot act or was never told to is precisely the
+question still live on `MeshWeaver.Plugins#1193` — so this page names the SHAPE, not a cause. The
+permanent diagnostic landed as `MeshWeaver.Plugins#1401` (diagnostic only, no production code) and
+the repro recipe is on #1193; reproduce from those rather than re-deriving.
+
+🚨 It reproduced **with #3408 already in the core**, so #3408 does not remove it and #3131 did not
+close it: fourth and fifth are independent, and neither subsumes the other.
+
+This shape is the one the durable door most clearly answers — and note the claim is about the shape,
+not about any mechanism. A root that has stopped emitting is neither dead nor slow, so nothing about
+the transport is going to recover it, while the durable GO is already published and already readable.
+**The durable door is correct whichever of the five it is, it is the only one that does not depend on
+diagnosing the transport first, and in this shape it is the only fix in flight that helps at all.**
+None of that makes it a cure: each cause is a separate change, owned separately, and this one must
+not be read as having addressed any of them.
+
 The probe semantics of `NodeTypeBakeGateState` are preserved unchanged — fail **closed**
 on a measured regression (the rollout stalls, the old image keeps serving), fail **open**
 when nothing is measuring (a configuration mistake must never black-hole a pod), gate
