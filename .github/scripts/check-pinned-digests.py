@@ -192,8 +192,10 @@ class RepoScan:
 #    SECONDARY one, which takes GitHub access away from every concurrent session. ───────────────
 
 
-def gh_api(path: str, paginate: bool = False) -> tuple[int, str, str]:
+def gh_api(path: str, paginate: bool = False, jq: str | None = None) -> tuple[int, str, str]:
     cmd = ["gh", "api", "-H", "X-GitHub-Api-Version: 2022-11-28", path]
+    if jq:
+        cmd += ["--jq", jq]
     if paginate:
         cmd.insert(2, "--paginate")
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -209,7 +211,17 @@ def discover_repos() -> list[str]:
     sat unswept. A repository that pins nothing costs one API call and shows up in the denominator
     as a measured zero.
     """
-    rc, out, err = gh_api("/installation/repositories", paginate=True)
+    # 🚨 LET `gh` DO THE EXTRACTION. `gh api --paginate` emits one JSON DOCUMENT PER PAGE,
+    # concatenated — not one merged array — so recovering the pages by splitting the text on
+    # braces is guesswork, and guesswork that loses a page loses a REPOSITORY. That repository
+    # then never appears in the report at all: not as a failure, not as a measured zero, simply
+    # absent, while the run goes green. That is this gate's own defect class turned inward, and
+    # swallowing the `JSONDecodeError` from a chunk that split badly is what would hide it.
+    # `--jq` makes gh apply the filter to each page and print one name per line, so pagination
+    # stops being this script's problem. It is also character-for-character what the caller's
+    # preflight asserts with, so the two can never disagree about who is in the fleet.
+    rc, out, err = gh_api("/installation/repositories", paginate=True,
+                          jq=".repositories[].full_name")
     if rc != 0:
         die(
             "could not enumerate the App installation's repositories.",
@@ -220,16 +232,7 @@ def discover_repos() -> list[str]:
                 f"gh said: {err.strip()[:400]}",
             ],
         )
-    names: list[str] = []
-    for chunk in re.findall(r"\{.*?\n\}|\{.*\}", out, re.DOTALL) or [out]:
-        try:
-            doc = json.loads(chunk)
-        except json.JSONDecodeError:
-            continue
-        for repo in doc.get("repositories") or []:
-            full = repo.get("full_name")
-            if full and full not in names:
-                names.append(full)
+    names = sorted({line.strip() for line in out.splitlines() if line.strip()})
     if not names:
         die(
             "the App installation reaches ZERO repositories.",
@@ -461,6 +464,8 @@ def run(repos: list[str], registry: str) -> int:
     gone = [pin for pin in all_pins if pin.verdict == "GONE"]
     indeterminate = [pin for pin in all_pins if pin.verdict == "INDETERMINATE"]
     resolved = [pin for pin in all_pins if pin.verdict == "RESOLVES"]
+    distinct_digests = {pin.digest for pin in all_pins}
+    gone_digests = {pin.digest for pin in gone}
 
     # 🚨 THE DENOMINATOR, PRINTED. A bare "0 unresolved" has two causes — every pin is fine, or
     # nothing was extracted — and they are indistinguishable from the verdict alone.
@@ -472,9 +477,15 @@ def run(repos: list[str], registry: str) -> int:
     emit(f"    …declaring NO digest pin              {len(silent)}"
          + (f"  ({', '.join(s.gh_repo for s in silent)})" if silent else ""))
     emit(f"    …whose workflows could not be read    {len(unreadable)}")
-    emit(f"    distinct pins found                   {len(all_pins)}")
-    emit(f"    …that RESOLVE                         {len(resolved)}")
-    emit(f"    …that are GONE                        {len(gone)}")
+    # 🚨 DECLARATIONS and DIGESTS are different numbers and the label must say which. One digest
+    # is commonly pinned by four repositories at once (the fleet moves its pins as ONE set), so
+    # "12 pins, 9 resolve" invites the reading "nine different images are fine" when it means nine
+    # declaration SITES. Both are worth having: declarations are how much editing a pin move costs,
+    # distinct digests are how many manifests retention actually has to keep alive.
+    emit(f"    pin DECLARATIONS found                {len(all_pins)}")
+    emit(f"    …over how many DISTINCT digests       {len(distinct_digests)}")
+    emit(f"    …declarations that RESOLVE            {len(resolved)}")
+    emit(f"    …declarations that are GONE           {len(gone)}")
     emit(f"    …INDETERMINATE (registry not reached) {len(indeterminate)}")
     emit(f"    pin-shaped declarations MALFORMED     {len(malformed)}")
     emit("")
@@ -518,6 +529,13 @@ def run(repos: list[str], registry: str) -> int:
         print("  and re-run.")
         failed = True
 
+    if gone:
+        # Declarations vs manifests again: N red declarations can be ONE deleted manifest pinned
+        # from N places, which is a single retention event and a single fix — or N separate ones,
+        # which is a policy failure of a different size. Say which before listing them.
+        print(f"::error::{len(gone)} pin declaration(s) name {len(gone_digests)} manifest(s) that "
+              f"no longer exist in {registry}.azurecr.io.")
+
     for pin in gone:
         print(f"::error::{pin.gh_repo} — {pin.where} pins {pin.digest}, which no longer exists in "
               f"{registry}.azurecr.io.")
@@ -544,7 +562,8 @@ def run(repos: list[str], registry: str) -> int:
 
     if failed:
         return 1
-    emit(f"All {len(resolved)} pinned digest(s) across {len(pinning)} repository(ies) resolve.")
+    emit(f"All {len(resolved)} pin declaration(s) — {len(distinct_digests)} distinct digest(s) — "
+         f"across {len(pinning)} repository(ies) resolve.")
     return 0
 
 

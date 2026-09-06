@@ -70,12 +70,19 @@ worth having whichever retention change lands, because it also catches the next 
     …declaring at least one digest pin    6
     …declaring NO digest pin              2  (Systemorph/MeshWeaver, Systemorph/Memex)
     …whose workflows could not be read    0
-    distinct pins found                   12
-    …that RESOLVE                          9
-    …that are GONE                         3
+    pin DECLARATIONS found                15
+    …over how many DISTINCT digests        9
+    …declarations that RESOLVE            12
+    …declarations that are GONE            3
     …INDETERMINATE (registry not reached)  0
     pin-shaped declarations MALFORMED      0
 ```
+
+Measured 2026-09-06, mid-release-wave. The three GONE are Education's, and they are `#3438` itself:
+`memex-migration@sha256:d81df6cc79ad…`, `memex-portal-ai@sha256:dab2a7b3a7e1…` and
+`mw-plugin-test@sha256:df19f10afc1f…`. Note the gap between **15** and **9**: the fleet moves its
+pins as one set, so most manifests are pinned from several repositories at once, and the two numbers
+must not be collapsed into one — see below.
 
 ### What it is built not to do
 
@@ -86,6 +93,15 @@ here in some form:
   extracted — and they are indistinguishable from the verdict alone. So the report states repos
   scanned, repos that pin, repos that do **not**, pins found and pins resolved; and a sweep that
   extracted no pins at all fails, because that proves the extractor broke, not that pinning stopped.
+
+- **Count DECLARATIONS and DIGESTS separately, and label which is which.** The fleet moves its pins
+  as one set, so a single manifest is routinely pinned from four repositories at once. "12 pins, 9
+  resolve" then invites the reading *nine different images are healthy* when it means nine
+  declaration **sites**. Both numbers earn their place and they answer different questions:
+  declarations are what a pin move has to edit, distinct digests are how many manifests retention
+  actually has to keep alive. The failure summary says it too — *N declarations name M manifests
+  that no longer exist* — because N reds from one deleted manifest is one retention event and one
+  fix, while N from M is a policy failure of a different size.
 
 - **Refuse placeholder vacuity.** A matcher of the shape `sha256:[0-9a-f]+` reads a *non-hex*
   placeholder such as `sha256:PLACEHOLDER` as "no literal pin present" and passes. Here, a
