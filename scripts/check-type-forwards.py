@@ -1618,7 +1618,10 @@ _KEEP = "namespace N;\npublic class Keep\n{\n}\n"
 _TF_ENTRY = "A:N.Widget  #3414 — nothing shipped can bind this TypeRef\n"
 
 
-def allowance_self_test() -> int:
+def allowance_self_test() -> tuple[int, int]:
+    """Returns (failures, cases run). The COUNT is returned, never restated at the call site:
+    a hard-coded total drifts the moment a case is added or removed, and a summary that
+    misreports what ran is the same defect as a gate that reports on evidence it never read."""
     import contextlib
     import io
     import os
@@ -1627,6 +1630,7 @@ def allowance_self_test() -> int:
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
     failed = 0
+    ran = 0
     here = Path.cwd()
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -1651,7 +1655,8 @@ def allowance_self_test() -> int:
             return rev()
 
         def case(label: str, base: str, resolve, expected: int, this_pr: int | None = None) -> None:
-            nonlocal failed
+            nonlocal failed, ran
+            ran += 1
             buffer = io.StringIO()
             with contextlib.redirect_stdout(buffer):
                 code = check(root, base, resolve=resolve, this_pr=this_pr)
@@ -1685,6 +1690,8 @@ def allowance_self_test() -> int:
                  ta._resolver(ta._state()), 0)
             case("…naming a MERGED pull request it FAILS as stale", base,
                  ta._resolver(ta._state(merged=True, state="closed")), 1)
+            case("…naming a CLOSED-unmerged pull request it FAILS", base,
+                 ta._resolver(ta._state(state="closed")), 1)
             case("…naming an ISSUE it FAILS", base,
                  ta._resolver(ta._state(isPullRequest=False)), 1)
             case("…with an UNRESOLVABLE reference it FAILS rather than passing", base,
@@ -1724,7 +1731,7 @@ def allowance_self_test() -> int:
         finally:
             os.chdir(here)
 
-    return failed
+    return failed, ran
 
 
 def self_test() -> int:
@@ -1780,13 +1787,14 @@ def self_test() -> int:
         else:
             print(f"ok: {label}")
     failed += surface_self_test()
-    failed += allowance_self_test()
+    allowance_failures, allowance_cases = allowance_self_test()
+    failed += allowance_failures
     if failed:
         print(f"\n{failed} self-test(s) failed — the gate cannot be trusted.")
         return 1
-    print(f"\nAll {len(SELF_TESTS) + len(SURFACE_TESTS) + 10} self-tests passed "
+    print(f"\nAll {len(SELF_TESTS) + len(SURFACE_TESTS) + allowance_cases} self-tests passed "
           f"({len(SELF_TESTS)} forwarder verdict, {len(SURFACE_TESTS)} surface report, "
-          f"10 transitional allowance).")
+          f"{allowance_cases} transitional allowance).")
     return 0
 
 

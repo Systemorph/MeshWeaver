@@ -344,12 +344,29 @@ def _api(url: str, token: str) -> dict:
         raise AllowResolutionError(f"{url} -> could not reach api.github.com: {e}") from e
 
 
-def github_resolver(token: str, repo: str | None = None):
-    """Resolve a number in THIS repository. One request: `/issues/{n}` answers for both kinds.
+def github_resolver(token: str, repo: str | None = None, fetch=_api):
+    """Resolve a number in THIS repository, normally in ONE request.
 
-    The issues endpoint carries `pull_request.merged_at` for a pull request and omits the
-    `pull_request` object entirely for an issue, which is exactly the discrimination the
-    classifier needs — so there is no second request to make and no second failure mode.
+    🚨 WHY `/issues/{n}` AND NOT `/pulls/{n}`. It is the only route that tells an ISSUE apart from
+    a number that does not exist: `/pulls/{n}` answers 404 for both, and this gate must say which
+    (`NOT_A_PR` is an author error with an obvious fix; `UNRESOLVED` is not). The issues payload
+    omits the `pull_request` object entirely for an issue and, for a pull request, carries it with
+    a `merged_at` field — which is exactly the discrimination the classifier needs.
+
+    MEASURED against the live API on 2026-09-06, with the incident's own numbers:
+
+        #3414     (merged pull request) -> expired              allows=False
+        #3406     (issue)               -> not-a-pull-request   allows=False
+        #99999999 (absent)              -> unresolved           allows=False   404
+
+    …so `merged_at` is present on this route, and the one-request shape is not an assumption.
+    Because that is a claim about somebody else's API, the SECOND request exists as a fallback for
+    the day it stops being true: if the payload says pull request but carries no `merged_at` KEY at
+    all (absent, not null — an open pull request sends the key with null), `merged` cannot be read
+    and `/pulls/{n}` is asked. It never fires against today's API, and the resolver self-tests
+    below prove both paths without a network. Note that even a total loss of the field could not
+    make this gate PASS: `merged` false with `state` closed reads as ABANDONED, which is equally
+    red — the fallback protects the MESSAGE, not the verdict.
     """
     slug = repo or os.environ.get("GITHUB_REPOSITORY") or THIS_REPO_DEFAULT
 
@@ -359,12 +376,21 @@ def github_resolver(token: str, repo: str | None = None):
                 "GITHUB_TOKEN is empty, so the reference could not be read. This gate resolves "
                 "the pull request an allow entry names, and refuses to pass on one it never saw"
             )
-        payload = _api(f"https://api.github.com/repos/{slug}/issues/{number}", token)
+        payload = fetch(f"https://api.github.com/repos/{slug}/issues/{number}", token)
         pull = payload.get("pull_request")
+        is_pr = isinstance(pull, dict)
+        state = str(payload.get("state", ""))
+        merged = bool(pull.get("merged_at")) if is_pr else False
+        if is_pr and "merged_at" not in pull:
+            # The field this route is documented to carry is gone. Ask the route that cannot
+            # omit it, rather than reporting a merged pull request as an abandoned one.
+            detail = fetch(f"https://api.github.com/repos/{slug}/pulls/{number}", token)
+            merged = bool(detail.get("merged_at")) or bool(detail.get("merged"))
+            state = str(detail.get("state", state))
         return {
-            "isPullRequest": isinstance(pull, dict),
-            "merged": bool((pull or {}).get("merged_at")),
-            "state": str(payload.get("state", "")),
+            "isPullRequest": is_pr,
+            "merged": merged,
+            "state": state,
             "title": str(payload.get("title", "")),
             "url": str(payload.get("html_url", "")),
         }
@@ -437,6 +463,90 @@ _CLASSIFIER_CASES: list[tuple] = [
     ("an EMPTY token is the same red", _RAIL,
      github_resolver(""), None, Verdict.UNRESOLVED),
 ]
+
+
+# ─────────────────────── the RESOLVER, against canned API payloads ───────────────────────
+#
+# 🚨 The classifier cases above inject a resolver, so they prove the VERDICTS and say nothing
+# about whether the real one reads GitHub's payload correctly. These cases close that gap: they
+# drive `github_resolver` itself with a fake `fetch`, asserting both the verdict AND which URLs
+# were requested — so "one request normally, two only when the field is missing" is measured
+# rather than claimed, and a resolver that silently started asking the wrong route fails here.
+
+_ISSUE_PAYLOAD = {"state": "closed", "title": "an issue", "html_url": "https://x/issues/3406"}
+_OPEN_PR_PAYLOAD = {
+    "state": "open", "title": "the change", "html_url": "https://x/pull/3414",
+    "pull_request": {"merged_at": None},
+}
+_MERGED_PR_PAYLOAD = {
+    "state": "closed", "title": "the change", "html_url": "https://x/pull/3414",
+    "pull_request": {"merged_at": "2026-09-06T13:38:00Z"},
+}
+_CLOSED_PR_PAYLOAD = {
+    "state": "closed", "title": "the change", "html_url": "https://x/pull/3414",
+    "pull_request": {"merged_at": None},
+}
+# The day GitHub stops sending the field this route is documented to carry.
+_PR_WITHOUT_MERGED_AT = {
+    "state": "closed", "title": "the change", "html_url": "https://x/pull/3414",
+    "pull_request": {"url": "https://api.github.com/repos/o/r/pulls/3414"},
+}
+
+
+def _fake_fetch(by_suffix: dict[str, dict], seen: list[str]):
+    def fetch(url: str, token: str) -> dict:
+        seen.append(url)
+        for suffix, payload in by_suffix.items():
+            if url.endswith(suffix):
+                return payload
+        raise AllowResolutionError(f"{url} -> 404: no such issue or pull request in this repository")
+    return fetch
+
+
+# (label, routes, expected verdict, expected number of requests)
+_RESOLVER_CASES: list[tuple] = [
+    ("the resolver reads a MERGED pull request off /issues in ONE request",
+     {"/issues/3414": _MERGED_PR_PAYLOAD}, Verdict.EXPIRED, 1),
+    ("…an OPEN one likewise", {"/issues/3414": _OPEN_PR_PAYLOAD}, Verdict.LIVE, 1),
+    ("…a CLOSED-unmerged one likewise",
+     {"/issues/3414": _CLOSED_PR_PAYLOAD}, Verdict.ABANDONED, 1),
+    ("…and an ISSUE, which /pulls could not tell from a missing number",
+     {"/issues/3414": _ISSUE_PAYLOAD}, Verdict.NOT_A_PR, 1),
+    # The fallback: `merged_at` absent as a KEY. /pulls settles it, and the verdict stays EXPIRED.
+    ("a payload with no `merged_at` KEY falls back to /pulls and still reports MERGED",
+     {"/issues/3414": _PR_WITHOUT_MERGED_AT,
+      "/pulls/3414": {"merged_at": "2026-09-06T13:38:00Z", "state": "closed"}},
+     Verdict.EXPIRED, 2),
+    ("…and when /pulls says it was never merged, ABANDONED — still red either way",
+     {"/issues/3414": _PR_WITHOUT_MERGED_AT,
+      "/pulls/3414": {"merged_at": None, "state": "closed"}},
+     Verdict.ABANDONED, 2),
+    ("an unknown number is UNRESOLVED, never NOT_A_PR", {}, Verdict.UNRESOLVED, 1),
+]
+
+
+def resolver_self_test() -> tuple[int, int]:
+    """Prove the real resolver against canned payloads. Returns (failures, cases run)."""
+    failed = 0
+    for label, routes, expected, requests in _RESOLVER_CASES:
+        seen: list[str] = []
+        resolve = github_resolver("a-token", "Systemorph/MeshWeaver", _fake_fetch(routes, seen))
+        got = classify(parse_entries(_RAIL)[0], resolve)
+        ok = got.verdict is expected and len(seen) == requests
+        print(f"  {'ok  ' if ok else 'FAIL'} {label}")
+        if not ok:
+            failed += 1
+            print(f"         expected {expected.value} in {requests} request(s); "
+                  f"got {got.verdict.value} in {len(seen)}: {seen}")
+    # An empty token must never reach the network at all.
+    seen = []
+    resolve = github_resolver("", "Systemorph/MeshWeaver", _fake_fetch({}, seen))
+    got = classify(parse_entries(_RAIL)[0], resolve)
+    ok = got.verdict is Verdict.UNRESOLVED and seen == []
+    print(f"  {'ok  ' if ok else 'FAIL'} an EMPTY token is refused before any request is made")
+    if not ok:
+        failed += 1
+    return failed, len(_RESOLVER_CASES) + 1
 
 
 def self_test() -> int:
@@ -534,10 +644,14 @@ def self_test() -> int:
         introduced_new, _ = partition_entries(root, "not-tracked.allow", base)
         check("an allow file that does not exist reads as empty", introduced_new == [])
 
+    resolver_failures, resolver_cases = resolver_self_test()
+    failed += resolver_failures
+
     if failed:
         print(f"\n{failed} self-test(s) failed — the transitional-allow mechanism cannot be trusted.")
         return 1
-    print("\nAll transitional-allow self-tests passed.")
+    print(f"\nAll transitional-allow self-tests passed ({resolver_cases} of them over the real "
+          f"resolver, against canned API payloads).")
     return 0
 
 

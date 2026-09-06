@@ -158,6 +158,33 @@ the mechanism, or went back to reading the allow file whole, the *inert* case wo
 *live* case would go green. A guard whose subject moved and whose roots did not passes having
 checked nothing; these roots move with it.
 
+Those cases inject a resolver, so they prove the *verdicts* and say nothing about whether the real
+one reads GitHub's payload correctly. Eight further cases drive `github_resolver` itself with a
+fake `fetch`, asserting the verdict **and which URLs were requested** — so "one request normally"
+is measured, not claimed.
+
+### Why `/issues/{n}` and not `/pulls/{n}`
+
+`/issues/{n}` is the only route that tells an **issue** apart from a number that **does not
+exist**: `/pulls/{n}` answers 404 for both, and this gate must say which — `NOT_A_PR` is an author
+error with an obvious fix, `UNRESOLVED` is not. The issues payload omits the `pull_request` object
+entirely for an issue and, for a pull request, carries it with `merged_at`. Measured against the
+live API with the incident's own numbers:
+
+```
+#3414     (merged pull request) -> expired              allows=False
+#3406     (issue)               -> not-a-pull-request   allows=False
+#99999999 (absent)              -> unresolved           allows=False   404
+```
+
+Because that is a claim about somebody else's API, a second request exists as a fallback for the
+day it stops holding: a payload that says *pull request* but carries no `merged_at` **key** —
+absent, not null; an open pull request sends the key with `null` — falls through to `/pulls/{n}`.
+It never fires against today's API, and both paths are covered by the resolver self-tests. Note
+that even a total loss of the field could not make this gate *pass*: `merged` false with `state`
+closed reads as `ABANDONED`, which is equally red. The fallback protects the **message**, not the
+verdict.
+
 ## What this does not do
 
 * It does not stop a landed entry from **accumulating**. An inert line is litter, not a defect —
