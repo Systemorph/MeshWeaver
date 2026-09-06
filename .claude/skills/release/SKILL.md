@@ -77,18 +77,23 @@ and the findings each release carried:
 [SecurityScanning.md](../../../src/MeshWeaver.Documentation/Data/Architecture/SecurityScanning.md).
 
 ```bash
+ZAP=ghcr.io/zaproxy/zaproxy:2.17.0          # pinned by VERSION; the version goes on the notes page; bump deliberately
 OUT=~/.cache/zap-scan-$(date -u +%F); mkdir -p "$OUT/public" "$OUT/auth"   # a PLAIN dir: Docker mounts it
+# Each run's console output IS its log (the verdict is its last line), so it is captured; the
+# scripts exit 0 PASS / 2 WARN / 1 FAIL / 3 scanner error — echo it, never let it end the shell.
 # 1. PUBLIC, ACTIVE — anonymous, safe against production
-docker run --rm -v "$OUT/public":/zap/wrk/:rw -t ghcr.io/zaproxy/zaproxy:stable \
-  zap-full-scan.py -t https://memex.meshweaver.cloud -r public-full.html -J public-full.json -w public-full.md
+docker run --rm -v "$OUT/public":/zap/wrk/:rw -t "$ZAP" \
+  zap-full-scan.py -t https://memex.meshweaver.cloud -r public-full.html -J public-full.json -w public-full.md \
+  > "$OUT/public/public-full.log" 2>&1; echo "public exit=$?"
 # 2. AUTHENTICATED, PASSIVE — never zap-full-scan with a session on production (it fires payloads
 #    AS THE USER at every write endpoint). $COOKIE = the full Cookie header of a real browser
 #    session (.AspNetCore.Cookies; an API token does not authenticate the SPA). -j = AJAX spider,
 #    the only thing that reaches the bundles a signed-in page loads.
-docker run --rm -v "$OUT/auth":/zap/wrk/:rw -t ghcr.io/zaproxy/zaproxy:stable \
+docker run --rm -v "$OUT/auth":/zap/wrk/:rw -t "$ZAP" \
   zap-baseline.py -t https://memex.meshweaver.cloud -j -r auth-report.html -J auth-report.json -w auth-report.md \
-  -z "-config replacer.full_list(0).description=sess -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Cookie -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=$COOKIE"
-# 3. VERDICT — the last line of each log; FAIL-NEW must be 0 on both, and rule 10003 blocks:
+  -z "-config replacer.full_list(0).description=sess -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Cookie -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=$COOKIE" \
+  > "$OUT/auth/auth-baseline.log" 2>&1; echo "authenticated exit=$?"
+# 3. VERDICT — the last line of each captured log; FAIL-NEW must be 0 on both, and rule 10003 blocks:
 tail -1 "$OUT/public/public-full.log" "$OUT/auth/auth-baseline.log"
 grep -h "Vulnerable JS Library" "$OUT"/*/*.log        # PASS = clean; WARN-NEW = a shipped library with advisories → blocker
 ```

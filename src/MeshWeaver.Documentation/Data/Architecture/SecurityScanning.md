@@ -27,24 +27,30 @@ every write endpoint it finds.
 | **Authenticated** | a real browser session | **passive** (`zap-baseline.py -j`) — spiders with the AJAX spider, inspects every response, sends no payload | the signed-in portal and the bundles only its pages load |
 
 ```bash
-# Both runs use the pinned scanner image; $OUT is a PLAIN directory (a Docker bind mount —
-# an agent scratchpad is not mountable), one sub-folder per run.
+# The scanner is pinned by VERSION, and that version goes on the notes page beside the verdict;
+# bumping it is a deliberate change (a new release of the scanner brings new rules). $OUT is a
+# PLAIN directory (a Docker bind mount — an agent scratchpad is not mountable), one sub-folder
+# per run, and each run's console output IS its log: the verdict is that log's last line, so it
+# is captured — the scripts exit 0 on PASS, 2 on WARN, 1 on FAIL, 3 on a scanner error.
+ZAP=ghcr.io/zaproxy/zaproxy:2.17.0
 OUT=~/.cache/zap-scan-$(date -u +%F); mkdir -p "$OUT/public" "$OUT/auth"
 
 # 1. Public, ACTIVE — anonymous, so safe against production.
-docker run --rm -v "$OUT/public":/zap/wrk/:rw -t ghcr.io/zaproxy/zaproxy:stable \
+docker run --rm -v "$OUT/public":/zap/wrk/:rw -t "$ZAP" \
   zap-full-scan.py -t https://memex.meshweaver.cloud \
-  -r public-full.html -J public-full.json -w public-full.md
+  -r public-full.html -J public-full.json -w public-full.md \
+  > "$OUT/public/public-full.log" 2>&1; echo "public scan exit=$?"
 
 # 2. Authenticated, PASSIVE — $COOKIE is the full `Cookie` header of a real browser session
 #    (the OIDC `.AspNetCore.Cookies` session; an API token does not authenticate the SPA).
 #    -j turns on the AJAX spider, which is what reaches the assets a signed-in page loads.
-docker run --rm -v "$OUT/auth":/zap/wrk/:rw -t ghcr.io/zaproxy/zaproxy:stable \
+docker run --rm -v "$OUT/auth":/zap/wrk/:rw -t "$ZAP" \
   zap-baseline.py -t https://memex.meshweaver.cloud -j \
   -r auth-report.html -J auth-report.json -w auth-report.md \
   -z "-config replacer.full_list(0).description=sess -config replacer.full_list(0).enabled=true \
       -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Cookie \
-      -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=$COOKIE"
+      -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=$COOKIE" \
+  > "$OUT/auth/auth-baseline.log" 2>&1; echo "authenticated scan exit=$?"
 ```
 
 The cookie is a live session: it stays in the shell that runs the scan, never in a file under a
@@ -52,7 +58,7 @@ repository, and the session is signed out when the run ends.
 
 ## The verdict
 
-The last line of each run's log is the verdict:
+The last line of each run's log (the console output captured above) is the verdict:
 
 ```
 FAIL-NEW: 0	FAIL-INPROG: 0	WARN-NEW: 9	WARN-INPROG: 0	INFO: 0	IGNORE: 0	PASS: 58
@@ -83,7 +89,7 @@ FAIL-NEW: 0	FAIL-INPROG: 0	WARN-NEW: 9	WARN-INPROG: 0	INFO: 0	IGNORE: 0	PASS: 58
 
 ## Findings by release
 
-### 3.0.0 — scanned 2026-09-06 against memex.meshweaver.cloud
+### 3.0.0 — scanned 2026-09-06 against memex.meshweaver.cloud, ZAP 2.17.0
 
 | run | verdict | endpoints |
 |---|---|---|
