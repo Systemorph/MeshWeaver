@@ -95,6 +95,59 @@ public static class PackageSources
         !string.Equals(format ?? "node-repo", "package-json", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
+    /// The format rule for a SOURCE: a declared <paramref name="format"/> wins, exactly as
+    /// <see cref="IsNodeRepoFormat(string?)"/> reads it; an UNDECLARED format on a LOCAL checkout is
+    /// detected from the layout on disk; an undeclared format on a URL stays the shipped default
+    /// (there is nothing to inspect before the fetch).
+    ///
+    /// <para>Why detection, not a default: #3384 unified the two readers of a catalog node on the
+    /// declared format with the shipped default — and thereby turned every undeclared
+    /// <c>package.json</c> catalog into an empty page (the browse view had read package.json before,
+    /// so nothing had ever needed declaring). Measured on the Plugins pin move to 3.0.0-ci.7917:
+    /// <c>CatalogRenderTest.Catalog_ListsPackagesFromGitSource_AsCards</c> and
+    /// <c>RestartRequiredCardTest.ALandedModule_PutsTheRestartNoteOnItsPackageCard</c> rendered the
+    /// catalog shell with zero cards over a <c>catalog/&lt;id&gt;/package.json</c> checkout. The layout
+    /// says which format a checkout is; only ambiguity falls back to the default.</para>
+    /// </summary>
+    public static bool IsNodeRepoFormatOrDetected(string? format, string? sourceRepoPath, string? sourceSubdir)
+    {
+        if (!string.IsNullOrWhiteSpace(format) || string.IsNullOrWhiteSpace(sourceRepoPath) || IsUrl(sourceRepoPath))
+            return IsNodeRepoFormat(format);
+        return DetectedFormatIsNodeRepo(sourceRepoPath.Trim(), (sourceSubdir ?? "").Trim());
+    }
+
+    /// <summary>
+    /// The layout rule: a checkout is <c>package.json</c>-format when <c>&lt;subdir&gt;/&lt;id&gt;/package.json</c>
+    /// exists and NO <c>&lt;x&gt;/index.json</c> Space root exists at the repo root or under the subdir;
+    /// everything else — node-repo roots, both shapes at once, an unreadable or absent directory —
+    /// is the shipped node-repo format. Unambiguous evidence for the manifest shape is the only thing
+    /// that overrides the default.
+    /// </summary>
+    internal static bool DetectedFormatIsNodeRepo(string repo, string subdir)
+    {
+        try
+        {
+            // A rooted subdir would make Path.Combine DROP the repo and scan outside it; that is not
+            // a layout to read, it is an input to refuse — the default, never a scan elsewhere.
+            if (Path.IsPathRooted(subdir))
+                return true;
+            var subdirPath = string.IsNullOrEmpty(subdir) ? repo : Path.Combine(repo, subdir);
+            static bool AnyChildHas(string root, string file) =>
+                Directory.Exists(root)
+                && Directory.EnumerateDirectories(root).Any(d => File.Exists(Path.Combine(d, file)));
+            var anyIndex = AnyChildHas(repo, "index.json") || AnyChildHas(subdirPath, "index.json");
+            var anyPackage = AnyChildHas(subdirPath, "package.json");
+            return anyIndex || !anyPackage;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            // Rendering a catalog page must never throw over a malformed path; the default is the
+            // behaviour every reader had before detection existed.
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Builds a package source for <paramref name="sourceRepoPath"/> (a URL or local path), or
     /// <c>null</c> when the path is empty / a URL source has no <see cref="IGitHubRepoClient"/>.
     /// <paramref name="nodeRepo"/> selects the format for BOTH a URL and a local path: <c>true</c>
@@ -168,7 +221,7 @@ public static class PackageSources
             string? repo, string? subdir, string? gitRef, string? format, string? name,
             string? autoDiscover, string? autoSync)
         {
-            var source = FromRepo(hub, repo, subdir, logger, IsNodeRepoFormat(format));
+            var source = FromRepo(hub, repo, subdir, logger, IsNodeRepoFormatOrDetected(format, repo, subdir));
             return source is null
                 ? null
                 : new ConfiguredPackageSource(source, gitRef ?? "HEAD", name ?? repo ?? "")

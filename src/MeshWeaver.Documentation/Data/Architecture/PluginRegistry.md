@@ -162,7 +162,22 @@ same way. It did not until #3384: the node's content had no format field, so the
 built a `package.json` source while `PluginUpdateWatcher` read the identical record as a node repo.
 A catalog node over a local node-repo checkout therefore rendered *"No installable packages found."*
 while its own watcher listed those packages happily. One record with two readers must have one rule;
-that rule is `PackageSources.IsNodeRepoFormat`, and both readers call it.
+that rule is `PackageSources.IsNodeRepoFormat` for a DECLARED format, wrapped by
+`PackageSources.IsNodeRepoFormatOrDetected` for the undeclared case below — and every reader calls the latter.
+
+🚨 **An UNDECLARED format on a local checkout is DETECTED from the layout, never defaulted.** #3384's
+unification turned every undeclared `package.json` catalog into an empty page: the browse view had
+read package.json before, so no such catalog had ever needed a declaration (measured on the Plugins
+pin move to `3.0.0-ci.7917` — two migrated PluginCatalog tests rendered the catalog shell with zero
+cards over `catalog/<id>/package.json`). The rule, in `PackageSources.IsNodeRepoFormatOrDetected(format, repoPath, subdir)`: a declared `Format` wins; with none, `<subdir>/<id>/package.json` present and NO
+`<x>/index.json` Space root anywhere (repo root or subdir) reads as `package-json`; every other
+layout — node-repo roots, both shapes at once, an absent or unreadable directory, a URL (nothing to
+inspect before the fetch) — is the shipped `node-repo`. Unambiguous evidence for the manifest shape
+is the only thing that overrides the default.
+The scan looks exactly ONE level down (`<child>/index.json` at the repo root and under the subdir — Space
+roots, not any `index.json` anywhere) and never deeper, and it is deliberately not more general than
+that: a repository that carries node-repo Space roots BESIDE a `package.json` catalog reads as both
+shapes, falls to the default, and must declare `package-json` on the node.
 
 ## The sync licence — what a grant now carries
 
