@@ -168,7 +168,7 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
         // unconditionally while the browse view read the same record as package.json.
         var source = PackageSources.FromRepo(
             hub, content.SourceRepoPath, content.SourceSubdir, logger,
-            nodeRepo: PackageSources.IsNodeRepoFormat(content.Format));
+            nodeRepo: PackageSources.IsNodeRepoFormatOrDetected(content.Format, content.SourceRepoPath, content.SourceSubdir));
         if (source is null)
         {
             logger?.LogWarning(
