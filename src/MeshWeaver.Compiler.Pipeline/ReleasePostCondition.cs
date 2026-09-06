@@ -131,7 +131,19 @@ internal static class ReleasePostCondition
     /// <para>🚨 Never faults and always emits exactly once — the terminal Status write runs in this
     /// observable's OnNext, so a sequence that completed empty or errored would wedge the NodeType
     /// at <c>Compiling</c>.</para>
+    ///
+    /// <para>🚨 <b>The re-cut is a RETRY, not a second cut (issue #3407).</b> It takes the SAME
+    /// <paramref name="identity"/> the settle handed the first attempt, so it addresses the node
+    /// that attempt addressed, and <c>TryCreateReleaseNode</c> writes it with the idempotent upsert.
+    /// If the first attempt's write landed and only its OUTCOME was lost (a bounded observation
+    /// gave up, a response was not delivered), this adopts it and the pointer advances to a release
+    /// that names this build. It used to mint a fresh <c>DateTime.UtcNow</c> id instead: a later
+    /// second produced a duplicate release for one build, and the SAME second produced the id its
+    /// own first attempt had already created — refused "Node already exists", swallowed to
+    /// <c>null</c>, pointer never advanced.</para>
     /// </summary>
+    /// <param name="identity">The release identity this settle owns — the one
+    /// <c>NodeTypeBuildState.MintReleaseIdentity</c> minted before the first attempt.</param>
     internal static IObservable<(string? ReleasePath, string? Diagnosis)> Restore(
         IMessageHub hub,
         string nodeTypePath,
@@ -139,6 +151,7 @@ internal static class ReleasePostCondition
         MeshNode pendingNode,
         string? activityPath,
         string? newReleasePath,
+        NodeTypeBuildState.ReleaseIdentity identity,
         ILogger? logger)
     {
         var before = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
@@ -159,7 +172,7 @@ internal static class ReleasePostCondition
 
         return access
             .RunAsSystem(() => NodeTypeBuildState.TryCreateReleaseNode(
-                hub, nodeTypePath, result, systemPending, activityPath, logger))
+                hub, nodeTypePath, result, systemPending, activityPath, identity, logger))
             .Take(1)
             .Catch((Exception ex) =>
             {
