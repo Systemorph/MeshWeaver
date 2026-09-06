@@ -338,16 +338,25 @@ public static class MemexConfiguration
             if (resolvedModules.Length > 0)
                 builder.InstallAssemblies(resolvedModules);
 
-            // 🚨 #3395 — say, once and durably, that a replica came up on the mesh's set. Written
-            // AFTER the assemblies are installed, because the claim is "this set is running", not
-            // "this set was read": a boot that dies before InstallAssemblies must not close the
-            // convergence window it never entered. Create-if-absent, so the second and every later
+            // 🚨 #3395 — say, once and durably, that a replica came up on the mesh's set. Deferred
+            // to a hosted service rather than written here, because the claim is "this set is
+            // RUNNING", not "this set was read" — a boot that dies before InstallAssemblies must
+            // not close the convergence window it never entered, and #3478 is the same rule one
+            // step further: a process its OWN validation refuses never serves anything either, so
+            // it must not make the claim. ModuleSetAdoptionService offers the write to the
+            // mesh-admission gate, which holds it while the bake is still forming a verdict, writes
+            // it when the bake passes and never writes it when the bake refuses the image. On every
+            // deployment that has not armed the bake readiness gate — the chart default — the gate
+            // is Unarmed and the write happens inline on that service's StartAsync, milliseconds
+            // later in boot than it did here. Create-if-absent, so the second and every later
             // replica writes nothing, and best-effort — a read-only volume costs the mesh-level
             // signal and nothing else.
             if (meshModuleSets.Proposed is { } adoptedSet)
-                ModuleSetStore.RecordAdoption(moduleRoot, adoptedSet,
-                    adoptedBy: Environment.MachineName,
-                    onWarn: msg => Console.Error.WriteLine($"[ModuleSet] {msg}"));
+                builder.ConfigureServices(services => services.AddModuleSetAdoption(
+                    $"module set {adoptedSet.Sequence} ('{adoptedSet.Id}')",
+                    () => ModuleSetStore.RecordAdoption(moduleRoot, adoptedSet,
+                        adoptedBy: Environment.MachineName,
+                        onWarn: msg => Console.Error.WriteLine($"[ModuleSet] {msg}"))));
             // Restart-as-activation: this boot IS the restart the sidecar was waiting for —
             // consume the pending flag so the step-10 signal reads current. Best-effort: on a
             // read-only app filesystem the flag simply stays set (cosmetic), and boot proceeds.

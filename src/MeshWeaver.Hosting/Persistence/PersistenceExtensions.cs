@@ -845,6 +845,21 @@ public static class PersistenceExtensions
         // guarantees read-after-write (see IPostCommitFlush / StoragePostCommitFlush).
         services.TryAddSingleton<MeshWeaver.Data.IPostCommitFlush>(sp =>
             new StoragePostCommitFlush(sp.GetRequiredService<IMessageHub>()));
+        // 🚨 #3478 — the mesh-ADMISSION gate every mesh-visible publication of this process's
+        // build identity goes through (NodeType compile stamps on both write-back paths; the
+        // module-set adoption record). Registered here, with the rest of the process-local mesh
+        // services, so it is ALWAYS resolvable and the call sites never have to ask whether a
+        // deployment happens to have one. It is Unarmed — a straight pass-through — until an
+        // IMeshAdmissionAuthority is registered alongside it (AddNodeTypeBakeGate), so this
+        // registration on its own changes nothing anywhere.
+        services.TryAddSingleton(sp => new MeshPublicationGate(
+            sp.GetServices<IMeshAdmissionAuthority>(),
+            sp.GetService<ILogger<MeshPublicationGate>>()));
+        // 🚨 …and the process-LOCAL half of the same change. A withheld compile stamp still happened
+        // as a COMPILE, and the bake gate's regression retraction (#1214) is asking about exactly
+        // that local fact — it had been reading the shared record as a proxy for it. Without this
+        // signal, gating publication would turn #1214's self-healing stall into a permanent one.
+        services.TryAddSingleton<LocalNodeTypeBuilds>();
         return services;
     }
 }

@@ -3,7 +3,9 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.Hosting;
 
@@ -51,7 +53,7 @@ public enum BakePhase
 /// readiness probe that takes the pod out of rotation under load (the /health-as-readiness
 /// death-spiral this deployment already fixed once).</para>
 /// </summary>
-public sealed class NodeTypeBakeGateState
+public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
 {
     private readonly ConcurrentDictionary<string, string> regressions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> unevaluated = new(StringComparer.OrdinalIgnoreCase);
@@ -139,6 +141,76 @@ public sealed class NodeTypeBakeGateState
 
     /// <summary>Human-readable status for the health payload and the logs.</summary>
     public string Detail => detail;
+
+    /// <summary>
+    /// 🚨 <b>THE readiness predicate — ONE table, and every consumer reads THIS one.</b> True when a
+    /// readiness probe over this state answers healthy.
+    ///
+    /// <para>It is stated here, beside the state it judges, for the reason
+    /// <c>IsAvailabilityFailure</c> gives in the compiler pipeline: one predicate, several
+    /// consumers, and they MUST agree. The host's <c>IHealthCheck</c>
+    /// (<c>Memex.Portal.Distributed.NodeTypeBakeHealthCheck</c>) implements exactly this table, and
+    /// <see cref="Admission"/> below is DERIVED from it — so "not ready" and "not admitted to the
+    /// mesh" cannot drift apart by construction, which is the whole of #3478's directive
+    /// (<i>"not ready should NEVER run"</i>).</para>
+    ///
+    /// <para><see cref="BakePhase.NotStarted"/> is healthy because it means the sweep is switched
+    /// OFF — the documented fail-OPEN state, since a configuration mistake must never black-hole a
+    /// pod. <see cref="BakePhase.Running"/> is NOT: a pod mid-sweep has not verified its NodeTypes
+    /// yet. <see cref="BakePhase.Faulted"/> follows <see cref="AllowUnprovenBake"/>, the operator's
+    /// explicit "serve on an unproven bake".</para>
+    /// </summary>
+    public bool ReadinessGranted => Phase switch
+    {
+        BakePhase.NotStarted => true,
+        BakePhase.Complete => true,
+        BakePhase.Faulted => AllowUnprovenBake,
+        _ => false,
+    };
+
+    /// <summary>
+    /// 🚨 <b>Whether this process may PARTICIPATE in the mesh — issue #3478.</b> Readiness gates
+    /// traffic; this gates membership, and the two are the same verdict read at different
+    /// strengths.
+    ///
+    /// <para><b>The invariant, and it is what the maintainer directive reduces to:</b>
+    /// <c>Admitted ⟹ <see cref="ReadinessGranted"/></c>. Admission is never more permissive than
+    /// readiness. It is deliberately LESS permissive in exactly one place — an armed gate at
+    /// <see cref="BakePhase.NotStarted"/>, where readiness is granted (the sweep is switched off as
+    /// far as a probe can tell) but this pod has formed no verdict yet, so its publications are
+    /// HELD rather than run. That window is the one the incident's pod walked through: its bake
+    /// started at <c>ApplicationStarted</c>, minutes after the process began.</para>
+    ///
+    /// <list type="table">
+    /// <listheader><term>Phase (armed)</term><description>Admission</description></listheader>
+    /// <item><term><see cref="BakePhase.NotStarted"/></term><description>Provisional — armed, no verdict yet</description></item>
+    /// <item><term><see cref="BakePhase.Running"/></term><description>Provisional — still measuring</description></item>
+    /// <item><term><see cref="BakePhase.Complete"/></term><description>Admitted</description></item>
+    /// <item><term><see cref="BakePhase.Regressed"/></term><description>Refused</description></item>
+    /// <item><term><see cref="BakePhase.Faulted"/></term><description>Admitted iff <see cref="AllowUnprovenBake"/>, else Refused</description></item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>Unarmed means unarmed.</b> With <see cref="GatesReadiness"/> false nothing
+    /// consumes this state and nothing is enforced, so admission is
+    /// <see cref="MeshAdmission.Unarmed"/> and publications pass straight through. Making an
+    /// unarmed gate withhold writes would be enforcement nobody opted into, on every dev host and
+    /// every test mesh — the exact "registered ≠ armed" confusion this class already exists to
+    /// keep honest.</para>
+    /// </summary>
+    /// <remarks>
+    /// 🚨 The NON-TERMINAL phases are tested FIRST, and the order is load-bearing:
+    /// <see cref="BakePhase.NotStarted"/> grants readiness, so asking
+    /// <see cref="ReadinessGranted"/> first would admit an armed pod that has not measured anything
+    /// — the very window the incident's pod published through.
+    /// </remarks>
+    public MeshAdmission Admission
+        => !GatesReadiness ? MeshAdmission.Unarmed
+            : Phase is BakePhase.NotStarted or BakePhase.Running ? MeshAdmission.Provisional
+            : ReadinessGranted ? MeshAdmission.Admitted
+            : MeshAdmission.Refused;
+
+    /// <summary>Why — the bake's own <see cref="Detail"/>, prefixed with the phase.</summary>
+    public string AdmissionReason => $"NodeType bake {Phase}: {Detail}";
 
     /// <summary>Types that regressed on this image, with their compile error.</summary>
     public IReadOnlyDictionary<string, string> Regressions => regressions;
@@ -553,6 +625,18 @@ public static class NodeTypeBakeGateExtensions
             GatesReadiness = gatesReadiness,
             AllowUnprovenBake = allowUnprovenBake,
         });
+        // 🚨 #3478 — the SAME verdict, now also gating MESH MEMBERSHIP and not merely traffic.
+        // Registering the state as an IMeshAdmissionAuthority is what makes a refused pod inert
+        // instead of silent-but-active: MeshPublicationGate reads this on every mesh-visible
+        // publication, so a pod that fails its bake stamps no NodeType record and records no
+        // module-set adoption. The gate itself is registered by AddMeshCatalog and is Unarmed
+        // until an authority like this one joins, so a host that never calls this method behaves
+        // exactly as it did before.
+        services.AddSingleton<IMeshAdmissionAuthority>(
+            sp => sp.GetRequiredService<NodeTypeBakeGateState>());
+        services.TryAddSingleton(sp => new MeshPublicationGate(
+            sp.GetServices<IMeshAdmissionAuthority>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<MeshPublicationGate>>()));
         return services;
     }
 }
