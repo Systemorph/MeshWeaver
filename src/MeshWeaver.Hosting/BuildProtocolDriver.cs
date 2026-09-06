@@ -116,25 +116,126 @@ public static class BuildProtocolDriver
         // is the sweep itself, whose failures are verdicts about this image and must reach the
         // gate untouched. Only reaching the coordination node at all is retried — see
         // CoordinationAttempts for why, and for why exhausting them is still a refusal.
-        return RetryUnreachableCoordination(
-                () => mesh.RequestBuildClaim(holder, fingerprint, priority: priority).Take(1),
-                CoordinationAttempts,
-                CoordinationBackoff,
-                Scheduler.Default,
-                logger)
-            .SelectMany(_ => mesh.ObserveBuildClaim(holder)
-                .Take(1)
-                .Timeout(GrantWindow)
-                .Select(__ => true)
-                // The Catch bounds the GRANT WAIT and nothing else. It used to wrap the bake as
-                // well, so a TimeoutException raised anywhere inside the sweep demoted the winner
-                // to a follower — still holding its claim, now waiting for a GO only it could ever
-                // publish.
-                .Catch((TimeoutException _) => Observable.Return(false))
-                .SelectMany(granted => granted
-                    ? BakeAsMaster(mesh, holder, fingerprint, definitions, bake, logger)
-                    : FollowGo(mesh, holder, fingerprint, definitions, store, bake, logger)));
+        //
+        // The whole subscription-borne composition is ONE DOOR. When it cannot be opened at all,
+        // the durable witness is asked — see WhenTheSubscriptionDoorIsShut (#3404).
+        return WhenTheSubscriptionDoorIsShut(
+            RetryUnreachableCoordination(
+                    () => mesh.RequestBuildClaim(holder, fingerprint, priority: priority).Take(1),
+                    CoordinationAttempts,
+                    CoordinationBackoff,
+                    Scheduler.Default,
+                    logger)
+                .SelectMany(_ => mesh.ObserveBuildClaim(holder)
+                    .Take(1)
+                    .Timeout(GrantWindow)
+                    .Select(__ => true)
+                    // The Catch bounds the GRANT WAIT and nothing else. It used to wrap the bake as
+                    // well, so a TimeoutException raised anywhere inside the sweep demoted the winner
+                    // to a follower — still holding its claim, now waiting for a GO only it could ever
+                    // publish.
+                    .Catch((TimeoutException _) => Observable.Return(false))
+                    .SelectMany(granted => granted
+                        ? BakeAsMaster(mesh, holder, fingerprint, definitions, bake, logger)
+                        : FollowGo(mesh, holder, fingerprint, definitions, store, bake, logger))),
+            mesh, fingerprint, definitions, store, logger);
     }
+
+    // ── the pre-warmer's second door ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The pre-warmer's SECOND DOOR: when the coordination node cannot be REACHED at all, ask the
+    /// DURABLE witness whether this image's GO is already recorded, and let readiness follow that
+    /// answer (#3404).
+    ///
+    /// <para><b>The defect this closes.</b> Everything the pre-warmer knew about the build arrived
+    /// through ONE door — a <c>SubscribeRequest</c> to <c>Admin/Build</c>. When that request went
+    /// unanswered the driver exhausted <see cref="CoordinationAttempts"/> and refused readiness, so
+    /// the rollout held the previous image. Measured on <c>memex-cloud</c> 2026-09-06: two pods
+    /// refused at 11:44:32Z and 11:49:37Z for a fingerprint whose GO had been written on an already
+    /// <c>Ready</c> build root at <b>11:28:56Z</b> — sixteen minutes earlier. They refused a build
+    /// that had already been approved, because they could not open a subscription to read a verdict
+    /// that was already durable.</para>
+    ///
+    /// <para><b>The shape is the follower's, not a new one.</b> <see cref="FollowGo"/> has had two
+    /// doors since #1440: <c>ReadBuildGo</c> — the durable row, the same witness the claim arbiter
+    /// decides on — merged with <c>ObserveBuildGo</c>, this cluster's mirror. Only the pre-warmer's
+    /// ENTRY was single-doored. This is the same durable read, at the one point that never had it.
+    /// </para>
+    ///
+    /// <para>🚨 <b>The GO must be THIS process's, and nothing else counts.</b> A GO is
+    /// per-fingerprint: the root's <c>Ready</c> map is keyed by framework version precisely so an
+    /// old-image pod stays ready through a rollout while the new image is still unproven.
+    /// <c>ReadBuildGo</c> looks the fingerprint up by exact key, so a GO written for ANY other
+    /// framework version reads as no GO here and this door stays shut. Accepting a foreign GO would
+    /// grant readiness for a build this process is not running — which is the one wrong answer this
+    /// door could give, and strictly worse than the refusal it replaces.</para>
+    ///
+    /// <para>🚨 <b>Fail-closed survives untouched.</b> No GO for this fingerprint — including the
+    /// "no durable store at all" and "the read failed" cases <c>ReadBuildGo</c> deliberately folds
+    /// into <c>null</c> — and the original
+    /// <see cref="BuildCoordinationUnreachableException"/> propagates UNCHANGED, so the sweep still
+    /// faults, readiness is still refused, and the health payload still classifies it through
+    /// <see cref="DescribesUnreachableCoordination"/>. Nothing here widens a timeout, retries,
+    /// polls, or swallows: the transport fault is still logged by
+    /// <see cref="RetryUnreachableCoordination"/> at its own severity with its own diagnostic
+    /// detail, because it remains the only signal that the pod↔<c>Admin/Build</c>-hub path is
+    /// broken. This changes the readiness VERDICT, never the visibility of the fault.</para>
+    ///
+    /// <para><b>No stand-down, deliberately.</b> The follower's post-GO path withdraws its claim
+    /// first, because it really did register one. This path did not: the registration is written by
+    /// <c>RequestBuildClaim</c> through <c>GetMeshNodeStream(path).Update(current =&gt; …)</c>, and
+    /// an <c>Update</c> whose stream never delivered current state never computed a patch, so no
+    /// candidate entry can exist to hand back. Calling <c>WithdrawBuildClaim</c> here would post a
+    /// second write into the same unreachable hub and re-fault the stream on the way out.</para>
+    /// </summary>
+    /// <param name="subscriptionDoor">The subscription-borne composition — claim, grant, bake or follow.</param>
+    /// <param name="mesh">The mesh hub.</param>
+    /// <param name="fingerprint">This process's framework fingerprint.</param>
+    /// <param name="definitions">Discovered NodeType definitions by path.</param>
+    /// <param name="store">The shared assembly store, for the post-GO probe.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <returns>The subscription door's outcomes, or — when it is shut and the GO is durable — the probe's.</returns>
+    internal static IObservable<PreWarmOutcome> WhenTheSubscriptionDoorIsShut(
+        IObservable<PreWarmOutcome> subscriptionDoor,
+        IMessageHub mesh,
+        string fingerprint,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IAssemblyStore store,
+        ILogger? logger)
+        => subscriptionDoor.Catch((BuildCoordinationUnreachableException unreachable) =>
+            mesh.ReadBuildGo(fingerprint, logger)
+                .SelectMany(go =>
+                {
+                    if (go is null)
+                    {
+                        // BOTH doors shut. Fail closed, with the original exception — the health
+                        // payload reads it through DescribesUnreachableCoordination, and the
+                        // hosted service logs the refusal.
+                        logger?.LogError(
+                            "BuildProtocol: '{Path}' is unreachable AND the durable witness carries "
+                            + "no GO for framework {Fingerprint} — BOTH doors are shut, so this "
+                            + "process has verified NOTHING and readiness stays REFUSED. The rollout "
+                            + "holds the previous image; a restart re-attempts.",
+                            BuildNodeType.RootPath, fingerprint);
+                        return Observable.Throw<PreWarmOutcome>(unreachable);
+                    }
+
+                    // Warning, not Information: readiness is granted on durable evidence, but the
+                    // transport fault that forced this door open is REAL and unfixed. It is already
+                    // logged in full by RetryUnreachableCoordination; this line says what the
+                    // process did about it, so the two are not confused for one another.
+                    logger?.LogWarning(
+                        "BuildProtocol: '{Path}' is UNREACHABLE from this process, but the DURABLE "
+                        + "witness already carries the GO for framework {Fingerprint} (ready at "
+                        + "{ReadyAt:O}) — the build this image needs was approved before this "
+                        + "process asked for it. Readiness follows the durable verdict instead of "
+                        + "refusing a build that is already approved. The unreachability above is "
+                        + "NOT cleared by this and remains the signal that the path from this pod "
+                        + "to the '{Path}' hub is broken.",
+                        BuildNodeType.RootPath, fingerprint, go.ReadyAt, BuildNodeType.RootPath);
+                    return ProbeTheShare(mesh, definitions, store, logger);
+                }));
 
     // ── the winner ──────────────────────────────────────────────────────────────────────────────
 
@@ -503,9 +604,28 @@ public static class BuildProtocolDriver
             fingerprint, go.ReadyAt, holder);
 
         return mesh.WithdrawBuildClaim(holder)
-            .SelectMany(_ => NodeTypeBakeStatus.Probe(definitions, store, logger: logger,
+            .SelectMany(_ => ProbeTheShare(mesh, definitions, store, logger));
+    }
+
+    /// <summary>
+    /// What a GO actually buys: the share is PROBED rather than trusted, so the verdict stays
+    /// level-triggered on reality — the same property the sweep itself has. A type still pending
+    /// after GO is reported as not-evaluated (<see cref="PreWarmStatus.TimedOut"/>, non-gating):
+    /// this process has no verdict about it, which is different from a verdict against it.
+    ///
+    /// <para>Deliberately contains NO claim bookkeeping. <see cref="ProbeAfterGo"/> stands down
+    /// first because it registered as a candidate; <see cref="WhenTheSubscriptionDoorIsShut"/> has
+    /// nothing to stand down from and must not post into an unreachable hub to find that out. Split
+    /// out so the two share the probe without sharing the stand-down.</para>
+    /// </summary>
+    private static IObservable<PreWarmOutcome> ProbeTheShare(
+        IMessageHub mesh,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IAssemblyStore store,
+        ILogger? logger)
+        => NodeTypeBakeStatus.Probe(definitions, store, logger: logger,
                 liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
-                liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId))
+                liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)
             .SelectMany(fresh => fresh.Entries
                 .Select(e => new PreWarmOutcome(
                     e.TypePath,
@@ -516,7 +636,6 @@ public static class BuildProtocolDriver
                 {
                     WasHealthyBeforeBake = e.WasHealthy,
                 }));
-    }
 
     // ── shared ──────────────────────────────────────────────────────────────────────────────────
 

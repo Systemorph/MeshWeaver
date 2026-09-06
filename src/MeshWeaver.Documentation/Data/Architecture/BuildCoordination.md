@@ -336,6 +336,52 @@ on durable state, exactly like the arbiter (and see #1366 for why the poll clock
 clusters instead of at the arbiter's next pass, but it changes behaviour for every partitioned-PG
 deployment and wants its own justification and measurement. The follower is correct without it.
 
+### The PRE-WARMER has the same two doors — and it did not, until #3404
+
+The follower's two doors only ever opened once a process had already got *inside*. Everything the
+pre-warmer knew about the build arrived through ONE door: `BuildProtocolDriver.Run` opens with a
+claim handshake, and a claim handshake is a `SubscribeRequest` to `Admin/Build`. Exhaust its
+attempts and the driver threw `BuildCoordinationUnreachableException`, the sweep faulted, readiness
+was refused, and the rollout held the previous image.
+
+🚨 **A pod can therefore refuse a build that was already approved.** Measured on `memex-cloud`,
+2026-09-06: two pods of one deployment refused at 11:44:32Z and 11:49:37Z for a fingerprint whose GO
+had been written on an already-`Ready` build root at **11:28:56Z** — sixteen minutes earlier. Their
+own hubs were healthy and idle throughout (`RunLevel=Started`, empty queue); the silence was between
+them and the hub that owns `Admin/Build`. They could not open a subscription to read a verdict that
+was already durable — and the verdict was the only thing they needed.
+
+So `Run`'s subscription-borne composition is now treated as ONE DOOR, and when it cannot be opened
+at all the **durable witness is asked** (`WhenTheSubscriptionDoorIsShut`). Same read as door 1 of
+the follower — `ReadBuildGo` on the durable row, the record the claim arbiter itself decides on —
+at the one point in the protocol that never had it.
+
+Four properties are load-bearing, and each is pinned by a case in
+`PreWarmerReadsTheDurableGoTest`:
+
+- **Per-fingerprint, never "a GO exists".** The `Ready` map is keyed by framework version precisely
+  so an old-image pod stays ready while a new image is unproven. `ReadBuildGo` looks the pod's own
+  fingerprint up by exact key; a GO for any other image reads as no GO and the door stays shut.
+  Granting on a foreign GO would certify a build the process is not running — strictly worse than
+  the refusal it replaces.
+- **Fail-closed is unchanged.** Neither door answering — including the two cases `ReadBuildGo`
+  deliberately folds into `null`, no durable store and a failed read — re-throws the ORIGINAL
+  `BuildCoordinationUnreachableException`, so the sweep still faults, readiness is still refused,
+  and `DescribesUnreachableCoordination` still separates "no verdict" from "a bad verdict" in the
+  health payload.
+- **The transport fault stays fully visible.** Nothing here widens a timeout, retries, polls or
+  swallows. `RetryUnreachableCoordination` logs the unreachability at its own severity with its own
+  diagnostic detail either way, and the grant logs a second `Warning` naming what could not be
+  reached. That fault is the only signal the pod↔`Admin/Build`-hub path is broken (routing loss, a
+  wedged per-node hub of the #2896 class, or a lost reply); the durable door changes the readiness
+  VERDICT, never the visibility of the fault, and does not diagnose or repair it.
+- **No stand-down on this path.** The follower withdraws its claim before probing because it really
+  registered one. This path did not: the registration is written by `RequestBuildClaim` through
+  `GetMeshNodeStream(path).Update(current => …)`, and an `Update` whose stream never delivered
+  current state never computed a patch, so there is no candidate entry to hand back — and calling
+  `WithdrawBuildClaim` would post a second write into the same unreachable hub. The two paths share
+  the post-GO share probe; they deliberately do not share the stand-down.
+
 The probe semantics of `NodeTypeBakeGateState` are preserved unchanged — fail **closed**
 on a measured regression (the rollout stalls, the old image keeps serving), fail **open**
 when nothing is measuring (a configuration mistake must never black-hole a pod), gate
