@@ -51,4 +51,30 @@ public sealed class ContainerImageOptions
     /// this is still served, streamed, and simply not recorded.</para>
     /// </summary>
     public int MaxRecordedManifestBytes { get; set; } = 4 * 1024 * 1024;
+
+    /// <summary>
+    /// Directory the read-through cache stores blobs and manifests in, keyed by content digest.
+    ///
+    /// <para>🚨 EMPTY MEANS THE CACHE IS OFF, and the mirror still proxies every pull — exactly
+    /// the behaviour it had before the cache existed. Like <see cref="ImageRoot"/>, turning it on
+    /// or off is a configuration change, never a migration: nothing in the cache is authoritative,
+    /// so discarding the whole directory costs a re-fetch and nothing else.</para>
+    ///
+    /// <para>🚨 The cache is NOT an archive and must never be treated as one. It is bounded by
+    /// <see cref="CacheMaxBytes"/> and evicts least-recently-used entries, so a digest that is
+    /// resident today may not be tomorrow. It can only ever ADD availability — a miss falls
+    /// through to the upstream — never subtract it.</para>
+    /// </summary>
+    public string? CacheDirectory { get; set; }
+
+    /// <summary>
+    /// Byte budget for <see cref="CacheDirectory"/>. A sweep runs after roughly an eighth of this
+    /// has been added and evicts least-recently-used entries until the directory is back under
+    /// 90 % of the budget, so the cache overshoots between sweeps by design rather than thrashing
+    /// on every store.
+    ///
+    /// <para>Default 20 GiB — a handful of portal images and their shared base layers. This is a
+    /// disk budget, not a tuning knob for correctness: every value serves the same bytes.</para>
+    /// </summary>
+    public long CacheMaxBytes { get; set; } = 20L * 1024 * 1024 * 1024;
 }

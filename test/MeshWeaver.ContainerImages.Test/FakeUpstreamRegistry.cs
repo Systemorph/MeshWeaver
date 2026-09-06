@@ -42,6 +42,48 @@ internal sealed class FakeUpstreamRegistry : HttpMessageHandler
     /// <summary>The blob the mirror streams in the layer tests.</summary>
     public static readonly byte[] LayerBytes = CreateLayer(1024 * 1024);
 
+    /// <summary>
+    /// The digest <see cref="LayerBytes"/> ACTUALLY hashes to.
+    ///
+    /// <para>🚨 It is computed, not written down. The cache verifies every entry against the
+    /// digest it is filed under, so a fixture that served bytes under a made-up digest could never
+    /// exercise a successful fill — and a hard-coded constant that drifted from
+    /// <see cref="CreateLayer"/> would silently turn every caching test into a
+    /// "nothing was stored" test that still passed its status assertions.</para>
+    /// </summary>
+    public static readonly string LayerDigest = Digest(LayerBytes);
+
+    /// <summary>The digest <see cref="ManifestJson"/> hashes to — the reference a pinned pull
+    /// uses, and the only manifest reference this cache will store.</summary>
+    public static readonly string ManifestDigest = Digest(Encoding.UTF8.GetBytes(ManifestJson));
+
+    /// <summary>
+    /// A well-formed digest that names nothing in this registry. The upstream answers 404 for it,
+    /// which is the "this does not exist" outcome the mirror must keep distinct from "I could not
+    /// reach the upstream".
+    /// </summary>
+    public const string MissingDigest =
+        "sha256:dead00000000000000000000000000000000000000000000000000000000beef";
+
+    /// <summary>
+    /// A digest whose bytes DISAGREE with it — the legacy placeholder the older tests pull. Served
+    /// (a mirror forwards what the upstream says), never cached (an entry is only ever the bytes
+    /// its digest names).
+    /// </summary>
+    public const string MismatchedDigest =
+        "sha256:a000000000000000000000000000000000000000000000000000000000000000";
+
+    /// <summary>
+    /// When set, every request fails at the TRANSPORT — the shape of a registry outage, a DNS
+    /// failure or a severed network. Distinct from <see cref="RefuseMirrorCredential"/>, which is
+    /// an upstream that answers and says no.
+    /// </summary>
+    public bool Unreachable;
+
+    private static string Digest(byte[] bytes) =>
+        "sha256:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes))
+            .ToLowerInvariant();
+
     /// <summary>How many times the mirror asked for an upstream token — the token cache's
     /// observable effect.</summary>
     public int TokenRequests;
@@ -75,6 +117,13 @@ internal sealed class FakeUpstreamRegistry : HttpMessageHandler
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref Requests);
+        // 🚨 Counted BEFORE the outage check, deliberately: "the mirror did not contact the
+        // upstream" is the assertion the cache tests rest on, and it has to stay observable even
+        // when the upstream would have failed.
+        if (Unreachable)
+            return Task.FromException<HttpResponseMessage>(
+                new HttpRequestException("the upstream registry is unreachable"));
+
         var uri = request.RequestUri!;
         if (!string.Equals(uri.Host, Host, StringComparison.Ordinal))
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
@@ -93,14 +142,19 @@ internal sealed class FakeUpstreamRegistry : HttpMessageHandler
         foreach (var repository in new[] { Repository, UnlistedRepository })
         {
             if (path == $"/v2/{repository}/manifests/ci.7794"
-                || path == $"/v2/{repository}/manifests/latest")
-                return Task.FromResult(Manifest());
+                || path == $"/v2/{repository}/manifests/latest"
+                || path == $"/v2/{repository}/manifests/{ManifestDigest}")
+                return Task.FromResult(Manifest(request));
             if (path == $"/v2/{repository}/tags/list")
                 return Task.FromResult(Json($$"""{"name":"{{repository}}","tags":["ci.7794","latest"]}"""));
-            if (path.StartsWith($"/v2/{repository}/blobs/sha256:", StringComparison.Ordinal))
+            // 🚨 Only the digests this registry actually HOLDS. A fixture that answered every
+            // sha256 path with the same bytes could not tell "does not exist" apart from
+            // "exists" — which is one of the four outcomes under test.
+            if (path == $"/v2/{repository}/blobs/{LayerDigest}"
+                || path == $"/v2/{repository}/blobs/{MismatchedDigest}")
                 return Task.FromResult(Blob(request));
         }
-        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        return Task.FromResult(NotFound());
     }
 
     private HttpResponseMessage Token(HttpRequestMessage request)
@@ -122,18 +176,29 @@ internal sealed class FakeUpstreamRegistry : HttpMessageHandler
         return response;
     }
 
-    private static HttpResponseMessage Manifest()
+    /// <summary>An OCI-shaped 404 — the "this does not exist" answer, as ACR gives it.</summary>
+    private static HttpResponseMessage NotFound() =>
+        new(HttpStatusCode.NotFound)
+        {
+            Content = new StringContent(
+                """{"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown"}]}""",
+                Encoding.UTF8, "application/json"),
+        };
+
+    private static HttpResponseMessage Manifest(HttpRequestMessage request)
     {
         var bytes = Encoding.UTF8.GetBytes(ManifestJson);
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new ByteArrayContent(bytes),
+            // A HEAD carries the headers and no body, exactly as a registry answers one.
+            Content = request.Method == HttpMethod.Head
+                ? new ByteArrayContent([])
+                : new ByteArrayContent(bytes),
         };
         response.Content.Headers.ContentType =
             new MediaTypeHeaderValue("application/vnd.oci.image.manifest.v1+json");
-        response.Headers.TryAddWithoutValidation(
-            "Docker-Content-Digest",
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000");
+        response.Content.Headers.ContentLength = bytes.Length;
+        response.Headers.TryAddWithoutValidation("Docker-Content-Digest", ManifestDigest);
         return response;
     }
 
