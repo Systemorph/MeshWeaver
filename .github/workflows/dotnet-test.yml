@@ -275,6 +275,20 @@ jobs:
     # entries ahead of this one) — so both diff gates keep holding inside the queue rather than
     # going quiet exactly where the merge actually happens.
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    # 🚨 THE ONE API DEPENDENCY THIS JOB HAS, and why it needs no preflight (#3422). Both gates
+    # resolve the PULL REQUEST an allow entry names, so a transitional entry expires on merge by
+    # mechanism instead of by somebody remembering to delete a line. Three things keep that from
+    # becoming the "secret + preflight" shape the note above rules out:
+    #   * the pull request is in THIS repository, so the AUTOMATIC GITHUB_TOKEN answers it — no
+    #     App token, no organisation secret, nothing to provision and nothing that can be missing;
+    #   * the call happens ONLY when the diff introduces an allow entry. Both allow files hold
+    #     zero entries and gain roughly one a year, so an ordinary pull request makes no request
+    #     at all and behaves exactly as it did before;
+    #   * an unreachable API is a RED gate, never an implicit allow — the script has no verdict
+    #     that passes on evidence it could not read.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
     - uses: actions/checkout@v7
       with:
@@ -283,6 +297,12 @@ jobs:
     - name: "Prove the record gate is not vacuous"
       run: python3 scripts/check-record-signatures.py --self-test
     - name: "Refuse a binary-breaking primary-constructor change"
+      env:
+        # No `if:` guards this and none may: the script fails RED on an empty token rather than
+        # treating an unreadable reference as an allowance.
+        GITHUB_TOKEN: ${{ github.token }}
+        EVENT: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
         set -euo pipefail
         git fetch --no-tags --depth=200 origin "${{ github.event_name == 'merge_group' && 'main' || github.base_ref }}"
@@ -301,7 +321,17 @@ jobs:
         # degenerates to `sha`, since it is an ancestor of HEAD).
         base=$(git merge-base "origin/${{ github.event_name == 'merge_group' && 'main' || github.base_ref }}" HEAD)
         echo "Comparing against merge base $base"
-        python3 scripts/check-record-signatures.py --base "$base"
+        # 🚨 An ASSERTION, not a skip. On a pull request the number MUST be there, and its absence
+        # fails the step naming that; a merge_group build genuinely has no single pull request
+        # (the queue ref can carry several), so the weaker rule — the entry must name an OPEN pull
+        # request — applies there, and nothing reaches the queue without this job green on the
+        # pull_request event first.
+        args=(--base "$base")
+        if [ "$EVENT" = "pull_request" ]; then
+          [ -n "${PR_NUMBER:-}" ] || { echo "::error::pull_request event carried no pull-request number — the rule that an allow entry names THIS pull request could not be applied, so this gate refuses to report success."; exit 1; }
+          args+=(--pr "$PR_NUMBER")
+        fi
+        python3 scripts/check-record-signatures.py "${args[@]}"
     # The OTHER half of the same class (#2370): a public TYPE moving assemblies, which no repo-local
     # build can see. `landed-modules-gate` used to compile the plugins repo's module SOURCE against
     # this PR and went GREEN on exactly this break — the module that is already published binds a
@@ -319,6 +349,11 @@ jobs:
     - name: "Prove the type-move gate is not vacuous"
       run: python3 scripts/check-type-forwards.py --self-test
     - name: "Refuse a public type moving assemblies without a forwarder"
+      env:
+        # Same posture as the record gate: no `if:` may guard this, and an empty token is red.
+        GITHUB_TOKEN: ${{ github.token }}
+        EVENT: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
         set -euo pipefail
         # Already fetched above for the record gate; repeated explicitly so the steps can be reordered.
@@ -329,7 +364,13 @@ jobs:
         # is the difference between a gate people believe and one they learn to allow-list past.
         base=$(git merge-base "origin/${{ github.event_name == 'merge_group' && 'main' || github.base_ref }}" HEAD)
         echo "Comparing against merge base $base"
-        python3 scripts/check-type-forwards.py --base "$base"
+        # An ASSERTION, not a skip — see the record gate above for why merge_group omits it.
+        args=(--base "$base")
+        if [ "$EVENT" = "pull_request" ]; then
+          [ -n "${PR_NUMBER:-}" ] || { echo "::error::pull_request event carried no pull-request number — the rule that an allow entry names THIS pull request could not be applied, so this gate refuses to report success."; exit 1; }
+          args+=(--pr "$PR_NUMBER")
+        fi
+        python3 scripts/check-type-forwards.py "${args[@]}"
 
   precheck:
     name: "Check for an already-green tree"
