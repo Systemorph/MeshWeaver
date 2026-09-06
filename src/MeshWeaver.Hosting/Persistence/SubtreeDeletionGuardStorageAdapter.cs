@@ -179,6 +179,12 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
     public IObservable<bool> Exists(string path) => inner.Exists(path);
 
     /// <inheritdoc />
+    /// <remarks>Pure delegation — the writable-only filter lives in the composite below, and
+    /// the interface default would collapse it back onto <see cref="Exists"/> here.</remarks>
+    public IObservable<bool> ExistsInWritableStorage(string path)
+        => inner.ExistsInWritableStorage(path);
+
+    /// <inheritdoc />
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
         => inner.FindBestPrefixMatch(fullPath, options);

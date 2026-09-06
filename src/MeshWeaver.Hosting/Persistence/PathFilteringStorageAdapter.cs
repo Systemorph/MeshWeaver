@@ -60,6 +60,12 @@ public sealed class PathFilteringStorageAdapter(IStorageAdapter inner, Func<stri
             : Observable.Return(false);
 
     /// <inheritdoc />
+    public IObservable<bool> ExistsInWritableStorage(string path)
+        => matches(path)
+            ? inner.ExistsInWritableStorage(path)
+            : Observable.Return(false);
+
+    /// <inheritdoc />
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
         => matches(fullPath)

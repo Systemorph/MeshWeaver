@@ -308,6 +308,28 @@ public interface IStorageAdapter
     IObservable<bool> Exists(string path);
 
     /// <summary>
+    /// Existence check restricted to the WRITABLE providers — the twin of
+    /// <see cref="ListDescendantPaths"/>, and writable-only for the same reason: it answers
+    /// "did a delete actually remove this row", so a path a READ-ONLY provider (Embedded, Static)
+    /// still serves must read as GONE. <see cref="Exists"/> cannot serve here — a writable
+    /// override of a shipped node is deletable, and its read-only original keeps answering
+    /// <c>true</c> forever after the override is removed.
+    ///
+    /// <para>The recursive-delete drain verification is the caller (issue #3392): the enumeration
+    /// it verifies with is STRICT descendants, so the ROOT — the one path the whole operation is
+    /// for — was never checked at all, and a root row that survived its own delete was reported as
+    /// drained with one node still in storage.</para>
+    ///
+    /// <para>The default answers <see cref="Exists"/>, which is exactly right for a single-store
+    /// adapter (everything it holds is writable). 🚨 Decorators MUST forward to their inner
+    /// adapter — the same forwarding rule as <see cref="ListDescendantPaths"/>,
+    /// <see cref="DeleteIfExists"/> and <see cref="FindDeleteBlockingProvider"/> — or the
+    /// writable-only filter is silently lost at the outermost decorator that falls back to this
+    /// default.</para>
+    /// </summary>
+    IObservable<bool> ExistsInWritableStorage(string path) => Exists(path);
+
+    /// <summary>
     /// Finds the node whose path is the longest prefix of the given full path.
     /// For example, given "Organization/acme/Settings", finds "Organization/acme" if it exists.
     /// Default impl emits (null, 0) — caller falls back to iterative lookup.

@@ -390,6 +390,22 @@ public sealed class PersistenceService : IStorageAdapter
             .Merge()
             .Any(b => b);
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Fan-out OR across the WRITABLE providers only — the same set, and the same reason, as
+    /// <see cref="ListDescendantPaths"/>: this answers "did the delete actually remove the row",
+    /// and a read-only provider can neither be deleted from nor leave a survivor behind. Consulting
+    /// every provider (what <see cref="Exists"/> does) would report a writable override of a
+    /// shipped node as still present forever after the override was removed.
+    /// </remarks>
+    public IObservable<bool> ExistsInWritableStorage(string path)
+        => _writable.Count == 0
+            ? Observable.Return(false)
+            : _writable
+                .Select(p => p.Adapter.ExistsInWritableStorage(path))
+                .Merge()
+                .Any(b => b);
+
     /// <summary>
     /// Deepest prefix across all adapters. Each emits its best prefix; we
     /// pick the one with the largest <c>MatchedSegments</c> (ties broken by
