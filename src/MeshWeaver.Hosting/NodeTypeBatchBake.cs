@@ -659,8 +659,46 @@ internal static class NodeTypeBatchBake
     /// Best-effort by design: a failed stamp is logged loudly but never fails the bake — the
     /// bytes are already on the share, and the level-triggered probe / lazy kickoffs self-heal
     /// the record on the next pass (the same restartability rule as an interrupted bake).
+    ///
+    /// <para>🚨 <b>#3478 — THIS IS THE WRITE THAT JOINED A REFUSED PROCESS TO THE MESH.</b> The
+    /// stamp carries this process's <c>CompiledFrameworkVersion</c>, <c>CompiledModulesHash</c>,
+    /// <c>CompiledDependencies</c> and assembly coordinates onto a node every other replica reads,
+    /// and the bake that produces it runs BEFORE the bake's own verdict exists — so on
+    /// <c>memex.systemorph.com</c> a pod whose readiness the bake gate then correctly refused had
+    /// already stamped <c>Crm/Offer</c> and <c>Crm/Opportunity</c> for an identity the serving
+    /// replicas could not load (#3472). It now goes through
+    /// <see cref="MeshPublicationGate"/>: HELD while the sweep is still measuring, RELEASED when
+    /// the sweep passes, and DISCARDED — never written — when it does not. The gate is Unarmed on
+    /// every host that has not armed the bake readiness gate, where this is a straight
+    /// pass-through.</para>
+    ///
+    /// <para>The whole read-modify-write is inside the deferred factory on purpose: a held stamp is
+    /// CONSTRUCTED at release time, so its compare-and-set reads the row it is about to race rather
+    /// than replaying a version it read before the verdict existed.</para>
     /// </summary>
-    private static IObservable<Unit> WriteStamp(
+    internal static IObservable<Unit> WriteStamp(
+        IMessageHub mesh,
+        MeshNode typeNode,
+        bool ok,
+        NodeCompilationResult? result,
+        Exception? error,
+        string? releasePath,
+        DateTimeOffset startedAt,
+        ILogger? logger)
+    {
+        var gate = mesh.ServiceProvider.GetService<MeshPublicationGate>();
+        IObservable<Unit> Stamp() =>
+            BuildStamp(mesh, typeNode, ok, result, error, releasePath, startedAt, logger);
+        return gate is null
+            ? Observable.Defer(Stamp)
+            : gate.Publish($"NodeType compile stamp for {typeNode.Path}", Stamp);
+    }
+
+    /// <summary>
+    /// The stamp itself, as a COLD observable — built by <see cref="WriteStamp"/> only when this
+    /// process is admitted to the mesh (or held for release when it becomes so).
+    /// </summary>
+    private static IObservable<Unit> BuildStamp(
         IMessageHub mesh,
         MeshNode typeNode,
         bool ok,

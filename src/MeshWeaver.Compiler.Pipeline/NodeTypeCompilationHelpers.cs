@@ -3620,6 +3620,32 @@ internal static class NodeTypeCompilationHelpers
                         ok ? ActivityStatus.Succeeded : ActivityStatus.Failed,
                         activityMessages.ToImmutable(), logger!);
 
+                    // 🚨 #3478 — THE ACTIVATION PATH'S HALF OF THE JOIN POINT. This is the same
+                    // compile-state stamp the batch bake writes (the field-sets are literally
+                    // shared — ApplyCompileSuccess / ApplyCompileFailure), so it carries the same
+                    // identity into the same shared record and is gated the same way: a process
+                    // that failed its own validation must not put CompiledFrameworkVersion /
+                    // CompiledModulesHash / assembly coordinates into a node the other replicas
+                    // follow. Held while the verdict is still forming, released when it passes,
+                    // never written when it does not — and a straight pass-through on every host
+                    // that has not armed the bake readiness gate.
+                    //
+                    // Built inside a FACTORY so a refused stamp never even mints the
+                    // RequireSubscribeObservable: constructing one and dropping it would log a
+                    // never-subscribed warning about a write we deliberately did not make.
+                    var admission = hub.ServiceProvider.GetService<MeshPublicationGate>();
+                    // 🚨 …and the PROCESS-LOCAL half, published BEFORE the (possibly withheld)
+                    // stamp. The bake gate's regression retraction (#1214) asks "has this
+                    // condemned type since built on THIS image?" and used to read the shared
+                    // record as a proxy for that local fact. On a refused pod the record can no
+                    // longer move, so without this signal a regression formed against a
+                    // half-applied content update would hold the rollout until a human noticed —
+                    // trading one outage class for another. Recorded whether or not the stamp is
+                    // published, because the compile is what it attests to.
+                    if (ok)
+                        hub.ServiceProvider.GetService<LocalNodeTypeBuilds>()
+                            ?.RecordUsableBuild(hubPath);
+                    IObservable<Unit> StampCompileState() =>
                     workspace.GetMeshNodeStream().Update(curr =>
                     {
                         // 🚨 Tolerant read — NOT a bare `curr.Content is not NodeTypeDefinition`.
@@ -3662,25 +3688,31 @@ internal static class NodeTypeCompilationHelpers
                                 hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash)
                         };
                     })
-                    .Subscribe(
-                        saved =>
+                    .Do(saved =>
+                    {
+                        // Publish the post-compile MeshNode update onto the
+                        // mesh change feed for cross-silo cache invalidation.
+                        try
                         {
-                            // Publish the post-compile MeshNode update onto the
-                            // mesh change feed for cross-silo cache invalidation.
-                            try
-                            {
-                                hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                                    ?.Publish(MeshChangeEvent.Updated(saved));
-                            }
-                            catch (Exception publishEx)
-                            {
-                                logger?.LogWarning(publishEx,
-                                    "Compile: failed to publish post-compile change-feed event for {HubPath}",
-                                    hubPath);
-                            }
-                        },
-                        ex => logger?.LogWarning(ex,
-                            "Compile: failed to write post-compile status for {HubPath}", hubPath));
+                            hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                                ?.Publish(MeshChangeEvent.Updated(saved));
+                        }
+                        catch (Exception publishEx)
+                        {
+                            logger?.LogWarning(publishEx,
+                                "Compile: failed to publish post-compile change-feed event for {HubPath}",
+                                hubPath);
+                        }
+                    })
+                    .Select(_ => Unit.Default);
+
+                    (admission is null
+                            ? Observable.Defer(StampCompileState)
+                            : admission.Publish($"NodeType compile stamp for {hubPath}", StampCompileState))
+                        .Subscribe(
+                            _ => { },
+                            ex => logger?.LogWarning(ex,
+                                "Compile: failed to write post-compile status for {HubPath}", hubPath));
                     },
                     ex => logger?.LogWarning(ex,
                         "Compile: release-create observation faulted for {HubPath}", hubPath));
