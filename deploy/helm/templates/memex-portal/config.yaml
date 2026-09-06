@@ -297,6 +297,23 @@ data:
 {{- range $key, $value := (.Values.hostingOperator).environment }}
   Hosting__Operator__Environment__{{ $key }}: "{{ $value }}"
 {{- end }}
+{{- /* The SECRET half of the Job environment (Memex#132). `environment` above renders into this
+       ConfigMap, one plaintext key each — fine for AZ_RESOURCE_GROUP or INGRESS_IP, and NOT fine for
+       PGPASSWORD, which is the shared admin credential for every instance database on the flexible
+       server. hosting-operator-secrets.yaml renders a SecretProviderClass and a synced Secret in the
+       OPERATOR's namespace for those; these three keys are how HostingOperator.Resolve finds them.
+
+       🚨 All THREE, not just the Secret name. The CSI driver creates the synced Secret only as a
+       side effect of a pod mounting the volume, so on a Job's first run it does not exist yet. A Job
+       that mounts the class at SecretMountPath can read the value from a file immediately; an
+       `envFrom` on SecretName is correct only once something has already mounted it. */}}
+{{- if (.Values.hostingOperator).secretEnvironment }}
+{{- $kv := ((.Values.hostingOperator).keyVault) | default dict }}
+{{- $spcName := $kv.name | default "hosting-operator-keyvault" }}
+  Hosting__Operator__SecretProviderClass: "{{ $spcName }}"
+  Hosting__Operator__SecretName: "{{ $kv.syncedSecret | default $spcName }}"
+  Hosting__Operator__SecretMountPath: "{{ $kv.mountPath | default "/mnt/operator-secrets" }}"
+{{- end }}
 {{- end }}
 {{- if (.Values.portalNext).enabled }}
   # ---- Next.js React frontend (FEATURE-FLAGGED — see .Values.portalNext) -----
