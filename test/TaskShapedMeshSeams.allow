@@ -1,0 +1,39 @@
+# TaskShapedMeshSeams.allow — the hub-reachable-async ratchet, rule 2 (#3433).
+#
+# Each line is a file under src/MeshWeaver.Mesh.Contract whose INTERFACE declares one or more
+# Task/ValueTask-returning members.
+#
+# WHY THE SHAPE IS THE ROOT, not a style. The mesh contract is the SDK-free assembly that hub-side
+# modules and agent tools compile against. A Task<T> on one of its interfaces does not merely
+# permit an await at the call site — it FORCES one, because a Task has exactly one consumption
+# idiom. IEaGraphAuth declared three, and ExecutiveAssistantPlugin (MeshWeaver.Plugins), an agent
+# TOOL, therefore awaited a mesh read from inside an agent round: #3433. IObservable<T> is the one
+# shape both a hub turn and an ASP.NET action can consume, because only the second of those can
+# bridge, and it bridges once at its own edge.
+#
+# SCOPE is the DECLARATION. A class in that assembly may still hold Task-returning internals —
+# IIoPool takes and returns them BY DESIGN, it is the one sanctioned boundary between the
+# turn-based schedulers and real I/O. This rule does not look at classes at all.
+#
+# THIS RATCHET MAY ONLY SHRINK. Lower HubReachableAsyncGuard.SeamTotalBudget whenever you delete
+# or lower an entry.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# IEaGraphAuth — the three RETIRING forwarders, and the reason they are still here.
+#
+# The seam's primary surface is now reactive (GetConnection / GetAccessToken / ExchangeAndStore).
+# The three …Async members are default-implemented forwarders over it, kept for exactly one merge
+# window: MeshWeaver.Plugins builds -warnaserror against a core CHECKOUT at a pinned ref, so a
+# core PR that DELETED them could not land before the Plugins PR that stops calling them, and that
+# Plugins PR cannot compile before the reactive surface exists in core. The forwarders break the
+# cycle. They carry no [Obsolete] for the same reason — the attribute would red MeshWeaver.Plugins'
+# main the moment core merged, before its own half could land. THIS LINE is the deprecation:
+# it goes to 0 in the core PR that follows the Plugins migration, and nothing in this repository
+# calls them in the meantime.
+src/MeshWeaver.Mesh.Contract/IEaGraphAuth.cs	3
+#
+# ICrossSchemaQueryProvider — pre-existing, NOT investigated as part of #3433. It is listed
+# because the rule is about the SHAPE, and seeding an inventory is how a ratchet distinguishes
+# "already there" from "just added". Whether any of its five members is reached from a hub turn is
+# an open question, not a claim made here; answering it is what would let this line go to 0.
+src/MeshWeaver.Mesh.Contract/Services/ICrossSchemaQueryProvider.cs	5

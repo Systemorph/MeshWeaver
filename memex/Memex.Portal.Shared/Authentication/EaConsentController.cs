@@ -1,5 +1,6 @@
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;        // IEaGraphAuth — the SDK-free seam, now in the mesh contract
-using MeshWeaver.Messaging;   // AccessService
+using MeshWeaver.Messaging;   // AccessService, ObserveCompletion
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -59,6 +60,27 @@ public sealed class EaConsentController(
     /// </summary>
     internal static string SafeReturnUrl(string? candidate) => ReturnUrlPolicy.Sanitize(candidate);
 
+    /// <summary>
+    /// Starts (or skips) the delegated-Graph consent for the signed-in user.
+    ///
+    /// <para>🚨 <b>THE <c>Task</c> LIVES HERE AND NOWHERE ELSE (#3433).</b> An MVC action is
+    /// genuinely Task-shaped — that signature is ASP.NET's, not ours — so this is where the ONE
+    /// bridge from the reactive <see cref="IEaGraphAuth"/> seam belongs:
+    /// <c>ObserveCompletion</c>, which completes with <c>RunContinuationsAsynchronously</c> so the
+    /// request never resumes on the thread that signalled. What it must NOT do is push the Task
+    /// shape back onto the seam, whose OTHER consumer is the Executive Assistant's agent tools —
+    /// they run on a hub, where an await parks the turn that has to deliver the reply to the
+    /// credential read.</para>
+    ///
+    /// <para>Only <see cref="EaConnection.Connected"/> skips the dialog.
+    /// <see cref="EaConnection.Undetermined"/> — the read did not answer — goes THROUGH consent:
+    /// re-consenting a live grant is harmless (Microsoft re-issues it), whereas skipping it on a
+    /// guess would strand a user who genuinely never connected. The guess is logged, never
+    /// silent.</para>
+    /// </summary>
+    /// <param name="returnUrl">Where to send the user afterwards; sanitised before either use.</param>
+    /// <param name="force">Runs the full consent even for a connected user (scope additions, rotation).</param>
+    /// <param name="ct">Cancels the wait on the connection read, not the read itself.</param>
     [HttpGet(ConnectAction)]
     public async Task<IActionResult> Connect(
         [FromQuery] string? returnUrl = null, [FromQuery] bool force = false, CancellationToken ct = default)
@@ -75,8 +97,20 @@ public sealed class EaConsentController(
         // path round-trips it through the IdP as `state` and redirects to it on the way back —
         // so an unsanitised value is an open redirect on both routes, not just the visible one.
         var safeReturnUrl = SafeReturnUrl(returnUrl);
-        if (!force && await ea.IsConnectedAsync(userId, ct))
+        // The ONE Task bridge, at this action's own edge — see the remarks above for why it may
+        // not move onto the seam.
+        var connection = await ea.GetConnection(userId)
+            .ObserveCompletion(
+                ex => logger.LogWarning(ex,
+                    "EA connect: the connection read for {User} faulted after the answer had already "
+                    + "settled", userId),
+                ct);
+        if (!force && connection is { IsConnected: true })
             return Redirect(safeReturnUrl);
+        if (!force && connection is { Connection: EaConnection.Undetermined })
+            logger.LogWarning(
+                "EA connect: could not determine whether {User} is already connected ({Reason}) — "
+                + "running the consent flow rather than guessing", userId, connection.Diagnostic);
         return Redirect(ea.BuildConsentUrl(Uri.EscapeDataString(safeReturnUrl), CallbackUri));
     }
 
@@ -97,7 +131,13 @@ public sealed class EaConsentController(
             return Redirect(returnUrl);
         }
 
-        var ok = await ea.ExchangeAndStoreAsync(code, CallbackUri, userId, ct);
+        // Same single bridge as Connect: the Task is the MVC action's, not the seam's.
+        var ok = await ea.ExchangeAndStore(code, CallbackUri, userId)
+            .ObserveCompletion(
+                ex => logger.LogWarning(ex,
+                    "EA consent callback: the code exchange for {User} faulted after the result had "
+                    + "already settled", userId),
+                ct);
         logger.LogInformation("EA consent for {User}: {Result}", userId, ok ? "connected" : "failed");
         return Redirect(returnUrl);
     }
