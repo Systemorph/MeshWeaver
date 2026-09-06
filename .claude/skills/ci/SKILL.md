@@ -33,12 +33,34 @@ partitions on the compilation-error overlay in production; a separate `AddTracki
   variables) and **fails RED naming exactly what to provision**. Adding an input = one line in its
   `missing` array.
 - **Gates depend on it (`needs: [preflight, …]`) and run unconditionally** — no input-shaped `if:`.
-- **The ONE legitimate exemption is a FORK PR** (GitHub withholds org secrets by design). Express it
-  **once**, as a check on the *event* (`github.event.pull_request.head.repo.fork != true`) — never
-  as a "the secret is empty" check. At the job level those two look identical and only one is safe.
+- **The ONE unconditionally legitimate exemption is a FORK PR** (GitHub withholds org secrets by
+  design, and no maintainer action changes that). Express it **once**, as a check on the *event*
+  (`github.event.pull_request.head.repo.fork != true`) — never as a "the secret is empty" check. At
+  the job level those two look identical and only one is safe.
 - **Propagate into the required check.** `collect-results` runs with `always()` and is the ONLY
   required status check, so it needs `preflight` in `needs` **plus an explicit fail step** — a
   skipped dependency does not fail an `always()` job, which would re-open the trapdoor one level up.
+
+### 🚨 The SECOND secret store — and the one precondition for a `dependabot[bot]` exemption
+
+**A run opened by Dependabot resolves `secrets.X` against a SEPARATE store** (Settings → Secrets and
+variables → **Dependabot**), so a secret that is provisioned on the Actions tab and used by every
+other run resolves EMPTY. The tell is `Secret source: Dependabot` in the run log, and the preflight
+does exactly what it should: it fails RED naming a secret the maintainer can see in the UI. **The
+remediation line must therefore name the STORE** — `Settings → Secrets → Actions` is misleading
+here — and the fix is to provision the same names into the Dependabot store, never an `if:`.
+
+Core's `dotnet-test.yml` *does* carry `github.actor != 'dependabot[bot]'` on `shared-rules` and
+`cross-repo-pair`. That is legitimate for exactly one reason, and it is a **precondition, not a
+precedent**: those gates also trigger on `merge_group`, where the Actions store IS available, and
+the merge queue is the only path to `main` — *the exemption moves WHERE the gate runs, never
+WHETHER it runs*. **Measured 2026-09-06: only `Systemorph/MeshWeaver` has a `merge_queue` rule.**
+Plugins, Reinsurance, SocialMedia, Crm, Manufacturing, Education and Memex have none — several
+carry a `merge_group:` trigger whose event never fires, which is the trap. Copying that `if:` into
+a satellite is a skip-trapdoor, and a silent one: the satellites' required contexts are the gate
+jobs themselves, and an absent required context counts as SATISFIED.
+
+Full reference: [DependabotSecretStore.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DependabotSecretStore.md).
 
 **Legitimate `continue-on-error` (do not "fix" these):** the `Publish Test Results` reporter (the
 TRX summarize step is the real gate; a GitHub-API 429 must not fail the run) and the green-marker
@@ -230,6 +252,9 @@ Full reference:
 - [ ] No `continue-on-error` on a gate's input step; no `if:` asking whether a secret/variable is
       set. Fork-PR exemption expressed once, on the event.
 - [ ] Missing external inputs fail a `preflight` job RED, naming what to provision.
+- [ ] Adding a required secret? It is provisioned in **both** stores (Actions *and* Dependabot), and
+      the preflight's remediation line names the store. A `dependabot[bot]` exemption only where the
+      same gate runs on `merge_group` — core only.
 - [ ] The required check has `preflight` in `needs` **and** an explicit fail step.
 - [ ] Deleting a public framework symbol? The node JSON and the live mesh were searched too.
 - [ ] Not adding `cancel-in-progress` on `main`.
