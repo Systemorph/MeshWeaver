@@ -10,5 +10,15 @@
          deliberately takes NO dependency on the plugin catalogue: the caller-authentication seam
          is IContainerImageAuthenticator, bound by the portal. -->
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+    <!-- IIoPool / IoPoolRegistry (the bound on layer transfers) and MeshNode / IMeshService (the
+         closure + provenance records). -->
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <!-- 🚨 The NodeType registration only. AddDefaultLayoutAreas / AddMeshDataSource /
+         WithContentType live in MeshWeaver.Graph, and a ContainerImage node WITHOUT them would
+         keep its content as an untyped JsonElement — the silent-null trap AGENTS.md names, where
+         the view renders empty and nothing logs. The alternative (a second seam interface, bound
+         by the portal like the authenticator) was rejected: nothing in THIS repo would implement
+         it, so the recording half would ship dead and untestable end to end. -->
+    <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
   </ItemGroup>
 </Project>
