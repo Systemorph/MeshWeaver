@@ -111,9 +111,9 @@ public static class PackageSources
     /// </summary>
     public static bool IsNodeRepoFormatOrDetected(string? format, string? sourceRepoPath, string? sourceSubdir)
     {
-        if (!string.IsNullOrWhiteSpace(format) || sourceRepoPath is not { Length: > 0 } || IsUrl(sourceRepoPath))
+        if (!string.IsNullOrWhiteSpace(format) || string.IsNullOrWhiteSpace(sourceRepoPath) || IsUrl(sourceRepoPath))
             return IsNodeRepoFormat(format);
-        return DetectedFormatIsNodeRepo(sourceRepoPath, sourceSubdir ?? "");
+        return DetectedFormatIsNodeRepo(sourceRepoPath.Trim(), (sourceSubdir ?? "").Trim());
     }
 
     /// <summary>
@@ -127,6 +127,10 @@ public static class PackageSources
     {
         try
         {
+            // A rooted subdir would make Path.Combine DROP the repo and scan outside it; that is not
+            // a layout to read, it is an input to refuse — the default, never a scan elsewhere.
+            if (Path.IsPathRooted(subdir))
+                return true;
             var subdirPath = string.IsNullOrEmpty(subdir) ? repo : Path.Combine(repo, subdir);
             static bool AnyChildHas(string root, string file) =>
                 Directory.Exists(root)
@@ -135,8 +139,10 @@ public static class PackageSources
             var anyPackage = AnyChildHas(subdirPath, "package.json");
             return anyIndex || !anyPackage;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
+            // Rendering a catalog page must never throw over a malformed path; the default is the
+            // behaviour every reader had before detection existed.
             return true;
         }
     }

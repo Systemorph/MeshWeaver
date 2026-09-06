@@ -75,6 +75,12 @@ public class UndeclaredCatalogFormatIsDetectedTest : IDisposable
         Assert.True(PackageSources.IsNodeRepoFormatOrDetected(null, empty, "catalog"), "an existing but EMPTY checkout is not evidence for the manifest shape either — it must not silently pick package.json");
         Assert.True(PackageSources.IsNodeRepoFormatOrDetected(null, null, null));
         Assert.True(PackageSources.IsNodeRepoFormatOrDetected(null, "", null));
+        Assert.True(PackageSources.IsNodeRepoFormatOrDetected(null, "   ", null), "whitespace is absent, not a path to scan");
+        var pkg = Repo("rooted");
+        Touch(pkg, "catalog/pack-a/package.json");
+        Assert.True(PackageSources.IsNodeRepoFormatOrDetected(null, pkg, Path.Combine(pkg, "catalog")),
+            "a ROOTED subdir would make Path.Combine drop the repo and scan elsewhere — refused into the default");
+        Assert.True(PackageSources.IsNodeRepoFormatOrDetected(null, "\0not-a-path\0", "catalog"), "a malformed path fails closed to the default, never throws into a render");
     }
 
     public void Dispose()

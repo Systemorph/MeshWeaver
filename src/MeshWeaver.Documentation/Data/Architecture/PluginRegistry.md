@@ -162,7 +162,8 @@ same way. It did not until #3384: the node's content had no format field, so the
 built a `package.json` source while `PluginUpdateWatcher` read the identical record as a node repo.
 A catalog node over a local node-repo checkout therefore rendered *"No installable packages found."*
 while its own watcher listed those packages happily. One record with two readers must have one rule;
-that rule is `PackageSources.IsNodeRepoFormat`, and both readers call it.
+that rule is `PackageSources.IsNodeRepoFormat` for a DECLARED format, wrapped by
+`PackageSources.IsNodeRepoFormatOrDetected` for the undeclared case below — and every reader calls the latter.
 
 🚨 **An UNDECLARED format on a local checkout is DETECTED from the layout, never defaulted.** #3384's
 unification turned every undeclared `package.json` catalog into an empty page: the browse view had
