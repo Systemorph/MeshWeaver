@@ -40,6 +40,27 @@ public class BakeShortfallNamesTheTypeTest
         Assert.DoesNotContain("DECLINED: Crm/Board", verdict);
     }
 
+    /// <summary>
+    /// A decline is not always a bake problem: on MeshWeaver.Reinsurance run 34027833694 the
+    /// verdict read "DECLINED: Hosting/Issue" and named three bake-identity reasons, while the
+    /// actual reason — logged right above it — was the seed's write to the type's owner timing out
+    /// ("seeding Hosting/Issue from Hosting.zip did not complete — the sweep compiles it instead").
+    /// The bytes were fine; the mesh was slow. A verdict that names only the bake-identity reasons
+    /// sends the reader to the wrong half of the log.
+    /// </summary>
+    [Fact]
+    public void Names_the_seed_write_timeout_as_a_reason_a_type_declines()
+    {
+        var declared = Set("Hosting/Issue", "Hosting/Admin");
+        var verdict = BakeSeedConsumer.DescribeShortfall(
+            declared, requested: declared, covered: Set("Hosting/Admin"), directory: "/seed");
+
+        Assert.NotNull(verdict);
+        Assert.Contains("did not complete", verdict);
+        Assert.Contains("not a bake problem", verdict);
+        Assert.Contains("framework identity", verdict);   // the bake-identity reasons stay named too
+    }
+
     [Fact]
     public void Silent_when_everything_declared_and_requested_was_backed()
     {
