@@ -188,7 +188,8 @@ blind spot above. Callers opt in with `ledger: required`.
 ## Before you open the PR
 
 ```bash
-python3 scripts/gen-manifests.py           # after ANY change to a package folder
+python3 scripts/gen-manifests.py           # after ANY change to a package folder OR to a src/
+                                           # project a package bundles — both move the lock
 python3 scripts/gen-manifests.py --check   # what CI runs on your branch
 ```
 
@@ -197,9 +198,13 @@ python3 scripts/gen-manifests.py --check   # what CI runs on your branch
 
 **The question to ask before merging is not "is it green" but "will anyone receive it":**
 
-1. Did I change a package's node content? → the hash moves, the patch is derived. Nothing to do.
-2. Did I change only `src/` of a mixed package? → confirm `manifest.lock` actually moved. If it did
-   not, the change reaches nobody.
+1. Did I change a package's node content? → the hash moves and the patch is derived, but **you still
+   run `gen-manifests.py` and commit its output**. "Derived, not hand-edited" does not mean
+   "generated for you": CI regenerates-and-commits only on `main` (`finalize-versions`), and on a
+   branch it merely runs `--check`, which reds `Validate node repos` naming every stale module.
+2. Did I change only `src/` of a mixed package? → **the same applies** — editing `src/` alone moves
+   the lock of every package that bundles that project, often a dozen at once. Run the generator,
+   then confirm `manifest.lock` actually moved: if it did not, the change reaches nobody.
 3. Is this a feature or a break? → bump the MINOR or the MAJOR in `index.json` by hand.
 4. Am I tempted to edit the patch, or to re-cut an existing tag? → no.
 
