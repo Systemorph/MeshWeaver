@@ -135,15 +135,77 @@ body, so no integration-specific code lands in the portal.
 `"verified"` and `"not-required"` are both 200, and they mean very different things to a sender that
 signed. The second says this instance declares no `SecretConfigKey` for the target, so the signature
 was never looked at. Without that distinction, "we verify now" would degrade silently back to "we
-used to verify" the day a chart value goes missing — the same shape as the bug, one level up. Both
-lanes therefore read the **body**, print the verdict into the step summary, and `::warning::` on
-`not-required`.
+used to verify" the day a chart value goes missing — the same shape as the bug, one level up.
 
-That is a warning and not a failure **only while the declaration rolls out**: the instance half
-arrives by `helm upgrade` from the private `Systemorph/Memex` env folders, never through
-self-update (which is a `set image`), so failing on it would red every publish until that lands.
-Escalating it to an error once the control instance answers `verified` is the remaining step, and
-it is a one-line change in both lanes.
+### How a publishing lane judges that answer
+
+Both lanes — `main-cd.yml`'s *Did the inbox VERIFY the build fact?* and
+`node-repo-publish-bake.yml`'s *Did the inbox VERIFY the publication record?* — read the **body**,
+not the status, in a step of their own. There are **three** answers, and only one is a
+misconfiguration:
+
+| the answer carries | what it means | the lane |
+|---|---|---|
+| `"signature":"verified"` | this instance checked the HMAC we just sent | passes, silently |
+| `"signature":"not-required"` | it ran the verdict code and declares no `SecretConfigKey` for this target — our signature was never looked at | **`::error::` + `exit 1`** |
+| no `signature` field at all | it cannot answer: the instance predates the verdict body and returns a bare `200` | warns (core lane) / echoes (satellite lane) |
+
+🚨 **The third row is the one that is easy to get wrong, and getting it wrong is worse than having
+no check.** The first form of these steps tested for the single string `verified` and reported
+*everything else* as `not-required`, so the **absence** of a verdict was printed as a verdict — and
+named the wrong fix. Measured on 2026-09-06 (core CD run `34039122957`, the notify job at 14:44:39Z
+and the satellite bake leg at 15:16:47Z): the control instance answered `200` with an **empty body**
+on both lanes, because it still runs the pre-verdict endpoint, and both lanes told the reader to
+provision a chart key on a pod that could not have read one.
+
+### What makes `not-required` a misconfiguration and an absent verdict not
+
+**The expectation is the act of signing** — there is no flag, no input and no opt-out, because a
+"verification expected" knob is a skip-trapdoor by another name. Both lanes ALWAYS sign:
+`main-cd.yml`'s `preflight` asserts `PLATFORM_WEBHOOK_SECRET`, the satellite lane's POST step fails
+RED without `webhook-secret`, and both always send `X-Hub-Signature-256`. So inside these lanes a
+`not-required` answer is a **broken pair**: the sender's secret is doing nothing, and a drifted one
+would be as invisible as it was before the verdict existed. The fix is one key on the receiving
+instance's record, and the error message names it.
+
+The legitimate `not-required` case is a target with an **unsigned sender** — Stripe on
+`Store/Payments`, which signs `Stripe-Signature`; GitHub on its own target — and neither of these
+steps ever runs against one. A target cannot be moved into that category silently: doing so means
+removing the lane's secret, at which point the POST step fails first, naming what to provision.
+
+An absent verdict is not a receiver declining to verify; it is a receiver that **cannot answer**
+because it has not rolled the endpoint yet. That half arrives by `helm upgrade` from the private
+`Systemorph/Memex` env folders, never through self-update (which is a `set image`), so failing on it
+would red every promoted build until a roll no repository here controls happens.
+
+**The escalation therefore arms itself.** The moment a receiver answers a verdict at all, the
+`not-required` branch becomes reachable and fatal — nothing has to be remembered, switched on, or
+re-decided. An unrecognised verdict word is fatal too: this step judges the receiver's own word, so
+a word it does not know is not a pass.
+
+`InboxSignatureVerdictGuard` lifts each step's script verbatim out of its workflow and RUNS it
+against synthetic answers, because a substring assertion cannot tell "classifies three states" from
+"classifies two and guesses" — which is precisely the defect that shipped. That is also why both
+steps read their response file through `RESP="${RESP:-/tmp/resp}"`.
+
+### The declaration has no typed home, and it has already been lost once
+
+`SecretConfigKey` is not a field on the `Hosting/Deployment` record — it rides in the free-form
+`extraPortalConfig` bag, which every writer of that record replaces **wholesale**. Measured on the
+control instance's own record:
+
+| version | when | by | `WebhookInbox__Targets__1__SecretConfigKey` |
+|---|---|---|---|
+| 25 | 2026-09-05 07:42Z | a person | `Hosting:PlatformWebhookSecret` |
+| 26 | 2026-09-05 09:24Z | `system-security` | **gone** — every other key in the bag survived |
+| 32 | 2026-09-06 17:03Z | `system-security` | still gone |
+
+So the declaration was provisioned by hand and removed by the next automated write, 1 h 42 min
+later, with nothing red anywhere — the shape this whole page exists to end, arriving one level
+further up than the last time. Until it is set again the receiver has nothing to verify with, and
+the escalation above is what will say so: it fires the first time that portal answers a verdict at
+all. When re-provisioning it, set it on slot **`__1`** (its `__0` is `Store/Payments`), and expect
+the next unrelated record rewrite to drop it again until the key has a typed home.
 
 ### The two shapes that were rejected, so they are not re-derived
 
