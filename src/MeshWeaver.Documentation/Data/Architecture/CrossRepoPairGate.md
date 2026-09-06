@@ -1,7 +1,7 @@
 ---
 Name: The Cross-Repo Pair Gate
 Category: Architecture
-Description: A core change that removes public surface can red a plugin repo's trunk hours later, on pull requests that did not make it. The gate that refuses to merge the deleting half until its declared counterpart has landed — what it triggers on, why it reads the API and never checks a sibling out, and where its teeth stop.
+Description: A core change that removes public surface — or ADDS a member to an interface someone else implements — can red a plugin repo's trunk hours later, on pull requests that did not make it. The gates that refuse to merge such a change undeclared, what each triggers on, why they read the API and never check a sibling out, and which of the ten shapes still have nothing.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
 ---
 
@@ -150,9 +150,25 @@ construction. So `Pairs-with: none — <reason>` is an escape, and it is deliber
 statement in the pull-request body, it is printed into the job log, and an unexplained `none` is
 refused. What the gate removes is the case where **nobody was ever asked**.
 
-It also covers exactly TWO of the seven shapes below — a public type leaving `src/`, and (since
-#3103) a public member leaving a type that stays. It does not see the other five, and no detector
-can: each of them is detectable only by knowing what the *dependent* consumes.
+It also covers exactly TWO of the ten shapes below — a public type leaving `src/`, and (since
+#3103) a public member leaving a type that stays. Two more have gates of their own, and **four have
+nothing**. The whole board, so that "uncovered" is written down rather than inferred:
+
+| # | shape | gated by | status |
+|---|---|---|---|
+| 1 | a public **type** leaves `src/` | `Cross-repo pair (public surface)` | **gated** |
+| 2 | an **added overload** makes a dependent's `<see cref>` ambiguous | — | **UNCOVERED** |
+| 3 | a **JSON envelope's field names** change | — | **UNCOVERED** |
+| 4 | a **comment** another repo's regex parses as data | — | **UNCOVERED** |
+| 5 | an i18n **value** change | — | **UNCOVERED** (the mirror guard compares against a *pinned* core commit) |
+| 6 | a public **member** leaves a type that stays | `Cross-repo pair (public surface)` | **gated** |
+| 7 | a public method's **BEHAVIOUR** changes behind an unchanged signature | — | **UNCOVERED**, and undetectable by construction |
+| 8 | a `PackageVersion` a satellite consumes VERSIONLESS is removed | `Satellite package pins (removal declared)` | **gated** (#3349) |
+| 9 | a RENDERED-UI change a satellite's e2e asserts on | — | **UNCOVERED**; the honest instrument is the release note |
+| 10 | a member **ADDED** to a public interface breaks external IMPLEMENTERS | `Interface additions (implementers declared)` | **gated** (#3465) |
+
+Shapes 2–5, 7 and 9 are detectable only by knowing what the *dependent* consumes, and core cannot
+know that.
 
 The structural answer to those is the one #2689 names as its acceptance criterion —
 **compile-and-run the dependent's suite against the candidate core commit**, as a CI-time
@@ -161,10 +177,13 @@ still builds and ships without the plugin repos present, and the integration is 
 about* a candidate commit rather than a *link into* it. This gate is the half of that which core can do alone. The other
 half is **event-based and lives in the dependent**: see *"The dependent reacts to core's events"* below.
 
-## The seven shapes
+## The seven CODE shapes
 
 Collected on #2689, #3103 and #3276. Each column says which mechanism sees it — the pair gate here, or the
-dependent's own CI reacting to core's release event.
+dependent's own CI reacting to core's release event. Three more shapes were found later and have
+sections of their own below: the **eighth** is a central package pin (#3344), the **ninth** a
+rendered-UI string a satellite's e2e asserts on (#3401), and the **tenth** an *added* interface
+member that breaks external implementers (#3465).
 
 | # | shape | incident | pair gate | dependent's CI on the release event |
 |---|---|---|---|---|
@@ -405,6 +424,176 @@ plausible causes taken from the container log — Orleans `no active nodes … g
 podhub errors appear in the last PASSING run too, and that refusal landed ten days before it. Guess
 from a log and this costs a day; read the snapshot and it costs an hour.
 
+### A tenth shape: an ADDED interface member breaks external IMPLEMENTERS (#3465, 2026-09-06)
+
+Everything above triggers on something LEAVING. This one is the mirror image, and it is the half
+nothing covered:
+
+> 🚨 **A forwarder rescues a CALLER. It cannot rescue an IMPLEMENTER.**
+
+Core **#3446** (the #3433 EA credential seam) added three reactive members to `IEaGraphAuth` —
+`GetConnection`, `GetAccessToken`, `ExchangeAndStore` — and kept the retiring `…Async` surface as
+**default-implemented forwarders**. Every CALLER therefore kept compiling. The pair gate was
+correctly silent, because nothing was removed. Core `main` went green. Then MeshWeaver.Plugins moved
+its platform pin onto the sealed set carrying it (Plugins#1415):
+
+```
+src/MeshWeaver.Mail.MicrosoftGraph.Test/ExecutiveAssistantDraftLifecycleTests.cs(438,44):
+  error CS0535: 'FakeEaGraphAuth' does not implement interface member 'IEaGraphAuth.ExchangeAndStore(string, string, string)'
+  error CS0535: ... 'IEaGraphAuth.GetAccessToken(string)'
+  error CS0535: ... 'IEaGraphAuth.GetConnection(string)'
+```
+
+`FakeEaGraphAuth` is a sanctioned test double that **implements** the interface, so adding a member
+obliges it to supply one, and no amount of source-compatible forwarding on the core side changes
+that. **Callers and implementers have different compatibility rules, and only the caller half was
+ever covered.**
+
+🚨 **#3446's forwarder strategy was CORRECT and is not the mistake.** It is what kept every caller
+working and what made the core change safe to land on its own. It is also what the platform's own
+rules ask for — AGENTS.md says retire a published symbol as a forwarder, never a delete — and it is
+deliberately **not** `[Obsolete]`, because MeshWeaver.Plugins builds `-warnaserror` against a core
+checkout at a pinned ref, so the attribute would red that repo's `main` the moment core merged. The
+gap is the shape, not the strategy.
+
+**Why it bit harder than usual: a CIRCULAR block on the release critical path.**
+
+- Plugins#1415 (the pin move) was red, because `FakeEaGraphAuth` predates #3446.
+- Plugins#1416 (the adaptation that fixes it) was correctly held as a **draft**, because it cannot
+  compile against the OLD pin.
+
+Each blocked on the other, Plugins `main` was dark for hours, and three sessions were needed to
+unwind it. The resolution is that the two must land together — but nothing warned that they would
+have to, and **the coupling was discovered by a red rather than predicted**.
+
+**Why the existing partial cover cannot fire either.** Same reason this page already records for
+shape 7: *for a dependent that PINS core, the pin bump IS the integration test.* Plugins'
+`platform-ref` job resolves the same pin on the release event as on a pull request, so the event
+moves what is BAKED, not what `src/` compiles against. The break is invisible until somebody moves
+the pin — which is when it is dearest.
+
+#### The gate that ships: declare the addition
+
+`Interface additions (implementers declared)` fires **only when the diff adds a member an outside
+implementer would have to write**, and requires the pull-request body to name each one:
+
+```
+Implementers: <Type.Member>[, <Type.Member>…] — <what you checked and what you found>
+```
+
+A member counts as *implementer-obliging* when:
+
+- it is added to a **public interface** that already existed at the merge base, is public (an
+  interface member is, unless it says otherwise) and carries **no body** — no `=>`, no `{ … }`
+  block, an accessor list of bare `get;`/`set;`/`init;` only — and is not `static` unless it is also
+  `abstract`; or
+- it is an **`abstract`** member added to a **public abstract class** that is not `sealed` —
+  `CS0534` in an external subclass rather than `CS0535`, same break, same declaration.
+
+🚨 **Giving the member a DEFAULT IMPLEMENTATION silences the gate, and that is the point.** A default
+interface member keeps every implementer compiling, so it is the actual fix; a gate that taxed it
+would push authors away from the one change that works. #3446's `…Async` forwarders are exactly that
+shape, and the detector is silent on them — including the case where the `=>` sits two lines below
+the parameter list, which is how a long signature is naturally written.
+
+#### 🚨 The ordering is INVERTED, and that is why this is not a `Pairs-with:`
+
+For a REMOVAL the deleting half lands **last**, so `Pairs-with:` demanding a **merged** counterpart
+is exactly right. For an ADDITION the core half lands **first**: the dependent's adaptation cannot
+compile until core's change is pinned. **A gate demanding a merged counterpart here would have
+demanded the very deadlock it exists to prevent** — Plugins#1416 could not have merged, by
+construction.
+
+So this gate asks for a *statement*, not a *precondition*: name each obliging member and say what
+you found. It therefore needs no credential, no API read and no ledger entry, and — like
+`Satellite-pins:` — it runs on **fork** pull requests, where the credentialed gates cannot. There is
+deliberately **no blanket form**: "nothing implements it" is a claim about a repository this one
+cannot see, so it is made per member or not at all. And a reason resting on a live-mesh sweep must
+quote the envelope's `searched: true`, for the same #2741 reason `Pairs-with: none` does — in-mesh
+C# can implement a core interface and no compiler here can see it.
+
+#### What it costs, measured
+
+| window | additions | of which implementer-obliging |
+|---|---|---|
+| `main~25 → main` (2026-09-06) | 17 types + 20 members | **3** — #3446's, all of them |
+| `main~100 → main` | 49 types + 42 members | **3** — the same three |
+| per merge, last 40 first-parent | 15 change the public declaration set | **1 merge meets the gate: #3446** |
+
+So the tax on ordinary work is zero, and the one pull request in a hundred that meets it is the one
+that caused the incident.
+
+#### Falsified both ways, against the incident itself
+
+Replaying #3446's own commit (`--base 1bcb764ec^1 --head 1bcb764ec`):
+
+```
+ARM 1 — the pull request as it was actually written (no declaration)      exit 1
+  [implementer-obliging-added] MeshWeaver.Mesh.Contract :: MeshWeaver.Mesh.IEaGraphAuth.ExchangeAndStore
+  [implementer-obliging-added] MeshWeaver.Mesh.Contract :: MeshWeaver.Mesh.IEaGraphAuth.GetAccessToken
+  [implementer-obliging-added] MeshWeaver.Mesh.Contract :: MeshWeaver.Mesh.IEaGraphAuth.GetConnection
+
+ARM 2 — the same diff with the three members declared                     exit 0
+  Every obliging addition is declared.
+```
+
+Exactly the three members `CS0535` named, and nothing else — the three `…Async` forwarders added in
+the same diff are default-implemented and are correctly reported as ordinary `member-added`.
+
+🚨 **Arm 2 was RED on its first run, and the reason is worth keeping.** The declaration in a real
+pull-request body WRAPS — three qualified member names plus a sentence does not fit on one line — and
+the first matcher was single-line, so it read a correct declaration as no declaration at all. A gate
+that rejects correct work is how people learn to route around it. The matcher now joins continuation
+lines up to a blank line or the next label, and a line that starts `Implementers:` and does not parse
+is a **failure**, never an ignored line — the same rule `Pairs-with:` carries, and for the same
+reason: an author who believes they declared something and a gate that believes they did not is
+indistinguishable from a skip.
+
+#### 🚨 Four ways to oblige an implementer that this gate does NOT see
+
+Written down because a gate whose limits are inferred rather than stated is how the next incident
+gets filed as a surprise. Each row was **run against the detector**, not assumed — the control in the
+same run (`public abstract void B();` added to a public abstract class) reports
+`implementer-obliging-added` correctly, so a blank here is a real blind spot and not a broken probe:
+
+| the change | why an implementer breaks | why the detector is blind |
+|---|---|---|
+| an interface gains a **base interface** — `interface IFoo : IBar` | every implementer of `IFoo` must now supply `IBar`'s members | the detector diffs member SETS per type; it does not diff base lists |
+| an interface gains an **overload** of a member name it already declares | `void M(string)` beside `void M(int)` is a member every implementer must write | member granularity is the NAME, deliberately — the same limit that makes removing one overload of several silent |
+| an existing **default** member is made `abstract` | the body implementers were relying on is gone | nothing is added or removed; this is shape 7 wearing an interface |
+| a **`protected abstract`** member is added to a public abstract class | `CS0534` in an external subclass, exactly as for a public one | only `public` members are indexed, so it is not an addition at all |
+
+The first two are cheap to close and the second would change what "member" means across the whole
+report, including the removal half; the third is undetectable by any surface detector, as shape 7
+already records. Until then they are what `Implementers:` cannot ask about, and a reviewer of an
+interface change should read them as the list of things still to check by hand.
+
+#### The denominator, and what printing it found
+
+`publicTypesAtBase` does not constrain this shape at all: a parser that located every public type
+but stopped recognising the word `interface` would publish a healthy 1 900 types and **zero**
+obligations forever, and "no obliging additions" would be spelled exactly like "the scan never
+looked". So the report carries two more control arms — `publicInterfacesAtBase` and
+`implementerObligationsAtBase` — and the gate **refuses** a report where either has collapsed, or
+one that predates the shape and carries neither. Measured on `main`, 2026-09-06: **131 public
+interfaces, 450 implementer obligations.**
+
+🚨 **Cross-checking that denominator against `grep` found a live blind spot in the EXISTING gate.**
+The parser said 130 public interfaces and `grep` said 131. The one it could not see was
+`MeshWeaver.Domain.INamed` — and the cause generalises: **a UTF-8 BOM is not a line start, and
+`NAMESPACE_RE` anchors on one.** 310 files under `src/` carry a BOM; in 91 of them it sits
+immediately before `namespace`, so `^namespace` never matched and the file was indexed with no
+namespace in force. Two silent consequences, both now fixed and both fixtured:
+
+| the file's namespace form | what happened | measured |
+|---|---|---|
+| block-scoped (`namespace N {`) | types are declared at column 4, which without a namespace reads as NESTED — so they were **absent from the index entirely** | **16 public types**, including `ButtonControl`, `HtmlControl`, `SplitterControl`, `NamedAreaControl`, `INamed`. Deleting one triggered no pair gate at all |
+| file-scoped (`namespace N;`) | types were indexed under the **wrong key** — `MeshWeaver.Data:IDataStorage` for a type that is `MeshWeaver.Data.IDataStorage` | **128 public types**. A `type-forwards.allow` entry written with the real full name can never match such a key, and a namespace rename is invisible because both sides carry the same wrong one |
+
+`publicTypesAtBase` went from 1 935 to 1 951 on `main` with the one-line fix. **A count nobody
+compares against anything is not a control arm** — which is the whole argument for printing the
+denominator rather than merely computing it.
+
 ## Member-level detection (the sixth shape)
 
 `check-type-forwards.py` indexes, under each public top-level type, the **names** of its public
@@ -532,28 +721,49 @@ a sibling repository is a dependency whatever token it uses.
 core keeps (the shared-rules sweep and the `Pairs-with:` resolution) and refuses a third.
 
 The consequence the pair gate covers stays: a pull request that REMOVES public surface must name
-its merged counterpart. Everything additive or behavioural (shapes 2–5 and 7) is the dependent's to
-catch when it next builds against the platform — on the event if it tracks, on the pin bump if it
-pins.
+its merged counterpart. Since #3465 one ADDITIVE shape is covered here too — a member added to a
+public interface, which breaks IMPLEMENTERS rather than callers and which a pinned dependent
+therefore cannot see either (shape 10). Everything else additive or behavioural (shapes 2–5, 7 and
+9) is the dependent's to catch when it next builds against the platform — on the event if it tracks,
+on the pin bump if it pins.
 
 ## Proving it
 
-Both scripts run `--self-test` **first** in the job, and both fail it:
+Every script runs `--self-test` **first** in its job, and every job fails it:
 
-- `check-type-forwards.py --self-test` — 49 cases (29 forwarder verdict + 20 surface report). The
-  surface cases prove the report fires on a departure, on a **forwarded** move (which the verdict
-  half is correctly silent on), on a whole assembly leaving, and — the sixth shape — on #3137's own
-  text in miniature, a renamed method, a member made `internal`, a renamed positional record
-  parameter, a removed enum constant, a removed interface member and a block-scoped namespace; and
-  stays silent on a within-assembly file move, an internal type, an in-mesh doc sample, an
-  addition, a body edit and a removed overload whose name still binds.
+- `check-type-forwards.py --self-test` — 68 cases (29 forwarder verdict + 29 surface report + 10
+  transitional allowance). The surface cases prove the report fires on a departure, on a
+  **forwarded** move (which the verdict half is correctly silent on), on a whole assembly leaving,
+  and — the sixth shape — on #3137's own text in miniature, a renamed method, a member made
+  `internal`, a renamed positional record parameter, a removed enum constant, a removed interface
+  member and a block-scoped namespace; and stays silent on a within-assembly file move, an internal
+  type, an in-mesh doc sample, an addition, a body edit and a removed overload whose name still
+  binds. Six more cover the **tenth** shape and are described below; two cover the BOM.
 - `check-cross-repo-pair.py --self-test` — 28 cases, including the passing ones. A gate that always
   failed would score identically without them. Five prove the member and sweep rules above.
+- `check-package-pin-removal.py --self-test` — the eighth shape, replayed against #3344's own commit.
+- `check-interface-addition.py --self-test` — the tenth shape. It fires on #3446's three obliging
+  members; stays silent on a diff that adds none and on a declared one; refuses a fenced, commented,
+  quoted, reasonless, wrapped-but-unparseable, mis-named or unswept declaration; and **raises**
+  rather than reading clean on a starved or shape-less surface report.
 
-The control arm is `publicTypesAtBase`. Every other field of the surface report is legitimately
-empty on an ordinary pull request, so *"this diff removed nothing"* and *"the scan read nothing"*
-would otherwise produce the same JSON. The gate refuses a base tree declaring fewer than 500 public
-top-level types; `src/` declares 1832 across 35 assemblies today.
+**Both directions, mechanically.** Each new mechanism was sabotaged in turn and the self-tests were
+re-run, because a case that cannot fail proves nothing:
+
+| what was disabled | surface cases that go RED |
+|---|---|
+| the BOM strip | 2 |
+| the obligation classifier, forced to "never obliges" | 4 |
+| …forced to "always obliges" | 8 |
+| body detection (every member reads as abstract) | 4 |
+| the declaration statement truncated to one line | 3 |
+
+The control arms are `publicTypesAtBase` (the pair gate refuses a base tree declaring fewer than 500
+public top-level types; `src/` declares **1 951** across 35 assemblies today) and, for the tenth
+shape, `publicInterfacesAtBase` and `implementerObligationsAtBase` (floors 50 and 150; **131** and
+**450** today). Every other field of the surface report is legitimately empty on an ordinary pull
+request, so without them *"this diff changed nothing"* and *"the scan read nothing"* would produce
+the same JSON.
 
 ## See also
 
