@@ -34,6 +34,9 @@ public class GitHubAppTokenRefreshTest
 {
     private static readonly DateTimeOffset T0 = new(2026, 9, 6, 0, 0, 0, TimeSpan.Zero);
 
+    // Every await is bounded: a wedged token stream must surface as a timeout, never a stuck run.
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
+
     [Fact]
     public async Task OneHeldObservable_RefreshesOnEveryExpiry_NotOnlyTheFirst()
     {
@@ -54,34 +57,34 @@ public class GitHubAppTokenRefreshTest
         // ONE observable, held — the Store feed's shape — subscribed per pass below.
         var held = service.GetInstallationToken();
 
-        Assert.Equal("ghs_1", await held.FirstAsync().Await());
+        Assert.Equal("ghs_1", await held.FirstAsync().Timeout(Budget).Await());
         Assert.Equal(1, handler.Mints);
 
         // Well inside the lifetime: replayed, no mint.
         clock = T0.AddMinutes(30);
-        Assert.Equal("ghs_1", await held.FirstAsync().Await());
+        Assert.Equal("ghs_1", await held.FirstAsync().Timeout(Budget).Await());
         Assert.Equal(1, handler.Mints);
 
         // Inside the five-minute refresh window: the FIRST refresh — this one always worked.
         clock = T0.AddMinutes(56);
-        Assert.Equal("ghs_2", await held.FirstAsync().Await());
+        Assert.Equal("ghs_2", await held.FirstAsync().Timeout(Budget).Await());
         Assert.Equal(2, handler.Mints);
 
         // Token 2 expires at T0+116 min. The SECOND refresh is the one the defect skipped: before
         // the fix this pass answered ghs_2, four minutes from expiry, and every later pass answered
         // it too — long after GitHub had stopped accepting it.
         clock = T0.AddMinutes(112);
-        Assert.Equal("ghs_3", await held.FirstAsync().Await());
+        Assert.Equal("ghs_3", await held.FirstAsync().Timeout(Budget).Await());
         Assert.Equal(3, handler.Mints);
 
         // And the third, to show it is every expiry rather than the first two.
         clock = T0.AddMinutes(168);
-        Assert.Equal("ghs_4", await held.FirstAsync().Await());
+        Assert.Equal("ghs_4", await held.FirstAsync().Timeout(Budget).Await());
         Assert.Equal(4, handler.Mints);
 
         // A pass while the token is fresh still replays: the fix did not turn the cache into a mint-per-pass.
         clock = T0.AddMinutes(170);
-        Assert.Equal("ghs_4", await held.FirstAsync().Await());
+        Assert.Equal("ghs_4", await held.FirstAsync().Timeout(Budget).Await());
         Assert.Equal(4, handler.Mints);
     }
 
@@ -103,7 +106,7 @@ public class GitHubAppTokenRefreshTest
             clock: () => clock);
 
         var held = service.GetInstallationToken();
-        Assert.Equal("ghs_1", await held.FirstAsync().Await());
+        Assert.Equal("ghs_1", await held.FirstAsync().Timeout(Budget).Await());
 
         // Five sources poll on the same timer; when the token is stale they all refresh at once
         // and must share the single new promise rather than mint five tokens.
