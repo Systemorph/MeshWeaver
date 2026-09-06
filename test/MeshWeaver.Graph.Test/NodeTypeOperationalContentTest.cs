@@ -168,8 +168,89 @@ public class NodeTypeOperationalContentTest
         var live = TypeNode(Parse(json));
         Assert.Same(incoming, NodeTypeOperationalContent.PreserveLiveOperational(incoming, live, CamelCase));
 
-        // No live node (a create) and non-NodeType nodes pass through untouched.
-        Assert.Same(incoming, NodeTypeOperationalContent.PreserveLiveOperational(incoming, null, CamelCase));
+        // No live node (a create) with NO operational member embedded, and non-NodeType nodes,
+        // pass through untouched.
+        var clean = TypeNode(Parse("""{"$type":"NodeTypeDefinition","configuration":"c"}"""));
+        Assert.Same(clean, NodeTypeOperationalContent.PreserveLiveOperational(clean, null, CamelCase));
+        var page = new MeshNode("Page", "Store") { NodeType = "Store/Page", Content = Parse(json) };
+        Assert.Same(page, NodeTypeOperationalContent.PreserveLiveOperational(page, null, CamelCase));
+    }
+
+    [Fact]
+    public void Preserve_WithNoLiveNode_ACreateIsAnImportToo_TheFilesVerdictNeverLands()
+    {
+        // 2026-09-06: MeshWeaver.Plugins' node files carried the verdicts GitSync wrote on 2026-07-18
+        // (compilationStatus Ok, a foreign compiledFrameworkVersion + latestAssemblyPath, and for
+        // Store a standing requestedReleaseForce). Every FRESH mesh installed them verbatim — the
+        // export-side strip cannot reach a file that predates it, and this seam let the create
+        // through — so Store's core types framework-stale-kicked into a forced live-source compile
+        // at every boot and every Edu/Exercise instance bound a foreign assembly path. With no live
+        // node there is nothing to prefer: the operational members must be ABSENT.
+        var incoming = TypeNode(Parse(
+            """
+            {"$type":"NodeTypeDefinition","configuration":"c","sources":["Store/Catalog/Source/A"],
+             "compilationStatus":"Ok","compiledFrameworkVersion":"eec04a058bd644f1b2b5eda01e952b5c",
+             "latestAssemblyCollection":"local","latestAssemblyPath":"Store_Catalog/v201-eec04a05-870bdb050e1e.dll",
+             "requestedReleaseForce":true,"requestedReleaseAt":"2026-07-19T11:32:29+00:00",
+             "lastReleaseRequestHandledAt":"2026-07-19T11:32:29+00:00"}
+            """));
+        var created = NodeTypeOperationalContent.PreserveLiveOperational(incoming, null, CamelCase);
+        // A raw element in, a raw element out — the import pipeline downstream (the installer's
+        // unchanged-check, ImportWriteOrder, the bake) knows a raw element and a typed definition,
+        // and neither of them as a JsonObject.
+        var content = Assert.IsType<JsonElement>(created.Content);
+        var names = content.EnumerateObject().Select(p => p.Name).ToArray();
+        foreach (var member in NodeTypeOperationalContent.MemberNames)
+            Assert.DoesNotContain(member, names, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("c", content.GetProperty("configuration").GetString());
+        Assert.Equal("Store/Catalog/Source/A", content.GetProperty("sources")[0].GetString());
+    }
+
+    [Fact]
+    public void Preserve_WithNoLiveNode_KeepsATypedDefinitionTyped_WithItsVerdictReset()
+    {
+        // The installer parses a NodeType file into a TYPED definition (the type is registered
+        // statically), and its unchanged-check compares two typed definitions on their authored
+        // members. Handed a JsonObject instead, a re-install of an unchanged snapshot read as
+        // "changed" and rewrote the type — the gate's idempotence check went red.
+        var incoming = TypeNode(new NodeTypeDefinition
+        {
+            Configuration = "config => config",
+            Description = "authored",
+            Sources = ["Store/Catalog/Source/A"],
+            CompilationStatus = CompilationStatus.Ok,
+            CompiledFrameworkVersion = "eec04a058bd644f1b2b5eda01e952b5c",
+            LatestAssemblyCollection = "local",
+            LatestAssemblyPath = "Store_Catalog/v201-eec04a05-870bdb050e1e.dll",
+            LastCompiledVersion = 201,
+            RequestedReleaseForce = true,
+            RequestedReleaseAt = DateTimeOffset.Parse("2026-07-19T11:32:29+00:00"),
+            LastReleaseRequestHandledAt = DateTimeOffset.Parse("2026-07-19T11:32:29+00:00"),
+        });
+        var created = NodeTypeOperationalContent.PreserveLiveOperational(incoming, null, CamelCase);
+        var def = Assert.IsType<NodeTypeDefinition>(created.Content);
+        Assert.Equal("config => config", def.Configuration);
+        Assert.Equal("authored", def.Description);
+        Assert.Equal(["Store/Catalog/Source/A"], def.Sources);
+        Assert.Null(def.CompilationStatus);
+        Assert.Null(def.CompiledFrameworkVersion);
+        Assert.Null(def.LatestAssemblyCollection);
+        Assert.Null(def.LatestAssemblyPath);
+        Assert.Null(def.LastCompiledVersion);
+        Assert.False(def.RequestedReleaseForce);
+        Assert.Null(def.RequestedReleaseAt);
+        Assert.Null(def.LastReleaseRequestHandledAt);
+        // …and every other operational property is at its default as well.
+        foreach (var property in typeof(NodeTypeDefinition).GetProperties()
+                     .Where(p => NodeTypeOperationalContent.MemberNames.Contains(p.Name)))
+        {
+            var blank = property.PropertyType.IsValueType ? Activator.CreateInstance(property.PropertyType) : null;
+            Assert.Equal(blank, property.GetValue(def));
+        }
+
+        // A typed definition that carries no verdict comes back as the SAME instance.
+        var clean = TypeNode(new NodeTypeDefinition { Configuration = "c" });
+        Assert.Same(clean, NodeTypeOperationalContent.PreserveLiveOperational(clean, null, CamelCase));
     }
 
     // ── The change-detection token ignores the operational members ──────────────────────────
