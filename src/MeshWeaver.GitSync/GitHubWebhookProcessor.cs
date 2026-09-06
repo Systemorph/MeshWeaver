@@ -621,7 +621,17 @@ public sealed class GitHubWebhookProcessor
                         + "GitHub is answered 200, so there is no redelivery, and nothing retries "
                         + "this elsewhere — the build fact is lost unless someone replays it.",
                         path, d.Message.Error, repoUrl, headSha);
-                    return Observable.Return(0);
+                    // 🚨 …and now the fact is KEPT rather than only mourned (#3374). The warning
+                    // above is the floor, not the record: on memex-cloud the ATTEMPT is logged at
+                    // Information and Information is not emitted, so 154 of these in one week had
+                    // no denominator at all. The node is queryable, survives the pod, and carries
+                    // the payload verbatim, so the lost build can be REPLAYED.
+                    //
+                    // Still returns 0 and still answers GitHub 200 — recording the miss must not
+                    // change the delivery's outcome, and a non-2xx is the redelivery storm the
+                    // comment above exists to avoid.
+                    return RecordMissedBuildFact(target, completion, d.Message.Error)
+                        .Select(_ => 0);
                 }
                 // The build record is the CI gate's verdict; the import is what the verdict authorises.
                 // Both hang off this one green-build event so they cannot disagree about what shipped.
@@ -635,6 +645,67 @@ public sealed class GitHubWebhookProcessor
                             "Green build of {Repo} recorded, but triggering the sync failed.", repoUrl);
                         return Observable.Return(1);
                     });
+            });
+    }
+
+    /// <summary>
+    /// Keeps a green build the mesh refused to record, at
+    /// <c>Admin/_MissedBuild/{owner}.{repo}</c> (Systemorph/MeshWeaver#3374).
+    ///
+    /// <para><b>Never fails the delivery.</b> Every outcome — a refusal, a throw — is logged and
+    /// swallowed. This runs on a path that has ALREADY lost the build fact; turning that into a
+    /// non-2xx would trade a silent loss for the redelivery storm the caller's comment exists to
+    /// avoid, and turning it into a throw would lose the caller's own warning too.</para>
+    ///
+    /// <para>🚨 <b>It shares a failure domain with the write that just failed, and says so.</b>
+    /// This is a different node with a different owning hub, so it survives the per-node faults
+    /// actually observed (an owner returning no verdict; initial state not arriving) — but a
+    /// cluster-wide fault takes both. When it does, the log line is all that is left, which is why
+    /// the refusal below is logged at Warning naming what is now unrecorded, rather than counted as
+    /// a success.</para>
+    /// </summary>
+    private IObservable<System.Reactive.Unit> RecordMissedBuildFact(
+        RepoIdentity target, BuildCompletion completion, string? error)
+    {
+        var path = MissedBuildFact.PathFor(target.Owner, target.Repo);
+        var slash = path.LastIndexOf('/');
+        var node = new MeshNode(path[(slash + 1)..], path[..slash])
+        {
+            NodeType = MissedBuildFact.NodeType,
+            Name = $"{target.Owner}/{target.Repo} missed build",
+            State = MeshNodeState.Active,
+            Content = MissedBuildFact.For(completion, error, DateTimeOffset.UtcNow),
+        };
+
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return Observable.Using(
+                () => accessService.ImpersonateAsSystem(),
+                _ => hub.NodeOperationIssuingHub()
+                    .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+                    .FirstAsync())
+            .Select(r =>
+            {
+                if (r.Message.Success)
+                    logger?.LogInformation(
+                        "Missed build fact for {Repo} at {Sha} recorded at {Path} — replay it from "
+                        + "there, or let the next green build of the same workflow supersede it.",
+                        completion.RepositoryUrl, completion.HeadSha, path);
+                else
+                    logger?.LogWarning(
+                        "Could not record the missed build fact at {Path} either: {Error}. The "
+                        + "green build of {Repo} at {Sha} is now recorded NOWHERE — this log line "
+                        + "is the only remaining witness.",
+                        path, r.Message.Error, completion.RepositoryUrl, completion.HeadSha);
+                return System.Reactive.Unit.Default;
+            })
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "Could not record the missed build fact at {Path} either. The green build of "
+                    + "{Repo} at {Sha} is now recorded NOWHERE — this log line is the only "
+                    + "remaining witness.",
+                    path, completion.RepositoryUrl, completion.HeadSha);
+                return Observable.Return(System.Reactive.Unit.Default);
             });
     }
 

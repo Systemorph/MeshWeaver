@@ -191,6 +191,18 @@ public static class GitHubSyncConfiguration
                 ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<BuildCompletion>()),
+            },
+            // MissedBuildFact satellite (Admin/_MissedBuild/{owner}.{repo}) — the record of a green
+            // build the webhook could NOT write (#3374). Registering the NODE type is not optional
+            // bookkeeping: without it the write dies with "NodeType is not registered", and the
+            // record that exists precisely to stop a silent loss would itself be silently lost.
+            new MeshNode(MissedBuildFact.NodeType)
+            {
+                Name = "Missed Build Fact",
+                IsSatelliteType = true,
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<MissedBuildFact>()),
             });
 
         // Also register the content types on the mesh hub + every per-node hub so reads via
@@ -200,13 +212,15 @@ public static class GitHubSyncConfiguration
             .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))
             .WithType<GitHubPullRequest>(nameof(GitHubPullRequest))
             .WithType<GitHubIssue>(nameof(GitHubIssue))
-            .WithType<BuildCompletion>(nameof(BuildCompletion)));
+            .WithType<BuildCompletion>(nameof(BuildCompletion))
+            .WithType<MissedBuildFact>(nameof(MissedBuildFact)));
         builder.ConfigureDefaultNodeHub(c => c
             .WithType<GitHubCredential>(nameof(GitHubCredential))
             .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))
             .WithType<GitHubPullRequest>(nameof(GitHubPullRequest))
             .WithType<GitHubIssue>(nameof(GitHubIssue))
             .WithType<BuildCompletion>(nameof(BuildCompletion))
+            .WithType<MissedBuildFact>(nameof(MissedBuildFact))
             // The "GitHub" node-menu dropdown (its own context) + the action area its items navigate
             // to. Per-node-hub scoped provider (self-gates to Spaces with a configured repo).
             .WithServices(s =>
