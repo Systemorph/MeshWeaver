@@ -16,7 +16,16 @@ Documentation lives as markdown files under `src/MeshWeaver.Documentation/Data/`
 | `Data/Architecture.md` | `Doc/Architecture` |
 | `Data/Architecture/AsynchronousCalls.md` | `Doc/Architecture/AsynchronousCalls` |
 | `Data/GUI/ContainerControl/Stack.md` | `Doc/GUI/ContainerControl/Stack` |
-| `Data/ReleaseNotes/3_0_0/index.md` | `Doc/ReleaseNotes/3_0_0` (an `index.md` *is* its folder's node) |
+| `Data/GUI/ContainerControl/index.md` | `Doc/GUI/ContainerControl` (an `index.md` *is* its folder's node) |
+| `Data/ReleaseNotes/3_0_0.md` | `Doc/ReleaseNotes/3_0_0` — a flat file on purpose, see below |
+
+🚨 **A folder name must be a C# identifier; a file name need not.** The embedded-resource name MSBuild
+gives a file makes every *folder* segment an identifier — a folder starting with a digit is prefixed
+(`3_0_0/` → `_3_0_0`), a hyphen becomes an underscore — while the *file* name is kept verbatim. So
+`Data/ReleaseNotes/3_0_0/index.md` is served at `/Doc/ReleaseNotes/_3_0_0`, and every link to the
+documented path is broken with nothing in the build to say so (`DocumentationLinkIntegrityTest` is
+what caught it). Version pages are therefore flat files, `Data/ReleaseNotes/3_0_0.md`, and no doc
+folder starts with a digit or carries a hyphen.
 
 Note the pairing: `Architecture.md` is the **index node** and the folder `Architecture/` holds its children. Agent definitions follow the same scheme under the **`Agent`** partition (`content/ai/Agent/Researcher.md` → `Agent/Researcher`), and skills under the **`Skill`** partition (`content/ai/Skill/code.md` → `Skill/code`).
 
