@@ -364,10 +364,17 @@ public sealed class MessageHub : IMessageHub
             // serving, which is where the #981 callbacks actually go unanswered (measured ~3.1 s
             // before Dispose() was even invoked). Dial MESHWEAVER_STALE_CALLBACK_MS down on a
             // repro run and this line, not the teardown one, names the handler side first.
+            // The pool's numbers ride on the line the host already writes (MeshWeaver#2543): a wall of
+            // stale callbacks with a large pending-work count and a thread count pinned at the minimum
+            // is a STARVED pool — timers (a flush bound, an activation budget) do not fire on it — and
+            // that reading is impossible from the callbacks alone.
             TryLog(LogLevel.Warning,
-                "[STALE-CALLBACK] {Address}: {Count} callback(s) pending > {ThresholdMs}ms: {Detail}{Fates}",
+                "[STALE-CALLBACK] {Address}: {Count} callback(s) pending > {ThresholdMs}ms: {Detail}{Fates} "
+                + "[pool threads={PoolThreads} pendingWork={PoolPending} completed={PoolCompleted}]",
                 Address, stale.Length, thresholdMs, FormatPendingCallbacks(stale),
-                FormatPendingCallbackFates(stale));
+                FormatPendingCallbackFates(stale),
+                System.Threading.ThreadPool.ThreadCount, System.Threading.ThreadPool.PendingWorkItemCount,
+                System.Threading.ThreadPool.CompletedWorkItemCount);
         }
         catch (Exception ex)
         {
