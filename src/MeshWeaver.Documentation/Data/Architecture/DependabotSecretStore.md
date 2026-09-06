@@ -227,7 +227,7 @@ only *calls* — the guard cannot follow a cross-repo `uses:`, so it says so rat
 callee consumes, so completeness cannot be proven — and inherit hands the callee every secret the
 repo owns.
 
-The self-test (`--self-test`, 19 cases) proves each check fires on its defect and stays silent on
+The self-test (`--self-test`, 21 cases) proves each check fires on its defect and stays silent on
 its fix, and it runs *before* the real tree — an unproven gate is no gate. It was falsified both
 ways on real trees when it was written: breaking core's two `MESHWEAVER_APP_ID` assertions took core
 from 0 violations to 1 and exit 0 to exit 1, and restoring them returned it to 0; SocialMedia's real

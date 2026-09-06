@@ -260,6 +260,43 @@ def _env_to_secret(mapping) -> dict[str, str]:
     return out
 
 
+def strip_shell_comments(script: str) -> str:
+    """Drop `#` comments so a COMMENTED-OUT assertion cannot count as one.
+
+    Without this the guard is defeatable — and silently — by the one edit most likely to happen
+    by accident: commenting a `[ -n "${X:-}" ]` line out while debugging and never restoring it.
+    A `#` only opens a comment at the start of a word (POSIX), and the fleet's preflight messages
+    routinely contain `#2249` / `#3399` INSIDE the quoted remediation text, so the scan has to
+    track quoting rather than cut at the first `#`.
+    """
+    out = []
+    for line in script.splitlines():
+        in_single = in_double = False
+        cut = None
+        i = 0
+        while i < len(line):
+            c = line[i]
+            if in_single:
+                if c == "'":
+                    in_single = False
+            elif in_double:
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == '"':
+                    in_double = False
+            elif c == "'":
+                in_single = True
+            elif c == '"':
+                in_double = True
+            elif c == "#" and (i == 0 or line[i - 1] in " \t"):
+                cut = i
+                break
+            i += 1
+        out.append(line if cut is None else line[:cut])
+    return "\n".join(out)
+
+
 def _asserted_in_job(job: dict) -> set[str]:
     """Secret names this job proves non-empty with `[ -n "${VAR:-}" ]` (or `[ -n "${VAR}" ]`)."""
     asserted: set[str] = set()
@@ -270,6 +307,7 @@ def _asserted_in_job(job: dict) -> set[str]:
         run = step.get("run")
         if not isinstance(run, str):
             continue
+        run = strip_shell_comments(run)
         env = dict(job_env)
         env.update(_env_to_secret(step.get("env")))
         for var, secret in env.items():
@@ -506,6 +544,20 @@ def self_test() -> int:
                 "      MW_REGISTRY_KEY: ${{ secrets.MW_REGISTRY_KEY }}\n"
                 '    steps: [{run: \'[ -n "$MW_REGISTRY_KEY_PATH" ] || exit 1\'}]\n'),
             None, True,
+        ),
+        (
+            "commented-out-assertion-does-not-count",
+            _wf(consumer + "  preflight:\n    runs-on: ubuntu-latest\n    env:\n"
+                "      MW_REGISTRY_KEY: ${{ secrets.MW_REGISTRY_KEY }}\n"
+                '    steps: [{run: \'# [ -n "${MW_REGISTRY_KEY:-}" ] || exit 1\'}]\n'),
+            None, True,
+        ),
+        (
+            "hash-inside-the-quoted-message-still-counts",
+            _wf(consumer + "  preflight:\n    runs-on: ubuntu-latest\n    env:\n"
+                "      MW_REGISTRY_KEY: ${{ secrets.MW_REGISTRY_KEY }}\n"
+                '    steps: [{run: \'[ -n "${MW_REGISTRY_KEY:-}" ] || missing+=("provision it, see #3399")\'}]\n'),
+            None, False,
         ),
         ("not-yaml", "jobs: [unclosed\n  - ::\n", None, True),
     ]
