@@ -2818,7 +2818,24 @@ public class MeshOperations
             .Timeout(TimeSpan.FromSeconds(5))
             .SelectMany(node =>
             {
-                var def = (NodeTypeDefinition)node!.Content!;
+                // ContentAs, never a cast: the Where above already accepted this node, but the
+                // value can still arrive as raw JSON on a hub that did not register the type.
+                var def = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+                if (def is null)
+                    return Observable.Return<NodeCompilationResult?>(null);
+                // 🚨 ADOPT-TIME IDENTITY GATE (#3472). One of the six load paths that gated on
+                // CompilationStatus == Ok alone. Ok is a claim SCOPED to CompiledFrameworkVersion,
+                // and reading only the verdict is what let two CRM types report green through a
+                // two-and-a-half-hour outage. Refusing answers as a store miss does — no hub
+                // configuration, so the schema falls back to the node's own registrations.
+                if (NodeTypeBuildIdentity.Refuses(def))
+                {
+                    logger.LogError(
+                        "{Summary} No hub configuration is recovered from those bytes for the schema probe. {Recovery}",
+                        NodeTypeBuildIdentity.RefusalSummary(node!.Path, def),
+                        NodeTypeBuildIdentity.RecoveryVerb);
+                    return Observable.Return<NodeCompilationResult?>(null);
+                }
                 var version = def.LastCompiledVersion ?? node.Version;
                 var store = string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
                     ? (IAssemblyStore)FrameworkAssemblyStore.Instance
@@ -4090,13 +4107,23 @@ public class MeshOperations
     private string FormatDiagnosticsFromDef(
         Graph.Configuration.NodeTypeDefinition def, string nodeTypePath)
     {
-        var status = def.CompilationStatus ?? CompilationStatus.Unknown;
+        // 🚨 THE SCOPED STATUS, not the raw field (#3472). `Ok` is a claim scoped to
+        // NodeTypeDefinition.CompiledFrameworkVersion, and reporting the verdict without its
+        // scope is what let two CRM types answer green for two and a half hours while every one
+        // of their per-instance hubs was dead. NodeTypeBuildIdentity.ReportedStatus is the one
+        // function that folds the pair; it derives, it never writes, so two replicas on two
+        // images each answer honestly about THEMSELVES instead of overwriting each other.
+        var status = NodeTypeBuildIdentity.ReportedStatus(def) ?? CompilationStatus.Unknown;
         return FormatDiagnostics(
             status,
             nodeTypePath,
             error: status is CompilationStatus.Error or CompilationStatus.Unavailable
                 ? def.CompilationError
-                : null,
+                // Foreign carries WHICH two identities disagree — the pair is what makes the
+                // verdict checkable by hand against the CD run that produced the bytes.
+                : status is CompilationStatus.Foreign
+                    ? NodeTypeBuildIdentity.RefusalSummary(nodeTypePath, def)
+                    : null,
             startedAt: status == CompilationStatus.Compiling ? def.LastCompileStartedAt : null,
             lastCompiledAt: status == CompilationStatus.Ok ? def.LastCompileSucceededAt : null,
             hub.JsonSerializerOptions,
@@ -4699,6 +4726,29 @@ public class MeshOperations
                             + "assembly lookup timed out) — this is NOT a compile failure and NOTHING "
                             + "is known to be wrong with the source. See `error` for what timed out. "
                             + "Trigger a fresh compile and re-call GetDiagnostics."
+                    },
+                    options);
+            case CompilationStatus.Foreign:
+                // 🚨 #3472. The sibling of the Ok branch's #2471 warning, one axis over:
+                // there the record could describe a build a pod was not SERVING; here it
+                // describes a build this process cannot LOAD AT ALL. Never "Ok" — the compile
+                // did succeed, for somebody else — and never "Error", which would send the
+                // reader to correct source code that is fine (the #641 mistake).
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Foreign",
+                        nodeTypePath,
+                        error,
+                        mvid = publishedAssemblyMvid,
+                        message = "The last compile SUCCEEDED — for a framework build identity that "
+                            + "is NOT this process's, so these bytes cannot be loaded here and every "
+                            + "per-instance hub of this type binds the fallback configuration (which "
+                            + "renders as 'Area not found'). This is NOT a source error and NOT an "
+                            + "availability problem: see `error` for the two identities that disagree. "
+                            + "The compile watcher rebuilds it against the live framework on its own; "
+                            + "on a `Modules:RequirePrebuilt` mesh, rebake the package for THIS "
+                            + "identity."
                     },
                     options);
             case CompilationStatus.Unknown:

@@ -193,6 +193,23 @@ internal static class NodeTypeDataModelAreas
         var def = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
         var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
 
+        // 🚨 ADOPT-TIME IDENTITY GATE (#3472). This is one of the six load paths that never
+        // consulted NodeTypeCompilationHelpers.HasUsableBuild, so a record naming an assembly
+        // built for another framework generation was loaded here on nothing but the two
+        // coordinate fields being populated. Refusing takes the branch a store miss already
+        // takes — the node's own (static / previously bound) configuration — so a data-model
+        // area degrades exactly as it does when the bytes are cold, never worse.
+        if (def != null && NodeTypeBuildIdentity.Refuses(def))
+        {
+            hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(NodeTypeDataModelAreas))
+                .LogError(
+                "{Summary} The data-model area falls back to this node's own configuration. {Recovery}",
+                NodeTypeBuildIdentity.RefusalSummary(node.Path, def),
+                NodeTypeBuildIdentity.RecoveryVerb);
+            return Observable.Return(node.HubConfiguration);
+        }
+
         if (def != null
             && compilationService != null
             && !string.IsNullOrEmpty(def.LatestAssemblyCollection)

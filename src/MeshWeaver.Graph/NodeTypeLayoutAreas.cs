@@ -174,14 +174,22 @@ public static class NodeTypeLayoutAreas
                             $"*{host.Localize("ui.noNodeTypeDefinition")}*")
                         .WithId(AreaFrameClassifier.CompileProgressId);
 
+                // 🚨 THE SCOPED STATUS, never the raw field (#3472). `Ok` is a claim scoped
+                // to CompiledFrameworkVersion: a record that compiled successfully for ANOTHER
+                // platform build reads Ok here and used to redirect the viewer straight back to
+                // the page that cannot render — which then bounces them back to this overlay.
+                // That loop is what a client saw for two and a half hours on 2026-09-06 while
+                // every instrument reported green.
+                var reportedStatus = NodeTypeBuildIdentity.ReportedStatus(def);
+
                 // Compile finished cleanly → redirect to the now-addressable page. The user
                 // only landed here because activation could not complete mid-compile; once
                 // it's Ok the real view resolves, so send them there. "When it ends, we redirect."
-                if (def.CompilationStatus == CompilationStatus.Ok)
+                if (reportedStatus == CompilationStatus.Ok)
                     return (UiControl?)Controls.Redirect(redirectOnOk);
 
                 var nodeName = node.Name ?? node.Id;
-                var (icon, header, body) = RenderProgressLines(def);
+                var (icon, header, body) = RenderProgressLines(host, def, reportedStatus);
                 var stack = Controls.Stack
                     .WithStyle("padding: 12px; gap: 8px;")
                     // Title carries the NodeType name: "⏳ Compiling… — <NodeType>".
@@ -399,7 +407,14 @@ public static class NodeTypeLayoutAreas
         return views;
     }
 
-    private static (string Icon, string Header, string Body) RenderProgressLines(NodeTypeDefinition def)
+    /// <param name="reportedStatus">The status this PROCESS may honestly report —
+    /// <c>NodeTypeBuildIdentity.ReportedStatus</c>, never the raw field. 🚨 The green
+    /// "✓ Compiled" line below was rendered from the raw <c>CompilationStatus</c> alone and
+    /// PRINTED <c>CompiledFrameworkVersion</c> beside it as decoration, without ever comparing it
+    /// — so a type whose every per-instance hub was dead showed the operator a green tick with
+    /// the evidence against it in the same sentence (#3472).</param>
+    private static (string Icon, string Header, string Body) RenderProgressLines(
+        LayoutAreaHost host, NodeTypeDefinition def, CompilationStatus? reportedStatus)
     {
         var hasSource = !string.IsNullOrWhiteSpace(def.Configuration)
             || !string.IsNullOrWhiteSpace(def.HubConfiguration)
@@ -409,7 +424,7 @@ public static class NodeTypeLayoutAreas
         // routing grain re-used the existing assembly without re-running Roslyn.
         // Surface that as a discrete state so the operator sees "we didn't burn
         // CPU to re-prove this assembly works."
-        if (def.CompilationStatus == CompilationStatus.Ok
+        if (reportedStatus == CompilationStatus.Ok
             && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
             && !string.IsNullOrEmpty(def.LatestAssemblyPath))
         {
@@ -419,8 +434,16 @@ public static class NodeTypeLayoutAreas
                 $"Using cached assembly `{coll}/{path}` (compile version `{def.LastCompiledVersion}`, framework `{def.CompiledFrameworkVersion}`).");
         }
 
-        return def.CompilationStatus switch
+        return reportedStatus switch
         {
+            // 🚨 Localized, unlike its English-only siblings on this operator page: this
+            // arm is the one a VIEWER of an ordinary content page reaches, because a foreign
+            // build is precisely the state in which every instance of the type falls back to
+            // this overlay instead of rendering.
+            CompilationStatus.Foreign => ("⚠", host.Localize("ui.compileForeignFramework"),
+                host.Localize("ui.compileForeignFrameworkBody",
+                    Short(def.CompiledFrameworkVersion),
+                    Short(NodeTypeCompilationHelpers.FrameworkVersion))),
             CompilationStatus.Compiling => ("⏳", "Compiling…",
                 $"Running Roslyn against {(def.Sources?.Count ?? 0)} source binding(s). The activity log below streams diagnostics live."),
             CompilationStatus.Pending => ("▶", "Compile queued",
@@ -444,6 +467,13 @@ public static class NodeTypeLayoutAreas
                    "This NodeType has no `Configuration` / `HubConfiguration` / `Sources` — instances activate against the default node-hub config.")
         };
     }
+
+    /// <summary>First eight characters of a framework build identity — the same width the
+    /// assembly-store filename tag carries, so a page and a DLL name compare by eye.</summary>
+    private static string Short(string? identity)
+        => string.IsNullOrEmpty(identity)
+            ? "(none)"
+            : identity[..Math.Min(8, identity.Length)];
 
     /// <summary>
     /// Shared shell for every primary NodeType area: a horizontal splitter with the

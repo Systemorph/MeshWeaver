@@ -505,6 +505,8 @@
   "ui.compileTypesReady": "{0} von {1} Typen kompiliert",
   "ui.compileNowCompiling": "Wird gerade kompiliert: {0}",
   "ui.compileQueued": "{0} weitere in der Warteschlange",
+  "ui.compileForeignFramework": "Für einen anderen Plattform-Build kompiliert",
+  "ui.compileForeignFrameworkBody": "Die letzte Kompilierung war ERFOLGREICH — für den Plattform-Build `{0}`, während dieses Portal `{1}` ausführt. Diese Bytes können hier nicht geladen werden, daher lassen sich die Seiten dieses Typs noch nicht darstellen. **Am Code ist nichts falsch.** Dieser Typ wird automatisch gegen die laufende Plattform neu gebaut.",
   "ui.noNodeTypeDefinition": "Dieser Knoten hat keine NodeTypeDefinition — nichts zu kompilieren.",
   "ui.noConfiguration": "Keine Konfiguration definiert.",
   "ui.noConfigLambda": "Kein Konfigurations-Lambda definiert.",

@@ -153,6 +153,25 @@ internal sealed class CellSurfaceAssemblyProvider(
             return Observable.Return<CellSurfaceAssembly?>(null);
         }
 
+        // ── 🚨 #3472 — the adopt-time framework-identity gate, third enforcement site. ──
+        // The cell surface is the most directly armed load path there is (every script submission
+        // in the session can then call the pack's functions by bare name), it loads straight
+        // through NodeAssemblyLoadContext with no enrichment, and it takes a lifetime LEASE — so
+        // an ABI-stale assembly joined here stays mapped and executable for the whole session.
+        // It gated on CompilationStatus == Ok alone, and Ok is a claim scoped to
+        // CompiledFrameworkVersion: the pair is what has to be read, never the verdict by itself.
+        //
+        // Error, not Warning, and for the same reason as the provenance refusal above: this is a
+        // verdict about the bytes that only a rebuild or a rebake changes.
+        if (NodeTypeBuildIdentity.Refuses(definition))
+        {
+            logger.LogError(
+                "{Summary} It is NOT being joined into this kernel session's cell surface. {Recovery}",
+                NodeTypeBuildIdentity.RefusalSummary(node.Path, definition),
+                NodeTypeBuildIdentity.RecoveryVerb);
+            return Observable.Return<CellSurfaceAssembly?>(null);
+        }
+
         if (definition.CompilationStatus is not CompilationStatus.Ok
             || definition.LastCompiledVersion is null)
         {

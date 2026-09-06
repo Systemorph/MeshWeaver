@@ -52,5 +52,32 @@ public enum CompilationStatus
     /// Appended LAST so the persisted ordinal of every existing member is
     /// unchanged.</para>
     /// </summary>
-    Unavailable
+    Unavailable,
+
+    /// <summary>
+    /// 🚨 <b>DERIVED, NEVER PERSISTED.</b> The last compile SUCCEEDED — for a framework build
+    /// identity that is not this process's, so the bytes it named cannot be loaded here. Nothing is
+    /// wrong with the source and nothing is unavailable; the remedy is a local recompile against
+    /// the live framework, which the compile watcher drives on its own.
+    ///
+    /// <para><b>Why a fourth state rather than reusing one.</b> Each of the three candidates
+    /// carries a different remedy, and all three are wrong here.
+    /// <see cref="Error"/> says <i>correct the code</i> — the code is fine, and conflating the two
+    /// is exactly the #641 defect in the other direction. <see cref="Unavailable"/> says <i>retry
+    /// or wait</i> — the state is fully determined and waiting is precisely what does not help.
+    /// <see cref="Ok"/> is the lie this member exists to stop: on 2026-09-06 two CRM types on a
+    /// client portal read <c>Ok</c> for two and a half hours while every one of their per-instance
+    /// hubs was dead, because <c>Ok</c> is a claim scoped to
+    /// <c>NodeTypeDefinition.CompiledFrameworkVersion</c> and every instrument read only the
+    /// verdict, never its scope (Systemorph/MeshWeaver#3472).</para>
+    ///
+    /// <para>🚨 <b>It is computed by the READER and is never written to a record.</b> "Can this
+    /// build be loaded" is answerable only relative to a process, so two replicas on two images
+    /// legitimately disagree — and persisting a reader-relative verdict into a shared record is how
+    /// the same incident's ping-pong (#3395) was made. The record keeps saying what the compiler
+    /// did; only the report is scoped. <c>NodeTypeBuildIdentity.ReportedStatus</c> is the one
+    /// function that derives it. Appended LAST so the persisted ordinal of every existing member is
+    /// unchanged.</para>
+    /// </summary>
+    Foreign
 }
