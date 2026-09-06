@@ -470,6 +470,10 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
     public IObservable<bool> Exists(string path) => inner.Exists(path);
 
     /// <inheritdoc />
+    public IObservable<bool> ExistsInWritableStorage(string path)
+        => inner.ExistsInWritableStorage(path);
+
+    /// <inheritdoc />
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
         => inner.FindBestPrefixMatch(fullPath, options);
