@@ -103,8 +103,15 @@ Three things the fleet's own entries show, none of which was written down anywhe
   `false`; `PreWarm__GateReadiness` runs `false` on `memex-cloud` while the ConfigMap says `true`,
   which renders the NodeType bake gate inert there. Removing that one entry is what *arms* the gate
   on `memex-cloud` — the opposite act to `memex`, where the inline entry already agrees.
-- **Some have no other home at all.** `Features__Ai__Clis__ClaudeCode` / `__Copilot` on `memex`, and
-  `Speech__{Endpoint,Enabled,Language}` on `memex-cloud`, correspond to no chart key whatsoever.
+- **Some have no other home today.** `Features__Ai__Clis__ClaudeCode` / `__Copilot` on `memex`, and
+  `Speech__{Endpoint,Enabled,Language}` and `Commerce__BaseUrl` on `memex-cloud`, are supplied by
+  the inline entry alone. Be precise about why: the chart *can* render each of them, but only when
+  the values file declares the key (`{{- if hasKey .Values.config.memex_portal "…" }}`), and no
+  committed file declares any of them — so the ConfigMap carries no such key at all and the inline
+  entry is the only source on the pod. Putting them in the record's `extraPortalConfig` is what
+  would give them a ConfigMap home. `PluginCatalog__RegistryUrl` is the other shape: the chart
+  renders it *unconditionally* from `pluginCatalog.registryUrl | default ""`, so the ConfigMap
+  carries it **empty** and the inline entry stands over a blank.
 
 ### Never a credential's value
 

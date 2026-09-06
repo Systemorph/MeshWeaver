@@ -137,9 +137,18 @@ public static class PublishedBundleCatalogue
     /// nothing (the seeder would skip it, so a gate that counted it would clear a release the
     /// portal then recompiles).
     ///
-    /// <para>Public because it is also the deployment gate's "what am I adopting TODAY" reading —
-    /// asked of the RUNNING identity to decide which installed packages are content-bearing at
-    /// all, which is what keeps the gate a regression check instead of a permanent freeze.</para>
+    /// <para>🚨 <b>This was the deployment gate's denominator, and it must never be that again
+    /// (#3441).</b> Asked of the RUNNING identity to decide which installed packages are
+    /// content-bearing, it made the expected set a function of the artifact store the gate was
+    /// about to judge: a package whose bake broke left the set and every later roll was green
+    /// about it. The gate now reads
+    /// <see cref="EverSealedBundles(string?, ILogger?)"/> instead. This overload answers the
+    /// narrower factual question — <i>what is sealed under THIS one identity</i> — which remains a
+    /// legitimate reading (it is what the boot seeder effectively resolves, and what
+    /// <c>ReleaseGateDenominatorTest</c> uses to reproduce the old verdict as its negative
+    /// control). It has no production caller today; kept public deliberately rather than deleted,
+    /// because a public surface here can have in-mesh and satellite callers the compiler cannot
+    /// see.</para>
     /// </summary>
     public static ImmutableHashSet<string> SealedBundlesForIdentity(
         string? publishedRoot, string? identity, ILogger? logger = null)
@@ -150,6 +159,113 @@ public static class PublishedBundleCatalogue
         if (!Directory.Exists(identityDirectory))
             return ReleaseArtifacts.Of([]).SealedBundles;
         return ReleaseArtifacts.Of(SealedBundleNames(identityDirectory, logger)).SealedBundles;
+    }
+
+    /// <summary>
+    /// 🚨 <b>The deployment gate's DENOMINATOR, and it must not come from the artifact under
+    /// judgement (#3441).</b> Every bundle id this root has EVER sealed, across every framework
+    /// identity it holds — plus how many identities actually carried a sealed publication, so a
+    /// caller can tell "this root serves no bakes" from "this root serves bakes and this package
+    /// is not among them".
+    ///
+    /// <para><b>Why not simply ask the LIVE identity.</b> That is what the gate used to do, and it
+    /// is the vacuous-denominator shape this repo forbids elsewhere: a package counted as
+    /// content-bearing exactly when it had a sealed bundle under the identity running NOW, read
+    /// from the same store the gate was about to judge. So a package whose bake BROKE silently
+    /// left the denominator and every later roll was green about it — the gate stopped asking
+    /// about precisely the package that had stopped being baked. In the limit, an identity with no
+    /// publication at all made every installed package non-content-bearing and the content half of
+    /// the gate checked NOTHING while reporting a pass, which is "0 expected, 0 found, green".
+    /// That is the state the maintainer named: <i>"we kept rolling without edu being properly
+    /// baked"</i>.</para>
+    ///
+    /// <para><b>Why this is independent.</b> The judgement is about the TARGET release's identity
+    /// directory; the denominator is read from the OTHER identity directories — publications made
+    /// by earlier CD waves, which the run under judgement cannot have written. And it is MONOTONE:
+    /// a package that has once shipped a bake can never silently leave the denominator, so a bake
+    /// that regresses to nothing is a HOLD rather than an exemption.</para>
+    ///
+    /// <para><b>Why it still cannot freeze an environment.</b> A package that has never sealed a
+    /// bundle under any identity — a module-only or NodeType-less package, which produces no
+    /// bundle ever — is still not demanded, exactly as before. The exemption is preserved; only
+    /// its EVIDENCE moved from "one identity's answer today" to "any identity's answer ever".</para>
+    ///
+    /// <para>🚨 <b>The cost of monotone, stated honestly.</b> A package that legitimately STOPS
+    /// shipping content — its last NodeType removed while it stays installed — produces no bundle
+    /// for the target identity and will hold, and keep holding; uninstalling it clears the hold
+    /// (the outer set is the environment's install records), re-baking does not. That is a
+    /// deliberate trade against the erosion bug, and the direction is chosen: the old failure was
+    /// SILENT (rolling onto content that was not there), this one is LOUD — named on the policy
+    /// node and re-evaluated every tick. A gate that is visibly wrong can be acted on; one that is
+    /// invisibly wrong cannot.</para>
+    ///
+    /// <para>🚨 <b>It reads each source's sentinel DECLARATION, not a per-bundle presence check</b>
+    /// (<see cref="DeclaredBundlesOf"/>). That is deliberate in both directions: inclusive, because
+    /// a torn publication that once listed a package should keep that package in the set the gate
+    /// asks about (which can only HOLD, never exempt); and cheap, because this reads EVERY identity
+    /// on a network share against a 60 s verdict budget, and a denominator expensive enough to time
+    /// out would answer <see cref="PackageAvailabilityKind.Indeterminate"/> and freeze every
+    /// environment. The full presence check stays exactly where it decides the verdict —
+    /// <see cref="ArtifactsForIdentity"/>, on the target identity.</para>
+    /// </summary>
+    public static SealedBundleFloor EverSealedBundles(string? publishedRoot, ILogger? logger = null)
+    {
+        // 🚨 "I could not look" is NOT "there is nothing here", and the difference decides the
+        // verdict: an unreadable root must HOLD (Indeterminate), while a readable root that holds
+        // no publication is the one stated applicability exemption. A configured root that does not
+        // EXIST is the mis-mount / mistyped-path case — the deployment declares it consumes CI
+        // bakes and its storage is not there — so it is a refusal, never an exemption. Collapsing
+        // the two is the same vacuity this whole method exists to remove.
+        if (string.IsNullOrWhiteSpace(publishedRoot))
+            return SealedBundleFloor.Unreadable(
+                $"no published bundle root is configured ({ShippedPrebuiltBundles.PublishedRootConfigKey})");
+        if (!Directory.Exists(publishedRoot))
+            return SealedBundleFloor.Unreadable(
+                $"the configured published bundle root '{publishedRoot}' does not exist — this "
+                + "deployment declares that it consumes CI bakes, so an absent root is an "
+                + "unreadable one (a volume that did not mount, or a mistyped path), not evidence "
+                + "that nothing is published. Cannot determine ≠ clear to proceed.");
+
+        var bundles = new List<string>();
+        var identities = 0;
+        try
+        {
+        foreach (var identityDirectory in Directory.EnumerateDirectories(publishedRoot)
+                     .OrderBy(d => d, StringComparer.Ordinal))
+        {
+            // The release-marker directory holds version→identity FILES, never a publication.
+            // Skipping it by name keeps "how many identities published" honest — it would
+            // contribute no bundles either way, but it would not be an identity.
+            if (string.Equals(
+                    Path.GetFileName(identityDirectory),
+                    ReleaseMarkerDirectoryName,
+                    StringComparison.Ordinal))
+                continue;
+            // The sentinel's DECLARATION, not a per-bundle presence check — see DeclaredBundlesOf
+            // for why the denominator must be both inclusive and cheap.
+            var declaredHere = Directory.EnumerateDirectories(identityDirectory)
+                .OrderBy(d => d, StringComparer.Ordinal)
+                .Select(DeclaredBundlesOf)
+                .Where(listing => listing is not null)
+                .SelectMany(listing => listing!)
+                .ToList();
+            if (declaredHere.Count == 0)
+                continue;
+            identities++;
+            bundles.AddRange(declaredHere);
+        }
+        }
+        catch (Exception ex)
+        {
+            // An IO fault against the share is an availability incident, and it must be
+            // distinguishable from an empty root for exactly the reason above.
+            logger?.LogWarning(ex,
+                "ReleaseAvailability: could not read the published bundle root {Root} while "
+                + "establishing which packages must carry a sealed bake", publishedRoot);
+            return SealedBundleFloor.Unreadable(
+                $"the published bundle root '{publishedRoot}' could not be read ({ex.Message})");
+        }
+        return new SealedBundleFloor(ReleaseArtifacts.Of(bundles).SealedBundles, identities);
     }
 
     /// <summary>
@@ -504,6 +620,41 @@ public static class PublishedBundleCatalogue
         CompleteBundlesOf(sourceDirectory, logger) is not null;
 
     /// <summary>
+    /// What a source directory's sentinel DECLARES was shipped, without verifying that each listed
+    /// bundle is still on disk. Null when there is no sentinel at all.
+    ///
+    /// <para>🚨 <b>Deliberately weaker than <see cref="CompleteBundlesOf"/>, and only ever used for
+    /// the DENOMINATOR (#3441).</b> Two reasons, and both point the same way:</para>
+    ///
+    /// <para><b>Semantics.</b> "Has this package ever shipped a bake?" is answered by the
+    /// publisher's own declaration. Whether every byte is still present is a question about what
+    /// can be ADOPTED NOW — the numerator — which <see cref="ArtifactsForIdentity"/> answers with
+    /// the full check, for the target identity, where it decides the verdict. Being INCLUSIVE here
+    /// is the safe direction: a publication that once listed a package keeps that package in the
+    /// set of things the gate asks about, which can only HOLD a roll, never exempt one.</para>
+    ///
+    /// <para><b>Cost, which is a correctness concern here.</b> The denominator reads EVERY identity
+    /// the root holds, and the published root is a network share (Azure Files over SMB on AKS).
+    /// Verifying presence would cost one stat per bundle per source per identity — on the order of
+    /// thousands of round trips per poll tick once identities accumulate — against a gate whose
+    /// whole verdict is bounded at 60 s. Blowing that bound answers
+    /// <see cref="PackageAvailabilityKind.Indeterminate"/>, which HOLDS: a denominator expensive
+    /// enough to time out would freeze every environment, turning this gate into the outage it
+    /// exists to prevent. Reading the sentinel alone is one file read per source.</para>
+    /// </summary>
+    private static IReadOnlyList<string>? DeclaredBundlesOf(string sourceDirectory)
+    {
+        var sentinel = Path.Combine(
+            sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+        if (!File.Exists(sentinel))
+            return null;
+        return File.ReadAllLines(sentinel)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToList();
+    }
+
+    /// <summary>
     /// Which sources are COMPLETE under one identity — the BUILD gate's question (#1755), asked per
     /// producing repo rather than per package.
     ///
@@ -618,3 +769,40 @@ public readonly record struct SealedModuleAssembly(string Name, string Mvid, boo
 /// <param name="Target">The release, with its framework identity resolved (or not).</param>
 /// <param name="Artifacts">What is sealed for it.</param>
 public sealed record ReleaseObservation(ReleaseTarget Target, ReleaseArtifacts Artifacts);
+
+/// <summary>
+/// 🚨 The deployment gate's DENOMINATOR (#3441) — what a published root has ever demonstrably been
+/// able to serve, read across every framework identity it holds rather than from the one identity
+/// the gate is about to judge. See
+/// <see cref="PublishedBundleCatalogue.EverSealedBundles(string?, Microsoft.Extensions.Logging.ILogger?)"/>
+/// for why the denominator may not be taken from the artifact under judgement.
+/// </summary>
+/// <param name="Bundles">Every bundle id sealed under ANY identity in the root, extension
+/// stripped and case-insensitive — the same spelling <see cref="ReleaseArtifacts.SealedBundles"/>
+/// uses, so the two sets compare directly.</param>
+/// <param name="Identities">How many framework-identity directories carried at least one SEALED
+/// source. 🚨 ZERO is the load-bearing value: it means this root serves no bakes at all, so
+/// "package X has never been sealed" carries NO information about X and must not be read as an
+/// exemption. A caller that cannot tell that case apart is back to a denominator that can be
+/// vacuously empty.</param>
+/// <param name="Refusal">Why the root could not be READ, or null when it was. 🚨 Non-null is a HOLD
+/// and never an exemption: an absent or unreadable root on a deployment that declares it consumes
+/// CI bakes is a mis-mount or an IO incident, not evidence that nothing is published. Collapsing
+/// "could not look" into "nothing here" is the vacuity this type exists to remove.</param>
+public sealed record SealedBundleFloor(
+    ImmutableHashSet<string> Bundles, int Identities, string? Refusal = null)
+{
+    /// <summary>A root that was READ and holds no sealed publication under any identity.</summary>
+    public static SealedBundleFloor Empty { get; } =
+        new(ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase), 0);
+
+    /// <summary>An observation that could not be made — the fail-safe constructor.</summary>
+    public static SealedBundleFloor Unreadable(string reason) =>
+        new(ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase), 0, reason);
+
+    /// <summary>Whether this root serves CI bakes at all — the precondition for reading an absent
+    /// bundle as "this package ships no content" rather than as "we have observed nothing".
+    /// False for an unreadable observation too, which is why callers must test
+    /// <see cref="Refusal"/> FIRST: the two share this answer and mean opposite things.</summary>
+    public bool ServesBakes => Refusal is null && Identities > 0;
+}

@@ -16,7 +16,16 @@ namespace MeshWeaver.Payments;
 /// </summary>
 public sealed record PaymentCheckoutRequest
 {
-    /// <summary>The caller's own handle for this purchase (an order path). Travels back verbatim.</summary>
+    /// <summary>
+    /// The caller's own handle for this purchase (an order path), for the PROVIDER's records — it is
+    /// what makes a session traceable to an order in the processor's own dashboard.
+    ///
+    /// <para>🚨 It is NOT how the facts come back. A delivery hands back
+    /// <see cref="PaymentCheckoutEvent.Metadata"/>, and nothing else; a caller that needs its
+    /// reference on fulfilment stamps it there too — which is exactly what
+    /// <see cref="PaymentMetadata.OrderPath"/> is. Deliberate: one map, read one way, rather than
+    /// two channels that can disagree about which purchase a payment was for.</para>
+    /// </summary>
     public required string Reference { get; init; }
 
     /// <summary>What the buyer sees on the provider's page.</summary>
