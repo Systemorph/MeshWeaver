@@ -119,7 +119,7 @@ public static class CatalogLayoutAreas
         return host.Workspace.GetMeshNodeStream()
             .Select(node => node.ContentAs<PluginCatalogContent>(host.Hub.JsonSerializerOptions))
             .Select(cfg => RenderFromSource(
-                host, BuildSource(host, cfg?.SourceRepoPath, cfg?.SourceSubdir),
+                host, BuildSource(host, cfg?.SourceRepoPath, cfg?.SourceSubdir, cfg?.Format),
                 cfg?.SourceRef ?? "HEAD", cfg?.Description,
                 cfg?.SourceRepoPath is { Length: > 0 } p ? $"{p} @ {cfg.SourceRef}" : null))
             .Switch()
@@ -405,8 +405,10 @@ public static class CatalogLayoutAreas
 
     // Selects the git-based package source for a repo path/subdir (delegates to the shared factory so
     // the node view and the registry endpoints build sources identically). Null when unconfigured.
-    internal static IPackageSource? BuildSource(LayoutAreaHost host, string? sourceRepoPath, string? sourceSubdir) =>
-        PackageSources.FromRepo(host.Hub, sourceRepoPath, sourceSubdir, Logger(host));
+    internal static IPackageSource? BuildSource(
+        LayoutAreaHost host, string? sourceRepoPath, string? sourceSubdir, string? format = null) =>
+        PackageSources.FromRepo(
+            host.Hub, sourceRepoPath, sourceSubdir, Logger(host), PackageSources.IsNodeRepoFormat(format));
 
     /// <summary>
     /// The live installed-plugin inventory: every <c>Package</c> record in the install registry,
