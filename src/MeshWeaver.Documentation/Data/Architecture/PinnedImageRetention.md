@@ -193,7 +193,32 @@ the only one unique to the aggressive task is `mw-plugin-test`, and that is the 
 
 That is what "diverged" costs: the hardened task's reasoning does not apply to the repositories that
 matter, and a maintainer adding a repository has to know which of two lists is the one that governs.
-**One task, one filter list, one window** removes the choice by construction.
+**One task, one filter list** removes the choice by construction. Note what that must *not* quietly
+become: see the next section before writing the merged window.
+
+### 🚨 Merging the tasks must not tighten `memex-portal` as a side effect
+
+The two lists differ by exactly two repositories, and they are not symmetric:
+
+- `mw-plugin-test` is unique to the **7-day** task. It is the one that broke.
+- **`memex-portal` is unique to the 30-day task**, and it is the **production portal** image
+  repository.
+
+So the obvious merge — union the filters, keep the stricter window — would move `memex-portal` from
+`--ago 30d` to `--ago 7d --keep 10` **without anyone deciding to**. That is a real tightening on the
+one repository where it is least affordable, and this page's own guard cannot cover it:
+
+🚨 **`memex-portal` is pinned on the OTHER axis — committed image TAGS in the deployment overlays,
+not digests in CI workflows** (Memex#141, where a portal tag that still resolved while its migration
+twin was gone left a Job in `ImagePullBackOff` 639 times in 146 minutes). `check-pinned-digests.py`
+reads `.github/workflows` and would enumerate **none** of those, so a lock set derived from it alone
+would leave every overlay-pinned manifest unlocked while the window that deletes them got shorter.
+Memex#122's victim was pinned exactly that way.
+
+Therefore the merge below is **behaviour-preserving by design**: it removes the second *task*, not
+the second *window*. One task, one place to edit, two steps whose windows are each what they already
+are today. Changing `memex-portal`'s window is a separate decision that must be taken on its own
+evidence — never as a side effect of tidying two task definitions into one.
 
 ### The mechanism that protects a pin: lock the manifest
 
@@ -203,8 +228,11 @@ passes. So a lock is a hard protection against this exact purge configuration, n
 
 The self-maintaining shape is:
 
-1. Derive the live pin set from the fleet's workflows — the guard above already does exactly this,
-   and it is the same list.
+1. Derive the live pin set. 🚨 **It is the UNION of two axes, and the guard above supplies only the
+   first**: digests pinned in the satellites' CI workflows (`check-pinned-digests.py`) *and* image
+   tags pinned in the deployment overlays (`Systemorph/Memex`'s `scripts/check-image-pins.py`). A
+   lock set built from either axis alone leaves the other axis's manifests unprotected, which is how
+   `memex-portal` and `memex-website` get deleted while every CI pin looks after itself.
 2. Lock every currently-pinned manifest.
 3. Report every locked manifest that nothing pins any more, so a pin move releases the old one.
 
@@ -239,9 +267,14 @@ az acr repository update --name meshweaver \
   --delete-enabled true --write-enabled true
 ```
 
-Collapse the two tasks into one. `az acr task update` replaces the task's inline YAML; write the
-union of both filter lists, keep the reasoning **in the task** as the hardened one already does, and
-delete the redundant task in the same sitting so there is only ever one list to edit:
+Collapse the two tasks into one. `az acr task update` replaces the task's inline YAML; keep the
+reasoning **in the task** as the hardened one already does, and delete the redundant task in the same
+sitting so there is only ever one list to edit.
+
+🚨 **Two steps, not one, and that is deliberate.** Unioning the filters under the stricter window
+would drag `memex-portal` from 30 days to `7d --keep 10` as a side effect — see the section above.
+This removes the second TASK while preserving each repository's current effective window exactly, so
+the change is reviewable as "one list instead of two" and nothing else:
 
 ```bash
 cat > purge.yaml <<'YAML'
@@ -257,9 +290,19 @@ version: v1.1.0
 # MeshWeaver#3438 — a repository that IS continuously republished still holds PINNED digests, and
 # `--keep` is counted in newer builds, so republishing is what destroys a pin. Protection is per
 # MANIFEST, not per repository: pinned manifests are locked (delete-enabled false) and `acr purge`
-# skips locked manifests unless `--include-locked` is passed. Never pass it here.
+# skips locked manifests unless `--include-locked` is passed. NEVER pass it here.
+#
+# TWO STEPS ON PURPOSE. Merging the lists must not silently retune a window. `memex-portal` is the
+# production portal image and was only ever on the 30-day window; it is also pinned on the OTHER
+# axis (committed tags in the deployment overlays, Memex#141), which the CI-workflow pin scan does
+# not enumerate. Tightening it is a separate decision with its own evidence.
 steps:
-  - cmd: acr purge --filter 'mw-plugin-test:.*' --filter 'memex-migration:.*' --filter 'memex-portal-ai:.*' --filter 'memex-portal-next:.*' --filter 'memex-portal:.*' --filter 'memex-bake:.*' --ago 7d --keep 10 --untagged
+  # CI images: rebuilt many times a day, pinned by digest from the satellites' workflows.
+  - cmd: acr purge --filter 'mw-plugin-test:.*' --filter 'memex-migration:.*' --filter 'memex-portal-ai:.*' --filter 'memex-portal-next:.*' --filter 'memex-bake:.*' --ago 7d --keep 10 --untagged
+    disableWorkingDirectoryOverride: true
+    timeout: 3600
+  # Production portal image: unchanged 30-day window, no --keep. Do not fold into the step above.
+  - cmd: acr purge --filter 'memex-portal:.*' --ago 30d --untagged
     disableWorkingDirectoryOverride: true
     timeout: 3600
 YAML
