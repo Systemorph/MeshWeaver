@@ -46,20 +46,31 @@ shape of the first incident, and it is the one people believe is safe.
 THE ESCAPE HATCH
 ----------------
 Sometimes the change is right and the fleet is moved deliberately. `scripts/record-signatures.allow`
-takes one fully-qualified type per line with a trailing reason. An entry is a statement that the
-atomic move is planned, not a way to make the gate quiet — so it must be deleted once the change
-has shipped, and a stale entry (listed, but the record no longer differs) FAILS, exactly like the
-repo's other ratchets.
+takes one fully-qualified type per line, then the PULL REQUEST the entry travels with, then a
+reason:
+
+    Rail  #3414 — the two order-losing buckets become one ordered sequence …
+
+An entry is a statement that the atomic move is planned, not a way to make the gate quiet, and it
+is TRANSITIONAL: `scripts/transitional_allow.py` scopes it to the diff that introduces it and
+resolves the pull request it names, so it expires on merge by mechanism rather than by a comment
+asking a future reader to delete it (#3422 — that comment was ignored and reddened every
+C#-touching pull request in the fleet for ~40 minutes). A LIVE entry that matches nothing in the
+diff carrying it still FAILS, exactly like the repo's other ratchets; an entry the merge base
+already carries is INERT — it allows nothing and fails nothing.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+import transitional_allow as ta
 
 ALLOW_FILE = "scripts/record-signatures.allow"
 
@@ -199,33 +210,23 @@ def compare(name: str, before: list[Param], after: list[Param], path: str) -> li
     return out
 
 
-def read_allow(root: Path) -> dict[str, str]:
-    path = root / ALLOW_FILE
-    if not path.exists():
-        return {}
-    entries: dict[str, str] = {}
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        name, _, reason = line.partition(" ")
-        entries[name.strip()] = reason.strip()
-    return entries
-
-
 def git(root: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(root), *args],
                           capture_output=True, text=True).stdout
 
 
-def run(root: Path, base: str) -> int:
+def run(root: Path, base: str, resolve, this_pr: int | None = None) -> int:
+    # 🚨 The allow file is judged BEFORE the early return on "no changed C# files". A pull request
+    # that adds an entry while changing no C# would otherwise slip past having declared an
+    # allowance nothing checked — the same shape as a gate that skips on a missing input.
+    judgements, landed = ta.judge(root, ALLOW_FILE, base, resolve, this_pr=this_pr)
+    allow = ta.in_force(judgements)
+    allow_lines = ta.report(ALLOW_FILE, judgements, landed)
+    allow_failures = ta.failures(judgements)
+
     changed = [f for f in git(root, "diff", "--name-only", f"{base}...HEAD").splitlines()
                if f.endswith(".cs") and "/obj/" not in f and "/bin/" not in f]
-    if not changed:
-        print("no changed C# files — nothing to check")
-        return 0
 
-    allow = read_allow(root)
     findings: list[Finding] = []
     hit_allow: set[str] = set()
 
@@ -245,25 +246,36 @@ def run(root: Path, base: str) -> int:
                 else:
                     findings.append(f)
 
-    stale = sorted(set(allow) - hit_allow)
+    # An entry this diff INTRODUCES and then matches nothing with is the classic stale entry —
+    # and it now fires only on the branch that carries the line, which is its author's own pull
+    # request. An entry the merge base already carried is inert and is never counted here: that
+    # is #3422's fleet-wide red, and it is gone by construction rather than by a reminder.
+    unmatched = sorted(set(allow) - hit_allow)
 
+    for line in allow_lines:
+        print(line)
     for f in findings:
         print(f"\n✗ {f.file}\n    record {f.record} — {f.kind}\n        {f.detail}")
-    for name in stale:
-        print(f"\n✗ {ALLOW_FILE} lists `{name}`, but its primary constructor no longer differs.\n"
-              f"    An allow entry says an atomic move is PLANNED. Once it has shipped the entry is\n"
-              f"    a lie that hides the next break — delete the line.")
+    for name in unmatched:
+        print(f"\n✗ {ALLOW_FILE} entry `{name}` is added by this diff, but that record's primary\n"
+              f"    constructor does not differ from the merge base. An allow entry says an atomic\n"
+              f"    move is PLANNED — one that permits nothing is a lie that hides the next break.\n"
+              f"    Delete the line, or make the change it was written for.")
 
-    if findings or stale:
-        print(f"\n🚨 {len(findings)} binary-breaking record change(s), {len(stale)} stale allow entr(ies).")
+    if findings or unmatched or allow_failures:
+        print(f"\n🚨 {len(findings)} binary-breaking record change(s), {len(unmatched)} allow "
+              f"entr(ies) permitting nothing, {len(allow_failures)} unusable allow entr(ies).")
         print("   A module and the platform it loads into must agree on this signature EXACTLY.")
         print("   There is no image that can serve a mixed set — the host aborts at boot, in both")
         print("   directions. If the change is deliberate, plan the atomic move and add the record")
-        print(f"   to {ALLOW_FILE} with a reason.")
+        print(f"   to {ALLOW_FILE} as `<Record>  #<this pull request> — <reason>`.")
         return 1
 
+    if not changed:
+        print("no changed C# files — nothing to check")
+        return 0
     print(f"✓ {len(changed)} changed C# file(s): no binary-breaking primary-constructor changes"
-          + (f" ({len(allow)} allow entr(ies), all still needed)" if allow else ""))
+          + (f" ({len(allow)} allow entr(ies) in force)" if allow else ""))
     return 0
 
 
@@ -328,8 +340,126 @@ def self_test() -> int:
     check("an attribute is stripped, not counted", len(a) == 2 and a[0].name == "X")
     check("a params modifier is stripped", a[1].name == "Rest")
 
+    # ── the transitional allowance, end to end through run() ─────────────────────────
+    #
+    # 🚨 These call run() on a real repository rather than the classifier in isolation. A guard
+    # whose subject moved and whose roots did not passes having checked nothing: if run() ever
+    # stopped consulting transitional_allow — or went back to reading the allow file whole — the
+    # INERT case below would go red and the LIVE case would go green, so neither can drift quietly.
+    for label, cond, evidence in _allowance_cases():
+        check(label, cond)
+        if not cond:
+            print("       --- what the gate actually printed ---\n       "
+                  + evidence.strip().replace("\n", "\n       "))
+
     print("\nself-test: " + ("PASSED" if not failures else f"{len(failures)} FAILURE(S)"))
     return 1 if failures else 0
+
+
+_RAIL_BEFORE = "namespace N;\npublic sealed record Rail(int A);\n"
+_RAIL_AFTER = "namespace N;\npublic sealed record Rail(int A, int B);\n"
+_OTHER = "namespace N;\npublic sealed record Other(int A);\n"
+_ENTRY = "Rail  #3414 — the two order-losing buckets become one ordered sequence\n"
+
+
+def _allowance_cases() -> list[tuple[str, bool, str]]:
+    """Replay #3422 against the gate itself: an entry lives for one diff and dies with the merge.
+
+    Every case is a real commit on a real repository, because that is the only way the SCOPE half
+    can be exercised at all — "already in the merge base" is a fact about history, not about text.
+    """
+    import contextlib
+    import io
+    import tempfile
+
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    out: list[tuple[str, bool, str]] = []
+
+    def quiet(*args, **kwargs) -> int:
+        """run(), with its report captured — and replayed only when the case FAILS."""
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = run(*args, **kwargs)
+        quiet.last = buffer.getvalue()  # type: ignore[attr-defined]
+        return code
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "scripts").mkdir()
+        allow = root / ALLOW_FILE
+
+        def g(*args: str) -> None:
+            done = subprocess.run(["git", "-C", str(root), *args], capture_output=True,
+                                  text=True, env=env)
+            if done.returncode != 0:
+                raise RuntimeError(f"git {' '.join(args)}: {done.stderr}")
+
+        def rev() -> str:
+            return subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True).stdout.strip()
+
+        def commit(message: str) -> str:
+            g("add", "-A")
+            g("commit", "-qm", message)
+            return rev()
+
+        g("init", "-q", "-b", "main")
+        (root / "Rail.cs").write_text(_RAIL_BEFORE, encoding="utf-8")
+        allow.write_text("# header only\n", encoding="utf-8")
+        base = commit("base")
+
+        # ── the pull request that breaks the signature ────────────────────────────────────
+        g("checkout", "-q", "-b", "the-change")
+        (root / "Rail.cs").write_text(_RAIL_AFTER, encoding="utf-8")
+        commit("break the primary constructor")
+        # THE CONTROL ARM. Without it, a gate that allowed everything would score identically.
+        out.append(("a break with no allow entry FAILS",
+                    quiet(root, base, ta._resolver(ta._state())) == 1, quiet.last))
+
+        allow.write_text("# header only\n" + _ENTRY, encoding="utf-8")
+        commit("declare the allowance")
+        out.append(("…with an entry naming an OPEN pull request it PASSES",
+                    quiet(root, base, ta._resolver(ta._state())) == 0, quiet.last))
+        # \U0001f6a8 An entry written for a merge that has already happened is stale by definition.
+        out.append(("…naming a MERGED pull request it FAILS as stale",
+                    quiet(root, base, ta._resolver(ta._state(merged=True, state="closed"))) == 1, quiet.last))
+        out.append(("…naming a CLOSED-unmerged pull request it FAILS",
+                    quiet(root, base, ta._resolver(ta._state(state="closed"))) == 1, quiet.last))
+        # What #3414's entry actually carried: #3406, the ISSUE.
+        out.append(("…naming an ISSUE it FAILS",
+                    quiet(root, base, ta._resolver(ta._state(isPullRequest=False))) == 1, quiet.last))
+        # \U0001f6a8 The one thing it must never do is pass because it could not tell.
+        out.append(("…with an UNRESOLVABLE reference it FAILS rather than passing",
+                    quiet(root, base, ta._raising("could not reach api.github.com")) == 1, quiet.last))
+        out.append(("…naming a DIFFERENT pull request than the one under test it FAILS",
+                    quiet(root, base, ta._resolver(ta._state()), this_pr=3415) == 1, quiet.last))
+        out.append(("…and naming THIS pull request it PASSES",
+                    quiet(root, base, ta._resolver(ta._state()), this_pr=3414) == 0, quiet.last))
+
+        # ── it merges. Every later pull request now carries the line in its merge base ────
+        g("checkout", "-q", "main")
+        g("merge", "-q", "--no-ff", "-m", "merge the change", "the-change")
+        merged = rev()
+
+        # THE INCIDENT. Before #3422 this printed "1 stale allow entr(ies)" and went RED on every
+        # C#-touching pull request in the fleet for ~40 minutes, while main itself read green.
+        g("checkout", "-q", "-b", "somebody-else", merged)
+        (root / "Other.cs").write_text(_OTHER, encoding="utf-8")
+        commit("an unrelated change")
+        out.append(("a LATER pull request is NOT reddened by the landed entry",
+                    quiet(root, merged, ta._raising("must not be called")) == 0, quiet.last))
+
+        # \U0001f6a8 …and the landed entry allows NOTHING, so a second break on the same record still
+        # fails. That is the property the old stale ratchet existed to protect, kept without the red.
+        g("checkout", "-q", "-b", "the-next-break", merged)
+        (root / "Rail.cs").write_text(
+            "namespace N;\npublic sealed record Rail(int A, int B, int C);\n", encoding="utf-8")
+        commit("break it again")
+        out.append(("…and the landed entry does NOT hide the next break on the same record",
+                    quiet(root, merged, ta._raising("must not be called")) == 1, quiet.last))
+
+    return out
 
 
 def main() -> int:
@@ -337,11 +467,21 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", default="origin/main", help="merge base to compare against")
     ap.add_argument("--root", default=".", help="repository root")
+    ap.add_argument("--pr", type=int, default=None,
+                    help="the pull request under test. When given, an allow entry must name IT — "
+                         "an entry is transitional for ONE change, the one it travels with. A "
+                         "merge_group build has no single pull request, so it is omitted there "
+                         "and the weaker rule (the entry must name an OPEN pull request) applies; "
+                         "nothing reaches the queue without the pull_request run being green.")
+    ap.add_argument("--repo", default=None,
+                    help="owner/name whose pull requests an allow entry may name "
+                         "(default: $GITHUB_REPOSITORY, else Systemorph/MeshWeaver)")
     ap.add_argument("--self-test", action="store_true", help="prove the gate catches the real cases")
     args = ap.parse_args()
     if args.self_test:
-        return self_test()
-    return run(Path(args.root).resolve(), args.base)
+        return max(ta.self_test(), self_test())
+    return run(Path(args.root).resolve(), args.base,
+               ta.resolver_from_env(args.repo), args.pr)
 
 
 if __name__ == "__main__":

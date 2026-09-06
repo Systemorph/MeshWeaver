@@ -5,8 +5,23 @@
 # There is no image that can serve a mixed set of module builds: a consumer compiled against
 # the old arity aborts the host at boot, in both directions.
 #
-# One fully-qualified type per line, then a reason. DELETE the line once the change has shipped:
-# a stale entry FAILS the gate, because an entry that outlives its change hides the next break.
+# One fully-qualified type per line, then the PULL REQUEST this entry travels with, then a
+# reason:
 #
-# Example:
 #   BurstAggregation  #2234 — bundles republished in the same wave, image rolled after
+#
+# 🚨 AN ENTRY IS TRANSITIONAL AND EXPIRES BY MECHANISM, not by anyone remembering (#3422).
+#
+#   * It is in force ONLY in the diff that ADDS it. The moment it merges, the line stops being
+#     an addition, and every later pull request treats it as INERT: it permits nothing, and it
+#     fails nothing. There is nothing here for you to delete on a later day — deleting a landed
+#     line is tidying, never a fix.
+#   * The `#<number>` is a PULL REQUEST in this repository and the gate resolves it. Open, and
+#     the allowance stands. Merged, closed-unmerged, an issue, missing, or unresolvable, and the
+#     gate goes RED naming which: "could not tell" never renders as "allowed".
+#   * An entry that permits nothing in the diff that adds it still FAILS — on that diff, which
+#     is its author's own pull request.
+#
+# The line this replaces read "DELETE the line once the change has shipped". Nobody did, once;
+# for ~40 minutes every C#-touching pull request in the fleet was red on somebody else's merge.
+# See Doc/Architecture/TransitionalAllowEntries.

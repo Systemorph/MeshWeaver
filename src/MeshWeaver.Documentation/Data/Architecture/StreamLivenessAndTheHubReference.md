@@ -363,6 +363,19 @@ which is the exact state this step exists to leave behind. So
 
 ## Related
 
-- `Doc/Architecture/RemovingHandWovenGates` — the sibling rule for gates the actor model cannot hold
-- `Doc/Architecture/AsynchronousCalls` — why every hub-reachable path is `IObservable<T>`
-- Systemorph/MeshWeaver#3321 (this program) · #1455, #2387 (why `StreamLiveness` is one predicate)
+- [The Cross-Repo Pair Gate](/Doc/Architecture/CrossRepoPairGate) → *"Shape 7 in the by-hand sweep"* —
+  why a `!` on the wrong receiver hid all 11 dependent sites, and how to write the sweep that finds
+  them
+- [Hub Disposal Model](/Doc/Architecture/HubDisposalModel) — why `Dispose()` returning is not the
+  teardown having happened, which is what the release hook and the reachability test both turn on
+- [Writing Tests](/Doc/Architecture/WritingTests) → *"A reachability assertion that collects before
+  teardown has finished"* — the flake this step's own test shipped with, and its measurement
+- [Removing Hand-Woven Gates](/Doc/Architecture/RemovingHandWovenGates) — the sibling rule for gates
+  the actor model cannot hold
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — why every hub-reachable path is
+  `IObservable<T>`
+- [Portal Heap Is Hubs](/Doc/Architecture/PortalHeapIsHubs) — the five dumps this step was measured
+  against, and the counter recipe that discriminates retention from fragmentation without one
+- Systemorph/MeshWeaver#3321 (this program, closed) · **#3432** (defect 2 — the 6 925 `Started`
+  `sync/` hubs, ≈2.7 GB, population measured and cause NOT established) · #1455, #2387 (why
+  `StreamLiveness` is one predicate)

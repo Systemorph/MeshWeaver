@@ -147,6 +147,20 @@ A `WeakReference` probe would be a sampling test of a 100 ms window, i.e. the th
 [Subscription Ownership](/Doc/Architecture/SubscriptionOwnership) carries the full treatment, including
 the negative-control table for the two live sites.
 
+**The carve-out, which proves the rule rather than weakening it (#3321).** What makes a
+`WeakReference` a sample is that its truth depends on *when* it is evaluated. Remove the *when* and
+it stops being one. A hub's `Dispose()` returns while its teardown is still running, so the window a
+naive probe samples is "did the shutdown happen to finish yet" — but that window has an explicit end
+signal, `DisposalCompleted`. A probe that **joins the signal and only then collects** is asserting
+something timing-free: *after the owner's teardown is complete, nothing but a kept reference can hold
+it.* That is a property, not a snapshot, and `StreamReleasesItsHubTest` pins it.
+
+So the test is not "is it a `WeakReference`?" but "**does the assertion name the moment it becomes
+true?**" A probe with no such moment — a 100 ms log flush, a 1 s watcher re-establish — has none to
+name and stays a discovery tool. The same page's own lesson applies unchanged, and the measured cost
+of getting this wrong is in [Writing Tests](/Doc/Architecture/WritingTests): without the join, that
+assertion passed in a 485-test suite and failed alone on the same binary.
+
 **The lesson to carry:** if the assertion's truth depends on *when* it is evaluated, it is a sample,
 not a proof. Sampling probes belong in discovery, never in the regression suite as the guard for a
 specific defect.
