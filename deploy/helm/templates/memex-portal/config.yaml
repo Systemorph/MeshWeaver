@@ -415,6 +415,26 @@ data:
   # #2494's safety net. Same typed-key rule as the line above: a real default, never "" — this
   # binds to a TimeSpan and an empty string aborts the host in the configuration binder.
   SelfUpdate__SafetyNetCheckInterval: "{{ .Values.config.memex_portal.SelfUpdate__SafetyNetCheckInterval | default "01:00:00" }}"
+  # ---- Deployment inventory (Doc/Architecture/DeploymentInventory) ---------------------------
+  # Every instance reports what it runs — platform build, commit, framework identity, update policy
+  # and every module's pinned coordinate — to the control instance's Hosting/Modules inbox, once
+  # the default install settles and hourly after. Hosting__Deployment MUST equal this instance's
+  # Hosting/Deployment record id on the control instance; empty = the reporter is INERT (a report
+  # under a guessed id overwrites another instance's inventory, and the fleet page renders that as
+  # fact). The control instance leaves ReportTo empty and files its own record locally. The signing
+  # key is Hosting__ModuleReportSecret — a SECRET (Key Vault via the SecretProviderClass, or
+  # secrets.memex_portal), never a config key. OperationalSpace must resolve the same on both ends.
+  {{- if .Values.config.memex_portal.Hosting__Deployment }}
+  Hosting__Deployment: "{{ .Values.config.memex_portal.Hosting__Deployment }}"
+  {{- end }}
+  {{- if .Values.config.memex_portal.Hosting__ReportTo }}
+  Hosting__ReportTo: "{{ .Values.config.memex_portal.Hosting__ReportTo }}"
+  {{- end }}
+  {{- if .Values.config.memex_portal.Hosting__OperationalSpace }}
+  Hosting__OperationalSpace: "{{ .Values.config.memex_portal.Hosting__OperationalSpace }}"
+  {{- end }}
+  # A TimeSpan: a real default, never "" (the same typed-key rule as SelfUpdate__MinRollInterval).
+  Hosting__ReportInterval: "{{ .Values.config.memex_portal.Hosting__ReportInterval | default "01:00:00" }}"
   WebhookInbox__Targets__0: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0 | default "" }}"
   # 🚨 #3312 — how a target says it is AUTHENTICATED, paired with the slot it authenticates.
   # Names the CONFIGURATION KEY holding that target's shared HMAC (never the secret itself), and

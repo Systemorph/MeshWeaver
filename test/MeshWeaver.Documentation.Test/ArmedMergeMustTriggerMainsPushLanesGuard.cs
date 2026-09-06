@@ -1,6 +1,7 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Xunit;
@@ -48,6 +49,63 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
         "enablePullRequestAutoMerge",
     ];
 
+    /// <summary>
+    /// The <c>gh</c> invocations (and actions) that OPEN a pull request. A pull request created
+    /// with the default token starts no <c>pull_request</c> workflow run at all.
+    /// </summary>
+    private static readonly string[] PullRequestOpeningCommands =
+    [
+        "gh pr create",
+        "peter-evans/create-pull-request",
+    ];
+
+    /// <summary>
+    /// The two spellings of the suppressed credential. <c>${{ github.token }}</c> and
+    /// <c>${{ secrets.GITHUB_TOKEN }}</c> are the SAME token; a guard that knows only one of them
+    /// is a guard the next author walks past by writing the other. Pure.
+    /// </summary>
+    private static bool NamesTheDefaultToken(string line) =>
+        line.Contains("GH_TOKEN", StringComparison.Ordinal)
+        && (line.Contains("secrets.GITHUB_TOKEN", StringComparison.Ordinal)
+            || line.Contains("github.token", StringComparison.Ordinal));
+
+    /// <summary>
+    /// One workflow's <c>steps:</c> entries, as text blocks — everything from a <c>- name:</c> /
+    /// <c>- uses:</c> line up to the next one, with the file's preamble (workflow and job level,
+    /// where a job-wide <c>env:</c> can also set <c>GH_TOKEN</c>) as the first block.
+    ///
+    /// <para>Step scope is what makes a token check honest. A file-wide match reads
+    /// <c>release.yml</c> — which opens its bump pull request with a MINTED token and, four steps
+    /// later, publishes the GitHub Release with the default one — as an offender, and a guard that
+    /// slanders a correct file is a guard people learn to override.</para>
+    ///
+    /// <para>The blind spot, named rather than papered over: a token exported into
+    /// <c>$GITHUB_ENV</c> by an earlier step is invisible here. Nothing in the fleet does that, and
+    /// a guard that claims to see it would be worse than one that says where it stops. Pure.</para>
+    /// </summary>
+    private static string[] StepBlocks(string text)
+    {
+        var lines = text.Split('\n')
+            .Where(l => !l.TrimStart().StartsWith("#", StringComparison.Ordinal))
+            .ToArray();
+        var blocks = new List<string>();
+        var current = new List<string>();
+        foreach (var line in lines)
+        {
+            var trimmed = line.TrimStart();
+            if (trimmed.StartsWith("- name:", StringComparison.Ordinal)
+                || trimmed.StartsWith("- uses:", StringComparison.Ordinal)
+                || trimmed.StartsWith("- run:", StringComparison.Ordinal))
+            {
+                blocks.Add(string.Join('\n', current));
+                current.Clear();
+            }
+            current.Add(line);
+        }
+        blocks.Add(string.Join('\n', current));
+        return [.. blocks];
+    }
+
     private static string WorkflowsDir() =>
         Path.Combine(FindRepoRoot(), ".github", "workflows");
 
@@ -69,9 +127,7 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
             .EnumerateFiles(WorkflowsDir(), "*.yml")
             .Select(path => (path, lines: ExecutableLines(File.ReadAllText(path))))
             .Where(w => w.lines.Any(l => MergingCommands.Any(c => l.Contains(c, StringComparison.Ordinal))))
-            .Where(w => w.lines.Any(l =>
-                l.Contains("GH_TOKEN", StringComparison.Ordinal) &&
-                l.Contains("secrets.GITHUB_TOKEN", StringComparison.Ordinal)))
+            .Where(w => w.lines.Any(NamesTheDefaultToken))
             .Select(w => Path.GetFileName(w.path))
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray();
@@ -237,6 +293,114 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
             + "run (measured on arm-credential.yml, runs 33605406624 and 33605578037).\n"
             + "Use /installation/repositories, which an installation token answers about itself, and "
             + "let the mint's explicit permission-* requests assert the permissions.");
+    }
+
+    /// <summary>
+    /// 🚨 The same suppression, one step earlier: a workflow that OPENS a pull request must not do
+    /// it with the default token either.
+    ///
+    /// <para>GitHub suppresses the <c>pull_request</c> event for anything <c>GITHUB_TOKEN</c>
+    /// creates — the same recursion guard that swallowed the merges in #2916. A bot pull request
+    /// opened that way gets <b>no check runs at all</b>, so on a repository whose branch protection
+    /// requires contexts (MeshWeaver.Plugins requires five) it can never merge, and the state it
+    /// presents is not "failed" but "not started yet", indefinitely.</para>
+    ///
+    /// <para><b>Why that is the worse half.</b> A failing automated bump is read and fixed. A bump
+    /// that opens a pull request nobody's CI touches looks like work in flight, so the pile grows
+    /// while the pin it exists to move stays exactly where it was — automation whose only effect is
+    /// to make the lag harder to notice. <c>node-repo-platform-ref-bump.yml</c> shipped in that
+    /// shape and was never called by any satellite, so it was never observed; it is called now
+    /// (MeshWeaver.Plugins, MeshWeaver.SocialMedia), which is what makes this guard load-bearing
+    /// rather than theoretical.</para>
+    ///
+    /// <para>Both spellings of the credential count. <c>${{ github.token }}</c> is the same token as
+    /// <c>${{ secrets.GITHUB_TOKEN }}</c>, and the lane above used the first one.</para>
+    /// </summary>
+    [Fact]
+    public void NoWorkflowOpensAPullRequestWithTheDefaultToken()
+    {
+        var offenders = Directory
+            .EnumerateFiles(WorkflowsDir(), "*.yml")
+            .Select(path => (path, blocks: StepBlocks(File.ReadAllText(path))))
+            .Where(w =>
+            {
+                var opening = w.blocks
+                    .Where(b => PullRequestOpeningCommands.Any(c => b.Contains(c, StringComparison.Ordinal)))
+                    .ToArray();
+                if (opening.Length == 0)
+                    return false;
+                // The step's own env, and the preamble — a job-wide `env:` reaches every step in it.
+                return opening.Append(w.blocks[0])
+                    .Any(b => ExecutableLines(b).Any(NamesTheDefaultToken));
+            })
+            .Select(w => Path.GetFileName(w.path))
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(
+            offenders.Length == 0,
+            $"These workflows OPEN a pull request using the default token: {string.Join(", ", offenders)}.\n"
+            + "GitHub does not raise a pull_request event for anything GITHUB_TOKEN creates, so the "
+            + "resulting PR gets no check runs — and a repository that requires status contexts can "
+            + "never merge it. It does not read as broken; it reads as 'checks have not started', "
+            + "forever, while the pile of unmergeable bot PRs hides the very lag the automation was "
+            + "added to end.\n"
+            + "Mint a GitHub App installation token (actions/create-github-app-token, "
+            + "permission-contents: write + permission-pull-requests: write), check out with it so "
+            + "the push is the App's, and pass it as GH_TOKEN.");
+    }
+
+    /// <summary>
+    /// The bump lane must name its minted token explicitly, for the same reason the arm lane must:
+    /// deleting the <c>GH_TOKEN</c> line passes the check above while recreating the failure by
+    /// omission, because <c>gh</c> falls back to whatever credential the runner exposes.
+    /// </summary>
+    [Fact]
+    public void ThePlatformRefBumpLaneNamesAMintedInstallationTokenExplicitly()
+    {
+        var path = Path.Combine(WorkflowsDir(), "node-repo-platform-ref-bump.yml");
+        Assert.True(File.Exists(path), $"{path} is missing — the bump lane is the subject of this guard.");
+
+        var lines = ExecutableLines(File.ReadAllText(path));
+
+        Assert.True(
+            lines.Any(l => l.Contains("actions/create-github-app-token", StringComparison.Ordinal)),
+            "node-repo-platform-ref-bump.yml no longer mints a GitHub App installation token. Its "
+            + "pull requests are then opened by whatever identity remains, and if that is the "
+            + "default token no CI runs on them at all.");
+
+        Assert.True(
+            lines.Any(l =>
+                l.Contains("GH_TOKEN", StringComparison.Ordinal) &&
+                l.Contains("steps.bump-token.outputs.token", StringComparison.Ordinal)),
+            "node-repo-platform-ref-bump.yml's PR step does not pass the minted token as GH_TOKEN. "
+            + "Without it gh falls back to the runner's default credential — the same suppressed "
+            + "trigger, by omission rather than by choice.");
+
+        Assert.True(
+            lines.Any(l =>
+                l.Contains("token:", StringComparison.Ordinal) &&
+                l.Contains("steps.bump-token.outputs.token", StringComparison.Ordinal)),
+            "node-repo-platform-ref-bump.yml checks out without the minted token, so the branch is "
+            + "pushed with the default credential. The pull request would then be the App's and the "
+            + "commit the default token's — and a push GITHUB_TOKEN made starts nothing either.");
+
+        foreach (var permission in new[] { "permission-contents: write", "permission-pull-requests: write" })
+        {
+            Assert.True(
+                lines.Any(l => l.Contains(permission, StringComparison.Ordinal)),
+                $"node-repo-platform-ref-bump.yml's token mint no longer requests '{permission}'. "
+                + "Pushing the bump branch needs Contents: write and opening the pull request needs "
+                + "Pull requests: write; requesting both explicitly is what makes a missing grant "
+                + "fail at the mint instead of somewhere downstream.");
+        }
+
+        Assert.True(
+            lines.All(l => !l.Contains("continue-on-error", StringComparison.Ordinal)),
+            "node-repo-platform-ref-bump.yml carries continue-on-error. Unlike auto-arm.yml — where "
+            + "a tolerated mint failure costs one PR its arm and the assertion lives on in "
+            + "arm-credential.yml — nothing else asserts this credential. A tolerated failure here "
+            + "means the pin silently stops being bumped, which is the state the lane exists to end.");
     }
 
     private static string FindRepoRoot()

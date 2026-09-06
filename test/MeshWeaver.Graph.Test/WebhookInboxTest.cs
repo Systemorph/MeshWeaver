@@ -198,6 +198,9 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             [Sign(BuildFact, InstanceSecret)], BuildFact);
 
         result.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
+        result.SignatureVerified.Should().BeTrue(
+            "the ANSWER, not the status, is what a signing publisher reads — this is the flag the "
+            + "endpoint renders as `\"signature\":\"verified\"` and both CD lanes judge (#3338)");
         (await InboxCount("Signed")).Should().Be(1);
     }
 
@@ -281,6 +284,13 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             [new(WebhookInbox.SignatureHeader, "sha256=deadbeef")], "{}");
 
         result.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
+        result.SignatureVerified.Should().BeFalse(
+            "an undeclared target is accepted having verified NOTHING — it renders as "
+            + "`\"signature\":\"not-required\"`, and a publisher that signed must be able to tell "
+            + "that apart from a delivery that WAS checked. This assertion and the one in "
+            + "SignedTarget_WithTheRightSecret_IsAccepted are the pair: if a change makes them "
+            + "agree, the two states are indistinguishable again and the #3338 escalation is "
+            + "judging a constant");
         (await InboxCount("Dumb")).Should().Be(1);
     }
 

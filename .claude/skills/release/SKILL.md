@@ -58,6 +58,11 @@ continuous builds ARE the pre-releases, and `PlatformVersion` always names the n
      | xargs -I{} gh api "repos/Systemorph/MeshWeaver/actions/runs/{}/jobs?per_page=100" \
        --jq '.jobs[] | select(.name | test("Promote|Verify every|bake \\+ seal")) | "\(.name): \(.conclusion)"'
    ```
+   🚨 **Name the target set only AFTER this reads success, and state the requirement as a COMMIT until
+   then** ("the first sealed set cut from `<sha>` or later"). A set's name carries its RUN number, and
+   the one-pending-slot rule cancels the pending run on every merge to `main` while the commit stays
+   valid — 7910 → 7911 → 7912 inside 20 minutes on 2026-09-06. Send a set's name and its digests in
+   ONE message. Full reference: [ContinuousDeliveryContract](../../../src/MeshWeaver.Documentation/Data/Architecture/ContinuousDeliveryContract.md) → "A set is named by its RUN".
 2. **`PlatformVersion` at that commit equals the tag** (`3.0.0` ↔ `v3.0.0`). The lane refuses a
    mismatch; so does it refuse a `-rc`/`-beta` suffix and a lightweight tag.
 3. **The notes page exists at that commit**: `src/MeshWeaver.Documentation/Data/ReleaseNotes/3_0_0.md` (a

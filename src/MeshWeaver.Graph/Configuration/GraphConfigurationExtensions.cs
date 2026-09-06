@@ -257,6 +257,27 @@ public static class GraphConfigurationExtensions
                 // IMessageHub, so the registry checked is the validating hub's own chain.
                 services.AddScoped<INodeValidator, Security.ContentDiscriminatorValidator>();
 
+                // 🚨 THE partition teardown, registered ONCE and matching every partition ROOT
+                // structurally (#3436) — the deletion-side mirror of the single, centralized
+                // OwnsPartitionProvisioningValidator. It used to be registered PER NODETYPE at
+                // AddSpaceType ("Space") and AddUserType ("User"), which meant a partition root
+                // of any other type deleted its nodes and silently kept its Postgres schema and
+                // its Admin/Partition definition. The victims were Store/Plugin roots — an
+                // IN-MESH NodeType, declared in package content, which no src/-side registration
+                // and no NodeTypeDefinition.OwnsPartition scan could have enumerated (it does not
+                // set OwnsPartition at all: the package installer provisions its schema). One
+                // structural registration covers every type, including one installed after boot.
+                services.AddSingleton<INodePostDeletionHandler>(sp =>
+                    new PartitionDropPostDeletionHandler(
+                        sp.GetRequiredService<IMessageHub>(),
+                        sp.GetService<ILoggerFactory>()
+                            ?.CreateLogger<PartitionDropPostDeletionHandler>()));
+                // …and the gate that refuses to start a mesh whose handler set does NOT cover an
+                // arbitrary partition root. Its probe carries a NodeType no registration can have
+                // enumerated, so a regression to per-type keying reds at boot instead of after
+                // the next space deletion. See PartitionTeardownCoverageGate.
+                services.AddHostedService<PartitionTeardownCoverageGate>();
+
                 // Write-boundary guard for the OTHER collision class in the same family
                 // (#2160/#2161/#2162, #2245, #2358): a NodeType declaration (Content IS a
                 // NodeTypeDefinition) must never also claim, via its own MeshNode.NodeType, to

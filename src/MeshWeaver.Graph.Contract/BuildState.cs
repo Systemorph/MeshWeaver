@@ -65,6 +65,67 @@ public sealed record BuildGo(
     string? Detail = null);
 
 /// <summary>
+/// What a read of the durable build root actually established about one framework fingerprint's GO
+/// — THREE states, never two (#3404).
+///
+/// <para>🚨 The third state exists because a failed read and a real negative are different facts,
+/// and code that models only "GO / no GO" has no way to say which it got. A pod that renders "I
+/// could not determine" as "there is no GO" refuses a build it never asked about — which is what
+/// held two <c>memex-cloud</c> rollouts on 2026-09-06.</para>
+/// </summary>
+public enum BuildGoWitness
+{
+    /// <summary>The witness was read and it carries a GO for the requested fingerprint.</summary>
+    Go,
+
+    /// <summary>
+    /// The witness was READ and it carries no GO for the requested fingerprint — a real negative,
+    /// established by an answer. Includes "the durable row does not exist at all": nothing has ever
+    /// been built here, which the store answered rather than failed to answer.
+    /// </summary>
+    NoGo,
+
+    /// <summary>
+    /// 🚨 The witness could not be read, so NOTHING was established. This is not a negative and must
+    /// never be reported as one: the store may be absent, the read may have faulted, or the row may
+    /// have come back in a shape that did not materialize. <see cref="BuildGoReading.Detail"/> always
+    /// says which, and <see cref="BuildGoReading.Error"/> carries the fault when there was one.
+    /// </summary>
+    Undetermined,
+}
+
+/// <summary>
+/// One reading of the durable build root: <see cref="Witness"/> says what was established, and
+/// <see cref="Detail"/> always says how — so a caller can act on the distinction AND report it.
+///
+/// <para>Deliberately not a <c>BuildGo?</c>. A nullable reference can carry the answer but not the
+/// PROVENANCE of the answer, and the provenance is the whole point: the same <c>null</c> licenses a
+/// redundant bake (harmless) and a readiness refusal (a held rollout).</para>
+/// </summary>
+/// <param name="Witness">What this read established.</param>
+/// <param name="Go">The GO record, present exactly when <see cref="Witness"/> is <see cref="BuildGoWitness.Go"/>.</param>
+/// <param name="Detail">Why the reading says what it says — always present, for the log line and the health payload.</param>
+/// <param name="Error">The fault that made the reading undetermined, when there was one.</param>
+public sealed record BuildGoReading(
+    BuildGoWitness Witness,
+    BuildGo? Go,
+    string Detail,
+    Exception? Error = null)
+{
+    /// <summary>The witness answered with a GO for the requested fingerprint.</summary>
+    public static BuildGoReading Found(BuildGo go) =>
+        new(BuildGoWitness.Go, go, $"the durable witness carries the GO recorded at {go.ReadyAt:O}");
+
+    /// <summary>The witness ANSWERED, and the answer is that no GO exists for this fingerprint.</summary>
+    public static BuildGoReading NotRecorded(string detail) =>
+        new(BuildGoWitness.NoGo, null, detail);
+
+    /// <summary>Nothing was established — see <see cref="BuildGoWitness.Undetermined"/>.</summary>
+    public static BuildGoReading Undetermined(string detail, Exception? error = null) =>
+        new(BuildGoWitness.Undetermined, null, detail, error);
+}
+
+/// <summary>
 /// Content of a <c>Build</c> node — the coordination state of the build protocol
 /// (<c>Doc/Architecture/BuildCoordination</c>). The ROOT node (<c>Admin/Build</c>) carries the
 /// build's identity, the chunk plan and the per-fingerprint GO history; each CHUNK node

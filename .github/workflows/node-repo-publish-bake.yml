@@ -1267,11 +1267,8 @@ jobs:
                 echo "### 📣 Publication registered with memex (HTTP $code)"
                 echo "- source: \`$SOURCE\`  identity: \`${IDENTITY:-?}\`  image: \`$IMAGE\`  platform: \`$PLATFORM_IMAGE\`"
                 echo "memex STORED the record. Whether it dispatched meshweaver-upstream-published is read on memex and on the dependents, never here."
-                if grep -Eq '"signature"[[:space:]]*:[[:space:]]*"verified"' /tmp/resp; then
-                  echo "- signature: **verified** — the instance checked this POST's HMAC."
-                else
-                  echo "- signature: **NOT checked** — the instance declares no SecretConfigKey for this target, so a drifted webhook-secret would still be invisible (MeshWeaver#3312)."
-                fi
+                verdict=$(tr -d '\n' < /tmp/resp | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                echo "- signature: **${verdict:-(the answer carried no verdict)}** — judged in the next step."
               } >> "$GITHUB_STEP_SUMMARY"
               ;;
             000) echo "::error::could not reach the inbox at all (DNS/TLS/connection refused) — the publication is sealed but unregistered; no dependent is told until its schedule poll."; exit 1 ;;
@@ -1286,23 +1283,55 @@ jobs:
       # anywhere in `register-publication`, because the lane's whole contract is that a record memex
       # never received goes RED and is never decorated into a pass. This step reports a DIFFERENT
       # thing — the record arrived, but did the instance check the signature while storing it? — and
-      # a guard cannot tell the two apart from a substring, so the plain-echo form is the honest
-      # answer rather than weakening a guard that exists because a delivery failure was once
-      # downgraded to a warning.
+      # a guard cannot tell the two apart from a substring. So this step never WARNS: the state it
+      # can act on is an `::error::` that ends the job (which the guard positively wants — it
+      # already asserts `exit 1` here), and the state it cannot act on is a plain echo. Neither
+      # weakens a guard that exists because a delivery failure was once downgraded to a warning.
       #
-      # The verdict is still recorded, twice: on the step summary above and in this log. When the
-      # receiving instance declares its SecretConfigKey and this becomes an `::error::` + `exit 1`
-      # (MeshWeaver#3338), the guard positively WANTS that shape — it already asserts the job
-      # carries `exit 1`. So the end state is guard-compatible; only this interim is quiet.
+      # 🚨 THREE ANSWERS, NOT TWO (MeshWeaver#3338), and the ESCALATION is now armed on the middle
+      # one. The first form tested for the single string "verified" and reported everything else as
+      # "declares no SecretConfigKey" — so the ABSENCE of a verdict read as a verdict and named the
+      # wrong fix. Measured 2026-09-06 (core CD run 34039122957, this job at 15:16:47Z): the
+      # receiving instance answered `200` with an EMPTY BODY, because it still runs the pre-#3312
+      # endpoint. The three states are distinct and only ONE is a misconfiguration:
+      #
+      #   verified      the instance checked THIS POST's HMAC                  → pass, silently
+      #   not-required  the instance RAN the verdict code and says it declares → ::error:: + exit 1
+      #                 no SecretConfigKey for this target, so the signature
+      #                 this lane did send was never looked at
+      #   (no verdict)  the instance cannot answer — it predates #3312         → plain echo
+      #
+      # `not-required` is fatal because this lane ALWAYS signs (the POST step fails RED without
+      # `webhook-secret`, and always sends X-Hub-Signature-256), so a receiver telling us it never
+      # looked is a broken PAIR with a one-key fix on the receiving record. An absent verdict is a
+      # receiver that has not rolled yet — nothing this lane or its callers can fix, and failing on
+      # it would red every satellite publish for a roll none of them controls. The escalation
+      # therefore ARMS ITSELF: the moment the receiver answers a verdict at all, the fatal branch
+      # becomes reachable, with nothing for anyone to remember to switch on.
       - name: "Did the inbox VERIFY the publication record?"
         run: |
           set -euo pipefail
-          if [ ! -f /tmp/resp ]; then
+          # Overridable ONLY so a guard can execute this exact script against synthetic answers
+          # (MeshWeaver's InboxSignatureVerdictGuard); CI never sets it.
+          RESP="${RESP:-/tmp/resp}"
+          if [ ! -f "$RESP" ]; then
             echo "::error::no inbox response was captured — the POST step did not run to completion."
             exit 1
           fi
-          if grep -Eq '"signature"[[:space:]]*:[[:space:]]*"verified"' /tmp/resp; then
-            echo "signature VERIFIED — the instance checked this POST's HMAC, so a drifted webhook-secret would now fail loudly (401)."
-          else
-            echo "signature NOT CHECKED — the inbox accepted this publication record without verifying it: the receiving instance declares no WebhookInbox__Targets__N__SecretConfigKey for this target, so webhook-secret was never exercised and a drifted secret would still be invisible (MeshWeaver#3312). Provision it on that instance's Hosting/Deployment record."
-          fi
+          verdict=$(tr -d '\n' < "$RESP" | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+          case "$verdict" in
+            verified)
+              echo "signature VERIFIED — the instance checked this POST's HMAC, so a drifted webhook-secret would now fail loudly (401)."
+              ;;
+            not-required)
+              echo "::error::the inbox ACCEPTED this publication record WITHOUT checking its signature. It answered \"not-required\", i.e. the receiving instance declares no WebhookInbox__Targets__N__SecretConfigKey for this target, so this repo's webhook-secret was never exercised and a drifted secret would still be invisible (MeshWeaver#3312). Fix it on that instance's Hosting/Deployment record: extraPortalConfig[\"WebhookInbox__Targets__N__SecretConfigKey\"] on whichever slot carries this target, then deploy. The publication is sealed and registered; what is NOT established is that the record came from us (MeshWeaver#3338)."
+              exit 1
+              ;;
+            "")
+              echo "signature verdict ABSENT — the inbox answered a bare 200 with no \"signature\" field, so it cannot say whether it checked our HMAC: the receiving instance still runs a pre-MeshWeaver#3312 endpoint. That is a ROLLOUT gap on the receiver, not a missing chart key; provisioning one changes nothing until it rolls. From its first publish after that roll this step judges for real, and a \"not-required\" answer then fails the job."
+              ;;
+            *)
+              echo "::error::the inbox answered an unrecognised signature verdict \"$verdict\". This step judges the receiver's own word, so a word it does not know is not a pass: either the answer's contract changed or something is rewriting the body in transit."
+              exit 1
+              ;;
+          esac
