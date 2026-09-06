@@ -13,11 +13,12 @@ namespace MeshWeaver.Graph;
 /// protected, so a rail built straight into controls cannot be asserted on: a test can count areas
 /// and read a skin, and nothing else. Every defect this class was written to fix was invisible to
 /// exactly that kind of test. The plan is an ordinary record, so what the rail CONTAINS — which
-/// entry is current, which group is open, what each line links to — is pinned by unit tests instead
-/// of by opening a page and looking.</para>
+/// entry is current, which group is open, what each line links to, and in WHAT ORDER — is pinned by
+/// unit tests instead of by opening a page and looking.</para>
 ///
-/// <para><b>The shape, and the three defects that chose it</b> (reported on a live course,
-/// 2026-08-19; the same rail is rendered by every page whose module supplies one):</para>
+/// <para><b>The shape, and the four defects that chose it</b> (the first three reported on a live
+/// course, 2026-08-19; the fourth on 2026-09-06 — the same rail is rendered by every page whose
+/// module supplies one):</para>
 /// <list type="number">
 ///   <item><b>The title is a LINK, never the collapsible root.</b> Nesting the whole index under one
 ///   <see cref="NavGroupControl"/> made its heading both a link and a toggle, so clicking the
@@ -31,6 +32,16 @@ namespace MeshWeaver.Graph;
 ///   jumped to the far-left margin and read as belonging to nothing.
 ///   <see cref="NavLinkControl.IsActive"/> gives it the accent bar, background and weight the
 ///   nav menu already styles, none of which is colour-only.</item>
+///   <item><b>The SUPPLIER'S ORDER is the rail's order — having children is not a sort key.</b> The
+///   plan used to hold two buckets, <c>Pages</c> (entries with no children) and <c>Groups</c>
+///   (entries with children), and render every page before every group. The supplied order survived
+///   inside each bucket and was lost between them, so an entry could never precede one that had
+///   children — a course's four lessons, ordered 1–4, rendered tenth to thirteenth behind every leaf
+///   page, and no <c>Order</c> value could fix it because the numbers were already right (#3406).
+///   The plan now carries ONE ordered sequence, <see cref="Rail.Items"/>, whose element is a
+///   <see cref="RailLink"/> or a <see cref="RailGroup"/>, and <see cref="Render"/> walks it once.
+///   Both container renderers emit a container's areas in declaration order, so preserving the order
+///   here is the whole fix.</item>
 /// </list>
 ///
 /// <para>Only the group the reader is inside is expanded, so a long index stays a scannable list of
@@ -38,13 +49,24 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class SuppliedNavigationRail
 {
+    /// <summary>
+    /// One item of the rail, in the order its supplier declared it: a <see cref="RailLink"/> or a
+    /// <see cref="RailGroup"/>, and nothing else — the constructor is <c>private protected</c>, so
+    /// the two cases below are the whole hierarchy and <see cref="Render"/>'s walk over them is
+    /// exhaustive.
+    /// </summary>
+    public abstract record RailItem
+    {
+        private protected RailItem() { }
+    }
+
     /// <summary>One line of the rail.</summary>
     /// <param name="Label">The text shown.</param>
     /// <param name="Path">The node this line stands for.</param>
     /// <param name="Href">Where it navigates, or null when the node is not there to link to.</param>
     /// <param name="IsCurrent">Whether this is where the reader stands (exactly one line, at most).</param>
     /// <param name="Icon">The node's icon, if it has one.</param>
-    public sealed record RailLink(string Label, string Path, string? Href, bool IsCurrent, string? Icon);
+    public sealed record RailLink(string Label, string Path, string? Href, bool IsCurrent, string? Icon) : RailItem;
 
     /// <summary>A collapsible group of the rail — one supplied entry that has children.</summary>
     /// <param name="Label">The group heading (never a link — it toggles).</param>
@@ -53,13 +75,14 @@ public static class SuppliedNavigationRail
     /// <param name="Links">The entry's own link first, then its children.</param>
     /// <param name="Icon">The entry's icon, if it has one — the heading shows it, so a group reads
     /// like the links beside it instead of losing its icon by having children.</param>
-    public sealed record RailGroup(string Label, string Path, bool Expanded, IReadOnlyList<RailLink> Links, string? Icon = null);
+    public sealed record RailGroup(string Label, string Path, bool Expanded, IReadOnlyList<RailLink> Links, string? Icon = null) : RailItem;
 
-    /// <summary>The whole rail: the heading link, flat entries, then the groups.</summary>
+    /// <summary>The whole rail: the heading link, then the supplied entries in the supplied order.</summary>
     /// <param name="Home">The index root — a link, not a collapsible heading.</param>
-    /// <param name="Pages">Supplied entries with no children of their own.</param>
-    /// <param name="Groups">Supplied entries that have children.</param>
-    public sealed record Rail(RailLink Home, IReadOnlyList<RailLink> Pages, IReadOnlyList<RailGroup> Groups);
+    /// <param name="Items">The supplied entries, IN THE ORDER SUPPLIED — a childless entry as a
+    /// <see cref="RailLink"/>, one with children as a <see cref="RailGroup"/>. One sequence, not a
+    /// bucket per kind: see the class remarks, defect 4.</param>
+    public sealed record Rail(RailLink Home, IReadOnlyList<RailItem> Items);
 
     /// <summary>
     /// The rail a page shows, from the navigation its module supplied. Pure — see the class remarks
@@ -83,28 +106,28 @@ public static class SuppliedNavigationRail
             root is not null && string.Equals(root, currentPath, StringComparison.Ordinal),
             supplied.Icon);
 
-        var pages = new List<RailLink>();
-        var groups = new List<RailGroup>();
+        // One projection, entry by entry, in the supplied order. Whether an entry has children
+        // decides WHAT it becomes, never WHERE it goes — the ordering the supplier computed (Order
+        // then Name, for a course) is the reading order, and re-grouping by kind silently discarded
+        // it (#3406).
+        var items = supplied.Entries
+            .Select(entry => entry.Children.Count == 0
+                ? (RailItem)Link(entry)
+                : new RailGroup(
+                    entry.Label,
+                    entry.Path,
+                    IsAtOrBelow(currentPath, entry.Path),
+                    // The entry's own link first, then its children.
+                    [Link(entry), .. entry.Children.Select(Link)],
+                    entry.Icon))
+            .ToList();
 
-        foreach (var entry in supplied.Entries)
-        {
-            if (entry.Children.Count == 0)
-            {
-                pages.Add(Link(entry));
-                continue;
-            }
-
-            var links = new List<RailLink> { Link(entry) };
-            links.AddRange(entry.Children.Select(Link));
-            groups.Add(new RailGroup(entry.Label, entry.Path, IsAtOrBelow(currentPath, entry.Path), links, entry.Icon));
-        }
-
-        return new Rail(home, pages, groups);
+        return new Rail(home, items);
     }
 
     /// <summary>
-    /// Renders a plan as the nav menu: the heading link, the flat entries, then one collapsible
-    /// group per entry that has children.
+    /// Renders a plan as the nav menu: the heading link, then every supplied entry in the order the
+    /// plan holds it — a link, or a collapsible group when the entry has children.
     /// </summary>
     /// <param name="rail">The plan to render.</param>
     /// <param name="width">Menu width in pixels.</param>
@@ -117,23 +140,36 @@ public static class SuppliedNavigationRail
             .WithSkin(s => s.WithWidth(width).WithCollapsible(collapsible))
             .WithNavLink(RenderLink(rail.Home));
 
-        foreach (var page in rail.Pages)
-            menu = menu.WithNavLink(RenderLink(page));
-
-        foreach (var group in rail.Groups)
-        {
-            // NO url on the heading: it toggles, and a control that both navigates and toggles is
-            // how clicking the index title used to collapse the whole index. The group's own page
-            // is the first LINK inside it.
-            var rendered = new NavGroupControl(group.Label).WithSkin(s => s.WithExpanded(group.Expanded));
-            if (group.Icon is not null)
-                rendered = rendered.WithIcon(group.Icon);
-            foreach (var link in group.Links)
-                rendered = rendered.WithView(RenderLink(link));
-            menu = menu.WithNavGroup(rendered);
-        }
+        // ONE walk, in plan order. WithNavLink and WithNavGroup both append to the container's
+        // single ordered area list, and both renderers (Blazor's NavMenuView, the React NavMenu
+        // skin) emit those areas in that order — so this loop is where the supplier's order either
+        // survives or dies. Two loops, one per kind, is what #3406 was.
+        foreach (var item in rail.Items)
+            menu = item switch
+            {
+                // NO url on the heading: it toggles, and a control that both navigates and toggles
+                // is how clicking the index title used to collapse the whole index. The group's own
+                // page is the first LINK inside it.
+                RailGroup group => menu.WithNavGroup(RenderGroup(group)),
+                RailLink link => menu.WithNavLink(RenderLink(link)),
+                // Unreachable: RailItem's constructor is private protected, so RailLink and
+                // RailGroup are the whole hierarchy. Loud rather than silent if that ever changes —
+                // a dropped item is a line missing from the index with nothing to show for it.
+                _ => throw new NotSupportedException(
+                    $"Unknown rail item '{item.GetType().Name}' — extend {nameof(Render)} when adding a {nameof(RailItem)} case."),
+            };
 
         return menu;
+    }
+
+    private static NavGroupControl RenderGroup(RailGroup group)
+    {
+        var rendered = new NavGroupControl(group.Label).WithSkin(s => s.WithExpanded(group.Expanded));
+        if (group.Icon is not null)
+            rendered = rendered.WithIcon(group.Icon);
+        foreach (var link in group.Links)
+            rendered = rendered.WithView(RenderLink(link));
+        return rendered;
     }
 
     private static RailLink Link(NodeNavigationEntry entry)
