@@ -208,6 +208,65 @@ public static class PublishedBundleCatalogue
     /// environment. The full presence check stays exactly where it decides the verdict —
     /// <see cref="ArtifactsForIdentity"/>, on the target identity.</para>
     /// </summary>
+    /// <summary>
+    /// 🚨 <b>Every platform release this root has a marker for — the roll SELECTOR's candidate
+    /// universe (#3479).</b> Unordered; the caller applies its own SemVer ordering and policy
+    /// filters (<c>VersionSelect</c>), because this assembly holds no opinion about which release
+    /// is newer.
+    ///
+    /// <para><b>Why the markers are the right universe.</b> A release's framework identity is a
+    /// property of its BINARIES and cannot be computed from a tag, so <c>_releases/&lt;version&gt;</c>
+    /// is the only way anything outside the image learns it. A version with no marker therefore has
+    /// no resolvable identity, every package answers
+    /// <see cref="PackageAvailabilityKind.Indeterminate"/> for it, and it could never be SELECTED —
+    /// so enumerating the markers loses no candidate the selector could have chosen, and it lets an
+    /// environment answer "which release should I be on" without listing a container registry it
+    /// may not be able to reach.</para>
+    ///
+    /// <para>Fail-safe and NAMED, like every other read here: an absent or unreadable root returns
+    /// a <see cref="PublishedReleaseCatalogue.Refusal"/> rather than an empty list, because "no
+    /// releases published" and "I could not look" decide opposite things.</para>
+    /// </summary>
+    public static PublishedReleaseCatalogue PublishedReleases(
+        string? publishedRoot, ILogger? logger = null)
+    {
+        if (string.IsNullOrWhiteSpace(publishedRoot))
+            return PublishedReleaseCatalogue.Unreadable(
+                $"no published bundle root is configured ({ShippedPrebuiltBundles.PublishedRootConfigKey})");
+
+        var markers = Path.Combine(publishedRoot, ReleaseMarkerDirectoryName);
+        if (!Directory.Exists(markers))
+            return PublishedReleaseCatalogue.Unreadable(
+                $"the published bundle root '{publishedRoot}' holds no '{ReleaseMarkerDirectoryName}' "
+                + "directory, so no release's framework identity is knowable here — cannot determine "
+                + "which release ships all plugins, which is not clearance to roll to the newest one");
+
+        try
+        {
+            return new PublishedReleaseCatalogue(
+                [.. Directory.EnumerateFiles(markers)
+                    .Select(Path.GetFileName)
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Select(name => name!)
+                    .OrderBy(name => name, StringComparer.Ordinal)],
+                null);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex,
+                "ReleaseAvailability: could not list the published releases under {Root}/{Markers}",
+                publishedRoot, ReleaseMarkerDirectoryName);
+            return PublishedReleaseCatalogue.Unreadable(
+                $"the release markers under '{markers}' could not be listed ({ex.Message})");
+        }
+    }
+
+    /// <summary>Reactive form of <see cref="PublishedReleases(string?, ILogger?)"/> — the
+    /// file-system leaf runs on the caller's I/O pool, never on a hub action block.</summary>
+    public static IObservable<PublishedReleaseCatalogue> ObserveReleases(
+        IIoPool pool, string? publishedRoot, ILogger? logger = null) =>
+        pool.InvokeBlocking(_ => PublishedReleases(publishedRoot, logger));
+
     public static SealedBundleFloor EverSealedBundles(string? publishedRoot, ILogger? logger = null)
     {
         // 🚨 "I could not look" is NOT "there is nothing here", and the difference decides the
@@ -769,6 +828,23 @@ public readonly record struct SealedModuleAssembly(string Name, string Mvid, boo
 /// <param name="Target">The release, with its framework identity resolved (or not).</param>
 /// <param name="Artifacts">What is sealed for it.</param>
 public sealed record ReleaseObservation(ReleaseTarget Target, ReleaseArtifacts Artifacts);
+
+/// <summary>
+/// Every platform release a published root carries a marker for — the roll selector's candidate
+/// universe (#3479).
+/// </summary>
+/// <param name="Versions">The release versions, ordinal-sorted for determinism. 🚨 That is NOT
+/// SemVer order: the caller orders them, because it owns the version rules and the update policy.
+/// </param>
+/// <param name="Refusal">Why the listing could not be made, or null when it was. Non-null is a
+/// HOLD — an absent or unreadable marker directory on a deployment that declares it consumes CI
+/// bakes is a mis-mount, not evidence that nothing is published.</param>
+public sealed record PublishedReleaseCatalogue(
+    ImmutableArray<string> Versions, string? Refusal)
+{
+    /// <summary>A listing that could not be made — the fail-safe constructor.</summary>
+    public static PublishedReleaseCatalogue Unreadable(string reason) => new([], reason);
+}
 
 /// <summary>
 /// 🚨 The deployment gate's DENOMINATOR (#3441) — what a published root has ever demonstrably been

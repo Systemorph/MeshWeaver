@@ -1280,7 +1280,29 @@ public static class DataExtensions
             .Subscribe(
                 committed =>
                 {
-                    var durable = flush(committed);
+                    // 🚨 Nothing may ESCAPE this arm. An exception thrown here propagates out of the
+                    // commit-echo subscription's onNext — Rx does not route it into onError — and the
+                    // verdict is then never produced: no stage, no ack, no bound, and the writer waits
+                    // out its bound in silence. Measured on CD 7937's bake host (MeshWeaver#2543): 13
+                    // stalls, every trail ending at PATCH_ECHO_SEEN, zero PATCH_FLUSH_SUBSCRIBED, pool
+                    // idle — the only code between those two stages is this arm. A synchronous fault
+                    // is a NACK with the classified error (the same verdict the async fault arm posts),
+                    // and the stage names the exception so the next occurrence is not a guess.
+                    IObservable<bool>? durable;
+                    try
+                    {
+                        durable = flush(committed);
+                    }
+                    catch (Exception ex)
+                    {
+                        noteStage?.Invoke($"PATCH_FLUSH_FAULTED_SYNC building {ex.GetType().Name}");
+                        logger?.LogWarning(ex,
+                            "[PatchAck] FLUSH_FAULTED_SYNC path={Path} — building the durable flush threw on "
+                            + "the echo thread; NACKing so the writer retries instead of waiting out its bound",
+                            hubPath);
+                        ackOnce(false, ClassifyPatchException(ex, hubPath));
+                        return;
+                    }
                     if (durable is null)
                     {
                         ackOnce(true, null);
@@ -1345,6 +1367,8 @@ public static class DataExtensions
                                 }
                                 ackOnce(false, ClassifyPatchException(ex, hubPath));
                             });
+                    // (A raw IObservable whose Subscribe throws is not a case: `Take(1)` subscribes through
+                    // Rx's SubscribeSafe, which forwards that throw into the fault arm above — measured.)
                     // The Subscribe above returned: the storage write chain did not block the thread the
                     // echo arrived on. A trail that ends at PATCH_ECHO_SEEN without this stage names a
                     // flush whose Subscribe never returned (MeshWeaver#2543, arm 1). A synchronous flush

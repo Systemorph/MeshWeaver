@@ -88,4 +88,38 @@ public class ReleaseGateAuthTest
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
+
+    // ── the SELECTOR route (#3479) ──────────────────────────────────────────────────────────────
+    // Same auth, same reason, and the same 401-not-404 discipline: this route answers with the
+    // environment's plugin COUNT and every release that cannot serve it, which is the same
+    // deployment inventory the verdict route protects.
+
+    [Fact]
+    public async Task TheSelectorRouteRejectsAnUnauthenticatedCaller()
+    {
+        using var response = await Get(ReleaseGateEndpoints.SelectRoute, authorization: null);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task TheSelectorRouteRejectsAnUnparseableBearer()
+    {
+        using var response = await Get(
+            ReleaseGateEndpoints.SelectRoute, "Bearer not-an-instance-key");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task TheSelectorRouteAuthenticatesBeforeItReadsTheRunningVersion()
+    {
+        // The handler resolves ReleaseAvailabilityService and reads the running platform version
+        // only INSIDE the authenticated branch — neither is registered here, so a 500 would mean
+        // the rejection path had grown a dependency and an unauthenticated caller could crash it.
+        using var response = await Get(
+            ReleaseGateEndpoints.SelectRoute + "?current=3.0.0-rc9.ci.7693", authorization: null);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
 }

@@ -1,7 +1,7 @@
 ---
 Name: The Portal Heap Is Hubs
 Category: Architecture
-Description: Five heap dumps from a live memex-cloud replica: the retention is 9,386 MessageHub instances (89.6% sync/ stream hubs), 1,496 of them fully disposed corpses held by SynchronizationStream.Hub after the parent killed the hub under a stream that was never told; 45% of the live heap is per-hub Autofac and TypeRegistry metadata; the ALC, lazy-compile and GC-fragmentation candidates are all falsified.
+Description: Five heap dumps from a live memex-cloud replica: the retention is 9,386 MessageHub instances (89.6% sync/ stream hubs), 1,496 of them fully disposed corpses held by SynchronizationStream.Hub after the parent killed the hub under a stream that was never told; 45% of the live heap is per-hub Autofac and TypeRegistry metadata; the ALC, lazy-compile and GC-fragmentation candidates are all falsified. Also: taking such a dump is NOT free — a --type Heap dump freezes a 6.6 GiB replica for 106 s, longer than the 90 s liveness budget, so it restarts the container.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M10 10L6.5 6.5"/><path d="M14 10l3.5-3.5"/><path d="M10 14l-3.5 3.5"/><path d="M14 14l3.5 3.5"/></svg>
 ---
 
@@ -27,6 +27,11 @@ container limit 16 Gi. A `dotnet-dump collect --type Heap` through an ephemeral
 [Debugging Disposal, Storms and Leaks](/Doc/Architecture/DebuggingDisposalAndLeaks)), then
 `dumpheap -stat`. The dump file was deleted from the pod afterwards; no cluster object was
 mutated.
+
+🚨 **That last sentence understates the cost, and a later measurement proved it.** On a replica
+this size `--type Heap` freezes the process for ~106 s, which is longer than the liveness budget,
+so taking one **restarts the container** — see *The dump is not free* below. No *cluster object*
+is mutated; the replica is.
 
 ```
 Total 49,827,806 objects, 5,544,881,838 bytes
@@ -332,6 +337,22 @@ held by `Workspace._localStreamCache` / `_remoteStreamCache` entries whose subsc
 they are garbage; if they are held by live circuits, the portal's working set is simply larger
 than its ceiling and the per-hub cost below is the whole story.
 
+🚨 **Two things block that walk today, and both are about WHICH replica you point it at**
+(measured 2026-09-06, Systemorph/MeshWeaver#3432):
+
+- **No deployment carries the `Dead`-half fix yet.** #3427 merged as `f41f8bda` at 15:49Z; CD run
+  7905 was that commit and was *cancelled*, so the earliest published image carrying it is
+  **`3.0.0-ci.7906`** (`71c194ca9` — confirmed an ancestor-of check plus the tag present in ACR).
+  Both `memex` and `memex-cloud` run **`3.0.0-rc9.ci.7693`**, 213 CD runs older, because prod was
+  rolled back by hand that evening. 🚨 Mind the two tag lines when reading those side by side: the
+  running tag carries an `rc9.` segment that current CD tags no longer use, so compare the CD run
+  NUMBER, not the string. A dump taken now therefore measures the *pre*-step-3 population and
+  cannot answer "did the `Started` count move", which is the first row of this section's outcome
+  table.
+- **Dumping a replica fat enough to carry the population restarts it** — see *The dump is not
+  free* below. The walk itself is cheap and correct; getting a dump to run it against is the
+  expensive half.
+
 🚨 **Do not skip to a fix on the strength of the corpse count alone.** 1 496 dead hubs is ≈580 MB
 — real, unambiguous, and worth fixing — but it is **one sixth** of the 9 398. Fixing only that
 leaves ~2.7 GB in the `Started` population untouched, and (2) is what decides whether that
@@ -342,6 +363,63 @@ replicas of different ages. #3321 observed that working set tracks uptime rather
 near-idle `fxbhd` holds 11 443 MiB on 512 log lines per 30 min while the busiest replica holds
 4 134 MiB. The +7-in-22-minutes reading above refines that rather than contradicting it: hubs
 arrive with load and never leave, so an idle pod *holds* its history without adding to it.
+
+## The dump is not free — it costs a container restart at this heap size
+
+Measured 2026-09-06 on `memex-cloud/memex-portal-deployment-58c859d4cc-gqqg7` (8 h old, working
+set 6 609 MiB, image `3.0.0-rc9.ci.7693`), while attempting the referrer walk this page's *What is
+still open* section asks for.
+
+```
+21:37:38Z  dotnet-dump collect -p 1 --type Heap   (process suspended)
+21:39:17Z  kubelet: Container memex-portal failed liveness probe, will be restarted
+21:39:26Z  Complete                               (process resumed — 106 s of freeze)
+21:39:35Z  ephemeral container SIGKILLed with the restart
+21:42:18Z  pod reads 1/1 Running, RESTARTS 1
+```
+
+The probes, read off the live deployment, are what turns a long freeze into a restart:
+
+| probe | path | period | timeout | failureThreshold | a freeze longer than |
+|---|---|---:|---:|---:|---|
+| readiness | `/ready` | 10 s | 5 s | 3 | **≈30 s** pulls the replica out of the Service |
+| liveness | `/alive` | 15 s | 10 s | 6 | **≈90 s** restarts the container |
+
+🚨 **The freeze is not write-bound, so it does not shrink by finding a faster disk.** `dd
+oflag=direct` on the same node measured **169 MB/s** (3.1 GB in 18.6 s). This dump's own file size
+was never read — the container restart wiped it before it could be — but at the 5.54 GB the
+2026-09-04 specimen produced, the write is only ≈33 s of the 106. The rest is `createdump` walking
+the object graph — ≈50 M objects — with every thread suspended, so **the freeze scales with the
+very thing that makes this heap interesting.**
+
+**Hence the tension that governs every future measurement on this page's open questions: the
+population only exists on a replica fat enough that dumping it restarts the replica.** A young
+replica dumps in seconds and has nothing to show — a freshly restarted portal here reached
+2 977 MiB within five minutes, so ~3 GiB is the *floor*, not the accumulation.
+
+So do not treat "read-only, dump deleted afterwards" as meaning "no impact". Either:
+
+- **Spend the restart on purpose.** The other four replicas stayed `1/1 Running` with `RESTARTS 0`
+  throughout, so the deployment served from four of five for ≈2 min; the cost is one replica's
+  accumulated state, which is also the thing being measured. That can be a fair trade — but it is a
+  decision to take deliberately and in advance, not a side effect to discover afterwards. (Whether
+  any in-flight request was actually dropped was not measured.)
+- **Or use the counters below**, which read EventCounters over the diagnostic socket and never
+  suspend the process. They cannot answer a referrer question, but they discriminate retention from
+  fragmentation, which is what most of this page's falsifications turned on.
+
+🚨 **And note WHY the cheap option is so weak: the platform publishes no metric of its own.**
+`src/` contains **zero** `System.Diagnostics.Metrics` meters — `grep -rn "new Meter(" src` is
+empty — so every counter this page relies on (`dotnet.gc.*`, `dotnet.assembly.count`,
+`dotnet.timer.count`) is a **runtime built-in**. Nothing anywhere reports live `MessageHub` count,
+the `sync/`-versus-node split, the `RunLevel` histogram, or `SynchronizationStream`
+total-vs-disposed. That is exactly why `dotnet.timer.count` appears below as a *proxy* for live
+hubs, and why answering any question on this page currently costs a replica restart. The three
+numbers this whole investigation turns on are cheap to compute in-process and are simply not
+emitted — `HostedHubsCollection.Hubs.Count()` already exists and is used only in two log lines
+(`MessageHub.cs:1879`, `:2487`). An observable-gauge trio over hub count by address type and run
+level would make the population trackable per replica, continuously, at no risk — and would turn
+"take a dump and hope" into "watch the curve and dump only when it says something changed".
 
 ## Reading the counters yourself
 
@@ -369,6 +447,29 @@ produced the address histogram above is forty lines
 (`MessageHub` → `<Configuration>k__BackingField` → `<Address>k__BackingField` →
 `<Segments>k__BackingField[0]`), and reading fields *by name-substring* off `ClrType.Fields` keeps
 it robust against the compiler's backing-field spelling.
+
+**Four practicalities, all verified 2026-09-06 against `Microsoft.Diagnostics.Runtime` 4.0.732401:**
+
+- **Pass the DAC explicitly.** `DataTarget.LoadDump(path)` records the runtime path *as seen by the
+  target*, which does not exist in the SDK sidecar. Find it with
+  `find /proc/1/root/usr/share/dotnet -name libmscordaccore.so` (it was
+  `…/Microsoft.NETCore.App/10.0.11/`) and pass it to `CreateRuntime(dacPath, ignoreMismatch: true)`.
+- **Compile the walk locally first.** `dotnet new console` + the same package pins the identical
+  version, so a local `dotnet build -c Release` catches a typo before it costs a dump — and, given
+  the section above, a dump can cost a replica.
+- **Get the analyzer into the sidecar with `kubectl cp`**, not a base64 heredoc:
+  `az aks command invoke --file Program.cs --command "kubectl cp Program.cs <ns>/<pod>:/hw/Program.cs -c <container>"`.
+  Create the sidecar with `-- sleep 7200` and drive it with individual `kubectl exec` calls, so a
+  failed step costs one command rather than the whole run.
+- **The sidecar dies with the target.** It is an ephemeral container in the same pod: if the dump
+  trips the liveness probe, the sidecar is SIGKILLed (exit 137) along with the restart, taking the
+  dump file and any un-flushed output with it. Print results as you go; do not batch them to the end.
+
+The fields the *open questions* above need, beyond address and `runLevel`: `SynchronizationStream`'s
+`isDisposed` and `Hub`; `Address.Host` (which names the parent hub, so a `Started` sub-hub under a
+`Dead` parent is separable from one under a live parent); and the subscriber count behind
+`SynchronizationStream.Store`, reachable as `ReplaySubject → _implementation → _observers → _data[]`
+— the discriminator for "is anyone actually listening to this stream".
 
 ## Related
 
