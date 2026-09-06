@@ -1097,6 +1097,7 @@
   "versions.title": "Version History",
   "versions.none": "No version history available.",
   "versions.unavailable": "Version history is not available.",
+  "versions.notRetained": "Version history is not retained on this deployment. This is a configuration fact, not a property of this node.",
   "versions.current": "Current",
   "versions.from": "From",
   "versions.to": "To",
