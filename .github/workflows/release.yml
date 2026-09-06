@@ -135,7 +135,10 @@ jobs:
             echo "::error::PlatformVersion at $SHA is '$PROPS' but the tag says '$VERSION'. The tag must name the line the commit was built under — either the wrong commit was tagged, or Directory.Build.props was bumped ahead of the release. Retag the right commit."
             exit 1
           fi
-          NOTES="src/MeshWeaver.Documentation/Data/ReleaseNotes/${VERSION//./_}/index.md"
+          # A flat file, not <version>/index.md: MSBuild embeds a digit-leading FOLDER as an identifier
+          # (3_0_0 → _3_0_0), so a page inside one is served at Doc/ReleaseNotes/_3_0_0 and no link to
+          # the documented path resolves. File names are embedded verbatim.
+          NOTES="src/MeshWeaver.Documentation/Data/ReleaseNotes/${VERSION//./_}.md"
           if [ ! -f "$NOTES" ]; then
             echo "::error::no release-notes page at $NOTES. The GitHub Release is published FROM that page (Doc/ReleaseNotes/${VERSION//./_}); commit it (Category: Release Notes) and tag a commit that carries it."
             exit 1
