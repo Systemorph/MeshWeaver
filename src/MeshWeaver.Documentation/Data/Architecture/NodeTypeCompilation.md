@@ -244,6 +244,26 @@ last word; with two, the first `Ok` opens a window in which a concurrent writer'
 overwritten by the tail. Readers are safe either way (both writes describe a real build); writers
 must not treat the first `Ok` as "the pipeline is finished".
 
+### The bake ships from a SETTLED record, never from the first one it sees
+
+The record and the store are two states, and a reader that takes them at different moments can
+name bytes that are gone. The package installer requests a **release** for every type it installs
+(the idempotence re-install too), and `ObserveNodeTypeRelease` completes when the
+`RequestedReleaseAt` trigger has been **written**, not when the compile it starts has finished — so a
+gate's report, and the bake behind it, can run while that compile is still in flight. The compile's
+upload then lands under a newer store version, the file-system store evicts superseded versions at
+write (it keeps the newest three), and the record the bake already read names a version the store
+no longer holds: *"claims a usable build at v7 but the run's assembly store has NO bytes for it"*
+(#3370, #3333 — measured on a tree that already carried the triple fix above).
+
+`BakeOutput.CollectOne` therefore waits for the record to **settle** before it names the bytes —
+`CompilationStatus == Ok`, `DispatchedBuildInputs` cleared (a terminal status clears it, #3390),
+and no release request the watcher has not handled (the watcher's own pending test:
+`RequestedReleaseAt` newer than `LastReleaseRequestHandledAt`) — and, if it never settles inside
+the read budget, fails naming what was still in flight. The claim and the payload are read as one
+state; no bound was raised. `BakeOutput.NotYetSettled` is the predicate, pinned by
+`BakeReadsASettledRecordTest`.
+
 ### Explicit — Create Release
 
 **The one entry point is `hub.RequestNodeTypeRelease(nodeTypePath, …)`** (`MeshWeaver.Graph/NodeTypeReleaseExtensions.cs`) — GUI, agents, and tests all call it. It writes the trigger onto the NodeType node via `stream.Update`: `RequestedReleaseAt` (a timestamp, so repeated requests are distinct), plus `RequestedReleaseForce` to bypass the "sources match the last compile" short-circuit and `RequestedReleaseBy` to attribute the release to the caller. The per-NodeType release watcher dispatches only while `RequestedReleaseAt > LastReleaseRequestHandledAt` — an idempotent CAS — and lands on the same `RunCompile`.
