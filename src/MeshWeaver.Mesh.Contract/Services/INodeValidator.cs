@@ -298,9 +298,31 @@ public interface INodePostCreationHandler
 public interface INodePostDeletionHandler
 {
     /// <summary>
-    /// The node type this handler applies to (e.g. "Space").
+    /// The node type this handler applies to (e.g. "Space"), used by the default
+    /// <see cref="Matches"/>. A handler that matches STRUCTURALLY overrides
+    /// <see cref="Matches"/> and this property is then only a diagnostic label.
     /// </summary>
     string NodeType { get; }
+
+    /// <summary>
+    /// Does this handler apply to <paramref name="deletedNode"/>? The default is the
+    /// historical rule — case-insensitive equality with <see cref="NodeType"/>.
+    ///
+    /// <para>🚨 <b>The seam exists because a NodeType string cannot express every deletion-side
+    /// side effect</b> (MeshWeaver#3436). Tearing down a partition's backing store has to fire for
+    /// EVERY partition root, and a partition root can carry a NodeType declared in mesh CONTENT
+    /// (<c>Store/Plugin</c>) that no <c>src/</c>-side registration, allow-list or
+    /// <c>OwnsPartition</c> scan can enumerate — including one installed after boot. Such a
+    /// handler answers <see cref="PartitionDefinition.IsPartitionRoot"/> here instead, and is
+    /// therefore complete by construction rather than by a list somebody has to remember to
+    /// extend. Keying it on the type was how two hand-maintained registrations came to stand for
+    /// "every partition-owning type", and how the third one leaked four schemas.</para>
+    /// </summary>
+    /// <param name="deletedNode">The node as it was loaded before deletion.</param>
+    /// <returns><c>true</c> when <see cref="Handle"/> should run for this node.</returns>
+    bool Matches(MeshNode deletedNode) =>
+        !string.IsNullOrEmpty(deletedNode.NodeType)
+        && NodeType.Equals(deletedNode.NodeType, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Executes after the node has been removed from persistence. Reactive — returns
