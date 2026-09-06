@@ -704,6 +704,9 @@ jobs:
           AGE_MIN: ${{ steps.required.outputs.age_min }}
           COMPLETE: ${{ steps.acr.outputs.complete }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ steps.target.outputs.sha }}
+          RUN_ID: ${{ github.run_id }}
+          WORKFLOW_NAME: ${{ github.workflow }}
           MAX_ATTEMPTS: "3"
           BATCH_WINDOW: ${{ vars.CD_BATCH_WINDOW_MINUTES }}
           FRESH_AGE_MIN: ${{ steps.freshness.outputs.age_min }}
@@ -718,6 +721,36 @@ jobs:
             gh issue view "$1" --repo "$GITHUB_REPOSITORY" --json comments \
               --jq "[.comments[] | select(.body | contains(\"$2\"))] | length"
           }
+
+          # ── ONE COMMIT, ONE IMAGE SET (MeshWeaver#3376) ────────────────────────────────────
+          # On 2026-09-05 core 34c3eecec got two publishing runs: the push-triggered run (#7845)
+          # and the hourly reconcile (#7846) both passed this step, because "is the set complete?"
+          # was asked while the first build was still in flight — not complete YET, so the second
+          # built too. Two `dotnet publish`es of one commit are two different digests: each got
+          # its own `<version>-ci.<n>` tag, phase A's `<short-sha>` tag moved to the later one, the
+          # earlier one's tag was orphaned, and the 25-minute build plus a bake were paid twice.
+          # The batching window cannot see this either — it compares against the newest PUBLISHED
+          # set, and neither had published.
+          #
+          # So before any other verdict: is an OLDER run of this workflow on THIS sha still running?
+          # Older by run id, deliberately — two runs deciding at the same instant would otherwise
+          # each see the other and BOTH defer, and one commit would yield no set at all. The older
+          # proceeds, the newer defers, and if the older one dies the next reconcile tick heals
+          # HEAD exactly as it does for any other incomplete set. `actions: read` is on this job.
+          # The probe FAILS OPEN, and says so: an API error here must not stop a publication that
+          # was correct before the probe existed — the worst case is the duplicate set this guards
+          # against, and the log names the reason instead of an empty answer.
+          if INFLIGHT=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA&per_page=30" \
+                          --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id < $RUN_ID and (.status == \"in_progress\" or .status == \"queued\"))] | .[0] // empty | .html_url"); then
+            :
+          else
+            echo "::warning::the in-flight probe failed (exit $?) — cannot tell whether an older run is publishing $SHORT; proceeding as before MeshWeaver#3376 (a duplicate image set is the worst case)"
+            INFLIGHT=""
+          fi
+          if [ -n "$INFLIGHT" ]; then
+            decision false "⏳ An older run of this workflow is still publishing \`$SHORT\`: $INFLIGHT — deferring, so one commit yields ONE image set (MeshWeaver#3376). If that run fails, the next reconcile tick heals HEAD."
+            exit 0
+          fi
 
           if [ "$REASON" = "push" ]; then
             if [ "$GREEN" != "true" ]; then
