@@ -549,24 +549,89 @@ is a **failure**, never an ignored line — the same rule `Pairs-with:` carries,
 reason: an author who believes they declared something and a gate that believes they did not is
 indistinguishable from a skip.
 
-#### 🚨 Four ways to oblige an implementer that this gate does NOT see
+#### Four ways to oblige an implementer — two of them are now SEEN (#3489)
 
 Written down because a gate whose limits are inferred rather than stated is how the next incident
 gets filed as a surprise. Each row was **run against the detector**, not assumed — the control in the
 same run (`public abstract void B();` added to a public abstract class) reports
-`implementer-obliging-added` correctly, so a blank here is a real blind spot and not a broken probe:
+`implementer-obliging-added` correctly, so a blank was a real blind spot and not a broken probe.
 
-| the change | why an implementer breaks | why the detector is blind |
+| the change | why an implementer breaks | status |
 |---|---|---|
-| an interface gains a **base interface** — `interface IFoo : IBar` | every implementer of `IFoo` must now supply `IBar`'s members | the detector diffs member SETS per type; it does not diff base lists |
-| an interface gains an **overload** of a member name it already declares | `void M(string)` beside `void M(int)` is a member every implementer must write | member granularity is the NAME, deliberately — the same limit that makes removing one overload of several silent |
-| an existing **default** member is made `abstract` | the body implementers were relying on is gone | nothing is added or removed; this is shape 7 wearing an interface |
-| a **`protected abstract`** member is added to a public abstract class | `CS0534` in an external subclass, exactly as for a public one | only `public` members are indexed, so it is not an addition at all |
+| an interface gains a **base interface** — `interface IFoo : IBar` | every implementer of `IFoo` must now supply `IBar`'s members | ✅ **closed (#3489a)** — `implementer-obliging-base-added` |
+| a **`protected abstract`** member is added to a public abstract class | `CS0534` in an external subclass, exactly as for a public one | ✅ **closed (#3489d)** — `implementer-obliging-protected-added` |
+| an interface gains an **overload** of a member name it already declares | `void M(string)` beside `void M(int)` is a member every implementer must write | ⛔ **open, deliberately** |
+| an existing **default** member is made `abstract` | the body implementers were relying on is gone | ⛔ **out of reach by construction** |
 
-The first two are cheap to close and the second would change what "member" means across the whole
-report, including the removal half; the third is undetectable by any surface detector, as shape 7
-already records. Until then they are what `Implementers:` cannot ask about, and a reviewer of an
-interface change should read them as the list of things still to check by hand.
+All three closed shapes are **one verdict in three grammars** — an outside implementer must now write
+code it did not have to write, and no forwarder on this side can help, because a forwarder rescues a
+CALLER. So they share one declaration mechanism (`Implementers:`) and one gate. Splitting them would
+ask an author to learn three spellings of one obligation.
+
+**Why the first two were invisible, and why neither is a member diff.** (a) changes **no member of
+the interface at all** — `surface_additions` diffs member SETS per type and there is nothing in that
+set to differ. (d) changes only members the public index **does not hold by contract** — it is
+public-only, so a `protected abstract` member is not an addition, it is not anything.
+
+🚨 **The (d) scan measured ZERO on its first run over a tree that has five, and the zero was
+blindness, not absence.** `MEMBER_MODIFIERS` deliberately contains no access keyword but `public`,
+so `_leading_modifiers` stops dead at `protected` and answers `set()`. Every downstream test then
+reads false and the shape stays invisible — the same *"a sweep's zero has two causes"* shape the
+denominator exists to catch, one level further in. The fix strips the access keywords inside the new
+scan rather than widening a frozenset the public path also reads: **moving `publicMembersAtBase` to
+close a blind spot in a separate index would be the cure breaking the patient.** Verified: on
+`origin/main` the report's `publicTypesAtBase`, `publicMembersAtBase`, `publicInterfacesAtBase` and
+`implementerObligationsAtBase` are **byte-identical before and after this change** (1 974 / 12 345 /
+132 / 452); only the two new counters appeared.
+
+🚨 **And the second zero-discrimination went the other way, which is why both are worth recording.**
+`grep -rE '^\s*protected\s+(internal\s+)?abstract'` under `src/` finds **six** declarations; the
+scan reports **five**. The missing one is `RoutingServiceBase.RouteImpl`, and the scan is RIGHT:
+`RoutingServiceBase` is `internal abstract class`, so nothing outside the assembly can subclass it
+and it is correctly out of scope. The crude instrument was the grep. A discrepancy is a question,
+not a verdict, and it resolves in whichever direction the evidence points.
+
+**What stays open, and why not closing it is the decision rather than the omission:**
+
+- **The overload shape** is real, and its fix is disproportionate. Member granularity is the NAME, a
+  documented choice (#3103) that also makes removing one overload of several silent. Changing it
+  would change what "member" means across the whole report — **the removal half included** — and
+  recalibrate every floor and every historical count. A gate that fires constantly gets bypassed;
+  this one would fire on every overload added anywhere.
+- **Making a default member `abstract`** is undetectable by a surface detector by construction:
+  nothing is added and nothing is removed. It is shape 7 wearing an interface, and #3276 already
+  records why no signature-level instrument can see a behaviour change behind an unchanged
+  signature. It stays documented rather than attempted.
+
+Both remain what `Implementers:` cannot ask about, and a reviewer of an interface change should read
+them as the two things still to check by hand — down from four.
+
+##### Their own control arms, and one floor that is deliberately 1
+
+`implementerObligationsAtBase` does not constrain either new shape: a parser that found every
+interface and every abstract member but stopped reading **base lists** would report a healthy
+132 / 452 and zero base edges forever. So each gets its own denominator, published and floored:
+
+| arm | floor | measured on `main`, 2026-09-07 |
+|---|---:|---:|
+| `interfaceBaseEdgesAtBase` | 5 | **26** |
+| `protectedObligationsAtBase` | 1 | **5** |
+
+🚨 The protected floor is **1**, not "far below 5", and that is a decision rather than laziness:
+with a true value that small there is no floor that is both meaningful and survivable, so it is set
+to catch exactly what a floor *can* catch here — the scan returning nothing at all, which is
+precisely how it read before this change. A **partial** regression is caught by a different
+instrument: `scripts/check-parser-delta.py` (#3492), which compares two parser versions over one
+tree rather than one parser against a guess about the codebase.
+
+**Falsification, three arms, each watched failing:**
+
+| what was disabled | cases that go RED |
+|---|---|
+| `_base_list` returns `set()` | **3** |
+| `_obliges_external_subclass` returns `False` | **1** |
+| the `where`-clause guard (constraints read as bases) | **1** |
+| the consumer's trigger set narrowed to the #3465 category alone | **2** |
 
 #### The denominator, and what printing it found
 
@@ -782,14 +847,19 @@ on the pin bump if it pins.
 
 Every script runs `--self-test` **first** in its job, and every job fails it:
 
-- `check-type-forwards.py --self-test` — 68 cases (29 forwarder verdict + 29 surface report + 10
+- `check-type-forwards.py --self-test` — 76 cases (29 forwarder verdict + 37 surface report + 10
   transitional allowance). The surface cases prove the report fires on a departure, on a
   **forwarded** move (which the verdict half is correctly silent on), on a whole assembly leaving,
   and — the sixth shape — on #3137's own text in miniature, a renamed method, a member made
   `internal`, a renamed positional record parameter, a removed enum constant, a removed interface
   member and a block-scoped namespace; and stays silent on a within-assembly file move, an internal
   type, an in-mesh doc sample, an addition, a body edit and a removed overload whose name still
-  binds. Six more cover the **tenth** shape and are described below; two cover the BOM.
+  binds. Six more cover the **tenth** shape and are described below; two cover the BOM; and
+  **eight cover #3489's two** — a gained base interface, a base *replaced*, a new interface
+  obliging nobody, a `where` constraint that is not a base, a whitespace-only generic
+  difference, a gained `protected abstract` (with `private protected`, `protected virtual`
+  and a non-abstract field alongside it as negatives), a non-abstract class, and an
+  `internal abstract` class that is out of scope entirely.
 - `check-cross-repo-pair.py --self-test` — 28 cases, including the passing ones. A gate that always
   failed would score identically without them. Five prove the member and sweep rules above.
 - `check-package-pin-removal.py --self-test` — the eighth shape, replayed against #3344's own commit.
