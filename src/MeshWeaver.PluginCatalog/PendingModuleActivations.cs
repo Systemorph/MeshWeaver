@@ -97,10 +97,32 @@ public sealed class PendingModuleActivations(string moduleRoot)
     /// The current report. Recomputed per call — the state changes underneath a running process
     /// (that is the whole point), so a cached answer would be wrong exactly when it matters.
     /// </summary>
-    public ModuleActivationReport Read() => Read(ModuleActivationStatus.LoadedAssemblyNames());
+    public ModuleActivationReport Read() => Read(
+        ModuleActivationStatus.LoadedAssemblyNames(),
+        ModuleActivationStatus.LoadedModuleGenerations());
 
-    /// <summary>Testable form: the caller supplies what counts as loaded.</summary>
-    public ModuleActivationReport Read(IReadOnlySet<string> loadedAssemblyNames)
+    /// <summary>
+    /// Testable form: the caller supplies what counts as loaded, BY NAME ONLY.
+    ///
+    /// <para>🚨 Name-only cannot see an UPDATE (#3395) — a module whose activated generation moved
+    /// while an older one stays loaded here has its name in this set and reads as not pending. Kept
+    /// so a host compiled against the previous platform keeps working; every live caller should
+    /// pass the generation map instead.</para>
+    /// </summary>
+    /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process.</param>
+    public ModuleActivationReport Read(IReadOnlySet<string> loadedAssemblyNames) =>
+        Read(loadedAssemblyNames, ImmutableDictionary<string, string>.Empty);
+
+    /// <summary>
+    /// Testable form: the caller supplies what counts as loaded, by name AND by the generation
+    /// directory each module was loaded from (#3395).
+    /// </summary>
+    /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process.</param>
+    /// <param name="loadedModuleGenerations">Module simple name → the generation directory leaf it
+    /// was loaded from here; an absent name means "unknown", never "stale".</param>
+    public ModuleActivationReport Read(
+        IReadOnlySet<string> loadedAssemblyNames,
+        IReadOnlyDictionary<string, string> loadedModuleGenerations)
     {
         string? corrupt = null;
         ModuleActivationList activation;
@@ -133,10 +155,12 @@ public sealed class PendingModuleActivations(string moduleRoot)
 
         return new ModuleActivationReport(
             ModuleActivationStatus.NotYetLoaded(
-                activation, loadedAssemblyNames, ModulePlatformFloor.DeclineReason, LandedDllExists),
+                activation, loadedAssemblyNames, loadedModuleGenerations,
+                ModulePlatformFloor.DeclineReason, LandedDllExists),
             UndeterminedReason: null,
             ModuleActivationStatus.Unresolvable(
-                activation, loadedAssemblyNames, ModulePlatformFloor.DeclineReason, LandedDllExists));
+                activation, loadedAssemblyNames, loadedModuleGenerations,
+                ModulePlatformFloor.DeclineReason, LandedDllExists));
     }
 
     /// <summary>
