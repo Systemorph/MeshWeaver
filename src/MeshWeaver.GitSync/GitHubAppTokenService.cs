@@ -36,6 +36,7 @@ public sealed class GitHubAppTokenService
     // Refreshed when the delivered token nears expiry; nulled on error so failures don't stick.
     private readonly object gate = new();
     private IObservable<InstallationToken>? cached;
+    private readonly Func<DateTimeOffset> now;
 
     /// <summary>Initializes the service.</summary>
     /// <param name="ioPools">Registry the HTTP I/O pool is resolved from so every HTTP leaf runs off the hub.</param>
@@ -46,11 +47,13 @@ public sealed class GitHubAppTokenService
         IoPoolRegistry ioPools,
         IOptions<GitHubAppOptions> options,
         ILogger<GitHubAppTokenService>? logger = null,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        Func<DateTimeOffset>? clock = null)
     {
         this.ioPools = ioPools;
         this.options = options.Value;
         this.logger = logger;
+        now = clock ?? (() => DateTimeOffset.UtcNow);
         http = httpClient ?? new HttpClient();
         if (!http.DefaultRequestHeaders.UserAgent.Any())
             http.DefaultRequestHeaders.UserAgent.ParseAdd("MeshWeaver-GitSync");
@@ -71,14 +74,24 @@ public sealed class GitHubAppTokenService
             return Observable.Throw<string>(new InvalidOperationException(
                 "The GitHub App is not configured (set GitHub:App:ClientId + GitHub:App:PrivateKey)."));
 
-        IObservable<InstallationToken> source;
-        lock (gate)
-            source = cached ??= CreateFetch();
+        // Deferred: the promise is read at SUBSCRIPTION time, not when this observable was built.
+        // A long-lived consumer holds ONE of these for the life of its feed and subscribes per pass
+        // (the Store's git poll loop). Before, the promise of the moment was captured here, so
+        // after the first refresh <see cref="Refresh"/> compared every later expiry against that
+        // stale capture, never matched the current promise again, and handed the expired token
+        // back on every pass — two token lifetimes after boot, every private source read as
+        // "Bad credentials" until the process restarted (Systemorph/Memex#165).
+        return Observable.Defer(() =>
+        {
+            IObservable<InstallationToken> source;
+            lock (gate)
+                source = cached ??= CreateFetch();
 
-        return source.SelectMany(tok =>
-            tok.ExpiresAt > DateTimeOffset.UtcNow.AddMinutes(5)
-                ? Observable.Return(tok.Token)
-                : Refresh(source).Select(t => t.Token));
+            return source.SelectMany(tok =>
+                tok.ExpiresAt > now().AddMinutes(5)
+                    ? Observable.Return(tok.Token)
+                    : Refresh(source).Select(t => t.Token));
+        });
     }
 
     /// <summary>Swap the stale promise for a fresh fetch (only once — concurrent refreshers share it).</summary>
@@ -105,7 +118,7 @@ public sealed class GitHubAppTokenService
 
     private async Task<InstallationToken> FetchInstallationTokenAsync(CancellationToken ct)
     {
-        var jwt = BuildAppJwt(DateTimeOffset.UtcNow);
+        var jwt = BuildAppJwt(now());
         var installationId = options.InstallationId
             ?? await DiscoverInstallationIdAsync(jwt, ct).ConfigureAwait(false);
 
@@ -128,7 +141,7 @@ public sealed class GitHubAppTokenService
                         && e.ValueKind == JsonValueKind.String
                         && DateTimeOffset.TryParse(e.GetString(), out var dto)
             ? dto
-            : DateTimeOffset.UtcNow.AddMinutes(50);   // GitHub's documented lifetime is 1h
+            : now().AddMinutes(50);   // GitHub's documented lifetime is 1h
         logger?.LogInformation("Minted GitHub App installation token (installation {Id}, expires {Exp})",
             installationId, expiresAt);
         return new InstallationToken(token, expiresAt);
