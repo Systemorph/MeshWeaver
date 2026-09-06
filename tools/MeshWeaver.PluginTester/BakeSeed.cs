@@ -287,9 +287,13 @@ public sealed class BakeSeedConsumer(
             + "not judge the bytes the bake shipped for them. DECLINED: "
             + $"{string.Join(", ", missing.Take(20))}"
             + (missing.Count > 20 ? ", …" : "")
-            + ". The per-assembly reason (framework identity, the per-type dependency record, or a "
-            + $"payload the bundle's manifest names but does not carry) is logged above under the "
-            + $"'{LogCategory}' category, which the gate raises to Information whenever it consumes "
-            + "a bake; outside the gate, enable that category to read it.";
+            + ". The per-assembly reason is logged above: a bake-identity decline (framework "
+            + "identity, the per-type dependency record, or a payload the bundle's manifest names "
+            + $"but does not carry) under the '{LogCategory}' category, which the gate raises to "
+            + "Information whenever it consumes a bake; or — not a bake problem at all — the seed's "
+            + "own write to the type's owner did not complete (a Warning reading 'seeding <type> "
+            + "from <bundle> did not complete — the sweep compiles it instead', preceded by that "
+            + "owner's write timing out), in which case the bytes were fine and the mesh was slow. "
+            + "Outside the gate, enable that category to read the first kind.";
     }
 }
