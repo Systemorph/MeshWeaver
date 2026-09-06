@@ -399,30 +399,43 @@ is the one that loses its place — load-sensitive by construction, green in iso
 being processed after the requester's 60 s budget has expired. That fits a requester measured healthy
 and idle against a target never observed dead better than a wedge does.
 
-**Fifth — a granted-but-never-acted-on claim that emits nothing further (`MeshWeaver.Plugins#1193`).**
-A controlled load experiment on `BuildCoordinationTest.Follower_StandsDown_SoTheNextBuildCanStart` —
+**Fifth — a root that STOPS EMITTING with a holder still set (`MeshWeaver.Plugins#1193`).** A
+controlled load experiment on `BuildCoordinationTest.Follower_StandsDown_SoTheNextBuildCanStart` —
 18 cores, two arms of ten runs, same binary and same sha, only background load differing — passed
 10/10 under 12 burners (load ~31–39) and failed 1 of 10 under 64 burners (load 49–91+), at 32.9 s,
-with the CI signature. Instrumenting the wait recorded **exactly one** root state in 15 seconds and
-then nothing at all:
+with the CI signature. Instrumenting the wait recorded **exactly one** root emission in 15 seconds
+and nothing after it.
+
+🚨 **The control is what makes the reading honest.** The PASSING state was captured at the same
+point in the same test (by temporarily making the predicate unsatisfiable — a diagnostic never seen
+to run reads exactly like one that works). The two states differ in **one field**:
 
 ```
-ClaimedBy=<machine-scoped id>  Status=Planning  RequestedClaims=[]  Ready=[fp]
+FAIL:  ClaimedBy=<machine-scoped id>   Status=Planning  RequestedClaims=[]  Ready=[fp]
+PASS:  ClaimedBy=<null>                Status=Planning  RequestedClaims=[]  Ready=[fp]
 ```
 
-Read it field by field: the build **completed** — `Ready` carries the fingerprint, the GO was
-published. `RequestedClaims` is **empty**, so this is *not* a pending registration outliving its
-candidate; it was consumed. And the holder sits at `Status=Planning` — **granted, never started,
-never released.** One emission in fifteen seconds is terminal, not slow. **A reader waiting on that
-state waits forever.** 🚨 It reproduced **with #3408 already in the core**, so #3408 does not remove
-it and #3131 did not close it: this is a second, independent hole.
+So `Status=Planning` and the empty `RequestedClaims` are **not symptoms** — the healthy run carries
+both, and the build completed in both (`Ready` holds the fingerprint either way). Any account
+resting on those two fields rests equally on the passing run. What is measured is exactly this:
+**`ClaimedBy` stays set, one root emission in 15 s, nothing after.** A reader waiting on such a root
+waits forever.
 
-The fifth cause is the one this door most clearly answers. In that state the target is neither dead
-nor slow, so nothing about the transport is going to recover it — while the durable GO is already
-published and already readable. **The durable door is correct whichever of the five it is, it is the
-only one that does not depend on diagnosing the transport first, and for the fifth it is the only one
-of the fixes in flight that helps at all.** None of that makes it a cure: each cause is a separate
-change, owned separately, and this one must not be read as having addressed any of them.
+**The mechanism is open.** Whether the holder cannot act or was never told to is precisely the
+question still live on `MeshWeaver.Plugins#1193` — so this page names the SHAPE, not a cause. The
+permanent diagnostic landed as `MeshWeaver.Plugins#1401` (diagnostic only, no production code) and
+the repro recipe is on #1193; reproduce from those rather than re-deriving.
+
+🚨 It reproduced **with #3408 already in the core**, so #3408 does not remove it and #3131 did not
+close it: fourth and fifth are independent, and neither subsumes the other.
+
+This shape is the one the durable door most clearly answers — and note the claim is about the shape,
+not about any mechanism. A root that has stopped emitting is neither dead nor slow, so nothing about
+the transport is going to recover it, while the durable GO is already published and already readable.
+**The durable door is correct whichever of the five it is, it is the only one that does not depend on
+diagnosing the transport first, and in this shape it is the only fix in flight that helps at all.**
+None of that makes it a cure: each cause is a separate change, owned separately, and this one must
+not be read as having addressed any of them.
 
 The probe semantics of `NodeTypeBakeGateState` are preserved unchanged — fail **closed**
 on a measured regression (the rollout stalls, the old image keeps serving), fail **open**
