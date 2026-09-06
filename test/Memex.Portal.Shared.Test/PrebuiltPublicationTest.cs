@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Net;
+using System.Text.Json;
 using System.Reactive.Linq;
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
@@ -76,10 +77,21 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
             var refused = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}", ungrantedKey);
             Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
 
-            // 3. unsealed directory → 404, even to a caller that would otherwise be allowed
+            // 3. unsealed directory → 503 + Retry-After, NOT 404 (#3401). The publisher removes the
+            // sentinel before republishing and restores it last, so a caller here is looking at a
+            // publication that exists and is being replaced — transient, and it must say so.
             var tornKey = await RegisterInstance("torn-reader", "torn/*");
             var tornResp = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/torn", tornKey);
-            Assert.Equal(HttpStatusCode.NotFound, tornResp.StatusCode);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, tornResp.StatusCode);
+            Assert.Equal("30", tornResp.Headers.RetryAfter?.Delta?.TotalSeconds.ToString("0"));
+            Assert.Contains("republished", await tornResp.Content.ReadAsStringAsync());
+
+            // …and a source nothing was ever published under stays a permanent 404, so the two are
+            // distinguishable — that distinction is the whole point.
+            var absentKey = await RegisterInstance("absent-reader", "never-published/*");
+            var absent = await Get(
+                app, $"/api/plugins/bundles/prebuilt/{Identity}/never-published", absentKey);
+            Assert.Equal(HttpStatusCode.NotFound, absent.StatusCode);
 
             // 4. present on disk but not sealed → 404
             var orphan = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}/Orphan.zip", grantedKey);
@@ -210,10 +222,81 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
         return app;
     }
 
-    private static async Task<HttpResponseMessage> Get(WebApplication app, string route, string key)
+    /// <summary>
+    /// 🚨 #3401. A consumer reads the index and then fetches each bundle it names — N+1 reads of a
+    /// directory the publisher may reseal underneath it. Without a generation the second half of
+    /// that fetch silently mixes bytes from two publications, and nothing in any status code says
+    /// so. With one, the server refuses the stale read and names both generations.
+    ///
+    /// <para>This is the case that no amount of retrying fixes and that the 2026-09-06
+    /// Manufacturing red could not have revealed: there, the window was observed as a 404 because
+    /// the seal was absent. Here the seal is present both times and only its CONTENT moved.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AResealBetweenTheIndexAndTheBundleIsRefused_NotSilentlyMixed()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-prebuilt-gen-" + Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(root, Identity, Source);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            WriteBundle(Path.Combine(dir, "Store.zip"), "Store");
+            var sentinel = Path.Combine(dir, ShippedPrebuiltBundles.CompletionSentinelFileName);
+            File.WriteAllText(sentinel, "Store.zip\n");
+
+            var key = await RegisterInstance(Granted, $"{Source}/*");
+            await using var app = await StartHost(root);
+            var route = $"/api/plugins/bundles/prebuilt/{Identity}/{Source}";
+
+            // 1. the index carries a generation, and the same value as its ETag
+            var index = await Get(app, route, key);
+            Assert.Equal(HttpStatusCode.OK, index.StatusCode);
+            var generation = JsonDocument.Parse(await index.Content.ReadAsStringAsync())
+                .RootElement.GetProperty("generation").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(generation));
+            Assert.Equal(generation, index.Headers.ETag?.Tag.Trim('"'));
+
+            // 2. pinning the generation we actually read is accepted
+            var fresh = await Get(app, $"{route}/Store.zip", key, generation);
+            Assert.Equal(HttpStatusCode.OK, fresh.StatusCode);
+
+            // 3. the publisher reseals — same bundle NAME, new bytes. Nothing about the listing
+            //    changes, which is exactly why a name-based check cannot see this.
+            File.Delete(Path.Combine(dir, "Store.zip"));   // a republish REPLACES the bytes
+            WriteBundle(Path.Combine(dir, "Store.zip"), "Store-v2");
+            File.SetLastWriteTimeUtc(sentinel, File.GetLastWriteTimeUtc(sentinel).AddSeconds(1));
+
+            var moved = await Get(app, $"{route}/Store.zip", key, generation);
+            Assert.Equal(HttpStatusCode.PreconditionFailed, moved.StatusCode);
+            var body = JsonDocument.Parse(await moved.Content.ReadAsStringAsync()).RootElement;
+            Assert.Equal(generation, body.GetProperty("held").GetString());
+            Assert.NotEqual(generation, body.GetProperty("current").GetString());
+
+            // 4. …and re-reading the index hands the caller the generation that now applies
+            var again = await Get(app, route, key);
+            var current = JsonDocument.Parse(await again.Content.ReadAsStringAsync())
+                .RootElement.GetProperty("generation").GetString();
+            Assert.Equal(current, body.GetProperty("current").GetString());
+            Assert.Equal(
+                HttpStatusCode.OK, (await Get(app, $"{route}/Store.zip", key, current)).StatusCode);
+
+            // 5. a caller that pins NOTHING keeps working — the precondition is opt-in, so a
+            //    satellite on an older gate pin is unaffected by this change.
+            Assert.Equal(HttpStatusCode.OK, (await Get(app, $"{route}/Store.zip", key)).StatusCode);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    private static async Task<HttpResponseMessage> Get(
+        WebApplication app, string route, string key, string? ifMatch = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, route);
         request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {key}");
+        if (ifMatch is not null)
+            request.Headers.TryAddWithoutValidation("If-Match", ifMatch);
         return await app.GetTestClient().SendAsync(request);
     }
 }
