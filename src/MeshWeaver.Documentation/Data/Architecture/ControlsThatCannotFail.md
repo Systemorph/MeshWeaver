@@ -43,10 +43,12 @@ instances. The family is larger, and it is worth recognising by shape.
 | **One word covering three states** | `completed/success` over checked-and-passed, never-ran, and ran-and-did-nothing | the verdict is not the outcome |
 | **A tool that collapses several failures into one exit code** | `git cat-file -e "$sha:$path" \|\| echo ABSENT` | absent-path, bad-sha, missing-object and bad-quoting all read the same |
 | **A measurement that truncates and answers anyway** | a profiler capping at N objects; `\| head -10` on a sorted sweep | the wrong number is *plausible* — and on ordered output the survivors are biased, so a partial view reads as a clean one |
+| **An identity field one value covers** | every session commits as the same git author | the field agrees with whichever hypothesis you brought to it |
+| **An EXCULPATORY wrong answer** | "it fails on another branch too" ⇒ pre-existing | *not our change* ends the investigation; nobody re-checks a clean bill |
 | **A count over a population whose membership varies** | `grep -c "webhook-url:" ci.yml` → `0` across six repos | a zero means "present and omits it" in five and "the thing does not exist" in the sixth |
 | **A writer whose failure mode is a SUCCESS line** | a generator that skips its work and prints a summary anyway | nothing distinguishes "wrote it" from "declined to" |
 
-## Nine measured instances
+## Eleven measured instances
 
 The first six were found in a single day, across tests, CI, publication and ops. Instances 7 and 8
 were found **while writing this page** — one by its author, one by the session that supplied instances
@@ -385,6 +387,85 @@ belongs on this page: nothing about the output looks wrong.
 it also measures which cause. If you cannot express the denominator as a column, you do not yet know
 what your zero means.
 
+### 10. An identity field that agrees with whatever you already believed
+
+Every agent session on the shared build machine commits as the **same git identity**. On one pull
+request touched by three sessions within an hour, all four commits read identically:
+
+```
+49ef8b9fe  author=rbuergi  committer=Roland Bürgi   (session A — staged the pin move)
+770b6306a  author=rbuergi  committer=Roland Bürgi   (session A)
+3cf2b206b  author=rbuergi  committer=Roland Bürgi   (session B, 19:13:56Z, 1 file)
+2f1471a96  author=rbuergi  committer=Roland Bürgi   (session C, 20:11:59Z, 2 other files)
+```
+
+A guess — *"session B, I assume"* — was relayed as fact, thanked for, and used to aim a
+"stop pushing to this branch" constraint. Nobody caught it, because the field anyone would check it
+against **agrees with every hypothesis**. It was corrected only when the session it named said "that
+is not my commit" and produced the timestamps.
+
+Cost of the near-miss: the real author was never told their change edits the *detector* rather than
+the defect, and the actual third pair of hands stayed invisible — the precise coordination failure
+the constraint existed to prevent.
+
+**Rule:** never attribute a commit on a shared branch from git metadata. The only discriminators are
+the **commit timestamp** and the **file set**. Say *"a commit landed"* and ask. When announcing your
+own push, state it as `<sha> <timestamp> <files>` so the next reader has the discriminator without
+having to ask anyone.
+
+### 11. "It fails on another branch too" — the wrong answer that is EXCULPATORY
+
+Two tests failed on a pin-move PR. Another pull request **on the old lane pin** failed the same two
+by name, so the failure was recorded as pre-existing and independent of the pin. That conclusion was
+wrong, and it was published before anyone checked it.
+
+Outcomes are incoherent when read against the lane pin, and exact when read against the core commit
+each branch actually compiles against:
+
+| PR | lane pin | outcome | | effective source ref | carries the suspect commit? |
+|---|---|---|---|---|---|
+| #1417 | old | success | | `main` `bbcb22f25` | **no** (compare: `behind`) |
+| #1419 | old | success | | #1410 `7278d3d22` | **YES** |
+| #1410 | old | **FAILURE** | | #1415 `1b5350d54` | **YES** |
+| #1415 | new | **FAILURE** | | | |
+
+**The outcome tracks the commit 4/4 and the lane pin 2/4.** The odd PR had moved its
+`MW_PLATFORM_REF` while leaving its lane pin alone — it *already had the cause*. Same symptom
+elsewhere was not evidence of independence; it was evidence that the other branch had got there
+first.
+
+🚨 **This one is the most dangerous in the family because of its DIRECTION.** Every other entry
+leaves someone still looking. *"Not our change"* **ends the investigation** — an exculpatory wrong
+answer is the one nobody re-checks, because it costs nothing to accept and closes the file.
+
+**Rule:** same-symptom-on-another-branch is evidence of independence ONLY after you establish which
+ref that branch compiles against. A repo here carries four that can differ on one branch —
+`MW_PLATFORM_REF` (source), `MW_PLATFORM_SET`/`MW_IMAGE_DIGEST` (image), the lane `uses:@sha` refs,
+and `clients/react/src/i18n/catalog-source.json` (not a build pin at all). One line settles it:
+
+```bash
+gh api "repos/<owner>/<core>/compare/<suspect>...<that branch's MW_PLATFORM_REF>" --jq .status
+# ahead|identical ⇒ that branch HAS the cause; behind|diverged ⇒ it does not
+```
+
+## What the whole family has in common
+
+Instances 9, 10 and 11 were found on one day, alongside a watcher reading a `startup_failure` (a
+check-**suite** with **zero** check-**runs**) as *all checks green*. Four instruments, one property:
+
+> **They do not fail to answer. They answer, confidently, wrongly — and the wrong answer is spelled
+> exactly like a real negative.**
+
+- git authorship → confirms whatever you already believed
+- zero check-runs → *all green*
+- a sweep's `0` → *"present and omits it"* **or** *"does not exist"*, indistinguishable
+- *"it fails elsewhere too"* → *pre-existing*
+
+**The shared remedy is one question, and it is not "be careful": ask what the instrument answers
+when it cannot actually see, and refuse to let that answer be spelled the same way as a real
+negative.** Where the two cannot be separated, add the column that separates them — the
+denominator, the suite state, the timestamp, the ancestry test.
+
 ## The family's edge: a control that fires correctly and hands you an impossible next step
 
 The eight above are all one defect — a control whose green is guaranteed. This last one is
@@ -453,6 +534,12 @@ carries its own control arm is that thesis applied to itself.
 9. **Read check-SUITES, not only check-runs.** `startup_failure` is terminal and produces zero runs,
    so a run-count filter and an absent-context filter both mis-report it — one as green, one as
    pending-forever.
+
+10. **Never attribute a commit on a shared branch from git metadata.** One identity covers every
+   session; only the timestamp and the file set discriminate. Announce your own pushes as
+   `<sha> <timestamp> <files>`.
+11. **Before calling a failure pre-existing, check which ref the other branch compiles against.** An
+   exculpatory wrong answer ends the investigation, so it is the one to distrust most.
 
 ## See also
 
