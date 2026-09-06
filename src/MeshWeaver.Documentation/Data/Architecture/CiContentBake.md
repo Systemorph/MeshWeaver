@@ -721,6 +721,7 @@ deliberately deferred.
 | `.github/workflows/node-repo-gate.yml` | the tester gate — `mw-plugin-test` over the (optionally affected-narrowed) mount, cross-repo `requires` staged in; since #3022 executed by the tester **as the portal** (`platform-image`, composed gate host, `--app /app`) |
 | `.github/workflows/node-repo-publish-bake.yml` | the main-only bake + publication — `compile --output` then `--seed` over the full repo or (opt-in) the affected closure, staged-module exclusion, OIDC publish via the canonical `publish-bake-bundles.sh`; since #3022 the bake compiles against and is keyed to the **portal** (`platform-image` + `platform-image-digest`, both required-or-explicit exactly like the tester's) |
 | `.github/workflows/node-repo-tag-modules.yml` | the `<Module>/vX.Y.Z` tag publisher (`scripts/tag-modules.py`) |
+| `.github/workflows/node-repo-platform-ref-bump.yml` | the scheduled `MW_PLATFORM_REF` bump — polls the upstream's default branch and opens a PR (never a push) so the source pin cannot silently lag; mints a GitHub App token, because a pull request opened with `GITHUB_TOKEN` starts no CI at all. Called by MeshWeaver.Plugins and MeshWeaver.SocialMedia — the two node repos that carry such a pin. See [Keeping the Platform Source Pin Current](../PlatformRefBumpLane) |
 
 The design rules the extraction preserves:
 
