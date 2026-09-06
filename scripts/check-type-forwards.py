@@ -932,6 +932,12 @@ def check(
             f"  nothing of that name moved in it. An entry that permits nothing hides the next\n"
             f"  break — delete the line, or make the move it was written for."
         )
+    if allow_failures:
+        print(
+            f"\n{len(allow_failures)} UNUSABLE ALLOW ENTR(IES): the pull request each names is not "
+            f"open,\n  or could not be read at all. An allow entry is transitional — see the "
+            f"per-entry lines above,\n  and Doc/Architecture/TransitionalAllowEntries."
+        )
     return 1
 
 
