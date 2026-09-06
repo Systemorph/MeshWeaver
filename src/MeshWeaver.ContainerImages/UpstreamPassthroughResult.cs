@@ -1,4 +1,9 @@
+using System.Reactive.Linq;
+using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.ContainerImages;
 
@@ -9,9 +14,36 @@ namespace MeshWeaver.ContainerImages;
 /// <para>🚨 The body is NEVER buffered. <c>CopyToAsync</c> against the raw response stream is what
 /// keeps a 300 MB layer off the heap; materialising it would OOM the portal under a rolling
 /// restart, when many pods pull at once.</para>
+///
+/// <para>🚨 And the copy runs THROUGH <see cref="IIoPool"/>, holding one slot for the whole
+/// transfer. Not buffering keeps one layer off the heap; the pool is what keeps a HUNDRED
+/// concurrent layer pulls — a rolling restart of a large deployment — from each holding a socket,
+/// a buffer and a thread's worth of scheduling at once. The bound is backpressure, deliberately:
+/// a pull that waits for a slot is correct, a portal that falls over is not. The pool slot is
+/// held across the copy rather than only across the connect, because the transfer is the part
+/// that costs.</para>
 /// </summary>
 public sealed class UpstreamPassthroughResult(HttpResponseMessage upstream) : IResult
 {
+    private readonly IIoPool? pool;
+    private readonly byte[]? body;
+
+    /// <summary>
+    /// A passthrough whose body copy is bounded by <paramref name="ioPool"/>, optionally serving
+    /// <paramref name="preRead"/> bytes the caller already read (a manifest it recorded) instead
+    /// of the upstream stream.
+    /// </summary>
+    /// <param name="upstream">The upstream response; this result owns its disposal.</param>
+    /// <param name="ioPool">The pool bounding the transfer, or null for an unbounded copy.</param>
+    /// <param name="preRead">Body bytes already read, or null to stream the upstream body.</param>
+    public UpstreamPassthroughResult(
+        HttpResponseMessage upstream, IIoPool? ioPool, byte[]? preRead = null)
+        : this(upstream)
+    {
+        pool = ioPool;
+        body = preRead;
+    }
+
     /// <summary>Headers an OCI client depends on. <c>Docker-Content-Digest</c> is how a client
     /// verifies it got the bytes it asked for, and dropping it silently breaks digest pinning.</summary>
     private static readonly string[] ForwardedHeaders =
@@ -34,11 +66,50 @@ public sealed class UpstreamPassthroughResult(HttpResponseMessage upstream) : IR
                     httpContext.Response.Headers[name] = cv.ToArray();
             }
 
+            if (body is not null)
+            {
+                // A manifest the caller already read in order to record it. Bounded by
+                // ContainerImageOptions.MaxRecordedManifestBytes at the point it was read, so
+                // this is kilobytes — never a layer.
+                await httpContext.Response.Body.WriteAsync(body, httpContext.RequestAborted);
+                return;
+            }
+
             // Content-Length is set from the upstream header above; Kestrel refuses a body longer
             // than it, so a truncated upstream surfaces as a failed request rather than a short
             // layer the client would cache as complete.
-            await using var body = await upstream.Content.ReadAsStreamAsync(httpContext.RequestAborted);
-            await body.CopyToAsync(httpContext.Response.Body, httpContext.RequestAborted);
+            if (pool is null)
+            {
+                await Copy(httpContext, httpContext.RequestAborted);
+                return;
+            }
+
+            var logger = httpContext.RequestServices.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(UpstreamPassthroughResult));
+            // 🚨 ObserveCompletion, never .ToTask() — a Task completed inside an Rx pipeline
+            // resumes its awaiter INLINE on the signalling thread, still inside Rx's trampoline,
+            // and in a pool that is the worst place for it: the continuation that runs there is
+            // the one RELEASING THE SLOT.
+            //
+            // 🚨 cancelSource: true, because this wait OWNS a bounded resource. A client that
+            // gives up mid-layer (a `docker pull` interrupted, a pod rescheduled) must release the
+            // pool permit with it — under the non-disposing default the permit would be held for
+            // the full remaining transfer that nobody is reading, invisibly, until the pool
+            // starved (#2772).
+            await pool.Invoke(ct => Copy(httpContext, ct))
+                .FirstAsync()
+                .ObserveCompletion(
+                    ex => logger?.LogWarning(ex,
+                        "Container registry mirror: the upstream body copy for {Path} faulted "
+                        + "after the request had already been answered", httpContext.Request.Path),
+                    cancelSource: true,
+                    httpContext.RequestAborted);
         }
+    }
+
+    private async Task Copy(HttpContext httpContext, CancellationToken ct)
+    {
+        await using var source = await upstream.Content.ReadAsStreamAsync(ct);
+        await source.CopyToAsync(httpContext.Response.Body, ct);
     }
 }
