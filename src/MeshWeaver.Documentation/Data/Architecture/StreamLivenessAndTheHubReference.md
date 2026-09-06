@@ -260,6 +260,47 @@ guarding its `Stream.Hub.Dispose()` with `IsUsable` would SKIP a disposal — a 
 `Hub is { }`, which only skips when the reference is already gone, i.e. when the hub is already
 disposed.
 
+### 🚨 The dependent half — and why no gate could have told you
+
+`ISynchronizationStream.Hub` is a **public** member of a **public** interface that these assemblies
+ship as packages, and step 3 changes what it ANSWERS without changing its signature. That is shape 7
+of the seven cross-repo break shapes, and it is the one **no surface detector can see by
+construction** — the `Cross-repo pair (public surface)` gate resolves removed types and removed
+members, and this diff removes zero of each. So the sweep has to be done by hand, on the receiver
+type, across every satellite checkout.
+
+Measured on 2026-09-06, all six satellites, every file (not just `.cs` — in-mesh C# lives inside
+`.json` node strings too):
+
+| Repo | stream-receiver `.Hub` | raw `.Hub` lines classified |
+|---|---:|---:|
+| **MeshWeaver.Plugins** | **22** (11 production, 11 test) | 2 051 |
+| education | 0 | 483 |
+| MeshWeaver.Education | 0 | 11 |
+| MeshWeaver.Reinsurance | 0 | 152 |
+| MeshWeaver.SocialMedia | 0 | 73 |
+| MeshWeaver.Manufacturing | 0 | 15 |
+
+The four content satellites are clean *structurally*, not merely by token match:
+`ISynchronizationStream` appears in ZERO files in four of them, and in exactly one file in
+Reinsurance where the stream is only `.Update(…)`d. Every `.json` node carrying `.Hub` inside a C#
+`configuration` string resolves to `IWorkspace.Hub` / `LayoutAreaHost.Hub` / an `IMessageHub` local.
+
+**All 11 production dereferences are one cluster in `MeshWeaver.Plugins`** — the Blazor view layer's
+inherited `ISynchronizationStream<JsonElement>? Stream` (`BlazorView.razor.cs`): `OnClick`,
+`OnBlur`, both `DialogView` close handlers, and seven `JsonSerializerOptions` reads across
+`ViewModelExtensions`, `FormComponentBase`, `DataGridView`, `RadzenChartView` and
+`RadzenPivotGridView`.
+
+🚨 **The `!` in `Stream!.Hub.Something` is on `Stream`, not on `.Hub`** — so the NRE moves one level
+right, past the operator that suppresses the warning, and the compiler stays silent. One of them
+(`RadzenChartView.razor:171`) sits inside a bare `catch { }`, so it would have been invisible at
+runtime too: a wrong chart rather than an exception.
+
+**Order: the dependent lands FIRST.** Its guards are no-ops on a live stream, so they are safe
+against the old core; core's release is not safe against an unguarded dependent. The core PR was
+held as a draft until the Plugins counterpart merged.
+
 ### And every read inside the stream now resolves the field once
 
 Step 2 excluded `SynchronizationStream`'s own bare `Hub` reads as "already guarded". They were —
