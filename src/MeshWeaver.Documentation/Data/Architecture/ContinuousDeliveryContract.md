@@ -348,6 +348,30 @@ read. **The number of images promoted was never the question.** The operator-fac
 choosing a target is [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall) →
 "What makes a tag a safe target".
 
+### A set is named by its RUN — and the pending slot cancels runs under commits that stay valid
+
+A sealed set's name is `<PlatformVersion>-ci.<run number>`, and the run number is the one thing about
+a set that is **not** a property of the commit. `main-cd`'s one-pending-slot rule (#3379) holds at
+most one run waiting behind the ones in flight, and every merge to `main` **cancels the pending run
+and re-queues a new one on the newer tip** — the commit that was waiting is still perfectly valid,
+still on `main`, and will still be *inside* whatever set eventually seals; only the run that would
+have named it is gone. Measured on 2026-09-06 while three sessions coordinated one satellite pin move:
+7910 (`db2e79990`) was cancelled by 7911 on the same commit, 7911 by 7912 on `3b6423939`, and three
+people wrote a wrong run number inside one hour, two of them twice.
+
+So a run number is meaningful only **after the slot has started and the seal has read `success`**, and
+naming a target set before that is naming something that does not exist yet. The protocol that
+survives it:
+
+- **State the requirement as a commit, not a run** — "the first sealed set cut from `db2e79990` or
+  later" cannot go stale; "`ci.7911`" went stale in four minutes.
+- **Name the set only when its bake/seal jobs read `success`** (read the JOB; a run's green tick with
+  the seal skipped is not a set), and **send the name together with its digests in one message** —
+  a digest without its run number, or a run number without its digests, is a question, not an
+  instruction.
+- **Parameterise pin-bump PRs on a placeholder** until then; a body claiming a number that was
+  cancelled is the kind of stale claim that survives into a release note.
+
 ## Property 1a — how the set already spans repos, and what the GUI move actually breaks
 
 🚨 **Correction, 2026-08-26.** An earlier draft of this section claimed the shipped artefacts have
