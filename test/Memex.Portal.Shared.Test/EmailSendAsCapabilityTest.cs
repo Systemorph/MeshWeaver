@@ -195,6 +195,41 @@ public class EmailSendAsCapabilityTest(ITestOutputHelper output) : MonolithMeshT
             "without this the fold could 'pass' the control above by answering false to everything");
     }
 
+    /// <summary>
+    /// 🚨 The probe stays LIVE — the hub extension must not truncate it to one answer.
+    ///
+    /// <para>The dialog <c>CombineLatest</c>s this stream into the form it renders, so it is a live
+    /// data-bound view, and <c>.Take(1)</c> on one of those freezes the binding. It is also the
+    /// mechanism the "Check again" affordance needs: a sender that re-probes has to be able to
+    /// replace an <see cref="EmailSendAs.Undetermined"/> answer with a real one <i>in place</i>,
+    /// without the dialog being torn down and rebuilt.</para>
+    ///
+    /// <para>Neither operator in the extension needs a single emission — <c>Catch</c> replaces only
+    /// the tail after a fault, and <c>DefaultIfEmpty</c> fires only on an empty completion — so the
+    /// truncation would buy nothing and cost the retry.</para>
+    /// </summary>
+    [Fact]
+    public async Task TheProbeStaysLive_SoARetryCanReplaceAnUndeterminedAnswerInPlace()
+    {
+        sender.Answer = _ => Observable
+            .Return(EmailSendAsCapability.Unknown("first check did not answer"))
+            .Concat(Observable.Return(EmailSendAsCapability.Available));
+
+        var answers = await Mesh.ObserveSendAsCapability(User)
+            .Take(2).ToList()
+            .Should().Within(TestTimeouts.Convergence).Emit();
+
+        foreach (var answer in answers)
+            Output.WriteLine($"live probe emitted: {answer}");
+
+        answers.Should().HaveCount(2,
+            "truncating the probe to one answer freezes the dialog's binding and makes 'Check "
+            + "again' unable to replace the panel it is offered on");
+        answers[0].IsUndetermined.Should().BeTrue();
+        answers[1].IsAvailable.Should().BeTrue(
+            "the second answer must reach the view, in place, without a rebuild");
+    }
+
     // ── The fault is now greppable ───────────────────────────────────────────────────────────────
 
     /// <summary>

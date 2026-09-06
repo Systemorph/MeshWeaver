@@ -110,8 +110,14 @@ public static class HubEmailExtensions
                 "No IEmailSender is registered on this deployment, so nothing can send as a user. "
                 + "This is a completed check with a negative answer, not an unknown."));
 
+        // 🚨 Deliberately NOT .Take(1). This feeds a live data-bound view — the send dialog
+        // CombineLatests it into the rendered form — and truncating a stream that a view binds to
+        // freezes the binding, which is the "Check again" affordance's whole mechanism: a sender
+        // that re-probes must be able to replace an Undetermined answer with a real one, in place.
+        // Neither operator below needs a single emission: Catch replaces only the tail after a
+        // fault, and DefaultIfEmpty fires only when the source completes having emitted nothing.
+        // The send-time caller, which genuinely wants one answer, takes its own .Take(1).
         return sender.ObserveSendAsCapability(userObjectId)
-            .Take(1)
             .Catch((Exception ex) =>
             {
                 Logger(hub)?.LogWarning(
