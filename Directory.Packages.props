@@ -167,7 +167,7 @@
          packages and the base image stays as it is — the font is supplied from an embedded
          resource instead. linux-x64 AND linux-arm64 natives ship in the package, which the
          multi-arch portal image requires. -->
-    <PackageVersion Include="SkiaSharp" Version="3.119.2" />
+    <PackageVersion Include="SkiaSharp" Version="4.151.2" />
     <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.2" />
     <!-- 🚨 SkiaSharp DRAWS; it does not PARSE. The favicon rasterizer (IconRasterizer, issue
          #2075) has to turn a node's AUTHORED &lt;svg&gt; mark into PNG bytes because Safari
