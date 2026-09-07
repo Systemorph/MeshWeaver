@@ -208,8 +208,11 @@ public static class InstallCompleteness
         JsonSerializerOptions options,
         IReadOnlySet<string> accountedPartitions)
     {
+        // 🚨 No adapter is not "no abandoned roots" — it is "nobody looked". Same rule as the
+        // fault path below; an empty sequence here would be a silent zero in the summary.
         if (persistence is null)
-            return Observable.Empty<InstallCompletenessVerdict>();
+            return Observable.Return(NotSwept(
+                "this host registers no storage adapter, so the abandoned-root sweep did NOT run"));
 
         return persistence.ListChildPaths(null)
             .Take(1)
@@ -227,17 +230,25 @@ public static class InstallCompleteness
                 // for at boot; silently reading the first N would be worse, because the roots it
                 // skipped would be spelled exactly like roots that are fine. So it emits ONE
                 // verdict saying the arm did not run and what the number was.
-                ? Observable.Return<InstallCompletenessVerdict>(new(
-                    "*", "*", InstallCompletenessKind.NotObserved, 0, 0,
-                    ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
+                ? Observable.Return(NotSwept(
                     $"{candidates.Count} top-level partition(s) are unaccounted for, above the "
                     + $"{MaxUnaccountedRootsToRead} this arm reads in one batch — so the "
                     + "abandoned-root sweep did NOT run this boot. This is not a clean result; it "
                     + "is an absent one."))
                 : ObserveCandidateRoots(persistence, options, candidates))
-            .Catch<InstallCompletenessVerdict, Exception>(_ =>
-                Observable.Empty<InstallCompletenessVerdict>());
+            // 🚨 A FAULT MUST NOT FOLD INTO AN EMPTY SEQUENCE. Returning `Observable.Empty` here
+            // would make "the abandoned-root sweep could not run" produce the same zero in the
+            // summary as "there are no abandoned roots" — the exact `not checked reads as clean`
+            // failure this whole type exists to remove, recreated inside it. Emit the absence
+            // instead, so the sweep's denominator carries it.
+            .Catch((Exception ex) => Observable.Return(NotSwept(
+                $"the abandoned-root sweep FAILED and did not run: {ex.Message}")));
     }
+
+    /// <summary>The whole-arm "this did not run" verdict — an absence, never a zero.</summary>
+    private static InstallCompletenessVerdict NotSwept(string because) =>
+        new("*", "*", InstallCompletenessKind.NotObserved, 0, 0,
+            ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal), because);
 
     /// <summary>
     /// The bound on <see cref="ObserveUnaccountedRoots"/>' one batched read. Every top-level node is
@@ -261,16 +272,36 @@ public static class InstallCompleteness
             .SelectMany(roots => roots.Count == 0
                 ? Observable.Empty<InstallCompletenessVerdict>()
                 : roots
-                    .Select(root => HasOnlySatellites(persistence, root.Path)
-                        .Where(onlySatellites => onlySatellites)
-                        .Select(_ => new InstallCompletenessVerdict(
-                            root.Path, root.Path, InstallCompletenessKind.RootWithoutRecord,
-                            0, 0,
-                            ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
-                            "a partition root exists that NO install record accounts for, holding "
-                            + "no content and nothing but satellites. That is the shape an install "
-                            + "leaves when it writes its root placeholder and then stops — the "
-                            + "portal serves it as an ordinary empty space (MeshWeaver#3485)")))
+                    .Select(root => Satellites(persistence, root.Path)
+                        .SelectMany(shape => shape switch
+                        {
+                            // Only satellites ⇒ this is the placeholder shape.
+                            SatelliteShape.OnlySatellites => Observable.Return(
+                                new InstallCompletenessVerdict(
+                                    root.Path, root.Path,
+                                    InstallCompletenessKind.RootWithoutRecord, 0, 0,
+                                    ImmutableSortedSet<string>.Empty
+                                        .WithComparer(StringComparer.Ordinal),
+                                    "a partition root exists that NO install record accounts for, "
+                                    + "holding no content and nothing but satellites. That is the "
+                                    + "shape an install leaves when it writes its root placeholder "
+                                    + "and then stops — the portal serves it as an ordinary empty "
+                                    + "space (MeshWeaver#3485)")),
+                            // 🚨 The listing did not answer. Reporting the root as wreckage would be
+                            // a false accusation; reporting NOTHING would spell it exactly like a
+                            // root that is fine. So it is an absence, named.
+                            SatelliteShape.Unreadable => Observable.Return(
+                                new InstallCompletenessVerdict(
+                                    root.Path, root.Path,
+                                    InstallCompletenessKind.NotObserved, 0, 0,
+                                    ImmutableSortedSet<string>.Empty
+                                        .WithComparer(StringComparer.Ordinal),
+                                    "this root has no install record and no content, but its "
+                                    + "children could not be listed — so whether it is an abandoned "
+                                    + "install placeholder was NOT determined")),
+                            // It has real children: an ordinary partition, nothing to report.
+                            _ => Observable.Empty<InstallCompletenessVerdict>(),
+                        }))
                     .ToObservable()
                     .Concat());
     }
@@ -301,18 +332,36 @@ public static class InstallCompleteness
         && string.Equals(node.NodeType, "Space", StringComparison.Ordinal)
         && !string.Equals(node.Path, PackageInstaller.InstalledPartition, StringComparison.Ordinal);
 
-    private static IObservable<bool> HasOnlySatellites(IStorageAdapter persistence, string partition) =>
+    /// <summary>What a candidate root's child listing said — THREE answers, because "it did not
+    /// answer" is neither of the other two.</summary>
+    private enum SatelliteShape
+    {
+        /// <summary>Nothing but <c>_</c>-prefixed satellites: the placeholder shape.</summary>
+        OnlySatellites,
+
+        /// <summary>Real children: an ordinary partition.</summary>
+        HasContentChildren,
+
+        /// <summary>The listing faulted or never emitted — NOT determined either way.</summary>
+        Unreadable,
+    }
+
+    private static IObservable<SatelliteShape> Satellites(
+        IStorageAdapter persistence, string partition) =>
         persistence.ListChildPaths(partition)
             .Take(1)
             .Select(children => children.NodePaths
                 .Concat(children.DirectoryPaths)
                 .Select(p => p.Split('/').LastOrDefault() ?? "")
-                .All(segment => segment.StartsWith('_')))
-            // 🚨 A listing that faults or completes empty answers "NOT only satellites" — the SAFE
-            // direction here, because the accusation is what would be wrong. A root that cannot be
-            // read is not reported as wreckage.
-            .Catch<bool, Exception>(_ => Observable.Return(false))
-            .DefaultIfEmpty(false);
+                .All(segment => segment.StartsWith('_'))
+                ? SatelliteShape.OnlySatellites
+                : SatelliteShape.HasContentChildren)
+            // 🚨 Neither a fault nor an empty completion is an ANSWER. Folding either into
+            // "has children" would drop the root silently — spelling "not checked" exactly like
+            // "checked and fine" — and folding it into "only satellites" would accuse a root
+            // nobody read. Both become Unreadable, which the caller reports as an absence.
+            .Catch<SatelliteShape, Exception>(_ => Observable.Return(SatelliteShape.Unreadable))
+            .DefaultIfEmpty(SatelliteShape.Unreadable);
 }
 
 /// <summary>

@@ -121,6 +121,23 @@ incomplete.
   then fast-fails the very write that would heal it.
 - A read that faults yields `NotObserved`, never "absent".
 
+🚨 **And that rule applies to the sweep's own machinery, not only to the packages it checks.** The
+first version of this change folded "no storage adapter" and "the root listing faulted" into an empty
+sequence, so the summary printed `0 root(s) with no record` in both cases — indistinguishable from a
+clean sweep, which is this page's whole subject reproduced inside its own implementation. Caught in
+review, and now:
+
+| Situation | What the sweep emits |
+|---|---|
+| no storage adapter | one `NotObserved` — "the abandoned-root sweep did NOT run" |
+| the root listing faulted | one `NotObserved` naming the fault |
+| more unaccounted roots than the bound | one `NotObserved` naming the count |
+| a candidate root whose children could not be listed | one `NotObserved` for **that root** — not an accusation, and not silence |
+| a clean sweep with nothing to report | **zero** verdicts |
+
+Only the last line is a zero, and `ASweepThatCouldNotRun_SaysSo_InsteadOfReportingZero` pins it —
+falsified by restoring the empty sequence, which turns it red.
+
 ## Where the verdict is consumed
 
 ### The install gate — it heals

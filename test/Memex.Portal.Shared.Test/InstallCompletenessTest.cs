@@ -350,6 +350,35 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
             + "red is a check nobody reads");
     }
 
+    /// <summary>
+    /// 🚨 A sweep that could not run must not produce the same ZERO as a sweep that found nothing.
+    /// Copilot caught this on the first version of this PR: <c>ObserveUnaccountedRoots</c> folded
+    /// both "no adapter" and "the listing faulted" into an empty sequence, so the summary printed
+    /// <c>0 root(s) with no record</c> either way — the `not checked reads as clean` failure this
+    /// whole change exists to remove, recreated inside it.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ASweepThatCouldNotRun_SaysSo_InsteadOfReportingZero()
+    {
+        var verdicts = await InstallCompleteness
+            .ObserveUnaccountedRoots(
+                persistence: null, Mesh.JsonSerializerOptions, ImmutableHashSet<string>.Empty)
+            .ToList()
+            .Timeout(30.Seconds())
+            .Await();
+
+        verdicts.Should().ContainSingle(
+            "a sweep that could not run emits exactly one verdict saying so — not zero, which is "
+            + "what a clean sweep emits");
+        verdicts[0].Kind.Should().Be(InstallCompletenessKind.NotObserved);
+        verdicts[0].IsComplete.Should().BeFalse("it was not checked, so it is not a pass");
+        verdicts[0].Because.Should().Contain("did NOT run",
+            "the line an operator reads has to distinguish an absent result from a clean one");
+
+        InstallCompleteness.Summarize(verdicts.ToImmutableList()).NotObserved.Should().Be(1,
+            "and the denominator has to carry it, or the summary is back to printing a bare zero");
+    }
+
     /// <summary>The denominator: a sweep reporting zero problems has to say what it looked at.</summary>
     [Fact]
     public void TheSummaryPrintsEveryKind()
@@ -382,6 +411,12 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
     /// Waits until <paramref name="path"/> is present (or absent) in STORAGE — a condition, never a
     /// clock. Read through <see cref="IStorageAdapter"/> because that is the one read that answers
     /// "absent" with a value instead of a fault.
+    ///
+    /// <para>🚨 A READ FAILURE IS NOT AN OBSERVATION OF ABSENCE. Mapping a fault to <c>false</c>
+    /// would make a broken read path satisfy <c>present: false</c> instantly — the precondition
+    /// would pass having measured nothing, and the assertion after it would then be testing a mesh
+    /// nobody could read. So the fault propagates and fails the test naming the path, which is the
+    /// same rule the production code under test is built on.</para>
     /// </summary>
     private async Task<bool> WaitForNode(string path, bool present) =>
         await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
@@ -390,7 +425,10 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
                 .Take(1)
                 .DefaultIfEmpty(null)
                 .Select(n => n is not null)
-                .Catch<bool, Exception>(_ => Observable.Return(false)))
+                .Catch<bool, Exception>(ex => Observable.Throw<bool>(new InvalidOperationException(
+                    $"reading '{path}' from storage FAILED, so neither its presence nor its "
+                    + "absence was observed. Treating this as 'absent' would let the test proceed "
+                    + "on a broken read path.", ex))))
             .Where(found => found == present)
             .Select(_ => true)
             .FirstAsync()
