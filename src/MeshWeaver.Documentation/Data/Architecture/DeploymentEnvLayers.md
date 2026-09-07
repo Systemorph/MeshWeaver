@@ -145,6 +145,47 @@ volumes of one name is an invalid spec while two classes syncing into one Secret
 `syncedSecret` still defaults to the class's own name, and the vault coordinates fall back to the
 singular block's — a namespace's classes normally read one vault with one add-on identity.
 
+## Two workloads, one secret set — and the escape hatch has to reach both
+
+The portal Deployment is not the only pod that reads the environment's secrets. The **migration
+Job** reads them too, because `MeshNodeEmbeddingBackfill` — the only thing that embeds rows written
+before a provider existed — needs `Embedding__ApiKey`. So the invariant is not *"the portal gets the
+keys"*, it is **both workloads carry the same secret set, by whichever mechanism delivers it**, and
+that has now failed twice in two different ways:
+
+| | #3548 | #3595 |
+|---|---|---|
+| mechanism | chart-owned class (`keyVaultSecrets`) | hand-made class (`extraEnvFrom`) |
+| what the Job had | the value, from **before** the rotation | **no value at all** |
+| defect | **staleness** | **absence** |
+| remedy | the Job mounts the SPC, so the driver writes the Secret before the container starts | the Job renders the escape hatch — env source, volume and mount |
+
+Both produced the same observable outcome, which is why neither was caught by watching the deploy:
+the backfill **logs-and-skips per row rather than throwing**, so the Job's exit code says nothing,
+and it reported `Database migration completed` in both cases. #3548's run authenticated 1,260 times
+with a stale credential; #3595's would have embedded nothing at all on an environment whose keys
+arrive through the escape hatch.
+
+**The escape hatch is three keys and they are a set.** `extraEnvFrom` names a Secret; `extraVolumes`
+is the CSI volume behind it; `extraVolumeMounts` is the mount — and the *mount* is what makes the
+Secrets Store CSI driver fetch the vault objects and write that Secret. A pod that names the Secret
+without mounting the class free-rides on some other pod's mount, and `envFrom` is resolved once, at
+container start. Render all three or none.
+
+**Why the #3548 guard could not see #3595.** `KeyVaultCsiFreshnessGuard`'s original fact is keyed on
+`$class.syncedSecret` / `$class.mountPath` — the markers of a class the *chart* owns. A hand-made
+SecretProviderClass carries neither, so the guard was blind to the escape hatch by construction, and
+that blindness is measurable: removing the Job's `extraEnvFrom` render leaves the original fact
+**green** while the two facts added for #3595 both go red. Those two are:
+
+- *every workload that carries the chart's Key Vault secrets also renders the escape hatch* — the
+  parity half;
+- *every workload that renders `extraEnvFrom` also renders its volume and mount* — #3548's freshness
+  argument, applied to the class the chart does not own.
+
+Each asserts its own denominator, including that `values.yaml` still declares the three keys, so a
+rename there fails the guard instead of silently making it match nothing.
+
 ## The falsification test
 
 The shape is only worth having if rendering the record reproduces what is actually running. Rendering
