@@ -312,6 +312,21 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     internal bool IsReadStreamLive(string path) =>
         _streams.TryGetValue(path, out var lazy) && lazy.IsValueCreated && lazy.Value.IsLive;
 
+    /// <summary>
+    /// True when the storm breaker's negative cache holds an OPEN window for
+    /// <paramref name="path"/> — i.e. a point read has minted a missing-node failure there and
+    /// both further reads AND further writes on that path are being fast-failed (see
+    /// <c>_negative</c> and the write-side check in <c>UpdateRaw</c>).
+    ///
+    /// <para>Test seam, and the only DIRECT measurement of the half a log flood hides. A caller
+    /// that must never open a window on an optional path — the node-bound GUI binding
+    /// (<c>MeshNodeBindingExtensions.Bind</c>, Systemorph/MeshWeaver#3517) — is asserted against
+    /// this rather than against the absence of a log line, because "it did not error" and "it did
+    /// not suppress the write the form is about to make" are different claims.</para>
+    /// </summary>
+    internal bool IsStormWindowOpen(string path) =>
+        _negative.TryGetValue(path, out var negative) && negative.OpenUntil > DateTimeOffset.UtcNow;
+
     // 🚨 STORM BREAKER / negative cache. A read whose owner answers NotFound /
     // DeliveryFailure (the node does not exist) caches that FAILURE here with an
     // exponential-backoff window. While the window is OPEN, GetStreamRaw fast-fails

@@ -562,6 +562,49 @@ failed at 20 s — widening a wait is not a repair for an unbounded lag.
 [`CreateOrUpdateNodeRequest`](#upserts-createorupdatenoderequest--single-verb-no-delete-then-create),
 which reads persistence itself.
 
+### 🚨 The GUI's node binding is gated here too — "create it first" was never a complete answer
+
+`MeshNodeBindingExtensions.Bind` — the seam every node-bound control reads through
+(`LayoutAreaReference.GetMeshNodeDataContext` → `BlazorView.DataBind`) — carries the two-half shape
+above, and **that is a framework obligation, not a call-site one.** [Data Binding](/Doc/GUI/DataBinding)
+still says a node-bound editor should have its node created first, and that advice stands; what it
+cannot do is make the node STAY there.
+
+#3517 is the proof, and it is worth stating exactly because the obvious reading of it is wrong. 473
+`fail:` lines over four days, on all five `memex-cloud` pods, 3–5 within a 4 ms window per render
+pass, from two unrelated spaces:
+
+| The sample | What it looked like | What it actually was |
+|---|---|---|
+| `rbuergi/_Draft/Event_…`, the "Share ⇒ as email" form | a form bound before its node was created | the node WAS created first — `EmailDraftNodeType.EnsureExists` does exactly that — and the user then deleted the document's `_Draft` subtree with the tab still open |
+| `roger.sas2026/_Answers/…/Quiz`, a course quiz | the same mistake, twice | the learner's answers node is written by the FIRST answer *on purpose*; creating it on render would write a node for everyone who merely looked at the page |
+
+So neither sample is a call site that forgot. **Any bound node can be deleted from under a live
+view, and some bound nodes are deliberately absent until the user acts** — which is why the tolerance
+belongs in the seam, where one change fixes every binding, present and future.
+
+🚨 **And a `try`/`catch` or a `.Catch(Observable.Empty)` in the view would have been worse than the
+noise it silenced.** Swallowing the `DeliveryFailureException` hides the fault AND leaves the breaker
+window open on the path — and the breaker fast-fails WRITES too (`MeshNodeStreamCache.UpdateRaw`), so
+the suppressed read goes on suppressing the write the form is about to make. The gate is the fix
+precisely because the `NotFound` is then never MINTED.
+
+Two details of the seam's gate that are decisions, not incidentals:
+
+- **It runs `AsSystem()`.** The gate decides only EXISTENCE; the content read behind it is still
+  row-level-security-gated by the owner exactly as before. A gate filtered by an identity that failed
+  to resolve would answer "absent" for a node the viewer can plainly see — an empty control
+  indistinguishable from a real absence, which is the failure `MeshQueryRequest.UserId` documents as
+  its own most-repeated defect.
+- **The read budget sits on the CONTENT leg, never on the gate.** Outside it, the immediate
+  "absent ⇒ null" emission would satisfy the budget and silence the case it exists for (#1748: the
+  owning hub unreachable, burning the hub's whole 60 s `RequestTimeout` before the fault reaches the
+  view).
+
+`NodeBoundBindingToleratesAnAbsentNodeTest` pins both live shapes — bind-then-create, and
+re-bind-after-delete — and asserts the storm window stays shut, which is the half the log flood
+hides.
+
 🚨 **Do not over-apply this to a genuine SET — the worked counter-example is
 `src/MeshWeaver.Blazor.Portal/Chat/ThreadTokenChip.razor.cs:106`.** That chip reads `content` out of
 the very same `{thread}/_Usage scope:children` query this section just told you not to read a value
