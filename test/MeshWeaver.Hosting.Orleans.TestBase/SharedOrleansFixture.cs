@@ -230,8 +230,13 @@ public class SharedOrleansFixture : IAsyncLifetime
         // Without this, response routing tries to activate a grain for the client address → fails.
         // Access silo's IRoutingService via reflection (InProcessSiloHandle.SiloHost.Services)
         // Try multiple paths to find the silo's IRoutingService
+        // 🚨 TestCluster.Primary is SiloHandle? from Microsoft.Orleans.TestingHost 10.3.1 on
+        // (it was non-nullable at 10.1.0). Propagate the null rather than asserting: this whole
+        // block is already best-effort — the `if (siloRouting != null)` below is the existing
+        // posture, because a cluster shape without a reachable primary simply skips the silo-side
+        // registration instead of failing the fixture.
         var primarySilo = Cluster.Primary;
-        var siloHost = primarySilo.GetType().GetProperty("SiloHost")?.GetValue(primarySilo) as IHost;
+        var siloHost = primarySilo?.GetType().GetProperty("SiloHost")?.GetValue(primarySilo) as IHost;
         var siloRouting = siloHost?.Services.GetService<IRoutingService>()
             ?? siloHost?.Services.GetService<IMessageHub>()?.ServiceProvider.GetService<IRoutingService>();
         if (siloRouting != null)
