@@ -86,16 +86,21 @@ import sys
 import tempfile
 from pathlib import Path
 
-# 🚨 scripts/affected-modules.py's NOOP_DIRS, and it must stay EQUAL to it — the top-level dirs a
-# change in which can reach no build at all. Every entry NOT in this set falls through to a FULL
-# run, so adding one silently un-builds something and dropping one merely costs a full run.
+# 🚨 scripts/affected-modules.py's NOOP_DIRS — the top-level dirs a change in which can reach no
+# build at all. Every entry NOT in this set falls through to a FULL run, so adding one silently
+# un-builds something and dropping one merely costs a full run.
 # `clients/` is deliberately absent (the established selector treats it as ALL, and a client asset
-# can be embedded by a host).
+# can be embedded by a host). Measured over 120 first-parent merges to MeshWeaver.Plugins' main,
+# `clients/` is the largest remaining full-set trigger after `.github/` (11 of 45); the entry stays
+# out because this set also feeds the mesh gate and the bake, so moving it is a wider decision than
+# the module matrix — see Doc/Architecture/BuildScopeNarrowing.
 #
 # 🚨 A HAND COPY IS NOT A GUARANTEE, and this one drifted on its first day: `WhatsNew` was missing,
 # so a note-only PR ran the entire fleet's module suite — the exact case affected-modules.py added
-# it for. `assert_noop_dirs_match()` below now READS the caller's set and refuses to narrow when
-# the two disagree, so the next drift is a full run with a named reason instead of a silent one.
+# it for. `resolve_noop_dirs()` below READS the caller's set and narrows on the INTERSECTION, so a
+# drift over-builds the divergent dir out loud instead of silently, and — since 2026-09-08 —
+# instead of switching the whole narrowing off (which is what equality did, on every pull request
+# three satellites ever opened). A literal it cannot READ is still a refusal.
 NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees"}
 
 # 🚨 A repo-ROOT path HAS NO TOP-LEVEL DIRECTORY, so NOOP_DIRS above can never reach it: both
