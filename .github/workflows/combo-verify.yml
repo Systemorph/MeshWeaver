@@ -1,0 +1,253 @@
+﻿# ─────────────────────────────────────────────────────────────────────────────────────────────
+# COMBO VERIFICATION — the PRODUCER half of the combo gate (issue #3544).
+#
+# `ComboVerificationGate` on every portal consults `Admin/UpdatePolicy` → `content.comboVerifications`
+# before it applies a self-update, and asks the question an artifact cannot answer: *may THIS
+# instance roll to that image, given the modules it actually runs?* Producing a verdict needs
+# docker, a materialisation root and repo credentials a portal pod does not have, so the producer
+# is off-cluster BY DESIGN — `tools/MeshWeaver.ComboVerifier` (`mw-combo-verify`).
+#
+# 🚨 Until this workflow, that producer was wired to NOTHING. Measured 2026-09-07: zero references
+# to `mw-combo-verify` anywhere under `.github/` in this repo or MeshWeaver.Plugins; the only
+# `IComboGateRunner` in either repo was a test fake; `Admin/UpdatePolicy.comboVerifications` was
+# `[]` on memex-cloud. So every roll in the fleet ran UNVERIFIED — the portal said so in its own
+# log ("nothing has checked whether that image can serve the modules this instance runs") and
+# applied the update anyway. The gate built to prevent a MissingMethodException-at-boot roll was
+# never once consulted with data.
+#
+# 🚨 WHY THIS IS ITS OWN WORKFLOW AND NOT A JOB IN main-cd.yml. The preflight below fails RED until
+# an operator provisions the per-instance credentials, which is the correct state and the whole
+# point of the no-skip-trapdoor rule — but a red inside main-cd would sit on the workflow that
+# publishes the fleet's images and would be read as "delivery failed". Here the red says exactly
+# what it is, and image delivery is untouched.
+#
+# 🚨 NO SKIP TRAPDOORS. There is no `continue-on-error:` on any input step and no `if:` anywhere
+# that asks whether a secret or variable is set. GitHub paints a skipped job the same colour as a
+# passed one, so "the gate never ran" and "the gate passed" would become indistinguishable. The
+# ONE condition in this file is on the EVENT (did CD actually succeed, i.e. is there a candidate at
+# all), byte-identical in intent to main-cd's own. And because a `needs:`-failure SKIPS the verify
+# job, the `verdict` job below runs `if: always()` and fails EXPLICITLY on anything that is not a
+# success — a skip cannot read green.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+name: Combo verification (candidate × instance)
+
+on:
+  workflow_run:
+    workflows: ["Continuous Delivery (main)"]
+    types: [completed]
+    # 🚨 REQUIRED, and not decoration. workflow_run fires on completions from EVERY branch, and this
+    # workflow keeps one concurrency group — GitHub holds exactly one pending run per group, so an
+    # off-branch arrival evicts the on-branch run waiting behind it. Measured on main-cd.yml
+    # (2026-09-02): six consecutive CD runs cancelled, nothing promoted for four hours, every
+    # dashboard green. WorkflowRunTriggerBranchFilterGuard fails this file without it.
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Never cancel: a run that is mid-`docker run` inside a candidate image has already spent the
+  # expensive part, and a cancelled verification lands no verdict at all.
+  group: combo-verify
+  cancel-in-progress: false
+
+env:
+  ACR: meshweaver.azurecr.io
+  # The fleet runs amd64. A verdict is about ONE architecture — a run pinned to the wrong one is
+  # NotVerifiable at best and a lie at worst (measured: the same combo and tag reads Green unpinned
+  # on an arm64 host and NotVerifiable pinned to linux/amd64, because the emulated tester dies 139).
+  PLATFORM: linux/amd64
+  # Comfortably under the job's timeout-minutes, so the tool's own budget fires FIRST and says what
+  # did not complete. The tool defaults to 45 minutes, which is exactly the fleet's hard job cap —
+  # i.e. the default can only ever be pre-empted by the runner, with no diagnosis.
+  GATE_TIMEOUT: "1500"
+
+jobs:
+  preflight:
+    name: "Assert the inputs exist"
+    # 🚨 The ONE sanctioned condition, and it is a check on the EVENT: when CD did not succeed there
+    # is no candidate to verify against. It is NEVER a check on whether a secret is set.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      instances: ${{ steps.assert.outputs.instances }}
+      count: ${{ steps.assert.outputs.count }}
+    steps:
+      - name: Every external input, or a red build naming what to provision
+        id: assert
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          COMBO_VERIFY_INSTANCES: ${{ vars.COMBO_VERIFY_INSTANCES }}
+          COMBO_VERIFY_SOURCES: ${{ vars.COMBO_VERIFY_SOURCES }}
+          COMBO_VERIFY_KEYS: ${{ secrets.COMBO_VERIFY_KEYS }}
+          COMBO_VERIFY_TOKENS: ${{ secrets.COMBO_VERIFY_TOKENS }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${AZURE_CLIENT_ID:-}" ]       || missing+=("secrets.AZURE_CLIENT_ID          OIDC app registration for azure/login (already provisioned for main-cd)")
+          [ -n "${AZURE_TENANT_ID:-}" ]       || missing+=("secrets.AZURE_TENANT_ID          the Systemorph AAD tenant (already provisioned for main-cd)")
+          [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID    the subscription holding ACR meshweaver (already provisioned for main-cd)")
+          [ -n "${MESHWEAVER_APP_ID:-}" ]     || missing+=("secrets.MESHWEAVER_APP_ID        the org App whose installation token reads the module repositories (already provisioned for chart-drift)")
+          [ -n "${MESHWEAVER_APP_PRIVATE_KEY:-}" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key, PEM (already provisioned for chart-drift)")
+          [ -n "${COMBO_VERIFY_INSTANCES:-}" ] || missing+=("vars.COMBO_VERIFY_INSTANCES      JSON array of the instances to verify: [{\"name\":\"memex\",\"baseUrl\":\"https://memex.systemorph.com\"}, …]")
+          [ -n "${COMBO_VERIFY_SOURCES:-}" ]   || missing+=("vars.COMBO_VERIFY_SOURCES        space-separated name=url for --source, e.g. plugins=https://github.com/Systemorph/MeshWeaver.Plugins")
+          [ -n "${COMBO_VERIFY_KEYS:-}" ]      || missing+=("secrets.COMBO_VERIFY_KEYS        JSON object {instance name: mwi_… instance-registry key}, one per instance above")
+          [ -n "${COMBO_VERIFY_TOKENS:-}" ]    || missing+=("secrets.COMBO_VERIFY_TOKENS      JSON object {instance name: mw_… API token of a GLOBAL ADMIN on that instance}, one per instance above")
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Combo verification cannot run — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            echo "Until then EVERY self-update in the fleet rolls UNVERIFIED (issue #3544): the" >&2
+            echo "portal's combo gate has no verdict to consult and applies the update anyway." >&2
+            exit 1
+          fi
+
+          # PRESENT is not VALID. A malformed list would otherwise produce an EMPTY matrix, and an
+          # empty matrix skips the verify job — which GitHub paints green. Assert the shape here.
+          if ! jq -e 'type == "array" and length > 0' >/dev/null <<<"$COMBO_VERIFY_INSTANCES"; then
+            echo "::error::vars.COMBO_VERIFY_INSTANCES is not a non-empty JSON array: $COMBO_VERIFY_INSTANCES"
+            exit 1
+          fi
+          if ! jq -e 'all(.[]; has("name") and has("baseUrl"))' >/dev/null <<<"$COMBO_VERIFY_INSTANCES"; then
+            echo "::error::every entry of vars.COMBO_VERIFY_INSTANCES needs a name and a baseUrl: $COMBO_VERIFY_INSTANCES"
+            exit 1
+          fi
+
+          # …and every instance must have BOTH credentials. A name present in the list but absent
+          # from either map would fail deep inside the verify job wearing an HTTP 401 that names no
+          # secret — the shape that made an absent MW_REGISTRY_KEY read as a script bug.
+          for key_name in $(jq -r '.[].name' <<<"$COMBO_VERIFY_INSTANCES"); do
+            jq -e --arg n "$key_name" '.[$n] | type == "string" and length > 0' >/dev/null <<<"$COMBO_VERIFY_KEYS" \
+              || { echo "::error::secrets.COMBO_VERIFY_KEYS has no mwi_ key for instance '$key_name'"; exit 1; }
+            jq -e --arg n "$key_name" '.[$n] | type == "string" and length > 0' >/dev/null <<<"$COMBO_VERIFY_TOKENS" \
+              || { echo "::error::secrets.COMBO_VERIFY_TOKENS has no mw_ admin token for instance '$key_name'"; exit 1; }
+          done
+
+          count=$(jq -r 'length' <<<"$COMBO_VERIFY_INSTANCES")
+          {
+            echo "instances=$(jq -c '.' <<<"$COMBO_VERIFY_INSTANCES")"
+            echo "count=$count"
+          } >>"$GITHUB_OUTPUT"
+          echo "All external inputs are present; $count instance(s) will be verified."
+
+  verify:
+    name: "Verify ${{ matrix.instance.name }} against its roll target"
+    # 🚨 `needs: preflight` and NOTHING else gating it. No `if:` — the preflight either asserted
+    # every input or went red; this job never asks a second time.
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: ${{ fromJSON(needs.preflight.outputs.instances) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login
+        run: |
+          set -euo pipefail
+          command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          bash .github/scripts/acr-login.sh
+
+      - name: Token for the module repositories
+        id: repo-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: Systemorph
+
+      - name: Build the verifier
+        run: dotnet build tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj -c Release
+
+      - name: "Verify, and LAND the verdict on ${{ matrix.instance.name }}"
+        env:
+          INSTANCE_NAME: ${{ matrix.instance.name }}
+          BASE_URL: ${{ matrix.instance.baseUrl }}
+          COMBO_VERIFY_KEYS: ${{ secrets.COMBO_VERIFY_KEYS }}
+          COMBO_VERIFY_TOKENS: ${{ secrets.COMBO_VERIFY_TOKENS }}
+          SOURCES: ${{ vars.COMBO_VERIFY_SOURCES }}
+          GITHUB_TOKEN: ${{ steps.repo-token.outputs.token }}
+          WORK_ROOT: ${{ runner.temp }}/combo
+        run: |
+          set -euo pipefail
+          INSTANCE_KEY=$(jq -r --arg n "$INSTANCE_NAME" '.[$n]' <<<"$COMBO_VERIFY_KEYS")
+          ADMIN_TOKEN=$(jq -r --arg n "$INSTANCE_NAME" '.[$n]' <<<"$COMBO_VERIFY_TOKENS")
+          # Never echoed, but a value pulled out of a JSON secret is no longer masked by the
+          # runner, so mask the extracted halves explicitly.
+          echo "::add-mask::$INSTANCE_KEY"
+          echo "::add-mask::$ADMIN_TOKEN"
+          export INSTANCE_KEY ADMIN_TOKEN
+          bash .github/scripts/combo-verify-instance.sh
+
+      - name: Keep the work root of a failed verification
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: combo-work-${{ matrix.instance.name }}
+          path: |
+            combo-${{ matrix.instance.name }}.json
+            combo-verdict-${{ matrix.instance.name }}.json
+          if-no-files-found: ignore
+
+  verdict:
+    name: "Combo verification ran, or said why not"
+    # 🚨 THE ANTI-SKIP JOB. `needs:` a failed preflight SKIPS `verify`, and GitHub paints a skipped
+    # job the same colour as a passed one. This job runs whatever happened and fails EXPLICITLY on
+    # anything that is not a success, so the run's conclusion can never say "verified" about a
+    # verification that did not happen. It also prints THE DENOMINATOR — how many instances were
+    # supposed to be verified — because a zero nobody can read is indistinguishable from a pass.
+    if: always()
+    needs: [preflight, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: The verdict, and it can fail
+        env:
+          PREFLIGHT: ${{ needs.preflight.result }}
+          VERIFY: ${{ needs.verify.result }}
+          COUNT: ${{ needs.preflight.outputs.count }}
+        run: |
+          set -euo pipefail
+          echo "preflight=$PREFLIGHT verify=$VERIFY instances=${COUNT:-0}"
+          {
+            echo "## Combo verification"
+            echo
+            echo "- preflight: \`$PREFLIGHT\`"
+            echo "- verify: \`$VERIFY\` over \`${COUNT:-0}\` instance(s)"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          if [ "$PREFLIGHT" != "success" ]; then
+            echo "::error::the preflight did not pass, so NO instance was verified and every roll in the fleet is still UNVERIFIED (#3544). Read the preflight job for the exact list of inputs to provision."
+            exit 1
+          fi
+          if [ "$VERIFY" != "success" ]; then
+            echo "::error::combo verification did not succeed for every instance (result: $VERIFY). A candidate a live instance cannot take is not delivered; read the per-instance jobs for the module that failed."
+            exit 1
+          fi
+          if [ "${COUNT:-0}" -lt 1 ]; then
+            echo "::error::the preflight passed but named ZERO instances — that is a vacuous green, not a verification."
+            exit 1
+          fi
+          echo "Every declared instance has a landed combo verdict for its roll target."

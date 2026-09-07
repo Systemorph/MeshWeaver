@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
@@ -49,6 +50,84 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class NodeTypeReleaseExtensions
 {
+    /// <summary>
+    /// 🚨 The ORDERED inner bound on ONE release request — issue #3510.
+    ///
+    /// <para><b>What it is for.</b> <see cref="ObserveNodeTypeRelease"/> promises, in its own
+    /// remarks and in its closing <c>DefaultIfEmpty(false)</c>, that it produces EXACTLY ONE
+    /// emission, always. That promise covered three of Rx's four outcomes — it emits, or it faults,
+    /// or it completes empty. The fourth is the one that bites: a source that NEITHER emits NOR faults
+    /// NOR completes. <c>DefaultIfEmpty</c> cannot see it and <c>Catch</c> cannot see it; only a
+    /// deadline can. The composed leg now carries one, so the promise is true by construction.</para>
+    ///
+    /// <para><b>What it costs when it is missing.</b> The package installer's release wave is
+    /// <c>nodeTypePaths.Select(ObserveNodeTypeRelease).Merge().ToList()</c> — one non-terminating leg
+    /// parks the ENTIRE install, silently, until the CD bake+seal gate's own 600 s
+    /// <c>InstallTimeout</c> reports <c>install: TimeoutException</c> against a package that
+    /// finished writing its nodes eight minutes earlier. That is #3510's measured signature (core CD
+    /// 7976: <c>Installed node-repo plugin Hosting: 144 written</c> at 05:45:28Z, the install's
+    /// deferred release wave at 05:46:04Z, then NOT ONE log line and NOT ONE pending callback
+    /// anywhere for eight minutes, and no <c>warmed installed root Hosting</c> — the step that
+    /// follows the wave — ever printed), and it was named in advance by
+    /// <c>MeshNodeStreamHandle.BaseStateSource</c>'s remarks: "no per-leg bound and no outer bound".
+    /// Roughly one CD run in two lost its seal to it.</para>
+    ///
+    /// <para>🚨 <b>Ordered, not tightened</b> (Doc/Architecture/BoundsMustBeOrdered). It sits ABOVE
+    /// every bound the write it wraps already carries — <c>BaseStateWaitBound</c> 30 s, then up to
+    /// three verdict windows of <c>LateResponseWatchBound</c> + <c>VerdictBoundGrace</c> = 31 s
+    /// apiece across <c>MaxConflictRetries</c>, ≈124 s in total — so it can only ever fire when
+    /// something is genuinely non-terminating, never when a write is merely slow. And it sits far
+    /// BELOW the installer's 600 s bound, which is the point: the outer bound knows only that the
+    /// install did not finish, while this one knows WHICH NodeType never answered and says so.
+    /// Nothing here is retried, nothing is swallowed and no existing bound moves.</para>
+    /// </summary>
+    internal static readonly TimeSpan ReleaseRequestBound = TimeSpan.FromSeconds(180);
+
+    /// <summary>
+    /// The release leg's totality, as a PURE composition — no hub, no mesh, no wall clock — so the
+    /// property it guarantees is drivable from a <c>TestScheduler</c>
+    /// (<c>ReleaseWaveLegIsTotalTest</c>). <paramref name="leg"/> is the permission check and the
+    /// trigger write composed exactly as <see cref="ObserveNodeTypeRelease"/> composes them; this
+    /// adds the one thing that composition cannot express about itself: an answer when the leg
+    /// produces none.
+    ///
+    /// <para><c>Take(1)</c> comes FIRST on purpose. Rx's <c>Timeout(TimeSpan)</c> is an
+    /// INTER-EMISSION deadline that restarts on every <c>OnNext</c> it sees, so a chatty source
+    /// resets it forever — the exact defect <c>BaseStateSource</c> was rewritten to fix. Reducing
+    /// the sequence to at most one emission first makes the deadline a TOTAL one.</para>
+    /// </summary>
+    /// <param name="leg">The composed permission-check-then-write sequence for one NodeType.</param>
+    /// <param name="nodeTypePath">Path of the NodeType — named in the refusal, so a parked leg is
+    /// attributable from one log line instead of a full bake-log read.</param>
+    /// <param name="bound">The ordered deadline; <see cref="ReleaseRequestBound"/> in production.</param>
+    /// <param name="onError">The caller's refusal sink — invoked with the same reason that is logged.</param>
+    /// <param name="report">Warning sink (the logger in production), given the reason.</param>
+    /// <param name="scheduler">Timer seam; <see cref="Scheduler.Default"/> in production.</param>
+    internal static IObservable<bool> BoundReleaseLeg(
+        IObservable<bool> leg,
+        string nodeTypePath,
+        TimeSpan bound,
+        Action<string>? onError,
+        Action<string>? report,
+        IScheduler? scheduler = null)
+        => leg
+            .Take(1)
+            .Timeout(
+                bound,
+                Observable.Defer(() =>
+                {
+                    var reason =
+                        $"The release request for '{nodeTypePath}' produced no answer within "
+                        + $"{bound.TotalSeconds:0}s — neither the Compile check nor the trigger write "
+                        + "emitted, faulted or completed. Treating it as NOT released so the caller "
+                        + "is answered; the release did not happen and this NodeType keeps the "
+                        + "assembly it already had.";
+                    report?.Invoke(reason);
+                    onError?.Invoke(reason);
+                    return Observable.Return(false);
+                }),
+                scheduler ?? Scheduler.Default);
+
     /// <summary>
     /// Request a release of the NodeType at <paramref name="nodeTypePath"/>. Checks the caller
     /// holds <see cref="Permission.Compile"/> on the target; on success flips the
@@ -118,7 +197,12 @@ public static class NodeTypeReleaseExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.NodeTypeReleaseExtensions");
 
-        return Observable.Defer(() =>
+        // 🚨 #3510 — the leg is composed here and made TOTAL by BoundReleaseLeg below. Everything
+        // between this Defer and the closing DefaultIfEmpty answers the caller for three of Rx's
+        // four outcomes; the fourth — a source that never terminates at all — is what parked the
+        // installer's whole release wave and, with it, the CD seal. See ReleaseRequestBound.
+        return BoundReleaseLeg(
+            Observable.Defer(() =>
         {
             // Capture the caller's FULL AccessContext synchronously, on the SUBSCRIBING thread —
             // before CheckPermission's reactive chain can hop schedulers (PermissionEvaluator reads
@@ -195,6 +279,11 @@ public static class NodeTypeReleaseExtensions
                 // answering must not turn into a sequence that completes without answering, or a
                 // caller composing `.FirstAsync()` on it faults instead of learning "no release".
                 .DefaultIfEmpty(false);
-        });
+            }),
+            nodeTypePath,
+            ReleaseRequestBound,
+            onError,
+            reason => logger?.LogWarning(
+                "[RequestNodeTypeRelease] {Path}: {Reason}", nodeTypePath, reason));
     }
 }

@@ -38,6 +38,10 @@ public static class InstanceManifestProjection
     /// <c>EmbeddingOptions</c> binds it.</summary>
     public const string EmbeddingSection = "Embedding";
 
+    /// <summary>The section the registered identity lands on — what the plugin catalog reads to
+    /// know who this instance is and which key it fetches with.</summary>
+    public const string PluginCatalogSection = "PluginCatalog";
+
     /// <summary>
     /// The tenant value a blank Microsoft tenant must become.
     ///
@@ -63,14 +67,47 @@ public static class InstanceManifestProjection
         if (manifest is not { State: InstanceSetupState.Complete })
             return entries;
 
-        ProjectStorage(manifest.Storage, entries);
+        ProjectIdentity(manifest.Identity, protector, entries);
+        ProjectStorage(manifest.Storage, protector, entries);
         ProjectSignIn(manifest.SignIn, protector, entries);
         ProjectAi(manifest.Ai, protector, entries);
         return entries;
     }
 
+    /// <summary>
+    /// The registered identity, as the plugin catalog reads it.
+    ///
+    /// <para>🚨 <b><c>RegistryToken</c> is the load-bearing one, and without it the wizard's whole
+    /// registration is ORPHANED.</b> <c>InstanceAutoRegistrationService</c> runs on the configured
+    /// boot and registers whenever it sees an instance id and no token — so an instance that had
+    /// just registered through the wizard would register a SECOND time, under whatever id the
+    /// deployment happens to carry, and claim another id permanently (ids are global and never
+    /// re-issued). Projecting the token instead takes that service's own
+    /// <c>RegistrationPreflight.Skip</c> branch — <i>"a registry token is already configured — the
+    /// explicit token wins"</i> — so the boot uses the registration the operator already made.</para>
+    ///
+    /// <para>Nothing is projected until the key can be DECRYPTED. A registry token that is still
+    /// ciphertext authenticates nothing: every fetch would 401, the catalog would look empty, and
+    /// the instance would appear to have been granted nothing — while the id sits claimed. Dropping
+    /// the whole identity instead leaves auto-registration to report the real problem.</para>
+    /// </summary>
+    private static void ProjectIdentity(
+        InstanceIdentitySelection? identity, IProviderKeyProtector? protector,
+        IDictionary<string, string?> entries)
+    {
+        if (identity is not { IsRegistered: true })
+            return;
+        if (Reveal(identity.InstanceKey, protector) is not { } key)
+            return;
+
+        entries[$"{PluginCatalogSection}:RegistryUrl"] = identity.RegistryUrl;
+        entries[$"{PluginCatalogSection}:InstanceId"] = identity.Id;
+        entries[$"{PluginCatalogSection}:RegistryToken"] = key;
+    }
+
     private static void ProjectStorage(
-        InstanceStorageSelection? storage, IDictionary<string, string?> entries)
+        InstanceStorageSelection? storage, IProviderKeyProtector? protector,
+        IDictionary<string, string?> entries)
     {
         if (storage is null || string.IsNullOrWhiteSpace(storage.Type))
             return;
@@ -78,13 +115,19 @@ public static class InstanceManifestProjection
         entries[$"{StorageSection}:Type"] = storage.Type;
         if (!string.IsNullOrWhiteSpace(storage.BasePath))
             entries[$"{StorageSection}:BasePath"] = storage.BasePath;
-        // 🚨 The connection string is NOT decrypted here and is never encrypted in the manifest:
-        // it is the one credential the host needs before the master key can be of any use — the
-        // database is where everything else lives. A deployment with a secret store names it
-        // instead (SecretName), and the named secret arrives as an ordinary configuration value
-        // that outranks this projection anyway.
-        if (!string.IsNullOrWhiteSpace(storage.ConnectionString))
-            entries[$"{StorageSection}:ConnectionString"] = storage.ConnectionString;
+        // 🚨 The connection string CARRIES A PASSWORD, so it is revealed exactly like every other
+        // secret in this file. An earlier comment here claimed it could not be encrypted because
+        // "the host needs it before the master key can be of any use" — that was simply wrong: the
+        // master key is resolved from the deployment or from instance.key BEFORE this projection
+        // runs, which is how the sign-in secrets and provider keys in the SAME manifest are already
+        // encrypted. Leaving this one in the clear meant a manifest that is copied onto a new
+        // volume, backed up, or pasted into an issue carried a live database password in plaintext
+        // beside ciphertext that was carefully protected.
+        //
+        // Reveal() passes an UNENCRYPTED value through unchanged, so a manifest written before this
+        // (or hand-authored) keeps working.
+        if (Reveal(storage.ConnectionString, protector) is { } connectionString)
+            entries[$"{StorageSection}:ConnectionString"] = connectionString;
     }
 
     private static void ProjectSignIn(

@@ -200,6 +200,95 @@ public static class GitHubActivityExtensions
                 }, onActivityCreated));
     }
 
+    /// <summary>
+    /// 🚨 <b>THE UNATTENDED IMPORT — it reads the commit a build PROVED, never a branch tip.</b>
+    /// Same authorization, activity and conflict semantics as
+    /// <see cref="UpdateToLatestFromGitHub"/>; the one difference is the ref, and that difference is
+    /// the whole point.
+    ///
+    /// <para><b>The sync-ref contract.</b> "Update to latest" resolves
+    /// <see cref="GitHubSyncConfig.Branch"/> AT FETCH TIME, so what lands is whatever the branch
+    /// points at in that instant — which for a machine trigger is a ref that MOVED after the trigger
+    /// was decided. A human clicking Update is asking for exactly that and gets it; an unattended
+    /// import must not, because nothing on the instance authorised the tree it would receive. So
+    /// every machine-initiated import states an immutable commit here, and there is deliberately no
+    /// branch-HEAD fallback: an empty <paramref name="commitSha"/> FAILS rather than degrading to
+    /// the very behaviour this exists to remove.</para>
+    ///
+    /// <para><b>What it cost to learn (Systemorph/MeshWeaver.Plugins#1430, measured).</b> The
+    /// <c>workflow_run</c> green-build trigger filtered candidates on the run's <c>head_sha</c> and
+    /// then imported "latest". On 2026-09-06 a MeshWeaver.Plugins <c>main</c> run for
+    /// <c>8d4920c93</c> finished at 22:38:18Z; by then <c>main</c> had moved past #1413 (the Payments
+    /// split, merged 22:17:21Z). Both production portals imported #1413's <c>Store/*</c> sources at
+    /// 22:38:39Z and 22:39:32Z — sources whose <c>IPaymentProvider</c> and Payments module their
+    /// running platform did not carry — and <c>Store/Catalog</c>, <c>Order</c>, <c>Plugin</c> and
+    /// <c>Maintenance</c> sat in compile <c>Error</c> for ~5 h, with the catalog and the checkout
+    /// path dark on the commercial portal. The bake and the sources it was compiled from are ONE
+    /// artefact; resolving the ref twice is what split them.</para>
+    ///
+    /// <para><b>Out-of-order builds can move a Space BACKWARDS, and that is the price.</b> Two green
+    /// builds of one branch can finish out of order, so a later trigger may name an EARLIER commit —
+    /// and it will be imported, because a compare whose base is not an ancestor yields no usable
+    /// diff and falls back to a full import. Stated plainly rather than claimed away: what lands is
+    /// still a tree CI proved, and the next green build brings the Space forward. It is also exactly
+    /// the property the package path has always had (<c>PluginUpdateWatcher</c> reads
+    /// <c>BuildCompletion.HeadSha</c> and installs at it), so this makes the two agree rather than
+    /// introducing a new risk. Resolving the branch instead trades a recoverable step backwards for
+    /// landing a tree NO build ever proved.</para>
+    /// </summary>
+    /// <param name="hub">The hub the activity and the import run on.</param>
+    /// <param name="spacePath">The Space to bring to <paramref name="commitSha"/>.</param>
+    /// <param name="userId">The GitHub identity whose credential authenticates the pull.</param>
+    /// <param name="commitSha">The immutable commit a green build proved. Required.</param>
+    /// <param name="onActivityCreated">Receives the activity path as soon as it exists.</param>
+    /// <param name="sourceId">The sync source (null = the primary).</param>
+    public static IObservable<string> UpdateToProvenCommitFromGitHub(
+        this IMessageHub hub, string spacePath, string userId, string commitSha,
+        Action<string>? onActivityCreated = null, string? sourceId = null)
+    {
+        // 🚨 NO BRANCH-HEAD FALLBACK. A caller that cannot name the proven commit has not
+        // established one — and collapsing that unread state into "then use the branch" is exactly
+        // how #1430 put an unvetted tree on two live portals. Fail, loudly, at the call.
+        if (string.IsNullOrWhiteSpace(commitSha))
+            return Observable.Throw<string>(new ArgumentException(
+                $"An unattended GitHub import of '{spacePath}' must name the commit a build proved; "
+                + "there is no branch-HEAD fallback (MeshWeaver.Plugins#1430). Trigger "
+                + $"{nameof(UpdateToLatestFromGitHub)} only from a human action.",
+                nameof(commitSha)));
+
+        var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
+        var shortSha = Short(commitSha);
+        return TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
+            () => hub.RunActivity(spacePath, ActivityCategory.Import,
+                new LogMessage(
+                        $"Update {spacePath} to the built commit {shortSha}", LogLevel.Information)
+                    .WithKey("activity.gitsync.updateToProvenCommit.title",
+                        ("space", spacePath), ("sha", shortSha)),
+                ctx =>
+                {
+                    ctx.Log(new LogMessage(
+                            $"Fetching {shortSha} — the commit the build proved — from GitHub and "
+                            + "importing the deltas…", LogLevel.Information)
+                        .WithKey("activity.gitsync.updateToProvenCommit.fetching", ("sha", shortSha)));
+                    // force: false — two-way conflict resolution still protects server-side edits,
+                    // exactly as the button-driven update does.
+                    return sync.ReimportAtCommit(spacePath, commitSha, userId, sourceId, ctx.Log, force: false)
+                        .Select(r =>
+                        {
+                            if (r.PrunedPaths.Count > 0)
+                                ctx.Log(PrunedLine(r));
+                            ctx.Log(ImportedLine(r, commitish: shortSha));
+                            return Unit.Default;
+                        });
+                }, onActivityCreated));
+    }
+
+    /// <summary>The first 8 characters of a sha — what a human reads in a log line. Anything
+    /// shorter than that (a branch name arriving where a sha was expected) is passed through whole,
+    /// so the line never silently truncates a ref into an unrecognisable stub.</summary>
+    private static string Short(string commitish) =>
+        commitish.Length > 8 && commitish.All(char.IsAsciiHexDigit) ? commitish[..8] : commitish;
+
     /// <summary>Re-import the Space at a chosen commit / branch (mirror to that state).
     /// <paramref name="sourceId"/> selects the sync source (null = the primary).</summary>
     public static IObservable<string> ReimportFromGitHub(

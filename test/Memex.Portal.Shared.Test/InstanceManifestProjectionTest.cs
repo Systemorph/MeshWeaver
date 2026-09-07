@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Linq;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -54,6 +55,42 @@ public class InstanceManifestProjectionTest
         Assert.Equal("Sqlite", entries["Graph:Storage:Type"]);
         Assert.Equal("Data Source=/data/memex.db", entries["Graph:Storage:ConnectionString"]);
     }
+
+    [Fact]
+    public void TheConnectionString_IsStoredEncrypted_AndRevealedForUse()
+    {
+        // 🚨 It carries a PASSWORD and lives in the same file as the sign-in secrets and provider
+        // keys. Leaving it readable while protecting those was an inconsistency, not a decision: a
+        // manifest gets copied to a new volume, backed up, and pasted into an issue when an
+        // instance will not boot.
+        var stored = Protector.Protect("Host=db;Username=postgres;Password=hunter2");
+        Assert.StartsWith("enc:v1:", stored);
+
+        var entries = InstanceManifestProjection.ToConfiguration(
+            Complete() with
+            {
+                Storage = new InstanceStorageSelection { Type = "PostgreSql", ConnectionString = stored },
+            },
+            Protector);
+
+        // Revealed for the host that must actually open the database…
+        Assert.Equal("Host=db;Username=postgres;Password=hunter2", entries["Graph:Storage:ConnectionString"]);
+    }
+
+    [Fact]
+    public void APlaintextConnectionString_FromAnOlderOrHandWrittenManifest_StillWorks()
+        // Reveal() passes an untagged value through unchanged, so this is not a breaking change for
+        // a manifest written before the encryption, or one an operator authored by hand.
+        => Assert.Equal("Host=db;Database=memex",
+            InstanceManifestProjection.ToConfiguration(
+                Complete() with
+                {
+                    Storage = new InstanceStorageSelection
+                    {
+                        Type = "PostgreSql", ConnectionString = "Host=db;Database=memex",
+                    },
+                },
+                Protector)["Graph:Storage:ConnectionString"]);
 
     [Fact]
     public void ABlankMicrosoftTenant_BecomesTheWordCommon_NeverEmpty()
@@ -226,6 +263,68 @@ public class InstanceManifestProjectionTest
 
         Assert.False(entries.ContainsKey("Embedding:Provider"));
     }
+
+    [Fact]
+    public void TheRegisteredIdentity_ProjectsTheTokenThatSTOPSASecondRegistration()
+    {
+        // 🚨 The whole point. InstanceAutoRegistrationService runs on the configured boot and
+        // registers whenever it sees an instance id and NO token — so without this projection an
+        // instance that had just registered through the wizard registers a SECOND time, under
+        // whatever id the deployment happens to carry, and claims another id permanently. Ids are
+        // global and never re-issued. With the token present that service takes its own Skip branch
+        // ("a registry token is already configured — the explicit token wins").
+        var entries = InstanceManifestProjection.ToConfiguration(
+            Complete() with
+            {
+                Identity = new InstanceIdentitySelection
+                {
+                    Id = "0f8fad5b-d9cb-469f-a165-70867728950e",
+                    Name = "Roland laptop",
+                    RegistryUrl = "https://memex.meshweaver.cloud",
+                    InstanceKey = Protector.Protect("mwi_realkey"),
+                    Plan = "free",
+                },
+            },
+            Protector);
+
+        Assert.Equal("https://memex.meshweaver.cloud", entries["PluginCatalog:RegistryUrl"]);
+        Assert.Equal("0f8fad5b-d9cb-469f-a165-70867728950e", entries["PluginCatalog:InstanceId"]);
+        Assert.Equal("mwi_realkey", entries["PluginCatalog:RegistryToken"]);
+    }
+
+    [Fact]
+    public void AnIdentityWhoseKeyCannotBeDecrypted_ProjectsNOTHING()
+    {
+        // 🚨 Not "projects the id without the token" — that is the shape that would register a
+        // second time. A registry token that is still ciphertext authenticates nothing either: every
+        // fetch 401s, the catalog looks empty, and the instance appears to have been granted
+        // nothing while its id sits claimed. Dropping the whole identity leaves auto-registration to
+        // report the real problem instead.
+        var other = new ProviderKeyProtector(new LiteralMasterKeyProvider("a-different-key"));
+        var entries = InstanceManifestProjection.ToConfiguration(
+            Complete() with
+            {
+                Identity = new InstanceIdentitySelection
+                {
+                    Id = "0f8fad5b-d9cb-469f-a165-70867728950e",
+                    Name = "Roland laptop",
+                    RegistryUrl = "https://memex.meshweaver.cloud",
+                    InstanceKey = other.Protect("mwi_realkey"),
+                },
+            },
+            Protector);
+
+        Assert.False(entries.ContainsKey("PluginCatalog:RegistryToken"));
+        Assert.False(entries.ContainsKey("PluginCatalog:InstanceId"));
+    }
+
+    [Fact]
+    public void NoIdentityAtAll_ProjectsNoPluginCatalogKeys()
+        // The ordinary state of every deployment configured through appsettings — it must stay
+        // byte-identical, and in particular must not have an empty registry token invented for it.
+        => Assert.DoesNotContain(
+            InstanceManifestProjection.ToConfiguration(Complete(), Protector).Keys,
+            k => k.StartsWith("PluginCatalog:", StringComparison.OrdinalIgnoreCase));
 
     private static InstanceManifest Complete() => new()
     {

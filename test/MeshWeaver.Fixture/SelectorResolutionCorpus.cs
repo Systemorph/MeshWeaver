@@ -116,22 +116,48 @@ public static class SelectorResolutionCorpus
         Content("accessObject", "n.content->>'accessObject'",
             "the AccessAssignment listing in UserActivityLayoutAreas"),
 
-        // ── Divergences: on MeshNode but NOT in the SQL PropertyMap ───────────────────────────
-        // Each of these has a REAL mesh_nodes column that MapSelector does not know about, so SQL
-        // reads the content field of the same name — which is empty for essentially every node —
-        // while the evaluator reads the node property. Same family as Plugins#1310, where the
-        // authorship columns were left out of a SELECT list and every queried node came back with
-        // CreatedBy = null while the row held the value.
-        Divergent("createdBy", "n.content->>'createdBy'",
-            "n.created_by is a real mesh_nodes column (AuthorColumns) and MapSelector's PropertyMap "
-            + "does not list it"),
-        Divergent("createdDate", "n.content->>'createdDate'", "n.created_date, same omission"),
-        Divergent("lastModifiedBy", "n.content->>'lastModifiedBy'", "n.last_modified_by, same omission"),
-        Divergent("desiredId", "n.content->>'desiredId'", "n.desired_id is projected but unmapped"),
-        Divergent("syncBehavior", "n.content->>'syncBehavior'",
-            "n.sync_behavior is projected (SyncBehaviorColumn) but unmapped"),
+        // ── Closed by Plugins#1439: real mesh_nodes columns MapSelector now knows about ────────
+        // Each of these was a divergence — SQL read the content field of the same name, empty for
+        // essentially every node, while the evaluator read the node property. Same family as
+        // Plugins#1310, where the authorship columns were left out of a SELECT list and every
+        // queried node came back with CreatedBy = null while the row held the value.
+        //
+        // 🚨 They could not simply be added to PropertyMap, and the reason is recorded here because
+        // it is what the SqlExpression column means. A SATELLITE table (threads, activities,
+        // access, …) has NEITHER authorship NOR sync_behavior NOR exclude_from_context —
+        // PostgreSqlSchemaInitializer.GetSatelliteTableScript gives it none of them — so a single
+        // table-blind map could only ever hold the INTERSECTION of the two schemas, which is
+        // exactly why these six sat outside it. Naming a mesh_nodes-only column unconditionally
+        // would not read the wrong side, it would fail the statement with `42703 column
+        // n.created_by does not exist` on every satellite query — starting with
+        // `nodeType:Thread createdBy:{user}`, which ChatHistorySelector.razor issues on every chat
+        // page load. MapSelector is therefore TABLE-AWARE, and the expression below is the one it
+        // emits for mesh_nodes: the canonical mapping, and what the one-argument overload answers.
+        // On a satellite these four still resolve to `n.content->>'<name>'`, which is what
+        // ThreadQueries deliberately relies on for a thread's own content.createdBy.
+        AgreedOnMeshNodes("createdBy", "n.created_by",
+            "n.created_by (AuthorColumns) — mesh_nodes only; a satellite keeps the content read"),
+        AgreedOnMeshNodes("createdDate", "n.created_date",
+            "n.created_date (AuthorColumns) — mesh_nodes only, and TIMESTAMPTZ, so the comparison "
+            + "must not be case-folded"),
+        AgreedOnMeshNodes("lastModifiedBy", "n.last_modified_by",
+            "n.last_modified_by (AuthorColumns) — mesh_nodes only"),
+        AgreedOnMeshNodes("syncBehavior", "n.sync_behavior",
+            "n.sync_behavior (SyncBehaviorColumn) — mesh_nodes only, and SMALLINT holding a "
+            + "SyncBehavior, so the value converts by enum name the way state does"),
+        // desired_id is the one of the six that IS on every table, satellite DDL included, and both
+        // SELECT lists already project it. It was simply never mapped.
+        Agreed("desiredId", "n.desired_id"),
+
+        // ── Divergences PropertyMap alone cannot close ─────────────────────────────────────────
         Divergent("excludeFromContext", "n.content->>'excludeFromContext'",
-            "n.exclude_from_context is projected (ExcludeFromContextColumn) but unmapped"),
+            "n.exclude_from_context IS a real mesh_nodes column, and it is still read from the "
+            + "content — the ONLY one of #1439's six left open, for a reason of TYPE rather than "
+            + "of omission. It is TEXT[] while every comparison the generator emits is scalar "
+            + "(LOWER(x) = @p0, x != @p0, x IN (…)), so mapping it would trade a silent-empty for "
+            + "`42883 operator does not exist: text[] = text`. Closing it means giving the selector "
+            + "ARRAY semantics (containment), which is a different change from widening a map. "
+            + "Nothing queries it today: the context opt-outs are filtered through excludedNodeTypes"),
         Divergent("isDefinitionOnly", "n.content->>'isDefinitionOnly'",
             "MeshNode-only: no column, so SQL can never answer it and the two cannot be reconciled "
             + "by widening PropertyMap alone"),
@@ -152,6 +178,16 @@ public static class SelectorResolutionCorpus
     private static SelectorCase Agreed(string selector, string sql) =>
         new(selector, SelectorSide.NodeField, SelectorSide.NodeField, sql,
             "a node field on both sides");
+
+    /// <summary>
+    /// A node field on both sides <b>for <c>mesh_nodes</c></b> — the canonical table, and the one
+    /// <c>MapSelector(selector)</c>'s single-argument overload answers for. The column does not
+    /// exist on a satellite table, where the SQL side still reads the content field of the same
+    /// name; see the comment on the cases that use this for why that is correct rather than a
+    /// residual gap.
+    /// </summary>
+    private static SelectorCase AgreedOnMeshNodes(string selector, string sql, string note) =>
+        new(selector, SelectorSide.NodeField, SelectorSide.NodeField, sql, note);
 
     private static SelectorCase Content(string selector, string sql, string note) =>
         new(selector, SelectorSide.ContentField, SelectorSide.ContentField, sql, note);

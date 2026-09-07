@@ -5,8 +5,19 @@ using MeshWeaver.Plugin.Packaging;
 namespace MeshWeaver.PluginCatalog;
 
 /// <summary>
-/// The ONE platform gate of the MODULE lane (#1664): a module bundle may land when the RUNNING
-/// platform version satisfies the module's declared <c>minMeshVersion</c> FLOOR.
+/// The DECLARED platform gate of the MODULE lane (#1664): a module bundle may land when the
+/// RUNNING platform version satisfies the module's declared <c>minMeshVersion</c> FLOOR.
+///
+/// <para>🚨 <b>It is no longer the only one, and it never could have been the whole answer
+/// (#3538).</b> This is a CLAIM — a version string a module author writes by hand — and a claim
+/// about the future at that: it asserts that every platform from that release onward has what the
+/// module needs. memex-cloud satisfied a declared <c>3.0.0-rc8</c> floor with
+/// <c>3.0.0-rc9.ci.7693</c> and adopted bytes linked against a type added three days later; every
+/// render of every code cell then threw <c>TypeLoadException</c>. The module's REAL requirement is
+/// the set of TYPES its bytes are linked against, which its own metadata states exactly — so it is
+/// MEASURED, by <c>MeshWeaver.Mesh.ModulePlatformLink</c>, beside this. Both gates run at landing
+/// and at boot; this one first, because it is a string comparison and the other reads metadata.
+/// See <c>Doc/Architecture/ModulePlatformLinkGate</c>.</para>
 ///
 /// <para><b>Deliberately NOT the MVID gate.</b> MVID equality is BAKE semantics — a NodeType
 /// assembly is compiled in-process against exact framework references, so only the identical build
