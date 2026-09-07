@@ -135,9 +135,13 @@ public static class VersionSelect
     /// <para>Walking the list newest-first and taking the first SEALED one converts that deadlock
     /// into ordinary progress: the instance always advances to the best release that can actually
     /// serve, and a not-yet-baked newer build simply waits its turn instead of blocking the ones
-    /// behind it. It never rolls backwards — the caller still requires the target to be newer than
-    /// what is installed — and it never rolls into a boot storm, because unsealed candidates are
-    /// skipped rather than forced.</para>
+    /// behind it. It never rolls into a boot storm, because unsealed candidates are skipped rather
+    /// than forced.</para>
+    ///
+    /// <para>This is a listing, not a decision: it says which tags are ELIGIBLE and in what order,
+    /// never which of them is newer than what runs. <see cref="SelectCandidates"/> makes that call —
+    /// forward-only, except on the one path where the installed tag has been proven WITHDRAWN and
+    /// rolling backwards is the only way out.</para>
     /// </summary>
     public static IReadOnlyList<string> PickTargets(
         IEnumerable<string> tags, UpdatePolicyKind policy, bool requireCiGreen = true)
