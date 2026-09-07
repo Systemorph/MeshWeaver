@@ -346,6 +346,16 @@ measured so far — the requester gets `HubDisposedBeforeResponseException`, whi
 | update — `WriteThroughStream` | `UPSERT_WRITE_THROUGH_STREAM` | **covered.** The owner's `RegisterOwnerDisposingNack` mints `OwnerDisposing`, the writer re-enqueues against the fresh activation, the caller is answered `success=True` (pinned by `UpsertAnswersWhenTheOwnerGoesAwayTest`) |
 | create — `DispatchInnerCreate` | `UPSERT_READ absent → create` | **not covered.** No disposal-NACK registration, no `WriteVerdictBound` equivalent |
 
+🚨 **This gap is real, and it is NOT what failed the CD seals — measured 2026-09-07 on CD 7976.** The
+one stale callback in that run's Hosting window took the **UPDATE** leg
+(`UPSERT_READ existing → update` → `UPSERT_WRITE_THROUGH_STREAM`) and resolved inside 35 s, and the
+eight-minute park that actually ran out the install's 600 s bound had **no pending callback anywhere**
+— `[STALE-CALLBACK]`, which reports every callback older than 30 s every 5 s, fired zero times
+throughout it. An unanswered `CreateOrUpdateNodeRequest` IS a pending callback, so the install was not
+waiting on one. The park is inside `PackageInstaller`'s release wave, one step further on; see
+[Bake Seal — NodeOps Saturation](../BakeSealNodeOpsSaturation) → "the park is INSIDE the release
+wave". Close the create leg on its own merits, not as a fix for the seal.
+
 Measured on core CD 7950: the create leg's trail ends at `HANDLER_EXIT state=Processed` and nothing
 follows, and the run contains **zero `[CreateOrUpdate]` lines of any kind** — so neither terminal arm
 ever ran. Silence, not a fault. The install then ran out its ten-minute bound with no name for what
