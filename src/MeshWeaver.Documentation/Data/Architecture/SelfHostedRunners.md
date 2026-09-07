@@ -178,6 +178,36 @@ In order of preference. **Re-derive the table above before any of them.**
 Never raise a cap to make a queue shorter without re-reading the reserve. The reserve is what keeps
 a portal scale-out from having to preempt anything.
 
+## Moving a job family onto it
+
+**One family at a time, behind a variable, hosted as the fallback.** The first candidate is the
+plugins repo's `Module bundles` matrix: **34 jobs / ~152 of the ~350 job-minutes** per run, all of
+them independent, none of them holding a credential that a runner would newly see.
+
+The mechanism is **cross-repo**, which is the part worth knowing before starting:
+
+- `modules-floor` and `modules-rest` in the plugins repo do **not** carry a `runs-on`. They are
+  `uses:` calls into **core's** reusable `node-repo-module-pack.yml`, pinned by full sha.
+- That reusable hard-codes `runs-on: ubuntu-latest` in **six** jobs — `select`, `prepare`,
+  `build-workspace`, `pack`, `tests`, `verify`. `pack` and `tests` are the matrix ones and carry
+  almost all of the minutes.
+
+So the change is: add a `runs-on` **input with a default of `ubuntu-latest`** to the reusable, use
+it on the matrix jobs, then pass it from the caller as
+`runs-on: ${{ vars.MW_RUNNER_LABEL || 'ubuntu-latest' }}`. Reverting is then one variable, with no
+workflow edit at all.
+
+🚨 **The default is load-bearing.** A *required* input added to a reusable workflow is a silent
+startup failure in every caller that has not been updated in the same breath — no checks appear at
+all, which reads exactly like CI being slow rather than like a break.
+
+🚨 **Do not point a workflow at the label before a job has provably run on a runner.** A `runs-on`
+label nothing serves does not fail — it queues, until the job hits its 45-minute cap. That is
+strictly worse than the hosted queue it was meant to escape.
+
+Bumping the caller's pinned sha is a deliberate act in its own PR, per that workflow's own rule
+about a reusable that receives secrets.
+
 ## Telling a self-hosted job from a hosted one
 
 - **In the run log**, the first line of the job's *Set up job* group names the runner:
