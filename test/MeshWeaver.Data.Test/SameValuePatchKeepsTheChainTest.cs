@@ -47,7 +47,11 @@ public class SameValuePatchKeepsTheChainTest(ITestOutputHelper output) : HubTest
                 return next.Invoke(d);
             }));
 
-    private static JsonElement Payload(string json) => JsonDocument.Parse(json).RootElement.Clone();
+    private static JsonElement Payload(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
+    }
 
     [HubFact]
     public async Task ANoOpPatch_IsNotAFrameLoss_TheMirrorAdoptsItsVersion()
@@ -75,16 +79,22 @@ public class SameValuePatchKeepsTheChainTest(ITestOutputHelper output) : HubTest
         var framesBefore = posted.Count;
         // Both sides of the rule are pinned from here on: what the mirror EMITS to its consumers.
         var emitted = 0;
-        using var emissions = mirror.Subscribe(_ => Interlocked.Increment(ref emitted));
-        await Task.Delay(200); // the subscription replays the current value; count only what follows
-        Interlocked.Exchange(ref emitted, 0);
+        var replayed = new TaskCompletionSource();
+        using var emissions = mirror.Subscribe(_ =>
+        {
+            if (!replayed.Task.IsCompleted) replayed.TrySetResult(); // the subscription replays the current value
+            else Interlocked.Increment(ref emitted);
+        });
+        await replayed.Task.WaitAsync(TestTimeouts.Convergence);
         var versionAfterFull = mirror.Current!.Version;
 
         // The no-op: the SAME payload, parsed again — a new JsonElement, so the owner sees a change
         // and ships a frame whose diff is empty.
         host.Post(new DataChangeRequest().WithUpdates(new Blob("doc-1", Payload("""{"a":1}"""))),
             o => o.WithAccessContext(accessService.Context!));
-        await Task.Delay(500);
+        await Observable.Interval(TimeSpan.FromMilliseconds(20))
+            .Where(_ => posted.Count > framesBefore)
+            .Take(1).Should().Within(TestTimeouts.Convergence).Emit();
         var noOpFrames = posted.Skip(framesBefore).ToArray();
         noOpFrames.Should().NotBeEmpty(
             "the scenario needs the owner to SEND a frame for the value-equal write — otherwise nothing chains onto it and this test proves nothing");
@@ -99,7 +109,9 @@ public class SameValuePatchKeepsTheChainTest(ITestOutputHelper output) : HubTest
             o => o.WithAccessContext(accessService.Context!));
         await mirror.Where(ci => Count(ci.Value, collectionName) == 2)
             .Take(1).Should().Within(TestTimeouts.Convergence).Emit();
-        await Task.Delay(300);
+        // A re-ask, if the old defect were back, is posted right after the gap is detected — i.e.
+        // before the Full it earns lands; the doc-2 emission above is that Full or the real patch,
+        // so by now a second SubscribeRequest would be in the queue. Nothing to wait for.
 
         foreach (var f in posted)
             Output.WriteLine($"owner posted {f.Type} v{f.Version} basedOn v{f.BasedOn}: {f.Change[..Math.Min(80, f.Change.Length)]}");
