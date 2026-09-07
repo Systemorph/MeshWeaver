@@ -1165,6 +1165,52 @@ green means nothing is the shape this canary keeps having to remove.
 `dissect=` line. At ~1 % per run a single clean arm proves nothing — that caveat is part of the
 instruction, because an experiment stated without it gets read as a fix.
 
+#### Leg 4 — vary the NESTING, inside a real emit
+
+Leg 3 asks its question from OUTSIDE the emit, and that is its ceiling. It reaches the symbols by
+reflection, so it exercises `get_ContainingTypeDefinition`'s **own** compiled body from a caller that
+is not `MetadataWriter`. If the fault is code that is wrong only where the writer reaches it — the
+hypothesis the readings themselves point at — leg 3 answers `READS-HEALTHY` **by construction**, no
+matter how broken the process is. Four unanimous readings (2026-09-05, 09-06 ×2, 09-07) are exactly
+what that ceiling looks like from the outside, and no amount of further reading narrows it.
+
+Leg 4 stays inside a real `Emit` and varies **one** thing instead: whether the compilation contains a
+nested type at all. Same references as leg 1, same process, microseconds later —
+`EmitPipeline.FlatCanarySource`, a single **top-level, non-generic, member-less** class.
+
+**Why that discriminates.** `MetadataWriter.GetConsolidatedTypeParameters` opens with
+`typeDef.AsNestedTypeDefinition(Context)` and returns IMMEDIATELY when that answers null. For a
+top-level type the recursive overload — and with it the `ITypeDefinitionMember.ContainingTypeDefinition`
+call every #890 stack dies in — is never reached. The class carries no members either, so the
+`NamedTypeSymbol` overload of that getter has exactly one caller left in that emit:
+`AsNestedTypeDefinitionImpl`'s guard having answered TRUE for a type whose containing type is null by
+construction.
+
+| verdict | meaning | where it sends triage |
+|---|---|---|
+| `flat=EMITS` | a flat compilation emits while the nested one cannot, same process, same references | **the process is NOT emit-dead.** The fault needs the nested/generic walk and the guard is intact; `PROCESS CANNOT EMIT` is true of the workload (nested-generic throughout, so the blast radius is unchanged) and false of emit as such |
+| `flat=SAME-FRAME@…` | the flat emit died in the SAME frame as the nested one | 🚨 the writer reached that frame with **no nested type anywhere in the compilation** ⇒ the guard read TRUE where it must read FALSE. #890 in ONE method — no recursion, no generics, no nesting. That is the `dotnet/runtime` report |
+| `flat=OTHER-FRAME@…` | the flat emit failed at a different frame | two frames are two faults until shown otherwise; both sites are printed and nothing is concluded |
+| `flat=INCONCLUSIVE(…)` | diagnostics, or a throw with no recorded site | it cannot be compared, so it says nothing — never folded into a conclusion |
+| `flat=NOT-RUN` / `flat=UNAVAILABLE(…)` | no probe supplied / the probe itself faulted | an absent reading is visible as absent |
+
+It runs on exactly the two verdicts leg 3 runs on (`BELOW-ROSLYN`, `DIVERGENT`) and never on
+`REFERENCES` — there the pristine leg emitted, so the process demonstrably can emit and the nesting
+question does not arise.
+
+🚨 **This replaces an assumption that has been load-bearing since the canary was written.** The
+source comment asserted *"a flat class would emit fine even on a poisoned writer and the canary would
+answer healthy wrongly"*. Nothing ever measured it, and it is why every occurrence has been read as
+`PROCESS CANNOT EMIT` — a claim about emit as such, on evidence that only ever exercised one shape.
+Both branches of leg 4 are informative and neither was previously observable.
+
+🚨 **The mutation guard is the leg** (`EmitCanaryFlatLegTest`). The discriminator holds only while
+the flat source really has no nested type, no generic arity and no members — a field added "for
+realism" is a second `ITypeDefinitionMember`, i.e. a second caller of a `ContainingTypeDefinition`
+getter, and `flat=SAME-FRAME` silently stops meaning what it says. The shape is asserted off Roslyn's
+own binding (`SourceModule.GlobalNamespace`, `ContainingType`, `Arity`, members), not by matching the
+literal, so a rewrite that preserves the shape passes and one that does not cannot.
+
 #### The first `dissect=` readings, 2026-09-06 — and what they do and do not settle
 
 Leg 3 landed 2026-09-04 and its first readings arrived immediately. Two occurrences, both in
@@ -1221,6 +1267,54 @@ did run in the window: runs `33881146362`, `33879617931`, `33879408750`), so the
 to look; it simply did not look at enough runs to say anything. The last confirmed occurrence is
 `33760859754`, 2026-09-03. **Read a #890 sweep the way the 2026-08-09 close should have been read:
 state the expected count beside the observed one, or do not state the null.**
+
+#### 2026-09-07 — the fourth `dissect=` reading, and the precursor search that came with it
+
+MeshWeaver.Plugins run [`34110361260`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34110361260),
+job `101705567486`, `Portal hosts (shard 3)`, attempt 1 of PR #1463. **94 `canary=BELOW-ROSLYN`, 28
+`PROCESS CANNOT EMIT`, 94 `dissect=READS-HEALTHY symbol:OK cci:OK`** — a fourth occurrence agreeing
+with the first three, on a platform commit that carries the third read, so this one's `READS-HEALTHY`
+does mean what the word says. Both legs threw, both in
+`NamedTypeSymbol.Microsoft.Cci.ITypeDefinitionMember.get_ContainingTypeDefinition`; the frames are
+byte-identical to 2026-09-05 and 09-06. 13 failing tests across 4 classes, shard `KILLED (exit 124)`.
+
+**#3425's attribution fix works.** `PROCESS CANNOT EMIT` now carries its exception, so it reaches
+`_meshweaver-test-trace.log`: **40** records there, against a measured **0 · 0** on the two 09-06
+occurrences. The line whose whole job is *"attribute the failures that follow to this line"* is on the
+authoritative sink for the first time.
+
+##### What ran immediately BEFORE the first failure — and what that excludes
+
+Read from `_meshweaver-test-trace.log` (`teardown-stragglers-34110361260-1-shard3`), pid `3039`, host
+first line `10:28:38.948`. First poisoned compile `type/OverlayDemo` at **`10:29:50.936` — 72.0 s into
+the host, after 167 `TEST_START`s** — 263 ms into
+`MeshNodeLanguageServiceTest.OverlayCompletions_CompleteAgainstProposedText`, **which then PASSED**.
+21 distinct paths were poisoned over the following 13 m 11 s, ending at `10:43:01`.
+
+Three candidate precursors were checked against the 2026-09-06 21:02Z occurrence
+([`34059122838`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34059122838), pid
+`3040`, onset `21:01:37.955`, 55.4 s / 48 `TEST_START`s in). All three are **refuted**:
+
+| candidate, and why it looked good on 09-07 | measured on 09-06 | verdict |
+|---|---|---|
+| **A cancelled Roslyn `Emit`.** `CompileLegBoundWedgeTest.HungRoslynLeg_…` fired 17.4 s before onset (`TimeoutException: Compile leg 'roslyn-compile' for 'TestData/RoslynLegWedgeType'`) — `BoundLeg` disposes a `CancellationDisposable` on the bound, so Roslyn is cancelled mid-emit by design | **zero** `Compile leg` timeouts anywhere in that host before its onset | refuted |
+| **A gen2 GC.** `gc2` went 51 → 52 → 53 in the 800 ms before onset | `gc2 = 16`, **unchanged for the 4.5 s** before onset | refuted |
+| **ALC churn.** `alc=4 asm=149` at onset, after two ALC-heavy classes | `alc=1 asm=153`; the ALC-heavy class was the one running AT onset, not before it (and 09-03 was `alc=1 asm=138`) | refuted — confirms the 2026-09-04 finding |
+
+The onset is simply **the first emit attempted after the poisoning**, and the "first poisoned type" is
+whatever the running test happened to compile: `type/OverlayDemo` under a language-service test,
+`type/AlcUnloadLiveProbeStory` under an ALC-unload test, `TestData/CodeEditType` under a recompile
+test. The warm-up spread is now 4× wider than the number two doc pages used to quote — 33 s / 12
+starts, 55 s / 48, **72 s / 167**, 130 s / 199 — so **onset timing constrains nothing**.
+
+🚨 **The honest conclusion, stated as a limit rather than a lead: the poisoning event is not visible
+in any sink the platform writes.** `_meshweaver-test-trace.log` takes a record only for an `ILogger`
+call carrying an exception at Warning-or-worse, so it can see the poisoning event only if that event
+is itself a logged fault — and the last fault before onset differs completely between occurrences (a
+hub-disposal cascade on `type/AppendDemo` on 09-07; `CompileStateMirror` satellite-write failures on
+09-06). **No event on the authoritative sink discriminates a poisoned process from a healthy one.**
+Adding a fifth read-probe would not change that; leg 4 and the split-arm run are the two instruments
+left, and they measure different things — mechanism and population.
 
 ### Framework-version freezing
 

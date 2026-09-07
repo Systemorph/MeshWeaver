@@ -258,6 +258,63 @@ Fixing only the silence makes this *worse-looking, not better*: before the fault
 (#2543) the writer burned the full 31 s `WriteVerdictBound` and reported `OwnerUnreachable`; after,
 it got a prompt `Unknown`. Same failed install, 31 seconds sooner.
 
+### 2026-09-07 — `PATCH_FLUSH_FAULTED_SYNC` has never fired, and that refutes the arm it was built for
+
+#3480 added the stage precisely so the next occurrence would name its exception. It has now had a
+window, and the reading is a **negative with a denominator**.
+
+**Population.** Every `Bake + publish NodeType assemblies to portal storage` job in core's
+`Continuous Delivery (main)` workflow (`303778518`) from #3480's merge
+(`8ebce31e8`, 2026-09-06T21:58:47Z) to 2026-09-07T13:31Z: **25 jobs, 18 success / 7 `GATE FAILED`**.
+Every one of the 25 head commits verified `git merge-base --is-ancestor 8ebce31e8` — the code was in
+the image, this is not a pin-staleness null.
+
+**Sensitivity, checked before the zero was believed.** The stall shape is still occurring: **8 jobs
+carry `OwnerUnreachable`** (32 · 15 · 9 · 6 · 3 · 3 · 1 · 1) and **5 carry `PATCH_ECHO_SEEN` stall
+trails** (43 · 19 · 8 · 4 · 4). And the trail cannot silently drop a late stage —
+`RequestFate.Add` keeps a HEAD plus a **sliding tail**, so *"the newest stages always survive"*.
+
+| stage | occurrences across all 25 jobs |
+|---|---:|
+| `PATCH_ECHO_SEEN` | 78 |
+| `PATCH_FLUSH_FAULTED_SYNC` | **0** |
+| `PATCH_FLUSH_SUBSCRIBED` | **0** |
+| `PATCH_FLUSH_BOUND_ARMED` / `_BOUND_FIRED` | **0** / **0** |
+| `PATCH_ACK` | **0** |
+
+**So arm 1's stated form is refuted.** The 2026-09-06 reading concluded *"the only code between
+`PATCH_ECHO_SEEN` and `PATCH_FLUSH_SUBSCRIBED` is the watcher's own onNext; if either leg throws
+synchronously the exception escapes"*. #3480 wraps exactly that code in `try`/`catch (Exception)` and
+NACKs — and in five stall-carrying jobs it never fired, while the stalls kept their old shape. A
+synchronous throw is not what is happening.
+
+**What survives, and it is one stage away from being named.** `flush(committed)` neither returned nor
+threw, i.e. it **blocked**. That call is:
+
+```
+GetService<IPostCommitFlush>()          ← DI resolve, on the echo thread
+  → StoragePostCommitFlush.Flush(node)
+      → GetService<IStorageAdapter>() / <IMeshChangeFeed> / <PostCommitFlushRegistry>
+      → flushed.Claim(path, version)
+      → storage.WriteAndPublishUpdated(node, …)   ← calls adapter.Write EAGERLY, at build time
+```
+
+Four DI resolutions and a registry claim run on the commit-echo thread before any `Subscribe`
+happens, and `WriteAndPublishUpdated` is `adapter.Write(node, options).Do(…)` — the adapter chain is
+CONSTRUCTED, not deferred, at that point. `PersistenceService.Write` is itself properly
+`Observable.Defer`red, so the eager part is the composition and the service resolution, not the IO.
+
+🚨 **The next discriminator is one stage, not another sweep:** a `PATCH_FLUSH_RESOLVED` recorded
+between `GetService<IPostCommitFlush>()` returning and `.Flush(...)` being called. A trail ending at
+`PATCH_ECHO_SEEN` then means the DI resolve parked; one ending at `PATCH_FLUSH_RESOLVED` means
+`Flush`'s own body did. Both are answerable causes; today they are one indistinguishable silence.
+
+🚨 **And the window does not yet include #3603** (the upsert's CREATE leg answering instead of
+hanging — merged 2026-09-07T14:20:56Z, after the last bake in this population). The `[STALE-CALLBACK]
+… CreateOrUpdateNodeRequest@portal/nodeops` half of #2543 is the shape #3603 addresses; **the first
+bake on a commit descended from #3603 is the first that can measure it**, and it must be counted
+separately from the `PATCH_ECHO_SEEN` half, which #3603 does not touch.
+
 ### The rule
 
 > **A disposal fault is the OWNER going away, not a verdict about the write.**
