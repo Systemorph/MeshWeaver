@@ -115,6 +115,34 @@ public class MigrationWorkloadModelGuard
     }
 
     /// <summary>
+    /// 🚨 Rehearsal BEFORE execution (maintainer, 2026-09-07: "we must first test the migration
+    /// process and only then execute"). The Job's init container runs the same image with
+    /// <c>MIGRATION_MODE=rehearse</c> — counts what the pending repairs would touch, executes
+    /// nothing — and a failed init container never lets the migration container start. The
+    /// ordering is the pod's, not a convention; this pins that the init container exists, runs
+    /// the migration image, carries the mode, and is on by default.
+    /// </summary>
+    [Fact]
+    public void TheMigration_IsRehearsedByAnInitContainer_BeforeItRuns()
+    {
+        var root = FindRepoRoot();
+        var job = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, Job)));
+        var values = File.ReadAllText(Path.Combine(root, "deploy/helm/values.yaml"));
+
+        var init = job.IndexOf("initContainers:", StringComparison.Ordinal);
+        var main = job.IndexOf("containers:", init + 1, StringComparison.Ordinal);
+        Assert.True(init >= 0 && main > init, $"{Job} must declare initContainers before containers");
+        var initBlock = job[init..main];
+        Assert.Contains("memex-migration-rehearsal", initBlock);
+        Assert.Contains(".Values.migration.image", initBlock);
+        Assert.True(Regex.IsMatch(initBlock, @"MIGRATION_MODE""?\s*\n\s*value:\s*""?rehearse", RegexOptions.Multiline),
+            "the rehearsal init container must run the migration image with MIGRATION_MODE=rehearse");
+        var rehearse = Regex.Match(values, @"^migration:\s*\n(?:.*\n)*?\s+rehearse:\s*(\w+)", RegexOptions.Multiline);
+        Assert.True(rehearse.Success && rehearse.Groups[1].Value == "true",
+            "deploy/helm/values.yaml must declare migration.rehearse: true — tested first is the default, not an option");
+    }
+
+    /// <summary>
     /// 🚨 And no command anywhere in the repo may roll the migration as a Deployment. Each of
     /// these was live until #1788: <c>AGENTS.md</c> — the file every agent loads first — carried
     /// both a <c>set image</c> and a <c>rollout restart</c> against
