@@ -36,7 +36,13 @@ name: Lock pinned image digests
 #   * `protect` runs `needs: [preflight]` with NO input-shaped `if:` and NO `continue-on-error:`.
 #   * The script probes the registry with a CONTROL first and fails closed on an unreadable
 #     repository, a truncated git tree, an unclassifiable pin, an indeterminate registry answer, or
-#     a lock that did not take.
+#     a lock that did not take. 🚨 That LAST one is an assertion, not a phrase: `apply_locks` READS
+#     `deleteEnabled` BACK after every write and requires `false`. `az`'s exit code is a statement
+#     about the REQUEST, and a write that returns 0 without the attribute moving would leave this
+#     job reporting `Protected N manifest(s)` over manifests the 03:00 purge can still delete —
+#     which is precisely the failure it exists to remove, pointed at itself. An INDETERMINATE
+#     read-back is not a confirmation either. Two `--self-test` arms drive both cases and were
+#     falsified by deleting the read-back.
 #   * It PRINTS THE DENOMINATOR — per axis: repositories scanned, repositories that pin, pin sites
 #     found — and a ZERO on either axis is RED, because both were non-zero when this was written.
 #

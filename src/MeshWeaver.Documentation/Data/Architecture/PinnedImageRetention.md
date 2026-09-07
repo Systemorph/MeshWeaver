@@ -433,6 +433,78 @@ az role assignment create --assignee <the AZURE_CLIENT_ID app's object id> \
 
 That is a provisioning task, not a workflow defect.
 
+### 🚨 The lock asserts its own postcondition — an exit code is not a locked manifest
+
+The whole job does exactly one thing: set `deleteEnabled: false` on a manifest. Until 2026-09-07 it
+believed **`az`'s exit code** that it had:
+
+```python
+def set_delete_enabled(...):
+    rc, _, err = az(["acr", "repository", "update", …, "--delete-enabled", "false", "-o", "none"])
+    return (rc == 0, …)          # ← the only evidence the job had
+```
+
+An exit code is a statement about the **request**, not about the manifest. A write that returns 0
+without the attribute moving — a subscription policy, an API version whose `--delete-enabled` is
+inert, a proxy that accepts and drops it — would leave the job printing `locked …` per manifest and
+`Protected N manifest(s)` at the end, over manifests the 03:00 purge could still delete. That is
+[a verification step that cannot fail](../ReadingCiSignals), pointed at the job's own reason for
+existing.
+
+So `apply_locks` now **reads the attribute back** and requires it to be `false`. Three outcomes, and
+only one of them counts:
+
+| Read-back | Verdict |
+|---|---|
+| `deleteEnabled == false` | protected — counted, and `locked …` printed |
+| `deleteEnabled == true` | **RED**: "the lock WRITE succeeded and the manifest still reads deleteEnabled=true" |
+| the registry did not answer | **RED**: "cannot be confirmed locked" — INDETERMINATE is not a confirmation |
+
+Two self-test arms drive it (`--self-test`, which runs on every pull request in `dotnet-test.yml`'s
+workflow-shell lane): a fixture whose write exits 0 without taking, and one whose read-back cannot
+answer. Both were **falsified** — deleting the read-back turns them red with
+`5 lock(s) were COUNTED although none took`, which is what makes them assertions rather than
+decoration.
+
+This matters more than it looks, because **the write half has never actually run**. Both runs so far
+were report-only or blocked, and the `metadata/write` grant below is (on the role evidence) still
+missing. The first `apply` run is the decisive measurement, and it must not be able to report
+success without having achieved it.
+
+### Two questions about the lock job, settled by measurement rather than reasoning
+
+🚨 **"Should the scan read each repo's DEFAULT branch rather than every branch?" — it already does,
+and changing that would be actively harmful.** `check-pin-set-consistency.py:scan_remote` calls
+`repos/{repo}/contents/.github/workflows` with **no `?ref=`**, and the GitHub contents API defaults
+to the repository's default branch. Verified by running the extractor against
+`Systemorph/MeshWeaver.Education` on 2026-09-07: it returns the three pins on `main`
+(`47dc1750…` / `24ea2fc6…` / `4cef7b67…`) and nothing else.
+
+Reading *every* branch would be a defect in both directions: a stale branch's pin would make the job
+red forever on a commit nobody will merge, **and** — worse — it would enter the lock set, so a
+manifest nothing live pins would be protected on the strength of an abandoned branch. The derivation
+is only sound because its input is what the fleet actually runs.
+
+🚨 **"A lock job that fails because a pin is already dead should NAME the stale pin, not just die."
+— it already names it**, with repository, file, line, variable and digest:
+
+```
+##[error]Systemorph/MeshWeaver.Education ci.yml:45 `MW_PORTAL_DIGEST`:
+         memex-portal-ai@sha256:dab2a7b3… does not exist in the registry, so it CANNOT be
+         protected. … Move the pin to a manifest that exists — as one set.
+```
+
+And the red was **correct, and transient**. Education's `main` sat at `53f0a65df` (2026-09-04T12:12Z)
+until `d622e7dc9` merged PR #274 at **2026-09-07T05:52:00Z** — `d622e7dc9`'s first parent is
+`53f0a65df`, and that commit's `ci.yml:45/46/64` carries exactly the three purged digests. So at
+00:07Z and 01:18Z the default branch really did declare three manifests that no longer exist. Note
+the trap this hid behind: those pins' *commit dates* (2026-09-06/07) belong to the branch they were
+authored on, not to the moment they reached `main` — reading a commit date as a merge time makes the
+job look like it read stale content when it read correctly.
+
+Locks are still applied on a degraded run, so those three never blocked the protection of anything
+else.
+
 ### The exact commands, by hand
 
 Lock one pinned manifest (idempotent):
