@@ -485,15 +485,44 @@ public static class StaticRepoImporter
     /// treating it as a deletion destroyed 47 mesh-minted release records on memex-cloud
     /// (issue #1326). Governance spares <c>_</c>-prefixed segments only, which <c>Release/</c> is
     /// not — hence a guard of its own rather than a widened governance rule.</para>
+    ///
+    /// <para>🚨 <paramref name="listingIsComplete"/> is the SIXTH guard, and it comes FIRST because it
+    /// is not about which nodes are prunable — it is about whether the question can be ASKED AT ALL
+    /// (issue #3589). Every other guard refines the inference "absent from
+    /// <paramref name="sourcePaths"/> ⇒ deleted from the source"; this one withdraws it. When the
+    /// source could not enumerate itself completely (<see cref="IStaticRepoSource.ListingIsComplete"/>
+    /// — GitHub returns HTTP 200 with a TRUNCATED recursive tree), an absent path is a read failure
+    /// wearing a deletion's clothes, and <paramref name="sourcePaths"/> is not a set anything may be
+    /// subtracted from. <b>The direction this closes:</b> nothing is pruned, so genuinely-retired
+    /// nodes linger for one more import — visible, recoverable, and gone the next time the listing
+    /// reads in full. <b>Why the other direction is worse:</b> it DELETES live nodes on the strength
+    /// of a read that never happened, and the deletion is indistinguishable in every log from one the
+    /// author intended.</para>
     /// </summary>
+    /// <param name="existing">The partition's current nodes (the prune candidate set).</param>
+    /// <param name="sourcePaths">The paths the source ships THIS run.</param>
+    /// <param name="previouslyOwnedPaths">The prior manifest's keys (Additive only).</param>
+    /// <param name="excludedRoots">Claimed/excluded roots — nothing at or under one is pruned.</param>
+    /// <param name="mode">The partition's <see cref="PartitionSyncMode"/>.</param>
+    /// <param name="isExcludedFromMirror">The source's never-mirrored predicate (issue #1326).</param>
+    /// <param name="listingIsComplete">Whether <paramref name="sourcePaths"/> is the source's COMPLETE
+    /// listing. <c>false</c> prunes NOTHING, in every mode (issue #3589).</param>
+    /// <returns>The nodes to delete — empty when the source listing is not complete.</returns>
     public static IReadOnlyList<MeshNode> ComputePrunableNodes(
         IEnumerable<MeshNode> existing,
         IEnumerable<string> sourcePaths,
         IEnumerable<string> previouslyOwnedPaths,
         IEnumerable<string> excludedRoots,
         PartitionSyncMode mode,
-        Func<string, bool>? isExcludedFromMirror = null)
+        Func<string, bool>? isExcludedFromMirror = null,
+        bool listingIsComplete = true)
     {
+        // 🚨 FIRST, ahead of every other guard including the mode: an INDETERMINATE source listing
+        // cannot support a deletion in ANY mode. See the remarks above for which direction this
+        // closes and why the opposite one is data loss rather than a nuisance.
+        if (!listingIsComplete)
+            return Array.Empty<MeshNode>();
+
         if (mode == PartitionSyncMode.UpsertOnly)
             return Array.Empty<MeshNode>();
 
@@ -1045,11 +1074,17 @@ public static class StaticRepoImporter
         // cache makes this a no-op for it and provisions any additional touched partition, e.g. _Provider.)
         var provision = ProvisionPartitions(hub, partitions);
 
+        // 🚨 .Complete() — this read is an ENUMERATION, not a search, and it gates a DESTRUCTIVE
+        // decision (issue #3589). A node this snapshot does not return is never a prune candidate,
+        // which is silent and in the safe direction; but a node it does not return is ALSO absent
+        // from the "what exists" half of every later comparison, and an unpinned read that inherits
+        // a bound from anywhere pages a set the caller iterates as complete. Declaring it is the
+        // point: no future limit may quietly turn this subtree read into a page.
         var existingSubtrees = partitions.Length == 0
             ? Observable.Return((IEnumerable<MeshNode>)Array.Empty<MeshNode>())
             : Observable.Zip(partitions.Select(p =>
                     meshService.Query<MeshNode>(
-                            MeshQueryRequest.FromQuery($"path:{p} scope:descendants"))
+                            MeshQueryRequest.FromQuery($"path:{p} scope:descendants").Complete())
                         .Take(1)
                         .Select(c => (IEnumerable<MeshNode>)c.Items)))
                 .Select(lists => lists.SelectMany(x => x));
@@ -1495,9 +1530,13 @@ public static class StaticRepoImporter
                     // candidate set: FullReplace prunes every such extra (mirror the partition to the
                     // repo); Additive prunes ONLY nodes the source PREVIOUSLY owned (the prior manifest's
                     // keys) so user-added nodes survive; UpsertOnly prunes nothing. See ComputePrunableNodes.
+                    // 🚨 …and BEFORE all of that: source.ListingIsComplete. When the source could not
+                    // enumerate itself in full (a TRUNCATED GitHub tree — HTTP 200, partial body), the
+                    // prune's premise is gone and nothing is removed at all (issue #3589).
+                    var sourceListingIsComplete = source.ListingIsComplete;
                     var toPrune = ComputePrunableNodes(
                         existing.Values, nodes.Select(n => n.Path), manifest.Keys, excludedRoots, syncMode,
-                        source.IsExcludedFromMirror);
+                        source.IsExcludedFromMirror, sourceListingIsComplete);
 
                     // Never prune a node CREATED/changed on the server since the last sync when the
                     // policy protects it (two-way, OR prune-only protection for bidirectional spaces —
@@ -1580,14 +1619,42 @@ public static class StaticRepoImporter
                             logger?.LogWarning(
                                 "[StaticRepoImport] {Partition}: {Report}", source.Partition, strandedReport);
 
+                        // 🚨 THE REFUSAL IS SAID OUT LOUD, and it names WHICH read came back
+                        // indeterminate (issue #3589). "Pruned N" is only ever emitted for N > 0, so
+                        // silence from this phase has always been unfalsifiable — it cannot tell
+                        // "prune ran and found nothing" from "prune never reached" from "prune found
+                        // the wrong set". A partition whose bundle is refused forever because three
+                        // retired Source nodes survived is exactly the state this sentence makes
+                        // legible. It is NOT a generic "prune skipped": UpsertOnly and an empty
+                        // candidate set stay silent, because they are not failures.
+                        var pruneRefusal = sourceListingIsComplete
+                            ? Array.Empty<LogMessage>()
+                            : new[]
+                            {
+                                new LogMessage(
+                                    $"⛔ Pruned nothing in {source.Partition}: the SOURCE listing came back "
+                                    + "INCOMPLETE (the repository tree was truncated), so a node missing from it "
+                                    + "is an unread file, not a deleted one. Everything that was read has been "
+                                    + "imported; nothing was removed.",
+                                    Microsoft.Extensions.Logging.LogLevel.Warning)
+                                    .WithKey("activity.import.pruneRefusedIncompleteListing",
+                                        ("partition", source.Partition)),
+                            };
+                        if (!sourceListingIsComplete)
+                            logger?.LogWarning(
+                                "[StaticRepoImport] {Partition}: prune REFUSED — the source listing is "
+                                + "incomplete (truncated repository tree), so absence from it is not evidence "
+                                + "of a deletion. {Candidates} existing node(s) were left untouched.",
+                                source.Partition, existing.Values.Count);
+
                         // 🚨 PHASE LOG #2 — the prune phase's whole audit trail (every kept server
                         // addition + every pruned path) in ONE Update, same O(n) reason as above.
                         NodeTypeCompilationActivity.AppendLogs(hub, activityPath,
-                            keptFromPrune
-                                .Select(kept => new LogMessage(
+                            pruneRefusal
+                                .Concat(keptFromPrune.Select(kept => new LogMessage(
                                     $"↩ Kept {kept.Path} (added on the server — commit to sync it back).",
                                     Microsoft.Extensions.Logging.LogLevel.Information)
-                                    .WithKey("activity.import.keptServerAddition", ("path", kept.Path)))
+                                    .WithKey("activity.import.keptServerAddition", ("path", kept.Path))))
                                 .Concat(prunedPaths.Select(p => new LogMessage(
                                     $"🗑 Pruned {p} (absent from the repo).",
                                     Microsoft.Extensions.Logging.LogLevel.Information)
@@ -1706,9 +1773,16 @@ public static class StaticRepoImporter
                                 : "";
                             // The summary NAMES the pruned nodes (issue #604) — the count alone left
                             // a destructive import unauditable ("pruned 7" — which seven? unknown).
+                            // 🚨 …and "pruned 0" alone cannot say WHY it is zero (issue #3589). The
+                            // summary is the one line that is always written, so the refusal is
+                            // stated HERE too rather than only in the phase log — a reader who sees
+                            // "pruned 0" on a partition that plainly still holds retired files needs
+                            // to be told the prune was refused, not that it looked and found nothing.
                             var prunedNote = prunedPaths.Count > 0
                                 ? $"pruned {prunedPaths.Count} ({string.Join(", ", prunedPaths)})"
-                                : "pruned 0";
+                                : sourceListingIsComplete
+                                    ? "pruned 0"
+                                    : "pruned 0 (REFUSED — the source listing was incomplete)";
                             // The stranding report rides on the terminal summary too, not only on the
                             // ⚠ line above: the summary is what a reader sees first, and "pruned 3"
                             // reads as routine housekeeping unless it says what the prune broke.

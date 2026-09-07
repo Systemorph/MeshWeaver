@@ -27,18 +27,31 @@ namespace MeshWeaver.GitSync;
 /// the SAME matcher the export and the import already apply, now also applied to the prune via
 /// <see cref="IsExcludedFromMirror"/>. Null falls back to <see cref="SyncIgnore.Default"/>, which
 /// is what the config-less callers effectively used before.</param>
+/// <param name="listingIsComplete">Whether <paramref name="children"/> is the WHOLE repo listing at
+/// that commit (<see cref="RepoSnapshot.ListingIsComplete"/>). False when GitHub truncated the
+/// recursive tree — see <see cref="IStaticRepoSource.ListingIsComplete"/>.</param>
 internal sealed class InMemoryStaticRepoSource(
     string partition,
     IReadOnlyList<MeshNode> children,
     MeshNode? root,
     IReadOnlyList<StaticContentSync>? contentSyncs = null,
-    SyncIgnore? ignore = null) : IStaticRepoSource
+    SyncIgnore? ignore = null,
+    bool listingIsComplete = true) : IStaticRepoSource
 {
     private readonly SyncIgnore ignoreRules = ignore ?? SyncIgnore.For(null);
 
     public string Partition => partition;
     public bool Versioned => false;
     public IReadOnlyList<MeshNode> EnumerateSourceNodes() => children;
+
+    /// <summary>
+    /// 🚨 The fetch's completeness verdict, carried to the prune (issue #3589). A GitSync source is
+    /// the one <see cref="IStaticRepoSource"/> whose listing is a REMOTE read that can come back
+    /// partial with no error, so it is the one that has something to declare here. False ⇒ the
+    /// import upserts what it read and prunes NOTHING: an omitted file is a read failure, and
+    /// laundering it into a deletion is how a Space gets mirrored away.
+    /// </summary>
+    public bool ListingIsComplete => listingIsComplete;
     public MeshNode? PartitionRoot => root;
     public IReadOnlyList<StaticContentSync> EnumerateInlineContentSyncs() => contentSyncs ?? [];
 

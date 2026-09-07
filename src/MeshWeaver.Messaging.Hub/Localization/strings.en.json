@@ -1272,6 +1272,7 @@
   "activity.import.strandedByNodeType": "⚠ {path}: written with NodeType '{nodeType}', which this source does not carry ahead of it and the mesh does not have. The node is STRANDED until that type lands — it will read as Unavailable. Import the source that defines it, or retype the node.",
   "activity.import.keptServerAddition": "↩ Kept {path} (added on the server — commit to sync it back).",
   "activity.import.pruned": "🗑 Pruned {path} (absent from the repo).",
+  "activity.import.pruneRefusedIncompleteListing": "⛔ Pruned nothing in {partition}: the SOURCE listing came back INCOMPLETE (the repository tree was truncated), so a node missing from it is an unread file, not a deleted one. Everything that was read has been imported; nothing was removed.",
   "activity.import.itemFailed": "⚠ Failed to import {path}: {error}",
   "activity.prune.strandedInstances": "⚠ Pruned {count} NodeType(s) that still have instances — those instances are now STRANDED: they have no per-node hub, so they read as Unavailable and render empty. Retype or delete them, or restore the NodeType: {detail}.",
   "activity.writeConflict.merged": "A write at Version={staleVersion} lost the race against the durable Version={latestVersion} on '{path}' and was merged into it.",
