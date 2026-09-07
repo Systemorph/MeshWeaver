@@ -161,7 +161,7 @@
     <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageVersion Include="Serilog.Settings.Configuration" Version="10.0.1" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
-    <PackageVersion Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageVersion Include="SixLabors.ImageSharp" Version="4.1.1" />
     <!-- Share-card rendering (OgCardRenderer). SkiaSharp is MIT; the NoDependencies native build
          deliberately drops the fontconfig/libfreetype link, so the portal image needs NO apt
          packages and the base image stays as it is — the font is supplied from an embedded
