@@ -205,18 +205,23 @@ public class SweepSelectorReachesTheCompileStatusTest
     public void TheProvidersDisagreeOnExactlyTheRecordedSelectors()
         => string.Join(", ", SelectorResolutionCorpus.KnownDivergences.Select(c => c.Selector))
             .Should().Be(
-                "createdBy, createdDate, lastModifiedBy, desiredId, syncBehavior, "
-                + "excludeFromContext, isDefinitionOnly, isSatelliteType, preRenderedHtml, "
+                "excludeFromContext, isDefinitionOnly, isSatelliteType, preRenderedHtml, "
                 + "hasExplicitMainNode",
                 "🚨 #3511 does NOT close every divergence, and the residue is pinned so it cannot "
                 + "grow in silence. Each of these is a MeshNode property that MapSelector's "
                 + "PropertyMap does not list, so Postgres reads the content field of the same name "
                 + "— empty for essentially every node — while this evaluator reads the property. "
-                + "The first six have a REAL mesh_nodes column behind them (created_by, "
-                + "created_date, last_modified_by, desired_id, sync_behavior, "
-                + "exclude_from_context), so those are a Plugins fix: widen PropertyMap. The last "
-                + "four exist only on MeshNode and cannot be reconciled that way. Adding a name "
-                + "here is a claim that a provider changed — do not do it to make a test pass");
+                + "Adding a name here is a claim that a provider changed; REMOVING one is a claim "
+                + "that a divergence was CLOSED, and neither is ever done to make a test pass. "
+                + "Five names left in MeshWeaver.Plugins#1439, which widened PropertyMap for "
+                + "createdBy, createdDate, lastModifiedBy, desiredId and syncBehavior and pinned "
+                + "each one there; the last four exist only on MeshNode and have no column at all, "
+                + "so no widening can reach them. excludeFromContext is the interesting one and it "
+                + "stays: exclude_from_context IS a real column, but it is TEXT[] while every "
+                + "comparison that generator emits is scalar, so mapping it would trade a "
+                + "silent-empty for `42883 operator does not exist: text[] = text`. Closing it "
+                + "means giving the selector ARRAY semantics, which is a different change from "
+                + "widening a map");
 
     /// <summary>
     /// 🚨 <b>The fallback widens what reaches the SORT comparator, and the comparator has to be
