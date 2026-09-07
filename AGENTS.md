@@ -12,6 +12,7 @@ it, not before.
 | [/worktree](.claude/skills/worktree/SKILL.md) | starting any change: branch, edit, build, push |
 | [/pullrequest](.claude/skills/pullrequest/SKILL.md) | opening / reviewing / merging a PR |
 | [/ci](.claude/skills/ci/SKILL.md) | authoring a workflow, a gate, satellite-repo CI |
+| [/new-repo](.claude/skills/new-repo/SKILL.md) | standing up a node repo: files, the thin CI caller, secrets in BOTH stores, webhooks to EVERY portal, the portal-side sync source |
 | [/release](.claude/skills/release/SKILL.md) | shipping, tagging, checking what actually published |
 | [/deployment](.claude/skills/deployment/SKILL.md) | rolling a portal, patching an environment |
 | [/testing](.claude/skills/testing/SKILL.md) | writing or running a test, triaging a red run |
