@@ -218,6 +218,45 @@ public class SweepSelectorReachesTheCompileStatusTest
                 + "four exist only on MeshNode and cannot be reconciled that way. Adding a name "
                 + "here is a claim that a provider changed — do not do it to make a test pass");
 
+    /// <summary>
+    /// 🚨 <b>The fallback widens what reaches the SORT comparator, and the comparator has to be
+    /// total.</b> <c>sort:</c> resolves through the same <c>GetPropertyValue</c>
+    /// (<see cref="QueryEvaluator.OrderResults"/>), and <c>MeshQuery.ClipMergedInitial</c> runs it
+    /// to order merged results on EVERY backend, Postgres included.
+    ///
+    /// <para>Before the fallback a bare content selector resolved to <c>null</c> for every row, so
+    /// every sort key was null and nothing could be mis-compared. Now the keys are the content's
+    /// real values — and JSON is not type-uniform: the same key can arrive as a string on one node
+    /// and a number on another. <c>Comparer&lt;object&gt;.Default</c> throws on that pair, which
+    /// would turn a widened selector into a FAILED QUERY on a portal's merge path rather than a
+    /// merely differently-ordered one.</para>
+    ///
+    /// <para>Nulls were always fine (the default comparer orders them first); it is the mixed
+    /// value types the fallback newly makes reachable.</para>
+    /// </summary>
+    [Fact]
+    public void SortingOnAContentFieldOfMixedTypesDoesNotThrow()
+    {
+        var nodes = new[]
+        {
+            new MeshNode("a", "Crm") { Content = UntypedContent(("rank", "high")) },
+            new MeshNode("b", "Crm") { Content = JsonSerializer.Deserialize<JsonElement>("""{"rank":42}""") },
+            new MeshNode("c", "Crm") { Content = UntypedContent(("other", "x")) },
+        };
+
+        var thrown = Record.Exception(() => new QueryEvaluator()
+            .OrderResults(nodes, new OrderByClause("rank", true))
+            .Select(n => n.Id)
+            .ToArray());
+
+        thrown.Should().BeNull(
+            "a content field is not type-uniform across nodes — JSON gives 'high' as a string and "
+            + "42 as a number — and Comparer<object>.Default refuses that pair. The fallback is "
+            + "what makes a BARE selector reach such a field, so the comparator has to tolerate "
+            + "it: a query that sorts must come back ordered somehow, never fail. Postgres has no "
+            + "equivalent hazard because n.content->>'X' is always TEXT");
+    }
+
     public static TheoryData<string> ContentSideCases()
     {
         var data = new TheoryData<string>();

@@ -498,8 +498,61 @@ public class QueryEvaluator
             return results;
 
         return orderBy.Descending
-            ? results.OrderByDescending(x => GetComparableValue(GetPropertyValue(x!, orderBy.Property)))
-            : results.OrderBy(x => GetComparableValue(GetPropertyValue(x!, orderBy.Property)));
+            ? results.OrderByDescending(x => GetComparableValue(GetPropertyValue(x!, orderBy.Property)), SelectorValueComparer.Instance)
+            : results.OrderBy(x => GetComparableValue(GetPropertyValue(x!, orderBy.Property)), SelectorValueComparer.Instance);
+    }
+
+    /// <summary>
+    /// Orders sort keys TOTALLY — <c>Comparer&lt;object&gt;.Default</c> is not, and a sort key
+    /// read out of a node's content is not type-uniform.
+    ///
+    /// <para>🚨 <b>Why this is required rather than defensive.</b> <c>sort:</c> resolves through
+    /// <see cref="GetPropertyValue"/>, so the content fallback widened it from "node fields and
+    /// explicitly dotted <c>content.X</c>" to "any selector". JSON has no schema: the same key is
+    /// a string on one node and a number on another, and <c>Comparer&lt;object&gt;.Default</c>
+    /// answers that pair with <c>InvalidOperationException: Failed to compare two elements in the
+    /// array</c> — so a widened selector would turn a merely differently-ordered query into a
+    /// FAILED one, on the merge path (<c>MeshQuery.ClipMergedInitial</c>) that every backend runs.
+    /// The same latent hole already swallowed <c>int</c> against <c>long</c>. Postgres has no
+    /// equivalent hazard: <c>n.content-&gt;&gt;'X'</c> is always TEXT.</para>
+    ///
+    /// <para><b>Uniform keys keep their existing order exactly</b> — same type and
+    /// <see cref="IComparable"/> is dispatched first and untouched, so strings still sort as
+    /// strings and ticks still sort chronologically. Only pairs the default comparer REFUSED are
+    /// newly decided: mixed numerics numerically, and anything else by its invariant string form.</para>
+    /// </summary>
+    private sealed class SelectorValueComparer : IComparer<object?>
+    {
+        public static readonly SelectorValueComparer Instance = new();
+
+        public int Compare(object? x, object? y)
+        {
+            if (ReferenceEquals(x, y))
+                return 0;
+            // Nulls first, matching the default comparer's placement of an absent key.
+            if (x is null)
+                return -1;
+            if (y is null)
+                return 1;
+
+            // Uniform keys: the pre-existing behaviour, unchanged.
+            if (x.GetType() == y.GetType() && x is IComparable sameType)
+                return sameType.CompareTo(y);
+
+            // Mixed numerics (int vs long, long vs double): compare as numbers, not as text.
+            if (IsNumeric(x) && IsNumeric(y))
+                return Convert.ToDouble(x, CultureInfo.InvariantCulture)
+                    .CompareTo(Convert.ToDouble(y, CultureInfo.InvariantCulture));
+
+            // Genuinely different kinds — a string against a number. Ordinal on the invariant
+            // form: deterministic, and never resolved from the ambient culture.
+            return string.CompareOrdinal(
+                Convert.ToString(x, CultureInfo.InvariantCulture),
+                Convert.ToString(y, CultureInfo.InvariantCulture));
+        }
+
+        private static bool IsNumeric(object value) =>
+            value is int or long or double or decimal or float or short or byte or uint or ulong;
     }
 
     /// <summary>

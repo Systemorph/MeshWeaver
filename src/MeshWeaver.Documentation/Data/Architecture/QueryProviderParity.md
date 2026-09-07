@@ -103,6 +103,26 @@ predicate discriminated while the in-memory relevance filter for the *same* quer
 `sort:` on a content field (`sort:CreatedAt-desc`, the notification bell) was a silent no-op in the
 merge step. Both converge now.
 
+### The fallback made the sort comparator's partiality reachable
+
+`sort:` resolves through the same `GetPropertyValue`, so the fallback widened it from *node fields
+and explicitly dotted `content.X`* to *any selector*. JSON has no schema: the same key arrives as a
+string on one node and a number on another, and `Comparer<object>.Default` answers that pair with
+
+```
+InvalidOperationException: Failed to compare two elements in the array
+ ---> ArgumentException: Object must be of type String
+```
+
+— which would turn a widened selector into a **failed query** rather than a differently-ordered
+one, on the merge path (`MeshQuery.ClipMergedInitial`) that every backend runs. The same latent
+hole already swallowed `int` against `long`.
+
+`OrderResults` now orders through a **total** comparer. Uniform keys keep their existing order
+exactly (same type + `IComparable` is dispatched first and untouched); only pairs the default
+comparer *refused* are newly decided — mixed numerics numerically, anything else by its invariant
+string form. Postgres has no equivalent hazard, because `n.content->>'X'` is always `TEXT`.
+
 ## The corpus: one rule, both providers pinned to it
 
 Prose parity is the state that produced this. The rule is now **data**, in a project both
