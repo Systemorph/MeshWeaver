@@ -284,10 +284,21 @@ printf '%s\n' "$BAKE_ARCHITECTURE" > "$ARCH_MARKER_LOCAL"
 # writer and an old writer on one prefix is the half-migration to avoid. The new one moves the
 # pointer; the old one replaces the flat copy in place and never touches it — so a pointer-following
 # reader keeps serving its generation and never sees the old writer's NEWER publication. A stale
-# serve, silent, with nothing red anywhere. Every producing repo's publish-bake `platform-ref` must
-# be past the reader phase before this script starts writing generations. (bake-scope.sh and
-# carry-forward-bundles.sh are fetched at the SAME platform-ref as this file, so those three move
-# together and no pin can carry half of it.)
+# serve, silent, with nothing red anywhere. (bake-scope.sh and carry-forward-bundles.sh are fetched
+# at the SAME platform-ref as this file, so those three move together and no pin can carry half of
+# it.)
+#
+# 🚨 "PAST THE READER PHASE" IS NOT THE PRECONDITION — measured 2026-09-07, and this comment used to
+# say it was. The reader phase (a4109d422) changed `src/` and documentation only; a producer whose
+# `platform-ref` moves past it runs THIS FILE byte-identically, so that condition can be satisfied
+# fleet-wide without moving the migration one step. What a producer must be past is the WRITER
+# commit — which is unreachable for a writer that is on by default, because it takes effect the
+# moment a pin reaches it, and core CD's `plugins-bake` pins nothing at all (it checks the platform
+# out at its own gate sha, so it would flip the day the writer merged, against a MeshWeaver.Plugins
+# 231 commits behind). Hence the writer lands behind a per-caller `publication-layout` selector
+# defaulting to `flat`, every producer's pin reaches it, and only then does each prefix flip — the
+# `plugins` prefix in ONE change set because it is the only one with two producers.
+# Doc/Architecture/SealedPublicationGenerations carries the table and the ordered phases.
 #
 # Cost: one `az storage file show` per published file per target, at seal time — measured against
 # the ~43-file publication these lanes produce, ~1s each. That is the price of the assertion and it

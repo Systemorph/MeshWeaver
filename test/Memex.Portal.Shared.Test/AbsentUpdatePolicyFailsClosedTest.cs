@@ -14,15 +14,21 @@ namespace Memex.Portal.Shared.Test;
 /// <para>The defect this pins is a two-part mechanism, and neither part is visible on its own. The
 /// hub serializer sets <c>DefaultIgnoreCondition = WhenWritingDefault</c>, so whichever enum member
 /// is ZERO is omitted from the persisted record; and an omitted field deserializes back to that same
-/// member. While <c>Continuous</c> was zero, a record that lost its policy under its own bookkeeping
-/// writes read back as the MOST PERMISSIVE state, reached purely by losing information. That is how
-/// memex-cloud rolled onto a withdrawn <c>3.1.0-ci</c> line "on a policy record that lost its own
-/// policy".</para>
+/// member. <c>Continuous</c> IS the enum's zero — it still is, deliberately (reordering the enum
+/// would make an explicit <c>None</c> unwritable, which is the safety-critical direction) — so a
+/// record that lost its policy under its own bookkeeping writes read back as the MOST PERMISSIVE
+/// state, reached purely by losing information. That is how memex-cloud rolled onto a withdrawn
+/// <c>3.1.0-ci</c> line "on a policy record that lost its own policy". The cure is the NULLABLE
+/// backing field: <c>null</c> is the default that gets dropped, and it reads as <c>None</c>.</para>
 ///
 /// <para>🚨 The two assertions below are a pair on purpose. Fail-closed alone would be satisfied by
 /// an enum nobody can express Continuous in; round-tripping alone would be satisfied by the old
-/// order. Together they say: an ABSENT policy is None, and an EXPLICIT Continuous survives — which
+/// shape. Together they say: an ABSENT policy is None, and an EXPLICIT Continuous survives — which
 /// is the distinction the old shape could not make.</para>
+///
+/// <para>This pins what an absent field MEANS. What stops the field from GOING absent is
+/// <c>UnreadablePolicyRecordIsNotClobberedTest</c>: a bookkeeping write that could not read the
+/// record refuses instead of writing a default over it.</para>
 /// </summary>
 public class AbsentUpdatePolicyFailsClosedTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -43,9 +49,10 @@ public class AbsentUpdatePolicyFailsClosedTest(ITestOutputHelper output) : Monol
     [Fact]
     public void AnExplicitContinuousSurvivesTheRoundTrip()
     {
-        // The other half: because None is now the zero value, Continuous is non-default and must be
-        // WRITTEN OUT — otherwise an admin's explicit choice would decay into the absent case and be
-        // silently downgraded to None on the next read.
+        // The other half: the DECLARED policy is nullable, so its default is null and every named
+        // member — Continuous included — is non-default and must be WRITTEN OUT. Otherwise an
+        // admin's explicit choice would decay into the absent case and be silently downgraded to
+        // None on the next read.
         var chosen = new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous };
 
         var json = JsonSerializer.Serialize(chosen, Mesh.JsonSerializerOptions);

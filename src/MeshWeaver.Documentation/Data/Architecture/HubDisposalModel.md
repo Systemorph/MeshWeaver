@@ -32,6 +32,9 @@ Tags:
 > [Debugging Disposal, Storms and Leaks](/Doc/Architecture/DebuggingDisposalAndLeaks).
 > For the policy the phases implement — accepted work finishes, wedged work is reported
 > and cancelled, nothing is forced — see [Teardown Layers](/Doc/Architecture/TeardownLayers).
+> For how to READ the stall report those phases emit — what each snapshot field measures, and the
+> three that were read as evidence while measuring nothing — see
+> [Reading a Disposal Stall Verdict](/Doc/Architecture/DisposalStallVerdicts).
 > This page is the **model** — how shutdown is built and how to add to it.
 
 ---
@@ -249,7 +252,9 @@ watchdogSubscription = DisposalProgress
     .Subscribe(OnDisposalStall, _ => { });
 ```
 
-`OnDisposalStall` reaches one of five verdicts and **performs no teardown** — see
+`OnDisposalStall` reaches one verdict — including an explicit *unknown* — and **performs no
+teardown**; how to read the one it printed is
+[Reading a Disposal Stall Verdict](/Doc/Architecture/DisposalStallVerdicts). See
 [Teardown Layers](/Doc/Architecture/TeardownLayers) for the table. In short: a pump that
 keeps completing turns is *busy* (Information; accepted work is draining ahead of the
 `ShutdownRequest`, which queues FIFO behind it); a turn that has held the block for a
