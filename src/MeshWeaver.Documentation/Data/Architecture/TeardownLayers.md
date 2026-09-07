@@ -215,6 +215,17 @@ while the reply settling a callback registered BEFORE the drain still lands and 
 The second half is not decoration — a fix that refused that reply would make every quiesce end in
 the `[QUIESCE-TIMEOUT]` it was built to remove.
 
+🚨 **The gate is at INTAKE, so it cannot un-accept a delivery already in the queue** — and there is
+a second, narrower window it does not touch, by construction. `MessageHub.Dispose` freezes
+hosted-hub creation SYNCHRONOUSLY on its first statement and only THEN posts the `ShutdownRequest`
+that moves `RunLevel` off `Started`, so a delivery admitted at `Started` can still reach a handler
+that can no longer create the sub-hub it needs (serving a layout area means creating one for its
+`SynchronizationStream`). That door stays open and is answered one layer down, by the
+`HubDisposingException` NACK — `MeshWeaver.Layout.Test.SubscribeDuringRecycleTest` pins both doors
+side by side, because both are ways a real page reaches a recycling area and the two are answered
+by different code. What changed is that the ARRIVAL path no longer reaches the layout stack at all:
+it is turned away at the door, before the hub takes on work it has no drain left to finish.
+
 ### A refused REPLY is discarded with nobody told
 
 The three shapes above all end with *someone is told*. There is a fourth that did not, and it is an
