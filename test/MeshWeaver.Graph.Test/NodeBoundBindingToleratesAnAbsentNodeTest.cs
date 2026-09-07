@@ -138,4 +138,67 @@ public class NodeBoundBindingToleratesAnAbsentNodeTest(ITestOutputHelper output)
             "a deleted node's path must not carry a breaker window opened by the view that is "
             + "merely still showing it");
     }
+
+    /// <summary>
+    /// 🚨 <b>THE ONE WAY THIS FIX COULD BE WORSE THAN THE BUG</b>, and it would be SILENT: an
+    /// existence gate that answers "absent" for a node that is plainly there blanks the control for
+    /// every viewer, with nothing logged and nothing to grep. So the gate is asserted against the
+    /// path shapes whose query routing is NOT uniform — the two that would have taken a whole
+    /// family of editors down with them:
+    /// <list type="bullet">
+    ///   <item><b>A satellite path</b> (<c>{x}/_Comment/{id}</c> → the annotations table; the same
+    ///     routing as <c>{x}/_Thread/{id}</c>, which <c>ThreadComposerView</c> binds). A query that
+    ///     does not TARGET a satellite path has its satellite rows excluded by construction
+    ///     (<c>StorageAdapterMeshQueryProvider.IsExcludedFromResults</c>, mirroring Postgres's
+    ///     per-prefix tables) — so a gate that were not satellite-targeted would report every
+    ///     thread composer's node missing.</item>
+    ///   <item><b>A partition root</b> (the shape <c>SettingsLayoutArea</c> binds for a space's
+    ///     Display name / description). A root is deliberately dropped from a
+    ///     <c>scope:descendants</c> listing; an exact read keeps it, and this pins that the gate
+    ///     gets the read it needs and not the listing.</item>
+    /// </list>
+    /// Each case proves the node exists through the OWNER's stream first, so a null from the
+    /// binding can only be the gate's verdict and nothing else.
+    /// </summary>
+    [Fact]
+    public async Task TheGateNeverBlanksANodeThatExists_OnASatellitePath_OrAPartitionRoot()
+    {
+        var docId = NewId("gated-");
+        var docPath = $"{TestPartition}/{docId}";
+        var satellitePath = $"{docPath}/_Comment/c1";
+
+        await NodeFactory.CreateNode(Page(docId, "The document")).Should().Within(TestTimeouts.Convergence).Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath(satellitePath) with
+        {
+            Name = "A comment",
+            NodeType = "Comment",
+            State = MeshNodeState.Active,
+            Description = "Satellite description",
+        }).Should().Within(TestTimeouts.Convergence).Emit();
+
+        // Control: the OWNER says the satellite node is there. Anything null below is the gate.
+        var owned = await Mesh.GetMeshNodeStream(satellitePath).Where(n => n is not null)
+            .Should().Within(TestTimeouts.Convergence).Emit("the satellite node exists");
+        owned.Description.Should().Be("Satellite description");
+
+        var satellite = await BindDescription(satellitePath).Should().Within(TestTimeouts.Convergence).Match(
+            v => Text(v) == "Satellite description",
+            "an exact-path gate TARGETS the satellite path, so satellite rows are not excluded — "
+            + "a non-targeted query would report every thread composer's node missing");
+        Text(satellite).Should().Be("Satellite description");
+
+        // The partition root, read through the same seam.
+        var root = await Mesh.GetMeshNodeStream(TestPartition).Where(n => n is not null)
+            .Should().Within(TestTimeouts.Convergence).Emit("the partition root exists");
+        root.Name.Should().NotBeNullOrEmpty();
+
+        var boundRoot = await MeshNodeBindingExtensions
+            .Bind(Mesh, TestPartition, bindContent: false, subPath: null,
+                new JsonPointerReference(nameof(MeshNode.Name)))
+            .Should().Within(TestTimeouts.Convergence).Match(
+                v => Text(v) == root.Name,
+                "a partition root is dropped from a descendants LISTING but kept by an exact read — "
+                + "the gate must use the read, or every space's settings editor draws empty");
+        Text(boundRoot).Should().Be(root.Name);
+    }
 }
