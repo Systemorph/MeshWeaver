@@ -1968,6 +1968,22 @@ jobs:
     - name: "Every job is capped at 45 minutes"
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
 
+    # 🚨 combo-verify.yml fires on `workflow_run` / `workflow_dispatch`, NEVER on `pull_request`, so
+    # nothing else on this PR opens it — the same blind spot #2642 cost 33 hours on. Its `preflight`
+    # is the only thing between "no per-instance credential was provisioned" and a lane that
+    # verifies nothing, and the shortfall that matters most is an EMPTY instance list: an empty
+    # matrix skips the verify job, and GitHub paints a skipped job the same colour as a passed one.
+    # This EXECUTES the preflight's real `run:` text over five input scenarios — and the lander's
+    # real verdict-merge jq over the two node shapes `/api/mesh/get` can return, because that merge
+    # re-sends the WHOLE verdict list (RFC 7396 replaces an array wholesale) and reading the
+    # `{node, compilationError}` wrapper as if it were the bare node would silently DELETE an
+    # instance's recorded history rather than fail. Self-test first: both parts must be shown to
+    # fire on their own defect.
+    - name: "The combo-verify preflight and verdict merge can fail (self-test)"
+      run: python3 .github/scripts/check-combo-verify.py --self-test
+    - name: "The combo-verify preflight names what to provision, and the verdict merge loses nothing"
+      run: python3 .github/scripts/check-combo-verify.py --root .
+
     # 🚨 A Dependabot run resolves `secrets.X` against a SECOND, SEPARATE store (Settings → Secrets
     # and variables → **Dependabot**), which is a PARTIAL mirror of the Actions one — and there is no
     # Dependabot *variables* store, so only `secrets.` is doubled. #3399 (a recurrence of #2249) had
