@@ -865,9 +865,15 @@ evidence. So each of these resolves to a FULL bake, naming itself in the log and
 - a baseline commit this checkout cannot resolve, or one that is not an ancestor of HEAD
   (history rewritten);
 - the selector refusing — an **empty diff** is a broken range, never "nothing to do";
-- the selector answering ALL modules: a change under `scripts/`, `.github/`, a repo-root file, or
-  **a module directory that no longer exists**. That last one is why a DELETED module still
-  shrinks the publication correctly.
+- the selector answering ALL modules: a change under `scripts/`, `.github/`, a repo-root file the
+  platform's `NOOP_FILES` does not name, or **a module directory that no longer exists**. That last
+  one is why a DELETED module still shrinks the publication correctly.
+
+> 🚨 **The MODULE lane's copy of this decision — `node-repo-scope.py` — had two blind spots that
+> made "a repo-root file" and "the two `NOOP_DIRS` copies differ" cost a full run each, measured at
+> 105 jobs / 345 job-minutes for a one-file documentation diff and at *every pull request three
+> satellites ever opened*. Both are closed, with the falsification evidence and the numbers:
+> [What a Pull Request Rebuilds](/Doc/Architecture/BuildScopeNarrowing).**
 
 And one verdict that is neither: **`scope=none`**, when the sealed publication already records
 *this* commit for *this* identity. It is a positive finding — read from every target, logged with

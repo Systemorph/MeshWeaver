@@ -86,17 +86,51 @@ import sys
 import tempfile
 from pathlib import Path
 
-# 🚨 scripts/affected-modules.py's NOOP_DIRS, and it must stay EQUAL to it — the top-level dirs a
-# change in which can reach no build at all. Every entry NOT in this set falls through to a FULL
-# run, so adding one silently un-builds something and dropping one merely costs a full run.
+# 🚨 scripts/affected-modules.py's NOOP_DIRS — the top-level dirs a change in which can reach no
+# build at all. Every entry NOT in this set falls through to a FULL run, so adding one silently
+# un-builds something and dropping one merely costs a full run.
 # `clients/` is deliberately absent (the established selector treats it as ALL, and a client asset
-# can be embedded by a host).
+# can be embedded by a host). Measured over 120 first-parent merges to MeshWeaver.Plugins' main,
+# `clients/` is the largest remaining full-set trigger after `.github/` (11 of 45); the entry stays
+# out because this set also feeds the mesh gate and the bake, so moving it is a wider decision than
+# the module matrix — see Doc/Architecture/BuildScopeNarrowing.
 #
 # 🚨 A HAND COPY IS NOT A GUARANTEE, and this one drifted on its first day: `WhatsNew` was missing,
 # so a note-only PR ran the entire fleet's module suite — the exact case affected-modules.py added
-# it for. `assert_noop_dirs_match()` below now READS the caller's set and refuses to narrow when
-# the two disagree, so the next drift is a full run with a named reason instead of a silent one.
+# it for. `resolve_noop_dirs()` below READS the caller's set and narrows on the INTERSECTION, so a
+# drift over-builds the divergent dir out loud instead of silently, and — since 2026-09-08 —
+# instead of switching the whole narrowing off (which is what equality did, on every pull request
+# three satellites ever opened). A literal it cannot READ is still a refusal.
 NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees"}
+
+# 🚨 A repo-ROOT path HAS NO TOP-LEVEL DIRECTORY, so NOOP_DIRS above can never reach it: both
+# no-op branches of the classifier are guarded by `"/" in f`, and a single-segment path takes
+# neither. Every root file therefore fell through to the global catch-all and ran the FULL set.
+#
+# Measured on MeshWeaver.Plugins run 34158493654 (2026-09-07), a pull request whose entire diff
+# was one file:
+#
+#     AGENTS.md  → EVERYTHING (tooling / repo-root / unknown scope)
+#     scope: full — 1 changed file(s) reach the tooling/global scope — first: AGENTS.md.
+#     34 of 34 selected module(s) still owe a test run: …
+#
+# 100 jobs, 38 bundles, 34 module suites, ~350 billable job-minutes and ~54 minutes of wall clock
+# for a documentation edit — and `AGENTS.md` is the file every agent session in this fleet edits.
+# The `docs/` entry above was added for exactly this shape and could not cover it, because the
+# fleet keeps its agent guidance at the ROOT rather than under `docs/`.
+#
+# 🚨 THIS IS A CLOSED LIST OF NAMES, NEVER A PATTERN, and that is the whole safety argument. A
+# root file this set does not name is UNKNOWN and still runs the full set — which is what keeps
+# `Directory.Build.props`, `Directory.Packages.props`, `global.json`, `nuget.config`, a `*.slnx`
+# and (measured across the fleet: `plugin-gate.allow`, `plugin-tests.allow`, `cover-prose.allow`,
+# `impersonation.allow`) every gate ALLOW FILE on the loud path where they belong. Adding a name
+# here is a deliberate claim that the file cannot change what any lane builds; a `*.md` glob, or
+# "any dotfile", would make that claim for files nobody has read yet.
+NOOP_FILES = {
+    "AGENTS.md", "CLAUDE.md", "README.md",
+    "LICENSE", "LICENSE-APACHE", "LICENSE-MIT",
+    ".gitignore", ".gitattributes", ".editorconfig",
+}
 
 SELECTOR = "scripts/affected-modules.py"        # the caller's NODE graph
 PROJECTS = "scripts/project-closure.py"          # the caller's PROJECT graph
@@ -208,28 +242,67 @@ def node_packages(root: Path) -> set[str]:
             if d.is_dir() and d.name not in skip and (d / "index.json").exists()}
 
 
-def assert_noop_dirs_match(root: Path) -> str | None:
-    """None when the caller's NOOP_DIRS equals ours; otherwise why we must not narrow.
+def caller_noop_dirs(root: Path) -> tuple[set[str] | None, str | None]:
+    """(the caller's NOOP_DIRS, or None with the reason it could not be READ AT ALL).
 
     Read out of the caller's source rather than imported: affected-modules.py is a CLI, and
     importing it would run its argparse. A set literal on one line is what it has always been; if
     that ever stops parsing, the honest answer is "cannot verify" — which is also a full run.
+    Shared with `check-noop-scope-parity.py`, the fleet guard that reds when this stops parsing.
     """
     try:
         text = (root / SELECTOR).read_text(encoding="utf-8")
     except OSError as exc:
-        return f"{SELECTOR} could not be read ({exc})"
+        return None, f"{SELECTOR} could not be read ({exc})"
     match = re.search(r"^NOOP_DIRS\s*=\s*\{([^}]*)\}", text, re.M)
     if not match:
-        return f"{SELECTOR} has no single-line NOOP_DIRS literal to compare against"
-    theirs = set(re.findall(r"[\"']([^\"']+)[\"']", match.group(1)))
-    if theirs != NOOP_DIRS:
-        only_theirs = ", ".join(sorted(theirs - NOOP_DIRS)) or "(none)"
-        only_ours = ", ".join(sorted(NOOP_DIRS - theirs)) or "(none)"
-        return (f"this script's NOOP_DIRS has drifted from {SELECTOR}'s — only theirs: "
-                f"{only_theirs}; only ours: {only_ours}. The two must classify a top-level dir "
-                "identically or the lanes disagree about what a change reaches")
-    return None
+        return None, f"{SELECTOR} has no single-line NOOP_DIRS literal to compare against"
+    return set(re.findall(r"[\"']([^\"']+)[\"']", match.group(1))), None
+
+
+def resolve_noop_dirs(root: Path) -> tuple[frozenset[str] | None, str | None]:
+    """(the no-op dirs BOTH sides agree on, a note about any divergence).
+
+    A `None` set means the caller's copy could not be READ AT ALL — the subject moved — and the
+    only honest answer to that is a full run. A note beside a set is a cost report, not a refusal.
+
+    🚨 DIVERGENCE USED TO MEAN "NARROW NOTHING", AND THAT SWITCHED NARROWING OFF FLEET-WIDE.
+    NOOP_DIRS is HAND-COPIED into every caller repo, so it drifts the moment one side gains an
+    entry — and the old equality check answered a drift with a blanket FULL run, forever, visible
+    only in a log line inside the very job it disabled. Measured 2026-09-07, MeshWeaver.SocialMedia
+    run 34122662676:
+
+        scope: full — this script's NOOP_DIRS has drifted from scripts/affected-modules.py's —
+        only theirs: (none); only ours: app.
+
+    …on EVERY pull request since `app` was added here — for a repo that has no `app/` directory at
+    all, so not one changed file could ever have been classified by the entry they disagree about.
+    MeshWeaver.Manufacturing and MeshWeaver.Reinsurance carry the same divergence today.
+
+    The INTERSECTION is what the safety argument actually needs, and unlike equality it is safe in
+    BOTH directions:
+      * a dir only WE call inert — the caller believes it reaches its gate, so we must not skip
+        it: the intersection drops it and it goes to EVERYTHING;
+      * a dir only THEY call inert — we believe it reaches a module, so we must not skip it: the
+        intersection drops it and it goes to EVERYTHING.
+    Either way the divergent dir is over-built, out loud, and every OTHER dir keeps narrowing.
+    "The two must classify a top-level dir identically" was the right requirement expressed as the
+    wrong remedy: they need only agree WHERE IT MATTERS, and the intersection makes them agree by
+    construction. The residual cost of a real drift is NAMED in the report so it can be closed,
+    and `check-noop-scope-parity.py` reds a caller whose divergence actually costs it something.
+    """
+    theirs, unreadable = caller_noop_dirs(root)
+    if theirs is None:
+        return None, unreadable
+    if theirs == NOOP_DIRS:
+        return frozenset(NOOP_DIRS), None
+    only_theirs = ", ".join(sorted(theirs - NOOP_DIRS)) or "(none)"
+    only_ours = ", ".join(sorted(NOOP_DIRS - theirs)) or "(none)"
+    return frozenset(NOOP_DIRS & theirs), (
+        f"NOOP_DIRS diverges from {SELECTOR}'s — only theirs: {only_theirs}; only ours: "
+        f"{only_ours}. Narrowing on the INTERSECTION, so every divergent dir above is treated as "
+        f"EVERYTHING (over-built, never skipped). Align {SELECTOR}'s literal with this script's "
+        "to stop paying for it")
 
 
 def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
@@ -257,14 +330,18 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
     all_packages = sorted(node_packages(root))
     universe = [e["module"] for e in entries]
 
+    divergence: str | None = None
+
     def full(reason: str) -> dict:
         return {"lane": lane, "scope": "full", "reason": reason,
                 "modules": [{**e, "test": True} for e in entries],
-                "count": len(universe), "selected": sorted(universe), "skipped": [], "why": {}}
+                "count": len(universe), "selected": sorted(universe), "skipped": [], "why": {},
+                "tested": sorted(universe), "divergence": divergence}
 
     def refuse(reason: str) -> dict:
         return {"lane": lane, "scope": "refuse", "reason": reason, "modules": [],
-                "count": 0, "selected": [], "skipped": [], "why": {}}
+                "count": 0, "selected": [], "skipped": [], "why": {},
+                "tested": [], "divergence": divergence}
 
     # 🚨 THE ANSWER "BUILD EVERYTHING, AND EVERYTHING IS NOTHING" IS NOT AN ANSWER. `full` with a
     # count of 0 is an internal contradiction, and it is REACHABLE: a --root that does not match
@@ -287,9 +364,10 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
     if not (root / SELECTOR).is_file():
         return full(f"the caller repo ships no {SELECTOR}, so the affected closure cannot be "
                     "computed — running the full set.")
-    drift = assert_noop_dirs_match(root)
-    if drift is not None:
-        return full(f"{drift} — running the full set.")
+    noop_dirs, divergence = resolve_noop_dirs(root)
+    if noop_dirs is None:
+        # The caller's copy could not be READ — its subject moved. "Cannot verify" is a full run.
+        return full(f"{divergence} — running the full set.")
 
     if override is not None:
         files = [f for f in override if f.strip()]
@@ -316,8 +394,14 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         if "/" in f and top in packages:
             node_files.append(f)
             report.append(f"  {f}  → node package {top}")
-        elif "/" in f and top in NOOP_DIRS:
+        elif "/" in f and top in noop_dirs:
             report.append(f"  {f}  → (reaches nothing this lane builds — {top}/)")
+        # 🚨 A repo-ROOT path reaches neither branch above — both require a "/" — so before this
+        # entry every one of them fell through to EVERYTHING (see NOOP_FILES). The list is closed:
+        # an unnamed root file is still UNKNOWN and still runs the full set, which is what keeps
+        # every gate `*.allow`, Directory.Build.props and global.json on the loud path.
+        elif "/" not in f and f in NOOP_FILES:
+            report.append(f"  {f}  → (reaches nothing any lane builds — a repo-root no-op file)")
         elif f.startswith("src/") and f.count("/") >= 2 and lane == "modules":
             src_files.append(f)
             report.append(f"  {f}  → src/ (which project decides, below)")
@@ -421,11 +505,17 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
             selected.append({**e, "test": not floor_only})
 
     chosen = {e["module"] for e in selected}
+    # 🚨 THE SECOND DENOMINATOR. `selected` answers what is BUILT; a floor-only entry is built and
+    # deliberately not tested, so "how many suites will run" is a different number and a reader
+    # who only sees the first cannot tell "nothing needed testing" from "the filter is broken and
+    # matched nothing". Both counts are stated, with names, at the point the decision is made.
+    tested = sorted(e["module"] for e in selected if e.get("test") is not False)
     return {"lane": lane, "scope": "narrowed",
             "reason": f"{len(selected)} of {len(entries)} module bundle(s) are reachable from this "
-                      f"diff ({len(files)} file(s)).",
+                      f"diff ({len(files)} file(s)); {len(tested)} of those owe a test run.",
             "modules": selected, "count": len(selected),
-            "selected": sorted(chosen), "skipped": sorted(set(universe) - chosen), "why": why}
+            "selected": sorted(chosen), "skipped": sorted(set(universe) - chosen), "why": why,
+            "tested": tested, "divergence": divergence}
 
 
 # ── self-test ────────────────────────────────────────────────────────────────────────────────
@@ -554,7 +644,15 @@ def self_test() -> int:
                       got["scope"] == "full" and got["count"] == n,
                       f"scope={got['scope']} count={got['count']}")
             for label, changed in (
-                    ("a repo-ROOT file ⇒ ALL", ["README.md"]),
+                    # 🚨 Each of these is a repo-ROOT path NOOP_FILES deliberately does NOT name,
+                    # and each is a real file in this fleet: two build-input files that change
+                    # what every project compiles, and the gate ALLOW files every satellite keeps
+                    # at its root. The narrowing must never reach them.
+                    ("an UNNAMED repo-ROOT file (a build input) ⇒ ALL",
+                     ["Directory.Build.props"]),
+                    ("a repo-ROOT global.json ⇒ ALL", ["global.json"]),
+                    ("a repo-ROOT gate ALLOW file ⇒ ALL", ["plugin-gate.allow"]),
+                    ("a repo-ROOT file nobody has classified yet ⇒ ALL", ["brand-new-thing.toml"]),
                     (".github/ (the workflow itself) ⇒ ALL", [".github/workflows/ci.yml"]),
                     ("scripts/ (the gates) ⇒ ALL", ["scripts/gen-manifests.py"]),
                     ("an UNKNOWN top-level dir (a deleted package) ⇒ ALL", ["Gone/index.json"]),
@@ -703,14 +801,73 @@ def self_test() -> int:
         check("…and it is checked even when the diff touches NO src/ path",
               got["scope"] == "full" and "does not exist" in got["reason"], f"{got['reason'][:90]}")
 
-        print("the NOOP_DIRS copy cannot drift from the caller's unnoticed:")
+        # ── the repo-ROOT no-op files (the AGENTS.md blind spot, Plugins run 34158493654) ──
+        # 🚨 THE SUBJECT OF THIS FILTER IS A LIST OF NAMES, and a name that no longer exists in the
+        # fleet would make its case pass having filtered nothing. So every name is asserted
+        # INDIVIDUALLY, off NOOP_FILES itself rather than off a hand-written copy: adding a name
+        # without an assertion is impossible, and REMOVING one turns its assertion red.
+        print(f"repo-ROOT no-op files ({len(NOOP_FILES)} named) — the blind spot NOOP_DIRS "
+              "structurally cannot cover:")
+        # 🚨 THE DENOMINATOR, ASSERTED. The loop below iterates NOOP_FILES, so DELETING a name
+        # would delete its case and the sweep would stay green having stopped covering it — the
+        # exact "a guard whose subject moved" shape. These three names are the measured ones
+        # (`AGENTS.md` is Plugins run 34158493654; every repo in the fleet carries all three), so
+        # removing any of them turns THIS case red instead of quietly shrinking the population.
+        check("NOOP_FILES still names the root files this fleet actually has",
+              {"AGENTS.md", "CLAUDE.md", "README.md"} <= NOOP_FILES and len(NOOP_FILES) >= 9,
+              f"NOOP_FILES={sorted(NOOP_FILES)}")
+        for name in sorted(NOOP_FILES):
+            got = _run(root, "modules", "pull_request", [name])
+            check(f"[modules] a {name}-only diff builds NOTHING, not everything",
+                  got["scope"] == "narrowed" and got["count"] == 0,
+                  f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+        got = _run(root, "modules", "pull_request", ["AGENTS.md"], extra=["--always", "Acme.Alpha"])
+        check("[modules] …and with a floor it builds the floor and TESTS NOTHING",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Alpha"]
+              and got["tested"] == [], f"{got['selected']} tested={got.get('tested')}")
+        got = _run(root, "modules", "pull_request", ["AGENTS.md", "src/Acme.Beta/T.cs"])
+        check("[modules] a root no-op file riding along never widens a real selection",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
+        got = _run(root, "modules", "pull_request", ["AGENTS.md", "plugin-gate.allow"])
+        check("[modules] one UNNAMED root file among no-op ones still runs the full set",
+              got["scope"] == "full" and "plugin-gate.allow" in got["reason"],
+              f"scope={got['scope']} — {got['reason'][:90]}")
+
+        print("the NOOP_DIRS copy drifting from the caller's costs the DIVERGENT DIR, not the run:")
         selector_src = (root / "scripts" / "affected-modules.py").read_text(encoding="utf-8")
-        (root / "scripts" / "affected-modules.py").write_text(
-            'NOOP_DIRS = {"legacy", "e2e"}\n' + selector_src, encoding="utf-8")
-        got = _run(root, "modules", "pull_request", ["Alpha/index.json"])
-        check("a NOOP_DIRS that disagrees with the caller's ⇒ ALL, naming both sides",
-              got["scope"] == "full" and "drifted" in got["reason"], f"{got['reason'][:100]}")
-        (root / "scripts" / "affected-modules.py").write_text(selector_src, encoding="utf-8")
+        selector_path = root / "scripts" / "affected-modules.py"
+        # THEIRS is missing `app` — MeshWeaver.SocialMedia's live divergence, measured on run
+        # 34122662676, which used to answer `full` on every pull request that repo ever opened.
+        theirs_short = 'NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", ".claude", ".worktrees"}\n'
+        selector_path.write_text(theirs_short + selector_src, encoding="utf-8")
+        got = _run(root, "modules", "pull_request", ["docs/guide.md"])
+        check("a caller missing one of our NOOP dirs still NARROWS on the ones both agree about",
+              got["scope"] == "narrowed" and got["count"] == 0 and got.get("divergence")
+              and "only ours: app" in got["divergence"],
+              f"scope={got['scope']} divergence={got.get('divergence')}")
+        got = _run(root, "modules", "pull_request", ["app/rn/App.tsx"])
+        check("…while the DIVERGENT dir itself is treated as EVERYTHING (over-built, never skipped)",
+              got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
+        # THEIRS carries a dir we do not — the other direction, and it must be just as safe.
+        selector_path.write_text(
+            'NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees", '
+            '"vendor"}\n' + selector_src, encoding="utf-8")
+        got = _run(root, "modules", "pull_request", ["vendor/lib.js"])
+        check("a dir only THEY call inert is still EVERYTHING here (the other direction)",
+              got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
+        got = _run(root, "modules", "pull_request", ["docs/guide.md"])
+        check("…and their extra entry does not stop US narrowing on the agreed ones",
+              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']}")
+        # 🚨 THE SUBJECT MOVING is the one thing that must still refuse to narrow: a literal that
+        # no longer parses means this script cannot know what the caller believes, and "cannot
+        # verify" has exactly one honest answer.
+        selector_path.write_text(
+            selector_src.replace("NOOP_DIRS", "NOOP_TOPS"), encoding="utf-8")
+        got = _run(root, "modules", "pull_request", ["docs/guide.md"])
+        check("a RENAMED NOOP_DIRS literal ⇒ ALL (the subject moved, so we cannot know)",
+              got["scope"] == "full" and "no single-line NOOP_DIRS literal" in got["reason"],
+              f"scope={got['scope']} — {got['reason'][:100]}")
+        selector_path.write_text(selector_src, encoding="utf-8")
         got = _run(root, "modules", "pull_request", ["WhatsNew/note.md"])
         check("WhatsNew/ is a NOOP dir — a note-only PR builds NOTHING, not everything",
               got["scope"] == "narrowed" and got["count"] == 0,
@@ -819,10 +976,22 @@ def main() -> int:
 
     say("")
     say(f"scope: {answer['scope']} — {answer['reason']}")
+    if answer.get("divergence"):
+        say(f"⚠ {answer['divergence']}")
     for name, reason in sorted(answer.get("why", {}).items()):
         say(f"  ▸ {name}: {reason}")
     if answer["skipped"]:
         say(f"not built ({len(answer['skipped'])}): {', '.join(answer['skipped'])}")
+    # 🚨 STATE BOTH DENOMINATORS, ALWAYS, AND NEVER LEAVE A ZERO BARE. "0 selected" and "0 tested"
+    # are the two answers a reader must be able to tell apart from "the filter matched nothing
+    # because it is broken", and the only thing that distinguishes them is the count they are
+    # measured against being printed beside them.
+    total = answer["count"] + len(answer["skipped"])
+    tested = answer.get("tested", [])
+    say(f"built {answer['count']} of {total} bundle(s): "
+        f"{', '.join(answer['selected']) if answer['selected'] else '<none>'}")
+    say(f"tested {len(tested)} of {answer['count']} selected bundle(s): "
+        f"{', '.join(tested) if tested else '<none> — no selected bundle owes a test run'}")
 
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
@@ -831,11 +1000,16 @@ def main() -> int:
             fh.write("modules=" + json.dumps(answer["modules"]) + "\n")
             fh.write("selected=" + " ".join(answer["selected"]) + "\n")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
-        total = answer["count"] + len(answer["skipped"])
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
             fh.write(f"### {'🧱' if answer['scope'] == 'full' else '🎯'} "
                      f"{answer['lane']}: {answer['scope']} — {answer['count']} of {total}\n\n"
-                     f"{answer['reason']}\n\n")
+                     f"{answer['reason']}\n\n"
+                     f"**Built** {answer['count']} of {total} · **tested** "
+                     f"{len(answer.get('tested', []))} of {answer['count']}"
+                     f"{' — no selected bundle owes a test run' if not answer.get('tested') else ''}"
+                     "\n\n")
+            if answer.get("divergence"):
+                fh.write(f"> ⚠ {answer['divergence']}\n\n")
             if answer["scope"] == "narrowed":
                 if answer["why"]:
                     fh.write("| built | why |\n|---|---|\n")
