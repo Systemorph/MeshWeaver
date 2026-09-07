@@ -77,12 +77,13 @@ loads at startup is the same shape: a value on `MemexOptions`, a config key on t
 the plugin fetched at runtime from the plugin catalog as a module bundle. Adding a startup-time
 capability means **adding an option to the adapter**, never adding a package.
 
-> 🚧 **Open direction, not yet built.** Two consequences of this ground rule are stated here so they
-> are not rediscovered: the adapter should grow explicit plugin selection (today plugins are
-> configured portal-side, not from the AppHost), and the hand-maintained Helm chart under
-> `deploy/helm/` duplicates keys that `MemexOptions` already owns — it should be **generated** from
-> the same surface rather than kept in parallel. Aspire's own Kubernetes/Helm publisher is the
-> mechanism.
+> 🚧 **Open direction, not yet built —
+> [#3646](https://github.com/Systemorph/MeshWeaver/issues/3646).** Two consequences of this ground
+> rule are recorded so they are not rediscovered: the adapter should grow explicit plugin selection
+> (today plugins are configured portal-side, not from the AppHost), and the hand-maintained Helm
+> chart under `deploy/helm/` duplicates keys that `MemexOptions` already owns — it should be
+> **generated** from the same surface rather than kept in parallel. Aspire's own Kubernetes/Helm
+> publisher is the mechanism.
 
 ---
 
