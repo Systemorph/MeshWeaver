@@ -161,7 +161,7 @@ public static class MeshNodeBindingExtensions
             return content;
 
         var announcedAbsent = 0;
-        return Exists(meshService, nodePath)
+        return Exists(meshService, hub, nodePath, firstValueBudget, scheduler)
             .Select(exists => exists
                 ? content
                 : Observable.Defer(() =>
@@ -193,12 +193,66 @@ public static class MeshNodeBindingExtensions
     /// <para>🚨 <c>StringComparison.Ordinal</c>, never <c>OrdinalIgnoreCase</c>: mesh paths are
     /// case-SENSITIVE, and a case-insensitive match would let a DIFFERENT node satisfy the gate —
     /// re-minting the very NotFound the gate exists to prevent.</para>
+    ///
+    /// <para>🚨 <b>The CHANGE-STREAM surface (<c>Query&lt;T&gt;</c>), never the unified snapshot
+    /// surface (<c>Query(request)</c>)</b>, and the difference is not a preference. The snapshot
+    /// surface seeds every provider with <c>.StartWith(empty)</c> before <c>CombineLatest</c> so a
+    /// fast provider need not wait for a slow one — its own comment calls the result "the brief
+    /// leading all-empty frame". A gate built on it therefore answers <b>false FIRST, always</b>,
+    /// including for a node that plainly exists: every binding in the portal would emit a spurious
+    /// <c>null</c> and log the "does not exist" line below. <c>Query&lt;T&gt;</c> instead merges the
+    /// providers' <c>Initial</c> frames into one authoritative full set and forwards the deltas
+    /// after it, so the gate's first answer is a real one. (Found in review of #3536.)</para>
+    ///
+    /// <para>🚨 <b>The gate carries its own budget, because a gate that never answers is a control
+    /// that spins forever with nothing logged</b> — the exact failure class <see cref="ReadBudget"/>
+    /// exists to remove, reintroduced one level up if only the CONTENT leg were bounded. A query
+    /// engine that produces no first frame degrades to <c>false</c>: the control draws empty (the
+    /// same, safe direction as a real absence — and notably NOT "assume it is there", which would
+    /// open the point read this whole gate exists to withhold), the degradation is LOGGED naming the
+    /// node and the budget, and the subscription stays live so a late answer still switches the
+    /// binding onto the owner's stream.</para>
     /// </summary>
-    private static IObservable<bool> Exists(IMeshService meshService, string nodePath)
+    private static IObservable<bool> Exists(
+        IMeshService meshService, IMessageHub hub, string nodePath,
+        TimeSpan? budget, IScheduler? scheduler)
         => meshService
-            .Query(MeshQueryRequest.FromQuery($"path:{nodePath}").AsSystem())
-            .Select(rows => rows.Any(r => string.Equals(r.Path, nodePath, StringComparison.Ordinal)))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}").AsSystem())
+            .Scan(false, (present, change) => FoldPresence(present, change, nodePath))
+            .DegradeIfNoFirstEmission(
+                fallback: false,
+                onDegraded: failure => ReadBudget.Logger(hub)?.LogWarning(
+                    "MeshNodeBinding: the existence gate for {Path} produced no answer — drawing the "
+                    + "control empty and staying subscribed. {Reason}",
+                    nodePath, failure.Message),
+                reader: hub,
+                target: nodePath,
+                what: "node existence",
+                budget: budget,
+                scheduler: scheduler)
             .DistinctUntilChanged();
+
+    /// <summary>
+    /// Folds one <see cref="QueryResultChange{T}"/> into "is the node at <paramref name="nodePath"/>
+    /// there?". <c>Initial</c> and <c>Reset</c> carry the FULL matching set and so are authoritative
+    /// in both directions; the deltas carry only what changed, so a frame that does not mention this
+    /// path says nothing about it and must leave the answer alone.
+    ///
+    /// <para>No <c>select:</c> projection is asked for upstream, deliberately:
+    /// <see cref="MeshNode.Path"/> is COMPUTED from <c>Namespace</c> + <c>Id</c>, so a projection
+    /// omitting either input yields an empty path and every comparison here would silently miss.</para>
+    /// </summary>
+    private static bool FoldPresence(bool present, QueryResultChange<MeshNode> change, string nodePath)
+    {
+        var names = change.Items.Any(n =>
+            string.Equals(n.Path, nodePath, StringComparison.Ordinal));
+        return change.ChangeType switch
+        {
+            QueryChangeType.Initial or QueryChangeType.Reset => names,
+            QueryChangeType.Removed => names ? false : present,
+            _ => names || present,
+        };
+    }
 
     /// <summary>
     /// The CONTENT leg: the owner's authoritative live stream for a node the gate has proven

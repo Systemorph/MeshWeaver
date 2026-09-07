@@ -596,14 +596,37 @@ Two details of the seam's gate that are decisions, not incidentals:
   to resolve would answer "absent" for a node the viewer can plainly see — an empty control
   indistinguishable from a real absence, which is the failure `MeshQueryRequest.UserId` documents as
   its own most-repeated defect.
-- **The read budget sits on the CONTENT leg, never on the gate.** Outside it, the immediate
-  "absent ⇒ null" emission would satisfy the budget and silence the case it exists for (#1748: the
-  owning hub unreachable, burning the hub's whole 60 s `RequestTimeout` before the fault reaches the
-  view).
+- **Each leg carries its OWN read budget; one budget spanning both would be worse than none.**
+  Wrapped around the composed binding, the immediate "absent ⇒ null" emission satisfies it instantly
+  and silences the case it exists for (#1748: the owning hub unreachable, burning the whole 60 s
+  `RequestTimeout` before the fault reaches the view). So the content leg is bounded where it is
+  opened, and the gate is bounded separately — a gate that never answers is the same spinning control
+  with nothing logged, reintroduced one level up. A lapsed gate degrades to **absent**, never to
+  "assume it is there": drawing empty is the safe direction, and the other one opens the point read
+  the gate exists to withhold.
+- 🚨 **The gate reads `IMeshService.Query<T>` — the CHANGE-STREAM surface — and never
+  `IMeshService.Query(request)`, the unified snapshot one.** This is not a preference, and it is the
+  kind of thing only a measurement settles. `MeshQuery.Query(request)` seeds every provider with
+  `.StartWith(empty)` before `CombineLatest` so a fast provider need not wait for a slow one; its own
+  comment calls the result *"the brief leading all-empty frame"*. A gate built on it therefore answers
+  **`false` FIRST, always** — including for a node that plainly exists — so every binding in the portal
+  would flash empty and log "does not exist" about a node that does. `Query<T>` instead merges the
+  providers' `Initial` frames into ONE authoritative full set and forwards deltas after it, so the
+  gate's first answer is a real one; membership is folded per frame (`Initial`/`Reset` are
+  authoritative both ways, deltas only speak about what they name). Caught by review on #3536 and
+  pinned by the third arm of the test below, which asserts the **first** emission for an existing
+  node — an assertion on a *later* one sails straight past a leading null.
 
 `NodeBoundBindingToleratesAnAbsentNodeTest` pins both live shapes — bind-then-create, and
 re-bind-after-delete — and asserts the storm window stays shut, which is the half the log flood
-hides.
+hides. Its third arm pins the one way this fix could be **worse** than the bug and **silent**: a gate
+that answers "absent" for a node that is plainly there blanks the control for every viewer, with
+nothing logged. So it is asserted against the two path shapes whose query routing is not uniform — a
+**satellite** path (`{x}/_Comment/{id}`; the same routing as the `{x}/_Thread/{id}` a thread composer
+binds, and a query that does not TARGET a satellite path has its satellite rows excluded by
+construction) and a **partition root** (dropped from a `scope:descendants` listing, kept by an exact
+read) — each proving the node exists through the OWNER's stream first, so a null from the binding can
+only be the gate's verdict.
 
 🚨 **Do not over-apply this to a genuine SET — the worked counter-example is
 `src/MeshWeaver.Blazor.Portal/Chat/ThreadTokenChip.razor.cs:106`.** That chip reads `content` out of

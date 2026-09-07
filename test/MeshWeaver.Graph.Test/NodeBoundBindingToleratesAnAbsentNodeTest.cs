@@ -181,11 +181,17 @@ public class NodeBoundBindingToleratesAnAbsentNodeTest(ITestOutputHelper output)
             .Should().Within(TestTimeouts.Convergence).Emit("the satellite node exists");
         owned.Description.Should().Be("Satellite description");
 
-        var satellite = await BindDescription(satellitePath).Should().Within(TestTimeouts.Convergence).Match(
-            v => Text(v) == "Satellite description",
+        // 🚨 Emit(), not Match(): the FIRST emission, because a leading spurious `null` is exactly
+        // the regression this arm exists to catch and Match() would sail straight past it. The
+        // gate reads the CHANGE-STREAM surface (Query<T>, whose Initial frame is the authoritative
+        // full set) precisely because the unified snapshot surface seeds every provider with
+        // .StartWith(empty) — so a gate built on that one answers "absent" first for EVERY node,
+        // existing ones included. Found in review of #3536; this assertion is what pins it.
+        var satellite = await BindDescription(satellitePath).Should().Within(TestTimeouts.Convergence).Emit(
             "an exact-path gate TARGETS the satellite path, so satellite rows are not excluded — "
             + "a non-targeted query would report every thread composer's node missing");
-        Text(satellite).Should().Be("Satellite description");
+        Text(satellite).Should().Be("Satellite description",
+            "the FIRST emission for a node that exists is its value — never a leading null");
 
         // The partition root, read through the same seam.
         var root = await Mesh.GetMeshNodeStream(TestPartition).Where(n => n is not null)
@@ -195,10 +201,10 @@ public class NodeBoundBindingToleratesAnAbsentNodeTest(ITestOutputHelper output)
         var boundRoot = await MeshNodeBindingExtensions
             .Bind(Mesh, TestPartition, bindContent: false, subPath: null,
                 new JsonPointerReference(nameof(MeshNode.Name)))
-            .Should().Within(TestTimeouts.Convergence).Match(
-                v => Text(v) == root.Name,
+            .Should().Within(TestTimeouts.Convergence).Emit(
                 "a partition root is dropped from a descendants LISTING but kept by an exact read — "
                 + "the gate must use the read, or every space's settings editor draws empty");
-        Text(boundRoot).Should().Be(root.Name);
+        Text(boundRoot).Should().Be(root.Name,
+            "the FIRST emission for a node that exists is its value — never a leading null");
     }
 }
