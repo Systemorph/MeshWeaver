@@ -132,27 +132,31 @@ public static class OverviewLayoutArea
             ? typeProp.GetString()
             : null;
 
-        // Not a per-emission flood: this branch is reached only on the already-degraded path, and a
-        // node whose type registers late leaves it for good on the very next emission.
+        // Two genuinely different states, and conflating them misleads — in the rendered notice AND
+        // in the log. NO discriminator means the content is free-form JSON: legal by design
+        // (ContentDiscriminatorValidator: "content WITHOUT a $type stays legal"), permanent, and
+        // nothing to wait for. There is no name that "resolves nowhere", so there is nothing to
+        // report — a warning here would accuse a legal shape, once per render, for ever (Copilot
+        // review). The notice on screen is the whole story.
+        if (string.IsNullOrEmpty(discriminator))
+            return Controls.Markdown(
+                $"**{host.Localize("overview.untypedContent")}**\n\n"
+                + host.Localize("overview.untypedContentHint"));
+
+        // A discriminator WAS named and resolves on neither route. Not a per-emission flood: this
+        // branch is reached only on the already-degraded path, and a node whose type registers late
+        // leaves it for good on the very next emission.
         host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>()?.LogWarning(
             "OverviewLayoutArea: content discriminator '$type': '{TypeName}' on {Path} (NodeType "
             + "'{NodeType}') resolves on neither the NodeType route nor the name route — the property "
             + "overview renders the unresolved-type notice instead of a form. Either the NodeType's "
             + "runtime compile has not registered it YET (transient — the view re-renders when it "
             + "does), or no declaration will ever claim this discriminator.",
-            discriminator ?? "(absent)", node.Path, node.NodeType ?? "(none)");
+            discriminator, node.Path, node.NodeType ?? "(none)");
 
-        // Two genuinely different states, and conflating them misleads. NO discriminator means the
-        // content is free-form JSON — legal by design (ContentDiscriminatorValidator: "content
-        // WITHOUT a $type stays legal"), permanent, and nothing to wait for. An UNRESOLVABLE one
-        // means a type was named and is not known here — which may still resolve.
-        return string.IsNullOrEmpty(discriminator)
-            ? Controls.Markdown(
-                $"**{host.Localize("overview.untypedContent")}**\n\n"
-                + host.Localize("overview.untypedContentHint"))
-            : Controls.Markdown(
-                $"⚠️ **{host.Localize("overview.unresolvedType", discriminator)}**\n\n"
-                + host.Localize("overview.unresolvedTypeHint"));
+        return Controls.Markdown(
+            $"⚠️ **{host.Localize("overview.unresolvedType", discriminator)}**\n\n"
+            + host.Localize("overview.unresolvedTypeHint"));
     }
 
     /// <summary>
