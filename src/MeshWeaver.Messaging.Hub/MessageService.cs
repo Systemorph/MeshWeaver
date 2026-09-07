@@ -452,6 +452,113 @@ public class MessageService : IMessageService
                 hub.IsShuttingDown ? ErrorType.ShuttingDown : ErrorType.Failed);
     }
 
+    /// <summary>
+    /// Whether SOMEBODY is awaiting an answer to <paramref name="delivery"/> — the one admission
+    /// test shared by <see cref="NackThroughParent"/> (may this abandonment be answered at all?)
+    /// and the Quiescing tier of the intake gate (<see cref="RefusesIntake"/>: is this new work
+    /// somebody will be left waiting for?).
+    ///
+    /// <para>🚨 Both questions must be decided by the SAME predicate, or the gate acquires a
+    /// refusal it cannot answer — a silent drop, which is the exact defect the NACK exists to
+    /// remove. Factoring it here makes "refused" and "NACKed" the same set by construction rather
+    /// than by two lists staying in step.</para>
+    ///
+    /// <para>The <see cref="RawJson"/> clause is not defensive breadth: a cross-hub delivery
+    /// reaches this service UNDESERIALIZED (the <c>MESHWEAVER_MSG_TRACE</c> captures show the
+    /// dropped <c>GetDataRequest</c> and <c>SubscribeRequest</c> both as <c>msg=RawJson</c>), so an
+    /// <see cref="IRequest"/>-only test would silently skip the two flows this whole mechanism
+    /// exists for. The one RawJson excluded is a payload that looks like a
+    /// <see cref="DeliveryFailure"/> itself — answering a NACK with a NACK between two
+    /// concurrently-disposing hubs ping-pongs; a false positive on that cheap sniff merely reverts
+    /// the delivery to the historical silent drop.</para>
+    ///
+    /// <para><see cref="AnswerPolicy.MayAnswer"/> reads the answer-once contract off the ENVELOPE,
+    /// not the CLR type (#1485): a packaged <c>[CanBeIgnored]</c> heartbeat is RawJson by the time
+    /// it gets here, so the type test alone was dead for every delivery that had crossed a hub
+    /// boundary and fire-and-forget lifecycle traffic was being answered during teardown — the
+    /// storm shape. The content sniff above stays as the fallback for a RawJson that never went
+    /// through <c>Package</c> (an external client's pre-serialised frame carries no stamp).</para>
+    /// </summary>
+    /// <param name="delivery">The delivery to classify.</param>
+    /// <returns>True when a sender is waiting for a reply to this delivery.</returns>
+    private static bool IsAwaitedBySender(IMessageDelivery delivery) =>
+        (delivery.Message is IRequest
+         || (delivery.Message is RawJson rawJson
+             && !rawJson.Content.Contains(nameof(DeliveryFailure), StringComparison.Ordinal)))
+        && delivery.MayAnswer();
+
+    /// <summary>
+    /// The teardown intake gate's predicate — TWO TIERS, because a hub that has begun disposing is
+    /// not yet a hub that has stopped routing.
+    ///
+    /// <para><b>Tier 2 — <see cref="MessageHubRunLevel.DisposeHostedHubs"/> and beyond</b> (the
+    /// historical gate). Routing is over and the hosted hubs are going away, so nothing but
+    /// teardown's own <c>ShutdownRequest</c> / <c>DisposeRequest</c> gets in.</para>
+    ///
+    /// <para><b>Tier 1 — <see cref="MessageHubRunLevel.Quiescing"/></b> (issue #3506). Disposal has
+    /// STARTED and the hub is spending a FIXED budget draining the callbacks it already owes. A
+    /// request taken on now has, by construction, no drain left to finish it: the next phase
+    /// cancels it, the requester gets <c>HubDisposedBeforeResponseException</c>, and
+    /// <c>[QUIESCE-TIMEOUT] … forcibly cancelling</c> is the tell. Measured across three bake runs
+    /// (2026-09-06), SIX of NINE callbacks pending at the timeout had been taken on by a hub that
+    /// was ALREADY <c>Quiescing</c> — one of them after it had logged <c>[QUIESCE-OK]</c>, i.e.
+    /// after it had finished draining and had nothing left that could ever answer them.</para>
+    ///
+    /// <para>🚨 The cure is NOT a bigger quiesce budget. #3261 settled that: a bigger budget buys a
+    /// slower leak. Teardown lets ACCEPTED work FINISH (Doc/Architecture/TeardownLayers) — it must
+    /// stop ACCEPTING work it cannot finish, which is a different sentence and this is it.</para>
+    ///
+    /// <para>Tier 1 is deliberately NARROWER than tier 2, because a <c>Quiescing</c> hub is still a
+    /// live poster and a live router:
+    /// <list type="bullet">
+    ///   <item>a delivery carrying <see cref="PostOptions.RequestId"/> is an ANSWER, never new work
+    ///     — it is precisely what the quiesce drain is waiting for, so refusing it would trade one
+    ///     silence for another. The test is the presence of the correlation, not a live
+    ///     <c>responseSubjects</c> entry: a reply whose callback has already fired is still an
+    ///     answer, and NACKing the responder for it would be pure teardown noise.</item>
+    ///   <item>a delivery addressed ELSEWHERE is TRANSIT. This hub's hosted children are not
+    ///     disposed until the NEXT phase, so they are alive, working, and reachable only through
+    ///     here; refusing their traffic would break work that teardown has not yet come for. Tier 2
+    ///     refuses transit, and by then that is correct — the children are going down with it.</item>
+    ///   <item>fire-and-forget traffic keeps the historical pass-through. Nobody awaits it, so it
+    ///     leaves no promise unkept, and answering it is the storm shape
+    ///     <see cref="AnswerPolicy"/> exists to prevent.</item>
+    /// </list>
+    /// What remains is exactly "a NEW request, addressed to THIS hub, whose sender is waiting for
+    /// an answer this hub can no longer promise" — refused with the same transient
+    /// <see cref="ErrorType.ShuttingDown"/> NACK, activation identity and all, that tier 2 posts.
+    /// </para>
+    ///
+    /// <para>Pinned by <c>MeshWeaver.Messaging.Hub.Test.QuiescingHubRefusesNewWorkTest</c>.</para>
+    /// </summary>
+    /// <param name="delivery">The delivery arriving at this hub.</param>
+    /// <returns>True when the gate must refuse it.</returns>
+    private bool RefusesIntake(IMessageDelivery delivery)
+    {
+        var runLevel = hub.RunLevel;
+        if (runLevel < MessageHubRunLevel.Quiescing)
+            return false;
+
+        // Teardown's OWN traffic gets in at every level — it is what advances the phases at all.
+        if (delivery.Message is ShutdownRequest or DisposeRequest)
+            return false;
+
+        if (runLevel >= MessageHubRunLevel.DisposeHostedHubs)
+            return true;
+
+        // ---- Tier 1: Quiescing ----
+        if (delivery.Properties.ContainsKey(PostOptions.RequestId))
+            return false;
+
+        // Compare without Host — Host tracks the routing path, the inner address is the identity
+        // (same test HierarchicalRouting.RouteMessageAsync makes to decide "are we the target").
+        // A null Target is handled locally, so it counts as addressed here.
+        if (delivery.Target is not null
+            && !(delivery.Target with { Host = null }).Equals(Address))
+            return false;
+
+        return IsAwaitedBySender(delivery);
+    }
 
     /// <summary>
     /// Posts a <see cref="DeliveryFailure"/> for <paramref name="delivery"/> through the PARENT
@@ -527,19 +634,7 @@ public class MessageService : IMessageService
     /// </returns>
     private bool NackThroughParent(IMessageDelivery delivery, string reason)
     {
-        if (delivery.Message is not IRequest
-            && !(delivery.Message is RawJson rawJson
-                 && !rawJson.Content.Contains(nameof(DeliveryFailure), StringComparison.Ordinal)))
-            return false;
-        // 🚨 The answer-once contract off the ENVELOPE, not the CLR type (#1485). A cross-hub
-        // delivery arrives here as RawJson — which is exactly the case the RawJson clause above
-        // exists to admit — so the [CanBeIgnored] test this line used to make was dead for every
-        // delivery that had crossed a hub boundary, and a packaged HeartBeatEvent dropped at a
-        // disposing hub was NACKed through the parent: fire-and-forget traffic answered during
-        // teardown, which is precisely the storm shape. The content sniff above is KEPT as the
-        // fallback for a RawJson that never went through Package (an external client's
-        // pre-serialised frame carries no stamp).
-        if (!delivery.MayAnswer())
+        if (!IsAwaitedBySender(delivery))
             return false;
         // The same "ONE request, ONE failure response" rule ReportFailure applies: an
         // authoritative, typed DeliveryFailure has already been posted for this delivery, so a
@@ -818,10 +913,10 @@ public class MessageService : IMessageService
         var fate = requestFates?.Find(delivery.Id);
         fate?.Add($"RECEIVED runLevel={hub.RunLevel}", Address);
 
-        // During shutdown, only allow ShutdownRequest and DisposeRequest through.
-        // All other messages (including DeliveryFailure) are dropped to prevent endless cascades.
-        if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
-            && delivery.Message is not ShutdownRequest and not DisposeRequest)
+        // The TEARDOWN INTAKE GATE. See RefusesIntake for the two tiers and why the second one
+        // (#3506) is narrower than the first. Only ShutdownRequest / DisposeRequest are exempt at
+        // every level; everything else is dropped once the gate closes, to prevent endless cascades.
+        if (RefusesIntake(delivery))
         {
             if (logger.IsEnabled(LogLevel.Debug))
                 logger.LogDebug("Dropping message {MessageType} (ID: {MessageId}) in {Address} - hub is shutting down (RunLevel={RunLevel})",
@@ -902,9 +997,28 @@ public class MessageService : IMessageService
                 $"RunLevel={hub.RunLevel}, {ActivationTag()}",
                 $"cannot process {typeName}");
 
-            return NackThroughParent(delivery, reason)
-                ? delivery.FailedAndNacked("Hub is shutting down")
-                : delivery.Failed("Hub is shutting down", ErrorType.ShuttingDown);
+            if (NackThroughParent(delivery, reason))
+                return delivery.FailedAndNacked("Hub is shutting down");
+
+            // 🚨 A refusal the caller cannot HEAR is the silence this gate exists to remove, so the
+            // decline gets a second carrier — but only where one actually exists.
+            //
+            // NackThroughParent declines when nothing can carry the failure: no parent (a ROOT hub),
+            // or a parent already past DisposeHostedHubs. At tier 2 that is correct and unavoidable —
+            // this hub's own Post is refused from DisposeHostedHubs on (PostImplGeneric's teardown
+            // guard) and ReportFailure returns early at the same level, so there is genuinely no
+            // route. At tier 1 (Quiescing, #3506) neither is true: the hub is still a live poster.
+            // Answering here is therefore not a new NACK path, it is the SAME give-up reporter every
+            // other abandoned delivery already uses — answer-once contract (FailureAlreadyReported)
+            // and MayAnswer() suppression included, so it cannot resurrect the DeliveryFailure
+            // ping-pong those guards exist to prevent.
+            if (hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                ReportFailure(delivery.WithProperty("Error", reason), ErrorType.ShuttingDown);
+                return delivery.FailedAndNacked("Hub is shutting down");
+            }
+
+            return delivery.Failed("Hub is shutting down", ErrorType.ShuttingDown);
         }
 
         // STORM CIRCUIT-BREAKER. Detect an unbounded retry/resubscribe/repost loop —
