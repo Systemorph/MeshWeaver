@@ -1,9 +1,12 @@
 ---
-nodeType: WhatsNew
-title: A database migration has ten minutes — more is a decision written into the deployment
-category: Fix
-date: 2026-09-07
+Name: A database migration has ten minutes; more is a decision written into the deployment
+Category: Fix
+Description: The migration Job carries a ten-minute budget enforced inside the process and by Kubernetes; a deployment that needs more sets migration.budgetMinutes explicitly.
+Icon: Timer
+Order: -20260907
 ---
+
+# A database migration has ten minutes; more is a decision written into the deployment
 
 The migration Job that runs on every deploy now carries a **budget**: ten minutes for every schema
 step, versioned repair and maintenance phase together, unless the deployment's values say otherwise
