@@ -1268,6 +1268,8 @@
   "activity.gitsync.update.titleForce": "Force-update {space} to latest",
   "activity.gitsync.update.fetching": "Fetching the branch HEAD from GitHub and importing the deltas…",
   "activity.gitsync.update.fetchingForce": "Fetching the branch HEAD from GitHub and overwriting local changes (force)…",
+  "activity.gitsync.updateToProvenCommit.title": "Update {space} to the built commit {sha}",
+  "activity.gitsync.updateToProvenCommit.fetching": "Fetching {sha} — the commit the build proved — from GitHub and importing the deltas…",
   "activity.gitsync.prunedNodes": "Pruned {count} node(s) absent from the repo: {paths}",
   "activity.gitsync.import.done": "Imported {outcome} ({count} node(s)).",
   "activity.gitsync.import.skipped": "Imported Skipped — an earlier FULL import already recorded this exact content at fingerprint {fingerprint} ({markerPath}), so the partition was not re-read.",
