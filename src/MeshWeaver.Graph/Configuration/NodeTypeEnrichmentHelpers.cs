@@ -1124,6 +1124,48 @@ internal static class NodeTypeEnrichmentHelpers
                                     activityPath: def.LastCompilationActivityPath),
                                 meshHub, nodeType, typeNode.Version, logger));
                     }
+                    // 🚨 ADOPT-TIME IDENTITY GATE (#3472). A release RECORDS the framework it
+                    // was built for and, until now, nothing read it: this branch resolved by
+                    // AssemblyStoreVersion and loaded whatever came back — ahead of the
+                    // HasUsableBuild gate that guards its non-pinned sibling a few lines below,
+                    // and this is the most directly armed of the six such paths (it configures a
+                    // live per-instance hub). Bytes from another framework generation would fail
+                    // as a TypeLoadException inside a collectible ALC, which the loader records as
+                    // an EMPTY configuration list — and a hub resolves its configuration exactly
+                    // once, so that instance serves "Area not found" for its whole lifetime.
+                    //
+                    // The answer is the one an unresolvable pin already gets: the assembly for
+                    // THIS framework is not available. Nothing is wrong with the source, so the
+                    // AssemblyUnavailable copy is right, and the overlay self-heals on a version
+                    // advance exactly as its siblings do. On a store whose key carries the
+                    // framework tag this is where the pin lands today anyway; what changes is
+                    // that the operator is told which two identities disagree.
+                    if (!string.Equals(
+                            release.FrameworkVersion,
+                            NodeTypeCompilationHelpers.FrameworkVersion,
+                            StringComparison.Ordinal))
+                    {
+                        logger?.LogError(
+                            "EnrichWithNodeType: pinned release {ReleasePath} for {NodeType} was built against "
+                            + "framework {ReleaseFramework} and this process is {LiveFramework} — refusing to "
+                            + "adopt it for instance '{InstancePath}'. {Recovery}",
+                            requestedReleasePath, nodeType, release.FrameworkVersion,
+                            NodeTypeCompilationHelpers.FrameworkVersion, node.Path,
+                            NodeTypeBuildIdentity.RecoveryVerb);
+                        var (foreignIntro, foreignCta, foreignGuidance) =
+                            OverlayCopy(OverlayCause.AssemblyUnavailable);
+                        return Observable.Return(
+                            WithOverlaySelfHeal(
+                                WithCompilationErrorOverlay(node, nodeType,
+                                    $"Pinned release '{requestedReleasePath}' was built against framework "
+                                    + $"'{release.FrameworkVersion}' and this process runs "
+                                    + $"'{NodeTypeCompilationHelpers.FrameworkVersion}'.",
+                                    guidance: foreignGuidance,
+                                    intro: foreignIntro,
+                                    callToAction: foreignCta,
+                                    activityPath: def.LastCompilationActivityPath),
+                                meshHub, nodeType, typeNode.Version, logger));
+                    }
                     // Use the persisted integer version the IAssemblyStore.Put used,
                     // not a parse of the display Version string.
                     var releaseVersion = release.AssemblyStoreVersion ?? 0;

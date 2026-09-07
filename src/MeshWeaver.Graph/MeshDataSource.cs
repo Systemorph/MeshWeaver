@@ -1538,12 +1538,33 @@ public static class MeshDataSourceExtensions
             .Timeout(TimeSpan.FromSeconds(10))
             .SelectMany(node =>
             {
-                if (node?.Content is not NodeTypeDefinition def
+                // ContentAs, never a CLR type test: a NodeType node whose Content arrived
+                // un-materialized IS a NodeType node, and reading it with `is` answers "no
+                // definition" for a type that has one (AGENTS.md, the untyped-payload rule).
+                var def = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+                if (def is null
                     || string.IsNullOrEmpty(def.LatestAssemblyCollection)
                     || string.IsNullOrEmpty(def.LatestAssemblyPath))
                     return Observable.Empty<GetDataResponse>();
 
-                var version = def.LastCompiledVersion ?? node.Version;
+                // 🚨 ADOPT-TIME IDENTITY GATE (#3472). The schema probe loads the type's assembly
+                // and spins a transient hub over the types it finds; it never consulted
+                // HasUsableBuild, so a record naming a foreign-framework build was loaded here on
+                // the two coordinate fields alone. Refusing answers exactly as a store miss does
+                // (no schema response — the caller's own not-found path), which is where this
+                // lands today on any store whose key carries the framework tag.
+                if (NodeTypeBuildIdentity.Refuses(def))
+                {
+                    hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger(typeof(MeshDataSourceExtensions))
+                        .LogError(
+                        "{Summary} No schema is answered from those bytes. {Recovery}",
+                        NodeTypeBuildIdentity.RefusalSummary(node!.Path, def),
+                        NodeTypeBuildIdentity.RecoveryVerb);
+                    return Observable.Empty<GetDataResponse>();
+                }
+
+                var version = def.LastCompiledVersion ?? node!.Version;
                 var store = string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
                     ? (IAssemblyStore)FrameworkAssemblyStore.Instance
                     : hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;

@@ -125,6 +125,35 @@ internal static class NodeTypeContractHandler
                                     $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."), false,
                                     Unavailable: true));
                             }
+                            // 🚨 ADOPT-TIME IDENTITY GATE (#3472), pinned-release arm. A release
+                            // records the framework it was built for (NodeTypeRelease.
+                            // FrameworkVersion) and nothing read it: this branch resolved by
+                            // AssemblyStoreVersion and loaded whatever came back, ahead of the
+                            // HasUsableBuild gate that guards the non-pinned sibling. A pin to a
+                            // release from another framework generation is not honourable here —
+                            // it answers exactly as an unresolvable pin does (Unavailable: the
+                            // bytes for THIS framework are not available), so the recorded state
+                            // is never branded a source error and the operator gets both
+                            // identities in one line.
+                            if (!string.Equals(
+                                    release.FrameworkVersion,
+                                    NodeTypeCompilationHelpers.FrameworkVersion,
+                                    StringComparison.Ordinal))
+                            {
+                                logger?.LogError(
+                                    "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} was built "
+                                    + "against framework {ReleaseFramework} and this process is {LiveFramework} — "
+                                    + "refusing to adopt it. {Recovery}",
+                                    hubPath, requestedReleasePath,
+                                    release.FrameworkVersion, NodeTypeCompilationHelpers.FrameworkVersion,
+                                    NodeTypeBuildIdentity.RecoveryVerb);
+                                return Observable.Return(new ResolvedResponse(Fail(
+                                    null,
+                                    $"Pinned release '{requestedReleasePath}' for '{hubPath}' was built against "
+                                    + $"framework '{release.FrameworkVersion}' and this process runs "
+                                    + $"'{NodeTypeCompilationHelpers.FrameworkVersion}'."), false,
+                                    Unavailable: true));
+                            }
                             // Use the persisted integer version the IAssemblyStore.Put
                             // used, not a parse of the display Version string.
                             var releaseVersion = release.AssemblyStoreVersion ?? 0;
@@ -162,6 +191,27 @@ internal static class NodeTypeContractHandler
                     && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
                     && !string.IsNullOrEmpty(def.LatestAssemblyPath))
                 {
+                    // 🚨 ADOPT-TIME IDENTITY GATE (#3472). A record naming an assembly built for a
+                    // framework identity that is not this process's must never be hydrated: those
+                    // bytes would fail as a TypeLoadException inside a collectible ALC at
+                    // activation — no compile error, no overlay, nothing to grep — and the write-
+                    // back would restamp Ok over the foreign identity, which is the record shape
+                    // two CRM types wore through a two-and-a-half-hour client-facing outage.
+                    // Refusing is NOT "the type is dead": it takes the SAME branch a store miss
+                    // takes, which compiles the live source here and stamps this process's own
+                    // identity. On a store whose key carries the framework tag the miss already
+                    // happens; this makes the guarantee explicit rather than resting on an
+                    // eight-character substring inside one store implementation's glob.
+                    if (NodeTypeBuildIdentity.Refuses(def))
+                    {
+                        logger?.LogError(
+                            "{Summary} Compiling it here instead. {Recovery}",
+                            NodeTypeBuildIdentity.RefusalSummary(node.Path, def),
+                            NodeTypeBuildIdentity.RecoveryVerb);
+                        return compilationService.CompileAndGetConfigurations(node)
+                            .Select(result => new ResolvedResponse(
+                                BuildResponse(hubPath, node, result), true));
+                    }
                     var compileVersion = def.LastCompiledVersion ?? node.Version;
                     return ResolveAssembly(hub, def.LatestAssemblyCollection, node.Path, compileVersion)
                         .SelectMany(localPath =>
@@ -701,7 +751,30 @@ internal static class NodeTypeContractHandler
             // older-than-framework DLLs). Hydrate paths
             // (freshCompile=false) keep the persisted value — they
             // must never erase an ABI-staleness marker.
-            CompiledFrameworkVersion = freshCompile
+            //
+            // 🚨 AND THE IDENTITY TRAVELS WITH THE COORDINATES (#3472). ResolvedStoreVersion
+            // argues, three fields up, that "the path and the version are ONE reference, so they
+            // must come from ONE source" — pairing retained bytes with a key that was never
+            // theirs is the #1368 defect. The framework identity is the FOURTH member of that
+            // reference and it was left out of the rule: a hydrate that RESOLVED bytes carried a
+            // foreign stamp forward over them, producing a record that says Ok, names bytes the
+            // store just handed us, and declares those bytes unloadable. HasUsableBuild is then
+            // false forever, every per-instance activation takes the ABI-stale recompile path,
+            // and after MaxRecompileAttempts the instance binds the fallback configuration for
+            // the grain's whole life — "Area not found", under a green compilationStatus. That is
+            // the exact shape two CRM types wore on a client portal for two and a half hours on
+            // 2026-09-06.
+            //
+            // So the identity is decided by the SAME predicate the coordinates are: a reference
+            // that came from the response names bytes THIS process resolved, and this process
+            // resolved them under its own framework identity — the assembly store's key carries
+            // the framework tag, and NodeTypeBuildIdentity refuses the resolve outright when the
+            // record's identity is not ours. A reference that was RETAINED (the producer uploaded
+            // nothing: memory:// compile, Null store, unreadable bytes) keeps the persisted
+            // identity, because retained coordinates and a live identity would be the same
+            // record-names-something-that-is-not-there defect reached the other way round — and
+            // it is the only case where an ABI-staleness marker is real and must not be erased.
+            CompiledFrameworkVersion = freshCompile || ReferenceCameFromResponse(response)
                 ? NodeTypeCompilationHelpers.FrameworkVersion
                 : def.CompiledFrameworkVersion
         };
@@ -727,10 +800,27 @@ internal static class NodeTypeContractHandler
         // store, unreadable bytes). Taking the version from the response while the PATH fell
         // back to def would pair the retained bytes with a key that was never theirs — the same
         // record-names-an-empty-shelf defect, just reached the other way round.
+        => StoreVersionFromResponse(response)          // path came from the response: take its key
+           ?? def.LastCompiledVersion ?? curr.Version; // path retained: retain its key
+
+    /// <summary>
+    /// The store key the response CARRIES, or null when the producer supplied no reference at all.
+    /// Extracted so <see cref="ResolvedStoreVersion"/> and the
+    /// <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/> stamp read the LITERAL same
+    /// predicate: the coordinates, the store key and the framework identity are one reference, and
+    /// two of them deciding "came from the response" differently is how a record starts describing
+    /// a build that is not the one being served (#1368, #3472).
+    /// </summary>
+    private static long? StoreVersionFromResponse(GetCompilationPathResponse response)
         => !string.IsNullOrEmpty(response.ContentPath)
            && long.TryParse(response.Version, out var v) && v > 0
-            ? v                                        // path came from the response: take its key
-            : def.LastCompiledVersion ?? curr.Version; // path retained: retain its key
+            ? v
+            : null;
+
+    /// <summary>Whether this response carried a store reference of its own — see
+    /// <see cref="StoreVersionFromResponse"/>.</summary>
+    private static bool ReferenceCameFromResponse(GetCompilationPathResponse response)
+        => StoreVersionFromResponse(response) is not null;
 
     private static GetCompilationPathResponse Fail(string? version, string error, ActivityLog? log = null) =>
         new(Success: false,
