@@ -138,7 +138,7 @@
          was withdrawn for exactly this. Doc/Architecture/PlatformImageClosure has the
          measurements. -->
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
-    <PackageVersion Include="ModelContextProtocol" Version="1.4.1" />
+    <PackageVersion Include="ModelContextProtocol" Version="2.2.0" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.2.0" />
     <PackageVersion Include="ModelContextProtocol.Core" Version="1.2.0" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.8.3" />
