@@ -316,7 +316,7 @@ these, both verified before they were written anywhere:
 | name | authoritative source | how the copy was proved correct |
 |---|---|---|
 | `MESHWEAVER_APP_PRIVATE_KEY` | keyvault `meshweaverkeyvault/github-app-privatekey` | minted an RS256 App JWT with it and called `GET https://api.github.com/app` — the answer was `id 4220566 / meshweaver-cloud`, the App `auto-arm.yml` names |
-| `REGISTRY_PUBLISH_TOKEN` | keyvault `Systemorph/memexcloud-Plugins-Registry-PublishToken` | `sha256` of the vault value equals `sha256` of the RUNNING registry pod's `Plugins__Registry__PublishToken` (`kubectl exec … printenv … \| sha256sum`) — a byte-identity proof that prints no value |
+| `REGISTRY_PUBLISH_TOKEN` | keyvault `Systemorph/memexcloud-Plugins-Registry-PublishToken` | `sha256` of the vault value equals `sha256` of the RUNNING registry pod's `Plugins__Registry__PublishToken` (`printenv` inside a `kubectl exec`, piped through `sha256sum`) — a byte-identity proof that prints no value |
 
 🚨 **Pick the vault object by the DEPLOYMENT, never by the secret's bare name.** Both portals keep a
 publish token and an instance key, and the prefix is the only thing that tells them apart:
