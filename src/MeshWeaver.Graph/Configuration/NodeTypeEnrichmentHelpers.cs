@@ -1140,32 +1140,37 @@ internal static class NodeTypeEnrichmentHelpers
                     // advance exactly as its siblings do. On a store whose key carries the
                     // framework tag this is where the pin lands today anyway; what changes is
                     // that the operator is told which two identities disagree.
-                    if (!string.Equals(
-                            release.FrameworkVersion,
-                            NodeTypeCompilationHelpers.FrameworkVersion,
-                            StringComparison.Ordinal))
+                    // 🚨 Decided from the release's ARTIFACT links (NodeTypeBuildIdentity.
+                    // PinnedReleaseRefusal), never from NodeTypeRelease.FrameworkVersion — the
+                    // assembly VERSION string that #3472 compared to the identity hash, refusing
+                    // every pin on every mesh. A release predating artifact links is admitted
+                    // UNVERIFIED, like a legacy bundle.
+                    if (NodeTypeBuildIdentity.PinnedReleaseRefusal(
+                            release, NodeTypeCompilationHelpers.FrameworkVersion,
+                            ReleaseArchitecture.Live) is { } pinnedRefusal)
                     {
                         logger?.LogError(
-                            "EnrichWithNodeType: pinned release {ReleasePath} for {NodeType} was built against "
-                            + "framework {ReleaseFramework} and this process is {LiveFramework} — refusing to "
-                            + "adopt it for instance '{InstancePath}'. {Recovery}",
-                            requestedReleasePath, nodeType, release.FrameworkVersion,
-                            NodeTypeCompilationHelpers.FrameworkVersion, node.Path,
-                            NodeTypeBuildIdentity.RecoveryVerb);
+                            "EnrichWithNodeType: pinned release {ReleasePath} for {NodeType}, instance "
+                            + "'{InstancePath}': {Refusal}",
+                            requestedReleasePath, nodeType, node.Path, pinnedRefusal);
                         var (foreignIntro, foreignCta, foreignGuidance) =
                             OverlayCopy(OverlayCause.AssemblyUnavailable);
                         return Observable.Return(
                             WithOverlaySelfHeal(
                                 WithCompilationErrorOverlay(node, nodeType,
-                                    $"Pinned release '{requestedReleasePath}' was built against framework "
-                                    + $"'{release.FrameworkVersion}' and this process runs "
-                                    + $"'{NodeTypeCompilationHelpers.FrameworkVersion}'.",
+                                    $"Pinned release '{requestedReleasePath}': {pinnedRefusal}",
                                     guidance: foreignGuidance,
                                     intro: foreignIntro,
                                     callToAction: foreignCta,
                                     activityPath: def.LastCompilationActivityPath),
                                 meshHub, nodeType, typeNode.Version, logger));
                     }
+                    if (NodeTypeBuildIdentity.IsPinnedReleaseUnverified(release))
+                        logger?.LogWarning(
+                            "EnrichWithNodeType: pinned release {ReleasePath} for {NodeType} predates artifact "
+                            + "links and states no framework identity — adopting it UNVERIFIED for instance "
+                            + "'{InstancePath}' (this process is {LiveFramework}). Re-release to record the identity.",
+                            requestedReleasePath, nodeType, node.Path, NodeTypeCompilationHelpers.FrameworkVersion);
                     // Use the persisted integer version the IAssemblyStore.Put used,
                     // not a parse of the display Version string.
                     var releaseVersion = release.AssemblyStoreVersion ?? 0;
