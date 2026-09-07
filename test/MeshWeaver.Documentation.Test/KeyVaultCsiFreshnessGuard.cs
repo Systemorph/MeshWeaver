@@ -107,18 +107,38 @@ public class KeyVaultCsiFreshnessGuard
     }
 
     /// <summary>
-    /// Strips YAML comments AND whole Helm comment blocks (<c>{{- /* … */}}</c>) before probing,
-    /// for the same reason <see cref="MigrationWorkloadModelGuard"/> strips comments: these
-    /// templates explain their own history at length, and a guard that matched the prose would pass
-    /// on the comment describing the fix rather than on the fix. The Helm blocks span many lines,
-    /// so a line-prefix filter is not enough here.
+    /// Strips Helm comment BLOCKS (<c>{{- /* … */}}</c>, which span many lines here), whole-line
+    /// YAML comments, and TRAILING YAML comments — for the same reason
+    /// <see cref="MigrationWorkloadModelGuard"/> strips comments: these templates explain their own
+    /// history at length, and a guard that matched the prose would pass on the comment describing
+    /// the fix rather than on the fix.
+    ///
+    /// <para>🚨 The trailing form matters as much as the leading one (Copilot review): a
+    /// line-prefix filter leaves <c>name: "x"  # {{ $class.mountPath }}</c> in the scan, so a
+    /// template could satisfy the mount half from a COMMENT while its real mount was gone — the
+    /// guard passing on its own documentation, which is the failure it exists to prevent.</para>
+    ///
+    /// <para>The trailing rule is deliberately naive about quoting: it cuts from the first
+    /// whitespace-preceded <c>#</c>, so a <c>#</c> inside a quoted value is cut too. That errs
+    /// toward removing text, and removing text can only make this guard REFUSE, never accept — a
+    /// false red is loud and fixable, a false green is the thing being guarded against. The chart's
+    /// marker lines (<c>mountPath: "{{ $class.mountPath }}"</c>, the CSI driver name) carry no
+    /// <c>#</c> at all, so nothing real is at risk today.</para>
     /// </summary>
     private static string ExecutableLinesOf(string yaml)
     {
         var withoutHelmComments = Regex.Replace(
             yaml, @"\{\{-?\s*/\*.*?\*/\s*-?\}\}", string.Empty, RegexOptions.Singleline);
         return string.Join("\n", withoutHelmComments.Split('\n')
-            .Where(line => !line.TrimStart().StartsWith('#')));
+            .Where(line => !line.TrimStart().StartsWith('#'))
+            .Select(StripTrailingComment));
+    }
+
+    /// <summary>Cuts a line at its first whitespace-preceded <c>#</c> — YAML's comment rule.</summary>
+    private static string StripTrailingComment(string line)
+    {
+        var hash = Regex.Match(line, @"(?<=^|\s)#");
+        return hash.Success ? line[..hash.Index] : line;
     }
 
     private static string FindRepoRoot()
