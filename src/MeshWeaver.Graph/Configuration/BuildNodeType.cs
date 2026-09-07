@@ -437,9 +437,25 @@ public static class BuildNodeType
     {
         // Holder state comes from the LOCK — never from the mirror and never from the Build node's
         // own durable row (see ClaimPath for why that row cannot hold it).
+        //
+        // 🚨 ABSENT and UNREADABLE are different facts, and conflating them here writes fiction to
+        // the one witness every cluster's arbiter decides on (#3623). `held?.ContentAs<BuildState>()
+        // ?? new BuildState()` answered the same empty state for "there is no lock row yet" —
+        // correct, that is the INSERT case at expectedVersion 0 — and for "the row is there and this
+        // build cannot read it". On the second reading the pass decides against a fiction in which
+        // nobody holds the build and nothing is stale, and then COMMITS it: WriteIfVersion succeeds,
+        // because the version it diffs against is the real row's. The live holder is evicted from
+        // the lock and a second full bake starts on a build somebody is already running.
+        //
+        // Refused instead, and loudly. Nothing is written; the arbiter is level-triggered, so the
+        // next legitimate trigger re-decides — against a row THIS pass did not overwrite.
+        var heldState = ReadLockStateOrRefuse(held, options, claimPath, logger);
+        if (heldState is null)
+            return Observable.Return(Unit.Default);   // refused — see ReadLockStateOrRefuse
+
         var decisionInput = (held ?? NewClaimNode(claimPath)) with
         {
-            Content = (held?.ContentAs<BuildState>(options) ?? new BuildState()) with
+            Content = heldState with
             {
                 RequestedClaims = pending,
             }
@@ -493,7 +509,7 @@ public static class BuildNodeType
                 // refusal is authoritative — and it is the arbiter's job, not the candidate's, to
                 // put the lock back where it found it.
                 return workspace.GetMeshNodeStream()
-                    .Update(current => ApplyGrant(current, granted, options))
+                    .Update(current => ApplyGrant(current, granted, options, logger))
                     .Take(1)
                     .SelectMany(published => HandBackAStoodDownGrant(
                         storage, options, logger, granted, claimPath, published));
@@ -596,6 +612,63 @@ public static class BuildNodeType
     }
 
     /// <summary>
+    /// The claim LOCK's state as a DECISION — absent, readable, or refused. Extracted so the
+    /// refusal the arbiter actually ships can be driven from a test, the same way
+    /// <see cref="ApplyGrant"/> and <see cref="StandDown"/> are.
+    ///
+    /// <para>🚨 ABSENT and UNREADABLE are different facts (#3623), and this is the one place the
+    /// distinction protects a DURABLE row rather than a mirror. <c>null</c> here means REFUSE:
+    /// deciding on a default-valued state would have the pass believe nobody holds the build and
+    /// nothing is stale, and the compare-and-set that follows would then COMMIT that belief — it
+    /// diffs against the real row's version, so it succeeds. The live holder is evicted from the
+    /// one witness every cluster's arbiter reads, and a second full bake starts on a build somebody
+    /// is already running.</para>
+    /// </summary>
+    /// <param name="held">The lock row as storage answered it, or <c>null</c> when there is none.</param>
+    /// <param name="options">Serializer options for content recovery.</param>
+    /// <param name="claimPath">The lock's path, for the diagnostic.</param>
+    /// <param name="logger">Diagnostics — the refusal is invisible without it.</param>
+    /// <returns>A fresh state when the row is ABSENT (the insert case, <c>expectedVersion 0</c>);
+    /// the row's state when it reads; <c>null</c> to refuse the whole pass.</returns>
+    internal static BuildState? ReadLockStateOrRefuse(
+        MeshNode? held, System.Text.Json.JsonSerializerOptions options, string claimPath,
+        ILogger? logger)
+    {
+        if (held is null)
+            return new BuildState();
+
+        var state = held.ContentAs<BuildState>(options);
+        if (state is not null)
+            return state;
+
+        logger?.LogError(
+            "Build claim {ClaimPath}: REFUSING to arbitrate — the lock row is present and could "
+            + "not be read as BuildState (runtime type {ContentType}). NOTHING was committed: "
+            + "deciding on a default-valued state would have written 'nobody holds this build' "
+            + "over the live holder, evicting it from the only witness every cluster's arbiter "
+            + "reads and starting a second bake on a build already running. The arbiter is "
+            + "level-triggered, so the next trigger re-decides — against a row this pass did not "
+            + "overwrite. Raw: {RawJson}",
+            claimPath,
+            held.Content?.GetType().FullName ?? "<null>",
+            ContentExcerpt(held.Content));
+        return null;
+    }
+
+    /// <summary>
+    /// A bounded, printable excerpt of a node's content for a diagnostic. Used only on the refusal
+    /// paths, where the whole point is that the value could NOT be read — so the raw bytes are the
+    /// only thing that identifies the offending row.
+    /// </summary>
+    private const int ContentExcerptLimit = 400;
+
+    private static string ContentExcerpt(object? content)
+    {
+        var text = content?.ToString() ?? "<null>";
+        return text.Length <= ContentExcerptLimit ? text : text[..ContentExcerptLimit] + "…";
+    }
+
+    /// <summary>
     /// A fresh, unheld claim lock — the node the compare-and-set INSERTS when nobody holds the
     /// build (<c>expectedVersion 0</c>).
     /// </summary>
@@ -614,11 +687,39 @@ public static class BuildNodeType
     /// Applies a grant this cluster WON durably onto its own mirror — the claim field set only, so
     /// nothing the mirror holds and storage has not seen yet is lost.
     /// </summary>
+    /// <param name="node">The Build node as read inside the update lambda.</param>
+    /// <param name="granted">The state this pass won durably.</param>
+    /// <param name="options">Serializer options for content recovery.</param>
+    /// <param name="logger">Diagnostics — the refusal below is invisible without it.</param>
     internal static MeshNode ApplyGrant(
-        MeshNode node, BuildState granted, System.Text.Json.JsonSerializerOptions options)
+        MeshNode node, BuildState granted, System.Text.Json.JsonSerializerOptions options,
+        ILogger? logger = null)
     {
         if (node is null) return node!;
-        var state = node.ContentAs<BuildState>(options) ?? new BuildState();
+        // 🚨 ABSENT and UNREADABLE are different facts (#3623). `?? new BuildState()` made them one,
+        // and the consequences ran both ways: with a non-null ClaimedBy every guard below then
+        // evaluated against a fiction in which nobody is registered and nobody stood down, and with
+        // a null one the method fell through and WROTE that fiction onto the mirror — a Build node
+        // whose registrations, holder, status and stand-down marks are all replaced by defaults.
+        //
+        // Refused instead: return the node untouched, exactly as the three sibling deciders on this
+        // node already do for an unreadable mirror (StandDown, ReleaseStoodDownClaim, Arbitrate).
+        // That is the recoverable outcome AND the one the protocol already handles — a refused
+        // publication is what HandBackAStoodDownGrant reads, so the lock this pass took is released
+        // rather than stranded. A throw here would strand it, which is why the framework's typed
+        // Update overload is deliberately NOT used at this call site.
+        var state = node.Content is null ? new BuildState() : node.ContentAs<BuildState>(options);
+        if (state is null)
+        {
+            logger?.LogError(
+                "Build node {Path}: REFUSING to publish the grant to {Holder} — the mirror's content "
+                + "is present and could not be read as BuildState (runtime type {ContentType}). "
+                + "NOTHING was written: publishing over a default-valued state would have dropped "
+                + "every pending registration, the live holder and every stand-down mark. The lock "
+                + "this pass took is handed back, so the next candidate elects freely.",
+                node.Path, granted.ClaimedBy, node.Content?.GetType().FullName ?? "<null>");
+            return node;
+        }
         if (state.ClaimedBy == granted.ClaimedBy && state.Status == granted.Status)
             return node;   // already reflects this grant — a redundant pass writes nothing
 
