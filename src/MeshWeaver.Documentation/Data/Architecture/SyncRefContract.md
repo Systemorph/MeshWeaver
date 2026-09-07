@@ -138,6 +138,37 @@ makes the two agree rather than introducing a new risk. Resolving the branch ins
 recoverable step backwards for landing a tree *no build ever proved* — which is what five hours of
 dark Store looked like.
 
+## The seal's attribution marker: whose CONTENT, never whose LANE
+
+`SealedSyncGate` holds a module-bearing repository's sources at the commit sealed for this
+instance's framework identity. To do that it has to answer one question about each sealed source on
+the shelf — *is this a publication of the repository whose green build just arrived?* — and it
+answers it from `repository.txt`, a marker `publish-bake-bundles.sh` writes beside the bundles.
+
+**That marker records the repository the baked CONTENT came from. It is not
+`$GITHUB_REPOSITORY`** — and the difference is not academic, because it is exactly the case the
+marker exists for. Core CD's `plugins-bake` job bakes **MeshWeaver.Plugins** content
+(`content-repository: Systemorph/MeshWeaver.Plugins`) from a run whose `$GITHUB_REPOSITORY` is
+`Systemorph/MeshWeaver`. Stamping the lane's own name therefore filed the `plugins` seal under the
+platform — and `SealedSyncGate.BelongsTo` takes the marker branch whenever the marker is non-empty
+and never falls back to commit attribution, so a Plugins green build found *no* seal attributable to
+Plugins, `mine` came back empty, and `Decide` returned `Go`. **The gate was inert for the one
+repository it was written for**, while MeshWeaver.Plugins' own `publish-bake` — the second writer of
+that same prefix — stamped it correctly. Two writers, two different answers, one directory
+(MeshWeaver#3583).
+
+The value is now passed in as `BAKE_CONTENT_REPOSITORY`, from the same
+`inputs.content-repository || github.repository` expression the content CHECKOUT resolves — one
+answer to "whose content is this", used by both — and both live publishers set it explicitly, so
+nothing depends on the script's fallback. The fallback to `$GITHUB_REPOSITORY` remains only for a
+lane whose workflow copy has not been re-pinned yet, where the lane's own name is the whole answer
+the old script had.
+
+🚨 **This is the same trap one field over from the content sha**, which the bake lane already warns
+about in its own words — *"The CONTENT commit, not `$GITHUB_SHA`. They differ exactly when
+`content-repository` is set (the platform baking Plugins)."* Anything the publication records about
+*what was baked* is a fact about the content, and `github.*` describes the lane.
+
 ## How to check it is still true
 
 - `test/MeshWeaver.Hosting.Test/BuildTriggeredSyncPinsTheBuiltCommitTest.cs` pins both halves: the
@@ -150,6 +181,13 @@ dark Store looked like.
 - After any wave that moves plugin sources, the readiness sweep is one call:
   `search 'nodeType:NodeType content.compilationStatus:Error'`. A `searched: false` envelope is a
   FAILED sweep, not a clean one.
+- `.github/scripts/test-publish-bake-overlap.py` EXECUTES the publish script and reads the marker off
+  the resulting bytes, in both directions: a bake of another repository's content records that
+  repository, and a lane baking its own content still records itself. Run it against the pre-fix
+  script (`--script <copy>`) and the first case goes red — which is how the attribution defect above
+  was falsified rather than assumed.
+- On the shelf: `<publishedRoot>/<live framework identity>/plugins/repository.txt`. If it reads
+  `Systemorph/MeshWeaver`, that seal predates the fix and the gate cannot attribute it to Plugins.
 
 ## Related
 
