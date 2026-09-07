@@ -79,6 +79,26 @@ parsing `[.-]ci.<n>` reads such a tag as *carrying no run number* — which prom
 promotion-ranked half of the order. That is the #3542 freeze, rebuilt by a tidy-up. The minter is
 where the shape is decided; the reader is where history is survived.
 
+### The one thing that looks like a third shape: `edge`
+
+`edge-images.yml` publishes `X.Y.Z-edge.<n>`, and that is **not a counter-example** — it is a
+*derived channel re-label*, not a version the scheme mints:
+
+- the lane computes `$(Version)` from this tree first, so what it starts from is already
+  `X.Y.Z-ci.<n>`; it then rewrites the **`ci` label to `edge`** and keeps the very same run number;
+- `VersionSelect` treats an `edge` tag as **ineligible under every policy** unless a caller opts in
+  explicitly (`requireCiGreen: false`), so it is never a self-update candidate for `Continuous`,
+  `Stable` or `None`;
+- `PlatformReleaseOrder.ChannelLabels` therefore lists `ci` *and* `edge`, and `BuildOrdinal` reads
+  the number out of either — the lineage is the publication's, whatever channel it was labelled for.
+
+So the scheme still has two shapes: `$(Version)` — the thing `Directory.Build.props` composes and
+`release.yml` promotes, and the thing the guard binds — is always `X.Y.Z-ci.<n>` or `X.Y.Z`. `edge`
+is what a *separate, opt-in lane* renames one of those to on its way to an unverified image.
+🚨 **A new channel is added by extending `ChannelLabels` and the re-label, never by adding a
+pre-release LABEL to `PlatformVersion`** — the second is what §11.4 punishes, and it is the thing
+this page forbids.
+
 ### What retiring `rc` fixes in the ORDERING — and the half it does not
 
 SemVer 2 orders the *strings* like this, and that is still what every package consumer sees:

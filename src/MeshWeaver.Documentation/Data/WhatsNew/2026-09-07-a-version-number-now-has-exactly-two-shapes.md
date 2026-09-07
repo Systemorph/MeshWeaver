@@ -1,7 +1,7 @@
 ---
 Name: A version number now has exactly two shapes
 Category: Feature
-Description: Every build is X.Y.Z-ci.<n> and every release is a clean X.Y.Z — no rc, no preview, no labelled line ever again, and a guard that reds the build if one comes back.
+Description: Every continuous build is X.Y.Z-ci.<n> and every release is a clean X.Y.Z — no rc, no preview, no labelled line ever again, and a guard that reds the build if one comes back.
 Icon: Tag
 Order: -20260907
 ---
@@ -13,6 +13,8 @@ continuous or temporary build, and a clean **`X.Y.Z`** for the release. No `rc`,
 `beta`, no labelled line. The `-ci.<n>` part is a channel marker rather than a version — it says
 which publication of the line you are looking at — and the release is a *promotion* of one of those
 sealed builds, retagged, never rebuilt. That is what leaves nothing for a "candidate" label to mark.
+(The opt-in `edge` images are the same builds under a renamed channel, `X.Y.Z-edge.<n>`; no install
+takes one unless it is asked to.)
 
 The rule is written down once, in **Release Process & Versioning**, and enforced where it is
 composed: `Directory.Build.props` no longer carries the branch that produced a labelled line's

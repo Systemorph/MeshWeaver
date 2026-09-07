@@ -38,6 +38,14 @@ namespace MeshWeaver.Documentation.Test;
 /// composition reintroduces a label somewhere downstream. So this evaluates the real project through
 /// the real evaluator, exactly as CD does, via <see cref="MsBuildPropertyProbe"/>.</para>
 ///
+/// <para>🚨 <b><c>edge</c> is not a third shape, and widening the pattern to admit it would be a
+/// mistake.</b> <c>edge-images.yml</c> computes <c>$(Version)</c> from this tree FIRST — so it starts
+/// from <c>X.Y.Z-ci.&lt;n&gt;</c> — then rewrites the <c>ci</c> label to <c>edge</c> and keeps the same
+/// run number. What this guard measures is <c>$(Version)</c> itself, before any lane renames it, and
+/// that is exactly the surface the rule is about. A new delivery channel is added by extending
+/// <c>PlatformReleaseOrder.ChannelLabels</c> and the re-label, never by putting a pre-release label on
+/// <c>PlatformVersion</c>.</para>
+///
 /// <para>🚨 <b>MINTING one shape is not READING one.</b> This guard binds the MINTER only. The
 /// rc-line images minted with the <c>.ci.</c> separator are still addressable, an install can be
 /// running one, and every consumer that parses the run number back out of a version must keep
