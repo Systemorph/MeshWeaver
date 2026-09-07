@@ -2,6 +2,7 @@ using System.IO;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 
@@ -403,9 +404,12 @@ public sealed class ModuleLandingService : IDisposable
     /// <param name="version">The package version the bundle was served at — recorded on the
     /// activation entry so the auto-update reconcile can answer "already landed" without a
     /// download (<see cref="ModuleActivationEntry.Version"/>).</param>
-    /// <param name="minMeshVersion">The module's declared platform FLOOR — the gate: an
-    /// unsatisfied floor (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>) refuses the
-    /// landing. Null = no constraint declared.</param>
+    /// <param name="minMeshVersion">The module's declared platform FLOOR — one of the two gates:
+    /// an unsatisfied floor (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>) refuses the
+    /// landing. Null = no constraint declared, which is NOT the same as no constraint: the second
+    /// gate (<see cref="MeshWeaver.Mesh.ModulePlatformLink"/>, #3538) measures the module's actual
+    /// link requirements against this platform's surface and refuses bytes this process could not
+    /// load, whatever the floor says.</param>
     public IObservable<Unit> LandModule(
         string name,
         IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
@@ -588,11 +592,36 @@ public sealed class ModuleLandingService : IDisposable
         // verdict HOLDS instead of refusing: the bytes land for CONSUMERS, whose own gates apply
         // this very function against their platforms, while this process's boot keeps applying it
         // per entry and so never loads what it records here.
-        var held = ModulePlatformFloor.DeclineReason(minMeshVersion);
+        //
+        // 🚨 #3538 — AND THE FLOOR THAT IS MEASURED RATHER THAN DECLARED. `minMeshVersion` is a
+        // CLAIM its author writes; the module's real requirement is the SET OF TYPES its bytes are
+        // linked against, which its own metadata states exactly. memex-cloud (core of 09-03)
+        // adopted a MeshWeaver.Graph.Views compiled on 09-06 against a Mesh.Contract carrying
+        // `CodeOutputCurrency` (added 09-04) because the declared floor `3.0.0-rc8` was satisfied
+        // by the running `3.0.0-rc9.ci.7693` — every render of every code cell then threw
+        // TypeLoadException, for every user, until a human read a pod log. So the bytes are
+        // MEASURED against this platform's surface, from memory, BEFORE anything touches the disk:
+        // a refusal here costs no generation directory and leaves the previous generation running.
+        // The verdict is tri-state and `MayLoad` is true for Linkable ALONE — a check that could
+        // not be made parks the module exactly like one that failed.
+        var held = ModulePlatformFloor.DeclineReason(minMeshVersion) ?? LinkHoldReason();
         if (held is not null && !holdAboveFloor)
         {
             logger?.LogWarning("Module '{Name}' REFUSED at landing: {Reason}", name, held);
             throw new InvalidOperationException($"Module '{name}' refused: {held}");
+        }
+
+        string? LinkHoldReason()
+        {
+            var entryBytes = assemblies.First(a =>
+                string.Equals(a.FileName, entryDll, StringComparison.OrdinalIgnoreCase)).Bytes;
+            // The module's own closure travels WITH it, so a reference into it is not this gate's
+            // question — the two were built together. Only the PLATFORM side is measured.
+            var closure = assemblies
+                .Select(a => Path.GetFileNameWithoutExtension(a.FileName))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var verdict = ModulePlatformLink.Check(entryBytes, name, closure, PlatformSurface());
+            return verdict.MayLoad ? null : verdict.Report();
         }
 
         // 🚨 The same-identity trap-door: modules/<name>/<name>.dll wins over the app folder in
@@ -738,6 +767,27 @@ public sealed class ModuleLandingService : IDisposable
             "Module '{Name}' UNINSTALLED: activation disabled — takes effect at the next restart",
             name);
     }
+
+    /// <summary>
+    /// This process's platform surface, read ONCE and reused for every landing (#3538).
+    ///
+    /// <para>🚨 <b><c>AppContext.BaseDirectory</c>, never <c>baseDirectory</c>.</b> The platform is
+    /// the APP closure; this service's root is the (possibly separate, possibly read-write) volume
+    /// the <c>modules/</c> tree lives on. Naming the wrong one would measure a module against the
+    /// directory it is being written into.</para>
+    ///
+    /// <para><b>An INSTANCE field, not a static</b> — the surface it describes is a property of
+    /// THIS process, and a process-wide static would outlive the mesh and bleed one test's
+    /// fabricated platform into the next one's (Doc/Architecture/NoStaticState). Built lazily
+    /// rather than in the constructor because the constructor can run before the deployment's
+    /// modules are loaded; the file probe above covers what the loaded snapshot has not seen yet,
+    /// and it is only ever touched from <see cref="LandCore"/>, which runs on this service's cap-1
+    /// pool — one at a time, by construction, with no gate of any kind.</para>
+    /// </summary>
+    private ModulePlatformSurface PlatformSurface() =>
+        platformSurface ??= ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory);
+
+    private ModulePlatformSurface? platformSurface;
 
     private static void ValidateFileName(string? value, string what)
     {
