@@ -587,6 +587,35 @@ the trace file was **never created**, and the gate answered `No content-type deg
 **1** naming `Space/ARenderedEmptyPage` twice; and against a trace carrying a real, unrelated
 `[FAULT]` record the gate exited **0**, so the pass is a verdict rather than an empty scan.
 
+🚨 **What the repaired gate found on its FIRST working run — and the classification that matters.**
+A gate that fires on the wrong thing is no better than one that cannot fire, so every occurrence was
+classified before anything was changed. Two node paths, two opposite verdicts:
+
+| occurrence | verdict |
+|---|---|
+| `Ops/Modules/{deployment}` (`Hosting/ModuleInventory`) | **TRUE POSITIVE — a live defect in `src/`.** `DeploymentReportService` stamped `$type = "ModuleInventoryContent"`, a literal naming **no CLR type in the fleet**, while the real record `DeploymentReport` was registered nowhere. Its own comment said the stamp existed because *"content without the discriminator … materialises as NOTHING"* — and it materialised as nothing anyway. Every instance's self-reported module inventory read back untyped. Fixed: the record is registered and the constant is `nameof(DeploymentReport)`. |
+| `{partition}/Live` (`LateContentTypeRegistrationTest`) | **A true degradation, but NOT the gate's subject.** That test asserts content *stays* untyped when an unrelated type registers; its `$type` is literally `AContentTypeTheMeshNeverCompiled`. The keying is not at fault — the event really happened — but the gate cannot distinguish a degradation that is a test's SUBJECT from one nobody intended. |
+
+🚨 **The guard on the true positive was asserting the defect.** `AnInstanceReportsWhatItRunsTest`
+checked `content.GetProperty("$type") == InventoryContentType` — and a `$type` **property** is only
+there to read when the content is raw JSON, i.e. when it has *not* materialised. The assertion
+passed *because of* the bug. It now asserts the materialised runtime type.
+
+🚨 **And the obvious replacement assertion also could not fail.** `ContentAs<T>` is the bad-data
+TOLERANT accessor: handed a raw `JsonElement` it deserialises anyway, so it answers a
+`DeploymentReport` whether or not the discriminator resolved. Measured, not assumed — the
+`ContentAs` version passed against the reverted fix. The property that actually breaks is
+MATERIALISATION at the read seam (`node.Content is DeploymentReport`), which is what every ordinary
+reader does and what the degradation warning is about. **When a diagnostic says a value "reads as
+absent", assert the runtime TYPE, never a tolerant accessor.**
+
+**The open question this leaves** is how a test declares that a degradation is its own SUBJECT. The
+fixture advice above (seed a registered foreign type) covers the case where the test only needs
+"unreadable as `T`" — it fixed `UnreadablePolicyRecordIsNotClobberedTest`, 8 records → 0. It cannot
+cover a test whose assertion IS that nothing can resolve the content. An allow-list is refused for
+the reason this whole section exists; a per-test, per-category suppression declared in that test's
+own source is the candidate, and it is a policy call rather than a repair.
+
 **The instrument that does answer it** is `MessageTrace`
 (`MeshWeaver.Messaging.Hub/MessageService.cs`): `MESHWEAVER_MSG_TRACE=1` makes every delivery write
 a `ROUTED` / `DEFERRED gates=[…]` / `GATE_FAILED` / `DROPPED_GATE_STUCK` line to
