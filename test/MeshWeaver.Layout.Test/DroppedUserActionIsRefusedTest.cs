@@ -79,7 +79,7 @@ public class DroppedUserActionIsRefusedTest : HubTestBase
         // no sync/{id} sub-hub exists, and none will ever register.
         client.Post(new ClickedEvent(area, streamId), o => o.WithTarget(CreateHostAddress()));
 
-        var failure = await clientFailures.Should().Within(30.Seconds()).Emit(
+        var failure = await clientFailures.Should().Within(TestTimeouts.Convergence).Emit(
             "a click the framework cannot deliver must be REFUSED to its sender, not discarded — "
             + "the sender is what surfaces it to the person who clicked");
 
