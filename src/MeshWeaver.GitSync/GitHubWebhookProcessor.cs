@@ -10,6 +10,9 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -332,6 +335,16 @@ public sealed class GitHubWebhookProcessor
                 // "43 sync config(s) in the mesh, 0 selected, 0 skipped": a healthy-looking count,
                 // no skips, and no clue that nothing was ever even a candidate. Hence {Targeting}
                 // here, and the Warning ConfigsTargeting raises (#1856).
+                // 🚨 What THIS instance's identity has sealed (MeshWeaver.Plugins#1430) — read once
+                // per delivery. A module-bearing repository's sources advance only to the commit
+                // sealed for this instance; the green build alone proved the tree compiles
+                // somewhere, not here. Repositories the instance runs no publication of are
+                // unaffected (SealedSyncGate: no attributable seal ⇒ today's behaviour).
+                var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
+                var sealedForThisIdentity = SealedPublicationIndex.ReadFor(
+                    hub.ServiceProvider.GetService<IConfiguration>()?[ShippedPrebuiltBundles.PublishedRootConfigKey],
+                    identity, logger);
+                var held = 0;
                 var picked = new List<PushTarget>();
                 var skipped = new List<string>();
                 foreach (var node in match.Configs)
@@ -340,6 +353,13 @@ public sealed class GitHubWebhookProcessor
                     if (SkipReason(cfg, branch, headSha) is { } reason)
                     {
                         skipped.Add($"{node.Path} ({reason})");
+                        continue;
+                    }
+                    if (SealedSyncGate.Decide(repo, headSha, cfg?.LastSyncCommitSha, sealedForThisIdentity, identity)
+                        is { Proceed: false } hold)
+                    {
+                        held++;
+                        skipped.Add($"{node.Path} ({hold.HoldReason})");
                         continue;
                     }
                     if (ToPushTarget(node) is not { } pushTarget)
@@ -359,6 +379,15 @@ public sealed class GitHubWebhookProcessor
                     + "{Targeting} targeting this repository, {Selected} selected, {Skipped} skipped{SkipDetail}.",
                     repo, branch, headSha, match.Candidates, match.Configs.Count, targets.Count,
                     skipped.Count, skipped.Count == 0 ? string.Empty : " — " + string.Join("; ", skipped));
+                if (held > 0)
+                    // Its own line, at Warning: a source held back by the seal is content that
+                    // quietly stops arriving until the registry seals this commit for this identity
+                    // — an operator must be able to find it without reading the skip detail.
+                    logger?.LogWarning(
+                        "Green build of {Repo}@{Branch} ({Sha}): {Held} sync source(s) HELD — the build is "
+                        + "not sealed for this instance's framework identity {Identity}; they advance when it is "
+                        + "(MeshWeaver.Plugins#1430).",
+                        repo, branch, headSha, held, identity);
 
                 return targets;
             });
