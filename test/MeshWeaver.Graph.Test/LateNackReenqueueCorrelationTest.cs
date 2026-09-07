@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -207,7 +206,21 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
         {
             var re = new Regex(pattern, RegexOptions.Compiled);
             return Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-                .Select(_ => lines.ToImmutableArray()
+                // 🚨 ToArray(), never ToImmutableArray(). This queue is written by the hub's
+                // action-block thread while the poller reads it, and ImmutableArray.CreateRange
+                // takes the ICollection.Count fast path: it reads Count, allocates exactly that
+                // many, then copies the enumerator's contents. ConcurrentQueue's enumerator is its
+                // own later snapshot, so ONE line enqueued between the two steps overflows the
+                // buffer and the poll throws instead of polling again:
+                //     System.ArgumentException: Value does not fall within the expected range.
+                //       at ImmutableExtensions.ToArray[T](IEnumerable`1 sequence, Int32 count)
+                //       at ImmutableArray.CreateRange[T](IEnumerable`1 items)
+                // Measured on run 34098887738, shard 4 — and the line that raced is the very
+                // LATE_NACK_REENQUEUE warning this test waits for, so the failure lands exactly
+                // when the test is about to succeed. ConcurrentQueue.ToArray() has no such split:
+                // it snapshots the segments under the queue's own synchronisation and returns a
+                // fixed-length array.
+                .Select(_ => lines.ToArray()
                     .Select(line => re.Match(line))
                     .FirstOrDefault(m => m.Success))
                 .Where(m => m is not null)

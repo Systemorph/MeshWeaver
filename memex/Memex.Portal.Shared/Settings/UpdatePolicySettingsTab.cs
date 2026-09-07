@@ -166,7 +166,23 @@ public static class UpdatePolicySettingsTab
     /// simultaneous viewer.
     /// </param>
     internal static string StatusMarkdown(
-        UpdatePolicyContent content, Func<string, object?[], string> localize, string? zoneId = null)
+        UpdatePolicyContent content, Func<string, object?[], string> localize, string? zoneId = null) =>
+        // 🚨 ABOVE everything else, on every branch (#3543). An install whose own version has been
+        // withdrawn from the registry cannot start a new pod and can never see anything "newer" —
+        // nothing outranks a tag that already outranks what is left. Until this line existed, that
+        // install rendered the same "No newer version detected yet" as a perfectly healthy one, and
+        // both AKS portals sat in it on 2026-09-07 until an operator moved them by hand. It is
+        // prefixed rather than folded into a branch because the Red / NotVerifiable renderings below
+        // deliberately replace the availability line, and a strand must not be droppable that way.
+        (string.IsNullOrEmpty(content.UnresolvedInstalledTag)
+            ? ""
+            : localize("ui.updateInstalledTagWithdrawn", [content.UnresolvedInstalledTag!]) + "\n\n")
+        + AvailabilityMarkdown(content, localize, zoneId);
+
+    /// <summary>The availability half of <see cref="StatusMarkdown"/>: the latest tag, the check
+    /// time, the availability hold and the combo verdict.</summary>
+    private static string AvailabilityMarkdown(
+        UpdatePolicyContent content, Func<string, object?[], string> localize, string? zoneId)
     {
         // 🚨 "No newer version detected yet" is a CLAIM, and until #2553 this surface made it
         // without evidence. An install that has checked hourly and found nothing and an install

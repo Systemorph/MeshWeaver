@@ -599,6 +599,7 @@
   "ui.connectOAuth": "Mit dem Login der Gegenstelle verbinden (OAuth)",
   "ui.applyUpdateNow": "Verfügbares Update jetzt anwenden",
   "ui.updateNoNewerVersion": "_Noch keine neuere Version erkannt._",
+  "ui.updateInstalledTagWithdrawn": "🚨 **Diese Installation läuft auf `{0}`, das nicht mehr veröffentlicht ist.** Das Image, auf das sie zeigt, wurde aus der Registry entfernt — daraus kann keine neue Instanz mehr starten, und nichts wirkt je neuer als eine Version, die es nicht mehr gibt. Updates zielen jetzt auf das beste verfügbare Release, statt zu melden, alles sei aktuell.",
   "ui.updateNeverChecked": "_Diese Installation hat noch keine Update-Prüfung abgeschlossen — diese Anzeige besagt also nicht, dass es keine neuere Version gibt. Bleibt das so, läuft die Update-Prüfung nicht._",
   "ui.updateLatestAvailable": "**Neueste verfügbare Version:** `{0}`",
   "ui.updateCheckedAt": "_(geprüft {0})_",
