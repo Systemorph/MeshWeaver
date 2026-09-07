@@ -121,6 +121,22 @@ public record UpdatePolicyContent
     [Browsable(false)]
     public DateTimeOffset? HeldAt { get; init; }
 
+    /// <summary>
+    /// 🚨 The version this install RUNS, when the last check found that it is no longer published in
+    /// the registry (#3543); <c>null</c> otherwise. Written by the poller on EVERY check, so it is
+    /// cleared the moment the tag resolves again — the same unconditional-clearing rule the
+    /// availability hold follows, and for the same reason: a healed state that lingers is a stale
+    /// scare.
+    ///
+    /// <para>This exists because the state was INVISIBLE. An install stranded on a withdrawn tag and
+    /// a perfectly up-to-date one produced byte-identical evidence — an empty
+    /// <see cref="LatestAvailableTag"/> and "no newer release" — while the first cannot start a new
+    /// pod at all and can never be rescued by a publication, since nothing outranks a tag that
+    /// already outranks everything left. Not user-editable.</para>
+    /// </summary>
+    [Browsable(false)]
+    public string? UnresolvedInstalledTag { get; init; }
+
     /// <summary>Whether <paramref name="tag"/> is the tag currently held by the availability gate.</summary>
     public bool IsHeld(string? tag) =>
         !string.IsNullOrEmpty(tag)

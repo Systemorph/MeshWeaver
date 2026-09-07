@@ -33,8 +33,12 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    /// <summary>A tag far above any real platform version, so "newer" is unambiguous.</summary>
-    private const string NewerTag = "9999.0.0-ci.1";
+    /// <summary>A tag far above any real platform version, so "newer" is unambiguous — far above in
+    /// BOTH keys. 🚨 The run number was <c>ci.1</c> until #3542: a 9999.0.0 LABEL over a build
+    /// published BEFORE the running one, which is the version slip that rolled memex-cloud three days
+    /// backwards, written into a fixture. "Newer" is now the publishing run number, and a real tag
+    /// can never carry a lower one than a build that already exists.</summary>
+    private const string NewerTag = "9999.0.0-ci.99999";
 
     /// <summary>The build the comparison runs against — explicit, because under a test host the entry
     /// assembly's informational version is the runner's, not a platform version.</summary>
