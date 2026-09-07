@@ -153,6 +153,35 @@ public sealed record BuildState
     /// </summary>
     public ImmutableDictionary<string, BuildClaimRequest>? RequestedClaims { get; init; }
 
+    /// <summary>
+    /// Candidates that have STOOD DOWN, keyed by holder id — a fact the candidate states and the
+    /// arbiter consumes, never a conditional the candidate tries to evaluate itself.
+    ///
+    /// <para>🚨 <b>Why a recorded fact and not simply clearing <see cref="ClaimedBy"/>.</b> A
+    /// candidate does not own the Build node, so its <c>stream.Update</c> lambda runs on ITS OWN
+    /// MIRROR and travels to the owner as an RFC 7396 merge patch
+    /// (<c>MeshNodeStreamHandle.UpdateQueued</c> → <c>ComputeMergePatchDiff</c>). A field the
+    /// lambda leaves unchanged is ABSENT from that patch. So when
+    /// <c>WithdrawBuildClaim</c> reads a mirror on which the grant has not landed yet, its
+    /// <c>grantedNotStarted</c> test is false, the patch carries only the registration removal, and
+    /// a grant the arbiter commits in between SURVIVES the stand-down — leaving
+    /// <c>ClaimedBy=&lt;the follower&gt;, Status=Planning, RequestedClaims=[]</c>, the measured
+    /// wedge of Systemorph/MeshWeaver.Plugins#1193.</para>
+    ///
+    /// <para>The arbiter, by contrast, writes the Build node it OWNS, so its lambda is serialised
+    /// against fresh state. Recording the stand-down here moves the decision to that side: the
+    /// candidate states an unconditional, own-key fact (merge-safe against every other candidate),
+    /// and <c>BuildNodeType.ReleaseStoodDownClaim</c> acts on it with the real state in hand. That
+    /// is the <c>RequestedX</c>-plus-owner-watcher shape the platform prescribes for exactly this
+    /// problem — <see cref="RequestedStatus"/> is the same idea one field over.</para>
+    ///
+    /// <para>Entries are CONSUMED, not accumulated: the arbiter removes one when it releases that
+    /// holder's claim, <c>RequestBuildClaim</c> removes its own when a candidate registers again,
+    /// and any entry older than <c>BuildNodeType.ClaimStaleAfter</c> is pruned on the next pass —
+    /// the same budget the claim itself ages by.</para>
+    /// </summary>
+    public ImmutableDictionary<string, DateTime>? StoodDown { get; init; }
+
     /// <summary>The holder currently granted this node, or <c>null</c> when unclaimed.</summary>
     public string? ClaimedBy { get; init; }
 
