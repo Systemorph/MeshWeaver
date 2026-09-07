@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -72,6 +73,12 @@ public class SameValuePatchKeepsTheChainTest(ITestOutputHelper output) : HubTest
         await mirror.Where(ci => Count(ci.Value, collectionName) == 1)
             .Take(1).Should().Within(TestTimeouts.Convergence).Emit();
         var framesBefore = posted.Count;
+        // Both sides of the rule are pinned from here on: what the mirror EMITS to its consumers.
+        var emitted = 0;
+        using var emissions = mirror.Subscribe(_ => Interlocked.Increment(ref emitted));
+        await Task.Delay(200); // the subscription replays the current value; count only what follows
+        Interlocked.Exchange(ref emitted, 0);
+        var versionAfterFull = mirror.Current!.Version;
 
         // The no-op: the SAME payload, parsed again — a new JsonElement, so the owner sees a change
         // and ships a frame whose diff is empty.
@@ -81,6 +88,11 @@ public class SameValuePatchKeepsTheChainTest(ITestOutputHelper output) : HubTest
         var noOpFrames = posted.Skip(framesBefore).ToArray();
         noOpFrames.Should().NotBeEmpty(
             "the scenario needs the owner to SEND a frame for the value-equal write — otherwise nothing chains onto it and this test proves nothing");
+        Volatile.Read(ref emitted).Should().Be(0,
+            "a frame that changed nothing must not wake a consumer — the dedup is the point, only the clock moves");
+        mirror.Current!.Version.Should().Be(noOpFrames.Last().Version,
+            "the skipped frame's version is adopted so the chain the owner built onto it stays intact");
+        mirror.Current!.Version.Should().BeGreaterThan(versionAfterFull);
 
         // The real change that chains onto the no-op frame.
         host.Post(new DataChangeRequest().WithUpdates(new Blob("doc-2", Payload("""{"b":2}"""))),
@@ -95,6 +107,8 @@ public class SameValuePatchKeepsTheChainTest(ITestOutputHelper output) : HubTest
 
         subscribeRequests.Count.Should().Be(1,
             "a value-equal Patch is not a lost frame — the mirror must not re-ask for a snapshot it already holds");
+        Volatile.Read(ref emitted).Should().Be(1,
+            "the genuinely different patch must still reach the consumer — the other side of the same rule, so a ValuesEqual that made everything equal cannot pass");
         mirror.Current!.Version.Should().Be(posted.Last().Version,
             "the mirror's clock must sit on the last frame the owner sent, whether or not that frame changed anything");
     }

@@ -263,6 +263,16 @@ identical control on every page load. The skip now adopts the frame's version si
 the warning: a run whose loss lines all sit right after `Skipping SetCurrent … same value (patch)`
 for the chained-onto version was never losing frames.
 
+⚠️ **The trade this makes, invisible afterwards:** before #3530 the spurious detection was
+accidentally a self-heal — had `ValuesEqual` ever answered *equal* for values that differ, the
+mirror would have diverged and the very next frame's broken chain would have pulled a Full that
+corrected it. After #3530 a false-equal is permanent: the chain no longer breaks, so nothing
+re-asks. `ValuesEqual` is therefore load-bearing now. It leans the safe way — structural
+`JsonDeepEquals` for `JsonElement`, `ToJsonString` for `JsonNode`, `Equals` otherwise, and any
+exception degrades to "changed" (emit) — and `SameValuePatchKeepsTheChainTest` pins both sides:
+the no-op frame emits nothing and moves the clock, the genuinely different frame emits AND moves
+it. Keep it two-sided; an "optimisation" that made everything equal would pass a one-sided test.
+
 🚨 **`[SYNC_STREAM] Frame loss detected …` is a RESYNC counter, not a data-loss
 counter.** Every line is a gap that was *detected and answered*; the mirror converges
 on the Full that follows. A raw count therefore means nothing on its own — the two
