@@ -196,9 +196,13 @@ package** — in-mesh source compiles against the platform *image*, module bundl
 closures, and satellite repositories build inside `mw-plugin-test`
 ([PluginPackaging](/Doc/Architecture/PluginPackaging),
 [ModuleBuildArchitecture](/Doc/Architecture/ModuleBuildArchitecture)). The packages already
-published stay listed as history; `MeshWeaver.Hosting.PostgreSql`, `MeshWeaver.AI` and
-`MeshWeaver.Blazor` stopped at `rc7` when they moved to MeshWeaver.Plugins, which publishes bundles
-and no packages.
+published were **retired and unlisted** on 2026-09-07 — forty-three ids, every one stalled at
+`rc7`/`rc8`/`rc9`. Exactly two packages survive, both entry points rather than platform bytes:
+`MeshWeaver.Aspire.Hosting.Memex` and `MeshWeaver.MemexTemplate`, published from
+`publish-packages.yml` on this same `v*.*.*` tag. Unlisting does not erase: existing exact-version
+pins keep resolving. See [NuGet Package Retirement](/Doc/Architecture/NuGetPackageRetirement) for the
+survivor rule, the retirement tool, and why startup configuration goes on the Aspire adapter instead
+of into new packages.
 
 ---
 

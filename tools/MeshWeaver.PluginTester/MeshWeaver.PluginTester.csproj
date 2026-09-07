@@ -193,23 +193,15 @@
     <InternalsVisibleTo Include="MeshWeaver.PluginTester.Test" />
   </ItemGroup>
 
-  <!-- The dotnet-tool distribution of the compiler (#1707 S1b): the SAME binary CI's bake/gate
-       runs, installable via `dotnet tool install -g MeshWeaver.Compiler.Cli` so satellite repos
-       need no platform-repo artifact download. OPT-IN via -p:PackCompilerTool=true (the
-       publish-compiler-tool workflow) — IsPackable stays false for the platform release pack, so
-       `dotnet pack` over the solution never ships this exe as an ordinary library package. The
-       docker distribution of the same binary is the existing mw-plugin-test container image. -->
-  <PropertyGroup Condition="'$(PackCompilerTool)' == 'true'">
-    <IsPackable>true</IsPackable>
-    <PackAsTool>true</PackAsTool>
-    <ToolCommandName>mw-compiler</ToolCommandName>
-    <PackageId>MeshWeaver.Compiler.Cli</PackageId>
-    <!-- ONE portable, framework-dependent tool package. With the container RID list left in
-         place, PackAsTool splits into linux-only RID packages — uninstallable on a macOS/Windows
-         CI host. The tool is RID-agnostic IL, exactly like the module bundles. -->
-    <RuntimeIdentifiers></RuntimeIdentifiers>
-    <Description>The MeshWeaver content compiler CLI — the same binary the platform CI runs to gate and bake mesh content: stages content from a git checkout, compiles NodeTypes with the MeshWeaver.Compiler toolchain, and (with --bake-output) emits prebuilt-assembly bundles keyed by the framework build identity.</Description>
-  </PropertyGroup>
+  <!-- 🚨 THE COMPILER IS DISTRIBUTED AS AN IMAGE, AND ONLY AS AN IMAGE (2026-09-07 —
+       Doc/Architecture/NuGetPackageRetirement). This project used to carry an opt-in
+       (-p:PackCompilerTool=true) that packed it as the `MeshWeaver.Compiler.Cli` dotnet tool
+       alongside the `mw-plugin-test` container image. The tool half never acquired a consumer —
+       CompileProgramStateOfRecord recorded it as "published, unproven … no CI lane consumes it.
+       Every lane in both repos runs mw-plugin-test" — and its publishing workflow is gone. Two
+       distributions of one binary is a drift trap with no upside, so the opt-in is removed and the
+       image is the answer: `docker run` with the entrypoint /app/mw-plugin-test in the pinned
+       image, which is exactly what every lane already does. -->
 
   <!-- 🚨 NO ContainerEnvironmentVariable PATH override. The one that used to sit here (added for
        GitHub Actions `container:` jobs, which run steps through `sh -c` and need the apphost on

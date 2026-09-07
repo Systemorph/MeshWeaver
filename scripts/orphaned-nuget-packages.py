@@ -45,6 +45,39 @@ def published(prefix: str) -> set[str]:
     return ids
 
 
+IS_PACKABLE = re.compile(r"<IsPackable>\s*(true|false)\s*</IsPackable>", re.I)
+IMPORTS_ABOVE = re.compile(r"<Import\b[^>]*GetPathOfFileAbove", re.I)
+
+
+def directory_default(project: Path, root: Path) -> bool:
+    """The IsPackable a project INHERITS from the Directory.Build.props chain.
+
+    🚨 This models MSBuild rather than guessing, and it errs toward TRUE — because the
+    caller subtracts what we pack from what is published, so believing a project packs can
+    only SPARE a package, while wrongly believing it does not is what unlists a live one.
+
+    MSBuild auto-imports only the NEAREST Directory.Build.props; a chain continues solely
+    because a props file explicitly imports the one above it (the GetPathOfFileAbove
+    idiom this repository uses). So: walk up from the project; at each props file, an
+    explicit <IsPackable> is the answer; otherwise continue ONLY if that file imports the
+    one above. A props file that neither declares nor imports ends the chain at MSBuild's
+    own default, which is true.
+    """
+    directory = project.parent
+    while True:
+        candidate = directory / "Directory.Build.props"
+        if candidate.is_file():
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+            declared = IS_PACKABLE.search(text)
+            if declared:
+                return declared.group(1).lower() == "true"
+            if not IMPORTS_ABOVE.search(text):
+                return True          # chain stops here; MSBuild's default is packable
+        if directory == root or directory.parent == directory:
+            return True
+        directory = directory.parent
+
+
 def packable(root: Path) -> set[str]:
     """Package ids this tree still produces.
 
@@ -52,6 +85,12 @@ def packable(root: Path) -> set[str]:
     sets IsPackable=false produces nothing and is therefore NOT evidence that we still
     ship it — but it is also not evidence that we don't, so it is simply excluded here
     and the orphan check below is what decides.
+
+    🚨 IsPackable is INHERITED. Since 2026-09-07 this repository defaults it to false in the
+    root Directory.Build.props (Doc/Architecture/NuGetPackageRetirement) and exactly one
+    project opts back in, so reading only the csproj would report every project as packable
+    and the orphan set would be empty — a subtraction that quietly retires nothing. The
+    inherited value is resolved by directory_default() above.
     """
     ids = set()
     for project in root.rglob("*.csproj"):
@@ -79,7 +118,10 @@ def packable(root: Path) -> set[str]:
         declared = set(re.findall(r"<PackageId>\s*([^<]+?)\s*</PackageId>", text, re.I))
         ids |= declared
 
-        if re.search(r"<IsPackable>\s*false\s*</IsPackable>", text, re.I) and not declared:
+        own = IS_PACKABLE.search(text)
+        is_packable = (own.group(1).lower() == "true") if own \
+            else directory_default(project, root)
+        if not is_packable and not declared:
             continue
         if not declared:
             ids.add(project.stem)
@@ -133,6 +175,58 @@ def self_test() -> int:
             failures.append("a conditionally-packed PackageId was not harvested")
         if "MeshWeaver.Private" in found:
             failures.append("an IsPackable=false project declaring no id counted as shipped")
+
+    # 🚨 IsPackable is INHERITED from Directory.Build.props, and this repository now defaults it
+    # to FALSE with exactly one opt-in. Reading only the csproj called every project packable and
+    # the orphan set came out EMPTY — a subtraction that retires nothing while reporting success.
+    # The mirror-image error is the dangerous one, so the chain rules are pinned in both
+    # directions: inherit false, honour an explicit opt-in, and STOP at a props file that neither
+    # declares IsPackable nor imports the one above (MSBuild auto-imports only the nearest, so the
+    # chain is real only where a file continues it — and where it stops, the default is true).
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        (root / "Directory.Build.props").write_text(
+            "<Project><PropertyGroup><IsPackable>false</IsPackable></PropertyGroup></Project>",
+            encoding="utf-8")
+
+        (root / "src" / "MeshWeaver.Inherited").mkdir(parents=True)
+        (root / "src" / "MeshWeaver.Inherited" / "MeshWeaver.Inherited.csproj").write_text(
+            "<Project><PropertyGroup></PropertyGroup></Project>", encoding="utf-8")
+
+        (root / "src" / "MeshWeaver.OptedIn").mkdir(parents=True)
+        (root / "src" / "MeshWeaver.OptedIn" / "MeshWeaver.OptedIn.csproj").write_text(
+            "<Project><PropertyGroup><IsPackable>true</IsPackable></PropertyGroup></Project>",
+            encoding="utf-8")
+
+        # A subtree whose own props declares nothing and does NOT import the root: MSBuild stops
+        # there and the default is true, so the root's false must NOT reach through it.
+        (root / "detached" / "MeshWeaver.Detached").mkdir(parents=True)
+        (root / "detached" / "Directory.Build.props").write_text(
+            "<Project><PropertyGroup><Nullable>enable</Nullable></PropertyGroup></Project>",
+            encoding="utf-8")
+        (root / "detached" / "MeshWeaver.Detached" / "MeshWeaver.Detached.csproj").write_text(
+            "<Project><PropertyGroup></PropertyGroup></Project>", encoding="utf-8")
+
+        # A subtree whose props declares nothing but DOES import the one above: the chain continues
+        # and the root's false applies.
+        (root / "chained" / "MeshWeaver.Chained").mkdir(parents=True)
+        (root / "chained" / "Directory.Build.props").write_text(
+            "<Project><Import Project=\"$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', "
+            "'$(MSBuildThisFileDirectory)../'))\" /><PropertyGroup></PropertyGroup></Project>",
+            encoding="utf-8")
+        (root / "chained" / "MeshWeaver.Chained" / "MeshWeaver.Chained.csproj").write_text(
+            "<Project><PropertyGroup></PropertyGroup></Project>", encoding="utf-8")
+
+        found = packable(root)
+        if "MeshWeaver.Inherited" in found:
+            failures.append("a project inheriting IsPackable=false counted as shipped")
+        if "MeshWeaver.OptedIn" not in found:
+            failures.append("an explicit IsPackable=true did not override the inherited false")
+        if "MeshWeaver.Detached" not in found:
+            failures.append("a props file that neither declares nor imports did not stop the chain "
+                            "at MSBuild's default (true) — this direction UNLISTS a live package")
+        if "MeshWeaver.Chained" in found:
+            failures.append("an importing props file did not carry the inherited false through")
 
     for failure in failures:
         print(f"FAIL: {failure}")

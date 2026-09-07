@@ -1,10 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <IsPackable>true</IsPackable>
-    <Description>Fluent, await-free assertions for IObservable&lt;T&gt;. Subscribe, wait (with a timeout) for the relevant emission, and assert — in one fluent chain. Self-contained: depends only on System.Reactive.</Description>
-    <PackageTags>reactive;rx;observable;testing;assertions;async</PackageTags>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- 🚨 NOT a NuGet package any more (2026-09-07 — Doc/Architecture/NuGetPackageRetirement).
+         Its one out-of-repo consumer, MeshWeaver.Plugins, references it by PROJECT against
+         $(MeshWeaverRoot) (src/MeshWeaver.GitSync.TestBase and the test tree), never from a feed —
+         so retiring the package breaks nothing. The assembly is unchanged; only packing is off.
+         `IsPackable` now defaults to false in Directory.Build.props. -->
     <!-- Ship IntelliSense docs with the package and enforce complete XML comments
          on the public assertion surface (CS1591). Fixed by writing comments, never suppressed. -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>

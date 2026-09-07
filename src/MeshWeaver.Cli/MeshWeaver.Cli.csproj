@@ -8,14 +8,15 @@
     <RootNamespace>MeshWeaver.Cli</RootNamespace>
     <AssemblyName>memex</AssemblyName>
 
-    <!-- Tool packaging — ships alongside the framework NuGet packages. -->
-    <PackAsTool>true</PackAsTool>
-    <ToolCommandName>memex</ToolCommandName>
-    <PackageId>MeshWeaver.Cli</PackageId>
-    <IsPackable>true</IsPackable>
-    <Description>Command-line interface for MeshWeaver / Memex — operates the mesh over the REST API (get, upload, patch, compile, mirror, …).</Description>
-    <PackageProjectUrl>https://github.com/Systemorph/MeshWeaver</PackageProjectUrl>
-    <PackageTags>meshweaver;memex;cli;mesh;cms</PackageTags>
+    <!-- 🚨 NOT a NuGet tool any more (2026-09-07 — Doc/Architecture/NuGetPackageRetirement). The
+         `memex` verbs reach CI through the mw-plugin-test IMAGE, never through `dotnet tool
+         install`: node-repo-module-pack.yml runs the mw-plugin-test entrypoint in the pinned image
+         directly and says so ("the `memex` half is only the trip into the container"), and no lane
+         in this repo or any satellite installs MeshWeaver.Cli. Developers run it from source with
+         `dotnet run` against src/MeshWeaver.Cli. Restoring the package means restoring the
+         PackAsTool/ToolCommandName/PackageId/IsPackable properties AND adding the project to
+         .github/workflows/publish-packages.yml: IsPackable alone would only spare the id from the
+         retirement sweep in scripts/orphaned-nuget-packages.py, not publish anything. -->
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
