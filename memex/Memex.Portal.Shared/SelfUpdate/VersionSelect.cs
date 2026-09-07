@@ -1,8 +1,8 @@
 using System.Collections.Immutable;
-using System.Globalization;
 using System.Text.RegularExpressions;
 using NuGet.Versioning;
 using MeshWeaver.Hosting.SelfUpdate;
+using MeshWeaver.Plugin.Packaging;
 
 namespace Memex.Portal.Shared.SelfUpdate;
 
@@ -46,6 +46,15 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// reach the clean release it is waiting for.</item>
 /// </list>
 ///
+/// <para>🚨 <b>The comparison itself is NOT defined here.</b> It lives in
+/// <see cref="PlatformReleaseOrder"/>, in <c>MeshWeaver.Plugin.Packaging</c> — the lowest assembly
+/// that both this selector and <c>ModulePlatformFloor</c> already reference. The reason is measured:
+/// the module platform floor makes the SAME wrong assumption at a second call site (SemVer puts
+/// <c>ci</c> below <c>rc</c>, so a floor of <c>3.0.0-rc8</c> is unsatisfiable by every
+/// <c>3.0.0-ci.N</c>, permanently), and two private ideas of "newer" is how fixing one leaves the
+/// other broken. This class keeps only what is specific to picking an IMAGE TAG: the tag-shape
+/// filters, the policy, and the total order a heterogeneous listing needs.</para>
+///
 /// <para>🔴 The run number must stay MONOTONIC (<c>Directory.Build.props</c>, fed from
 /// <c>GITHUB_RUN_NUMBER</c>). A non-monotonic build number would make a newer build sort lower and
 /// break "pick the newest" — that is the one property this ordering rests on, and it is the property
@@ -72,38 +81,10 @@ public static class VersionSelect
     private static readonly Regex PlatformVersionTag =
         new(@"^\d+\.\d+\.\d+([-+].*)?$", RegexOptions.Compiled);
 
-    /// <summary>
-    /// The pre-release identifiers that mark a CD channel and are FOLLOWED by the publishing run
-    /// number: <c>3.0.0-ci.7977</c>, the retired <c>3.0.0-rc9.ci.7824</c>, and the unverified
-    /// <c>3.0.0-edge.7977</c> (<c>edge-images.yml</c> rewrites <c>.ci.</c> to <c>.edge.</c> and keeps
-    /// the same number). Both separators must be accepted — <c>Directory.Build.props</c> says so in as
-    /// many words, because the retired rc line used <c>.ci.</c> and its tags are still in ACR.
-    /// </summary>
-    private static readonly string[] ChannelLabels = ["ci", "edge"];
-
-    /// <summary>
-    /// The CD run number <paramref name="version"/> was published by — its SEALED-PUBLICATION LINEAGE
-    /// — or <c>null</c> for a version that carries none (an official release, which is a promotion of
-    /// a set rather than a publication of its own; or anything unparseable).
-    ///
-    /// <para>Read as the numeric identifier that FOLLOWS a channel label, so all four shapes the
-    /// pipeline produces answer the same way: <c>3.0.0-ci.7977</c> → 7977, <c>3.0.0-rc9.ci.7824</c> →
-    /// 7824, <c>3.0.0-edge.7977</c> → 7977, <c>3.0.0</c> → null.</para>
-    /// </summary>
-    public static long? BuildOrdinal(string version) =>
-        NuGetVersion.TryParse(version, out var parsed) ? BuildOrdinal(parsed) : null;
-
-    private static long? BuildOrdinal(NuGetVersion version)
-    {
-        var labels = version.ReleaseLabels?.ToArray() ?? [];
-        for (var i = 0; i < labels.Length - 1; i++)
-            if (ChannelLabels.Contains(labels[i], StringComparer.OrdinalIgnoreCase)
-                && long.TryParse(
-                    labels[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out var ordinal))
-                return ordinal;
-
-        return null;
-    }
+    /// <summary>The CD run number <paramref name="version"/> was published by — see
+    /// <see cref="PlatformReleaseOrder.BuildOrdinal"/>, which owns it. Kept here as the name this
+    /// file's own documentation and tests refer to, never as a second implementation.</summary>
+    public static long? BuildOrdinal(string version) => PlatformReleaseOrder.BuildOrdinal(version);
 
     /// <summary>
     /// The best tag to roll to under <paramref name="policy"/>, or <c>null</c> when nothing qualifies.
@@ -174,7 +155,9 @@ public static class VersionSelect
                 // a sort an arbitrary answer.
                 .OrderByDescending(x => x.ordinal.HasValue)
                 .ThenByDescending(x => x.ordinal ?? 0L)
-                .ThenByDescending(x => x.ver)
+                // The SAME SemVer implementation the shared comparison uses, so the band ordering and
+                // PlatformReleaseOrder.Compare can never disagree about two promotion tags.
+                .ThenByDescending(x => x.tag, NuGetVersionComparer.Instance)
                 .Select(x => x.tag),
         ];
     }
@@ -188,7 +171,7 @@ public static class VersionSelect
             .Where(t => PlatformVersionTag.IsMatch(t))         // exclude bare git-sha / `main` tags (see PlatformVersionTag)
             .Select(t => (tag: t, ver: NuGetVersion.TryParse(t, out var v) ? v : null))
             .Where(x => x.ver is not null)
-            .Select(x => (x.tag, ver: x.ver!, ordinal: BuildOrdinal(x.ver!)));
+            .Select(x => (x.tag, ver: x.ver!, ordinal: PlatformReleaseOrder.BuildOrdinal(x.tag)));
 
     /// <summary>An UNVERIFIED edge/pre-merge build — identified by an <c>edge</c> SemVer pre-release
     /// label (e.g. <c>3.0.0-edge.51</c>). Verified CD builds use <c>-ci.&lt;n&gt;</c> or a clean release,
@@ -199,29 +182,15 @@ public static class VersionSelect
     /// <summary>
     /// True if <paramref name="targetTag"/> is strictly newer than <paramref name="currentVersion"/> —
     /// by SEALED-PUBLICATION LINEAGE when both name a continuous build, and by SemVer when either side
-    /// is an official release (which carries no run number of its own; see <see cref="VersionSelect"/>).
-    /// An unparseable current version (e.g. <c>"unknown"</c> on an unstamped build) returns
-    /// <c>false</c> — we never auto-update when we can't establish the running version.
+    /// is an official release (which carries no run number of its own). An unparseable current version
+    /// (e.g. <c>"unknown"</c> on an unstamped build) returns <c>false</c> — we never auto-update when
+    /// we can't establish the running version.
+    ///
+    /// <para>The rule itself is <see cref="PlatformReleaseOrder.IsNewer"/>, shared with every other
+    /// caller that has to compare two platform builds. This is the name the self-updater calls it by.</para>
     /// </summary>
-    public static bool IsNewer(string targetTag, string currentVersion)
-    {
-        if (!NuGetVersion.TryParse(targetTag, out var target))
-            return false;
-        if (!NuGetVersion.TryParse(currentVersion, out var current))
-            return false;
-
-        // 🚨 Both sides are CD publications ⇒ the run number decides and the version line is ignored.
-        // This is what lets an install stranded on a withdrawn 3.1.0-ci.7841 see the sealed
-        // 3.0.0-ci.7977 as newer, and what stops a 3.0.0-rc9.ci.7824 from looking newer than it is.
-        if (BuildOrdinal(target) is { } targetOrdinal && BuildOrdinal(current) is { } currentOrdinal)
-            return targetOrdinal > currentOrdinal;
-
-        // One side is a promotion (a clean release) with no lineage of its own — the version string is
-        // the only key both sides share, and for a deliberately cut release it is a trustworthy one.
-        // Keeping this branch on SemVer is what preserves the Stable path: an install running a
-        // continuous build must still be able to reach the clean release it is waiting for.
-        return target > current;
-    }
+    public static bool IsNewer(string targetTag, string currentVersion) =>
+        PlatformReleaseOrder.IsNewer(targetTag, currentVersion);
 
     /// <summary>
     /// What ONE check may roll to, and why — the whole selection decision, pure, so it is testable
@@ -257,6 +226,11 @@ public static class VersionSelect
     /// <para>The third state — the listing could not answer — takes NEITHER branch. See
     /// <see cref="InstalledTagResolution.Indeterminate"/>: a failed read that recovered as if the tag
     /// were withdrawn would roll the whole fleet backwards off one bad ACR response.</para>
+    ///
+    /// <para>🚨 <b>"Continuous follows the ci line"</b> (maintainer, 2026-09-07). An install already
+    /// ON the continuous line stays on it: the clean release is NOT a Continuous target, even though
+    /// <see cref="IsNewer"/> correctly reports it as newer. Those are different questions and both
+    /// answers are wanted — see <see cref="OnTheContinuousLine"/>.</para>
     /// </summary>
     public static RollCandidates SelectCandidates(
         IReadOnlyList<string> tags,
@@ -265,16 +239,50 @@ public static class VersionSelect
         bool requireCiGreen = true)
     {
         var eligible = PickTargets(tags, policy, requireCiGreen);
-        var newer = eligible.Where(tag => IsNewer(tag, installedVersion)).ToImmutableArray();
         var installed = CheckInstalledTag(tags, installedVersion);
+        var staysOnTheCiLine = OnTheContinuousLine(installedVersion, policy);
+
+        var newer = eligible
+            .Where(tag => !staysOnTheCiLine || PlatformReleaseOrder.BuildOrdinal(tag) is not null)
+            .Where(tag => IsNewer(tag, installedVersion))
+            .ToImmutableArray();
 
         if (newer.Length > 0)
             return new(newer, IsRecovery: false, installed, tags.Count);
 
+        // 🚨 RECOVERY deliberately drops the line rule. The install cannot start a pod on the image it
+        // names at all; an image that EXISTS beats line purity, and the verdict says RECOVERY so the
+        // departure is visible. Refusing a promotion tag here could leave an install stranded with a
+        // perfectly good release sitting in the registry.
         return installed.Resolution == InstalledTagResolution.Withdrawn
             ? new([.. eligible], IsRecovery: true, installed, tags.Count)
             : new([], IsRecovery: false, installed, tags.Count);
     }
+
+    /// <summary>
+    /// 🚨 <b>"Continuous follows the ci line" — the maintainer's decision, 2026-09-07, encoded.</b>
+    ///
+    /// <para>Once <c>v3.0.0</c> is tagged, SemVer ranks the clean <c>3.0.0</c> above every
+    /// <c>3.0.0-ci.&lt;n&gt;</c>, so a Continuous install would jump onto the release and then sit
+    /// there while later sealed ci builds accumulate below it — the release outranks them all. That is
+    /// the #3542 freeze again, wearing the release's clothes. The clean release belongs to the Stable
+    /// policy; Continuous means the continuous line.</para>
+    ///
+    /// <para>So: an install whose running build carries a run number is ON the line, and under
+    /// <see cref="UpdatePolicyKind.Continuous"/> only tags that also carry one are candidates. An
+    /// install that is NOT on the line (it runs a promotion) is not held there — the version string
+    /// decides for it, so it rejoins at the next line's first ci build.</para>
+    ///
+    /// <para>🚨 This deliberately does NOT change <see cref="IsNewer"/>, and the two must not be
+    /// merged. "Is the release newer than this ci build?" is YES — Stable needs that answer to reach
+    /// the release at all, and a capability question (is the running platform at least as new as X)
+    /// needs it too. "Should a Continuous install take it?" is NO. One predicate cannot carry both,
+    /// so the POLICY decision lives here, where the policy is in scope, and the ORDER stays a pure
+    /// fact about publications.</para>
+    /// </summary>
+    private static bool OnTheContinuousLine(string installedVersion, UpdatePolicyKind policy) =>
+        policy == UpdatePolicyKind.Continuous
+        && PlatformReleaseOrder.BuildOrdinal(installedVersion) is not null;
 
     /// <summary>
     /// Whether the tag this install RUNS still resolves in a registry listing — the three-valued

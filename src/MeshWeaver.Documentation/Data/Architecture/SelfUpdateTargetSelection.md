@@ -84,6 +84,32 @@ release it is waiting for. Mixing the two keys *pairwise inside the ordering* wo
 — a slip tag beats a release beats a sealed tag beats the slip tag — and an intransitive comparer
 hands a sort an arbitrary answer.
 
+### 🚦 Continuous follows the ci line
+
+**Maintainer decision, 2026-09-07.** Once `v3.0.0` is tagged, a Continuous install keeps taking the
+newest sealed `3.0.0-ci.<n>`. It must **not** jump to the clean `3.0.0` merely because SemVer ranks a
+release above its pre-releases — the clean release belongs to the Stable policy.
+
+That is not a preference, it is the #3542 freeze again wearing the release's clothes: a Continuous
+install that took `3.0.0` would then sit on it while every later sealed `3.0.0-ci.<n>` accumulated
+*below* it in SemVer order, and nothing would ever look newer again.
+
+So `SelectCandidates` adds one policy rule: **an install whose running build carries a run number is
+ON the line, and under `Continuous` only tags that also carry one are candidates.** An install that is
+*not* on the line (it runs a promotion) is not held there — the version string decides for it, so it
+rejoins at the next line's first `ci` build.
+
+🚨 **This deliberately does not change `IsNewer`, and the two must not be merged.** *"Is the release
+newer than this ci build?"* is **yes** — Stable needs that answer to reach the release at all. *"Should
+a Continuous install take it?"* is **no**. One predicate cannot carry both, so the POLICY lives in
+`SelectCandidates`, where the policy is in scope, and the ORDER stays a pure fact about publications.
+`VersionSelectTest.ContinuousFollowsTheCiLine_AndDoesNotJumpToTheRelease` pins all four cases,
+including the one that matters most: right after the tag, when nothing on the line is newer yet and
+the release is sitting there looking newer.
+
+The RECOVERY path (§3) deliberately drops the line rule: an install that cannot start a pod at all
+takes the best image that EXISTS, and the verdict says `RECOVERY` so the departure is visible.
+
 ## 3. "I am current" is not "my tag no longer exists"
 
 The second defect is the same code being unable to tell two opposite states apart.
@@ -119,12 +145,69 @@ reached only once the newer set is empty.
 - A strand with nothing eligible to recover to reports `SelfUpdateOutcome.InstalledTagWithdrawn` at
   Warning, naming the operator's move. Nothing in the process can fix that one.
 
-## 4. What this does NOT fix
+## 4. The same wrong assumption has a SECOND call site
 
-- **The withdrawn tags themselves.** Ordering makes them lose; it does not remove them. `3.1.0-ci.783x`
-  / `7841` were untagged from `memex-portal-ai`, `memex-migration` and `mw-plugin-test` on 2026-09-07
-  (27 tags; manifests kept, reachable via `staging-*`). A future slip needs the same maintainer action
-  — the selector's job is to make the slip harmless while it is still there.
+`ModulePlatformFloor.DeclineReason` decides whether a module bundle may land: it declines when
+`NuGetVersionComparer.Instance.Compare(runningVersion, minMeshVersion) < 0`. That is pure SemVer, and
+SemVer §11.4 compares pre-release identifiers as text — so `"ci"` < `"rc"`, and a floor of
+`3.0.0-rc8` is unsatisfiable by **every** `3.0.0-ci.N`. Measured 2026-09-07 against the real comparer
+(`Compare(running, floor) < 0` ⇒ DECLINED):
+
+| running \ floor | `3.0.0-rc4` | `3.0.0-rc8` | `3.0.0-rc9` | `3.0.0` |
+|---|---|---|---|---|
+| `3.0.0-ci.1` | DECLINED | DECLINED | DECLINED | DECLINED |
+| `3.0.0-ci.7989` | DECLINED | DECLINED | DECLINED | DECLINED |
+| `3.0.0-ci.999999999` | DECLINED | DECLINED | DECLINED | DECLINED |
+| `3.0.0` | ok | ok | ok | ok |
+| `3.1.0-ci.1` | ok | ok | ok | ok |
+
+Note the last column: a **clean `3.0.0` floor is refused too**, because a pre-release ranks below its
+own release. So it is not only the ~20 packages carrying retired `rc4`..`rc9` floors — a package
+declaring the current line's clean version is equally un-landable while the fleet runs `3.0.0-ci.N`.
+On both AKS portals at 08:20Z the observed line was:
+
+```
+HOLDING 3.0.0-ci.7989 — AI: the module requires platform 3.0.0-rc8 or newer
+                         but this deployment runs 3.0.0-ci.7989
+```
+
+### 🚨 …but "newer than" and "satisfies the floor of" are NOT the same predicate
+
+The tempting conclusion is "make the floor use this page's comparison". **That is measured to be
+wrong, and the counter-example is one line up in this very design.** For an updater, `3.0.0` MUST
+outrank `3.0.0-ci.7977` — otherwise a Stable install running a continuous build can never take the
+clean release it is waiting for, which is the regression §2 exists to avoid. For a floor, the same
+two strings must give the OPPOSITE answer: a `3.0.0` floor must be *satisfied* by `3.0.0-ci.7977`.
+
+Same two strings, opposite required answers. So the shareable part is the **key**
+(`PlatformReleaseOrder.BuildOrdinal` — the lineage), not the **predicate**. Forcing one predicate to
+serve both would fix the floor by breaking the update path.
+
+The overlap that *does* exist is the **same-line** case, and there the two must agree exactly: two
+builds of one line compare by build number, numerically. Once the declared floors name a
+`3.0.0-ci.<n>` (MeshWeaver.Plugins#1447) that is the whole of the shared surface, and
+`VersionSelectTest.SameLineBuildsCompareNumerically_TheOneCaseTheFloorAlsoAsks` pins this side of it.
+
+🚨 **Declared floors are not going away, so do not design as if they were.** The measured link probe
+(core #3552) reads `ModulePlatformFloor.DeclineReason(minMeshVersion) ?? LinkHoldReason()` — the probe
+short-circuits *behind* the declared floor and never runs unless the declared floor already passes.
+The declared floor still gates first.
+
+That is why `PlatformReleaseOrder` lives in `MeshWeaver.Plugin.Packaging`, beside
+`NuGetVersionComparer` and in the lowest assembly both `MeshWeaver.PluginCatalog` (which owns
+`ModulePlatformFloor`) and `Memex.Portal.Shared` (which owns `VersionSelect`) already reference
+directly — the key is in reach of whoever writes the floor's own predicate, and neither call site
+carries a private idea of lineage. `PlatformReleaseOrderTest` pins the boundary so the floor decision
+is taken knowingly rather than by reusing the update one.
+
+## 5. What this does NOT fix
+
+- **The withdrawn tags themselves.** Ordering makes them lose; it does not remove them. Measured
+  2026-09-07 (`az acr repository show-tags -n meshweaver --repository memex-portal-ai`): **1268 tags —
+  798 `staging-*`, 48 `3.0.0-ci.*`, ZERO `3.1.0-*`, ZERO `rc*`.** The slip tags and the whole retired
+  rc line are already untagged from all three repositories (manifests kept, reachable via
+  `staging-*`), so the 2026-09-07 trap has no tag left to fire on. A future slip needs the same
+  maintainer action — the selector's job is to make the slip harmless while its tags are still there.
 - **The policy record losing its own policy** under its bookkeeping writes (issue #3542, proposal 3).
 - **"Installed" is what the pod RUNS.** This reads `ShippedReleaseSeed.InstalledPlatformVersion` —
   the injected `MESHWEAVER_PLATFORM_VERSION`, never the record's `LatestAvailableTag`, which after a
@@ -132,9 +215,14 @@ reached only once the newer set is empty.
 
 ## Where it lives
 
-- `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs` — `BuildOrdinal`, `PickTargets`, `IsNewer`,
-  `CheckInstalledTag`, `SelectCandidates`. Pure; no hub, no registry, no Rx.
+- `src/MeshWeaver.Plugin.Packaging/PlatformReleaseOrder.cs` — the lineage key (`BuildOrdinal`) and the
+  update predicate (`Compare` / `IsNewer`), in the lowest assembly both call sites reach.
+- `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs` — the tag-shape filters, the policy, the
+  total order a heterogeneous listing needs, `CheckInstalledTag` and `SelectCandidates`. Pure; no hub,
+  no registry, no Rx.
 - `memex/Memex.Portal.Shared/SelfUpdate/SelfUpdateHostedService.cs` — `RunOnce` / `NothingToRoll`.
+- `test/MeshWeaver.Graph.Test/PlatformReleaseOrderTest.cs` — the lineage key, the incident, and the
+  measured floor boundary.
 - `test/Memex.Portal.Shared.Test/VersionSelectTest.cs` — the ordering and the three-valued check.
 - `test/Memex.Portal.Shared.Test/SelfUpdateStrandRecoveryTest.cs` — the poller, against a real mesh.
 

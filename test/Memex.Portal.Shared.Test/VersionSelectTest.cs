@@ -244,6 +244,10 @@ public class VersionSelectTest
     /// version string to compare against — and it must still be able to reach the clean release it is
     /// waiting for. That is why <c>IsNewer</c> falls back to SemVer whenever either side is a
     /// promotion, and why the Stable ordering is untouched.
+    ///
+    /// <para>🚨 <c>IsNewer</c> is the ORDER, not the POLICY: it says the release is newer, and
+    /// <see cref="ContinuousFollowsTheCiLine_AndDoesNotJumpToTheRelease"/> is what stops a Continuous
+    /// install acting on that. Both answers are wanted; see <c>OnTheContinuousLine</c>.</para>
     /// </summary>
     [Fact]
     public void AnOfficialRelease_IsStillReachableFromAContinuousBuild()
@@ -253,6 +257,62 @@ public class VersionSelectTest
         Assert.Equal(
             ["3.1.0", "3.0.0"],
             VersionSelect.PickTargets(["3.0.0", "3.1.0", "3.0.0-ci.7977"], UpdatePolicyKind.Stable));
+
+        // Stable is where a release is actually TAKEN, and it still is.
+        var stable = VersionSelect.SelectCandidates(
+            ["3.0.0", "3.0.0-ci.7977"], "3.0.0-ci.7977", UpdatePolicyKind.Stable);
+        Assert.Equal(["3.0.0"], stable.Candidates);
+    }
+
+    /// <summary>
+    /// 🚨 <b>"Continuous follows the ci line"</b> — maintainer, 2026-09-07, and the reason it needs a
+    /// test rather than a comment. The day <c>v3.0.0</c> is tagged, SemVer ranks the clean release
+    /// above every <c>3.0.0-ci.&lt;n&gt;</c>. A Continuous install would take it and then sit there
+    /// while later sealed ci builds pile up underneath — the release outranks all of them — which is
+    /// the #3542 freeze again, wearing the release's clothes.
+    ///
+    /// <para>Three cases, and the middle one is the whole point: it is the state right after the tag,
+    /// where nothing on the ci line is newer yet and the release is sitting there looking newer.</para>
+    /// </summary>
+    [Fact]
+    public void ContinuousFollowsTheCiLine_AndDoesNotJumpToTheRelease()
+    {
+        string[] registry = ["3.0.0", "3.0.0-ci.7977", "3.0.0-ci.7989"];
+
+        // 1. The ordering alone already prefers the line: the release is in the trailing band.
+        Assert.Equal("3.0.0-ci.7989", VersionSelect.PickTarget(registry, UpdatePolicyKind.Continuous));
+
+        // 2. 🚨 Nothing newer ON the line ⇒ nothing to take. The release must NOT be the answer, and
+        //    it is exactly here that SemVer would have said it was.
+        var settled = VersionSelect.SelectCandidates(
+            registry, "3.0.0-ci.7989", UpdatePolicyKind.Continuous);
+        Assert.Empty(settled.Candidates);
+        Assert.False(settled.IsRecovery);
+
+        // 3. A newer ci build ⇒ take it, and the release is not even a fallback the gate walk could
+        //    drop through to.
+        var rolling = VersionSelect.SelectCandidates(
+            registry, "3.0.0-ci.7977", UpdatePolicyKind.Continuous);
+        Assert.Equal(["3.0.0-ci.7989"], rolling.Candidates);
+
+        // 4. An install NOT on the line is not held off it: it rejoins at the next line's ci builds.
+        var offTheLine = VersionSelect.SelectCandidates(
+            ["3.0.0", "3.1.0-ci.8100"], "3.0.0", UpdatePolicyKind.Continuous);
+        Assert.Equal(["3.1.0-ci.8100"], offTheLine.Candidates);
+    }
+
+    /// <summary>
+    /// The same-line case, where this selector and the module platform floor MUST agree: two builds of
+    /// one line compare by build number, numerically. The floors now name a <c>3.0.0-ci.&lt;n&gt;</c>
+    /// (MeshWeaver.Plugins#1447), so that is the whole of the overlap — and it is the one case where
+    /// "newer than" and "satisfies the floor of" cannot diverge.
+    /// </summary>
+    [Fact]
+    public void SameLineBuildsCompareNumerically_TheOneCaseTheFloorAlsoAsks()
+    {
+        Assert.True(VersionSelect.IsNewer("3.0.0-ci.7989", "3.0.0-ci.7977"));
+        Assert.False(VersionSelect.IsNewer("3.0.0-ci.7977", "3.0.0-ci.7989"));
+        Assert.False(VersionSelect.IsNewer("3.0.0-ci.7989", "3.0.0-ci.7989"));
     }
 
     /// <summary>The run number is read out of all four shapes the pipeline publishes — both
