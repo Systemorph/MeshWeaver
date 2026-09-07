@@ -26,12 +26,19 @@ namespace MeshWeaver.GitSync;
 ///
 /// <para><b><c>workflow_run</c> success keeps GitSync'd Spaces CURRENT without polling — and only
 /// ever with content CI accepted.</b> A green build of a repository's DEFAULT branch gives every
-/// Space whose sync config targets that repository + branch the same headless "Update to latest"
-/// the GUI button and the MCP <c>git_hub_sync</c> tool run
-/// (<see cref="GitHubActivityExtensions.UpdateToLatestFromGitHub"/>, <c>force: false</c> so
+/// Space whose sync config targets that repository + branch a headless import
+/// <b>at that build's commit</b>
+/// (<see cref="GitHubActivityExtensions.UpdateToProvenCommitFromGitHub"/>, <c>force: false</c> so
 /// two-way conflict resolution still protects server-side edits). The mesh writes run under
 /// the system identity; the GitHub pull authenticates as the sync config's CREATOR (their
 /// connected credential, or the GitHub App when they have none).</para>
+///
+/// <para>🚨 <b>AT THAT BUILD'S COMMIT, not "latest".</b> The GUI button's
+/// <see cref="GitHubActivityExtensions.UpdateToLatestFromGitHub"/> resolves the branch when it
+/// fetches, which is right for a human asking for latest and wrong for every machine trigger: the
+/// branch can move between the build completing and the fetch happening, and what lands is then a
+/// tree no build ever proved. That is Systemorph/MeshWeaver.Plugins#1430 — a ~5 h outage on two
+/// production portals. The contract is in <c>Doc/Architecture/SyncRefContract</c>.</para>
 ///
 /// <para>🚨 <b>The import is gated on CI, so <c>push</c> imports nothing.</b> A push event arrives
 /// BEFORE the build it starts, so importing on push shipped content to live Spaces seconds ahead of
@@ -228,16 +235,31 @@ public sealed class GitHubWebhookProcessor
     }
 
     /// <summary>
-    /// A verified GREEN build of the default branch → the headless "Update to latest" for every sync
-    /// source that targets this repo + branch and is not already at this commit. TRIGGERS the updates
-    /// (each its own activity, fire-and-forget with error logging) and emits the number triggered — it
-    /// does NOT await the imports, so the webhook response returns within GitHub's delivery timeout.
+    /// A verified GREEN build of the default branch → a headless import AT THAT BUILD'S COMMIT for
+    /// every sync source that targets this repo + branch and is not already sitting on it. TRIGGERS
+    /// the updates (each its own activity, fire-and-forget with error logging) and emits the number
+    /// triggered — it does NOT await the imports, so the webhook response returns within GitHub's
+    /// delivery timeout.
+    ///
+    /// <para>🚨 <b><paramref name="headSha"/>, never the branch — this is the #1430 fix.</b> The
+    /// candidate filter has always been the built commit while the import itself said "bring the
+    /// Space to latest", and those are the same tree only when nothing merges in between. When
+    /// something does, the mesh receives a tree NO build proved: a MeshWeaver.Plugins <c>main</c> run
+    /// for <c>8d4920c93</c> finished at 2026-09-06 22:38:18Z with <c>main</c> already past #1413, and
+    /// both production portals imported #1413's <c>Store/*</c> sources — against a platform carrying
+    /// neither <c>IPaymentProvider</c> nor the Payments module — leaving four <c>Store</c> NodeTypes
+    /// in compile <c>Error</c> for ~5 h. The publication and the sources it was compiled from are one
+    /// artefact; resolving the ref a second time at fetch time is what split them. The sibling
+    /// consumer of the same fact, <c>PluginUpdateWatcher</c>, already read
+    /// <c>BuildCompletion.HeadSha</c>; this makes GitSync agree with it. See
+    /// <c>Doc/Architecture/SyncRefContract</c>.</para>
     ///
     /// <para>Scoping differs from the old push path in one way that matters: a <c>workflow_run</c>
     /// payload carries no file list, so a source's <c>Subdirectory</c> cannot be used to skip it.
-    /// Every source of the repo is brought to latest; an unchanged subdirectory imports as a no-op.
-    /// The <c>lastSyncCommitSha</c> check below is what keeps that cheap — it makes a re-run of an
-    /// already-imported commit (a flake re-run, a manual re-dispatch) trigger nothing at all.</para>
+    /// Every source of the repo is brought to the built commit; an unchanged subdirectory imports as
+    /// a no-op. The <c>lastSyncCommitSha</c> check below is what keeps that cheap — it makes a re-run
+    /// of an already-imported commit (a flake re-run, a manual re-dispatch) trigger nothing at all,
+    /// and now compares like with like: what the source RECORDS is the commit it was told to fetch.</para>
     /// </summary>
     private IObservable<int> TriggerSyncForGreenBuild(RepoIdentity repo, string branch, string headSha)
         => MatchingBuildTargets(repo, branch, headSha).Select(targets =>
@@ -254,20 +276,24 @@ public sealed class GitHubWebhookProcessor
                 return 0;
             }
             logger?.LogInformation(
-                "Green build of {Repo}@{Branch} ({Sha}) → updating {Count} sync source(s) to latest.",
+                "Green build of {Repo}@{Branch} ({Sha}) → importing {Count} sync source(s) AT THAT COMMIT.",
                 repo, branch, headSha, targets.Count);
             var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
             foreach (var t in targets)
                 Observable.Using(
                         () => accessService.ImpersonateAsSystem(),
-                        _ => hub.UpdateToLatestFromGitHub(
-                            t.SpacePath, t.UserId, sourceId: t.SourceId))
+                        // 🚨 headSha, NOT "latest" — see the remarks. The candidates were selected
+                        // against this commit; importing anything else means the selection and the
+                        // import disagree about which tree this build proved (#1430).
+                        _ => hub.UpdateToProvenCommitFromGitHub(
+                            t.SpacePath, t.UserId, headSha, sourceId: t.SourceId))
                     .Subscribe(
                         activity => logger?.LogInformation(
-                            "Build-triggered update of {Space} completed ({Activity}).", t.SpacePath, activity),
+                            "Build-triggered import of {Space} at {Sha} completed ({Activity}).",
+                            t.SpacePath, headSha, activity),
                         exception => logger?.LogWarning(exception,
-                            "Build-triggered update of {Space} (source {Source}) failed.",
-                            t.SpacePath, t.SourceId ?? "(primary)"));
+                            "Build-triggered import of {Space} at {Sha} (source {Source}) failed.",
+                            t.SpacePath, headSha, t.SourceId ?? "(primary)"));
             return targets.Count;
         });
 

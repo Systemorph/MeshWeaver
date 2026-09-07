@@ -10,6 +10,12 @@
          already grants InternalsVisibleTo for the cache's eviction seam (ReadStreamEvictions /
          IsReadStreamLive). -->
     <ProjectReference Include="..\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+    <!-- BuildTriggeredSyncPinsTheBuiltCommitTest (MeshWeaver.Plugins#1430) drives the real webhook
+         processor + sync service over a real monolith mesh. The GitSync SUITE lives in
+         MeshWeaver.Plugins since the boots-a-mesh split, but that repo compiles against a PINNED
+         core sha — so a test of a core change cannot run there until the pin moves, which is
+         precisely the window this defect shipped through. The pin belongs where the code is. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- Concrete HostBuilder for MeshHostBuilderTeardownOrderingTest (the legacy
