@@ -241,6 +241,23 @@ printf '%s\n' "$BAKE_ARCHITECTURE" > "$ARCH_MARKER_LOCAL"
 # question (a generation directory plus an atomic pointer swap, which removes republication in
 # place entirely). The refusal below is a postcondition, not mutual exclusion.
 #
+# 🚨 THAT LAYOUT IS DESIGNED AND ITS READER HALF IS LANDED — do not re-derive it either:
+# Doc/Architecture/SealedPublicationGenerations. Each publication goes into its OWN directory named
+# by $PUBLICATION (already unique per run, already a legal bare name), and a one-line `_current`
+# pointer is moved LAST; disjoint directories mean two publishers cannot interleave at all, so a mix
+# stops being detectable and becomes unrepresentable. Every READER now resolves that pointer and
+# falls back to this flat layout when there is none (ShippedPrebuiltBundles.PublicationDirectoryOf),
+# so the reader side is already deployed and inert.
+#
+# 🚨 WHAT MUST NOT HAPPEN BEFORE THE WRITER MOVES, and it is an ORDERING rule, not a code one: a new
+# writer and an old writer on one prefix is the half-migration to avoid. The new one moves the
+# pointer; the old one replaces the flat copy in place and never touches it — so a pointer-following
+# reader keeps serving its generation and never sees the old writer's NEWER publication. A stale
+# serve, silent, with nothing red anywhere. Every producing repo's publish-bake `platform-ref` must
+# be past the reader phase before this script starts writing generations. (bake-scope.sh and
+# carry-forward-bundles.sh are fetched at the SAME platform-ref as this file, so those three move
+# together and no pin can carry half of it.)
+#
 # Cost: one `az storage file show` per published file per target, at seal time — measured against
 # the ~43-file publication these lanes produce, ~1s each. That is the price of the assertion and it
 # is deliberately paid in full: verifying a SAMPLE would be a guard that passes on the files nobody

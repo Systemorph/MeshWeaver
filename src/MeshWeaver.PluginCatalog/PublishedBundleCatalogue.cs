@@ -371,13 +371,15 @@ public static class PublishedBundleCatalogue
         foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory)
                      .OrderBy(d => d, StringComparer.Ordinal))
         {
-            var complete = CompleteBundlesOf(sourceDirectory, logger);
+            // 🚨 #3461: `publication` is where the bytes ARE (the pointed-to generation, or the
+            // source directory in the flat layout); `sourceDirectory` only names the SOURCE.
+            var (publication, complete) = CompletePublicationOf(sourceDirectory, logger);
             if (complete is null)
                 continue;
             var source = Path.GetFileName(sourceDirectory)!;
             bundles.AddRange(complete);
             foreach (var bundle in complete)
-                records.AddRange(DependencyRecordsOf(Path.Combine(sourceDirectory, bundle), bundle, logger));
+                records.AddRange(DependencyRecordsOf(Path.Combine(publication, bundle), bundle, logger));
 
             var modules = SealedModulesOf(sourceDirectory, logger);
             if (modules.Modules is null)
@@ -387,7 +389,8 @@ public static class PublishedBundleCatalogue
             }
             foreach (var moduleBundle in modules.Modules)
             {
-                var path = Path.Combine(sourceDirectory, ModulesDirectoryName, moduleBundle);
+                var path = Path.Combine(
+                    modules.Directory ?? publication, ModulesDirectoryName, moduleBundle);
                 ImmutableArray<SealedModuleAssembly> carried;
                 try
                 {
@@ -610,26 +613,36 @@ public static class PublishedBundleCatalogue
     public static SealedPublicationReading SealedPublicationOf(
         string sourceDirectory, ILogger? logger = null)
     {
+        // 🚨 #3461: resolve the publication pointer ONCE, here, and hand the resolved directory
+        // back on the reading. Every path this publication's bytes live at is composed under
+        // `Directory` — a caller that resolves and then composes against `sourceDirectory` would
+        // read the flat layout while reporting the generation's, which is a wrong answer rather
+        // than a missing one, and both paths exist during the migration.
+        var directory = ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory, logger);
         var sentinel = Path.Combine(
-            sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+            directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
         if (!File.Exists(sentinel))
             return new SealedPublicationReading(
                 null, null,
                 "the publication is being republished right now (no completion sentinel) — the "
                 + "publisher removes it before uploading and restores it last, so this is a "
-                + "transient window, not a missing publication");
+                + "transient window, not a missing publication") { Directory = directory };
 
         var listed = File.ReadAllLines(sentinel)
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToList();
-        if (listed.FirstOrDefault(name => !File.Exists(Path.Combine(sourceDirectory, name)))
+        if (listed.FirstOrDefault(name => !File.Exists(Path.Combine(directory, name)))
             is { } missing)
             return new SealedPublicationReading(
                 null, null,
-                $"the publication is torn — its seal lists '{missing}', which is not on disk");
+                $"the publication is torn — its seal lists '{missing}', which is not on disk")
+            { Directory = directory };
 
-        return new SealedPublicationReading(listed, GenerationOf(sentinel, listed), null);
+        return new SealedPublicationReading(listed, GenerationOf(sentinel, listed), null)
+        {
+            Directory = directory,
+        };
     }
 
     /// <summary>
@@ -647,32 +660,44 @@ public static class PublishedBundleCatalogue
     }
 
     private static IReadOnlyList<string>? CompleteBundlesOf(string sourceDirectory, ILogger? logger)
+        => CompletePublicationOf(sourceDirectory, logger).Bundles;
+
+    /// <summary>
+    /// The same reading as <see cref="CompleteBundlesOf"/>, plus the directory the bytes are
+    /// actually in — the generation this source's pointer names, or the source directory itself
+    /// (#3461). Every caller that composes a path under a publication takes it from here rather
+    /// than resolving a second time; see
+    /// <c>ShippedPrebuiltBundles.PublicationDirectoryOf</c>.
+    /// </summary>
+    private static (string Directory, IReadOnlyList<string>? Bundles) CompletePublicationOf(
+        string sourceDirectory, ILogger? logger)
     {
+        var directory = ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory, logger);
         var sentinel = Path.Combine(
-            sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+            directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
         if (!File.Exists(sentinel))
         {
             logger?.LogInformation(
                 "ReleaseAvailability: {SourceDirectory} carries no {Sentinel} — the publication "
                 + "is torn, so its bundles do not count as available",
-                sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName);
-            return null;
+                directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+            return (directory, null);
         }
 
         var listed = File.ReadAllLines(sentinel)
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToList();
-        if (listed.Any(name => !File.Exists(Path.Combine(sourceDirectory, name))))
+        if (listed.Any(name => !File.Exists(Path.Combine(directory, name))))
         {
             logger?.LogInformation(
                 "ReleaseAvailability: {SourceDirectory} is sealed but a listed bundle is "
                 + "absent — the publication is torn, so its bundles do not count as available",
-                sourceDirectory);
-            return null;
+                directory);
+            return (directory, null);
         }
 
-        return listed;
+        return (directory, listed);
     }
 
     private static bool IsComplete(string sourceDirectory, ILogger? logger) =>
@@ -704,7 +729,8 @@ public static class PublishedBundleCatalogue
     private static IReadOnlyList<string>? DeclaredBundlesOf(string sourceDirectory)
     {
         var sentinel = Path.Combine(
-            sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+            ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory),
+            ShippedPrebuiltBundles.CompletionSentinelFileName);
         if (!File.Exists(sentinel))
             return null;
         return File.ReadAllLines(sentinel)
@@ -765,19 +791,23 @@ public static class PublishedBundleCatalogue
     /// </summary>
     public static ModuleSetReading SealedModulesOf(string sourceDirectory, ILogger? logger = null)
     {
-        if (CompleteBundlesOf(sourceDirectory, logger) is null)
-            return new(null, "no sealed publication");
-        var directory = Path.Combine(sourceDirectory, ModulesDirectoryName);
+        // 🚨 #3461: one resolution, handed back on the reading. `publication` is the directory the
+        // bytes are in; the module set is `<publication>/modules`, never `<source>/modules`.
+        var (publication, complete) = CompletePublicationOf(sourceDirectory, logger);
+        if (complete is null)
+            return new(null, "no sealed publication") { Directory = publication };
+        var directory = Path.Combine(publication, ModulesDirectoryName);
         var index = Path.Combine(directory, ModulesIndexFileName);
         if (!File.Exists(index))
         {
             logger?.LogInformation(
                 "ReleaseAvailability: {SourceDirectory} is sealed but carries no {Modules}/{Index} — "
                 + "it predates module sealing, so a consumer cannot compose from it until it is republished",
-                sourceDirectory, ModulesDirectoryName, ModulesIndexFileName);
+                publication, ModulesDirectoryName, ModulesIndexFileName);
             return new(null,
                 $"the publication is sealed but carries no module set ({ModulesDirectoryName}/{ModulesIndexFileName}) — "
-                + "it predates module sealing; republish the source under a platform that seals module sets");
+                + "it predates module sealing; republish the source under a platform that seals module sets")
+            { Directory = publication };
         }
         var listed = File.ReadAllLines(index)
             .Select(line => line.Trim())
@@ -791,16 +821,29 @@ public static class PublishedBundleCatalogue
             logger?.LogInformation(
                 "ReleaseAvailability: {SourceDirectory} lists module bundle '{Bundle}' that is absent "
                 + "or not a bare name — the module set is torn, so a consumer cannot compose from it",
-                sourceDirectory, bad);
-            return new(null, $"the module set is torn: '{bad}' is listed in {ModulesDirectoryName}/{ModulesIndexFileName} but absent (or not a bare name)");
+                publication, bad);
+            return new(null, $"the module set is torn: '{bad}' is listed in {ModulesDirectoryName}/{ModulesIndexFileName} but absent (or not a bare name)")
+            { Directory = publication };
         }
-        return new(listed, null);
+        return new(listed, null) { Directory = publication };
     }
 }
 
 /// <summary>One reading of a sealed publication's module set: the listed bundle names, or
 /// <c>null</c> with the reason a consumer must not compose from it.</summary>
-public sealed record ModuleSetReading(IReadOnlyList<string>? Modules, string? Refusal);
+public sealed record ModuleSetReading(IReadOnlyList<string>? Modules, string? Refusal)
+{
+    /// <summary>
+    /// 🚨 The directory the module bundles are actually IN (#3461) — the generation this source's
+    /// <c>_current</c> pointer names, or the source directory itself in the flat layout. Compose
+    /// <c>&lt;Directory&gt;/modules/&lt;bundle&gt;</c>, NEVER
+    /// <c>&lt;sourceDirectory&gt;/modules/&lt;bundle&gt;</c>: during the migration both exist, so
+    /// composing against the source directory reads the wrong publication's bytes and says
+    /// nothing. Null only on a reading nobody produced through
+    /// <c>PublishedBundleCatalogue.SealedModulesOf</c> (a hand-built one in a test).
+    /// </summary>
+    public string? Directory { get; init; }
+}
 
 /// <summary>
 /// One reading of a source's sealed publication (#3401): the bundle names and the generation that
@@ -808,7 +851,19 @@ public sealed record ModuleSetReading(IReadOnlyList<string>? Modules, string? Re
 /// <paramref name="TornReason"/> is non-null exactly when <paramref name="Bundles"/> is null.
 /// </summary>
 public sealed record SealedPublicationReading(
-    IReadOnlyList<string>? Bundles, string? Generation, string? TornReason);
+    IReadOnlyList<string>? Bundles, string? Generation, string? TornReason)
+{
+    /// <summary>
+    /// 🚨 The directory the sealed bytes are actually IN (#3461) — the generation this source's
+    /// <c>_current</c> pointer names, or the source directory itself in the flat layout. Compose
+    /// every bundle path under THIS, never under the source directory handed in: during the
+    /// migration both exist, so composing against the source directory serves the wrong
+    /// publication's bytes under this reading's generation — which is the mix the generation
+    /// exists to prevent. Null only on a reading nobody produced through
+    /// <c>PublishedBundleCatalogue.SealedPublicationOf</c> (a hand-built one in a test).
+    /// </summary>
+    public string? Directory { get; init; }
+}
 
 /// <summary>
 /// One <c>MeshWeaver.*</c> assembly a sealed module bundle carries, and the build it is

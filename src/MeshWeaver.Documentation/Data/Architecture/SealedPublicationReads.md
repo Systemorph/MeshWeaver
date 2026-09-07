@@ -232,8 +232,15 @@ Stated plainly, because a page that only lists what works is how the next sessio
   that single-upload window still lands under this run's seal. That shrinks the exposure from the
   whole ~90-second publication to one file upload, and it is why the *layout* question stays open —
   a generation directory plus an atomic pointer swap removes republication in place entirely, and
-  is the shape the read side already pins. Closing it is a layout migration every reader must land
-  first.
+  is the shape the read side already pins.
+
+  **That layout is now designed and its reader half is landed**:
+  [Sealed Publication Generations](../SealedPublicationGenerations) carries the directory shape, the
+  resolution rules, the retention rule, and — the part that decides the order — why a *new* writer
+  and an *old* writer on one prefix is the half-migration to avoid: the pointer-following reader
+  would keep serving its generation and never see the flat writer's newer publication, a stale serve
+  with nothing red anywhere. Phase 1 (every reader tolerates a pointer) is in; the writer is not, so
+  **everything on this page still describes what is live**.
 - **A refused publication leaves the prefix unsealed**, which every consumer skips — correct, and
   it means an overlap now costs a red lane and a re-run rather than a portal that renders nothing.
   It is not free: the identity serves nothing until either publisher runs again.
