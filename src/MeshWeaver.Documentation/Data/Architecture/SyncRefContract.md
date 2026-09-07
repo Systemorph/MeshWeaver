@@ -126,10 +126,17 @@ is a new empty partition rather than live content going dark. It is named here s
 residue rather than an oversight.
 
 **Out-of-order builds can move a Space backwards.** Two green builds of one branch can finish out of
-order, so a later webhook may name an earlier commit. Every tree that lands is still a tree CI
-proved, and the next green build brings the Space forward; this is the property the package path has
-always had. It is the safe direction, and it is the price of the guarantee — resolving the branch
-instead trades it for landing a tree *no build ever proved*.
+order, so a later webhook may name an earlier commit — and it is imported, not skipped: GitHub's
+compare answers `behind` when the recorded base is not an ancestor, `GetChangedPaths` returns `null`
+for anything that is not `ahead`/`identical`, and a null diff means *full import* (never a silent
+under-import). So the Space really does step back to the older tree.
+
+That is stated rather than claimed away, and it is the price of the guarantee. What lands is still a
+tree CI proved; the next green build brings the Space forward; and it is exactly the property the
+package path has always had (`PluginUpdateWatcher` → `BuildCompletion.HeadSha`), so pinning the ref
+makes the two agree rather than introducing a new risk. Resolving the branch instead trades a
+recoverable step backwards for landing a tree *no build ever proved* — which is what five hours of
+dark Store looked like.
 
 ## How to check it is still true
 

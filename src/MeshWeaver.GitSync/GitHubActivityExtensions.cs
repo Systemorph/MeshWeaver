@@ -226,12 +226,15 @@ public static class GitHubActivityExtensions
     /// path dark on the commercial portal. The bake and the sources it was compiled from are ONE
     /// artefact; resolving the ref twice is what split them.</para>
     ///
-    /// <para><b>Out-of-order builds cannot regress content.</b> Two green builds of the same branch
-    /// can finish out of order, so a later trigger may name an EARLIER commit. That is the same
-    /// property the package path has always had — <c>PluginUpdateWatcher</c> reads
-    /// <c>BuildCompletion.HeadSha</c> and installs at it — and it is the safe direction: every tree
-    /// that lands is a tree CI proved, and the next green build brings the Space forward again.
-    /// Resolving the branch instead trades that for landing a tree NO build ever proved.</para>
+    /// <para><b>Out-of-order builds can move a Space BACKWARDS, and that is the price.</b> Two green
+    /// builds of one branch can finish out of order, so a later trigger may name an EARLIER commit —
+    /// and it will be imported, because a compare whose base is not an ancestor yields no usable
+    /// diff and falls back to a full import. Stated plainly rather than claimed away: what lands is
+    /// still a tree CI proved, and the next green build brings the Space forward. It is also exactly
+    /// the property the package path has always had (<c>PluginUpdateWatcher</c> reads
+    /// <c>BuildCompletion.HeadSha</c> and installs at it), so this makes the two agree rather than
+    /// introducing a new risk. Resolving the branch instead trades a recoverable step backwards for
+    /// landing a tree NO build ever proved.</para>
     /// </summary>
     /// <param name="hub">The hub the activity and the import run on.</param>
     /// <param name="spacePath">The Space to bring to <paramref name="commitSha"/>.</param>
