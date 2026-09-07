@@ -384,6 +384,73 @@ Alternatively, start the assertion first without awaiting it (`var assertion = o
 
 ---
 
+## 🚨 Never `await` an Observable the Code Under Test Signals
+
+**`await someObservable` resumes its continuation INLINE on whatever thread called `OnNext`.** If
+that thread belongs to the code under test — a hub's action-block thread, a grain turn — then
+*everything after the await* runs there: the remaining assertions, the `finally`, the method return,
+and the framework's teardown.
+
+If the test is also waiting on that same component (disposing it, draining it, parking it), it
+**wedges in total silence**. No assertion fails and no `.Timeout()` fires, because the thread that
+would carry the test forward is the one being waited on.
+
+### The fingerprint: absent teardown lines
+
+```
+=== TEST START: … ===
+[+0.2s]  [Warning] … LATE_NACK_REENQUEUE … corr=…      ← the awaited line WAS written
+[+5.2s]  [Warning] … Dropping UnsubscribeRequest …
+                                                        ← 84 seconds of nothing
+[+89.8s] [FAIL] Test execution timed out after 90000 milliseconds
+```
+
+**No `=== TEST END ===` and no `[DISPOSE]` lines.** Those are present on every ordinary failure, so
+their absence means the method never returned — which separates "an inner wait lost" from "the
+thread is gone". Read that before theorising about which bound expired.
+
+### Why it presents as a flake
+
+A capture that replays a buffer and then concats a live subject has **two paths that resume on
+different threads**:
+
+| path taken | continuation resumes on | observed |
+|---|---|---|
+| the **replay** of already-buffered values | the test's own thread | 663 ms, green |
+| the **live subject** | the component's own thread | 90 s, killed |
+
+So it passes locally and on the PR build, and fails in the merge queue. **Re-running proves
+nothing** — local runs may take the replay path every time. Measured on #3477/PR #3532: five green
+local runs did not discriminate, because the *un-fixed* code also passed locally.
+
+### The control that names it in one step
+
+Its sibling test — identical park/dispose choreography, differing only in that it asserted on
+durable storage rather than on a log line — **passed in the same shard of the same run**. When two
+tests of one mechanism disagree on a single host, diff what they *observe*, not what they *do*.
+
+### What to write instead
+
+**Poll a buffer from `Observable.Interval`**, so the continuation resumes on the scheduler's thread:
+
+```csharp
+// ✅ the continuation lands on the scheduler's thread, never on the hub's
+return Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+    .Select(_ => lines.ToImmutableArray().Select(l => re.Match(l)).FirstOrDefault(m => m.Success))
+    .Where(m => m is not null).Select(m => m!)
+    .FirstAsync().Timeout(within);
+```
+
+Delete the subject rather than leaving it unused — keeping one invites the await back. And **prefer
+asserting ground truth (what landed in storage) over a log line**: a log line buys determinism only
+if *observing* it cannot perturb what produced it.
+
+🚨 **Avoiding `.ToTask()` does not avoid this.** The ban on `.ToTask()` exists because *"a Task
+completed inside an Rx pipeline resumes its awaiter inline on the signalling thread"* — and that
+reasoning applies verbatim to awaiting the observable directly. In the incident above, the offending
+method's own comment cited that rule to justify returning `IObservable`, and then the caller awaited
+it. The hazard is the **inline resume**, not the `Task`.
+
 ## "One Emission Carrying Everything" — Batched or Late? The First Snapshot Decides
 
 A test that asserts progress **streams** (several distinct snapshots, not one lump) fails with a
