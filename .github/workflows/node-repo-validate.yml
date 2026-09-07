@@ -167,6 +167,35 @@ jobs:
         run: python3 "$RUNNER_TEMP/check-pr-secret-preflight.py" --self-test
       - name: "Every PR-reachable secret in this repo is asserted by a preflight"
         run: python3 "$RUNNER_TEMP/check-pr-secret-preflight.py" --root .
+      # ── THE NO-OP SET THIS REPO OWNS STILL AGREES WITH THE PLATFORM'S ──
+      # 🚨 `node-repo-scope.py` decides which module bundles a pull request rebuilds and which
+      # module SUITES it runs, and half that decision reads a set the CALLER owns: NOOP_DIRS in
+      # `scripts/affected-modules.py`, hand-written in two repositories. When the caller's copy
+      # stops PARSING — renamed, reformatted, moved — the platform answers "cannot verify" with a
+      # full run on every pull request, forever, and the only trace is one line inside the log of
+      # the job it disabled. That is the "a guard whose subject moved while its roots did not"
+      # shape, and this is where it is caught. (A mere DIVERGENCE no longer costs the run: the
+      # scope script narrows on the intersection, so a divergent dir is over-built, never skipped
+      # — this reds only when a dir the repo ACTUALLY HAS is classified differently, which is
+      # runner time being spent. `app` missing from three satellites' copies is dormant in all
+      # three: none of them has an `app/`.)
+      # Static, two files and a directory listing — no credential, so it runs on forks too.
+      - name: Fetch the platform's no-op parity guard at the pinned ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM_REF: ${{ inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the no-op parity guard has no ref to be fetched at"; exit 1; }
+          for script in check-noop-scope-parity.py node-repo-scope.py; do
+            gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/${script}?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/${script}" \
+              || { echo "::error::could not fetch .github/scripts/${script} at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            head -c 400 "$RUNNER_TEMP/${script}" | grep -q "${script%.py}" || { echo "::error::the fetched ${script} at ${PLATFORM_REF} does not look like the guard"; exit 1; }
+          done
+      - name: "This repo's no-op set is comparable and agrees — the gate can fail (self-test)"
+        run: python3 "$RUNNER_TEMP/check-noop-scope-parity.py" --self-test
+      - name: "This repo's no-op set agrees with the platform's"
+        run: python3 "$RUNNER_TEMP/check-noop-scope-parity.py" --root .
       # 🚨 ONE implementation of the version derivation, every repo. Fetched exactly like the two
       # guards above and like compile-check.py: asserted RED when unavailable, never fallen back to
       # a drifted per-repo copy. The fetch and the self-test run on EVERY call, whichever copy is
