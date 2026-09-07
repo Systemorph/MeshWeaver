@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -12,7 +13,7 @@ namespace MeshWeaver.GitSync;
 /// removal (clear its repository URL instead); additional sources are removable.
 /// </summary>
 public sealed class GitHubPartitionSyncSourceProvider(GitHubSyncService sync, IMessageHub hub)
-    : IPartitionSyncSourceProvider
+    : IPartitionSyncSourceProvider, IPartitionSourceTracking
 {
     /// <inheritdoc />
     public string Kind => "GitHub";
@@ -23,6 +24,17 @@ public sealed class GitHubPartitionSyncSourceProvider(GitHubSyncService sync, IM
     /// <inheritdoc />
     public IObservable<IReadOnlyList<MeshNode>> WatchSyncSources(string partition)
         => sync.WatchConfigNodes(partition);
+
+    /// <inheritdoc />
+    /// <remarks>A <c>_GitSync</c> node whose <see cref="GitHubSyncConfig.RepositoryUrl"/> is empty
+    /// is the "not configured" state the settings tab shows (the primary node is created before a
+    /// repository is chosen and is protected from removal), so existence alone is not tracking —
+    /// the repository is. Same source of truth as <see cref="WatchSyncSources"/>, so the compile
+    /// gate and the administration page can never disagree about a partition.</remarks>
+    public IObservable<bool> IsTracked(string partition)
+        => sync.WatchConfigNodes(partition)
+            .Select(nodes => nodes.Any(n =>
+                n.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions)?.RepositoryUrl is { Length: > 0 }));
 
     /// <inheritdoc />
     public string Describe(MeshNode source)

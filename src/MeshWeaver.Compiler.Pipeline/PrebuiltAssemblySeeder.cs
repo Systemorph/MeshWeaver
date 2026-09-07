@@ -72,6 +72,36 @@ public static class PrebuiltAssemblySeeder
     }
 
     /// <summary>
+    /// The NAMED refusal the compile watcher parks a MODULE's NodeType with when its partition
+    /// tracks no source on this mesh and no prebuilt build for it landed (MeshWeaver#3583) — the
+    /// sibling of <see cref="RequiredParkReason"/> for a mesh that CAN compile but must not compile
+    /// THIS: the "live source" of a partition nothing syncs is whatever an install left behind, and
+    /// compiling it serves old code that reads as current. Two shapes, because the fix differs:
+    /// <paramref name="offered"/> means a bundle for this identity DID name the type and was
+    /// declined (its source fingerprint disagrees with the files here — the files are stale, not
+    /// the bundle), otherwise no bundle for this identity named it at all (the bake has not landed).
+    /// Pure.
+    /// </summary>
+    public static string UntrackedPartitionParkReason(string nodeTypePath, bool offered)
+    {
+        var slash = nodeTypePath.IndexOf('/');
+        var partition = slash > 0 ? nodeTypePath[..slash] : nodeTypePath;
+        var finding = offered
+            ? $"the prebuilt bundle for framework {LiveFrameworkMvid}/{ReleaseArchitecture.Live} "
+              + "names this type but was DECLINED: its source fingerprint disagrees with the "
+              + "files this mesh holds, and nothing syncs those files"
+            : $"no prebuilt bundle for framework {LiveFrameworkMvid}/{ReleaseArchitecture.Live} "
+              + "names this type";
+        return $"Untracked module content: NodeType '{nodeTypePath}' is a module's content, but "
+            + $"partition '{partition}' tracks no source on this mesh (no configured sync source), "
+            + $"and {finding}. This mesh does not compile a module's content it does not track — "
+            + "a local build of an install's leftover copy would serve old code as if it were "
+            + $"current. Fix: add a sync source for '{partition}' (Partition Sync administration) "
+            + $"and sync it, or publish/rebake the package for this framework identity; then "
+            + "request a release to retry (MeshWeaver#3583).";
+    }
+
+    /// <summary>
     /// Why a prebuilt assembly may NOT be adopted, or null when it may.
     ///
     /// <para>🚨 This is the whole safety argument, kept as one pure function so it can be tested

@@ -1,3 +1,5 @@
+using System;
+
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
@@ -22,4 +24,21 @@ public interface IPrebuiltAssemblyConsumer
     /// <summary>Attempts to adopt pre-built assemblies for exactly <paramref name="typePaths"/>;
     /// emits the adopted count (0 when nothing matched or nothing is configured).</summary>
     IObservable<int> SeedForTypes(IReadOnlyCollection<string> typePaths);
+
+    /// <summary>
+    /// <see cref="SeedForTypes(IReadOnlyCollection{string})"/> with a per-path witness:
+    /// <paramref name="onOffered"/> is invoked once for every requested path a bundle entry NAMED
+    /// — adopted now, already current, or DECLINED — from the consumer's own worker threads, so an
+    /// implementation must be thread-safe. The count is unchanged and still authoritative; the
+    /// witness answers the one question the count cannot: "was there a bundle for this type at
+    /// all?" — which is what separates "the bake has not landed for this identity" from "the bake
+    /// is here and was refused" when the compile watcher decides whether a local compile is honest
+    /// (<c>IPartitionSourceTracking</c>, MeshWeaver#3583).
+    ///
+    /// <para>Defaulted so that an implementation predating the witness keeps its contract; it then
+    /// reads as "nothing offered", which degrades in the direction the gate tolerates — a compile,
+    /// never a park.</para>
+    /// </summary>
+    IObservable<int> SeedForTypes(IReadOnlyCollection<string> typePaths, Action<string> onOffered)
+        => SeedForTypes(typePaths);
 }

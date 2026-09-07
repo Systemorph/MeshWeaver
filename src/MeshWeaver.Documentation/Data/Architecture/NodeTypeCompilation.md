@@ -792,6 +792,59 @@ set on a mesh nobody can see:
 > **memex** and **memex-cloud** (#2194 item 3 records the same) — two instances, saying nothing about
 > `pearl`, `atioz`, local installs, or any external instance the registry serves.
 
+#### 🚨 A module's content this mesh does not TRACK never compiles here — it errors, named
+
+Every route above ends in the same fallback: when the bundle is refused, or no bundle for this
+framework identity has landed, **compile the live source instead**. That fallback is honest on
+exactly one kind of partition — one whose files TRACK the module's repository (a configured
+`_GitSync`), because there "the live source" is the repository at some commit and a local build of
+it is the same code the bake would have produced. On a partition nothing syncs, "the live source" is
+whatever an install left behind. Measured on **memex**, 2026-09-07 (#3583): the `Feedback` partition
+held four of the bundle's five files and no `_GitSync`; every `Feedback` bundle was refused on
+fingerprint (the bundle knew about the fifth file); and on every roll the portal compiled the
+leftover copy — old code, reading as current, with no line anywhere saying so. The maintainer's rule
+is the one this section implements: **a module whose sources this mesh does not sync is never
+self-baked here — it errors, and the error names the fix.**
+
+The decision is taken in the ONE place every compile passes through, the compile watcher's
+`DispatchOrPark` (the same gate that parks a `Modules:RequirePrebuilt` mesh), from two facts that are
+already in hand there:
+
+1. **Is this a MODULE's content?** Either a bundle entry on this identity NAMED the type in the
+   adoption pass that just ran — adopted, already current, or *declined* — or the record carries
+   adoption provenance from an earlier identity (`AdoptedSourceFingerprint` survives a local
+   compile; `BuildProvenance` is reset by one, so it only ever adds). The pass reports the first
+   through a witness the consumer exposes (`IPrebuiltAssemblyConsumer.SeedForTypes(paths, onOffered)`,
+   defaulted so an older consumer reads as "nothing offered"). Authored content — never offered,
+   never adopted — is not a module's and compiles exactly as before.
+2. **Does the partition TRACK a source?** `IPartitionSourceTracking` (MeshWeaver.Graph.Contract),
+   the one-bit seam the sync layer implements — the GitHub provider answers *true* when at least one
+   `_GitSync` of the partition names a repository (a config node with an empty repository is the
+   settings tab's "not configured" state, not tracking). It is the SAME object that feeds the
+   Partition Sync administration page, so the page and the gate cannot disagree. A mesh with no
+   implementation registered — a local mesh, CI's disposable meshes, the bake host — has no notion of
+   tracking and compiles as before.
+
+Module content **and** an untracked partition → the type PARKS with
+`PrebuiltAssemblySeeder.UntrackedPartitionParkReason`: deterministic, the attempt counter at zero,
+the reason naming the partition, whether a bundle was declined or simply absent, and the two fixes —
+add a sync source for the partition and sync it, or publish/rebake the package for this identity —
+"then request a release to retry". It lifts through the same doors as every other park: a source
+change (the sync that was missing) re-drives it, and a release request after the rebake re-runs the
+adoption pass, which now adopts. `RequestedReleaseForce` does NOT bypass it: a force means "build
+the live source", and on such a partition the live source is the problem.
+
+Whether the answer could be read is never a verdict: a fault or a timeout while asking the tracking
+seam compiles, as the mesh did before the gate existed — a stranded type is worse than a redundant
+compile, and the refusal is only ever formed from a positive *false*.
+
+| partition tracks a source | module content (offered / adopted before) | outcome |
+|---|---|---|
+| yes | yes | compile the live source (today's behaviour — Crm and Edu on the production portals) |
+| no | **yes** | **PARK, named** (#3583 — Feedback on memex) |
+| no | no | compile (authored content in a user's own space) |
+| unknown (no seam registered) | any | compile (local / CI / bake host) |
+
 #### 🚨 The path the fingerprint actually travels — and why it was INERT for months
 
 The comparison above shipped complete, and for months it could not fire. Nothing was broken in it;
