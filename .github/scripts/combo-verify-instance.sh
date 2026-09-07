@@ -108,14 +108,22 @@ get_code=$(curl -sS -o "$policy" -w '%{http_code}' --connect-timeout 15 --max-ti
 [ "$get_code" = "200" ] \
   || fail "POST $BASE_URL/api/mesh/get Admin/UpdatePolicy -> HTTP $get_code. $(head -c 400 "$policy")"
 # 🚨 The mesh API ships its OWN failures with HTTP 200 — the body is the verdict, not the status.
+# ("Not found: Admin/UpdatePolicy" and "Error: …" are plain strings, so they are not objects.)
 if ! jq -e 'type == "object"' >/dev/null <"$policy"; then
   fail "reading Admin/UpdatePolicy did not return a node: $(head -c 400 "$policy")"
 fi
+# 🚨 …and it has TWO node shapes. When the node's NodeType carries a recorded compile error the
+# body is {"node": {…}, "compilationError": "…"} instead of the bare node. Reading
+# `.content.comboVerifications` off the wrapper yields null, and null merges as an EMPTY list —
+# which would silently DELETE the up-to-eight verdicts already recorded on that instance and
+# replace them with this one. Unwrap, and then assert the field is readable.
+jq -e '(.node // .) | has("content")' >/dev/null <"$policy" \
+  || fail "Admin/UpdatePolicy has no readable content — refusing to merge, because a null here would replace the instance's recorded verdicts with an empty list: $(head -c 400 "$policy")"
 
 request=$out_dir/combo-patch-$INSTANCE_NAME.json
 jq -n --slurpfile p "$policy" --slurpfile v "$verdict" '
   ($v[0].candidateTag // "" | ascii_downcase) as $tag
-  | (($p[0].content.comboVerifications // [])
+  | (($p[0] | (.node // .) | .content.comboVerifications // [])
       | map(select((.candidateTag // "" | ascii_downcase) != $tag)))
     + [$v[0]]
   | sort_by(.verifiedAt) | reverse | .[0:8]

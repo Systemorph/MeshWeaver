@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove the combo-verify preflight can FAIL, and fails naming what to provision.
+"""Prove the combo-verify lane's shell: the preflight can FAIL, and the verdict merge cannot lose data.
 
 WHY THIS EXISTS
 ---------------
@@ -32,15 +32,30 @@ asserts a sentinel is present, so if the preflight is renamed, reordered or move
 this fails LOUD instead of silently testing nothing — the "a guard whose subject moved and whose
 roots did not" failure mode.
 
+PART TWO — THE VERDICT MERGE
+----------------------------
+`combo-verify-instance.sh` lands a verdict by read-merge-write, because an RFC 7396 merge patch
+replaces an array WHOLESALE. So the whole list is re-sent on every landing, and a defect in the jq
+that builds it does not fail — it silently DELETES an instance's recorded verdict history.
+
+There is a live trap: `MeshOperations.Get` has TWO node shapes. Normally the body is the bare node;
+when the node's NodeType carries a recorded compile error it is
+`{"node": {...}, "compilationError": "..."}` instead. Reading `.content.comboVerifications` off the
+wrapper yields null, null merges as an empty list, and the landing would replace up to eight
+verdicts with one. This part extracts the jq program FROM the shipped script and runs it over both
+shapes plus an instance that has no verdicts yet, asserting the rule
+`UpdatePolicyNodeType.RecordVerification` applies in-process: upsert by `candidateTag`
+(case-insensitive), newest first, capped at `MaxRecordedVerifications` = 8.
+
 Usage:
-    python3 .github/scripts/check-combo-verify-preflight.py            # run the scenarios
-    python3 .github/scripts/check-combo-verify-preflight.py --self-test  # prove the harness detects
-                                                                         # a gutted preflight
+    python3 .github/scripts/check-combo-verify.py              # run both parts
+    python3 .github/scripts/check-combo-verify.py --self-test  # prove each part detects its defect
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -50,10 +65,11 @@ from pathlib import Path
 try:
     import yaml
 except ImportError:  # pragma: no cover - the CI step installs PyYAML; locally `pip install pyyaml`
-    print("::error::check-combo-verify-preflight.py needs PyYAML (pip install pyyaml)")
+    print("::error::check-combo-verify.py needs PyYAML (pip install pyyaml)")
     raise SystemExit(1)
 
 WORKFLOW = ".github/workflows/combo-verify.yml"
+LANDER = ".github/scripts/combo-verify-instance.sh"
 
 # The sentinel proves we extracted the preflight's assertion block and not some neighbouring step.
 SENTINEL = "missing=()"
@@ -106,6 +122,108 @@ SCENARIOS = [
         "2 instance(s) will be verified",
     ),
 ]
+
+
+# The jq program that builds the patch body, delimited in the shipped script by these two markers.
+MERGE_START = 'jq -n --slurpfile p "$policy" --slurpfile v "$verdict" \''
+MERGE_END = "' >\"$request\""
+
+
+def read_merge_program(root: Path) -> str:
+    """The jq program the lander actually ships, read out of it rather than retyped."""
+    path = root / LANDER
+    if not path.is_file():
+        raise SystemExit(f"::error::{LANDER} does not exist under {root}")
+    text = path.read_text(encoding="utf-8")
+    start = text.find(MERGE_START)
+    if start < 0:
+        raise SystemExit(
+            f"::error::{LANDER}: could not find the verdict-merge jq invocation. It moved and this "
+            "guard did not — it would otherwise pass having checked nothing."
+        )
+    start += len(MERGE_START)
+    end = text.find(MERGE_END, start)
+    if end < 0:
+        raise SystemExit(
+            f"::error::{LANDER}: the verdict-merge jq program is not terminated by {MERGE_END!r}")
+    program = text[start:end]
+    if "comboVerifications" not in program or "ascii_downcase" not in program:
+        raise SystemExit(
+            f"::error::{LANDER}: the extracted jq program does not look like the verdict merge "
+            f"(no comboVerifications / no case-insensitive tag test):\n{program}"
+        )
+    return program
+
+
+def existing_verdicts() -> list:
+    rows = [
+        {"candidateTag": f"3.0.0-ci.{7900 + i}", "verdict": "Green",
+         "verifiedAt": f"2026-08-0{1 + i}T00:00:00+00:00"}
+        for i in range(9)
+    ]
+    # Same tag as the incoming verdict, different case: the upsert must REPLACE it, not duplicate it.
+    rows.append({"candidateTag": "3.0.0-CI.7999", "verdict": "Red",
+                 "verifiedAt": "2026-07-01T00:00:00+00:00"})
+    return rows
+
+
+INCOMING = {"candidateTag": "3.0.0-ci.7999", "verdict": "Green",
+            "verifiedAt": "2026-09-07T12:00:00+00:00"}
+
+BARE_NODE = {"id": "UpdatePolicy",
+             "content": {"comboVerifications": existing_verdicts(), "mode": "Auto"}}
+
+# (label, the body /api/mesh/get returns, expected list length)
+NODE_SHAPES = [
+    ("the bare node", BARE_NODE, 8),
+    ("the compile-error wrapper {node, compilationError}",
+     {"node": BARE_NODE, "compilationError": "boom"}, 8),
+    ("an instance with no verdicts yet", {"id": "UpdatePolicy", "content": {"mode": "Auto"}}, 1),
+]
+
+
+def run_merge(program: str, policy: dict) -> dict:
+    with tempfile.TemporaryDirectory() as tmp:
+        pol = Path(tmp) / "policy.json"
+        ver = Path(tmp) / "verdict.json"
+        pol.write_text(json.dumps(policy))
+        ver.write_text(json.dumps(INCOMING))
+        proc = subprocess.run(
+            ["jq", "-n", "--slurpfile", "p", str(pol), "--slurpfile", "v", str(ver), program],
+            capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            raise SystemExit(f"::error::the verdict-merge jq failed: {proc.stderr}")
+        return json.loads(proc.stdout)
+
+
+def check_merge(program: str) -> int:
+    failures = 0
+    for label, policy, want_len in NODE_SHAPES:
+        body = run_merge(program, policy)
+        rows = json.loads(body["fields"])["content"]["comboVerifications"]
+        tags = [r["candidateTag"] for r in rows]
+        lowered = [t.lower() for t in tags]
+        stamps = [r["verifiedAt"] for r in rows]
+        problems = []
+        if body.get("path") != "Admin/UpdatePolicy":
+            problems.append(f"patched {body.get('path')!r}, not Admin/UpdatePolicy")
+        if len(rows) != want_len:
+            problems.append(f"{len(rows)} verdict(s), want {want_len}")
+        if len(lowered) != len(set(lowered)):
+            problems.append(f"duplicate candidateTag after the upsert: {tags}")
+        if INCOMING["candidateTag"] not in tags:
+            problems.append("the incoming verdict is not in the list it would land")
+        if stamps != sorted(stamps, reverse=True):
+            problems.append(f"not newest-first: {stamps}")
+        if len(rows) > 8:
+            problems.append("over MaxRecordedVerifications = 8")
+        if problems:
+            failures += 1
+            print(f"[FAIL] merge over {label}: " + "; ".join(problems))
+            print(f"::error::the verdict merge would corrupt Admin/UpdatePolicy for {label}")
+        else:
+            print(f"[PASS] merge over {label}: {len(rows)} verdict(s), newest {tags[0]}")
+    return failures
 
 
 def read_preflight(root: Path) -> str:
@@ -166,14 +284,31 @@ def check(script: str) -> int:
 
 
 def self_test() -> int:
-    """A gutted preflight — one that accepts anything — must be CAUGHT by the scenarios above."""
+    """Each part must be shown to FIRE on its own defect. An unproven guard is no guard."""
     gutted = 'echo "instances=[]" >>"$GITHUB_OUTPUT"; echo "count=0" >>"$GITHUB_OUTPUT"; exit 0'
-    failures = check(gutted)
-    if failures == 0:
+    preflight_failures = check(gutted)
+    if preflight_failures == 0:
         print("::error::--self-test: a preflight that asserts nothing passed every scenario, so "
               "this guard proves nothing about the real one.")
         return 1
-    print(f"--self-test: a gutted preflight failed {failures} scenario(s) — the guard can fail.")
+    print(f"--self-test: a gutted preflight failed {preflight_failures} scenario(s) "
+          "— part one can fail.")
+
+    # The un-hardened merge: reads `.content` off the body without unwrapping `{node, ...}`. It is
+    # correct for the bare node and DELETES the history for the wrapper — the exact defect the
+    # shipped program's `(.node // .)` exists to prevent.
+    naive = ('($v[0].candidateTag // "" | ascii_downcase) as $tag '
+             '| (($p[0].content.comboVerifications // []) '
+             '| map(select((.candidateTag // "" | ascii_downcase) != $tag))) + [$v[0]] '
+             '| sort_by(.verifiedAt) | reverse | .[0:8] '
+             '| { path: "Admin/UpdatePolicy", '
+             'fields: ({ content: { comboVerifications: . } } | tojson) }')
+    merge_failures = check_merge(naive)
+    if merge_failures == 0:
+        print("::error::--self-test: a merge that never unwraps {node, compilationError} passed "
+              "every shape, so part two proves nothing about the real one.")
+        return 1
+    print(f"--self-test: the un-hardened merge failed {merge_failures} shape(s) — part two can fail.")
     return 0
 
 
@@ -187,12 +322,13 @@ def main() -> int:
     if args.self_test:
         return self_test()
 
-    script = read_preflight(Path(args.root).resolve())
-    failures = check(script)
+    root = Path(args.root).resolve()
+    failures = check(read_preflight(root)) + check_merge(read_merge_program(root))
     if failures:
-        print(f"::error::{failures} combo-verify preflight scenario(s) behaved wrongly.")
+        print(f"::error::{failures} combo-verify check(s) behaved wrongly.")
         return 1
-    print(f"check-combo-verify-preflight: {len(SCENARIOS)} scenario(s), 0 violation(s).")
+    print(f"check-combo-verify: {len(SCENARIOS)} preflight scenario(s) + "
+          f"{len(NODE_SHAPES)} verdict-merge shape(s), 0 violation(s).")
     return 0
 
 

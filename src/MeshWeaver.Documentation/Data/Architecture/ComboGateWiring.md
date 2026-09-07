@@ -138,9 +138,15 @@ It lives in its own workflow rather than inside `main-cd.yml` for one reason: th
 and will persist until an operator provisions the credentials, and a red inside the workflow that
 publishes the fleet's images would be read as "delivery failed".
 
-`check-combo-verify-preflight.py` executes the preflight's real `run:` text over five scenarios —
-including the empty-instance-list case, whose empty matrix would otherwise skip `verify` into a
-green — and runs on every platform PR, because `combo-verify.yml` itself never fires on one.
+`check-combo-verify.py` runs on every platform PR — because `combo-verify.yml` itself never fires on
+one — and opens both halves of the lane's shell. It executes the preflight's real `run:` text over
+five scenarios, including the empty-instance-list case whose empty matrix would otherwise skip
+`verify` into a green; and it executes the lander's real verdict-merge `jq` over both node shapes
+`/api/mesh/get` can return. That second half guards a data-loss path rather than a wrong answer: the
+merge re-sends the WHOLE list, so reading the `{node, compilationError}` wrapper as if it were the
+bare node yields null, null merges as an empty list, and the landing would replace up to eight
+recorded verdicts with one. Both halves carry a `--self-test` that substitutes the defect and
+requires the guard to catch it.
 
 ## The three verdicts, and the fourth state
 
