@@ -92,7 +92,7 @@ on:
   workflow_dispatch:
 jobs:
   bump:
-    permissions: {contents: write, pull-requests: write}
+    permissions: {contents: write, pull-requests: write, issues: write}
     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-platform-ref-bump.yml@<sha>
     with:
       workflow-file: .github/workflows/ci.yml
@@ -107,6 +107,98 @@ Every input is passed explicitly even where it matches the lane's default: a def
 lane the calling repo did not open is a value nobody here has agreed to, and a new *required* input
 on a reusable lane is a silent startup failure for any caller that omits it. Never `secrets:
 inherit` — that hands the lane every secret the calling repo owns.
+
+`issues: write` is the third grant and it is not optional: it is what the reporting job below writes
+the alert with. A called workflow can only *narrow* what its caller was given, so the grant has to
+be written here, in the caller's job, and a caller that bumps the `uses:` sha without adding it gets
+a red report job naming the missing line.
+
+## The lane had never once worked (2026-09-07)
+
+Everything above was in place, and the lane had still never moved a pin. Measured across both
+callers on 2026-09-07: MeshWeaver.Plugins had **one** run of it in its entire history —
+[34083504064](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34083504064), scheduled,
+04:32:51Z — and MeshWeaver.SocialMedia one, at 04:51:24Z. Both failed, three minutes in, on the last
+step:
+
+```text
+! [remote rejected] chore/platform-ref-c7fef7a2d -> chore/platform-ref-c7fef7a2d
+  (refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml`
+   without `workflows` permission)
+```
+
+**This can never not happen.** `MW_PLATFORM_REF` lives *in a workflow file*, so the lane's entire
+diff is always under `.github/workflows/**`, and GitHub refuses an App push to that path without the
+`workflows` grant. The `meshweaver-cloud` installation does not have it — measured first-hand, and
+this is the reading that settles it because it is the *installation's* granted set, which is what an
+installation access token is minted from:
+
+```console
+$ gh api orgs/Systemorph/installations --jq '.installations[]|select(.app_slug=="meshweaver-cloud")'
+{"app_id":4220566,"app_slug":"meshweaver-cloud","id":144517285,
+ "permissions":{"contents":"write","metadata":"read","pull_requests":"write"},
+ "repository_selection":"all"}
+```
+
+`workflows`: absent. `issues`: absent too — which is why the alert below is written with
+`${{ github.token }}` and not with the App token. An App-token issue write would fail for a *second*
+missing grant while trying to report the first.
+
+The mint now requests `permission-workflows: write` explicitly, so the refusal moves to the step
+whose own name says what it wanted, instead of arriving four steps later as a push rejection about a
+permission nobody had asked for.
+
+### 🚨 Honestly red is not the same as visible — the empty-room failure
+
+This is the part worth carrying to other lanes. The bump lane had **every** property the CI rules
+demand of a gate: a minted App token, an assert that fails RED naming what to provision, and no
+`continue-on-error` anywhere. Its own header even argues, correctly, that a tolerated failure here
+would be worse than none. And it *was* red — every night, honestly, exactly as designed.
+
+Nobody saw it. A scheduled run hangs off no pull request, no reviewer, and no check list: it is red
+in an empty room. **From outside, that is indistinguishable from a gate that cannot fail**, which is
+the shape the CI rules forbid — and it produced the same class of
+outcome. The pin froze at 04:32Z and drifted unattended (120 → 130 → 139 → 153) until, at 08:23Z,
+the staleness ratchet went red on MeshWeaver.Plugins' `main` and therefore on **all 16 open pull
+requests at once**, each for a reason its own diff could not reach. Nothing sealed, so the registry's
+Education publication stayed at a pre-fix `sourceCommit`, and the session debugging *that* was
+looking at a quiz-dialog regression in a third repository. One rejected `git push` is the whole
+chain, and the four hours between are the cost of the silence rather than of the defect.
+
+So the lane now routes its own failure onto an artefact that outlives the run: a `report` job opens
+**one** tracking issue in the calling repo, labelled `platform-pin-bump-failure`, keeps it current
+(edited, not commented, so a daily schedule does not bury the one sentence that matters), and
+**closes it on the next success**.
+
+Three properties make that true rather than decorative, and each is pinned by
+`ArmedMergeMustTriggerMainsPushLanesGuard` because each has an attractive-looking removal:
+
+| Property | Why the obvious alternative is wrong |
+|---|---|
+| it branches on `needs.bump.result`, not `if: failure()` | a failure-only reporter leaves a stale alert standing after the lane recovers, and an alert that is no longer true is how the next real one gets skimmed past |
+| it writes an **issue**, not a log line | the log line goes into the same empty room the red already went into |
+| it carries no `continue-on-error` and no input-shaped `if:` | an alerting path that swallows its own failure re-creates, one level up, the exact silence it was added to end |
+
+🚨 **Do not close that issue after a hand bump.** A hand bump clears the drift and leaves the mover
+dead — which is precisely the state that produced the issue. The issue closes itself when the lane
+next succeeds.
+
+### Should the staleness bound page when it is *approached*?
+
+It was considered and **rejected as the wrong instrument**, and the reasoning is worth recording
+because the question comes back every time the ratchet fires.
+
+The approach signal already exists: it is this lane. A daily bump keeps the pin within ~24 h of
+core's tip by construction, so the 24 h / 120-commit bound is a *backstop* for the case where the
+mover stopped — not a schedule anybody is supposed to ride. Adding a second, earlier threshold
+would fire on every open pull request in the repo, for a condition none of their diffs caused,
+which is the same harm the breach itself does — only more often. A gate that fires constantly gets
+bypassed, and one that must be bypassed is worse than none.
+
+What was actually missing is not an earlier threshold but an **observer of the mover**, and that is
+what the `report` job is. The breach red also taught the wrong lesson while the mover was dead: it
+says *"the pin is stale, move it"*, a person hand-moves it, the mover stays dead, and the whole
+thing recurs — twice on 2026-09-07 alone.
 
 ### Why `repository_dispatch` is deliberately not in the contract
 
