@@ -1590,17 +1590,29 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// refused this write against, so the re-attempt rebases on something newer
     /// (<see cref="RebaseSource"/>). 0 for a caller write and for the re-enqueue codes that never
     /// reached a merge.</param>
+    /// <param name="correlationId">
+    /// 🚨 #3477: the id that makes a re-enqueued write followable. Each attempt registers under a
+    /// FRESH <c>requestId</c> (the late registry mints one per attempt), so after
+    /// <c>LATE_NACK_REENQUEUE</c> the trail went dark — nothing related the child's registration to
+    /// the parent's, and "never left the cache hub", "never activated the owner" and "activated and
+    /// never answered" were indistinguishable in the log. That is the ambiguity #3477 exists to
+    /// remove. Minted once at the caller's entry and passed UNCHANGED into every re-attempt, so one
+    /// <c>grep corr=&lt;id&gt;</c> yields the whole chain across attempts.
+    /// </param>
     private IObservable<MeshNode> UpdateRemote(
         Func<MeshNode, MeshNode> update, int attempt = 0, long refusedBaseVersion = 0,
-        MeshNode? pendingSelfWrite = null, Action<MeshNode?>? onLocalState = null)
+        MeshNode? pendingSelfWrite = null, Action<MeshNode?>? onLocalState = null,
+        string? correlationId = null)
         => Observable.Create<MeshNode>(observer =>
         {
+            // Minted here on the FIRST attempt only; a re-enqueue passes the parent's through.
+            var corr = correlationId ?? Guid.NewGuid().AsString();
             var diagLogger = _workspace.Hub.ServiceProvider
                 .GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
                 ?.CreateLogger("MeshWeaver.Mesh.MeshNodeStreamHandle");
             diagLogger?.LogDebug(
-                "[UpdateRemote] BEGIN hub={Hub} target={Path} attempt={Attempt}",
-                _workspace.Hub.Address, _path, attempt);
+                "[UpdateRemote] BEGIN hub={Hub} target={Path} attempt={Attempt} corr={Corr}",
+                _workspace.Hub.Address, _path, attempt, corr);
 
             // 🚨 Capture AccessContext SYNCHRONOUSLY here, NOT inside the
             // deferred initialSub.Subscribe callback below. The outer
@@ -1939,6 +1951,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // late watch below and the response subject are both keyed by this id,
                             // and both must exist before anything can answer.
                             var requestId = Guid.NewGuid().AsString();
+                            // 🚨 #3477. A fresh requestId is minted PER ATTEMPT, so a re-enqueue
+                            // registers under a different one and nothing related the child to the
+                            // parent — after LATE_NACK_REENQUEUE the trail went dark and "never left
+                            // the cache hub", "never activated the owner" and "activated and never
+                            // answered" read identically. This line is what makes the chain
+                            // followable: Debug because it is one per late-registered write and this
+                            // is the hot path; the WARNING that pays for it is VERDICT_TIMEOUT,
+                            // which names the same corr and only fires once a write has already
+                            // failed to settle.
+                            diagLogger?.LogDebug(
+                                "[UpdateRemote] LATE_VERDICT_REGISTERED hub={Hub} target={Path} attempt={Attempt} corr={Corr} requestId={RequestId}",
+                                _workspace.Hub.Address, _path, attempt, corr, requestId);
                             lateRegistry?.Register(requestId, _path!, resp =>
                             {
                                 // 🚨 EVERY branch below now settles the CALLER too (#2661). Before,
@@ -1960,8 +1984,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     // starts on the ack instead of sitting out QueueAdvanceBound.
                                     onLocalState?.Invoke(updated);
                                     diagLogger?.LogDebug(
-                                        "[UpdateRemote] LATE_ACK hub={Hub} target={Path} — the owner committed; completing the caller on its verdict",
-                                        _workspace.Hub.Address, _path);
+                                        "[UpdateRemote] LATE_ACK hub={Hub} target={Path} corr={Corr} — the owner committed; completing the caller on its verdict",
+                                        _workspace.Hub.Address, _path, corr);
                                     // The owner COMMITTED. That — not the elapsed bound — is what
                                     // "saved" means, so this is the caller's success terminal.
                                     EmitTerminal();
@@ -2005,8 +2029,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         ? current.Version
                                         : 0;
                                     diagLogger?.LogWarning(
-                                        "[UpdateRemote] LATE_NACK_REENQUEUE hub={Hub} target={Path} attempt={Attempt} code={Code} — the patch was never applied; re-enqueueing the original update, rebased on state newer than {RebaseFrom}",
-                                        _workspace.Hub.Address, _path, attempt + 1, lateErr.Code, lateRebaseFrom);
+                                        "[UpdateRemote] LATE_NACK_REENQUEUE hub={Hub} target={Path} attempt={Attempt} code={Code} corr={Corr} — the patch was never applied; re-enqueueing the original update, rebased on state newer than {RebaseFrom}",
+                                        _workspace.Hub.Address, _path, attempt + 1, lateErr.Code, corr, lateRebaseFrom);
                                     // Restore the writer's identity: this callback runs on the
                                     // cache hub's action block where the AsyncLocal context is
                                     // the hub's own, and the re-posted patch must carry the
@@ -2029,10 +2053,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             UpdateRemote(update, attempt + 1, lateRebaseFrom,
                                                     onLocalState: onLocalState is null
                                                         ? null
-                                                        : _ => onLocalState(null))
+                                                        : _ => onLocalState(null),
+                                                    correlationId: corr)
                                                 .Do(_ => { }, ex2 => diagLogger?.LogWarning(ex2,
-                                                    "[UpdateRemote] LATE_NACK_REENQUEUE failed hub={Hub} target={Path} attempt={Attempt}",
-                                                    _workspace.Hub.Address, _path, attempt + 1)),
+                                                    "[UpdateRemote] LATE_NACK_REENQUEUE failed hub={Hub} target={Path} attempt={Attempt} corr={Corr}",
+                                                    _workspace.Hub.Address, _path, attempt + 1, corr)),
                                             attachToCaller: false);
                                     }
                                 }
@@ -2191,8 +2216,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                     ? current.Version
                                                     : 0;
                                                 diagLogger?.LogWarning(
-                                                    "[UpdateRemote] OWNER_NACK_REENQUEUE hub={Hub} target={Path} code={Code} attempt={Attempt} — the patch was never applied; re-enqueueing rebased on state newer than {RebaseFrom}",
-                                                    _workspace.Hub.Address, _path, err.Code, attempt + 1, rebaseFrom);
+                                                    "[UpdateRemote] OWNER_NACK_REENQUEUE hub={Hub} target={Path} code={Code} attempt={Attempt} corr={Corr} — the patch was never applied; re-enqueueing rebased on state newer than {RebaseFrom}",
+                                                    _workspace.Hub.Address, _path, err.Code, attempt + 1, corr, rebaseFrom);
                                                 // 🚨 The queue slot stays HELD across the re-attempt
                                                 // and is released by ITS verdict — the re-attempt is
                                                 // this write, still in flight, and letting the
@@ -2212,7 +2237,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                     ChainTerminal(UpdateRemote(update, attempt + 1, rebaseFrom,
                                                             onLocalState: onLocalState is null
                                                                 ? null
-                                                                : _ => onLocalState(null)),
+                                                                : _ => onLocalState(null),
+                                                            correlationId: corr),
                                                         attachToCaller: true);
                                                 }
                                                 return;
@@ -2362,8 +2388,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                     // timeout precisely so it can be read here.
                                                     var trail = _workspace.Hub.DescribeRequestFate(requestId);
                                                     diagLogger?.LogWarning(
-                                                        "[UpdateRemote] VERDICT_TIMEOUT hub={Hub} target={Path} bound={BoundSeconds}s — the owner produced no terminal for this patch inside the late-response window, which dominates every owner-side terminal path; the write is NOT confirmed. Request trail: {Trail}",
-                                                        _workspace.Hub.Address, _path, verdictBoundSeconds, trail);
+                                                        "[UpdateRemote] VERDICT_TIMEOUT hub={Hub} target={Path} bound={BoundSeconds}s corr={Corr} — the owner produced no terminal for this patch inside the late-response window, which dominates every owner-side terminal path; the write is NOT confirmed. 🚨 #3477: `grep corr={Corr}` yields every attempt of this write, including re-enqueues that registered under a different requestId. Request trail: {Trail}",
+                                                        _workspace.Hub.Address, _path, verdictBoundSeconds, corr, corr, trail);
                                                     RaiseError(new MeshNodeStreamException(new MeshNodeError(
                                                         MeshNodeErrorCode.OwnerUnreachable, _path!,
                                                         $"The owner of '{_path}' returned no verdict for this update within "
