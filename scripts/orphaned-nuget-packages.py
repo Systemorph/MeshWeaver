@@ -101,20 +101,24 @@ def packable(root: Path) -> set[str]:
         # the default stays.
         #
         # Only build output is skipped — NOT tools/ or test/. Over-counting what we pack can
-        # only SPARE a package; under-counting unlists a live one. MeshWeaver.Compiler.Cli is
-        # the worked example: it ships from tools/ behind -p:PackCompilerTool=true, and a
-        # tools/ exclusion listed it as orphaned.
+        # only SPARE a package; under-counting unlists a live one. MeshWeaver.Compiler.Cli was
+        # the worked example: it shipped from tools/ behind -p:PackCompilerTool=true, and a
+        # tools/ exclusion listed it as orphaned. (That opt-in was removed in the 2026-09-07
+        # retirement and the package is now deliberately orphaned — but the rule it taught is
+        # about WHERE a package can ship from, and tools/ is still such a place.)
         relative = project.relative_to(root).parts
         if any(part in {"bin", "obj", ".worktrees"} for part in relative):
             continue
         text = project.read_text(encoding="utf-8", errors="replace")
 
-        # EVERY declared <PackageId>, regardless of the condition it sits under. Packing can
-        # be conditional — MeshWeaver.Compiler.Cli is IsPackable=false by default and packs
-        # only under -p:PackCompilerTool=true, with its id declared inside that same
-        # PropertyGroup. Reading IsPackable first and skipping made the project invisible, and
-        # a package we very much still ship was reported as orphaned. An id that appears
-        # anywhere in a csproj is evidence we own it.
+        # EVERY declared <PackageId>, regardless of the condition it sits under. Packing can be
+        # conditional: a project may be IsPackable=false by default and pack only under an opt-in
+        # property, with its id declared inside that same conditional PropertyGroup. Reading
+        # IsPackable first and skipping made such a project invisible, and a package we very much
+        # still shipped was reported as orphaned. MeshWeaver.Compiler.Cli was that project until
+        # its opt-in was removed on 2026-09-07; the shape is pinned by the self-test rather than
+        # by any project currently in the tree. An id that appears anywhere in a csproj is
+        # evidence we own it — and therefore evidence NOT to unlist it.
         declared = set(re.findall(r"<PackageId>\s*([^<]+?)\s*</PackageId>", text, re.I))
         ids |= declared
 
