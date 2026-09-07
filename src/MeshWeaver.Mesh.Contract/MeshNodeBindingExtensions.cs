@@ -204,6 +204,16 @@ public static class MeshNodeBindingExtensions
     /// providers' <c>Initial</c> frames into one authoritative full set and forwards the deltas
     /// after it, so the gate's first answer is a real one. (Found in review of #3536.)</para>
     ///
+    /// <para><b>Deliberately NOT cached per path, and this was considered rather than overlooked.</b>
+    /// A form with N node-bound controls opens N of these gates on the same path where one would do,
+    /// and the obvious dedupe — a per-path <c>ConcurrentDictionary&lt;string, IObservable&lt;bool&gt;&gt;</c>
+    /// holding a shared <c>Replay(1)</c> — is the shape this repo bans by name: a replayed subject
+    /// LATCHES <c>OnError</c>, so one transient query fault would be replayed to every future binding
+    /// on that path for the process's life (#1369). Trading a bounded, self-healing cost for an
+    /// unbounded latched fault is the wrong direction, and the CONTENT leg behind the gate is already
+    /// shared per path by <c>IMeshNodeStreamCache</c>. If this ever measures as a real cost, the fix
+    /// is a mesh-scoped instance cache with fault-evicting semantics — not a bare dictionary.</para>
+    ///
     /// <para>🚨 <b>The gate carries its own budget, because a gate that never answers is a control
     /// that spins forever with nothing logged</b> — the exact failure class <see cref="ReadBudget"/>
     /// exists to remove, reintroduced one level up if only the CONTENT leg were bounded. A query
