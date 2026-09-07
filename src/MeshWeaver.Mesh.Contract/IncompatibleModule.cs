@@ -42,10 +42,67 @@ namespace MeshWeaver.Mesh;
 /// exception names one. Null when the failure is of another kind.</param>
 public sealed record IncompatibleModule(string Entry, string Name, string Error, string? MissingMember)
 {
+    /// <summary>
+    /// True when the module was refused BEFORE it was ever loaded, because its bytes link against
+    /// a platform this deployment is not running (#3538) — as opposed to a module that DID load
+    /// and whose registration threw (#2234).
+    ///
+    /// <para>🚨 <b>The distinction decides whether a ROLLOUT stalls.</b> A module the IMAGE ships
+    /// that cannot install is a fault the previous generation does not share and that this
+    /// deployment can fix by moving both halves together, so a rollout must stall on it. A
+    /// STORE-delivered module built for a platform this one is not running is the declared floor's
+    /// case exactly: no rollout of this deployment can conjure that platform, and stalling one
+    /// would recreate the 2026-08-22 three-way deadlock in a new place. It is reported and named
+    /// (never Healthy), and it starts working by itself at the platform update — which is itself a
+    /// restart.</para>
+    ///
+    /// <para>An INIT property, not a fifth positional parameter: replacing a public record's
+    /// constructor signature is what <see cref="MissingMethodException"/>-aborts a host compiled
+    /// against the previous platform — which is the very incident this record exists for. Default
+    /// <c>false</c> keeps every existing producer's meaning unchanged.</para>
+    /// </summary>
+    public bool RefusedBeforeLoad { get; init; }
+
     // MissingMethodException / MissingFieldException render as: Method not found: 'Void Ns.T..ctor(...)'.
     // TypeLoadException names the type instead. Both put the thing that is missing in quotes, which is
     // the one detail that turns "a module failed" into "this build lacks this signature".
     private static readonly Regex QuotedMember = new("'([^']+)'", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Builds the record from a LINK verdict — the module was never loaded at all because its
+    /// bytes reference types this platform does not carry (#3538).
+    ///
+    /// <para>🚨 The other half of this record's job, and the half that used to be missing. An
+    /// install failure is what happens when the module's registration TOUCHES the missing surface;
+    /// a view pack whose <see cref="MeshNodeProviderAttribute"/> touches none of it installs
+    /// perfectly and then throws <see cref="TypeLoadException"/> at every render that reaches the
+    /// linked type — which is how memex-cloud served dead code cells to every user for a day while
+    /// every module reported installed. A module refused HERE is in exactly the same state as one
+    /// that failed to install: it contributes nothing, it is reported, and nothing else is
+    /// affected.</para>
+    ///
+    /// <para>🚨 <b>A distinct NAME, deliberately not an overload of <see cref="From"/>.</b> An
+    /// added overload is one of the break shapes no gate in this fleet sees: a dependent repo's
+    /// <c>&lt;see cref="IncompatibleModule.From"/&gt;</c> becomes ambiguous and fails
+    /// <c>CS0419</c> under <c>-warnaserror</c>, in a different repository, on pull requests that
+    /// did not make the change (see Doc/Architecture/CrossRepoPairGate). Naming it costs nothing
+    /// and removes the shape entirely.</para>
+    /// </summary>
+    /// <param name="entry">The raw entry or resolved path that was going to be installed.</param>
+    /// <param name="verdict">The refusal — <see cref="ModuleLinkState.Unlinkable"/> or
+    /// <see cref="ModuleLinkState.Indeterminate"/>.</param>
+    public static IncompatibleModule FromLinkRefusal(string entry, ModuleLinkVerdict verdict)
+    {
+        ArgumentNullException.ThrowIfNull(verdict);
+        return new IncompatibleModule(
+            entry,
+            Path.GetFileNameWithoutExtension(entry) is { Length: > 0 } name ? name : verdict.Module,
+            verdict.Report(),
+            verdict.MissingTypes.IsDefaultOrEmpty ? null : verdict.MissingTypes[0])
+        {
+            RefusedBeforeLoad = true,
+        };
+    }
 
     /// <summary>Builds the record from a failed install, extracting the missing member when named.</summary>
     public static IncompatibleModule From(string entry, Exception exception)
