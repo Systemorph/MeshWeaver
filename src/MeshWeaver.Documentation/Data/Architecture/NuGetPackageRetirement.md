@@ -198,10 +198,14 @@ retired package from the sweep.
   exist in a registry; no nupkg is ever built by `main-cd`, so there is nothing to retag. Packing at
   the tag is safe **only** because neither survivor is a platform assembly. If either grows a
   dependency on a MeshWeaver framework assembly, this lane is wrong.
-- **The template needs both trees.** Its generator copies six projects split 3/3 across MeshWeaver
-  and MeshWeaver.Plugins, so it takes `<portalRoot> --core <meshweaverRoot>` and can run in neither
-  repository alone. The lane checks out MeshWeaver.Plugins with a **minted GitHub App token** — never
-  a stored PAT. Its predecessor, `publish-github.yml`, carried `secrets.GH_PAT` and is deleted.
+- **The template needs both trees, and neither alone is enough.** Its generator copies six
+  projects — four from MeshWeaver.Plugins, two from MeshWeaver — plus three assets only core has
+  (`samples/Graph/Data/User`, `samples/Graph/Data/ACME`, and the `Directory.Packages.props` the
+  generated template's pins are read from). So it takes `<portalRoot> --core <meshweaverRoot>` and
+  can run in neither repository alone. `projectsToCopy` in `generate-memex-template.cs` is the
+  authority on the split; it moves as projects move, so read it rather than a remembered ratio.
+  The lane checks out MeshWeaver.Plugins with a **minted GitHub App token** — never a stored PAT.
+  Its predecessor, `publish-github.yml`, carried `secrets.GH_PAT` and is deleted.
 - **The publish is verified.** `dotnet nuget push` exiting 0 reports that the call was made, not the
   resulting state; the lane polls nuget.org until both versions read `listed: true`.
 

@@ -33,9 +33,10 @@ name: Publish the surviving NuGet packages
 # must take its bytes from a sealed set instead.
 #
 # ─────────────────────────────────── THE TEMPLATE NEEDS BOTH TREES ───────────────────────────────
-# generate-memex-template.cs copies six projects that split 3/3 across MeshWeaver and
-# MeshWeaver.Plugins, plus three core-only assets, so it takes `<portalRoot> --core <meshweaverRoot>`
-# and can run in NEITHER repo alone. The generator lives in Plugins; this lane checks out Plugins
+# generate-memex-template.cs copies six projects — four from MeshWeaver.Plugins, two from
+# MeshWeaver — plus three core-only assets, so it takes `<portalRoot> --core <meshweaverRoot>` and
+# can run in NEITHER repo alone. (`projectsToCopy` in that script is the authority on the split; it
+# moves as projects move.) The generator lives in Plugins; this lane checks out Plugins
 # with a MINTED GitHub App token (AGENTS.md / memory `mint-app-tokens-never-store-pats`: never a
 # stored PAT — the predecessor publish-github.yml carried `secrets.GH_PAT` and is deleted).
 #
