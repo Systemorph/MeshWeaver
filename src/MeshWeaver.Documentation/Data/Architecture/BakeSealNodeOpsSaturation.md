@@ -239,6 +239,79 @@ the deterministic repro of the read side. Two consequences for the next measurem
   something running **on this hub**, which is a much smaller set to search than "any mesh singleton
   in the process".
 
+## 🚨 2026-09-07 — the park is INSIDE the release wave, and it is not an unanswered node op (#3510)
+
+Six seals were lost to this failure between 2026-09-06 23:36Z and 2026-09-07 06:09Z — CD 7950, 7959,
+7967, 7968, 7976 failed while 7955, 7962, 7964, 7969, 7974, 7977, 7981 sealed. Roughly one started
+run in two, `Hosting` every time, always `install: TimeoutException`. The reading below is from
+**CD 7976** (`19b077868`, bake job
+[101634597130](https://github.com/Systemorph/MeshWeaver/actions/runs/34085298189)).
+
+### What the sixth occurrence measured
+
+```
+05:44:31.5  ── Hosting: installing 145 file(s)…
+05:45:28.8  Installed node-repo plugin Hosting: 144 written, 0 unchanged
+05:45:56.7  Install: Hosting: adopted 15 prebuilt assembly(ies) for 15 installed type(s)
+05:45:56.7  [PackageInstaller] recycling root Hosting …            ← by design; it SUCCEEDS
+05:45:59.6  InitializeHubRequest | Hub: Hosting                     ← the root is back, 2.9 s later
+05:46:04.5  [UpdateQueue] ADVANCE_WITHOUT_HANDOFF path=Hosting/Admin … /Backup … /LogEntry
+05:46:34.9  (last log line of any kind)
+                                     ⋯ EIGHT MINUTES OF COMPLETE SILENCE ⋯
+05:54:31.5  ── Hosting.Instance: installing 3 file(s)…              ← exactly T+600 s
+```
+
+**Nothing was pending.** `[STALE-CALLBACK]` reports every pending callback older than 30 s, every
+5 s; it fired four times for HomeAssistant minutes earlier in this very run and **zero times** during
+the eight-minute park. So the install was not waiting on a message at all — not on an unanswered
+`CreateOrUpdateNodeRequest`, which is what #3510 was originally attributed to. It was parked on an
+observable that never terminated.
+
+**The control is in the same log.** `Edu` — same shape, same run — printed
+`[PackageInstaller] warmed installed root Edu` 2.5 s after its own deferred release wave.
+`warmed installed root Hosting` **never printed**. `WarmInstalledRoots` runs immediately after
+`RequestReleases(deferredWave)`, so the park is inside the wave.
+
+### Why the wave, by elimination from code
+
+Every other composition between the deferred wave and the warm carries its own bound:
+`AffectedNodeTypes` (`TypeEnumerationBudget`, plus a `Catch`), `SeedPrebuiltAssemblies`
+(`SeedBound`), and the trigger write itself (`BaseStateWaitBound` 30 s, then verdict windows of
+`LateResponseWatchBound + VerdictBoundGrace` = 31 s across `MaxConflictRetries`, ≈124 s worst case).
+`PackageInstaller.RequestReleases`' `nodeTypePaths.Select(ObserveNodeTypeRelease).Merge().ToList()`
+carried **none** — which `MeshNodeStreamHandle.BaseStateSource`'s remarks had already named in
+advance: *"no per-leg bound and no outer bound — so ONE non-terminating leg parks the entire package
+install, silently, until the gate's own 600 s `InstallTimeout` reports `install: TimeoutException`
+against a package that installed fine 8 minutes earlier."*
+
+### The fix, and what it is NOT
+
+`ObserveNodeTypeRelease` states its own contract in its remarks and in its closing
+`DefaultIfEmpty(false)`: **exactly one emission, always**. That covered three of Rx's four outcomes.
+The fourth — a source that neither emits nor faults nor completes — reached no handler, and neither
+`DefaultIfEmpty` nor `Catch` can see it. `NodeTypeReleaseExtensions.BoundReleaseLeg` now closes it:
+`Take(1)` (so the deadline is TOTAL, not Rx's inter-emission one) then `ReleaseRequestBound`, whose
+elapse answers `false`, logs, and **names the NodeType**.
+
+🚨 **No bound was raised and nothing is retried.** `ReleaseRequestBound` is 180 s: strictly above the
+≈124 s a legitimate trigger write can compose, and far below the installer's 600 s — the ordering
+[Bounds Must Be Ordered](../BoundsMustBeOrdered) requires, so it can only fire on a leg that is
+genuinely non-terminating and never on one that is merely slow. The outer 600 s bound knows only
+which PACKAGE did not finish; this one knows which TYPE never answered.
+
+**It does not claim to explain why a leg stops answering.** It converts an eight-minute silent park
+into a named warning and lets the install finish, which is what makes the next occurrence one grep
+instead of a full bake-log read — the same role #3512's recycle line plays. Pinned by
+`ReleaseWaveLegIsTotalTest` (pure composition, `TestScheduler`, no mesh).
+
+### What this retires
+
+The `#3510` reading in [Write Verdict Totality](../WriteVerdictTotality) — *"the upsert lane's CREATE
+leg has no disposal NACK"* — is a real totality gap and is worth closing on its own merits, but it is
+**not** what fails these seals: 7976's one stale callback took the UPDATE leg
+(`UPSERT_READ existing → update`), resolved inside 35 s, and the park that killed the run had no
+pending callback at all.
+
 ## Related
 
 - [Action-Block Wedge Prevention](../ActionBlockWedgePrevention) — the invariants a single-threaded hub
