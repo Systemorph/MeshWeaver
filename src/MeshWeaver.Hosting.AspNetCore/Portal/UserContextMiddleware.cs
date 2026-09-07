@@ -185,6 +185,27 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                         + "evidence that the user is unknown, and must never drive onboarding.",
                         userContext.Email, lookup.UnavailableReason);
                 }
+                else if (hub.ServiceProvider.GetService<UserIdentityCache>()?.OwnerEmailOf(userContext.ObjectId)
+                             is { } ownerEmail
+                         && LocalPartCollides(ownerEmail, userContext.Email))
+                {
+                    // 🚨 The index answered, this email has no User node, and the local part the
+                    // claims yielded ALREADY NAMES SOMEONE ELSE'S node (MeshWeaver#3561: the admin
+                    // `rbuergi@systemorph.com` and a personal `rbuergi@icloud.com` both became home
+                    // `rbuergi` — same breadcrumbs, same notifications, same installed copies).
+                    // The partition key is the data boundary, so adopting it is handing this
+                    // sign-in another person's space. Anonymous instead, exactly like the
+                    // email-shaped refusal below: least privilege, and the onboarding path is
+                    // where this account gets a username of its own.
+                    logger.LogWarning(
+                        "UserContextMiddleware: refusing the local-part id '{ObjectId}' for {Email} — "
+                        + "a mesh User node with that id belongs to {OwnerEmail}. Treating as anonymous; "
+                        + "this account needs its own username (MeshWeaver#3561).",
+                        userContext.ObjectId, userContext.Email, ownerEmail);
+                    userService.SetContext(AnonymousContext with { Locale = requestLocale });
+                    await next(context);
+                    return;
+                }
             }
 
             // Defence-in-depth: if anything upstream slipped an email-shaped
@@ -584,6 +605,17 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                         "ResolveHttpCaller: mesh user index UNAVAILABLE for {Email} ({Reason}) — "
                         + "keeping the claim-derived identity; this is NOT evidence the user is unknown.",
                         ctx.Email, lookup.UnavailableReason);
+                else if (services.GetService<UserIdentityCache>()?.OwnerEmailOf(ctx.ObjectId) is { } ownerEmail
+                         && LocalPartCollides(ownerEmail, ctx.Email))
+                {
+                    // Same refusal as the middleware path (MeshWeaver#3561): the claim-derived local
+                    // part names another email's User node — never that person's partition.
+                    logger?.LogWarning(
+                        "ResolveHttpCaller: refusing the local-part id '{ObjectId}' for {Email} — a mesh User "
+                        + "node with that id belongs to {OwnerEmail}; treating as anonymous (MeshWeaver#3561).",
+                        ctx.ObjectId, ctx.Email, ownerEmail);
+                    return AnonymousContext;
+                }
             }
             if (LooksLikeEmail(ctx.ObjectId))
             {
@@ -657,6 +689,16 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList()
         };
     }
+
+    /// <summary>
+    /// Whether a candidate partition id is TAKEN: the mesh <c>User</c> node carrying that id belongs
+    /// to <paramref name="ownerEmail"/>, and that is not the signing-in <paramref name="email"/>
+    /// (compared case-insensitively — mail addresses are). No owner, or the same address, is no
+    /// collision. Pure (MeshWeaver#3561).
+    /// </summary>
+    public static bool LocalPartCollides(string? ownerEmail, string? email) =>
+        !string.IsNullOrEmpty(ownerEmail)
+        && !string.Equals(ownerEmail, email, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Normalises an email-shaped identifier to its local part — the post-v10
