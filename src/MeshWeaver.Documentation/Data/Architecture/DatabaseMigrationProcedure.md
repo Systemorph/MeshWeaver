@@ -123,6 +123,39 @@ completed in 11 minutes. Two consequences:
   portal down (the site stays up on fewer pods, and fewer pods also means fewer fan-out queries), run
   the Job, scale back, resume.
 
+## 🚨 A long-running Job is not a stuck Job — measure it before you kill it
+
+The schema steps finish in seconds to minutes; the **always-on reconcile that follows** (partition
+access, doc backfill, embeddings) is a loop over every partition schema, and on a large install it
+runs for *hours*. Elapsed time therefore says nothing about health, and "it has been running all
+day, it can never finish" is a conclusion that has been reached — and been **wrong**.
+
+Measured on `memex-cloud` 2026-09-07: Job `memex-migration-28` was described as a backfill that
+"can never finish within its own design" and slated for deletion after 9 h 50 m. Its own log said
+otherwise — `Current DB version: 55` (the schema half had completed 90 s in), 165 partition schemas
+and 74,246 rows embedded, progressing at a steady 200 rows per 81–86 s, and the schema then in
+flight was `vuser`: the loop runs the schemas **alphabetically**, so it was near the end, not
+stalled. It was left to run.
+
+**Read these four before deciding, in this order — they are all in the Job itself:**
+
+| Read | Where | What it settles |
+|---|---|---|
+| `Current DB version: N` | the Job's log | Whether the *schema* duty is already done. If it is, nothing is blocked on this Job: `DbVersionGate` passes and the portal serves. |
+| rows per unit time | two consecutive `N/M…` progress lines and their `--timestamps` | Whether it is moving at all. A flat counter is a stall; a steady one is work. |
+| the schema **name** in flight | the same lines | How far through the loop it is. The order is alphabetical, so the name is a position — a `v…` schema is nearly done, an `a…` one is not. |
+| `activeDeadlineSeconds` | `kubectl get job … -o jsonpath='{.spec.activeDeadlineSeconds}'` | Whether Kubernetes will let it finish. **Empty means no deadline** — it runs to completion, and `ttlSecondsAfterFinished` then removes it with no manual cleanup. |
+
+Deleting a reconcile that is progressing costs the un-embedded tail: those rows stay `NULL` and
+their partitions answer vector search poorly until some later migration reaches them again. The
+per-row writes are committed as they go, so a delete loses only the row in flight — but it also
+loses the remaining work, which nothing re-queues on its own.
+
+**When it genuinely is stuck**, the tell is a counter that does not move (or `40P01` in the log,
+which is the deadlock above), never the elapsed time. And the durable fix for the long tail is not
+a kill: it is the budgeted, batched reconcile — a bounded slice per Job that reports its remainder
+and resumes on the next one — so no single Job has to finish the whole backfill.
+
 ## Related
 
 - [Deployment — AKS](/Doc/Architecture/DeploymentAKS) — the runbook this procedure is the schema half of.
