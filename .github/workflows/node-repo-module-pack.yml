@@ -753,9 +753,12 @@ jobs:
       # and bundle is keyed to (the portal adopts, so the portal's identity is the honest one).
       platform-identity: ${{ steps.identity.outputs.identity }}
       # The platform's own SemVer, read off the image the modules compile against — what `pack`
-      # measures every package's declared minMeshVersion FLOOR against (#3554). Empty only when
-      # the caller pinned no platform image, and `pack` refuses a declared floor in that case
-      # rather than skipping the check.
+      # measures every package's declared minMeshVersion FLOOR against (#3554). Empty when the
+      # caller pinned no `platform-image-digest` — which is what selects a SOURCE build, whatever
+      # `platform-image` says, so a caller can leave the digest empty while naming an image. `pack`
+      # does not skip the check there: it falls back to the LINE the platform CHECKOUT declares
+      # (the same "the checkout IS the platform" reading its bundle-identity block takes), and is
+      # RED only when neither can be established.
       platform-version: ${{ steps.platform-version.outputs.version }}
     steps:
       - name: Check out Systemorph/MeshWeaver at the pinned ref

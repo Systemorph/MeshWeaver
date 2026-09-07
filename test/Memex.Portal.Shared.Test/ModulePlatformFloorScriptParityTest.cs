@@ -69,7 +69,13 @@ public class ModulePlatformFloorScriptParityTest
 
         using var process = Process.Start(psi);
         Assert.NotNull(process);
-        var stderr = process!.StandardError.ReadToEnd();
+        // 🚨 DRAIN BOTH PIPES BEFORE WAITING (Copilot review). A redirected stream nobody reads
+        // fills its OS buffer and blocks the child in `write`, so the wait would time out on a
+        // process that had already finished its work — a hang that reads as a broken gate. stdout
+        // first because it is the one this call can make large (`--quiet` suppresses the verdict
+        // line, but an argparse or traceback message can arrive on either).
+        var stdout = process!.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit(milliseconds: 30_000);
         Assert.True(process.HasExited,
             "python3 did not answer within 30s — the gate's own logic is a pure comparison, so a "
@@ -77,7 +83,8 @@ public class ModulePlatformFloorScriptParityTest
         // A python that could not START (argparse error, syntax error) exits 2 with text on stderr.
         // That must never read as "the floor is not satisfied": it is a broken fixture, named.
         Assert.True(process.ExitCode is 0 or 1,
-            $"the script exited {process.ExitCode} rather than 0/1 — it did not run. stderr: {stderr}");
+            $"the script exited {process.ExitCode} rather than 0/1 — it did not run. "
+            + $"stdout: {stdout} stderr: {stderr}");
         return process.ExitCode == 0;
     }
 
@@ -99,6 +106,20 @@ public class ModulePlatformFloorScriptParityTest
     // The trap NuGetVersionComparer exists for: string order puts ci.3758 below ci.900.
     [InlineData("3.0.0-ci.900", "3.0.0-ci.3758")]
     [InlineData("3.0.0-ci.3758", "3.0.0-ci.900")]
+    // 🚨 Int32 OVERFLOW, on both sides and in both positions (Copilot review). `int.TryParse`
+    // REFUSES past 2147483647, so the runtime reads such a segment as zero in the core and as
+    // ALPHANUMERIC in the pre-release — the one place an unbounded Python `int()` was free to
+    // disagree. 2147483647 is the last value both accept; 2147483648 is the first neither does.
+    [InlineData("3.0.0-ci.2147483647", "3.0.0-ci.2147483647")]
+    [InlineData("3.0.0-ci.2147483647", "3.0.0-ci.2147483648")]
+    [InlineData("3.0.0-ci.2147483648", "3.0.0-ci.2147483647")]
+    [InlineData("3.0.0-ci.2147483648", "3.0.0-ci.9999999999999999999999")]
+    [InlineData("3.0.0-ci.7845", "3.0.0-ci.99999999999999999999")]
+    [InlineData("99999999999999999999.0.0", "3.0.0")]
+    [InlineData("3.0.0", "99999999999999999999.0.0")]
+    // Non-ASCII digits: str.isdigit() accepts them, NumberStyles.None does not.
+    [InlineData("3.0.0-ci.٣", "3.0.0-ci.3")]
+    [InlineData("3.0.0-ci.3", "3.0.0-ci.٣")]
     // Boundaries: no declared floor is no constraint; an unknown platform is refused, not waved.
     [InlineData("", "3.0.0-ci.7989")]
     [InlineData(null, "3.0.0-ci.7989")]

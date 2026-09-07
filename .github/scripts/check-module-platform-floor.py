@@ -50,6 +50,28 @@ import argparse
 import sys
 
 
+#: The largest value C#'s `int.TryParse` accepts. Beyond it TryParse returns FALSE, which the
+#: comparer reads as "not a number" — so Python's unbounded `int()` would disagree exactly where a
+#: version carries an absurd segment. Small, and the whole point of the parity test.
+_INT32_MAX = 2_147_483_647
+
+
+def as_int32(part: str) -> int | None:
+    """`int.TryParse(part, NumberStyles.None, InvariantCulture, out v)` — the value, or None.
+
+    🚨 Three ways to disagree with C#, all closed here (Copilot review on #3554):
+    ASCII digits only (`str.isdigit()` alone accepts superscripts and Arabic-Indic digits, which
+    `NumberStyles.None` refuses); no sign and no whitespace (`NumberStyles.None` again, and
+    `isdigit()` rejects both anyway); and OVERFLOW is a REFUSAL, not a big number — `int.TryParse`
+    returns false past Int32.MaxValue, and the two call sites below do different things with that
+    refusal, so it has to be reported rather than clamped.
+    """
+    if not part or not part.isascii() or not part.isdigit():
+        return None
+    value = int(part)
+    return value if value <= _INT32_MAX else None
+
+
 def split(version: str) -> tuple[list[int], list[str]]:
     """Numeric core + pre-release identifiers, build metadata discarded (SemVer ignores it)."""
     plus = version.find("+")
@@ -57,9 +79,8 @@ def split(version: str) -> tuple[list[int], list[str]]:
         version = version[:plus]
     dash = version.find("-")
     core, pre = (version, "") if dash < 0 else (version[:dash], version[dash + 1:])
-    parts = []
-    for p in core.split("."):
-        parts.append(int(p) if p.isdigit() else 0)
+    # CompareCore: `int.TryParse(...) ? lv : 0` — an unparsable OR OVERFLOWING core part is ZERO.
+    parts = [as_int32(p) or 0 for p in core.split(".")]
     return parts, (pre.split(".") if pre else [])
 
 
@@ -79,11 +100,15 @@ def compare_pre(left: list[str], right: list[str]) -> int:
             return -1
         if i >= len(right):
             return 1
-        lnum, rnum = left[i].isdigit(), right[i].isdigit()
+        # 🚨 `int.TryParse`'s BOOLEAN is the classifier here, not just the value — so an identifier
+        # that overflows Int32 is ALPHANUMERIC to the runtime comparer, and must be to this one.
+        # Clamping it to a number instead would rank it below every word, silently inverting the
+        # comparison in the one case where the two implementations were free to differ.
+        lv, rv = as_int32(left[i]), as_int32(right[i])
+        lnum, rnum = lv is not None, rv is not None
         if lnum and rnum:
-            l, r = int(left[i]), int(right[i])
-            if l != r:
-                return -1 if l < r else 1
+            if lv != rv:
+                return -1 if lv < rv else 1
             continue
         # A numeric identifier always ranks below an alphanumeric one (SemVer §11.4.3).
         if lnum:
