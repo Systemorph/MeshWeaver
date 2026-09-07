@@ -6,8 +6,11 @@ name: Publish the surviving NuGet packages
 # package and the aspire integration". Everything else under the MeshWeaver prefix is retired and
 # unlisted (Doc/Architecture/NuGetPackageRetirement; scripts/orphaned-nuget-packages.py).
 #
-#   MeshWeaver.Aspire.Hosting.Memex   memex/aspire/Memex.Aspire.Hosting  (THIS repo)
+#   MeshWeaver.Aspire.Hosting.Memex   memex/aspire/Memex.Aspire.Hosting  (THIS repo)  ← published here
 #   MeshWeaver.MemexTemplate          tools/MeshWeaver.MemexTemplate.Pack (MeshWeaver.Plugins)
+#
+# 🚨 ONLY THE FIRST IS PUBLISHED BY THIS LANE, and that is deliberate — see "the template is
+# blocked" below. Both survive the retirement; only one can ship without a product decision.
 #
 # Both are ENTRY POINTS, not platform bytes: one is the `dotnet new` template that writes a portal
 # solution, the other is the AppHost-side Aspire integration whose `builder.AddMemex()` names the
@@ -32,18 +35,31 @@ name: Publish the surviving NuGet packages
 # The moment either grows a dependency on a MeshWeaver framework assembly, this lane is wrong and
 # must take its bytes from a sealed set instead.
 #
-# ─────────────────────────────────── THE TEMPLATE NEEDS BOTH TREES ───────────────────────────────
-# generate-memex-template.cs copies six projects — four from MeshWeaver.Plugins, two from
-# MeshWeaver — plus three core-only assets, so it takes `<portalRoot> --core <meshweaverRoot>` and
-# can run in NEITHER repo alone. (`projectsToCopy` in that script is the authority on the split; it
-# moves as projects move.) The generator lives in Plugins; this lane checks out Plugins
-# with a MINTED GitHub App token (AGENTS.md / memory `mint-app-tokens-never-store-pats`: never a
-# stored PAT — the predecessor publish-github.yml carried `secrets.GH_PAT` and is deleted).
+# ──────────────────── THE TEMPLATE IS BLOCKED ON A PRODUCT DECISION, NOT ON WIRING ────────────────
+# MeshWeaver.MemexTemplate is a survivor by decision but is NOT published here yet, because
+# publishing it today would publish PRIVATE SOURCE to public nuget.org. Measured 2026-09-07:
 #
-# 🚨 WHICH PLUGINS COMMIT. A core tag names a core commit; it does not name a Plugins commit, and
-# no pairing artefact exists to resolve one. This lane therefore takes Plugins' DEFAULT BRANCH and
-# RECORDS the resolved sha in the job summary, so the pairing is at least observable after the fact.
-# `plugins-ref` overrides it on a dispatch. When a pairing artefact appears, read it here instead.
+#   • generate-memex-template.cs REFUSES to generate without `--with-gui`: the two shipped hosts
+#     reference Memex.Portal.Gui unconditionally, so a template without it cannot build.
+#   • Memex.Portal.Gui lives ONLY in Systemorph/MeshWeaver.Plugins, which is PRIVATE. Core holds
+#     zero .razor files and no MeshWeaver.Blazor* project — the GUI has fully left the public repo.
+#   • The published 3.0.0-rc7 template contains NO Memex.Portal.Gui, so shipping it now would be a
+#     NEW public exposure, not a restoration of prior behaviour.
+#   • A nupkg cannot be recalled. Unlisting hides a version from search; it stays downloadable by
+#     exact version for ever (verified against this very registry).
+#
+# There IS a standing decision to include the GUI (2026-08-26) but its stated premise — "the UI is
+# public in core today" — has since expired with the move. So the template's publish step is
+# deliberately absent rather than written and disabled: a step that exists but never runs is the
+# skip-trapdoor this repository forbids, and one that runs would ship the source.
+#
+# 🚨 DO NOT add the template here until the GUI question is answered (issue #3653). When it is, the step needs:
+# a Plugins checkout with a MINTED App token (never a stored PAT — the predecessor
+# publish-github.yml carried secrets.GH_PAT and is deleted), `-p:Version=X.Y.Z` (that project
+# inherits no props and would otherwise stamp 1.0.0), `-p:MeshWeaverRoot=` (the generator copies
+# two projects and three assets from core and can run in NEITHER repo alone), and an answer to
+# WHICH Plugins commit a core tag pairs with — no pairing artefact exists, so record the resolved
+# sha in the summary at minimum.
 #
 # 🛡️ NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"): `preflight` asserts every
 # secret and fails RED naming what to provision; `publish` needs it and runs unconditionally. There
@@ -61,10 +77,6 @@ on:
     inputs:
       version:
         description: "Version to publish (e.g. 3.0.0). Required on a dispatch; the tag supplies it otherwise."
-        type: string
-        default: ""
-      plugins-ref:
-        description: "MeshWeaver.Plugins ref holding the template generator (default: its default branch)"
         type: string
         default: ""
       dry-run:
@@ -89,14 +101,13 @@ jobs:
       - name: Every secret this lane consumes exists
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_PAT }}
-          APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
-          APP_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
+          # Only what this lane actually consumes. The App credential that would read
+          # MeshWeaver.Plugins for the template belongs here the day the template's step does —
+          # asserting an input nothing uses teaches a reader the wrong thing about what runs.
           missing=()
           [ -n "${NUGET_API_KEY:-}" ] || missing+=("secrets.NUGET_PAT — the nuget.org API key with push rights for the MeshWeaver prefix (Settings → Secrets → Actions)")
-          [ -n "${APP_ID:-}" ]  || missing+=("secrets.MESHWEAVER_APP_ID — the meshweaver-cloud GitHub App that reads Systemorph/MeshWeaver.Plugins for the template generator")
-          [ -n "${APP_KEY:-}" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY — its private key (Key Vault Systemorph, secret github-app-privatekey)")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::the surviving packages cannot be published — provision:"
             for m in "${missing[@]}"; do echo "  • $m"; done
@@ -145,37 +156,12 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "publishing version $version"
 
-      - name: Mint the App token for the plugins repository
-        id: app
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
-          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
-          owner: Systemorph
-          repositories: MeshWeaver.Plugins
-          permission-contents: read
-
-      - name: Checkout MeshWeaver.Plugins (the template generator)
-        uses: actions/checkout@v7
-        with:
-          repository: Systemorph/MeshWeaver.Plugins
-          ref: ${{ inputs.plugins-ref }}
-          token: ${{ steps.app.outputs.token }}
-          path: plugins
-
-      # 🚨 A core tag does not name a Plugins commit. Record which one was used, so the pairing is
-      # observable after the fact rather than reconstructed from timestamps.
-      - name: Record the Plugins commit this template is generated from
-        id: pluginsref
+      - name: Say what is being published
         run: |
-          set -euo pipefail
-          sha="$(git -C plugins rev-parse HEAD)"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "MeshWeaver.Plugins @ $sha"
           {
             echo "### Publishing MeshWeaver ${{ steps.version.outputs.version }}"
             echo "- core: \`${GITHUB_SHA}\`"
-            echo "- plugins: \`$sha\` (${{ inputs.plugins-ref || 'default branch' }})"
+            echo "- \`MeshWeaver.MemexTemplate\` is NOT published by this lane — see the header."
           } >> "$GITHUB_STEP_SUMMARY"
 
       # PublicRelease=true is what makes $(Version) the clean $(PlatformVersion) rather than
@@ -190,34 +176,20 @@ jobs:
             -p:PlatformVersion=${{ steps.version.outputs.version }} \
             --output "$RUNNER_TEMP/nupkgs"
 
-      # 🚨 -p:Version, not -p:PlatformVersion. The template pack lives under the plugins repo's
-      # tools/, which inherits NO Directory.Build.props, so it never sees the platform's version
-      # scheme and would otherwise pack under the SDK default 1.0.0. MeshWeaverRoot is passed
-      # because the generator copies three projects and three assets out of the platform tree; the
-      # project fails the pack with a named error if it does not point at a real checkout.
-      - name: Pack the dotnet new template
-        run: |
-          set -euo pipefail
-          dotnet pack plugins/tools/MeshWeaver.MemexTemplate.Pack/MeshWeaver.MemexTemplate.Pack.csproj \
-            -c Release \
-            -p:Version=${{ steps.version.outputs.version }} \
-            -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" \
-            --output "$RUNNER_TEMP/nupkgs"
-
-      # 🚨 A POSITIVE, SPECIFIC signal: both ids, at this exact version, and nothing else. `dotnet
-      # pack` exiting 0 having produced one package (or a package under a version nobody asked for)
-      # is precisely the shape of false pass this repository has paid for.
-      - name: Both packages exist, at this version, and only these two
+      # 🚨 A POSITIVE, SPECIFIC signal: the id, at this exact version, and nothing else. `dotnet
+      # pack` exiting 0 having produced no package (or one under a version nobody asked for) is
+      # precisely the shape of false pass this repository has paid for. The count also catches a
+      # project silently regaining packability, which Directory.Build.props defaults to false.
+      - name: The package exists, at this version, and it is the only one
         run: |
           set -euo pipefail
           V="${{ steps.version.outputs.version }}"
           ls -1 "$RUNNER_TEMP/nupkgs"
-          for id in MeshWeaver.Aspire.Hosting.Memex MeshWeaver.MemexTemplate; do
-            [ -f "$RUNNER_TEMP/nupkgs/$id.$V.nupkg" ] || { echo "::error::$id.$V.nupkg was not produced"; exit 1; }
-          done
+          [ -f "$RUNNER_TEMP/nupkgs/MeshWeaver.Aspire.Hosting.Memex.$V.nupkg" ] \
+            || { echo "::error::MeshWeaver.Aspire.Hosting.Memex.$V.nupkg was not produced"; exit 1; }
           count="$(find "$RUNNER_TEMP/nupkgs" -name '*.nupkg' | wc -l | tr -d ' ')"
-          [ "$count" -eq 2 ] || { echo "::error::expected exactly 2 packages, found $count — a project has regained packability; see Directory.Build.props"; exit 1; }
-          echo "2 packages, both at $V"
+          [ "$count" -eq 1 ] || { echo "::error::expected exactly 1 package, found $count — a project has regained packability; see Directory.Build.props"; exit 1; }
+          echo "1 package at $V"
 
       - name: Push to nuget.org
         if: ${{ !inputs.dry-run }}
@@ -246,7 +218,7 @@ jobs:
           import gzip, json, os, sys, time, urllib.request
 
           version = os.environ["VERSION"]
-          pending = ["MeshWeaver.Aspire.Hosting.Memex", "MeshWeaver.MemexTemplate"]
+          pending = ["MeshWeaver.Aspire.Hosting.Memex"]
 
           def listed(package_id: str) -> bool | None:
               url = ("https://api.nuget.org/v3/registration5-gz-semver2/"
@@ -264,7 +236,7 @@ jobs:
           for attempt in range(1, 9):
               pending = [p for p in pending if listed(p) is not True]
               if not pending:
-                  print(f"VERIFIED on attempt {attempt}: both packages read as listed at {version}")
+                  print(f"VERIFIED on attempt {attempt}: the package reads as listed at {version}")
                   sys.exit(0)
               print(f"attempt {attempt}: {', '.join(pending)} not listed yet — waiting 60s")
               time.sleep(60)
@@ -282,5 +254,7 @@ jobs:
           {
             echo "### Published to nuget.org"
             echo "- \`MeshWeaver.Aspire.Hosting.Memex\` ${{ steps.version.outputs.version }}"
-            echo "- \`MeshWeaver.MemexTemplate\` ${{ steps.version.outputs.version }}"
+            echo ""
+            echo "\`MeshWeaver.MemexTemplate\` was NOT published — it is blocked on the GUI"
+            echo "decision recorded in Doc/Architecture/NuGetPackageRetirement."
           } >> "$GITHUB_STEP_SUMMARY"

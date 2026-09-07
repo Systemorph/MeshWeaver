@@ -34,20 +34,35 @@ solution a newcomer starts from; the other is the AppHost-side integration that 
 Neither is loaded into a portal, neither carries a framework assembly, and neither participates in
 the NodeType bake identity.
 
-> ⚠️ **One survivor is currently unlisted, and that is a state to fix rather than a decision.**
-> `MeshWeaver.MemexTemplate` last published `3.0.0-rc7`; every one of its seven versions reads
-> `listed: false`, so a versionless `dotnet new install MeshWeaver.MemexTemplate` cannot resolve it.
-> Two independent causes, both now fixed: an earlier orphan sweep run from THIS repository could
-> not see a project that lives in MeshWeaver.Plugins and therefore derived it as orphaned — which
-> is exactly why the sweep now takes a `keep` list and why both survivors are passed to it — and
-> its pack target never passed the generator the platform checkout it requires, so `dotnet pack`
-> on it could not succeed at all. The id relists the moment a version is published, which the
-> next release tag does. A listing can also be restored from the nuget.org UI, which the workflow
-> deliberately cannot do.
-
 🚨 **Always pass both survivors to the sweep's `keep` input.** The subtraction alone protects only
 what THIS tree packs, and one survivor is in another repository — invisible to the derivation by
-construction. That gap has already cost one wrong unlist.
+construction. That gap has already cost one wrong unlist: an earlier sweep run from this repository
+could not see the template's project and retired it.
+
+### 🛑 The template is a survivor that cannot ship yet
+
+`MeshWeaver.MemexTemplate` last published `3.0.0-rc7`; all seven of its versions read
+`listed: false`, so a versionless `dotnet new install MeshWeaver.MemexTemplate` cannot resolve it.
+One cause was mechanical and is fixed — its pack target never passed the generator the platform
+checkout it requires, so `dotnet pack` on it could not succeed at all. The other is **a product
+decision that is not made**, and it blocks publication. Measured 2026-09-07:
+
+| Fact | Consequence |
+|---|---|
+| `generate-memex-template.cs` **refuses** to generate without `--with-gui` — the two shipped hosts reference `Memex.Portal.Gui` unconditionally | there is no GUI-less template to publish |
+| `Memex.Portal.Gui` lives **only** in MeshWeaver.Plugins, which is **private**. Core holds zero `.razor` files and no `MeshWeaver.Blazor*` project | publishing the template publishes private source |
+| The published `3.0.0-rc7` package contains **no** `Memex.Portal.Gui` | shipping it now is a NEW exposure, not a restoration |
+| A nupkg cannot be recalled — unlisting hides a version from search but it stays downloadable by exact version for ever | the exposure is irreversible |
+
+There *is* a standing decision to include the GUI (2026-08-26), but its stated premise — *"the UI
+is public in core today, the move is what would make it private"* — **expired when the move
+happened.** So `publish-packages.yml` publishes the Aspire integration only, and the template's
+step is **absent rather than written-and-disabled**: a step that exists but never runs is the
+skip-trapdoor this repository forbids, and one that runs would ship the source. Tracked in
+[#3653](https://github.com/Systemorph/MeshWeaver/issues/3653).
+
+Either answer unblocks it — publish the GUI source deliberately, or change the hosts so a GUI-less
+template builds. Neither is a packaging decision.
 
 Everything else was a *library*, and a MeshWeaver library package has had no consumer for months:
 in-mesh source compiles against the platform **image**, module bundles carry their own closures, and

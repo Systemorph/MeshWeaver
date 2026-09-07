@@ -33,6 +33,8 @@ cd MyPortal
 dotnet run --project MyPortal.Portal.Monolith
 ```
 
+> ⚠️ **The template is not on nuget.org right now** — see the NuGet section below.
+
 The template contains the complete Memex portal solution (Blazor Server monolith + Aspire microservices, Graph + AI integration), renamed to your project name.
 
 ### Local Kubernetes stack (macOS)
@@ -93,12 +95,15 @@ come from the `mw-plugin-test` container image, which is what every pipeline her
 | [`MeshWeaver.MemexTemplate`](https://www.nuget.org/packages/MeshWeaver.MemexTemplate) | `dotnet new install MeshWeaver.MemexTemplate` — scaffolds a portal solution |
 | [`MeshWeaver.Aspire.Hosting.Memex`](https://www.nuget.org/packages/MeshWeaver.Aspire.Hosting.Memex) | `builder.AddMemex()` — the Aspire integration that runs the portal, its database and its migration |
 
-> ⚠️ **`MeshWeaver.MemexTemplate` is not resolvable yet.** Its last published version is
-> `3.0.0-rc7` and every version of it is currently unlisted, so a versionless
-> `dotnet new install` cannot find it. Its pack target had been broken since then (it never passed
-> the generator the platform checkout it requires) and nothing published it. Both halves are fixed;
-> the template appears on nuget.org with the next release tag. Until then, generate it from a
-> checkout — see `tools/generate-memex-template.cs` in MeshWeaver.Plugins.
+> ⚠️ **`MeshWeaver.MemexTemplate` is not resolvable right now.** Its last published version is
+> `3.0.0-rc7` and every version of it is unlisted, so `dotnet new install MeshWeaver.MemexTemplate`
+> cannot find it. Two reasons: its pack target was broken (it never passed the generator the
+> platform checkout it requires — now fixed), and republishing it is blocked on an open decision,
+> because the template can only be generated together with a UI project that currently lives in a
+> private repository ([#3653](https://github.com/Systemorph/MeshWeaver/issues/3653) and
+> [NuGet Package Retirement](src/MeshWeaver.Documentation/Data/Architecture/NuGetPackageRetirement.md)).
+> Until that is answered, generate the template from a checkout —
+> `tools/generate-memex-template.cs` in MeshWeaver.Plugins.
 
 The framework itself is **not** distributed as libraries. It ships as a container image: your mesh
 content compiles against the running portal, plugins ship as module bundles, and startup
