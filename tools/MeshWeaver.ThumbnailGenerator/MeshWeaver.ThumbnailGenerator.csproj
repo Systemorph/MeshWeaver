@@ -7,16 +7,9 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <NoWarn>$(NoWarn);NU5111</NoWarn>
 
-    <!-- Tool packaging configuration -->
-    <PackAsTool>true</PackAsTool>
-    <ToolCommandName>meshweaver-thumbnails</ToolCommandName>
-    <PackageId>MeshWeaver.ThumbnailGenerator</PackageId>
-    <Authors>MeshWeaver</Authors>
-    <Description>A tool for generating thumbnails of MeshWeaver Layout Areas</Description>
-    <PackageProjectUrl>https://github.com/meshweaver/meshweaver</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/meshweaver/meshweaver</RepositoryUrl>
-    <PackageTags>meshweaver;thumbnails;screenshot;playwright</PackageTags>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <!-- 🚨 NOT a dotnet tool any more (2026-09-07 — Doc/Architecture/NuGetPackageRetirement).
+         Nothing in this repository or any satellite installs or invokes it; it is run from source
+         when a thumbnail needs regenerating. -->
   </PropertyGroup>
   <ItemGroup>
       <PackageReference Include="Microsoft.Playwright" />

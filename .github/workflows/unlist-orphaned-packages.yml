@@ -84,11 +84,29 @@ jobs:
           fi
           keep_args=""
           for id in ${{ inputs.keep }}; do keep_args="$keep_args --keep $id"; done
-          python3 scripts/orphaned-nuget-packages.py --root . --apply $keep_args \
-            | tee applied.txt
+          # 🚨 Capture the SCRIPT's exit code, not the pipeline's. Three outcomes, and they must
+          # stay distinguishable: 0 = the set is retired, 2 = RESUMABLE (nuget.org's rate limit
+          # stopped the run with work left — re-run this same dispatch), anything else = a real
+          # failure. Measured 2026-09-07: 760 versions do not fit in one quota window, so 2 is an
+          # ordinary outcome of a large retirement and must not read as either of the other two.
+          set +e
+          python3 scripts/orphaned-nuget-packages.py --root . --apply $keep_args | tee applied.txt
+          status=${PIPESTATUS[0]}
+          set -e
           {
-            echo "### Unlisted"
+            echo "### Unlist run"
+            case "$status" in
+              0) echo "✅ Every orphaned version now reads as unlisted." ;;
+              2) echo "🔁 **RESUMABLE — not finished.** nuget.org rate-limited the run with work"
+                 echo "left. Nothing is wrong: re-dispatch this workflow with the same inputs."
+                 echo "Already-unlisted versions are skipped, so the next run spends its whole"
+                 echo "budget on the remainder (listed at the end of the log below)." ;;
+              *) echo "❌ The run failed for a reason that is NOT the rate limit — read the log." ;;
+            esac
             echo '```'
             cat applied.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          # A resumable stop is not a green tick: the retirement is incomplete and a reader must
+          # not be able to mistake it for done.
+          exit "$status"
