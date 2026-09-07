@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -207,7 +206,17 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
         {
             var re = new Regex(pattern, RegexOptions.Compiled);
             return Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-                .Select(_ => lines.ToImmutableArray()
+                // 🚨 ENUMERATE the queue; never materialise it. `lines.ToImmutableArray()` goes
+                // through ImmutableArray.CreateRange, which reads the sequence's Count, allocates
+                // exactly that many slots, and THEN enumerates — two separate reads of a queue the
+                // hub's action-block thread is still writing to. One enqueue between them yields
+                // more items than slots and ImmutableExtensions.ToArray throws
+                // "Value does not fall within the expected range", failing the test on the
+                // COLLECTOR rather than on anything it collected. Measured on this PR's CI (run
+                // 34102515449, shard 4) while the very line being waited for had already been
+                // logged. ConcurrentQueue's own enumerator is a single moment-in-time snapshot, so
+                // reading it directly cannot disagree with itself.
+                .Select(_ => lines
                     .Select(line => re.Match(line))
                     .FirstOrDefault(m => m.Success))
                 .Where(m => m is not null)

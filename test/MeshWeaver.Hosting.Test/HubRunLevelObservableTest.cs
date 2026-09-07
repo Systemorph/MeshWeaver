@@ -16,8 +16,10 @@ namespace MeshWeaver.Hosting.Test;
 /// <para><see cref="IMessageHub.RunLevel"/> is a plain property and
 /// <see cref="IMessageHub.DisposalCompleted"/> fires at the very END of teardown, so anything
 /// interested in the disposal WINDOW — the interval where the hub is
-/// <see cref="MessageHubRunLevel.Quiescing"/>/<c>DisposeHostedHubs</c> but intake is still open —
-/// had nothing to subscribe to: by the time the one available signal fired, the window had closed.
+/// <see cref="MessageHubRunLevel.Quiescing"/>/<c>DisposeHostedHubs</c>, still draining accepted
+/// work but no longer taking any on (MeshWeaver#3506 closed the intake gate at the first of those
+/// two, having found the drain wide open) — had nothing to subscribe to: by the time the one
+/// available signal fired, the window had closed.
 /// Every "wait for the hub to reach state X" therefore had to either SAMPLE the property on an
 /// interval or contrive the ordering, and the sampling form is a standing violation of the reactive
 /// rule. That window is where the interesting bugs live (#1470: a read serviced during teardown
