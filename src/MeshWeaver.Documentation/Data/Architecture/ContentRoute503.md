@@ -107,6 +107,12 @@ Reader: Hub portal/nodeops-… RunLevel=Started Queue(buffer=0,deferred=0,exec=0
 **Empty queue, nothing executing.** The reader processed everything delivered to it; the silence is
 upstream. Peer pods carry the matching `[ROUTE] Directed delivery to pod hub '…' was refused` line.
 
+> 🚨 `exec=` in the captures on this page is the **pre-#3593 name** of a field that was a hard-coded
+> literal `0` — it read the same in every state and carried no information. Today the same position
+> prints `drainsInFlight=`, a real count. Nothing on this page depended on it: the discriminator
+> below is `buffer` and the `Executing(…)` line. See
+> [Reading a Disposal Stall Verdict](/Doc/Architecture/DisposalStallVerdicts).
+
 ## Cause B — the reply is delivered and not dispatched
 
 `portal/nodeops-{meshId}` is *also* the mesh's ONE node-CRUD execution hub. Every
