@@ -320,6 +320,12 @@ public sealed class UserIdentityCache : IDisposable
         {
             case QueryChangeType.Initial:
             case QueryChangeType.Reset:
+                // 🚨 UNHYDRATED while the snapshot is rebuilt. A Reset lands on an index that was
+                // already authoritative; clearing it with the flag still up would let a concurrent
+                // lookup read the half-built index as a definitive "no such user" — the cold-cache
+                // ambiguity #974 exists to prevent — and OwnerEmailOf as "nobody owns this id".
+                // Down first, rebuild, then up again LAST (below).
+                Volatile.Write(ref _hydrated, false);
                 _byEmail.Clear();
                 _byId.Clear();
                 foreach (var node in change.Items)
