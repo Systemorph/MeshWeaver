@@ -268,12 +268,45 @@ public static class EmitPipeline
     /// A minimal, self-contained compilation used ONLY by <see cref="ProbeSharedEmitState"/>.
     /// Three levels of nested generics on purpose: that is what makes Roslyn's metadata writer
     /// walk a type's containing chain (<c>GetConsolidatedTypeParameters</c> recursing through
-    /// <c>ContainingTypeDefinition</c>) — the exact path issue #890's NRE dies on. A flat class
-    /// would emit fine even on a poisoned writer and the canary would answer "healthy" wrongly.
+    /// <c>ContainingTypeDefinition</c>) — the exact path issue #890's NRE dies on.
+    ///
+    /// <para>🚨 This comment used to end *"a flat class would emit fine even on a poisoned writer
+    /// and the canary would answer 'healthy' wrongly"*. That was an assumption, never a
+    /// measurement, and it is load-bearing in both directions: it is the reason the canary uses a
+    /// nested source, and it is the reason every occurrence has been read as "this process cannot
+    /// emit AT ALL". <see cref="FlatCanarySource"/> and the <c>flat=</c> leg
+    /// (<see cref="ClassifyFlatLeg"/>) turn it into a reading.</para>
     /// </summary>
     private const string EmitCanarySource =
         "public class MwEmitCanary<T> { public class Inner<U> { public class Leaf<V> "
         + "{ public T A; public U B; public V C; } } }";
+
+    /// <summary>
+    /// The SAME probe with the ONE variable this defect turns on removed: a single top-level,
+    /// non-generic, member-less class. Deliberately the narrowest source that still makes
+    /// Roslyn's metadata writer ask the #890 question and no other.
+    ///
+    /// <para><b>Why it discriminates.</b> <c>MetadataWriter.GetConsolidatedTypeParameters</c>
+    /// opens with <c>typeDef.AsNestedTypeDefinition(Context)</c> and returns IMMEDIATELY when that
+    /// answers null — the recursive overload, and with it the
+    /// <c>ITypeDefinitionMember.ContainingTypeDefinition</c> call every #890 stack dies in, is
+    /// never reached for a top-level type. The class carries no members either, so the
+    /// <c>NamedTypeSymbol</c> overload of that property has exactly one possible caller left:
+    /// <c>AsNestedTypeDefinitionImpl</c>'s guard having answered TRUE for a type whose containing
+    /// type is null by construction.</para>
+    ///
+    /// <para>So the two outcomes say different things, and neither was previously observable:
+    /// <list type="bullet">
+    ///   <item><b>It emits</b> ⇒ the process is NOT emit-dead; the fault needs the nested /
+    ///     generic walk, the guard is intact, and "every later compile in this process will fail
+    ///     the same way" is true of the workload but not of emit as such.</item>
+    ///   <item><b>It dies in the same frame</b> ⇒ the writer reached that frame with no nested
+    ///     type anywhere in the compilation, i.e. the guard read TRUE where it must read FALSE.
+    ///     That is #890 in ONE method, with no recursion, no generics and no nesting — the
+    ///     smallest form this defect could take, and what a <c>dotnet/runtime</c> report needs.</item>
+    /// </list></para>
+    /// </summary>
+    internal const string FlatCanarySource = "public class MwFlatEmitCanary { }";
 
     /// <summary>
     /// Answers, at the moment a Roslyn <c>Emit</c> throws, which state is actually broken — in
@@ -371,9 +404,18 @@ public static class EmitPipeline
                 + "— the shared reference set cannot emit, but the pristine control could not be "
                 + "BUILT, so this says nothing about whether the reference set is the cause";
 
-        // Leg 3 runs only on the two verdicts that mean "the control could not emit either", and
-        // it is passed as a FACTORY so Verdict stays pure and unit-testable.
-        return Verdict(shared, EmitCanary(() => pristineRefs), () => DissectTheNull(() => faulted.References));
+        // Legs 3 and 4 run only on the two verdicts that mean "the control could not emit either",
+        // and both are passed as FACTORIES so Verdict stays pure and unit-testable.
+        //
+        // 🚨 Leg 4 uses the FAULTED compilation's OWN references — the same set leg 1 used — on
+        // purpose. Leg 2 varies the reference set; leg 4 varies the SOURCE and nothing else, so
+        // "the flat source emits and the nested one does not" is a statement about nesting rather
+        // than about references. Running it against the pristine set would confound the two.
+        return Verdict(
+            shared,
+            EmitCanary(() => pristineRefs),
+            () => DissectTheNull(() => faulted.References),
+            () => EmitCanary(() => faulted.References, FlatCanarySource));
     }
 
     /// <summary>
@@ -382,8 +424,9 @@ public static class EmitPipeline
     /// cannot compile would retire the discriminator silently, turning every occurrence into
     /// INCONCLUSIVE with nothing going red.
     /// </summary>
-    internal static string EmitCanaryForTest(IReadOnlyList<MetadataReference> references)
-        => EmitCanary(() => references);
+    internal static string EmitCanaryForTest(
+        IReadOnlyList<MetadataReference> references, string source = EmitCanarySource)
+        => EmitCanary(() => references, source);
 
     /// <summary>
     /// Builds leg 2's control reference set: CoreLib, and nothing else.
@@ -736,7 +779,15 @@ public static class EmitPipeline
     /// (the unit-test shape) reports <c>dissect=NOT-RUN</c> rather than silently omitting it: an
     /// absent reading must be visible as absent.
     /// </param>
-    internal static string Verdict(string shared, string pristine, Func<string>? dissect = null)
+    /// <param name="flat">
+    /// The <c>flat=</c> leg as a FACTORY returning leg 1's token shape for
+    /// <see cref="FlatCanarySource"/> — a single top-level, non-generic, member-less class emitted
+    /// against the SAME references as <paramref name="shared"/>, so NESTING is the only variable
+    /// between them. Gated exactly like <paramref name="dissect"/>. <c>null</c> reports
+    /// <c>flat=NOT-RUN</c>: an absent reading must be visible as absent.
+    /// </param>
+    internal static string Verdict(
+        string shared, string pristine, Func<string>? dissect = null, Func<string>? flat = null)
     {
         if (pristine.StartsWith("OK", StringComparison.Ordinal))
             return $"canary=REFERENCES shared:{shared} pristine:{pristine} — the same source emits fine "
@@ -758,7 +809,8 @@ public static class EmitPipeline
                 + "one process-wide fault, so the below-Roslyn verdict is withheld — COMPARE THE "
                 + "TWO SITES: one corruption can surface a frame apart, but two unrelated faults "
                 + "look exactly like this as well, and only the sites tell them apart. Start with "
-                + "whichever site is not the emit itself. " + Dissection(dissect);
+                + "whichever site is not the emit itself. " + Dissection(dissect)
+                + " " + Flatness(flat, sharedSite);
 
         return $"canary=BELOW-ROSLYN shared:{shared} pristine:{pristine} — a trivial compilation "
             + "with freshly parsed source and an IMAGE-BACKED CoreLib (fresh managed bytes, "
@@ -774,7 +826,8 @@ public static class EmitPipeline
             + "together with the dissect= reading below. RESIDUAL: both legs still run on the one "
             + "CLR, so this does not separate a corrupted heap from a miscompiled Roslyn method; "
             + "#613 is the SIGNALLING twin and is where a faulting address actually comes from. "
-            + Dissection(dissect);
+            + Dissection(dissect)
+            + " " + Flatness(flat, sharedSite);
     }
 
     /// <summary>
@@ -798,6 +851,74 @@ public static class EmitPipeline
     }
 
     /// <summary>
+    /// Runs the <c>flat=</c> leg and reduces it to the token appended to the verdict, or says it
+    /// did not run. Never throws, for the same reason <see cref="Dissection"/> does not.
+    /// </summary>
+    private static string Flatness(Func<string>? flat, string? nestedSite)
+    {
+        if (flat is null)
+            return "flat=NOT-RUN (no probe supplied)";
+        try
+        {
+            return ClassifyFlatLeg(flat(), nestedSite);
+        }
+        catch (Exception probeError)
+        {
+            return $"flat=UNAVAILABLE({probeError.GetType().Name} — the probe itself faulted, "
+                + "so it says nothing either way)";
+        }
+    }
+
+    /// <summary>
+    /// Reduces the <c>flat=</c> leg to one token. Pure — no Roslyn, no process state — so every
+    /// branch is unit-testable without a poisoned process, which is the only way the branches that
+    /// matter can be covered at all.
+    ///
+    /// <para>🚨 <b>What this leg varies, and why it is narrower than <c>dissect=</c>.</b> Leg 3
+    /// probes symbol READS from a caller that is not the metadata writer, so a fault that is wrong
+    /// only at the writer's own call site reads healthy there by construction — which is exactly
+    /// what three unanimous <c>READS-HEALTHY</c> occurrences (2026-09-05, 09-06, 09-07) say. This
+    /// leg stays inside a real <c>Emit</c> and varies ONE thing instead: whether the compilation
+    /// contains a nested type at all. Same references as leg 1, same process, same moment.</para>
+    /// </summary>
+    /// <param name="flat">Leg 1's token shape, for <see cref="FlatCanarySource"/>.</param>
+    /// <param name="nestedSite">
+    /// The frame the NESTED leg died in, or <c>null</c> when it recorded none. The comparison is
+    /// the whole discriminator: a flat emit dying somewhere ELSE is a second fault, not this one.
+    /// </param>
+    internal static string ClassifyFlatLeg(string flat, string? nestedSite)
+    {
+        if (flat.StartsWith("OK", StringComparison.Ordinal))
+            return "flat=EMITS — a single TOP-LEVEL, non-generic, member-less class emits against "
+                + "the SAME reference set, in the same process, microseconds after the nested "
+                + "source could not. So this process is NOT emit-dead: the fault needs the "
+                + "nested/generic walk (GetConsolidatedTypeParameters' recursion through "
+                + "ContainingTypeDefinition), and AsNestedTypeDefinitionImpl's guard is answering "
+                + "correctly for a top-level type. Read every 'PROCESS CANNOT EMIT' line as "
+                + "'cannot emit THIS SHAPE' — the workload is nested-generic throughout, so the "
+                + "blast radius is unchanged, but the mechanism is confined to the recursion";
+
+        var site = SiteOf(flat);
+        if (site is null)
+            return $"flat=INCONCLUSIVE({flat}) — the flat leg neither emitted nor recorded a "
+                + "throwing frame, so it cannot be compared with the nested leg and says nothing "
+                + "either way";
+
+        if (nestedSite is not null && string.Equals(site, nestedSite, StringComparison.Ordinal))
+            return $"flat=SAME-FRAME@{site} — 🚨 the writer reached that frame with NO nested type "
+                + "anywhere in the compilation. GetConsolidatedTypeParameters returns immediately "
+                + "when AsNestedTypeDefinition answers null, and a member-less top-level class "
+                + "leaves that guard as the only caller of the NamedTypeSymbol overload — so the "
+                + "guard read TRUE where it must read FALSE. #890 reproduces here in ONE method, "
+                + "with no recursion, no generics and no nesting: that is the report dotnet/runtime "
+                + "needs, and it is what dissect=GUARD-READ-BROKEN could not see from outside emit";
+
+        return $"flat=OTHER-FRAME@{site} — the flat leg failed too, but at a DIFFERENT frame than "
+            + $"the nested leg ('{nestedSite ?? "an unrecorded site"}'). Two frames are two faults "
+            + "until shown otherwise, so nothing is concluded about the guard; compare the sites";
+    }
+
+    /// <summary>
     /// The <c>Type.Method</c> frame out of a leg token shaped
     /// <c>THREW {Type} at {Site}: {Message}</c>, or <c>null</c> when the leg did not throw or
     /// recorded no site (a <c>DIAGNOSTICS(...)</c> outcome, or a token from an older shape).
@@ -816,20 +937,22 @@ public static class EmitPipeline
     }
 
     /// <summary>
-    /// One canary leg: emit <see cref="EmitCanarySource"/> against the references
+    /// One canary leg: emit <paramref name="source"/> (<see cref="EmitCanarySource"/> unless the
+    /// <c>flat=</c> leg overrides it) against the references
     /// <paramref name="references"/> produces, into memory, and reduce the outcome to a short
     /// token. Never throws — see the "cannot fail into the fault path it is diagnosing" note on
     /// <see cref="ProbeSharedEmitState"/>. The references arrive as a FACTORY so that building
     /// them is inside this method's try as well: on a poisoned process even
     /// <c>MetadataReference.CreateFromFile</c> is a candidate to fail.
     /// </summary>
-    private static string EmitCanary(Func<IEnumerable<MetadataReference>> references)
+    private static string EmitCanary(
+        Func<IEnumerable<MetadataReference>> references, string source = EmitCanarySource)
     {
         try
         {
             var canary = CSharpCompilation.Create(
                 "MeshWeaverEmitCanary",
-                syntaxTrees: [CSharpSyntaxTree.ParseText(EmitCanarySource)],
+                syntaxTrees: [CSharpSyntaxTree.ParseText(source)],
                 references: references(),
                 options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
