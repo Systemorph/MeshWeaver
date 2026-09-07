@@ -25,10 +25,29 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// </summary>
 public record UpdatePolicyContent
 {
-    /// <summary>The update strategy. Defaults to <see cref="UpdatePolicyKind.Continuous"/>.</summary>
+    /// <summary>
+    /// The update strategy. A NEWLY constructed record defaults to
+    /// <see cref="UpdatePolicyKind.Continuous"/> — but an ABSENT value on a persisted record reads as
+    /// <see cref="UpdatePolicyKind.None"/>, not as Continuous (#3542).
+    ///
+    /// <para>Those two are different questions and used to have the same answer. Because
+    /// <c>None</c> is now the enum's zero value, an explicit <c>Continuous</c> is non-default and is
+    /// therefore always written out, so "the admin chose Continuous" is distinguishable from "this
+    /// record lost its policy" — and the latter fails closed instead of enabling an unattended roll.</para>
+    /// </summary>
     [Description("Update strategy")]
     [Translation("de", "Update-Strategie")]
-    public UpdatePolicyKind Policy { get; init; } = UpdatePolicyKind.Continuous;
+    // 🚨 NO initialiser, deliberately (#3542). System.Text.Json leaves an ABSENT field at whatever
+    // the property initialiser set, so `= Continuous` here made a record that lost its `policy`
+    // deserialise back to auto-update ENABLED — which is the defect, and it is NOT fixed by the enum
+    // reorder alone: the reorder governs what is WRITTEN, the initialiser governs what an absent
+    // field READS AS. Both had to go. Absent now lands on default(UpdatePolicyKind) = None.
+    //
+    // The seed path (`SeedIfAbsent`) still sets the platform default EXPLICITLY via `defaultPolicy`,
+    // so a freshly provisioned install is unchanged; what changes is that `ParseContent`'s two
+    // fallbacks — content absent, or content that failed to deserialise — now yield None instead of
+    // silently enabling unattended rolls on unreadable information.
+    public UpdatePolicyKind Policy { get; init; }
 
     /// <summary>
     /// When <c>true</c> (default) the install only rolls to builds that PASSED CI ("green").
