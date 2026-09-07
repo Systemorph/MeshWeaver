@@ -178,6 +178,15 @@ ARCH_MARKER="architecture.txt"
 ARCH_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$ARCH_MARKER"
 printf '%s\n' "$BAKE_ARCHITECTURE" > "$ARCH_MARKER_LOCAL"
 
+# The PRODUCING REPOSITORY marker (MeshWeaver.Plugins#1430) — same contract as the two above: not
+# part of the reader's contract, written BEFORE the sentinel. It is what lets an instance attribute
+# a sealed source to the repository whose green builds it receives, so its sync sources advance only
+# to the commit sealed for its own identity (SealedPublicationIndex / SealedSyncGate in core). A
+# local run records nothing rather than a guess; the gate attributes such a seal by commit instead.
+REPO_MARKER="repository.txt"
+REPO_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$REPO_MARKER"
+printf '%s\n' "${GITHUB_REPOSITORY:-}" > "$REPO_MARKER_LOCAL"
+
 # ══════════════════════ THE TWO-WRITER POSTCONDITION (MeshWeaver#3461) ══════════════════════
 #
 # 🚨 `<identity>/plugins` HAS SEVERAL WRITERS. Core CD's `plugins-bake` job publishes `bake-source:
@@ -296,6 +305,7 @@ done
 manifest_add "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL"
 manifest_add "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL"
 manifest_add "$ARCH_MARKER" "$ARCH_MARKER_LOCAL"
+manifest_add "$REPO_MARKER" "$REPO_MARKER_LOCAL"
 # The denominator every verification prints and every refusal quotes. A publication with nothing
 # in it cannot be verified into existence, and a zero here would make the sweep below pass having
 # read nothing — the exact vacuity a guard must never render as green.
@@ -564,6 +574,7 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
   # DIRECTORY and fail ParentNotFound (see the SENTINEL_LOCAL comment above).
   upload_published_file "$account" "$share" "$dest" "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL" "$dest"
   upload_published_file "$account" "$share" "$dest" "$ARCH_MARKER" "$ARCH_MARKER_LOCAL" "$dest"
+  upload_published_file "$account" "$share" "$dest" "$REPO_MARKER" "$REPO_MARKER_LOCAL" "$dest"
   # 🚨 THE POSTCONDITION, between the last content upload and the seal (MeshWeaver#3461). Every
   # file above is read back and must still carry THIS run's digest; a foreign publisher that
   # overwrote any of them makes this refuse, and the directory stays sentinel-less rather than
