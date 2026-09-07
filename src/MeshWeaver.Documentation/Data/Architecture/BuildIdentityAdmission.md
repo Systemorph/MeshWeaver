@@ -189,33 +189,32 @@ sweep is broken" would be the wrong summary and was the wrong filing.
 
 | backend | `compilationStatus:Error` | `content.compilationStatus:Error` |
 |---|---|---|
-| in-memory / FileSystem (`QueryEvaluator`) | **matches nothing** — resolves to `null` | reaches the field |
-| Postgres (`PostgreSqlSqlGenerator`, out of repo) | **discriminates** — measured on a live mesh: 5 for `Error`, 195 for `Ok`, disjoint | not measured here |
+| in-memory / FileSystem (`QueryEvaluator`), **before #3511** | **matches nothing** — resolves to `null` | reaches the field |
+| in-memory / FileSystem, **after #3511** | reaches the field | reaches the field |
+| Postgres (`PostgreSqlSqlGenerator`, out of repo) | **discriminates** — measured on a live mesh: 5 for `Error`, 195 for `Ok`, disjoint | the same 5 |
 
-`QueryEvaluator.GetDirectPropertyValue` resolves a selector by reflection against the object it is
-handed — a `MeshNode` — which has no `compilationStatus` property and no `Content` fallback, so the
-comparison is `null == "Error"`: false for every node, and a mesh full of broken types answers
-`count: 0`. `GetPropertyValue` splits on `.` and walks, so `content.compilationStatus` resolves
-`MeshNode.Content` and then `NodeTypeDefinition.CompilationStatus` case-insensitively, and
-`CompareEqual` compares on `ToString()` so the enum name matches the query's literal.
-`SweepSelectorReachesTheCompileStatusTest` pins all three rows of that — the dotted selector answers
-`Error`, the bare one answers `null`, and a healthy type answers `Ok` rather than everything
-answering `Error`.
+`QueryEvaluator` used to resolve a selector by reflection against the object it was handed — a
+`MeshNode` — which has no `compilationStatus` property and had no `Content` fallback, so the
+comparison was `null == "Error"`: false for every node, and a mesh full of broken types answered
+`count: 0`. **The evaluator now has the fallback**, resolving a selector the way SQL always did:
+the node's own field first, else the content field of the same name. So the two providers answer
+this query alike, and `SweepSelectorReachesTheCompileStatusTest` plus the shared
+`SelectorResolutionCorpus` pin both of them against one list. The full account — the ordering
+decision, what it changes on a running portal, and the selectors on which the two providers still
+disagree — is [Query Provider Parity](/Doc/Architecture/QueryProviderParity).
 
-**The consequence is not "the sweep lies" but "the sweep means different things in different
-places".** On the portal a deploy is actually gated on, the bare form discriminates. On a dev
-Monolith, a disposable CI mesh, or any FileSystem-backed host, the same query is green by
-construction — which is the CI-gate-that-skips-on-missing-input shape: *it never ran* and *it
-passed* paint the same colour. A rehearsal of the sweep on a local mesh therefore proves nothing
-about the sweep, and that is exactly what makes the disagreement dangerous rather than merely
-untidy.
+**The consequence, while it lasted, was not "the sweep lies" but "the sweep means different things
+in different places".** On the portal a deploy is actually gated on, the bare form discriminated.
+On a dev Monolith, a disposable CI mesh, or any FileSystem-backed host, the same query was green by
+construction — the CI-gate-that-skips-on-missing-input shape: *it never ran* and *it passed* paint
+the same colour. A rehearsal of the sweep on a local mesh therefore proved nothing about the sweep.
 
-The evaluator is **pinned rather than changed** here: giving it a `Content` fallback would alter the
-meaning of every selector in every query in the platform, and closing the gap properly means one
-test exercising both providers against the same records — #3511's scope, of which the pin above is
-the first half. What this page fixes is the INSTRUCTION. And the instrument that is genuinely
-reader-relative — the one that answers the question this page is about — is `get_diagnostics`, which
-now answers `Foreign`.
+🚨 **The instruction stays `content.compilationStatus:Error` even so.** The fix ships with a
+platform build; the sweep is run against whatever image a portal is *already* running, and the bare
+form answers correctly there only on Postgres. The dotted form is the established production idiom
+(`nodeType:User content.email:…`), it reaches the field on every backend and every deployed image,
+and it says where the field lives. And the instrument that is genuinely reader-relative — the one
+that answers the question this page is about — is `get_diagnostics`, which now answers `Foreign`.
 
 ## What this does not fix
 

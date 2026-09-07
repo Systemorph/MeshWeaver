@@ -115,66 +115,157 @@ public class QueryEvaluator
     }
 
     /// <summary>
-    /// Gets a property value from an object, supporting nested properties (e.g., "address.city").
+    /// The property a selector falls back into when it names nothing on the object itself.
+    /// Resolved case-insensitively like every other selector hop, so it matches
+    /// <see cref="MeshNode.Content"/> however the query spelled it.
+    /// </summary>
+    private const string ContentProperty = "Content";
+
+    /// <summary>
+    /// Gets a property value from an object, supporting nested properties (e.g., "address.city"),
+    /// and — on the FIRST hop only — falling back into the object's <c>Content</c> when the
+    /// selector names nothing on the object itself.
+    ///
+    /// <para>🚨 <b>The fallback is what makes this evaluator agree with the SQL provider</b>
+    /// (Systemorph/MeshWeaver#3511). A query is one language with two implementations: this one,
+    /// which every in-memory, FileSystem and static-node host runs, and
+    /// <c>PostgreSqlSqlGenerator.MapSelector</c>, which every portal runs. The SQL side resolves a
+    /// selector as <i>known column, else <c>content.X</c> walk, else <c>n.content-&gt;&gt;'X'</c></i>
+    /// — so an unknown selector reads the content JSONB there. Without the fallback this side
+    /// answered <c>null</c> instead, and the two providers silently disagreed about which selectors
+    /// exist: <c>compilationStatus:Error</c> discriminated on a portal (measured on a live mesh
+    /// 2026-09-07: 5 Error, 195 Ok, disjoint) and matched NOTHING here, which is the shape where
+    /// "it never ran" and "it passed" paint the same colour.</para>
+    ///
+    /// <para><b>Ordering — the object's own property WINS, content is only the fallback</b>, which
+    /// is <c>MapSelector</c>'s order (<c>PropertyMap</c> is consulted before the
+    /// <c>n.content-&gt;&gt;</c> default) and the only order that changes nothing that works today.
+    /// Content-first would silently re-point every live query whose selector names both — and
+    /// <c>name</c>, <c>description</c>, <c>category</c>, <c>icon</c>, <c>order</c>, <c>state</c> and
+    /// <c>version</c> are common content field names, so <c>name:Foo</c> would start filtering on
+    /// the content's name for a large part of the mesh. This way round, the ONLY selectors whose
+    /// resolution moves are the ones that resolved to <c>null</c> before — i.e. the ones that
+    /// matched nothing.</para>
+    ///
+    /// <para>🚨 <b>The fallback keys on the property being ABSENT, never on its value being
+    /// null</b> — see <see cref="TryGetDirectPropertyValue"/>. A node with no description must keep
+    /// answering <c>null</c> for <c>description</c> rather than reaching into its content, because
+    /// SQL answers the <c>n.description</c> column there and never falls through.</para>
+    ///
+    /// <para><b>First hop only</b>, again for parity: SQL's default is a single root-level
+    /// <c>n.content-&gt;&gt;'X'</c>, so <c>content.status</c> walks <c>Content</c> then
+    /// <c>status</c> and a miss deeper in the walk stays a miss rather than re-entering some
+    /// nested object's own <c>Content</c>.</para>
     /// </summary>
     public object? GetPropertyValue(object obj, string selector)
     {
-        var current = obj;
         var parts = selector.Split('.');
 
-        foreach (var part in parts)
+        var current = ResolveRootSelector(obj, parts[0]);
+
+        for (var i = 1; i < parts.Length; i++)
         {
             if (current == null)
                 return null;
 
-            current = GetDirectPropertyValue(current, part);
+            current = GetDirectPropertyValue(current, parts[i]);
         }
 
         return current;
     }
 
     /// <summary>
-    /// Gets a direct property value from an object.
+    /// The first hop of a selector walk: the object's own property, else the same name read out of
+    /// its <c>Content</c>. See <see cref="GetPropertyValue"/> for why the order is this way round
+    /// and why absence — not nullness — opens the fallback.
+    /// </summary>
+    private object? ResolveRootSelector(object obj, string propertyName)
+    {
+        if (TryGetDirectPropertyValue(obj, propertyName, out var value))
+            return value;
+
+        // The selector names nothing on the object. SQL would read it out of the content JSONB;
+        // do the same, so one query means one thing on every backend.
+        if (TryGetDirectPropertyValue(obj, ContentProperty, out var content) && content is not null)
+            return GetDirectPropertyValue(content, propertyName);
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gets a direct property value from an object; <see langword="null"/> when the object carries
+    /// no such property, which is indistinguishable from a property whose value IS null. Callers
+    /// that must tell those apart — the content fallback does — use
+    /// <see cref="TryGetDirectPropertyValue"/>.
     /// </summary>
     private object? GetDirectPropertyValue(object obj, string propertyName)
+    {
+        TryGetDirectPropertyValue(obj, propertyName, out var value);
+        return value;
+    }
+
+    /// <summary>
+    /// Resolves <paramref name="propertyName"/> on <paramref name="obj"/>, reporting whether the
+    /// property EXISTS separately from what it holds.
+    ///
+    /// <para>The distinction is the whole point: <c>false</c> means "this object has no such
+    /// member", which is what opens the content fallback, while <c>true</c> with a
+    /// <see langword="null"/> value means "it has one and it is empty", which must NOT.</para>
+    /// </summary>
+    private bool TryGetDirectPropertyValue(object obj, string propertyName, out object? value)
     {
         // Handle $type as a special case - return the CLR type name
         if (propertyName == "$type")
         {
-            return obj.GetType().Name;
+            value = obj.GetType().Name;
+            return true;
         }
 
         if (obj is JsonElement jsonElement)
-        {
-            return GetJsonPropertyValue(jsonElement, propertyName);
-        }
+            return TryGetJsonPropertyValue(jsonElement, propertyName, out value);
 
         // Use reflection for regular objects
         var type = obj.GetType();
         var property = type.GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-        return property?.GetValue(obj);
+        if (property is null)
+        {
+            value = null;
+            return false;
+        }
+
+        value = property.GetValue(obj);
+        return true;
     }
 
     /// <summary>
-    /// Gets a property value from a JsonElement.
+    /// Gets a property value from a JsonElement, reporting presence separately from content — the
+    /// JSON counterpart of <see cref="TryGetDirectPropertyValue"/>. A JSON <c>null</c> is PRESENT.
     /// </summary>
-    private object? GetJsonPropertyValue(JsonElement element, string propertyName)
+    private static bool TryGetJsonPropertyValue(JsonElement element, string propertyName, out object? value)
     {
+        value = null;
+
         if (element.ValueKind != JsonValueKind.Object)
-            return null;
+            return false;
 
         // Try exact match first, then case-insensitive
         if (element.TryGetProperty(propertyName, out var prop))
-            return JsonElementToObject(prop);
+        {
+            value = JsonElementToObject(prop);
+            return true;
+        }
 
         // Case-insensitive search
         foreach (var property in element.EnumerateObject())
         {
             if (property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
-                return JsonElementToObject(property.Value);
+            {
+                value = JsonElementToObject(property.Value);
+                return true;
+            }
         }
 
-        return null;
+        return false;
     }
 
     /// <summary>
