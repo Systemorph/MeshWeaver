@@ -174,6 +174,17 @@ printf '%s\n' "${SOURCE_SHA:-unknown}" > "$SOURCE_MARKER_LOCAL"
 # The ARCHITECTURE marker — same contract as the content marker: not part of the reader's
 # contract (SeedPublishedRoot seeds only what the sentinel lists), written BEFORE the sentinel so
 # a sealed directory always carries one, and read by the cross-architecture guard below.
+# The PRODUCING REPOSITORY marker (MeshWeaver.Plugins#1430) — same contract as the content marker:
+# not part of the reader's contract, written BEFORE the sentinel. It is what lets an instance
+# attribute a sealed source to the repository whose green builds it receives, so its sync sources
+# advance only to the commit sealed for its own identity (SealedPublicationIndex / SealedSyncGate
+# in core). A local run records nothing rather than a guess; the gate attributes such a seal by
+# commit instead. Listed and uploaded BEFORE architecture.txt, which stays the LAST upload before
+# the postcondition — the overlap harness hooks its second publisher onto that file.
+REPO_MARKER="repository.txt"
+REPO_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$REPO_MARKER"
+printf '%s\n' "${GITHUB_REPOSITORY:-}" > "$REPO_MARKER_LOCAL"
+
 ARCH_MARKER="architecture.txt"
 ARCH_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$ARCH_MARKER"
 printf '%s\n' "$BAKE_ARCHITECTURE" > "$ARCH_MARKER_LOCAL"
@@ -295,6 +306,7 @@ for m in ${MODULES[@]+"${MODULES[@]}"}; do
 done
 manifest_add "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL"
 manifest_add "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL"
+manifest_add "$REPO_MARKER" "$REPO_MARKER_LOCAL"
 manifest_add "$ARCH_MARKER" "$ARCH_MARKER_LOCAL"
 # The denominator every verification prints and every refusal quotes. A publication with nothing
 # in it cannot be verified into existence, and a zero here would make the sweep below pass having
@@ -563,6 +575,7 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
   # basename. An extensionless "$dest/$SENTINEL" --path would be silently re-interpreted as a
   # DIRECTORY and fail ParentNotFound (see the SENTINEL_LOCAL comment above).
   upload_published_file "$account" "$share" "$dest" "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL" "$dest"
+  upload_published_file "$account" "$share" "$dest" "$REPO_MARKER" "$REPO_MARKER_LOCAL" "$dest"
   upload_published_file "$account" "$share" "$dest" "$ARCH_MARKER" "$ARCH_MARKER_LOCAL" "$dest"
   # 🚨 THE POSTCONDITION, between the last content upload and the seal (MeshWeaver#3461). Every
   # file above is read back and must still carry THIS run's digest; a foreign publisher that
