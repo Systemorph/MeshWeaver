@@ -294,14 +294,10 @@ public static class NodeMenuItemsExtensions
     /// <c>/RemoteControl/Start/Cast?target=…</c>, a plugin front door, a search URL — names an area
     /// this hub's layout definition was never asked about, so it is left alone.</para>
     ///
-    /// <para>🚨 FAILS OPEN, which is the whole point of the Overview probe. <c>HasNamedRenderer</c>
-    /// answers a boolean about something it had to READ, and "the definition is empty / not the one
-    /// that serves this node" must never be collapsed into "this area has no renderer" — that
-    /// direction silently deletes Delete, Copy and Move from every portal at once. A node hub
-    /// ALWAYS carries Overview (<c>AddDefaultLayoutAreas</c> registers it in the same call that
-    /// registers this menu, and nothing can unregister it), so a definition that does not know
-    /// Overview is a definition we cannot trust to answer for the rest — in that case every entry
-    /// is kept and the diagnostic page remains the (visible) outcome.</para>
+    /// <para>🚨 FAILS OPEN — see <see cref="MeshNodeLayoutAreas.CanRenderArea"/>, which owns that
+    /// rule and the Overview probe behind it. "The definition is empty / not the one that serves
+    /// this node" must never collapse into "this area has no renderer": that direction silently
+    /// deletes Delete, Copy and Move from every portal at once.</para>
     /// </summary>
     /// <param name="layout">The layout definition of the hub the menu is being rendered on.</param>
     /// <param name="menuPath">The node path the menu belongs to — the href prefix entries must match.</param>
@@ -309,9 +305,7 @@ public static class NodeMenuItemsExtensions
     /// <returns>The entries whose target this hub can actually render.</returns>
     internal static ImmutableList<NodeMenuItemDefinition> WithoutUnrenderableAreas(
         LayoutDefinition? layout, string menuPath, ImmutableList<NodeMenuItemDefinition> items)
-        => layout is null || !layout.HasNamedRenderer(MeshNodeLayoutAreas.OverviewArea)
-            ? items
-            : items.RemoveAll(item => TargetsUnrenderableArea(layout, menuPath, item));
+        => items.RemoveAll(item => TargetsUnrenderableArea(layout, menuPath, item));
 
     /// <summary>
     /// True when <paramref name="item"/> is a plain navigation to <paramref name="menuPath"/>'s own
@@ -319,14 +313,14 @@ public static class NodeMenuItemsExtensions
     /// <see cref="WithoutUnrenderableAreas"/> for every condition and why each is there.
     /// </summary>
     private static bool TargetsUnrenderableArea(
-        LayoutDefinition layout, string menuPath, NodeMenuItemDefinition item)
+        LayoutDefinition? layout, string menuPath, NodeMenuItemDefinition item)
         => !item.IsAction
            && !item.IsSubmenuParent
            && item.Area is { Length: > 0 }
            && item.Area[0] != '_'
            && string.Equals(item.Href, MeshNodeLayoutAreas.BuildUrl(menuPath, item.Area),
                StringComparison.Ordinal)
-           && !layout.HasNamedRenderer(item.Area);
+           && !MeshNodeLayoutAreas.CanRenderArea(layout, item.Area);
 
     /// <summary>
     /// Default provider for the "Mesh" menu — mesh-level operations.

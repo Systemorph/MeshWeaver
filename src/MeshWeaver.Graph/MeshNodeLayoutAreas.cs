@@ -593,26 +593,35 @@ public static class MeshNodeLayoutAreas
 
         if (canEdit)
         {
-            row = row.WithView(Controls.Button(host.Localize("common.edit"))
-                .WithAppearance(Appearance.Neutral)
-                .WithIconStart(FluentIcons.Edit())
-                .WithNavigateToHref(BuildUrl(nodePath, EditArea)));
+            // 🚨 Each button is gated on its area actually rendering HERE — the same probe the node
+            // menu uses, for the same reason: Copy, Move and Delete render from the optional
+            // MeshWeaver.Graph.Views (DefaultViews) package, and this row is the SECOND way into
+            // those areas (#3604 named it). CanRenderArea fails OPEN, so on a portal carrying the
+            // package nothing changes at all.
+            if (CanRenderArea(host.LayoutDefinition, EditArea))
+                row = row.WithView(Controls.Button(host.Localize("common.edit"))
+                    .WithAppearance(Appearance.Neutral)
+                    .WithIconStart(FluentIcons.Edit())
+                    .WithNavigateToHref(BuildUrl(nodePath, EditArea)));
 
-            row = row.WithView(Controls.Button(host.Localize("menu.copy"))
-                .WithAppearance(Appearance.Neutral)
-                .WithIconStart(FluentIcons.Copy())
-                .WithNavigateToHref(BuildUrl(nodePath, CopyArea)));
+            if (CanRenderArea(host.LayoutDefinition, CopyArea))
+                row = row.WithView(Controls.Button(host.Localize("menu.copy"))
+                    .WithAppearance(Appearance.Neutral)
+                    .WithIconStart(FluentIcons.Copy())
+                    .WithNavigateToHref(BuildUrl(nodePath, CopyArea)));
 
-            row = row.WithView(Controls.Button(host.Localize("menu.move"))
-                .WithAppearance(Appearance.Neutral)
-                .WithIconStart(FluentIcons.ArrowMove())
-                .WithNavigateToHref(BuildUrl(nodePath, MoveArea)));
+            if (CanRenderArea(host.LayoutDefinition, MoveArea))
+                row = row.WithView(Controls.Button(host.Localize("menu.move"))
+                    .WithAppearance(Appearance.Neutral)
+                    .WithIconStart(FluentIcons.ArrowMove())
+                    .WithNavigateToHref(BuildUrl(nodePath, MoveArea)));
 
-            row = row.WithView(Controls.Button(host.Localize("common.delete"))
-                .WithAppearance(Appearance.Neutral)
-                .WithStyle("color: var(--error, #d32f2f);")
-                .WithIconStart(FluentIcons.Delete())
-                .WithNavigateToHref(BuildUrl(nodePath, DeleteArea)));
+            if (CanRenderArea(host.LayoutDefinition, DeleteArea))
+                row = row.WithView(Controls.Button(host.Localize("common.delete"))
+                    .WithAppearance(Appearance.Neutral)
+                    .WithStyle("color: var(--error, #d32f2f);")
+                    .WithIconStart(FluentIcons.Delete())
+                    .WithNavigateToHref(BuildUrl(nodePath, DeleteArea)));
         }
 
         return row;
@@ -673,6 +682,36 @@ public static class MeshNodeLayoutAreas
             url += $"?{queryString}";
         return url;
     }
+
+    /// <summary>
+    /// Whether <paramref name="area"/> has a renderer on <paramref name="layout"/> — the ONE probe
+    /// behind every "do not offer what this hub cannot do" decision (issue #3604), used by the node
+    /// menu (<c>NodeMenuItemsExtensions.WithoutUnrenderableAreas</c>) and by the header's own
+    /// Edit / Copy / Move / Delete buttons.
+    ///
+    /// <para>Why it is needed: the platform emits those affordances, but the RENDERERS for Delete,
+    /// Copy, Move, Versions, Pin, Import, Stop sync, Access control and Groups ship in the optional
+    /// <c>MeshWeaver.Graph.Views</c> (<c>DefaultViews</c>) package. On a mesh without it, each one
+    /// was still offered and every click landed on the layout engine's diagnostic page —
+    /// <c>"Area not found — No renderer is registered for area `Delete`"</c>.</para>
+    ///
+    /// <para>🚨 <b>It FAILS OPEN, and the <see cref="OverviewArea"/> probe is the whole reason.</b>
+    /// <c>HasNamedRenderer</c> answers a boolean about something it had to READ, and "this
+    /// definition is empty, or is not the one that serves this node" must never be collapsed into
+    /// "this area has no renderer" — that direction silently removes Delete, Copy and Move from
+    /// every portal at once. A node hub ALWAYS carries <see cref="OverviewArea"/>
+    /// (<c>AddDefaultLayoutAreas</c> registers it in the same call that registers the menu, and
+    /// nothing can unregister it), so a definition that does not know Overview is one that cannot be
+    /// trusted to answer for the rest: everything is kept, and the visible diagnostic page remains
+    /// the outcome.</para>
+    /// </summary>
+    /// <param name="layout">The layout definition of the hub the affordance is rendered on.</param>
+    /// <param name="area">The area name the affordance navigates to.</param>
+    /// <returns><c>true</c> when the area renders here, or when the definition cannot be trusted to say.</returns>
+    internal static bool CanRenderArea(LayoutDefinition? layout, string area)
+        => layout is null
+           || !layout.HasNamedRenderer(OverviewArea)
+           || layout.HasNamedRenderer(area);
 
     /// <summary>
     /// Returns the Edit menu item if the user has Update permission.

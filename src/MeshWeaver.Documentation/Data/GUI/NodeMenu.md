@@ -136,13 +136,20 @@ is a submenu parent, a separator, a group, or an entry linking anywhere but `/{n
 absolute href such as Cast's `/RemoteControl/Start/Cast?target=…` names an area this hub was never
 asked about.
 
-🚨 **It fails OPEN, and the Overview probe is why.** `HasNamedRenderer` answers a boolean about
-something it had to read, and "this definition is empty, or is not the one that serves this node"
-must never be collapsed into "this area has no renderer" — that direction silently deletes Delete,
-Copy and Move from every portal at once. A node hub always carries `Overview` (registered by the same
-`AddDefaultLayoutAreas` call that registers this menu, and nothing can unregister it), so a
-definition that does not know `Overview` is one that cannot be trusted to answer for the rest: every
-entry is kept, and the visible diagnostic page remains the outcome.
+🚨 **It fails OPEN, and the Overview probe is why.** The one rule is
+`MeshNodeLayoutAreas.CanRenderArea`. `HasNamedRenderer` answers a boolean about something it had to
+read, and "this definition is empty, or is not the one that serves this node" must never be collapsed
+into "this area has no renderer" — that direction silently deletes Delete, Copy and Move from every
+portal at once. A node hub always carries `Overview` (registered by the same `AddDefaultLayoutAreas`
+call that registers this menu, and nothing can unregister it), so a definition that does not know
+`Overview` is one that cannot be trusted to answer for the rest: every entry is kept, and the visible
+diagnostic page remains the outcome.
+
+**The node header's button row is the second way in, and it uses the same probe.**
+`MeshNodeLayoutAreas.BuildHeaderActionRow` renders Edit / Copy / Move / Delete as buttons carrying
+the identical `/{node}/{area}` hrefs, so hiding the menu entry alone would have left the dead link
+one click away. Each button is gated on `CanRenderArea` for its own area. On a portal carrying the
+package, neither surface changes at all.
 
 Contributed providers are not filtered — a provider owns the applicability of what it emits, which is
 what `RequiredPermission` already expresses. If you contribute an entry pointing at an area, register

@@ -130,3 +130,51 @@ public class NodeMenuHidesUnrenderableAreasTest(ITestOutputHelper output)
         Assert.Contains(items, m => m.Area == MeshNodeLayoutAreas.FilesArea);
     }
 }
+
+/// <summary>
+/// The probe itself, in isolation — <see cref="MeshNodeLayoutAreas.CanRenderArea"/> is the ONE
+/// rule behind both the node menu and the header's Edit / Copy / Move / Delete buttons, and its
+/// fail-open direction is the half that cannot be observed end to end (a definition that has lost
+/// Overview is not a state a working mesh can be driven into).
+/// </summary>
+public class CanRenderAreaTest
+{
+    private static LayoutDefinition Definition(params string[] areas)
+    {
+        var layout = new LayoutDefinition(null!);
+        foreach (var area in areas)
+            layout = layout.WithNamedRenderer(area,
+                (LayoutAreaHost _, RenderingContext _, EntityStore _) =>
+                    Observable.Empty<EntityStoreAndUpdates>());
+        return layout;
+    }
+
+    /// <summary>The everyday answer: registered here ⇒ offer it.</summary>
+    [Fact]
+    public void ARegisteredAreaCanRender()
+        => Assert.True(MeshNodeLayoutAreas.CanRenderArea(
+            Definition(MeshNodeLayoutAreas.OverviewArea, MeshNodeLayoutAreas.DeleteArea),
+            MeshNodeLayoutAreas.DeleteArea));
+
+    /// <summary>The defect #3604 reported: nothing serves it ⇒ do not offer it.</summary>
+    [Fact]
+    public void AnUnregisteredAreaCannotRender()
+        => Assert.False(MeshNodeLayoutAreas.CanRenderArea(
+            Definition(MeshNodeLayoutAreas.OverviewArea),
+            MeshNodeLayoutAreas.DeleteArea));
+
+    /// <summary>
+    /// 🚨 The direction that matters. A definition that does not know Overview is one this probe
+    /// cannot trust — every node hub carries Overview — so "cannot tell" answers YES, and the
+    /// visible diagnostic page stays. Answering NO here would strip Delete, Copy and Move from
+    /// every portal at once.
+    /// </summary>
+    [Fact]
+    public void ADefinitionThatCannotAnswerSaysYes()
+    {
+        Assert.True(MeshNodeLayoutAreas.CanRenderArea(
+            Definition(), MeshNodeLayoutAreas.DeleteArea));
+        Assert.True(MeshNodeLayoutAreas.CanRenderArea(
+            layout: null, MeshNodeLayoutAreas.DeleteArea));
+    }
+}
