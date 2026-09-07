@@ -610,11 +610,17 @@ Minutes after 12b, opening the pull request for this very page failed:
 Post "https://api.github.com/graphql": net/http: TLS handshake timeout
 ```
 
-**The standing remedy would have been wrong here, and it is the remedy this repository writes down.**
+🚨 **The standing remedy is SAFE here and NOT SUFFICIENT — and the difference is the whole entry.**
 AGENTS.md's rule for a failed GitHub call — *on a refusal STOP for at least five minutes, do not
-retry, do not switch queries* — is correct and hard-won. It is also, like almost all retry advice,
-**implicitly about READS**. Applied to a mutation it is not merely unhelpful; the *opposite* advice —
-"just try again" — is the one that does damage, and nothing in the error distinguishes the two cases.
+retry, do not switch queries* — is correct, hard-won, and its **"do not retry" half is exactly what
+prevents the duplicate**. So this is not a correction to that rule. It is an addition to it: for a
+write, stopping is necessary and leaves you knowing nothing, because you still cannot say whether the
+thing happened. A read can stop and simply be asked again later; a write cannot resume until someone
+establishes which of two states the system is in.
+
+The advice that *does* damage is the ordinary reflex the rule exists to suppress — "just try again" —
+and nothing in the error text distinguishes the case where it is harmless from the case where it is
+not.
 
 > **A timeout on a READ means ask again — the worst case is a wasted call.**
 > **A timeout on a WRITE means find out what happened, then decide.**
@@ -648,6 +654,30 @@ that would have falsified the claim, run by the party that did not make it.
 a tag push, a `POST` that provisions something, an issue comment. Before any retry of a mutation,
 name the read that distinguishes *landed* from *did not land* — and if no such read exists, that is
 worth knowing before you need it, not after.
+
+🚨 **But the axis is IDEMPOTENCE, not write-ness — and this entry proved it on itself minutes later.**
+Pushing this very section failed with `Could not resolve host: github.com`. That is a *stronger*
+failure than the timeout above (DNS resolution precedes any connection, so the request provably never
+left) — and it would not have mattered either way, because `git push` of a named ref **is
+idempotent**: repeating it converges on the same remote state. `gh pr create` is not; repeating it
+creates a second pull request.
+
+So the rule is not "never retry a write". It is:
+
+> **Never retry a NON-IDEMPOTENT write without the read that says whether it landed.**
+> An idempotent one may simply be repeated.
+
+The distinguishing read was cheap and was run anyway, because "provably never left" is a claim worth
+one command rather than one inference:
+
+```bash
+git rev-parse HEAD                                  # 1ba7eb461…  local
+git ls-remote origin refs/heads/<branch> | cut -f1   # b818b4f75…  remote — the push had NOT landed
+```
+
+Classify the operation *before* choosing the recovery, and note which of the three the error tells you
+about: whether the request was sent, whether it was applied, and whether the operation is safe to
+repeat. Most transport errors answer only the first, and only sometimes.
 
 ## What the whole family has in common
 
@@ -746,11 +776,13 @@ carries its own control arm is that thesis applied to itself.
    Remove the input, or require it and refuse the empty value — never accept it and proceed. If you
    removed it by hardcoding, the hardcoded set is now a transitional artifact: delete it with the
    change, or it goes stale into the same shape.
-13. **Never retry a failed WRITE without a read that says whether it landed.** Retry advice — this
-   page's included — is written for reads, where the cost of asking again is a wasted call. A
+13. **Never retry a NON-IDEMPOTENT write without a read that says whether it landed.** Retry advice —
+   this page's included — is written for reads, where the cost of asking again is a wasted call. A
    mutation whose response was lost may well have succeeded, and the blind retry produces the
-   duplicate *and* destroys the evidence. Name the distinguishing read first; if there is none, learn
-   that before you need it.
+   duplicate *and* destroys the evidence. Classify first: an idempotent write (`git push` of a named
+   ref, a `PUT` to a fixed path) may simply be repeated; a non-idempotent one (`gh pr create`, a
+   `POST` that mints an id) may not. Then name the distinguishing read; if there is none, learn that
+   before you need it.
 14. **Stop the waiter you replace.** A backgrounded `sleep …; poll` waiter spawned once per turn
    accumulates silently, and a process match on the caller cannot see it — it is sleeping, not
    calling, for nearly all of its life. Count the waiters, not the calls in flight.
