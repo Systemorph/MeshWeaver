@@ -55,7 +55,9 @@ things were true of that design and both were measured:
 The replacement is a **stall detector** that observes and reports. It keeps everything the
 watchdog got right — it measures a stall, re-armed on every `RunLevel` transition anywhere in the
 subtree, so a slow nested teardown never trips it (#1701) — and it stops doing the one thing that
-was wrong: it performs no teardown. See the five verdicts below.
+was wrong: it performs no teardown. See the verdicts below — and
+[Reading a Disposal Stall Verdict](/Doc/Architecture/DisposalStallVerdicts) for what each field of
+the snapshot they print actually measures.
 
 ---
 
@@ -123,11 +125,11 @@ parked behind its gates is answered `ShuttingDown` and reported (`[DISPOSE-DISCA
 
 ---
 
-## Layer 2 — the hub goes down behind its work: the five stall verdicts
+## Layer 2 — the hub goes down behind its work: the stall verdicts
 
 `MessageHub.OnDisposalStall` runs every `DisposalWatchdogTimeout` (8 s) during which nothing in the
-subtree changed `RunLevel`. It reads the pump's completed-turn counter and the executing turn, and
-reaches exactly one of these:
+subtree changed `RunLevel`. It reads the pump's completed-turn and **dequeued-turn** counters, the
+count of drain bodies actually executing, and the executing turn, and reaches exactly one of these:
 
 | Verdict | Condition | Action | Level / event |
 |---|---|---|---|
@@ -135,7 +137,16 @@ reaches exactly one of these:
 | **wedged turn, first strike** | a turn has held the block for the whole budget | `CancelExecution()` once | **Error** `[DISPOSE-WEDGE]` (7311) |
 | **wedged turn, ignores cancellation** | same turn, another budget later | none — report again every budget | **Error** `DISPOSAL DEADLOCK DETECTED` (7312) |
 | **ShutDown phase blocked** | the executing turn *is* the `ShutdownRequest` | none — it runs with `CancellationToken.None`; the finding is the registrant that blocks inside `DisposeImpl` / `messageService.Dispose` | **Error** (7314) |
-| **stalled below** | no turn executing, no progress | none — the stall is in a child or a join; the diagnostics name it | **Error** (7313) |
+| **the pump is not turning** | queue non-empty, the drain flag latched, **nothing dequeued** for a whole budget, nothing on the block | none — the stall is in THIS hub's turn scheduling; the line prints `drainsInFlight` and the dequeue delta | **Error** (7316) |
+| **stalled below** | no turn executing, no progress, **and there is something below** (hosted hubs, an outstanding join, or past `DisposeHostedHubs`) | none — the stall is in a child or a join; the diagnostics name it | **Error** (7313) |
+| **unclassified** | none of the above | none — the line states explicitly that it does not identify a cause | **Error** (7317) |
+
+🚨 **The last three are #3593.** "Stalled below" used to be the unguarded fallback, so the
+queue-non-empty-but-nothing-dequeued case fell into it and 47 reports in one pod shutdown told their
+readers to look at children of hubs still at `RunLevel=Started` — hubs that have asked nothing below
+them to do anything. A verdict may only assert what its snapshot measured; the counters that make
+that possible, and the two misreadings the old snapshot invited, are in
+[Reading a Disposal Stall Verdict](/Doc/Architecture/DisposalStallVerdicts).
 
 Every Error carries the hub address, the message type and its age, the queue depth, the last
 progress signal, the `RunLevel`, and the **recursive disposal snapshot** (every hosted hub's

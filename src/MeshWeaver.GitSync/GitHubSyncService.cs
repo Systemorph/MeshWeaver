@@ -581,8 +581,14 @@ public sealed class GitHubSyncService
                 {
                     // 🚨 The ignore rules travel WITH the source (issue #1326): the importer's prune
                     // needs them to tell "the repo dropped this node" from "this node never syncs".
+                    // 🚨 So does the fetch's COMPLETENESS verdict (issue #3589): a truncated GitHub
+                    // tree arrives as HTTP 200 with a partial file list, and the prune's inference
+                    // ("absent from the source ⇒ deleted from the source") is unsound on one. The
+                    // import still upserts everything it did read — only the deletion half is
+                    // withheld, because a stale extra is recoverable and a silent delete is not.
                     var source = new InMemoryStaticRepoSource(
-                        spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs, ignore);
+                        spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs, ignore,
+                        listingIsComplete: snapshot.ListingIsComplete);
                     var changedNodePaths = ChangedNodePaths(changedFiles, spaceId);
                     if (changedNodePaths is not null)
                         logger?.LogInformation(

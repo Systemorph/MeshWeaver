@@ -70,6 +70,35 @@ public interface IStaticRepoSource
     IReadOnlyList<MeshNode> EnumerateSourceNodes();
 
     /// <summary>
+    /// Whether <see cref="EnumerateSourceNodes"/> is the source's COMPLETE listing, or only as much
+    /// of it as could be read. <c>false</c> means <b>the answer is indeterminate</b>: some of what
+    /// the source carries is missing from the enumeration for a reason that has nothing to do with
+    /// the author deleting it.
+    ///
+    /// <para>🚨 <b>The prune reads "absent from the source" as "deleted from the source".</b> That
+    /// inference is only sound when the listing is COMPLETE — otherwise a read failure is laundered
+    /// into a deletion, and under the default <see cref="PartitionSyncMode.FullReplace"/> the import
+    /// mirrors away every node the reader happened not to see. So an incomplete listing prunes
+    /// NOTHING (<c>StaticRepoImporter.ComputePrunableNodes</c> returns empty before any other guard)
+    /// and says so on the import activity.</para>
+    ///
+    /// <para><b>Which direction this closes, and why the other one is worse (issue #3589).</b>
+    /// Fail-closed leaves genuinely-retired nodes behind for one more import — visible, recoverable,
+    /// and self-correcting the moment the listing can be read in full. Fail-open DELETES live user
+    /// data on the strength of a read that never happened, and the deletion is indistinguishable
+    /// from an intended one in every log. A stale extra is a nuisance; a silent delete is data
+    /// loss.</para>
+    ///
+    /// <para>Defaults to <c>true</c> — a source that materializes its nodes from an embedded
+    /// assembly, or from a full clone, cannot return a partial listing, so it has nothing to
+    /// declare. The declaration exists for sources whose listing is a REMOTE READ that can come back
+    /// partial: <c>InMemoryStaticRepoSource</c> carries GitHub's <c>truncated</c> flag from the
+    /// recursive-tree response, which GitHub sets — on an HTTP 200 — when the tree exceeds its
+    /// response cap.</para>
+    /// </summary>
+    bool ListingIsComplete => true;
+
+    /// <summary>
     /// Optional customization of the partition <b>root</b> node (<c>namespace="", id={Partition}</c>).
     /// The importer always ensures a proper <c>Space</c> root exists for the partition as a standard
     /// step; when this returns <c>null</c> it synthesizes a generic <c>Space</c> root. Override it to

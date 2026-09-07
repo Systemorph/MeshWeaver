@@ -50,8 +50,11 @@ public interface IGitHubRepoClient
         ArgumentNullException.ThrowIfNull(pathFilter);
         return Fetch(repositoryUrl, commitish, subdirectory, accessToken)
             .Select(snapshot => new RepoSnapshot(
-                snapshot.CommitSha,
-                snapshot.Files.Where(f => pathFilter(f.Path)).ToArray()));
+                    snapshot.CommitSha,
+                    snapshot.Files.Where(f => pathFilter(f.Path)).ToArray())
+                // Filtering narrows WHICH files are returned; it can never make a partial listing
+                // whole, so the completeness verdict is carried, never re-derived.
+                { ListingIsComplete = snapshot.ListingIsComplete });
     }
 
     /// <summary>
@@ -185,7 +188,27 @@ public interface IGitHubRepoClient
 }
 
 /// <summary>A point-in-time snapshot of a repo subtree — the resolved commit SHA + its files.</summary>
-public record RepoSnapshot(string CommitSha, IReadOnlyList<RepoFile> Files);
+public record RepoSnapshot(string CommitSha, IReadOnlyList<RepoFile> Files)
+{
+    /// <summary>
+    /// Whether <see cref="Files"/> is the COMPLETE listing at <see cref="CommitSha"/>, or only as
+    /// much of it as the reader could get. <c>false</c> means the answer is INDETERMINATE — a file
+    /// missing here is not evidence that the repository does not carry it.
+    ///
+    /// <para>🚨 GitHub answers HTTP 200 with a PARTIAL list when a recursive tree exceeds its
+    /// response cap, flagging it only with <c>truncated: true</c> in the body (issue #3589). Read as
+    /// a complete answer, that partial list makes every omitted file look deleted, and a
+    /// <see cref="MeshWeaver.Mesh.PartitionSyncMode.FullReplace"/> import mirrors the corresponding
+    /// mesh nodes away. This flag carries the indeterminacy to the importer, which then prunes
+    /// nothing rather than deleting on an unread answer — the same shape
+    /// <see cref="IGitHubRepoClient.GetChangedPaths"/> already uses for a truncated <em>compare</em>
+    /// (null = "diff unknown → full import", never "nothing changed").</para>
+    ///
+    /// <para>Defaults to <c>true</c>: a snapshot built from a full clone or a local directory cannot
+    /// be partial, so only the remote tree reader has anything to declare.</para>
+    /// </summary>
+    public bool ListingIsComplete { get; init; } = true;
+}
 
 /// <summary>
 /// A repository's identity as <c>owner</c> + <c>repo</c> — the pair every stored url and every
