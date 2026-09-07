@@ -599,6 +599,7 @@
   "ui.connectOAuth": "Connect with the remote's login (OAuth)",
   "ui.applyUpdateNow": "Apply available update now",
   "ui.updateNoNewerVersion": "_No newer version detected yet._",
+  "ui.updateInstalledTagWithdrawn": "🚨 **This installation runs `{0}`, which is no longer published.** The image it points at has been removed from the registry, so no new instance can start from it — and nothing will ever look newer than a version that no longer exists. Updates now target the best available release instead of reporting that everything is up to date.",
   "ui.updateNeverChecked": "_This install has not completed an update check yet — so nothing here says a newer version does not exist. If this persists, the update checker is not running._",
   "ui.updateLatestAvailable": "**Latest available:** `{0}`",
   "ui.updateCheckedAt": "_(checked {0})_",

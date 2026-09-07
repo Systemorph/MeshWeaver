@@ -13,13 +13,17 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class VersionSelectTest
 {
-    // 3.1.0-ci.5 is the newest overall (base 3.1.0 beats 3.0.0); the only CLEAN release is 3.0.0.
+    // 3.1.0-ci.55 is the newest overall (run 55 is the latest publication); the only CLEAN release
+    // is 3.0.0. 🚨 The build number was 5 here until #3542: a 3.1.0 LABEL over an EARLIER run than
+    // 3.0.0-ci.51, which is the slip shape itself, and the assertion below then pinned the defect as
+    // the contract. Real tags cannot look like that — the number is the CI run number and only ever
+    // increases — so the data now says what the pipeline actually produces.
     private static readonly string[] Tags =
-        ["3.0.0", "3.0.0-ci.40", "3.0.0-ci.51", "3.1.0-ci.5", "garbage", "latest", "main"];
+        ["3.0.0", "3.0.0-ci.40", "3.0.0-ci.51", "3.1.0-ci.55", "garbage", "latest", "main"];
 
     [Fact]
     public void Continuous_PicksNewestTag_IncludingBuildNumbered()
-        => Assert.Equal("3.1.0-ci.5", VersionSelect.PickTarget(Tags, UpdatePolicyKind.Continuous));
+        => Assert.Equal("3.1.0-ci.55", VersionSelect.PickTarget(Tags, UpdatePolicyKind.Continuous));
 
     [Fact]
     public void Stable_PicksNewestCleanRelease_IgnoringBuildNumbered()
@@ -61,15 +65,18 @@ public class VersionSelectTest
 
     [Fact]
     public void Any_RequireCiGreenFalse_IncludesEdgeBuilds()
-        => Assert.Equal("3.1.0-edge.7",
-            VersionSelect.PickTarget(["3.0.0-ci.51", "3.1.0-edge.7"], UpdatePolicyKind.Continuous, requireCiGreen: false));
+        // 🚨 edge.70, not edge.7: `edge-images.yml` rewrites `.ci.` to `.edge.` and keeps the same
+        // run number, so an edge build that is genuinely newer carries a HIGHER one. Pinning
+        // "3.1.0-edge.7 beats 3.0.0-ci.51" would be pinning the #3542 defect under another label.
+        => Assert.Equal("3.1.0-edge.70",
+            VersionSelect.PickTarget(["3.0.0-ci.51", "3.1.0-edge.70"], UpdatePolicyKind.Continuous, requireCiGreen: false));
 
     [Fact]
     public void UpdatePolicyContent_DefaultsToRequireCiGreen()
         => Assert.True(new UpdatePolicyContent().RequireCiGreen, "green-only must be the safe default");
 
     [Theory]
-    [InlineData("3.1.0-ci.5", "3.0.0-ci.51", true)]   // higher base wins
+    [InlineData("3.1.0-ci.55", "3.0.0-ci.51", true)]  // later run on a higher base wins
     [InlineData("3.0.0-ci.51", "3.0.0-ci.40", true)]  // monotonic ci number
     [InlineData("3.0.0", "3.0.0-ci.51", true)]        // release beats its prerelease
     [InlineData("3.0.0-ci.40", "3.0.0-ci.51", false)] // older ci number
@@ -166,5 +173,226 @@ public class VersionSelectTest
 
         Assert.Equal(["3.1.0", "3.0.0"], VersionSelect.PickTargets(tags, UpdatePolicyKind.Stable));
         Assert.Empty(VersionSelect.PickTargets(tags, UpdatePolicyKind.None));
+    }
+
+    // ───────── #3542: the key is the sealed-publication LINEAGE, not the version string ─────────
+
+    /// <summary>
+    /// 🚨 <b>The incident, in one assertion.</b> On 2026-09-05 <c>Directory.Build.props</c> briefly
+    /// read <c>3.1.0</c>, so runs 7832–7841 published as <c>3.1.0-ci.*</c> and were withdrawn. Ordered
+    /// by SemVer those outrank every later, SEALED <c>3.0.0-ci.79xx</c> set forever — and on
+    /// 2026-09-07 memex-cloud rolled itself onto <c>3.1.0-ci.7841</c>, three days behind, onto a line
+    /// nobody had published for two days.
+    ///
+    /// <para>Nothing in the release process can prevent that: 7841 passed promote, bake, seal and
+    /// register. Every gate it has says yes, and none of them asks whether this core is NEWER than
+    /// what the fleet already runs. Only the ordering can, and only once it stops reading a
+    /// hand-maintained label as if it were the publication order.</para>
+    /// </summary>
+    [Fact]
+    public void AMislabelledLine_NeverOutranksALaterSealedSet()
+    {
+        // The registry as it stood on 2026-09-07, minus the noise.
+        string[] tags =
+        [
+            "3.0.0-rc9.ci.7693", "3.1.0-ci.7832", "3.1.0-ci.7841",
+            "3.0.0-ci.7955", "3.0.0-ci.7962", "3.0.0-ci.7977",
+        ];
+
+        Assert.Equal("3.0.0-ci.7977", VersionSelect.PickTarget(tags, UpdatePolicyKind.Continuous));
+        Assert.Equal(
+            [
+                "3.0.0-ci.7977", "3.0.0-ci.7962", "3.0.0-ci.7955",
+                "3.1.0-ci.7841", "3.1.0-ci.7832", "3.0.0-rc9.ci.7693",
+            ],
+            VersionSelect.PickTargets(tags, UpdatePolicyKind.Continuous));
+    }
+
+    /// <summary>
+    /// 🚨 The other half of the same defect: once ON the mislabelled tag, nothing is ever newer, so
+    /// the install can never leave under its own power — an operator had to move both AKS portals by
+    /// hand. Lineage answers it (7977 was published after 7841, whatever the labels say), and the
+    /// reverse must stay false or the two would trade places on every check.
+    /// </summary>
+    [Fact]
+    public void AnInstallOnTheMislabelledTag_SeesTheLaterSealedSetAsNewer()
+    {
+        Assert.True(VersionSelect.IsNewer("3.0.0-ci.7977", "3.1.0-ci.7841"));
+        Assert.False(VersionSelect.IsNewer("3.1.0-ci.7841", "3.0.0-ci.7977"));
+    }
+
+    /// <summary>
+    /// 🚨 The trap one layer down, and the reason "just stop bumping the line" is not the fix: SemVer
+    /// §11.4 compares pre-release identifiers as TEXT, so <c>rc9</c> sorts above <c>ci</c> and the
+    /// retired rc images still in ACR outrank every clean-line build. With the 3.1.0 tags removed the
+    /// selector simply picked the next mislabelled tag — a 2026-09-04 build — and would have rolled
+    /// the portal onto it within the hour.
+    /// </summary>
+    [Fact]
+    public void ARetiredPrereleaseLabel_DoesNotOutrankALaterRun()
+    {
+        Assert.Equal(
+            "3.0.0-ci.7977",
+            VersionSelect.PickTarget(["3.0.0-rc9.ci.7824", "3.0.0-ci.7977"], UpdatePolicyKind.Continuous));
+        Assert.False(VersionSelect.IsNewer("3.0.0-rc9.ci.7824", "3.0.0-ci.7977"));
+        Assert.True(VersionSelect.IsNewer("3.0.0-ci.7977", "3.0.0-rc9.ci.7824"));
+    }
+
+    /// <summary>
+    /// 🚨 The regression the lineage key must NOT introduce. An official release is a PROMOTION and
+    /// carries no run number of its own, so a Stable install running a continuous build has only the
+    /// version string to compare against — and it must still be able to reach the clean release it is
+    /// waiting for. That is why <c>IsNewer</c> falls back to SemVer whenever either side is a
+    /// promotion, and why the Stable ordering is untouched.
+    /// </summary>
+    [Fact]
+    public void AnOfficialRelease_IsStillReachableFromAContinuousBuild()
+    {
+        Assert.True(VersionSelect.IsNewer("3.1.0", "3.0.0-ci.7977"));
+        Assert.True(VersionSelect.IsNewer("3.0.0", "3.0.0-ci.7977"));
+        Assert.Equal(
+            ["3.1.0", "3.0.0"],
+            VersionSelect.PickTargets(["3.0.0", "3.1.0", "3.0.0-ci.7977"], UpdatePolicyKind.Stable));
+    }
+
+    /// <summary>The run number is read out of all four shapes the pipeline publishes — both
+    /// separators (<c>Directory.Build.props</c> requires it), the retired rc line, the edge channel —
+    /// and is absent exactly for a promotion tag.</summary>
+    [Theory]
+    [InlineData("3.0.0-ci.7977", 7977L)]
+    [InlineData("3.0.0-rc9.ci.7824", 7824L)]
+    [InlineData("3.0.0-edge.7977", 7977L)]
+    [InlineData("3.0.0-ci.7977+build.638", 7977L)]
+    [InlineData("3.0.0", null)]
+    [InlineData("3.0.0-rc6", null)]
+    [InlineData("main", null)]
+    public void BuildOrdinal_ReadsThePublishingRunNumber(string version, long? expected)
+        => Assert.Equal(expected, VersionSelect.BuildOrdinal(version));
+
+    // ───────── #3543: "I am current" is not the same as "my tag no longer exists" ─────────
+
+    /// <summary>
+    /// 🚨 <b>The three states, and why the third one exists.</b> A check that asks a boolean about
+    /// something it had to READ must not fold a failed read into a real negative: an unparseable
+    /// running version, or a listing carrying no platform tags at all, means the question was never
+    /// answered — and answering it "withdrawn" would strand-recover the whole fleet off one bad ACR
+    /// response.
+    /// </summary>
+    [Fact]
+    public void CheckInstalledTag_SeparatesCurrent_FromWithdrawn_FromCouldNotTell()
+    {
+        string[] registry = ["3.0.0-ci.7955", "3.0.0-ci.7977", "main", "6943991"];
+
+        Assert.Equal(
+            VersionSelect.InstalledTagResolution.Resolved,
+            VersionSelect.CheckInstalledTag(registry, "3.0.0-ci.7977").Resolution);
+        // The running InformationalVersion carries +build.<ticks>; the registry tag does not.
+        Assert.Equal(
+            VersionSelect.InstalledTagResolution.Resolved,
+            VersionSelect.CheckInstalledTag(registry, "3.0.0-ci.7977+build.638123456789").Resolution);
+        Assert.Equal(
+            VersionSelect.InstalledTagResolution.Withdrawn,
+            VersionSelect.CheckInstalledTag(registry, "3.1.0-ci.7841").Resolution);
+        Assert.Equal(
+            VersionSelect.InstalledTagResolution.Indeterminate,
+            VersionSelect.CheckInstalledTag(registry, "unknown").Resolution);
+        Assert.Equal(
+            VersionSelect.InstalledTagResolution.Indeterminate,
+            VersionSelect.CheckInstalledTag(["main", "6943991"], "3.0.0-ci.7977").Resolution);
+        Assert.Equal(
+            VersionSelect.InstalledTagResolution.Indeterminate,
+            VersionSelect.CheckInstalledTag([], "3.0.0-ci.7977").Resolution);
+    }
+
+    /// <summary>
+    /// 🚨 <b>The strand, and the way out.</b> The 3.1.0 tags were untagged from ACR on 2026-09-07, so
+    /// the installed tag stopped resolving and the Deployment named an image no new pod could start
+    /// from. The check still reported <i>"500 tag(s) listed, none newer than the installed
+    /// 3.1.0-ci.7841"</i> — the same sentence a perfectly current install prints — and by construction
+    /// nothing would ever be newer than a tag that already outranks everything left.
+    ///
+    /// <para>So when nothing is newer AND the installed tag is gone, the eligible list becomes a
+    /// RECOVERY set: the best AVAILABLE release, even though it is older, because an image that
+    /// exists beats one that does not.</para>
+    ///
+    /// <para>🚨 The numbers here are deliberately NOT the 2026-09-07 ones. Ranking by lineage already
+    /// rescues that exact incident — <c>3.0.0-ci.7977</c> was published after <c>3.1.0-ci.7841</c>, so
+    /// it now reads as newer and the install rolls forward normally. The strand survives the ordering
+    /// fix in the case the ordering cannot reach: the withdrawn tag was the NEWEST publication, which
+    /// is the state between an untagging and the next CD run.</para>
+    /// </summary>
+    [Fact]
+    public void AWithdrawnInstalledTag_TurnsTheEligibleListIntoARecoverySet()
+    {
+        string[] registry = ["3.0.0-ci.7000", "3.0.0-ci.7100"];
+
+        var selection = VersionSelect.SelectCandidates(
+            registry, "3.1.0-ci.7841", UpdatePolicyKind.Continuous);
+
+        Assert.True(selection.IsRecovery,
+            "nothing is newer than a withdrawn tag, so 'nothing newer' cannot be the answer");
+        Assert.Equal(["3.0.0-ci.7100", "3.0.0-ci.7000"], selection.Candidates);
+        Assert.Equal(VersionSelect.InstalledTagResolution.Withdrawn, selection.Installed.Resolution);
+        Assert.Equal(2, selection.Listed);
+    }
+
+    /// <summary>
+    /// 🚨 The two fixes meet here, and the ORDER matters: the 2026-09-07 registry is no longer a
+    /// strand at all, because <c>3.0.0-ci.7977</c> was PUBLISHED after the withdrawn
+    /// <c>3.1.0-ci.7841</c> and lineage says so. The install rolls forward normally, and the recovery
+    /// branch — which is allowed to roll BACKWARDS — is never reached. Pinning that keeps a future
+    /// change from turning an ordinary update into a downgrade.
+    /// </summary>
+    [Fact]
+    public void TheRealIncident_IsAnOrdinaryRollForward_NotARecovery()
+    {
+        var selection = VersionSelect.SelectCandidates(
+            ["3.0.0-ci.7955", "3.0.0-ci.7962", "3.0.0-ci.7977"],
+            "3.1.0-ci.7841",
+            UpdatePolicyKind.Continuous);
+
+        Assert.False(selection.IsRecovery);
+        Assert.Equal("3.0.0-ci.7977", selection.Candidates[0]);
+        Assert.Equal(VersionSelect.InstalledTagResolution.Withdrawn, selection.Installed.Resolution);
+    }
+
+    /// <summary>A current install recovers nothing and rolls nothing — the recovery path must be
+    /// reachable ONLY from a proven withdrawal, or every check would roll backwards.</summary>
+    [Fact]
+    public void ACurrentInstall_SelectsNothingAndIsNotRecovering()
+    {
+        var selection = VersionSelect.SelectCandidates(
+            ["3.0.0-ci.7955", "3.0.0-ci.7977"], "3.0.0-ci.7977", UpdatePolicyKind.Continuous);
+
+        Assert.Empty(selection.Candidates);
+        Assert.False(selection.IsRecovery);
+        Assert.Equal(VersionSelect.InstalledTagResolution.Resolved, selection.Installed.Resolution);
+    }
+
+    /// <summary>🚨 A listing that could not answer must NOT recover: "the registry read returned
+    /// nothing" and "your tag was withdrawn" have the same shape and opposite meanings, and acting on
+    /// the second when it was the first rolls the fleet backwards off one bad response.</summary>
+    [Fact]
+    public void AnUnreadableListing_RecoversNothing()
+    {
+        var selection = VersionSelect.SelectCandidates([], "3.1.0-ci.7841", UpdatePolicyKind.Continuous);
+
+        Assert.Empty(selection.Candidates);
+        Assert.False(selection.IsRecovery);
+        Assert.Equal(
+            VersionSelect.InstalledTagResolution.Indeterminate, selection.Installed.Resolution);
+    }
+
+    /// <summary>A newer release is still an ordinary update — the recovery branch is only reached
+    /// once the newer set is empty, so a withdrawn tag with something newer above it rolls forward
+    /// normally and says nothing about a strand.</summary>
+    [Fact]
+    public void SomethingNewer_IsAnOrdinaryUpdate_EvenWhenTheInstalledTagIsGone()
+    {
+        var selection = VersionSelect.SelectCandidates(
+            ["3.0.0-ci.7977"], "3.1.0-ci.7000", UpdatePolicyKind.Continuous);
+
+        Assert.Equal(["3.0.0-ci.7977"], selection.Candidates);
+        Assert.False(selection.IsRecovery);
     }
 }

@@ -64,12 +64,19 @@ release. Every build derives its version from it ([details](/Doc/Architecture/Re
   `release.yml` when the annotated tag `v3.0.0` is pushed on a commit `main-cd` has promoted and
   sealed. Nothing is rebuilt. Cut only when every open issue is closed.
 
-> 🚨 **No pre-release label on the core, and no rc line.** `3.0.0-ci.<n>` sorts below the clean
-> `3.0.0` and below the next line's first `3.1.0-ci.1` — which is why the bump to `3.1.0` happens
-> the day `3.0.0` is tagged (the lane opens that pull request). It also sorts below the
-> `3.0.0-rc*` images already in the registry, so until the release lands a Continuous install on an
-> rc build stays where it is. The rc labels were retired on 2026-09-05: SemVer compares them as
-> text, so `rc13` sorted below `rc2`. See [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) §1.
+> 🚨 **Candidates are ranked by the CD run number, not by the version string** (#3542). `<n>` is the
+> ordering key: a `3.1.0-ci.7841` published *before* `3.0.0-ci.7977` loses to it, and so does a
+> retired `3.0.0-rc9.ci.7824` — SemVer compares pre-release identifiers as text, which is how a
+> mislabelled line outranked every sealed set for ever and rolled both AKS portals three days
+> backwards on 2026-09-07. An official release carries no run number of its own (it is a promotion of
+> a sealed set), so it is ranked by version — which is what keeps a **Stable** install running a
+> continuous build able to reach it. Full reference:
+> [Self-Update Target Selection](/Doc/Architecture/SelfUpdateTargetSelection).
+>
+> **No pre-release label on the core, and no rc line.** The rc labels were retired on 2026-09-05
+> (SemVer compares them as text, so `rc13` sorted below `rc2`). The bump to `3.1.0` still happens the
+> day `3.0.0` is tagged — the lane opens that pull request. See
+> [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) §1.
 
 ### Cutting an official release and starting the next line
 
@@ -114,7 +121,7 @@ to the node). Default **Continuous**.
 
 | Policy | Behaviour |
 |---|---|
-| **Continuous** (default) | Roll to the newest tag on ACR, **including** build-numbered continuous builds. As soon as a new build number lands, the install picks it up. |
+| **Continuous** (default) | Roll to the **latest-published** tag on ACR, **including** build-numbered continuous builds — latest by CD run number, not by version string ([why](/Doc/Architecture/SelfUpdateTargetSelection)). As soon as a new build number lands, the install picks it up. |
 | **Stable** | Roll only to the newest **clean release** (no build number). |
 | **None** | Never auto-update. Apply updates manually (operator, or the admin tab's *Apply available update now*). |
 
@@ -193,7 +200,9 @@ in-cluster Deployment PATCH works without this; it only authenticates the tag-li
 - **Manual apply:** Settings → Updates → *Apply available update now* (installs that can self-patch).
 
 The decision logic (which tag each policy picks; "is newer") is unit-pinned in
-`VersionSelectTest`; the enum dropdown in `MeshNodeEditorFieldTest`.
+`VersionSelectTest` (ordering, and the three-valued "does my own tag still exist" check) and
+`SelfUpdateStrandRecoveryTest` (the poller, against a real mesh); the enum dropdown in
+`MeshNodeEditorFieldTest`.
 
 ---
 

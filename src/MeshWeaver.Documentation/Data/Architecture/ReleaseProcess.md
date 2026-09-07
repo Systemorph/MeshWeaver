@@ -36,17 +36,25 @@ version from it by appending the CI run number as the one and only pre-release i
 | local | `3.0.0-ci.0` | any `dotnet build` on a developer machine |
 | release | `3.0.0` | `release.yml`, on the annotated tag `v3.0.0` — a **promotion** of one of the continuous builds above |
 
-The ordering is what the self-updater relies on (`VersionSelect`, SemVer 2 via `NuGetVersion`):
+SemVer 2 orders the *strings* like this — which is still what nuget.org and every package consumer
+sees:
 
 ```
 3.0.0-ci.7900  <  3.0.0-preview1  <  3.0.0-rc9.ci.7818  <  3.0.0-rc13  <  3.0.0  <  3.1.0-ci.1
 ```
 
+🚨 **The self-updater does NOT order candidates that way** (#3542). It ranks them by `<n>` — the
+sealed-publication lineage — and uses the version string only between tags that carry no `<n>` at
+all (the promoted releases). See
+[Self-Update Target Selection](/Doc/Architecture/SelfUpdateTargetSelection) for why, and for the two
+different keys the *ordering* and the *is-this-newer* questions use.
+
 Four consequences, all load-bearing:
 
-- **`<n>` is the GitHub Actions run number**, monotonic per workflow, so within a line newer
-  builds sort higher. 🔴 Do not replace it with anything that can reset (the old
-  seconds-since-midnight number made a morning build sort below the previous evening's).
+- **`<n>` is the GitHub Actions run number**, monotonic per workflow, so a later build always ranks
+  higher — whatever line it is LABELLED with. 🔴 This is now the self-updater's whole ordering key,
+  so do not replace it with anything that can reset (the old seconds-since-midnight number made a
+  morning build sort below the previous evening's).
 - **A Stable install takes the clean release and nothing before it.** `Stable` selects
   `!IsPrerelease`; the only clean tags are the promoted ones.
 - **The number must move the day a release is tagged.** `3.0.0-ci.7950` sorts *below* `3.0.0`, so
@@ -54,14 +62,14 @@ Four consequences, all load-bearing:
   from rolling forward. `release.yml` opens the pull request that moves the line to `3.1.0` itself;
   rc6 shipped with the props still reading rc6 and rc10–rc13 were tagged with them on rc9, which is
   why that bump is no longer a human step.
-- 🚨 **Until `3.0.0` is cut, a `3.0.0-ci.<n>` build sorts BELOW every `3.0.0-rc*` image already in
-  the registry** — SemVer §11.4 compares pre-release identifiers as text, and `ci` < `preview1` <
-  `rc`. A Continuous install already on an rc build therefore sees nothing newer and stays put
-  (never rolls back, never rolls forward) until the clean `3.0.0` lands, which outranks every rc.
-  That is the price of releasing the number the rc line was named for, paid once; after the
-  release, `3.1.0-ci.<n>` outranks `3.0.0` and continuous rolling resumes. Two `3.1.0-ci` sets
-  (7832, 7835) exist from the hours on 2026-09-05 when the props briefly read 3.1.0; an install
-  that took one of them will not take the clean `3.0.0` and waits for the first `3.1.0-ci` build.
+- 🚨 **A mislabelled line used to win for ever, and that is what the lineage key removes.** SemVer
+  §11.4 compares pre-release identifiers as text (`ci` < `preview1` < `rc`), so every `3.0.0-rc*`
+  image in the registry outranked every clean-line build — and ten sets published as
+  `3.1.0-ci.7832…7841` during the hours on 2026-09-05 when the props briefly read `3.1.0` outranked
+  everything, full stop. On 2026-09-07 both AKS portals rolled themselves onto `3.1.0-ci.7841`,
+  three days behind, and could not leave: nothing is ever newer than the highest-sorting tag.
+  Ranking by `<n>` makes such a slip lose while its tags are still in the registry, and an install
+  already on one roll forward again on the next check.
 
 > 🚨 **There is no rc line and there will be none** (maintainer, 2026-09-05). `3.0.0-rc1` …
 > `3.0.0-rc13` were tagged and rebuilt on tagging, which made each "candidate" a candidate of
