@@ -26,7 +26,7 @@ public class PlatformUpdateStatusTest
     public void NewerRecordedTag_IsAnAvailableUpdate()
     {
         var status = PlatformUpdateStatus.Derive(
-            new UpdatePolicyContent { LatestAvailableTag = "3.0.0-ci.2400" }, Running);
+            new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous, LatestAvailableTag = "3.0.0-ci.2400" }, Running);
 
         Assert.Equal(PlatformUpdateAvailability.UpdateAvailable, status.Availability);
         Assert.Equal("3.0.0-ci.2400", status.LatestVersion);
@@ -36,7 +36,7 @@ public class PlatformUpdateStatusTest
     public void NoRecordedTag_IsUpToDate()
     {
         // The poller records ONLY when it finds something newer, so an empty tag IS the up-to-date signal.
-        var status = PlatformUpdateStatus.Derive(new UpdatePolicyContent(), Running);
+        var status = PlatformUpdateStatus.Derive(new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous }, Running);
 
         Assert.Equal(PlatformUpdateAvailability.UpToDate, status.Availability);
         Assert.Null(status.LatestVersion);
@@ -49,7 +49,7 @@ public class PlatformUpdateStatusTest
         // (not newer than) the running build. Comparing, rather than testing for presence, is what
         // keeps the tab from claiming an update forever after it was applied.
         var status = PlatformUpdateStatus.Derive(
-            new UpdatePolicyContent { LatestAvailableTag = Running }, Running);
+            new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous, LatestAvailableTag = Running }, Running);
 
         Assert.Equal(PlatformUpdateAvailability.UpToDate, status.Availability);
         Assert.Null(status.LatestVersion);
@@ -59,7 +59,7 @@ public class PlatformUpdateStatusTest
     public void OlderRecordedTag_IsUpToDate()
     {
         var status = PlatformUpdateStatus.Derive(
-            new UpdatePolicyContent { LatestAvailableTag = "3.0.0-ci.2000" }, Running);
+            new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous, LatestAvailableTag = "3.0.0-ci.2000" }, Running);
 
         Assert.Equal(PlatformUpdateAvailability.UpToDate, status.Availability);
     }
@@ -93,7 +93,8 @@ public class PlatformUpdateStatusTest
         // A git-less source drop stamps "unknown"; VersionSelect.IsNewer refuses to compare against it
         // (the same gate that stops the poller auto-rolling). The user must not be nagged on that basis.
         var status = PlatformUpdateStatus.Derive(
-            new UpdatePolicyContent { LatestAvailableTag = "3.1.0" }, "unknown");
+            new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous, LatestAvailableTag = "3.1.0" },
+            "unknown");
 
         Assert.Equal(PlatformUpdateAvailability.UpToDate, status.Availability);
     }
