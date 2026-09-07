@@ -128,6 +128,86 @@ centralization as `check-workflow-timeouts.py` and `check-pr-secret-preflight.py
 ([Module Build Architecture](../ModuleBuildArchitecture): scripts are centralized, repos keep only
 allow-files). There is no fallback: a ref the script cannot be fetched at fails red naming it.
 
+## What the satellite lane actually looks like, and how the three repos differ
+
+The three repositories #3454 named adopted the gate on 2026-09-06/07 —
+MeshWeaver.SocialMedia#141, MeshWeaver.Manufacturing#58, MeshWeaver.Crm#58 — each as one job in
+its own `ci.yml`:
+
+```yaml
+  pin-set:
+    name: Platform pins name one build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MW_PIN_GATE_REF: <a core commit carrying the script>
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+      - name: Fetch the platform's pin-set gate at the pinned ref   # gh api contents?ref=…, no fallback
+      - run: python3 "$RUNNER_TEMP/check-pin-set-consistency.py" --self-test
+      - run: python3 "$RUNNER_TEMP/check-pin-set-consistency.py" --root . --require-pins
+```
+
+🚨 **`MW_PIN_GATE_REF` is a script-DEFINITION pin, and it is deliberately named so that I8 cannot
+see it.** I8's subject is a name matching `platform.?ref` whose value is a 40-character commit; a
+guard ref carrying that name would be read as a platform source ref and then demanded to have a
+lane pinned at it, which is exactly the coupling the gate refuses to assert elsewhere
+(MeshWeaver.Plugins#1268 moved two of them together and went red). The image a repository pins and
+the source a guard runs are two different objects. It is also why the gate could not simply be
+fetched at each repo's existing `MW_PLATFORM_REF`: that value is older than the script.
+
+### The three are not variations of one shape
+
+Measured 2026-09-06 — every column a fact about the repository, not about the gate:
+
+| | SocialMedia | Manufacturing | Crm |
+|---|---|---|---|
+| digest pin sites / classified | 3 / 3 | 3 / 3 | 3 / 3 |
+| how the **tester** pin is written | `$GITHUB_OUTPUT` step output | `env: MW_IMAGE_DIGEST` | `$GITHUB_OUTPUT` step output |
+| `MW_PLATFORM_REF` declared | yes (`1b5350d5`) | **no** | **no** |
+| lane passing a literal `platform-ref:` | 1 (module-pack) | **0** | 1 (validate) |
+| platform lane calls | 8 | 4 | 6 |
+| calls `node-repo-validate.yml` | yes | **no — hand-rolled** | yes |
+
+So **I3 and I8 have nothing to compare in Manufacturing today**, and the printed denominator says
+so rather than the verdict quietly reading "consistent". That is the denominator rule doing its
+job at repository granularity: *"0 lanes passing a literal platform-ref"* is a measured zero, and a
+reader can tell it from an unchecked one.
+
+The tester-pin row is the one that matters most: **two of the three write it into a
+`$GITHUB_OUTPUT`**, which is invisible to any scan of `env:` blocks — and it is the shape that hid
+a hole inside this gate's own first draft (see the falsification section below).
+
+### 🚨 Hand-rolling `validate` costs a repository every OTHER central guard too
+
+`check-workflow-timeouts.py` and `check-pr-secret-preflight.py` do not run on satellites by
+themselves: they run **inside `node-repo-validate.yml`**. MeshWeaver.Manufacturing does not call
+that lane — it hand-rolls `validate` and `tag-modules` — so neither guard had ever executed
+against it. Measured 2026-09-06, with both siblings at **0 violations** on the same day:
+
+```
+::error file=.github/workflows/ci.yml::job 'preflight'   has no timeout-minutes …
+::error file=.github/workflows/ci.yml::job 'validate'    has no timeout-minutes …
+::error file=.github/workflows/ci.yml::job 'tag-modules' has no timeout-minutes …
+check-workflow-timeouts: 6 job(s) checked, 4 reusable-call job(s) exempt, 3 violation(s), cap=45 min
+```
+
+GitHub's default job timeout is **360 minutes** against a fleet cap of 45. Capped in
+MeshWeaver.Manufacturing#58; the durable fix is adopting the lane. **The transferable rule: a
+repository that keeps a hand-rolled copy of a shared lane silently opts out of every guard that
+lane grows later, and nothing anywhere reports it** — the same shape as the pin gate that did not
+exist.
+
+### The context is new, so nothing is renamed
+
+Adding a job publishes a NEW status context (`Platform pins name one build`) and renames none, so
+this adoption does not hit the trap that a reusable-workflow adoption does — where the context
+becomes `<caller job> / <name>` and the old required name stays required and never reports again.
+MeshWeaver.Manufacturing encodes that rule as data in `scripts/check-ci-invariants.py`
+(`EXPECTED_CONTEXTS`), so the branch-protection change a context change implies is a visible edit
+rather than a discovery via a blocked PR; that list is edited in the same commit.
+
 ## This is not the same question as [Pinned Image Retention](../PinnedImageRetention)
 
 They share a subject and answer different things, and neither implies the other:
