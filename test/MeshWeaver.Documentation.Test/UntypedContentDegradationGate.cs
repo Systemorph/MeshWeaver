@@ -32,18 +32,38 @@ namespace MeshWeaver.Documentation.Test;
 /// "registered because it was once posted" now surfaces as this warning. On the day it merged it
 /// surfaced as a validator that silently stopped validating.</para>
 ///
-/// <para><b>What this test deliberately does NOT do.</b> It does not plant an unregistered type and
-/// assert the warning is emitted at runtime. That would be a stronger control arm — it would prove
-/// the emission path is live, not merely that the string exists — but the planted case would write
-/// the very phrase the shard gate greps for, so the gate validating itself would red every run.
-/// Isolating the planted log from <c>collected-logs/</c> is possible and is the right follow-up;
-/// it is called out here rather than silently omitted.</para>
+/// <para>🚨 <b>Neither of the two assertions below asks the question that actually mattered</b>, and
+/// for five days the answer to that question was "no". They pin that the phrase EXISTS in the
+/// source and that the script GREPS it — both were true the whole time — but not whether a
+/// degradation record can REACH the directory the script scans. It could not: both warnings were
+/// logged with no exception object, and the sink that feeds <c>collected-logs/</c> takes a record
+/// if and only if <c>exception is not null &amp;&amp; logLevel &gt;= Warning</c>. The gate was
+/// permanently green having matched nothing (MeshWeaver#3625) — the subject moved and the roots did
+/// not, which is the exact shape AGENTS.md names.
+///
+/// <para>The missing half now lives in
+/// <c>MeshWeaver.Hosting.Test.UntypedContentDegradationReachesTheTraceSinkTest</c>, which drives the
+/// PRODUCTION emitter and evaluates the sink's own predicate against the captured record. It runs
+/// against a private recording logger, so it proves reachability without writing into the shared
+/// trace file — which is why the earlier "plant it and watch the gate red every run" objection no
+/// longer applies.</para>
+///
+/// <para>🚨 <b>The gate's PRIMARY key is now the exception type, not the phrase.</b> A message is a
+/// DESCRIPTION of the event; <c>MeshNodeContentDegradedException</c> is the event's IDENTITY, bound
+/// by the compiler at every construction site. That gives the coupling two independent bindings
+/// (a rename is a compile-wide change, AND this test pins the script's key to
+/// <c>nameof(...)</c>) where the phrase has only this file. The phrase is kept as a second net
+/// because a per-test file log carries the formatted message with no exception attached at all.</para>
 /// </summary>
 public class UntypedContentDegradationGate
 {
     /// <summary>The exact phrase. Both ends are asserted against THIS constant, so the two can
     /// never agree with each other while disagreeing with reality.</summary>
     private const string Phrase = "stayed an untyped JsonElement";
+
+    /// <summary>The gate's PRIMARY key, taken from the type itself so a rename cannot leave the
+    /// script grepping for a name nothing constructs.</summary>
+    private static readonly string Marker = nameof(MeshWeaver.Mesh.MeshNodeContentDegradedException);
 
     private const string Script = ".github/scripts/check-untyped-content.sh";
     private const string EmittingSource = "src/MeshWeaver.Hosting/MeshNodeStreamCache.cs";
@@ -53,6 +73,125 @@ public class UntypedContentDegradationGate
         var path = Path.Combine(SourceScan.FindRepoRoot(), relative);
         Assert.True(File.Exists(path), $"{relative} is missing — this gate's subject moved; follow it.");
         return File.ReadAllText(path);
+    }
+
+    /// <summary>
+    /// 🚨 The identity key. Every degradation seam must ATTACH the marker exception — that is both
+    /// what makes the record reach the trace sink at all and what the gate keys on. A seam that
+    /// logs the prose without the exception is a seam whose degradations are invisible to CI, which
+    /// is the state this whole gate was in before #3625.
+    /// </summary>
+    [Fact]
+    public void EverySeamAttachesTheMarkerExceptionTheGateKeysOn()
+    {
+        // 🚨 Count CONSTRUCTIONS in code, not lines that happen to contain a substring (Copilot
+        // review). The first version split on newlines and looked for `"new " + Marker`, which is
+        // wrong in both directions at once: it MISSES a construction the formatter wrapped across
+        // two lines or wrote alias-qualified (`Mesh.MeshNodeContentDegradedException`), and it
+        // COUNTS a prose mention in a comment — and this file's subject is a source file that
+        // explains itself at length, so comments naming the type are the norm here rather than the
+        // exception. Masking first (the same helper every other source ratchet uses) removes the
+        // second failure mode outright; the regex removes the first.
+        var source = SourceScan.MaskCommentsAndStrings(Read(EmittingSource));
+        var constructions = new Regex(
+                @"\bnew\s+(?:[A-Za-z_][\w]*\s*\.\s*)*" + Regex.Escape(Marker) + @"\s*\(",
+                RegexOptions.Compiled)
+            .Matches(source).Count;
+
+        Assert.True(
+            constructions >= 3,
+            $"Only {constructions} construction(s) of {Marker} in {EmittingSource}; expected at least 3 "
+            + "(GetStream, GetQuery, and GetQuery's deserialization catch).\n"
+            + "A degradation warning WITHOUT this exception cannot reach "
+            + "collected-logs/_meshweaver-test-trace.log — the sink takes a record if and only if "
+            + "`exception is not null && logLevel >= Warning` — so the shard gate that scans that "
+            + "directory has nothing to match, and passes having checked nothing. That is exactly "
+            + "how this gate spent its first five days (#3625).");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The control arm for the gate's ONLY sanctioned exemption.</b>
+    ///
+    /// <para>The gate has no allow-list, on purpose. But a test whose SUBJECT is a degradation —
+    /// <c>LateContentTypeRegistrationTest</c> asserts that content nothing can resolve stays
+    /// untyped, and that a live reader is re-typed when the type finally registers (#2952) — cannot
+    /// take the gate's prescribed remedy either: seeding a DIFFERENT, REGISTERED type deletes the
+    /// thing it tests. Such a test therefore keeps its own records out of the shared trace file by
+    /// substituting <c>ILogger&lt;MeshNodeStreamCache&gt;</c> for its own mesh.</para>
+    ///
+    /// <para>🚨 <b>That substitution is the exemption, so it must never be silent.</b> Capturing
+    /// degradation records and not asserting them is EXACTLY the permanently-green check this file
+    /// exists to prevent — the gate would pass because nothing reached it, which is
+    /// indistinguishable from passing because nothing degraded. So: any test that substitutes the
+    /// emitter's logger must also assert what it caught.</para>
+    ///
+    /// <para><b>Scope, stated honestly.</b> This sees ONE diversion mechanism — replacing the
+    /// closed <c>ILogger&lt;MeshNodeStreamCache&gt;</c>, which is the only way a full-mesh test can
+    /// keep a degradation record out of <c>TestTraceLog</c>. A future test that invents a different
+    /// route (its own logger provider, a filter rule) is not covered here, and that is a limit to
+    /// re-measure rather than to assume away. The denominator arm below is what stops this guard
+    /// from quietly checking zero files.</para>
+    /// </summary>
+    [Fact]
+    public void ADivertedDegradationIsAssertedWhereItIsDiverted()
+    {
+        const string Diversion = "ILogger<MeshWeaver.Hosting.MeshNodeStreamCache>";
+        const string ShortDiversion = "ILogger<MeshNodeStreamCache>";
+        const string Assertion = "AssertReportedFor(";
+
+        var root = SourceScan.FindRepoRoot();
+        var diverting = SourceScan.SourceFiles(root, ["test"])
+            .Select(path => (Path: path, Text: File.ReadAllText(path)))
+            .Where(f => f.Text.Contains(Diversion, StringComparison.Ordinal)
+                        || f.Text.Contains(ShortDiversion, StringComparison.Ordinal))
+            // This gate's own prose names the type; only a file that USES it counts.
+            .Where(f => !SourceScan.Relative(root, f.Path)
+                .EndsWith("MeshWeaver.Documentation.Test/UntypedContentDegradationGate.cs", StringComparison.Ordinal))
+            .ToArray();
+
+        // 🚨 The DENOMINATOR. "No offender found" and "no file was examined" read identically, and
+        // the second is how a guard spends years enforcing nothing. The sanctioned diversion exists
+        // today; if it is ever removed, delete this guard deliberately rather than leaving it green
+        // over an empty set.
+        Assert.True(
+            diverting.Length > 0,
+            $"No test substitutes {ShortDiversion} any more, so this guard examined ZERO files and "
+            + "passed having checked nothing. Either the sanctioned diversion "
+            + "(LateContentTypeRegistrationTest) was removed — in which case remove this guard in "
+            + "the same change and say so — or the scan is looking at the wrong tree.");
+
+        var silent = diverting
+            .Where(f => !f.Text.Contains(Assertion, StringComparison.Ordinal))
+            .Select(f => SourceScan.Relative(root, f.Path))
+            .ToArray();
+
+        Assert.True(
+            silent.Length == 0,
+            $"These test files divert {ShortDiversion} away from the shared trace file without "
+            + $"asserting what they caught ({Assertion}):\n  {string.Join("\n  ", silent)}\n"
+            + "A degradation record kept out of collected-logs/ and then never asserted is an "
+            + "exemption from check-untyped-content.sh that can never fail — the gate passes "
+            + "because nothing reached it, which is indistinguishable from passing because nothing "
+            + "degraded, and is the exact state #3625 was about. Assert that the record WAS "
+            + "produced, that it names the node you expect, and that it would have satisfied the "
+            + "trace sink's own predicate (exception is not null && level >= Warning).");
+    }
+
+    [Fact]
+    public void TheGateScriptStillKeysOnTheMarkerExceptionType()
+    {
+        var script = Read(Script);
+
+        // The ASSIGNMENT, not the file — same reason as the phrase assertion below: the script
+        // explains itself at length and quotes the type name in its own comments.
+        var assignment = new Regex(
+            @"MARKER\s*=\s*[""']" + Regex.Escape(Marker) + @"[""']", RegexOptions.Compiled);
+        Assert.True(
+            assignment.IsMatch(script),
+            $"{Script} no longer binds MARKER to \"{Marker}\". The exception type is the gate's "
+            + "primary key precisely because it is compiler-bound at every construction site — "
+            + "renaming it is a repo-wide change, and this assertion is what stops such a rename "
+            + "leaving the script grepping for a name nothing writes any more.");
     }
 
     [Fact]

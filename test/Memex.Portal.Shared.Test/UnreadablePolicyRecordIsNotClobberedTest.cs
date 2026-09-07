@@ -58,12 +58,40 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class UnreadablePolicyRecordIsNotClobberedTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    /// <summary>A real record carrying an explicit policy and a real tag, with ONE field this build
-    /// cannot deserialize (<c>comboVerifications</c> is an
-    /// <c>ImmutableList&lt;ComboVerification&gt;</c>) — a field written by a build whose content
-    /// type differed. The record as a whole is then unreadable.</summary>
+    /// <summary>
+    /// A real record carrying an explicit policy and a real tag, written by a build whose content
+    /// type DIFFERED — <see cref="ForeignPolicyRecord"/>, in which <c>comboVerifications</c> is a
+    /// string where this build declares an <c>ImmutableList&lt;ComboVerification&gt;</c>. The record
+    /// as a whole is therefore unreadable as <c>UpdatePolicyContent</c>.
+    ///
+    /// <para>🚨 <b>The discriminator names a type the mesh CAN materialise, and that is deliberate
+    /// (#3625).</b> Written without a resolvable <c>$type</c>, this record does not merely fail to
+    /// read as <c>UpdatePolicyContent</c> — it degrades to an untyped <c>JsonElement</c> at the
+    /// stream cache, which is a DIFFERENT defect: content nothing can read, and the exact condition
+    /// the <c>check-untyped-content.sh</c> shard gate exists to report. This fixture would then red
+    /// its own shard, on a true positive. Naming a registered foreign type instead makes the cache
+    /// type it happily while <c>ContentAs&lt;UpdatePolicyContent&gt;</c> still answers <c>null</c>,
+    /// because <c>ObjectAsExtensions.As&lt;T&gt;</c> recovers a foreign runtime type ONLY when the
+    /// short name matches. It is also the closer model of production: a same-named record from
+    /// another collectible assembly, or a genuinely different type, is how this arises in a running
+    /// mesh. See <c>Doc/Architecture/ReadingCiSignals</c>.</para>
+    /// </summary>
     private const string UnreadableRecord =
-        """{"policy":"None","requireCiGreen":true,"latestAvailableTag":"3.0.0-ci.8009","comboVerifications":"written-by-a-shape-this-build-cannot-read"}""";
+        """{"$type":"ForeignPolicyRecord","policy":"None","requireCiGreen":true,"latestAvailableTag":"3.0.0-ci.8009","comboVerifications":"written-by-a-shape-this-build-cannot-read"}""";
+
+    /// <summary>
+    /// The content type the unreadable record was written by — a stand-in for another build's
+    /// version of the same record. Registered on the test mesh so the framework can materialise it;
+    /// its SHORT NAME differs from <c>UpdatePolicyContent</c>, which is what keeps
+    /// <c>As&lt;UpdatePolicyContent&gt;</c> answering <c>null</c> instead of silently adopting it.
+    /// </summary>
+    public sealed record ForeignPolicyRecord
+    {
+        public string? Policy { get; init; }
+        public bool RequireCiGreen { get; init; }
+        public string? LatestAvailableTag { get; init; }
+        public string? ComboVerifications { get; init; }
+    }
 
     private const string ReadableRecord =
         """{"$type":"UpdatePolicyContent","policy":"None","requireCiGreen":true,"latestAvailableTag":"3.0.0-ci.8009"}""";
@@ -75,7 +103,13 @@ public class UnreadablePolicyRecordIsNotClobberedTest(ITestOutputHelper output) 
     private static TimeSpan Budget => TestTimeouts.Convergence;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddUpdatePolicyType();
+    {
+        var configured = base.ConfigureMesh(builder).AddUpdatePolicyType();
+        // The foreign writer's type, so the seeded record materialises rather than degrading — see
+        // UnreadableRecord for why that distinction is load-bearing (#3625).
+        configured.ConfigureHub(config => config.WithType<ForeignPolicyRecord>(nameof(ForeignPolicyRecord)));
+        return configured;
+    }
 
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
