@@ -2018,6 +2018,10 @@ jobs:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
           BAKE_ARCHITECTURE: ${{ matrix.arch }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          # This lane bakes the PLATFORM's OWN content, so the content repository IS this
+          # repository. Stated explicitly rather than left to the script's fallback, so no live
+          # publisher depends on a default that is only right by coincidence (MeshWeaver#3583).
+          BAKE_CONTENT_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           # The third argument is the CONTENT identity (the commit this bake was taken from).

@@ -1192,6 +1192,14 @@ jobs:
         if: steps.scope.outputs.scope != 'none'
         env:
           BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+          # 🚨 The CONTENT repository, exactly as the checkout above resolves it — NOT
+          # github.repository (MeshWeaver#3583). They differ in precisely the case the marker is
+          # for: core CD bakes MeshWeaver.Plugins content from a run whose github.repository is
+          # Systemorph/MeshWeaver, and stamping the lane's own name made SealedSyncGate unable to
+          # attribute the `plugins` seal to Plugins — so the gate fell open for the one repository
+          # it was written for. Same expression as the checkout's `repository:` on purpose: one
+          # answer to "whose content is this", used by both.
+          BAKE_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
         # Contract: layout <base>/prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip,
         # every bundle first, the `_complete` sentinel strictly LAST; an already-sealed identity
         # with the same source sha skips (the surface identity is breaking-change-keyed, so
