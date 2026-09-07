@@ -33,6 +33,15 @@ name: Node repo platform-ref bump (reusable)
 # above, silently, on the day the App loses a grant. `ArmedMergeMustTriggerMainsPushLanesGuard`
 # fails core's build if anyone puts it back.
 #
+# 🚨 THE APP INSTALLATION MUST GRANT `workflows`, not just `contents` and `pull_requests` (#3568).
+# The pin lives in the calling repo's OWN workflow file (`workflow-file`, default
+# `.github/workflows/ci.yml`), so this lane's entire diff is under `.github/workflows/**`, and
+# GitHub refuses an App push that touches that path without the grant — by name, at the push, on
+# the last step. The mint below asks for it explicitly so a missing grant is reported by the step
+# that wanted it. Provisioning it is a repository-settings act (Settings → GitHub Apps → the
+# installation → Repository permissions → Workflows: Read and write); nothing in CI can grant it,
+# and nothing in CI can read whether it is granted.
+#
 # Caller contract:
 #
 #   name: Bump the platform pin
@@ -140,11 +149,36 @@ jobs:
           private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          # Requested explicitly so an installation missing either fails HERE, on a step whose name
-          # says what it wanted, rather than degrading to a token that pushes fine and then opens a
-          # pull request nothing runs on.
+          # Requested explicitly so an installation missing any of them fails HERE, on a step whose
+          # name says what it wanted, rather than degrading to a token that pushes fine and then
+          # opens a pull request nothing runs on.
           permission-contents: write
           permission-pull-requests: write
+          # 🚨 THIS LANE'S ENTIRE DIFF IS A WORKFLOW FILE, so `contents: write` alone cannot push it
+          # (#3568). `workflow-file` defaults to `.github/workflows/ci.yml` — the pin lives in the
+          # workflow's own `env:` — and GitHub refuses an App push that touches
+          # `.github/workflows/**` without this grant, by name:
+          #
+          #   ! [remote rejected] chore/platform-ref-<sha> -> chore/platform-ref-<sha>
+          #     (refusing to allow a GitHub App to create or update workflow
+          #      `.github/workflows/ci.yml` without `workflows` permission)
+          #
+          # Measured 2026-09-07: that is EVERY run this lane has ever had — MeshWeaver.Plugins
+          # 34083504064 at 04:32:51Z and MeshWeaver.SocialMedia at 04:51:24Z, the only two runs the
+          # API lists for either caller. So the lane has never once moved a pin, and it failed at
+          # the LAST step, three minutes in, naming a permission nobody had asked for.
+          #
+          # It stayed invisible because the lane is right about everything else: it refuses to
+          # `continue-on-error`, so it went red honestly — at 04:17Z, on a schedule, against
+          # nobody's branch, where nothing surfaces a scheduled red. "The pin is not being
+          # maintained" is exactly the statement this lane exists to make, and it made it daily
+          # into an empty room while MeshWeaver.Plugins' MW_PLATFORM_REF drifted 117 commits behind
+          # core main — inside the staleness gate's bounds, and therefore silent.
+          #
+          # Requesting it here is the same discipline the two lines above already state: if the
+          # installation lacks the grant, this step fails with the permission in its own name,
+          # instead of a push failing later with a message about something nobody requested.
+          permission-workflows: write
 
       # The checkout carries the minted token, so the later `git push` is the App's push. With the
       # default credential the push would be GITHUB_TOKEN's, and the branch would exist with no
