@@ -176,6 +176,49 @@ public class ModulePlatformLinkTest : IDisposable
         Assert.Contains("could NOT be determined", refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// 🚨 <b>A module referencing a SIBLING MODULE is not the defect, and must not be refused as
+    /// one.</b> A wave lands its modules one at a time, and the sibling this one needs may have
+    /// landed thirty seconds ago and not be loaded here at all (restart-as-activation). Measuring
+    /// against the application closure alone would find no <c>MeshWeaver.Test.SiblingLib</c>
+    /// anywhere, hit the platform-prefix rule, and refuse a module that is perfectly fine — a
+    /// false refusal, which on a real deployment means a feature silently missing after an
+    /// upgrade.
+    ///
+    /// <para>The surface therefore carries the ACTIVE generation of every landed module, rebuilt
+    /// per landing. Pinning the sibling's landing FIRST is what makes this able to fail: measure
+    /// against <c>/app</c> only, and the second landing throws.</para>
+    /// </summary>
+    [Fact]
+    public async Task AModuleReferencingASiblingModuleLandedMomentsEarlier_IsNotRefused()
+    {
+        var sibling = Emit("MeshWeaver.Test.SiblingLib", """
+            namespace MeshWeaver.Test;
+            public static class SiblingApi { public static int Answer => 42; }
+            """);
+        await landing.LandModule(
+                "MeshWeaver.Test.SiblingLib", [("MeshWeaver.Test.SiblingLib.dll", sibling)])
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        // Compiled against the sibling — and the sibling is NOT in the application closure and is
+        // NOT loaded in this process. Only the landed generation can answer for it.
+        var dependent = Emit("MeshWeaver.Test.DependentPack", """
+            using MeshWeaver.Test;
+            public static class DependentViews
+            {
+                public static int Show() => SiblingApi.Answer;
+            }
+            """, extra: MetadataReference.CreateFromImage(sibling));
+
+        await landing.LandModule(
+                "MeshWeaver.Test.DependentPack", [("MeshWeaver.Test.DependentPack.dll", dependent)])
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        var landedNames = ModuleActivationSidecar.Read(root).Entries.Select(e => e.Name).ToArray();
+        Assert.Contains("MeshWeaver.Test.SiblingLib", landedNames);
+        Assert.Contains("MeshWeaver.Test.DependentPack", landedNames);
+    }
+
     // ───────────────────────────────────────────────────── the probe itself, and its denominator
 
     /// <summary>

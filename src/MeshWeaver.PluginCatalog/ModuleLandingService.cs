@@ -769,25 +769,42 @@ public sealed class ModuleLandingService : IDisposable
     }
 
     /// <summary>
-    /// This process's platform surface, read ONCE and reused for every landing (#3538).
+    /// The surface a landing module is measured against (#3538): the application closure, this
+    /// process's loaded assemblies, and the ACTIVE generation of every module this deployment has
+    /// landed.
     ///
-    /// <para>🚨 <b><c>AppContext.BaseDirectory</c>, never <c>baseDirectory</c>.</b> The platform is
-    /// the APP closure; this service's root is the (possibly separate, possibly read-write) volume
-    /// the <c>modules/</c> tree lives on. Naming the wrong one would measure a module against the
-    /// directory it is being written into.</para>
+    /// <para>🚨 <b><c>AppContext.BaseDirectory</c>, never <c>baseDirectory</c>, for the platform
+    /// half.</b> The platform is the APP closure; this service's root is the (possibly separate,
+    /// possibly read-write) volume the <c>modules/</c> tree lives on. Naming the wrong one would
+    /// measure a module against the directory it is being written into.</para>
     ///
-    /// <para><b>An INSTANCE field, not a static</b> — the surface it describes is a property of
-    /// THIS process, and a process-wide static would outlive the mesh and bleed one test's
-    /// fabricated platform into the next one's (Doc/Architecture/NoStaticState). Built lazily
-    /// rather than in the constructor because the constructor can run before the deployment's
-    /// modules are loaded; the file probe above covers what the loaded snapshot has not seen yet,
-    /// and it is only ever touched from <see cref="LandCore"/>, which runs on this service's cap-1
-    /// pool — one at a time, by construction, with no gate of any kind.</para>
+    /// <para>🚨 <b>The landed modules belong in it, and it is REBUILT per landing.</b> A wave lands
+    /// its modules ONE AT A TIME, and a module may legitimately reference a SIBLING module that
+    /// landed thirty seconds ago and that this process has not loaded (restart-as-activation). A
+    /// surface that knew only <c>/app</c> — or one captured at the wave's first landing — would
+    /// not carry that sibling, and the platform-prefix rule would refuse the module for "no such
+    /// platform assembly": a false refusal, and exactly the confidently-wrong verdict this gate
+    /// exists to replace. The cost is a sidecar read plus the metadata of the assemblies THIS
+    /// module references, on the cap-1 IO pool, off every render path.</para>
+    ///
+    /// <para>The ACTIVE generation specifically, through the one resolution rule
+    /// (<see cref="ModuleDirectoryFor"/>) — not every directory under <c>modules/</c>. Superseded
+    /// generations are still on the volume until the GC reclaims them, and an older one can
+    /// legitimately lack a type its successor has; measuring against whichever directory an
+    /// unordered listing happened to yield first would make the verdict depend on the filesystem.</para>
     /// </summary>
-    private ModulePlatformSurface PlatformSurface() =>
-        platformSurface ??= ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory);
-
-    private ModulePlatformSurface? platformSurface;
+    private ModulePlatformSurface PlatformSurface()
+    {
+        var landed = ModuleActivationSidecar.Read(baseDirectory,
+                msg => logger?.LogWarning("{Message}", msg))
+            .Entries
+            .Where(entry => entry.Enabled && !string.IsNullOrWhiteSpace(entry.Name))
+            .Select(entry => ModuleDirectoryFor(baseDirectory, entry.Name, entry))
+            .Where(Directory.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return ModulePlatformSurface.OfRunningProcess([AppContext.BaseDirectory, .. landed]);
+    }
 
     private static void ValidateFileName(string? value, string what)
     {

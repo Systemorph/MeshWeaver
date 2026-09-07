@@ -125,6 +125,18 @@ The two landing paths differ exactly as they already did for the declared floor:
   apply this same measurement against *their* platform, and this process's boot never loads them.
   Refusing here would recreate the 2026-08-22 three-way deadlock the shelf exists to break.
 
+🚨 **The surface here carries the ACTIVE generation of every landed module, and it is rebuilt per
+landing.** A wave lands its modules ONE AT A TIME, and a module may legitimately reference a
+SIBLING module that landed thirty seconds ago and that this process has not loaded
+(restart-as-activation). A surface that knew only `/app` — or one captured at the wave's first
+landing — would not carry that sibling, and the platform-prefix rule below would refuse a module
+that is perfectly fine. On a real deployment that reads as a feature silently missing after an
+upgrade, which is the same class of confidently-wrong verdict this gate exists to replace. The
+ACTIVE generation specifically, through the one resolution rule (`ModuleDirectoryFor`) — a
+superseded generation is still on the volume until the GC reclaims it and can legitimately lack a
+type its successor has, so listing directories would make the verdict depend on the filesystem's
+ordering.
+
 ### At boot — the generation is parked, not the portal
 
 `MeshBuilder.InstallAssemblies` probes each module **before** `Assembly.LoadFrom`. A refusal is
@@ -192,6 +204,7 @@ missing type — and lands it through the real `ModuleLandingService`.
 | `UnreadableBytes_AreRefused_NotWavedThroughAsUnknown` | `Indeterminate` fails closed |
 | `ALinkableModule_ReportsANonZeroDenominator` | a clean verdict actually checked something |
 | `AWholePlatformAssemblyThisDeploymentLacks_IsRefused` | the coarse-grained shape, and that a private dependency is *named unchecked* rather than refused |
+| `AModuleReferencingASiblingModuleLandedMomentsEarlier_IsNotRefused` | the FALSE-refusal direction: a sibling module is not an absent platform assembly |
 | `AnUnloadableModule_IsParked_AndTheOthersStillInstall` | the blast radius: one module, not the portal |
 | `AParkedModule_ReadsAsQuarantined_NeverAsRestartRequired` | the false-promise rule |
 
