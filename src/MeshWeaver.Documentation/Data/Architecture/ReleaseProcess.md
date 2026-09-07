@@ -108,35 +108,53 @@ SemVer 2 orders the *strings* like this, and that is still what every package co
 ```
 
 🚨 §11.4 compares pre-release identifiers as **TEXT**, so `"ci" < "rc"` and `3.0.0-ci.<n>` ranks
-below `3.0.0-rc8` **for every n**. Measured 2026-09-07 (#3554): **42 packages** declared rc-line or
-clean-`3.0.0` floors, every self-update candidate was held on both AKS portals with a message naming
-two versions that look like they are in the right order —
+below `3.0.0-rc8` **for every n** — and, for the same reason one hop on, a clean `3.0.0` floor is
+unsatisfied by a `3.0.0-ci.<n>` platform, because a pre-release ranks below its own release. Measured
+2026-09-07 (#3554): **42 packages** declared rc-line or clean-`3.0.0` floors naming a platform that
+did not exist and could not be built; the registry held **1268 tags — 48 `3.0.0-ci.*`, ZERO `rc*`,
+ZERO `3.1.0-*`**; every open pull request in MeshWeaver.Plugins went red; and both AKS portals spent
+the day logging, per module, two versions that look like they are in the right order:
 
 ```
 HOLDING 3.0.0-ci.7989 — AI: the module requires platform 3.0.0-rc8 or newer
                          but this deployment runs 3.0.0-ci.7989
 ```
 
-— and the registry held **1268 tags: 48 `3.0.0-ci.*`, ZERO `rc*`, ZERO `3.1.0-*`**. The floor named a
-platform that did not exist and could not be built, silently; it also reddened every open pull
-request in MeshWeaver.Plugins. **Retiring the rc line removes that trap by construction** — with one
-pre-release identifier in the whole scheme there is no label left to sort against — and
-`.github/scripts/check-module-platform-floor.py` now refuses, at build time, any floor the platform
-the bundle is built against cannot satisfy.
+### 🚨 Where a floor is compared is being split in two — cite the right half
 
-🚨 **It removes only that half.** A clean `X.Y.Z` genuinely outranks its own `X.Y.Z-ci.<n>`
-pre-releases. That is SemVer working correctly, it is load-bearing, and it must keep working:
+A `content.minMeshVersion` floor is a platform version, so the ordering above lands on it. **But the
+two places it is compared are diverging, and only one of them keeps a verdict:**
+
+| | who compares | verdict |
+|---|---|---|
+| **Authoring / pack time** | `.github/scripts/check-module-platform-floor.py`, MeshWeaver.Plugins' `check-module-floors.py` | **an ERROR.** A floor above the platform the bundle is built against is unsatisfiable by construction, and the lane refuses it. This is where the ordering above bites, and it is the gate that reddened the Plugins pull requests. |
+| **Runtime** | `ModulePlatformLink.Check` plus the actual load | **measured, never declared.** [Issue #3648](https://github.com/Systemorph/MeshWeaver/issues/3648) makes the declared floor *advisory* at all eight of its runtime decision points — logged, shown on the module's status row, deciding nothing — so it no longer refuses, holds or skips anything. |
+
+So read the `HOLDING …` line above as a **measurement of what happened on 2026-09-07**, never as the
+contract: that hold is exactly what #3648 removes. What survives unchanged is the **pack-time**
+question, and there the comparison is not merely retained but pinned — the script must agree with
+`NuGetVersionComparer` exactly, which `ModulePlatformFloorScriptParityTest` enforces case by case.
+
+**Retiring the rc line removes the LABEL half of the trap by construction** — with one pre-release
+identifier in the whole scheme there is no label left to sort against.
+
+🚨 **It does not remove the other half, and the other half is not going anywhere.** A clean `X.Y.Z`
+genuinely outranks its own `X.Y.Z-ci.<n>` pre-releases. That is SemVer working correctly, it is
+load-bearing, and it must keep working:
 
 - a **Stable** install running `3.0.0-ci.7977` reaches the clean `3.0.0` *because* the release
   outranks the pre-release
-  ([Self-Update Target Selection](/Doc/Architecture/SelfUpdateTargetSelection) §2);
-- a **floor** of `3.0.0` must give the OPPOSITE answer for the same two strings — it has to be
-  *satisfied* by `3.0.0-ci.7977`, or a package declaring the current line is un-landable while the
-  whole fleet runs that line (measured: the last column of that page's §4 table).
+  ([Self-Update Target Selection](/Doc/Architecture/SelfUpdateTargetSelection) §2) — an ordering
+  #3648 does not touch;
+- a **pack-time floor** of `3.0.0` must give the OPPOSITE answer for the same two strings: it has to
+  be *satisfiable* by the `3.0.0-ci.7977` the bundle is built against, or a package declaring the
+  current line cannot be packed at all while the whole fleet runs that line (measured: the last
+  column of that page's §4 table — every `3.0.0-ci.N` against a clean `3.0.0` floor).
 
 Same two strings, opposite required answers — so the shareable part is the **key**
 (`PlatformReleaseOrder.BuildOrdinal`), never the predicate. Do not read *"there is no rc line any
-more"* as *"pre-release ordering is no longer a hazard"*.
+more"* as *"pre-release ordering is no longer a hazard"*, and do not read *"floors are advisory at
+runtime"* as *"a floor can say anything"*.
 
 Two consequences of the same ordering, both load-bearing:
 
