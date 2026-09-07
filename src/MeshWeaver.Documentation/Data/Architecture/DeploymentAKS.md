@@ -418,6 +418,72 @@ a half-migrated portal; it does **not** make the ordering safe on its own, and t
 what decides whether "unsafe ordering" costs you a stalled rollout or an outage. Treat "the migration ran" as a precondition you verify, not one
 the roll guarantees.
 
+### The migration Job IS the evidence — so it must outlive the observer
+
+`helm upgrade` mints `memex-migration-<revision>`, and that Job object is the **only** durable
+record that this revision's migration ran. Memex's `helm-release.yml` reads it directly: its
+*Observe the rollout* step polls `kubectl get deploy memex-portal-deployment` **and**
+`kubectl get job memex-migration-<revision>`, and reports `DONE` only when every replica is updated
+and available at the new generation **and** the Job succeeded.
+
+🚨 **`ttlSecondsAfterFinished` reaps a FINISHED Job whether it Completed or FAILED**, and at the
+chart's original 600 s that happened well inside the reader's own window — 25 minutes inside a
+deploy, 40 on an `action: observe` re-run, with the lane's error message explicitly telling the
+operator to *"re-run with action=observe"* later. Measured 2026-09-07 on the live cluster:
+
+| | |
+|---|---|
+| `memex` revision 35, run 34117537570 | observe gave up at its 25-minute budget with `migration-job=succeeded=0 failed=0 active=1` |
+| the same namespace at 16:20Z | **no Job, no pod, no events** — `kubectl get job -n memex` returns only the `assembly-cache-prune` Jobs |
+
+An absent Job is indistinguishable from a Job that never existed, and a migration that *failed*
+reaps exactly the same way. The chart now sets **`ttlSecondsAfterFinished: 86400`** so the artefact
+outlives every window that reads it. That is one half; the other is the verdict refusing to call an
+absent Job a success (Memex#188). **Neither half alone is enough** — a longer TTL without the
+verdict change only moves the cliff, and the verdict change without the longer TTL makes a
+legitimate `observe` re-run permanently red.
+
+**A `memex-cloud` migration is measured in HOURS, not minutes, and that is not a deadlock.**
+`memex-migration-28` ran 4 h 47 m on 2026-09-07 and was healthy throughout: the tail of its log is
+`[EmbeddingBackfill] <schema>: N embedded`, walking ~137 partition schemas alphabetically. The
+portal serves normally while it runs (`2/2` Ready on `3.0.0-ci.8009`), because `DbVersionGate`
+gates on the schema version, not on the backfill. So *"the rollout finished"* and *"the Job
+finished"* are two different clocks in that namespace, minutes apart from hours — do not read a
+still-running migration Job as a stuck deploy.
+
+## Secrets the chart renders that no in-cluster Postgres backs
+
+`postgres.enabled: false` on every AKS namespace — the mesh lives on the Azure Postgres flexible
+server and is reached through `ConnectionStrings__memex`. There is no `memex-postgres-statefulset`
+and no `memex-postgres-service` in either production namespace (measured 2026-09-07: *"No resources
+found"* in both).
+
+Two keys in `memex-portal-secrets` / `memex-migration-secrets` address that absent Service, and
+until 2026-09-07 they rendered there unconditionally (Memex#204). Read by base64 **length** only —
+never by value:
+
+| key | `memex` | `memex-cloud` |
+|---|---|---|
+| `MEMEX_PASSWORD` | b64len 40 | **b64len 0** |
+| `MEMEX_URI` | b64len 112 | b64len 76 → `postgresql://postgres:@memex-postgres-service:5432/memex` |
+
+🚨 **The URI is the instructive half.** Its template `default` fires on the empty password and
+*derives* a value, so the key is **present, non-empty, plausible and wrong** — it survives a
+`keys[]` audit *and* the base64-length audit that exists because `keys[]` is insufficient. The
+shape that catches it is neither: it is a per-key statement of whether empty is legal, plus an
+expected form.
+
+Both are now gated on `postgres.enabled` (or on a value supplied explicitly, so nothing an operator
+sets is ever silently dropped). Nothing read either key — swept across `MeshWeaver` and
+`MeshWeaver.Plugins`, all `*.cs`: every match in either repository is a manifest that *sets* it
+(compose ×4, ACA bicep ×2, helm ×2). They still render for compose, local k3s and e2e, where an
+in-cluster Postgres genuinely exists and the same values are correct.
+
+**The general rule, which is the reusable part:** a secret that reads as configured and is not
+fails at **connect** time with a credentials error rather than at **startup** with "not
+configured", and the second is the one an operator can act on at 3am. Prefer *absent* to *empty*,
+and never let a `default` manufacture a plausible value out of an unconfigured input.
+
 ## Key Vault secrets are DECLARED in values — `keyVaultSecrets`
 
 Since 2026-08-30 the chart renders the `SecretProviderClass` itself, from one block in the values

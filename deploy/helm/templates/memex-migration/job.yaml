@@ -21,7 +21,20 @@ metadata:
     app.kubernetes.io/instance: "{{ .Release.Name }}"
 spec:
   backoffLimit: 6
-  ttlSecondsAfterFinished: 600
+  # 🚨 THIS JOB IS THE ONLY EVIDENCE THAT THIS REVISION'S MIGRATION RAN — so its lifetime must
+  # outlive whoever reads it. `ttlSecondsAfterFinished` reaps a FINISHED Job whether it Completed
+  # or Failed, and at 600 s it reaped the record before the reader looked.
+  #
+  # The reader is Memex's `helm-release.yml`, whose observe step polls
+  # `kubectl get job memex-migration-<revision>` and decides `DONE` from it. Its budget is 25 min
+  # inside a deploy and 40 min on an `action: observe` re-run — both far longer than 600 s — and
+  # its error message tells the operator to re-run `observe` LATER. Measured 2026-09-07: `memex`
+  # revision 35's Job was `active=1` when run 34117537570 gave up at its budget, and by 16:20Z the
+  # Job, its pod and its events were all gone. An `observe` run at that moment reads no Job at all,
+  # which is indistinguishable from a Job that never existed — and a migration that FAILED reaps
+  # exactly the same way. 86400 s makes the artefact outlive every window that reads it; the
+  # verdict refusing to call an absent Job a success is the other half (Memex#188).
+  ttlSecondsAfterFinished: 86400
   template:
     metadata:
       labels:
