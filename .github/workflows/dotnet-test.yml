@@ -1388,8 +1388,21 @@ jobs:
         # outside the test-method window (so the trx never sees them either). This trace answers
         # the question those cannot: was InitializeHubRequest processed, was an UpdateStreamRequest
         # ever posted, was anything deferred. See Doc/Architecture/ReadingCiSignals.
-        if [ -f /tmp/meshweaver-msg-trace.log ]; then
-          cp /tmp/meshweaver-msg-trace.log collected-logs/_meshweaver-msg-trace.log
+        # 🚨 Derive the directory the SAME way the writer does, never a literal. MessageTrace
+        # writes to `Path.Combine(Path.GetTempPath(), "meshweaver-msg-trace.log")`
+        # (MessageService.cs:27, and identically in OrleansRoutingService and RoutingGrain), and on
+        # Unix `GetTempPath()` returns $TMPDIR when it is set and /tmp only when it is not. A
+        # hard-coded /tmp therefore works by the coincidence that GitHub's ubuntu images leave
+        # TMPDIR unset — and the day anything sets it (a container action, a setup step, a
+        # self-hosted runner) this `-f` test answers false, the copy is skipped, and the step stays
+        # GREEN having collected nothing. That is precisely the failure class this whole step exists
+        # to make visible, so it must not be the shape of the collector itself.
+        msg_trace="${TMPDIR:-/tmp}/meshweaver-msg-trace.log"
+        if [ -f "$msg_trace" ]; then
+          cp "$msg_trace" collected-logs/_meshweaver-msg-trace.log
+          echo "collected the per-message trace from $msg_trace"
+        else
+          echo "no per-message trace at $msg_trace (MESHWEAVER_MSG_TRACE is off unless set for the run)"
         fi
         # Native-crash mini dumps (DOTNET_DbgEnableMiniDump) — present only when a
         # test host died on a signal; the exit-marker gate reds the shard, this is
