@@ -119,6 +119,35 @@ Portal (LayoutAreaView)
    │  PortalLayoutBase renders items in menu
 ```
 
+### An entry is never offered for an area this hub cannot render
+
+🚨 **Most of the default entries link to a renderer the platform does not own.** Delete, Copy, Move,
+Versions, Pin, Import, Stop sync, Access control and Groups all render from
+`MeshWeaver.Graph.Views`, which ships as the optional **`DefaultViews`** package — the platform keeps
+the area name and the menu descriptor, the package brings the view. On a mesh without that package
+every one of those entries used to be offered anyway, and every click landed on the layout engine's
+diagnostic page: *"Area not found — No renderer is registered for area `Delete`"* (MeshWeaver#3604).
+
+`DefaultNodeMenuProvider` therefore drops, as its last step, any entry that is a plain navigation to
+**this node's own area URL** for an area no named renderer serves
+(`NodeMenuItemsExtensions.WithoutUnrenderableAreas`). The check is deliberately narrow: an
+**action** entry is never dropped (Recycle runs in place and its href is the node's landing page), nor
+is a submenu parent, a separator, a group, or an entry linking anywhere but `/{node}/{area}` — an
+absolute href such as Cast's `/RemoteControl/Start/Cast?target=…` names an area this hub was never
+asked about.
+
+🚨 **It fails OPEN, and the Overview probe is why.** `HasNamedRenderer` answers a boolean about
+something it had to read, and "this definition is empty, or is not the one that serves this node"
+must never be collapsed into "this area has no renderer" — that direction silently deletes Delete,
+Copy and Move from every portal at once. A node hub always carries `Overview` (registered by the same
+`AddDefaultLayoutAreas` call that registers this menu, and nothing can unregister it), so a
+definition that does not know `Overview` is one that cannot be trusted to answer for the rest: every
+entry is kept, and the visible diagnostic page remains the outcome.
+
+Contributed providers are not filtered — a provider owns the applicability of what it emits, which is
+what `RequiredPermission` already expresses. If you contribute an entry pointing at an area, register
+its renderer on the same hub.
+
 ---
 
 ## Adding Custom Menu Items
