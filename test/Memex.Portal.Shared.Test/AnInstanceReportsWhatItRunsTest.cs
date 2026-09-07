@@ -124,16 +124,33 @@ public class AnInstanceReportsWhatItRunsTest(ITestOutputHelper output) : Monolit
         sample.Origin.Should().Be("Package");
         sample.ModuleVersion.Should().Be("1.2.3", "a package-only module reports the installer's version, never an unknown build");
 
-        // The landed node: the same partition a reported one is filed under, the discriminator stamped.
+        // The landed node: the same partition a reported one is filed under, and its content
+        // MATERIALISES — which is the assertion this test was always reaching for.
         var node = await Read($"{DeploymentReportService.DefaultOperationalSpace}/Modules/{Deployment}");
         node.Should().NotBeNull();
         node!.NodeType.Should().Be(DeploymentReportService.InventoryNodeType);
-        var content = Element(node.Content!);
-        content.GetProperty("$type").GetString().Should().Be(DeploymentReportService.InventoryContentType,
-            "content without the discriminator is stored perfectly and materialises as NOTHING");
-        content.GetProperty("deployment").GetString().Should().Be(Deployment);
-        content.GetProperty("modules").GetArrayLength().Should().Be(2);
-        content.GetProperty("commitSha").ValueKind.Should().BeOneOf(JsonValueKind.String, JsonValueKind.Null);
+
+        // 🚨 READ IT BACK AS THE RECORD, not as raw JSON (#3625). This assertion used to be
+        // `content.GetProperty("$type") == InventoryContentType` — a check that the discriminator
+        // STRING was stamped, with the reason given as "content without the discriminator is stored
+        // perfectly and materialises as NOTHING". The string was stamped and the content
+        // materialised as nothing anyway: `"ModuleInventoryContent"` named no CLR type in the
+        // fleet, so the reading hub could not resolve it and the value degraded back to a raw
+        // JsonElement. The old assertion passed BECAUSE of the defect — raw JSON is the only shape
+        // in which a `$type` property is there to be read — which is why it never noticed. Asserting
+        // the materialised record instead cannot pass while the type is unregistered.
+        // 🚨 The RUNTIME TYPE, not ContentAs<T>. ContentAs is the bad-data-TOLERANT accessor: handed
+        // a raw JsonElement it deserialises it anyway, so it answers a DeploymentReport whether or
+        // not the discriminator resolved — it cannot fail here, and an assertion that cannot fail is
+        // not an assertion. What the defect actually breaks is MATERIALISATION at the read seam:
+        // `node.Content is DeploymentReport`, which is what every ordinary reader does and what the
+        // stream cache's degradation warning is about.
+        node.Content.Should().BeOfType<DeploymentReport>(
+            "the inventory node's content must MATERIALISE — an unresolvable discriminator leaves it "
+            + "a raw JsonElement, and every reader doing `Content is DeploymentReport` sees nothing");
+        var landed = (DeploymentReport)node.Content!;
+        landed.Deployment.Should().Be(Deployment);
+        landed.Modules.Count.Should().Be(2);
     }
 
     /// <summary>
