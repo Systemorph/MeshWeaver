@@ -18,9 +18,72 @@ updates:
       timezone: Europe/Zurich
     open-pull-requests-limit: 10
     groups:
+      # 🚨 FIRST on purpose. Dependabot assigns a dependency to the FIRST group it matches, and
+      # nuget-minor-patch below declares no `patterns:`, which defaults to "*" — so anything listed
+      # after it would be swallowed by the catch-all and split back out into its own PR.
+      #
+      # The Skia stack is ONE decision across THREE packages, and splitting it produces PRs that are
+      # red BY CONSTRUCTION rather than by any defect. Measured 2026-09-07, all three shapes at once:
+      #
+      #   #3527  SkiaSharp 3.119.2 -> 4.151.2 (managed only)  => every OgCardRenderer/NodeIcon test
+      #          dies in the SkiaApi static ctor: "The version of the native libSkiaSharp library
+      #          (119.0) is incompatible ... Supported versions are in the range [151.0, 152.0)."
+      #   #3528  SkiaSharp.NativeAssets.Linux.NoDependencies (native only) => the mirror image.
+      #   neither PR touches Svg.Skia, which per /Directory.Packages.props FLOORS SkiaSharp at
+      #          3.119.2 — a lower central pin under a higher transitive floor is NU1605, not a
+      #          silent resolve. So even both halves together are incomplete without it.
+      #
+      # Managed and native are version-locked to each other, and Svg.Skia's floor binds both. One
+      # group makes the unit Dependabot proposes the same as the unit that can actually build.
+      skia-stack:
+        applies-to: version-updates
+        patterns:
+          - "SkiaSharp*"
+          - "Svg.Skia*"
+          - "HarfBuzzSharp*"
+        update-types: [major, minor, patch]
       nuget-minor-patch:
         applies-to: version-updates
         update-types: [minor, patch]
+    ignore:
+      # 🚨 ENFORCES the hold recorded in /Directory.Packages.props. That comment says "THE ASPIRE
+      # FAMILY IS HELD AT 13.4.6 ON PURPOSE — do not let a dependency sweep move it", and until now
+      # nothing made that true: a sweep proposed 13.4.6 -> 13.5.3 (#3519), and the LICENCE GATE is
+      # what caught it, one job before the build. A rule written only in prose is a rule the next
+      # sweep does not read.
+      #
+      # WHY: every Aspire.Hosting version depends on JsonPatch.Net, and 13.5.0 is where that crosses
+      # from MIT to OSMFEULA (Open Source Maintenance Fee). The exposure is NOT our image - it is
+      # memex/aspire/Memex.Aspire.Hosting, PUBLISHED as MeshWeaver.Aspire.Hosting.Memex, whose
+      # nuspec would hand the fee obligation to everyone who installs it and calls AddMemex().
+      #
+      # 🚨 TEMPORARY, and here is the exit. microsoft/aspire#19498 already replaced JsonPatch.Net
+      # with an internal RFC 6902 implementation (merged 2026-08-25, unreleased as of 13.5.3). Take
+      # the FIRST release whose nuspec no longer lists it, then DELETE this block:
+      #
+      #   curl -s https://api.nuget.org/v3-flatcontainer/aspire.hosting/<ver>/aspire.hosting.nuspec | grep JsonPatch.Net
+      #   # no match => the dependency is gone, safe to take
+      #
+      # Scoped to >= 13.5.0 rather than to minors, so an ordinary 13.4.x patch still flows.
+      - dependency-name: "Aspire.*"
+        versions: [">=13.5.0"]
+
+      # 🚨 ImageSharp 4.x is PAY-TO-USE, and unlike the Aspire hold above this one is not a licence
+      # a reader has to go and look up — the package ENFORCES it in MSBuild. Measured on #3526
+      # (3.1.12 -> 4.1.1), the Release build failed before a single test ran:
+      #
+      #   sixlabors.imagesharp/4.1.1/build/SixLabors.ImageSharp.targets(28,5): error : No Six Labors
+      #   license found. Set $(SixLaborsLicenseKey), set $(SixLaborsLicenseFile), or add a
+      #   'sixlabors.lic' file ... Please obtain a license from https://sixlabors.com/pricing/
+      #
+      # So this is not a preference to weigh: 4.x cannot build here at all without a purchased key,
+      # and MeshWeaver ships Apache-2.0 / MIT. 3.1.x remains Apache-2.0 and keeps receiving security
+      # patches, which is why the floor is on the MAJOR and ordinary 3.1.x bumps still flow.
+      #
+      # The exit is a commercial decision, not a technical one: if a Six Labors licence is ever
+      # bought, drop this block AND provision the key for CI and every developer machine.
+      - dependency-name: "SixLabors.ImageSharp*"
+        versions: [">=4.0.0"]
 
   - package-ecosystem: pip
     directory: "/clients/python"
