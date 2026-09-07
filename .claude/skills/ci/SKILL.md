@@ -203,10 +203,30 @@ BEFORE the cap does.
 
 **Never hand-roll (or copy-paste) a node repo's CI.** The shared jobs live here as `workflow_call`
 workflows — `.github/workflows/node-repo-{validate,compile-check,gate,tag-modules,publish-bake}.yml`
-— and MeshWeaver.Plugins / .Education / .Reinsurance / .SocialMedia call them, keeping only
-repo-specific policy (digest pin, gating, `repository_dispatch` receiver, their own `scripts/`).
-Adopting one renames that repo's required-status-check contexts to `<caller job> / <name>` — do it
-in the same change.
+— and MeshWeaver.Plugins / .Education / .Reinsurance / .SocialMedia / .Crm / .Manufacturing call
+them, keeping only repo-specific policy (digest pin, gating, `repository_dispatch` receiver, their
+own `scripts/`). Adopting one renames that repo's required-status-check contexts to
+`<caller job> / <name>` — do it in the same change.
+
+🚨 **`node-repo-validate` is not one lane among several — it is where the FLEET-WIDE guards run**,
+so a copy of it opts out of every guard the lane grows LATER: silently, retroactively, and
+invisibly from inside the repo that made the copy. `check-workflow-timeouts.py` and
+`check-pr-secret-preflight.py` both live inside it and neither existed when the older copies were
+made — nobody chose to skip them, the copy chose, months of commits later. #3504 found Plugins (the
+largest satellite, most lanes, most secrets) running **no** secret preflight at all, and its first
+execution named three violations.
+
+🚨 **Calling the lane is NECESSARY and NOT SUFFICIENT — the PIN must carry the guard**, and this is
+the half an adoption table cannot see. Measured over every satellite's `main`, 2026-09-07: three
+pre-existing callers (Crm, SocialMedia, Education) pin a `node-repo-validate` sha that predates
+`check-pr-secret-preflight.py`, so they call the lane and are not checked by it — **4 violations
+each, `MW_REGISTRY_KEY` among them**, which is precisely Reinsurance#128's absent secret. The
+control that makes that a measurement rather than an assertion: Reinsurance, the ONE pre-existing
+caller whose pin carries the guard, is the ONE at zero. Read a caller's staleness line ("Shared CI
+logic pinned to `<sha>` — cut N days ago") as a coverage report, not a tidiness one, and bump every
+`uses:` with its paired `platform-ref` in one commit. Full table:
+[CiContentBake.md](../../../src/MeshWeaver.Documentation/Data/Architecture/CiContentBake.md) →
+"Node repos run the same lane".
 
 Full contract:
 [CiContentBake.md](../../../src/MeshWeaver.Documentation/Data/Architecture/CiContentBake.md) and
