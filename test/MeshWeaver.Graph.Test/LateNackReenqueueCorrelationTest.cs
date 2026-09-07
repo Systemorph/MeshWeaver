@@ -32,11 +32,16 @@ namespace MeshWeaver.Graph.Test;
 /// every re-attempt. This test pins that inheritance: the re-attempt's own <c>BEGIN</c> must carry
 /// the SAME <c>corr=</c> as the <c>LATE_NACK_REENQUEUE</c> that caused it.</para>
 ///
-/// <para>🚨 It deliberately asserts on the RE-ENQUEUE, not on the write landing. Its sibling
-/// <c>LateNackReenqueueTest</c> waits for the re-enqueued write to be persisted and is 1-in-330
-/// flaky on exactly that wait (#3477's own subject). Everything this test needs has already
-/// happened by the time the re-enqueue is logged, so it is deterministic where the sibling is
-/// not — and it stays silent about landing, which is the open defect rather than this one.</para>
+/// <para>🚨 It deliberately asserts on the RE-ENQUEUE, not on the write landing: everything it
+/// needs has already happened by the time the re-enqueue is logged, and it stays silent about
+/// landing, which is the open defect rather than this one.</para>
+///
+/// <para>🚨 An earlier revision of this comment claimed this test was "deterministic where the
+/// sibling is not". THAT WAS FALSE, and measurement said so: on queue-build 34089526911 the
+/// sibling passed in the same shard, on the same host, while this test wedged for 90 s and was
+/// killed. The cause was this test's own log capture awaiting a live Subject — see
+/// <c>CapturingLoggerProvider.FirstMatching</c>. Asserting on a log line rather than on storage
+/// buys determinism only if OBSERVING the line cannot perturb what produced it; here it did.</para>
 ///
 /// <para>🚨 WHAT THIS TEST DOES NOT COVER, stated so a green suite is not read as more than it
 /// checked. It pins that the re-enqueue line CARRIES a correlation id. It does NOT pin that the
@@ -168,33 +173,45 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
     private sealed class CapturingLoggerProvider : ILoggerProvider
     {
         private readonly ConcurrentQueue<string> lines = new();
-        private readonly Subject<string> emitted = new();
 
         public ILogger CreateLogger(string categoryName) => new Sink(this, categoryName);
         public void Dispose() { }
         public void Clear() => lines.Clear();
 
-        private void Add(string line)
-        {
-            lines.Enqueue(line);
-            emitted.OnNext(line);
-        }
+        // 🚨 Enqueue ONLY. There is deliberately no Subject here — see FirstMatching.
+        private void Add(string line) => lines.Enqueue(line);
 
-        /// <summary>Replays what has already been seen before waiting, so a line logged between the
-        /// write and this call is not missed — the race that makes a subscribe-then-act test flaky.</summary>
-        /// 🚨 Returns the OBSERVABLE, never a Task. `.ToTask()` is forbidden everywhere, tests
-        /// included: a Task completed inside an Rx pipeline resumes its awaiter inline on the
-        /// signalling thread, still inside Rx's trampoline, so the bridge changes what the test
-        /// measures. The caller awaits this directly with the timeout already applied.
+        /// <summary>Waits for a line matching <paramref name="pattern"/> by POLLING the buffer, so
+        /// a line logged before this call is seen and one logged after it is not missed.</summary>
+        /// <remarks>
+        /// 🚨 THIS MUST NOT AWAIT A LIVE SUBJECT, and that is the whole point of the poll. An
+        /// earlier version concatenated a replay of the buffer with a <c>Subject&lt;string&gt;</c>
+        /// completed from <c>Add</c>. <c>Add</c> runs on WHATEVER THREAD LOGGED — for these lines,
+        /// the owner hub's action-block thread — and awaiting an observable resumes its
+        /// continuation INLINE on the signalling thread. So everything after the await (the
+        /// assertions, the <c>finally</c> that releases the parked merge turn, the method return
+        /// and the framework's teardown) ran ON THE HUB'S OWN THREAD while that hub was mid
+        /// disposal, and the test wedged in total silence until its Fact timeout killed it.
+        ///
+        /// <para>It presented as a flake because the two paths differ: when the line was already in
+        /// the buffer the REPLAY satisfied it and the continuation resumed on the test's thread
+        /// (663 ms locally, green); when the line arrived live, the SUBJECT satisfied it and the
+        /// continuation captured the hub thread (90 s, killed, no teardown). Measured on queue-build
+        /// 34089526911, where the sibling LateNackReenqueueTest passed in the same shard.</para>
+        ///
+        /// <para>Polling from <c>Observable.Interval</c> resumes on the scheduler's thread, never on
+        /// the hub's, which is what makes the continuation safe. It is also why no Subject remains
+        /// in this class — one would be an invitation to reintroduce the await.</para>
+        /// </remarks>
         public IObservable<Match> FirstMatching(string pattern, TimeSpan within)
         {
             var re = new Regex(pattern, RegexOptions.Compiled);
-            // Replay what was already seen BEFORE subscribing, so a line logged between the write
-            // and this call is not missed — the race that makes a subscribe-then-act test flaky.
-            return lines.ToImmutableArray().ToObservable()
-                .Concat(emitted)
-                .Select(line => re.Match(line))
-                .Where(m => m.Success)
+            return Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .Select(_ => lines.ToImmutableArray()
+                    .Select(line => re.Match(line))
+                    .FirstOrDefault(m => m.Success))
+                .Where(m => m is not null)
+                .Select(m => m!)
                 .FirstAsync()
                 .Timeout(within);
         }
