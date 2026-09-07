@@ -580,6 +580,7 @@
   "ui.removeInstallRecord": "Installationseintrag entfernen",
   "ui.requiresGlobalAdmin": "Erfordert Global Admin",
   "ui.restartRequiredToActivate": "Neustart erforderlich, um dieses Paket vollständig zu aktivieren",
+  "ui.moduleBuiltForNewerPlatform": "Hier nicht aktiv: Diese Version wurde für eine neuere Plattform gebaut. Sie wird aktiv, sobald diese Installation aktualisiert wird.",
   "ui.orphanedInstallRecords": "Verwaiste Installationseinträge",
   "ui.requestAccess": "Zugriff anfragen",
   "ui.resetToDefault": "Auf Standard zurücksetzen",

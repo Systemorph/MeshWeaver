@@ -168,8 +168,47 @@ public record MeshBuilder
         // equally hazardous step, isolated per module just below.
         var pending = new List<PendingModuleInstall>();
         var incompatible = new List<IncompatibleModule>();
+        // 🚨 #3538 — THE LINK PROBE, before a single Assembly.LoadFrom. Per-module isolation above
+        // catches a module that THROWS while installing; it cannot catch one that installs cleanly
+        // and is linked against types this platform does not have, because nothing touches those
+        // types until a render does. memex-cloud adopted a MeshWeaver.Graph.Views built against a
+        // core three days newer than its own, installed it without a murmur, and then threw
+        // `TypeLoadException: Could not load type 'MeshWeaver.Mesh.CodeOutputCurrency'` on EVERY
+        // code cell for every user until a human read a pod log. The requirement was never a
+        // version string — it is the set of types the bytes are linked against, and that is in the
+        // module's own metadata, so it can be MEASURED here instead of taken on trust.
+        //
+        // One surface per call, so 40 modules read each platform assembly's type list once. A
+        // baseline (image) module sits IN the application closure, so every platform assembly is
+        // its own sibling and it checks trivially clean — which is right, it ships with the
+        // platform by construction.
+        //
+        // 🚨 The surface is the application closure PLUS every directory this batch is loading
+        // from — never the app closure alone. A store-landed module lives in its own generation
+        // directory and may legitimately reference ANOTHER module landed beside it; measuring it
+        // against /app alone would report that sibling as an absent platform assembly and
+        // quarantine a module that is perfectly fine. The runtime's resolution surface is what has
+        // to be measured, and at boot that is exactly these directories.
+        var surface = assemblyLocations is { Length: > 0 }
+            ? ModulePlatformSurface.OfRunningProcess([
+                AppContext.BaseDirectory,
+                .. assemblyLocations
+                    .Select(location => Path.GetDirectoryName(Path.GetFullPath(location)))
+                    .Where(directory => !string.IsNullOrEmpty(directory))
+                    .Select(directory => directory!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase),
+            ])
+            : null;
         foreach (var location in assemblyLocations)
         {
+            // Fail CLOSED on Indeterminate: MayLoad is true for Linkable and nothing else, so a
+            // check that could not be made can never be read as a check that passed.
+            if (surface is not null && ModulePlatformLink.Check(location, surface) is { MayLoad: false } verdict)
+            {
+                incompatible.Add(ReportIncompatible(location, verdict));
+                continue;
+            }
+
             try
             {
                 var assembly = Assembly.LoadFrom(location);
@@ -322,6 +361,18 @@ public record MeshBuilder
     private static IncompatibleModule ReportIncompatible(string entry, Exception exception)
     {
         var module = IncompatibleModule.From(entry, exception);
+        Console.Error.WriteLine($"[MeshWeaver.Mesh.IncompatibleModule] {module.Report()}");
+        return module;
+    }
+
+    /// <summary>
+    /// Records a module the LINK PROBE refused (#3538) — never loaded, so nothing of it ran — and
+    /// writes it to the same stderr channel, for the same reason: this runs before the logging
+    /// pipeline exists.
+    /// </summary>
+    private static IncompatibleModule ReportIncompatible(string entry, ModuleLinkVerdict verdict)
+    {
+        var module = IncompatibleModule.FromLinkRefusal(entry, verdict);
         Console.Error.WriteLine($"[MeshWeaver.Mesh.IncompatibleModule] {module.Report()}");
         return module;
     }

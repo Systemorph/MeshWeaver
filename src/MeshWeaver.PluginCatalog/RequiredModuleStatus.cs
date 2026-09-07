@@ -157,8 +157,23 @@ public static class RequiredModuleStatus
                 module => string.Equals(module.Name, name, StringComparison.OrdinalIgnoreCase));
             if (broken is not null)
             {
+                // 🚨 A module REFUSED BEFORE LOADING because its bytes need a platform this
+                // deployment is not running (#3538) is the declared FLOOR's case, not #2234's — and
+                // the two must not classify alike. #2234 is "the image and its module set
+                // disagree", which this deployment CAN fix by moving both together, so a rollout
+                // stalls. A store-delivered module built for another platform is one no rollout of
+                // this deployment can conjure: stalling on it would recreate the 2026-08-22
+                // three-way deadlock in a new place, and in the rollback direction it would stall
+                // the very roll that resolves it. ExpectedLater — named, reported, NOT Healthy —
+                // exactly as a floor-held entry is. An IMAGE-shipped module that cannot link is
+                // still Incompatible: that is a build defect the previous generation does not
+                // share, which is precisely what a rollout must not complete over.
                 verdicts.Add(new RequiredModuleVerdict(
-                    entry!, name, RequiredModuleState.Incompatible, broken.Report()));
+                    entry!, name,
+                    broken.RefusedBeforeLoad && !imageShips.Contains(name)
+                        ? RequiredModuleState.ExpectedLater
+                        : RequiredModuleState.Incompatible,
+                    broken.Report()));
                 continue;
             }
 
