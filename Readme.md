@@ -108,7 +108,7 @@ come from the `mw-plugin-test` container image, which is what every pipeline her
 The framework itself is **not** distributed as libraries. It ships as a container image: your mesh
 content compiles against the running portal, plugins ship as module bundles, and startup
 configuration is expressed as options on the Aspire integration rather than as package references.
-The forty-three `MeshWeaver.*` library packages published up to `3.0.0-rc9` are retired and unlisted
+The forty-three `MeshWeaver.*` library packages published up to `3.0.0-rc13` are retired and unlisted
 — existing exact-version pins keep resolving, but nothing new is published under them. See
 [NuGet Package Retirement](src/MeshWeaver.Documentation/Data/Architecture/NuGetPackageRetirement.md).
 

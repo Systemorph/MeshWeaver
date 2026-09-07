@@ -233,8 +233,15 @@ retired package from the sweep.
 
 ## 5. What was retired
 
-Forty-three package ids, every one stalled at `3.0.0-rc7`/`rc8`/`rc9` — nothing has been published
-since the rc line closed. The largest by downloads were `MeshWeaver.ShortGuid`, `MeshWeaver.Utils`,
+Forty-three package ids. Thirty-nine stopped at `3.0.0-rc13`, three at `rc8`
+(`MeshWeaver.Fixture`, `MeshWeaver.Hosting.Monolith.TestBase`,
+`MeshWeaver.Hosting.Orleans.TestBase`) and one at `rc7`
+(`MeshWeaver.Markdown.Collaboration`) — nothing has been published since the rc line closed.
+
+> 🚨 **`v3-flatcontainer/index.json` sorts versions as STRINGS, not as versions.** `rc10`…`rc13`
+> therefore sort BEFORE `rc9`, so reading the tail of that list reports `rc9` as the newest and is
+> wrong by four releases. It fooled this page's first draft. Order with a SemVer comparison, or
+> read the registration blob, whenever "the latest version" matters. The largest by downloads were `MeshWeaver.ShortGuid`, `MeshWeaver.Utils`,
 `MeshWeaver.Domain`, `MeshWeaver.Reflection`, `MeshWeaver.ServiceProvider`,
 `MeshWeaver.Messaging.Contract` and `MeshWeaver.Messaging.Hub`; the set also included the three
 dotnet tools (`MeshWeaver.Cli`, `MeshWeaver.Compiler.Cli`, `MeshWeaver.ThumbnailGenerator`) and

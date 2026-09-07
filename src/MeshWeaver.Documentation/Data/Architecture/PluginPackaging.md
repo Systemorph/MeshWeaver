@@ -15,7 +15,7 @@ source **outside** it: in CI, ahead of time, so the bytes can be shipped rather 
 The compile toolchain itself is **`MeshWeaver.Compiler`** (#1707) — the same code path whether the
 portal compiles at runtime, CI gates and bakes, or you run it by hand — and it is distributed
 two ways: in every portal image, and as the `mw-plugin-test` container image. (The
-`MeshWeaver.Compiler.Cli` dotnet tool, `mw-compiler`, was published to nuget.org up to `3.0.0-rc9`
+`MeshWeaver.Compiler.Cli` dotnet tool, `mw-compiler`, was published to nuget.org up to `3.0.0-rc13`
 and is retired and unlisted — a module compiles against the image, never a feed. See
 [NuGet Package Retirement](/Doc/Architecture/NuGetPackageRetirement).)
 `MeshWeaver.Plugin.Build` is the packaging tool on top. Everything below is what the pipeline has
