@@ -2,8 +2,12 @@ name: Node repo validate (reusable)
 
 # ♻️ REUSABLE (workflow_call) — the cheap shape gate for MeshWeaver.* content repos (unified per
 # #1707): every node JSON validates, every manifest.lock is current, and — on main only — every
-# module's derived version matches its content. The caller's `scripts/` do the work
-# (validate-repos.py, gen-manifests.py); this workflow is only the unified harness around them.
+# module's derived version matches its content. `validate-repos.py` is the caller's; the manifest
+# half runs the PLATFORM's `.github/scripts/gen-manifests.py`, fetched at `platform-ref`, against
+# the caller's tree — the same centralization as compile-check.py, and for the same measured
+# reason: the six vendored copies had drifted to five vintages (Plugins 1157 lines, Crm 646,
+# Education 646, Reinsurance 644, SocialMedia 643, Manufacturing 305), so each fix landed in one
+# repo and the other five kept the bug (#434, #942/#1023, #1426).
 #
 # Caller contract:
 #
@@ -37,6 +41,20 @@ on:
           repair a miss on main (a miss would otherwise surface as a red MAIN push). A repo with
           higher PR traffic keeps the default: the derived patch races the moving trunk baseline,
           so PR-gating it fails PRs for OTHER people's merges.
+        required: false
+        type: boolean
+        default: false
+      centralized-gen-manifests:
+        description: >-
+          Take the manifest VERDICT from the platform's canonical gen-manifests.py rather than the
+          caller's vendored copy. The platform's copy is fetched and self-tested on EVERY run either
+          way — this input only chooses which one is believed, so neither setting skips a gate.
+          A caller flips it to true in the same commit that adds `scripts/gen-manifests.config.json`
+          (the skip list + hashModuleSources, its allow-file); until then it keeps running the copy
+          it has, visibly, in a step that names it. Retiring the vendored copy is a SEPARATE step —
+          it is still the repo's local command and, in most callers, `validate-repos.py`'s library
+          for `check_manifests`, so it goes when a `platform-script.py`-style resolver replaces it.
+          After the flip it is no longer the VERDICT, which is what this input is about.
         required: false
         type: boolean
         default: false
@@ -112,10 +130,33 @@ jobs:
         run: python3 "$RUNNER_TEMP/check-pr-secret-preflight.py" --self-test
       - name: "Every PR-reachable secret in this repo is asserted by a preflight"
         run: python3 "$RUNNER_TEMP/check-pr-secret-preflight.py" --root .
+      # 🚨 ONE implementation of the version derivation, every repo. Fetched exactly like the two
+      # guards above and like compile-check.py: asserted RED when unavailable, never fallen back to
+      # a drifted per-repo copy. The fetch and the self-test run on EVERY call, whichever copy is
+      # believed below, so "the platform's checker is intact" is never a thing a run can skip.
+      - name: Fetch the platform's manifest checker at the pinned ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM_REF: ${{ inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the canonical gen-manifests.py has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/gen-manifests.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/gen-manifests.py" \
+            || { echo "::error::could not fetch .github/scripts/gen-manifests.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/gen-manifests.py" | grep -q "manifest.lock" || { echo "::error::the fetched gen-manifests.py at ${PLATFORM_REF} does not look like the manifest generator"; exit 1; }
+      - name: "The manifest checker can fail — --resolve, the trunk baseline and the config contract (self-test)"
+        run: python3 "$RUNNER_TEMP/gen-manifests.py" --self-test
+
       # manifest.lock calls itself CI-verified; this is what verifies it. A stale lock means a
       # module's recorded content hash — and the version derived from it — describes a tree that
       # no longer exists, which is exactly what a dependent's pin would be trusting.
       - name: Every manifest.lock is current (and carries a version)
+        if: ${{ inputs.centralized-gen-manifests }}
+        env:
+          MW_REPO_ROOT: ${{ github.workspace }}
+        run: python3 "$RUNNER_TEMP/gen-manifests.py" --check
+      - name: "Every manifest.lock is current — this repo's VENDORED copy, not yet centralized"
+        if: ${{ !inputs.centralized-gen-manifests }}
         run: python3 scripts/gen-manifests.py --check
       # 🚨 …and the version is the RIGHT one — but ONLY on main, and that restriction is the
       # point. The patch is derived from a baseline that MOVES (the highest published tag plus
@@ -126,6 +167,13 @@ jobs:
       # number, so this runs as that step's POST-condition rather than as a gate.
       - name: Every module's version matches its content
         if: >
-          inputs.check-versions-always ||
-          (github.event_name == 'push' && github.ref == 'refs/heads/main')
+          inputs.centralized-gen-manifests && (inputs.check-versions-always ||
+          (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+        env:
+          MW_REPO_ROOT: ${{ github.workspace }}
+        run: python3 "$RUNNER_TEMP/gen-manifests.py" --check-versions
+      - name: "Every module's version matches its content — this repo's VENDORED copy, not yet centralized"
+        if: >
+          !inputs.centralized-gen-manifests && (inputs.check-versions-always ||
+          (github.event_name == 'push' && github.ref == 'refs/heads/main'))
         run: python3 scripts/gen-manifests.py --check-versions
