@@ -1,9 +1,12 @@
 ---
-nodeType: WhatsNew
-title: A database migration is rehearsed before it runs
-category: Feature
-date: 2026-09-07
+Name: A database migration is rehearsed before it runs
+Category: Feature
+Description: An init container asks the migration image what it would touch, executes nothing, and only then lets the migration run.
+Icon: ClipboardTask
+Order: -20260907
 ---
+
+# A database migration is rehearsed before it runs
 
 The migration Job now asks its own image what it would do before letting it do it. An init
 container runs the migration worker in rehearse mode: it reads the database's version, counts what
