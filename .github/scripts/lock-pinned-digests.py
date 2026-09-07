@@ -775,14 +775,18 @@ def apply_locks(plan: Plan, registry: Registry) -> list[str]:
             # either. Without this the job's central claim — "N manifests are protected" — rested
             # on `az` having accepted a request, which is the one failure mode that would leave
             # every lock decoration while the report stayed green.
-            protected, why = registry.read_delete_enabled(entry.acr_repo, entry.digest)
-            if protected is False:
+            # `delete_enabled`, named for what it HOLDS rather than for what it implies: PROTECTED
+            # is `delete_enabled is False`, and a local called `protected` holding the opposite
+            # polarity is how a future reader talks themselves into `== True` being success.
+            # `None` is INDETERMINATE and is neither.
+            delete_enabled, why = registry.read_delete_enabled(entry.acr_repo, entry.digest)
+            if delete_enabled is False:
                 plan.locked_now += 1
                 print(f"locked {entry.acr_repo}@{entry.digest}")
                 continue
             failures.append(
                 f"{entry.acr_repo}@{entry.digest}: the lock WRITE succeeded and the manifest still "
-                + ("reads deleteEnabled=true" if protected is True
+                + ("reads deleteEnabled=true" if delete_enabled is True
                    else f"cannot be confirmed locked ({why})")
                 + ". It is pinned by "
                 + f"{', '.join(entry.sources[:3])} and the 03:00 purge can still delete it. A write "
