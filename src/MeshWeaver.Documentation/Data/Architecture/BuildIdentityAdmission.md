@@ -143,6 +143,19 @@ populated, or on `CompilationStatus == Ok` alone:
 |---|---|
 | `NodeTypeEnrichmentHelpers` — pinned release | `RequestedReleasePath` set. `NodeTypeRelease.FrameworkVersion` exists and nothing read it |
 | `NodeTypeContractHandler` — pinned release | the same, answering `GetCompilationPathRequest` |
+
+> 🚨 **Both pinned-release sites decide from the release's `Artifacts`, never from
+> `NodeTypeRelease.FrameworkVersion`.** That field is the framework's ASSEMBLY VERSION string
+> (`3.0.0.0`) and its own doc says it has never gated adoption; the identity that does lives on each
+> `ReleaseArtifact.FrameworkIdentity`. The first cut of #3472 compared the two, so from
+> `3.0.0-ci.7939` every pin to a historical release was refused on every mesh — *"built against
+> framework 3.0.0.0 and this process is 1deb…"*, #1696's producer/gate disagreement one door over. It
+> was caught by MeshWeaver.Plugins' moved suite (`CodeEditRecompileTest.NodeType_RequestedReleasePath_PinsToHistoricalRelease`)
+> on the 7991 pin bump; this repository had no test that pins a release, and now has one
+> (`PinnedReleaseAdmissionTest`). The decision is `NodeTypeBuildIdentity.PinnedReleaseRefusal`: an
+> artifact for this identity and a runnable architecture → admitted; artifacts present, none for this
+> identity → refused, naming what the release offers; no artifact link at all (a release written
+> before links existed) → admitted **unverified**, logged — an absence is not a verdict (#890).
 | `NodeTypeContractHandler` — published-release hydrate | `LatestReleasePath` + coordinates |
 | `MeshDataSource.HandleNodeTypeSchemaRequest` | coordinates |
 | `NodeTypeDataModelAreas.ResolveInstanceHubConfig` | coordinates |

@@ -185,6 +185,44 @@ public static class NodeTypeBuildIdentity
 
     /// <summary>First eight characters — the same width the assembly-store filename tag carries, so
     /// a log line and a DLL name can be compared by eye.</summary>
+    /// <summary>
+    /// Why a PINNED release (<see cref="NodeTypeDefinition.RequestedReleasePath"/>) may NOT be adopted
+    /// by this process, or <see langword="null"/> when it may — the pinned-release half of the
+    /// admission rule, decided from the release's <see cref="NodeTypeRelease.Artifacts"/>.
+    ///
+    /// <para>🚨 <b>Never from <see cref="NodeTypeRelease.FrameworkVersion"/>.</b> That field is the
+    /// framework's ASSEMBLY VERSION string (<c>3.0.0.0</c>) and its own doc says it "has never gated
+    /// adoption"; the value that does is the build IDENTITY on each artifact link. #3472 compared the
+    /// two, so from 3.0.0-ci.7939 every pin to a historical release was refused on every mesh —
+    /// "built against framework 3.0.0.0 and this process is 1deb…" — the exact producer/gate
+    /// disagreement #1696 recorded, one door over (MeshWeaver.Plugins'
+    /// <c>CodeEditRecompileTest.NodeType_RequestedReleasePath_PinsToHistoricalRelease</c> caught it;
+    /// this repository had no test that pins a release).</para>
+    ///
+    /// <para>Three answers. An artifact for THIS identity and a runnable architecture → admitted.
+    /// Artifacts present, none for this identity → refused, naming what the release offers (that is
+    /// the case #3472 exists for: bytes keyed to another framework must not load here). NO artifact
+    /// link at all → admitted, UNVERIFIED: a release written before artifact links existed states no
+    /// identity, and refusing on an absence is the inconclusive-probe mistake (#890) — the same
+    /// choice <c>ApplyAdoptedSourceStamp</c> makes for a legacy bundle. Pure.</para>
+    /// </summary>
+    public static string? PinnedReleaseRefusal(
+        NodeTypeRelease release, string liveFrameworkIdentity, string liveArchitecture)
+    {
+        if (release.Artifacts is not { Count: > 0 })
+            return null;
+        var match = ReleaseArtifactResolver.Resolve([release], liveFrameworkIdentity, liveArchitecture);
+        if (match.IsResolved)
+            return null;
+        return $"pinned release '{release.Path}' carries no artifact for framework "
+            + $"{Short(liveFrameworkIdentity)} on {liveArchitecture} — {match.DeclineReason}. {RecoveryVerb}";
+    }
+
+    /// <summary>Whether a pinned release is admitted WITHOUT an identity to check — it predates
+    /// artifact links. The caller logs it; the answer is "adopt, unverified", never a refusal.</summary>
+    public static bool IsPinnedReleaseUnverified(NodeTypeRelease release)
+        => release.Artifacts is not { Count: > 0 };
+
     private static string Short(string? identity)
         => string.IsNullOrEmpty(identity)
             ? "(none)"
