@@ -99,11 +99,35 @@ safe to automate at all:
 | ❌ Gone from search | The package no longer appears in nuget.org search or `dotnet add package` completion. |
 | ❌ Gone from latest-version resolution | A floating range or a versionless `dotnet tool install -g` no longer finds it. |
 
-**This is measured, not assumed.** An earlier sweep already unlisted `MeshWeaver.AI`,
-`MeshWeaver.Blazor`, `MeshWeaver.Hosting.Blazor`, `MeshWeaver.Import`, `MeshWeaver.Charting` and
-others. `Systemorph/Memex` pins about thirty-five of them at `3.0.0-rc2` through central package
-management, restores from nuget.org and nothing else, and its `Build (Release)` has stayed green
-throughout — exact-version restore against unlisted packages, in production, for weeks.
+**This is measured, not assumed**, three ways:
+
+1. **A direct restore.** `MeshWeaver.AI 2.5.0` reads `listed: false` on nuget.org. A project
+   referencing exactly that version, against nuget.org as the only source, restores in about three
+   seconds. That is the property the whole retirement rests on, verified against the live registry
+   rather than inferred from NuGet's documentation.
+2. **An earlier sweep already did this.** `MeshWeaver.AI`, `MeshWeaver.Blazor`,
+   `MeshWeaver.Hosting.Blazor`, `MeshWeaver.Import` and `MeshWeaver.Charting` are already unlisted.
+   `Systemorph/Memex` pins about thirty-five of them at `3.0.0-rc2`, restores from nuget.org and
+   nothing else, and its `Build (Release)` has stayed green throughout — for weeks.
+3. **Every downstream consumer pins exactly.** Six repositories in the organisation reference
+   `MeshWeaver.*` by `PackageReference`, and every one of them fixes the version through central
+   package management — nothing floats:
+
+| Repository | Pinned at |
+|---|---|
+| `Systemorph/Memex` | `3.0.0-rc2` |
+| `Systemorph/ILS` | `3.0.0-preview1` |
+| `Systemorph/CreditReRate` | `2.5.0` |
+| `Systemorph/PartnerRe.Aviation` | `2.4.0` |
+| `Systemorph/PartnerRe.PropertyFac` | `2.4.0` |
+| `Systemorph/Solar` | `1.0.0` / `1.0.1` |
+
+> 🚨 **A floating range is what unlisting would break** — `Version="2.*"`, a versionless
+> `dotnet tool install -g`, or a `PackageReference` with no version at all under a feed that
+> supplies one. Before retiring any further id, check for those rather than for the *presence* of a
+> reference: a reference is not the risk, an unpinned one is. The check that matters is an
+> organisation-wide code search for `PackageReference Include="MeshWeaver`, followed by reading each
+> hit's `Directory.Packages.props`.
 
 The two consumption paths that unlisting *does* end are both deliberate:
 
