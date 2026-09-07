@@ -1541,6 +1541,21 @@ public static class PackageInstaller
                 // and the same for `Analysis` — this post, arriving packed as RawJson at a root whose
                 // hub has no DisposeRequest in its TypeRegistry. NodeOperationIssuingHub is a NO-OP
                 // for every other caller, so nothing else changes.
+                // 🚨 THE RECYCLE NAMES ITSELF (#3510). This method logged only its DECLINE, never
+                // the positive path — so a package root disappearing mid-install was attributable
+                // to no one. Attributing CD 7950's `Hosting` took a full log archaeology pass and
+                // still needed the code to prove it: every candidate recycler (the rebind watcher,
+                // stale-build convergence, the overlay self-heal) also announces itself at
+                // Information, and the only thing that separated them was ORDERING — this recycle
+                // fires after the package's own adoption wave, the others do not. One line makes
+                // the next occurrence a read instead of a reconstruction. Information, not Debug:
+                // it is one line per package install, it names a deliberate teardown of a live
+                // hub, and the reader needing it is looking at a failed install, not a trace.
+                logger?.LogInformation(
+                    "[PackageInstaller] recycling root {Root} now that its in-package NodeType has a "
+                    + "loadable build — the hub re-activates against the package's own configuration. "
+                    + "Work in flight beneath this root is answered by the teardown, not abandoned.",
+                    rootPath);
                 using (accessService?.ImpersonateAsSystem())
                     hub.NodeOperationIssuingHub()
                         .Post(new DisposeRequest(), o => o.WithTarget(new Address(rootPath!)));

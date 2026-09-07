@@ -335,6 +335,45 @@ trails, six show `RECEIVED runLevel=Quiescing` at the issuing hub, i.e. the call
 the hub was `Started`), it is not fixed by this page's rule, and it is benign in every occurrence
 measured so far — the requester gets `HubDisposedBeforeResponseException`, which is a real answer.
 
+## The UPSERT lane is the same rule, one lane over — and only half of it is covered (#3510)
+
+`CreateOrUpdateNodeRequest` has three legs. Its READ leg reaches all of Rx's terminations already
+(#2454, `MeshExtensions`: *"THREE terminal states, not two"*). Its two WRITE legs subscribe with
+`onNext`/`onError` only:
+
+| leg | trail stage | owner disposed under it |
+|---|---|---|
+| update — `WriteThroughStream` | `UPSERT_WRITE_THROUGH_STREAM` | **covered.** The owner's `RegisterOwnerDisposingNack` mints `OwnerDisposing`, the writer re-enqueues against the fresh activation, the caller is answered `success=True` (pinned by `UpsertAnswersWhenTheOwnerGoesAwayTest`) |
+| create — `DispatchInnerCreate` | `UPSERT_READ absent → create` | **not covered.** No disposal-NACK registration, no `WriteVerdictBound` equivalent |
+
+Measured on core CD 7950: the create leg's trail ends at `HANDLER_EXIT state=Processed` and nothing
+follows, and the run contains **zero `[CreateOrUpdate]` lines of any kind** — so neither terminal arm
+ever ran. Silence, not a fault. The install then ran out its ten-minute bound with no name for what
+happened.
+
+### 🚨 The recycle is by design, it succeeds, and it is NOT the defect
+
+The disposer is `PackageInstaller.SettleRetypedRoot` — the installer's own ordered recycle of the
+root it just retyped from its `Space` placeholder. It fires for every package whose root NodeType is
+dynamic, which is **every plugin package** (`retypedRoot` is non-null iff `!rootTypeIsStatic`, and
+`Store/Plugin` is dynamic — stated in `PackageInstaller.cs:92` and `PartitionTeardownCoverageGate`).
+
+It is not a race, and it works: zero `root … never answered after its recycle` warnings, and the
+same recycle appears 7–12× per bake in every run examined **including the one that SEALED**. A
+package install is *supposed* to survive its own root recycling. What it cannot survive is work in
+flight across that recycle never being answered.
+
+Everything else was eliminated from code, not from a line's absence: stale-build convergence
+(`Modules:AutoRecycleOnStaleBuild` is never set by the tester ⇒ the watcher offers, never disposes),
+the overlay self-heal (needs a fault card), `RecycleNode` (one non-test caller — a circuit-only GUI
+flow), and MeshWeaver.Plugins (posts no `DisposeRequest` outside tests and its MCP tool). The rebind
+watcher is excluded by **ordering**: it fires on the root's *retype*, in the write stage, before the
+release waves — while every observed disposal is *after* that package's own adoption.
+
+Because ordering was the only discriminator, `SettleRetypedRoot` now logs its recycle at
+Information. It previously logged only its *decline*, so the positive case was attributable to
+nobody.
+
 ## What this is NOT
 
 **It is not a timeout, a retry, or a watchdog.** No bound moves; nothing is re-attempted; no poller is
