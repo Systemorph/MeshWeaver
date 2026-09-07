@@ -47,6 +47,19 @@ public class KeyVaultCsiFreshnessGuard
     private const string CsiDriver = "secrets-store.csi.k8s.io";
     private const string MountsClassPath = "$class.mountPath";
 
+    /// <summary>
+    /// The LEGACY escape hatch, for an environment whose SecretProviderClass is HAND-MADE and is
+    /// therefore attached by NAME rather than declared. These three values keys are the whole of
+    /// it, and they are a set: the env source, the volume behind it, and the mount that makes the
+    /// driver write the volume's Secret.
+    /// </summary>
+    private const string ExtraEnvFrom = ".Values.extraEnvFrom";
+    private const string ExtraVolumes = ".Values.extraVolumes";
+    private const string ExtraVolumeMounts = ".Values.extraVolumeMounts";
+
+    /// <summary>Where those keys are declared — asserted so a rename cannot silence this guard.</summary>
+    private const string Values = "deploy/helm/values.yaml";
+
     /// <summary>Kinds that carry a pod template — the only ones that can mount anything.</summary>
     private static readonly Regex PodBearingKind =
         new(@"^kind:\s*""?(Deployment|Job|CronJob|StatefulSet|DaemonSet|ReplicaSet|Pod)""?",
@@ -104,6 +117,176 @@ public class KeyVaultCsiFreshnessGuard
             + "PREVIOUS one, and the workload runs green against a stale credential (#3548: 1,260 × "
             + "HTTP 401 and a completed migration). Add the volume + volumeMount from the same "
             + "`memex.keyVaultClasses` block that renders the envFrom.");
+    }
+
+    /// <summary>
+    /// 🚨 <b>Every workload that carries the chart's Key Vault secret set carries the LEGACY
+    /// ESCAPE HATCH too</b> (Systemorph/MeshWeaver#3595).
+    ///
+    /// <para><b>What went wrong, and why the guard above could not see it.</b> The fact above is
+    /// keyed entirely on <c>$class.*</c> — the classes the CHART owns. An environment whose
+    /// SecretProviderClass is HAND-MADE owns no class: it attaches the SPC's synced Secret BY NAME
+    /// through <c>.Values.extraEnvFrom</c>, the shape <c>values.yaml</c> calls "the memex-cloud
+    /// AI-keys shape". A hand-made class carries neither marker, so the freshness guard is blind
+    /// to it BY CONSTRUCTION and cannot go red on it. Measured on <c>origin/main</c>
+    /// <c>fbf9e9be1</c>: <c>grep -rn extraEnvFrom deploy/</c> found exactly ONE rendering site in
+    /// the whole chart — the portal Deployment. The migration Job rendered none of it.</para>
+    ///
+    /// <para><b>And that is a DIFFERENT defect from #3548, with a different remedy.</b> #3548 was
+    /// STALENESS: the Job had the value, from before the rotation. This is ABSENCE: for a key
+    /// delivered through the escape hatch the Job had no value at all, so
+    /// <c>MeshNodeEmbeddingBackfill</c> took the not-configured path, logged-and-skipped every row,
+    /// and the Job still reported <c>Database migration completed</c>. Same green run, same silent
+    /// outcome, different mechanism.</para>
+    ///
+    /// <para><b>The invariant.</b> The two workloads must carry the SAME secret set, whichever
+    /// mechanism delivers it. So every pod-bearing template that reads the chart's own classes
+    /// must render the escape hatch as well — the parity is what stops the next workload from
+    /// getting half the environment's secrets, which is a state that produces a green run and an
+    /// empty index rather than a failure.</para>
+    /// </summary>
+    [Fact]
+    public void EveryWorkloadThatCarriesTheChartsKeyVaultSecrets_AlsoRendersTheLegacyEscapeHatch()
+    {
+        var root = FindRepoRoot();
+
+        AssertTheEscapeHatchKeysStillExist(root);
+
+        var readers = PodBearingTemplatesReadingTheChartsClasses(root);
+
+        var missingHatch = readers
+            .Where(t => !t.Body.Contains(ExtraEnvFrom, StringComparison.Ordinal))
+            .Select(t => Path.GetRelativePath(root, t.Path))
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(missingHatch.Length == 0,
+            "these workloads carry the chart-owned Key Vault secrets but render NONE of "
+            + $"`{ExtraEnvFrom}`: {string.Join(", ", missingHatch)}. An environment whose "
+            + "SecretProviderClass is hand-made delivers its keys ONLY through that escape hatch "
+            + "(values.yaml calls it the memex-cloud AI-keys shape), so such a workload receives "
+            + "part of the environment's secrets and no signal that the rest is missing — the "
+            + "embedding backfill then logs-and-skips every row and the Job still reports "
+            + "`Database migration completed` (#3595). Render the same "
+            + $"`{ExtraEnvFrom}` block the portal Deployment does, and its "
+            + $"`{ExtraVolumes}` / `{ExtraVolumeMounts}` twins with it.");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The escape hatch's own freshness half: a workload that READS
+    /// <c>.Values.extraEnvFrom</c> also renders the volume and the mount behind it.</b>
+    ///
+    /// <para>This is #3548's argument applied to the class the chart does not own, and it is why
+    /// the three values keys are a SET rather than three options. The CSI driver materialises and
+    /// rotates a synced Secret for the pods that MOUNT its SecretProviderClass; a pod that only
+    /// names the Secret in <c>envFrom</c> free-rides on some other pod's mount and resolves
+    /// <c>envFrom</c> once, at container start. Rendering the env source without its volume would
+    /// therefore hand the new workload exactly the stale credential #3548 measured — 1,260 × HTTP
+    /// 401 behind a green migration — with the guard above unable to see it, because none of it
+    /// goes through <c>$class.*</c>.</para>
+    ///
+    /// <para>Asserted in the same direction as its sibling and for the same reason: rendering
+    /// MORE of the hatch can only be safe, rendering less is the defect.</para>
+    /// </summary>
+    [Fact]
+    public void EveryWorkloadThatRendersTheEscapeHatchEnvFrom_AlsoRendersItsVolumeAndMount()
+    {
+        var root = FindRepoRoot();
+
+        AssertTheEscapeHatchKeysStillExist(root);
+
+        var templates = PodBearingTemplates(root);
+
+        var hatchReaders = templates
+            .Where(t => t.Body.Contains(ExtraEnvFrom, StringComparison.Ordinal))
+            .ToArray();
+
+        // 🚨 The denominator. Two workloads render the hatch today — the portal Deployment and the
+        // migration Job. If that reaches zero the escape hatch was removed from the chart while
+        // values.yaml still declares it (the assertion above proves it does), which is a values key
+        // consumed by nothing — the exact class of defect chart-gate exists for. Never a pass.
+        Assert.True(hatchReaders.Length >= 2,
+            $"expected at least two pod-bearing templates to render `{ExtraEnvFrom}` (the portal "
+            + $"Deployment and the migration Job); found {hatchReaders.Length}. `{Values}` still "
+            + "declares the key, so either a workload stopped rendering it — which is #3595 "
+            + "reopening — or the hatch was retired and this guard must move with it.");
+
+        var freeRiders = hatchReaders
+            .Where(t => !t.Body.Contains(ExtraVolumes, StringComparison.Ordinal)
+                        || !t.Body.Contains(ExtraVolumeMounts, StringComparison.Ordinal))
+            .Select(t => Path.GetRelativePath(root, t.Path))
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(freeRiders.Length == 0,
+            $"these workloads read `{ExtraEnvFrom}` but do not render "
+            + $"`{ExtraVolumes}` / `{ExtraVolumeMounts}`: {string.Join(", ", freeRiders)}. The env "
+            + "source names a Secret the Secrets Store CSI driver writes only for the pods that "
+            + "MOUNT its SecretProviderClass, and envFrom is resolved once at container start — so "
+            + "without the volume the workload free-rides on another pod's mount and reads a value "
+            + "that is stale or absent, green and silent (#3548, #3595). The three keys are a set: "
+            + "render all three or none.");
+    }
+
+    /// <summary>
+    /// The escape hatch's keys must still be DECLARED in values.yaml. Without this a rename there
+    /// would leave both facts above matching nothing in every template and passing — a guard whose
+    /// subject moved and whose roots did not, which AGENTS.md names as the skip-trapdoor shape.
+    /// </summary>
+    private static void AssertTheEscapeHatchKeysStillExist(string root)
+    {
+        var values = Path.Combine(root, Values);
+        Assert.True(File.Exists(values),
+            $"{Values} is gone — the escape-hatch keys this guard keys on are declared there. If "
+            + "the values file moved, move the guard with it rather than letting it match nothing.");
+
+        var body = File.ReadAllText(values);
+        var undeclared = new[] { "extraEnvFrom", "extraVolumes", "extraVolumeMounts" }
+            .Where(k => !Regex.IsMatch(body, $@"^{Regex.Escape(k)}\s*:", RegexOptions.Multiline))
+            .ToArray();
+
+        Assert.True(undeclared.Length == 0,
+            $"{Values} no longer declares: {string.Join(", ", undeclared)}. These three keys are "
+            + "the legacy escape hatch and this guard is keyed on their names, so a rename here "
+            + "makes both facts match nothing and pass having checked no template. Rename them in "
+            + "the guard in the same change — or, if the hatch was retired because every "
+            + "environment moved onto `keyVaultSecretClasses`, delete this guard and say so.");
+    }
+
+    /// <summary>Pod-bearing templates that read the chart's OWN Key Vault classes.</summary>
+    private static (string Path, string Body)[] PodBearingTemplatesReadingTheChartsClasses(string root)
+    {
+        var readers = PodBearingTemplates(root)
+            .Where(t => t.Body.Contains(ReadsSyncedSecret, StringComparison.Ordinal))
+            .ToArray();
+
+        // The same denominator the first fact asserts, for the same reason: zero readers means the
+        // wiring was rewritten, which is a human question and never a pass.
+        Assert.True(readers.Length >= 2,
+            $"expected at least two pod-bearing templates to read '{ReadsSyncedSecret}' (the portal "
+            + $"Deployment and the migration Job); found {readers.Length}. Either the Key Vault "
+            + "wiring was rewritten (move this guard with it) or a reader was lost.");
+
+        return readers;
+    }
+
+    /// <summary>Every template in the chart that declares a pod, comments stripped.</summary>
+    private static (string Path, string Body)[] PodBearingTemplates(string root)
+    {
+        var dir = Path.Combine(root, Templates);
+
+        var templates = Directory.EnumerateFiles(dir, "*.yaml", SearchOption.AllDirectories)
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(templates.Length > 0,
+            $"{Templates} contains no .yaml templates — this guard would pass having examined "
+            + "nothing. Point it at wherever the chart moved.");
+
+        return templates
+            .Select(f => (Path: f, Body: ExecutableLinesOf(File.ReadAllText(f))))
+            .Where(t => PodBearingKind.IsMatch(t.Body))
+            .ToArray();
     }
 
     /// <summary>
