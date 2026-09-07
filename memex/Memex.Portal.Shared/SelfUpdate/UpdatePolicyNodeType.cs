@@ -27,19 +27,9 @@ namespace Memex.Portal.Shared.SelfUpdate;
 public record UpdatePolicyContent
 {
     /// <summary>
-    /// The update strategy. A NEWLY constructed record defaults to
-    /// <see cref="UpdatePolicyKind.Continuous"/> — but an ABSENT value on a persisted record reads as
-    /// <see cref="UpdatePolicyKind.None"/>, not as Continuous (#3542).
-    ///
-    /// <para>Those two are different questions and used to have the same answer. Because
-    /// <c>None</c> is now the enum's zero value, an explicit <c>Continuous</c> is non-default and is
-    /// therefore always written out, so "the admin chose Continuous" is distinguishable from "this
-    /// record lost its policy" — and the latter fails closed instead of enabling an unattended roll.</para>
-    /// </summary>
-    /// <summary>
     /// The update strategy AS DECLARED on the record — <c>null</c> when the record carries no
     /// <c>policy</c> field at all. Read <see cref="Policy"/> instead; this exists so that "absent"
-    /// and "explicitly chosen" stay different facts on the wire.
+    /// and "explicitly chosen" stay different facts on the wire (#3542).
     /// </summary>
     [Description("Update strategy")]
     [Translation("de", "Update-Strategie")]
@@ -60,6 +50,12 @@ public record UpdatePolicyContent
     /// <para>The consequence that matters: an install whose record lost its policy under its own
     /// bookkeeping writes no longer rolls itself. That is how memex-cloud reached a withdrawn
     /// <c>3.1.0-ci</c> line "on a policy record that lost its own policy".</para>
+    ///
+    /// <para>🚨 Reading an absent policy as <c>None</c> made the CONSEQUENCE safe; it did not stop
+    /// the record from losing the field. What did is that every bookkeeping write now goes through
+    /// the framework's TYPED write (<c>Update&lt;UpdatePolicyContent&gt;</c>), which refuses a node
+    /// whose content it cannot read instead of writing a default over it — see
+    /// <see cref="UpdatePolicyNodeType.ParseContent"/>.</para>
     /// </summary>
     [JsonIgnore]
     public UpdatePolicyKind Policy
@@ -294,19 +290,21 @@ public static class UpdatePolicyNodeType
     /// <see cref="PlatformUpdateStatus"/> shape, and for its reason: impersonation is an
     /// <c>AsyncLocal</c>, and <c>Observable.Using</c> would dispose it on whichever thread the
     /// sequence terminates on, leaving the caller running as System).</para>
+    ///
+    /// <para>🚨 The TYPED write, never <c>ParseContent</c> + the untyped overload — see
+    /// <see cref="ParseContent"/> for what that shape destroys.</para>
     /// </summary>
     public static IObservable<Unit> RecordVerification(IMessageHub hub, ComboVerification verdict)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var jsonOptions = hub.JsonSerializerOptions;
         return Observable.Create<Unit>(observer =>
         {
             using (AccessContextScope.AsSystem(accessService))
                 return hub.GetWorkspace().GetMeshNodeStream(NodePath)
-                    .Update(node =>
+                    .Update<UpdatePolicyContent>((node, cur) =>
                     {
-                        var cur = ParseContent(node.Content, jsonOptions);
-                        var verifications = cur.ComboVerifications
+                        var current = cur ?? new UpdatePolicyContent();
+                        var verifications = current.ComboVerifications
                             .RemoveAll(v => string.Equals(
                                 v.CandidateTag, verdict.CandidateTag,
                                 StringComparison.OrdinalIgnoreCase))
@@ -316,7 +314,7 @@ public static class UpdatePolicyNodeType
                             .ToImmutableList();
                         return node with
                         {
-                            Content = cur with { ComboVerifications = verifications },
+                            Content = current with { ComboVerifications = verifications },
                         };
                     })
                     .Select(_ => Unit.Default)
@@ -324,25 +322,52 @@ public static class UpdatePolicyNodeType
         });
     }
 
-    /// <summary>Parses the policy content from a node (handles both typed content and raw
-    /// <see cref="JsonElement"/>); returns defaults when absent/unparseable.</summary>
+    /// <summary>Parses the policy content from a node (handles typed content, a degraded
+    /// <see cref="JsonElement"/>, an as-written <c>JsonNode</c> and a same-named record from another
+    /// build); returns defaults when absent or unreadable. 🚨 READ-ONLY — see
+    /// <see cref="ParseContent"/>.</summary>
     public static UpdatePolicyContent Parse(MeshNode? node, JsonSerializerOptions options) =>
         ParseContent(node?.Content, options);
 
-    /// <summary>Parses the policy content from a node's <c>Content</c> value.</summary>
+    /// <summary>
+    /// Parses the policy content from a node's <c>Content</c> value, defaulting when it is absent
+    /// or cannot be read.
+    ///
+    /// <para>🚨 <b>READ-ONLY. A WRITE MUST NEVER BE BUILT ON THIS.</b> Every write on
+    /// <c>Admin/UpdatePolicy</c> is the framework's TYPED write —
+    /// <c>stream.Update&lt;UpdatePolicyContent&gt;((node, cur) =&gt; node with { Content = (cur ??
+    /// new UpdatePolicyContent()) with { … } })</c> — and never
+    /// <c>Update(node =&gt; … ParseContent(node.Content, …) …)</c>.</para>
+    ///
+    /// <para>A read must stay bad-data tolerant: a settings tab that throws is worse than one
+    /// showing the fail-closed <see cref="UpdatePolicyKind.None"/>. That tolerance is exactly what
+    /// makes it wrong for a write. This method answers <c>new UpdatePolicyContent()</c> for BOTH
+    /// "there is no content" and "the content is present and this build cannot read it", and a
+    /// bookkeeping write built on it PERSISTS that empty record — a failed READ becoming a write
+    /// that erases the admin's policy, the latest available tag, every combo verdict and any live
+    /// availability hold. That is #3542's proposal 3, and it survived #3607, which changed only
+    /// what an ABSENT policy MEANS.</para>
+    ///
+    /// <para>Measured on <c>origin/main</c> at <c>5453be493</c>: with the record holding
+    /// <c>{"policy":"None","latestAvailableTag":"3.0.0-ci.8009","comboVerifications":"corrupt"}</c>
+    /// — one field this build cannot deserialize — one <c>RecordAvailable</c>-shaped write
+    /// completed silently and left
+    /// <c>{"requireCiGreen":true,"latestAvailableTag":"3.0.0-ci.9999","comboVerifications":[]}</c>.
+    /// The <c>policy</c> field was gone: precisely the production state #3542 opens on.</para>
+    ///
+    /// <para>The typed overload is the framework's own answer to exactly this and needs no local
+    /// guard: <c>null</c> there means ABSENT and only absent, while content that is present but
+    /// unreadable faults the observable with a <c>MeshNodeStreamException</c> carrying the path,
+    /// the runtime type and a JSON excerpt — <b>the write does not happen</b>. Every bookkeeping
+    /// caller already wraps its write in a <c>.Catch</c> that logs and carries on (#1020: a
+    /// bookkeeping write may never gate the roll), so an unreadable record is refused loudly and
+    /// left intact instead of overwritten silently.</para>
+    /// </summary>
     public static UpdatePolicyContent ParseContent(object? content, JsonSerializerOptions options) =>
-        content switch
-        {
-            UpdatePolicyContent c => c,
-            JsonElement je => TryDeserialize(je, options) ?? new UpdatePolicyContent(),
-            _ => new UpdatePolicyContent(),
-        };
-
-    private static UpdatePolicyContent? TryDeserialize(JsonElement je, JsonSerializerOptions options)
-    {
-        try { return JsonSerializer.Deserialize<UpdatePolicyContent>(je.GetRawText(), options); }
-        catch { return null; }
-    }
+        // ObjectAsExtensions.As<T>, not a hand-rolled JsonElement switch: it also covers the
+        // as-written JsonNode DOM and a same-named record from another collectible assembly, both
+        // of which the switch answered with a silent default.
+        content.As<UpdatePolicyContent>(options) ?? new UpdatePolicyContent();
 
     /// <summary>True if the exception (or any inner) reports an "already exists" outcome — the
     /// idempotent-create success signal.</summary>

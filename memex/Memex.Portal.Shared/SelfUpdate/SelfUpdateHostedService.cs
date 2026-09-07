@@ -942,7 +942,6 @@ public class SelfUpdateHostedService : IHostedService
     protected virtual IObservable<Unit> RecordHold(string tag, UpdatabilityVerdict? verdict)
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
-        var jsonOptions = _hub.JsonSerializerOptions;
         // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790):
         // `AsSystem(x)` IS `x.ImpersonateAsSystem()`, so the helper hides the shape. The write here
         // is CROSS-HUB, which is the worst case for `Using` — Rx disposes the scope when the inner
@@ -950,20 +949,24 @@ public class SelfUpdateHostedService : IHostedService
         // subscriber (the self-update poller's tick) keeps `system-security` latched. RunAsSystem
         // opens and closes inside one Subscribe; the Update is still ISSUED as System, which is what
         // the cross-hub patch stamps.
+        // 🚨 The TYPED write (#3542). `cur` is null ONLY when the node carries no content at all;
+        // content that is present but unreadable faults instead of arriving as null, so a record
+        // this build cannot parse is REFUSED here rather than replaced by a default — see
+        // UpdatePolicyNodeType.ParseContent.
         return accessService.RunAsSystem(
             () => _hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
-                .Update(node =>
+                .Update<UpdatePolicyContent>((node, cur) =>
                 {
-                    var cur = UpdatePolicyNodeType.ParseContent(node.Content, jsonOptions);
+                    var current = cur ?? new UpdatePolicyContent();
                     return node with
                     {
                         Content = verdict is null
-                            ? cur with
+                            ? current with
                             {
                                 HeldTag = null, HeldReason = null,
                                 HeldIndeterminate = false, HeldAt = null,
                             }
-                            : cur with
+                            : current with
                             {
                                 HeldTag = tag,
                                 HeldReason = verdict.HoldReason,
@@ -1094,27 +1097,22 @@ public class SelfUpdateHostedService : IHostedService
     protected virtual IObservable<Unit> RecordCheck(SelfUpdateTrigger trigger, SelfUpdateVerdict verdict)
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
-        var jsonOptions = _hub.JsonSerializerOptions;
         // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` — see
-        // RecordHold below (#1444/#1790).
+        // RecordHold below (#1444/#1790). Typed write — see RecordHold (#3542).
         return accessService.RunAsSystem(
             () => _hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
-                .Update(node =>
+                .Update<UpdatePolicyContent>((node, cur) => node with
                 {
-                    var cur = UpdatePolicyNodeType.ParseContent(node.Content, jsonOptions);
-                    return node with
+                    Content = (cur ?? new UpdatePolicyContent()) with
                     {
-                        Content = cur with
-                        {
-                            LastCheckedAt = DateTimeOffset.UtcNow,
-                            LastCheckVerdict = verdict.Message,
-                            LastCheckTrigger = trigger.ToString(),
-                            // 🚨 Written on EVERY check, so it CLEARS itself the moment the tag
-                            // resolves again — the same unconditional-clearing rule the availability
-                            // hold follows. A healed strand that lingered would be a stale scare.
-                            UnresolvedInstalledTag = verdict.UnresolvedInstalledTag,
-                        },
-                    };
+                        LastCheckedAt = DateTimeOffset.UtcNow,
+                        LastCheckVerdict = verdict.Message,
+                        LastCheckTrigger = trigger.ToString(),
+                        // 🚨 Written on EVERY check, so it CLEARS itself the moment the tag
+                        // resolves again — the same unconditional-clearing rule the availability
+                        // hold follows. A healed strand that lingered would be a stale scare.
+                        UnresolvedInstalledTag = verdict.UnresolvedInstalledTag,
+                    },
                 })
                 .Select(_ => Unit.Default));
     }
@@ -1126,18 +1124,17 @@ public class SelfUpdateHostedService : IHostedService
     protected virtual IObservable<Unit> RecordAvailable(string tag)
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
-        var jsonOptions = _hub.JsonSerializerOptions;
         // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` — see
-        // RecordHold above (#1444/#1790).
+        // RecordHold above (#1444/#1790). Typed write — see RecordHold (#3542).
         return accessService.RunAsSystem(
             () => _hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
-                .Update(node =>
+                .Update<UpdatePolicyContent>((node, cur) => node with
                 {
-                    var cur = UpdatePolicyNodeType.ParseContent(node.Content, jsonOptions);
-                    return node with
+                    Content = (cur ?? new UpdatePolicyContent()) with
                     {
-                        Content = cur with { LatestAvailableTag = tag, CheckedAt = DateTimeOffset.UtcNow },
-                    };
+                        LatestAvailableTag = tag,
+                        CheckedAt = DateTimeOffset.UtcNow,
+                    },
                 })
                 .Select(_ => Unit.Default));
     }
