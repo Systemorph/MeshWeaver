@@ -942,12 +942,20 @@ public sealed class GitHubWebhookProcessor
             // scope on the SUBSCRIBING thread and disposes it wherever the work terminates, leaving
             // the subscriber running as System.
             accessService
-                .RunAsSystem(() => workspace.GetMeshNodeStream(node.Path).Update(current =>
-                {
-                    var cfg = current.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)
-                              ?? new GitHubSyncConfig();
-                    return current with { Content = cfg with { RepositoryUrl = repointed } };
-                }))
+                // 🚨 The TYPED overload (#3623). The untyped shape read the config through
+                // `ContentAs<GitHubSyncConfig>(…) ?? new GitHubSyncConfig()`, which answers the same
+                // empty record for "no content yet" and for "content is present and this build
+                // cannot read it" — and the write then persisted that empty record, erasing the
+                // token reference, the branch, the path mapping and `LastSyncCommitSha` on a repo
+                // whose only sin was being renamed. Here `null` means ABSENT and only absent;
+                // unreadable content faults, the write does NOT happen, and the onError arm below
+                // says so — which is the right outcome, because canonical matching already covers
+                // this delivery and a repair is never worth the record.
+                .RunAsSystem(() => workspace.GetMeshNodeStream(node.Path)
+                    .Update<GitHubSyncConfig>((current, cfg) => current with
+                    {
+                        Content = (cfg ?? new GitHubSyncConfig()) with { RepositoryUrl = repointed }
+                    }))
                 .Subscribe(
                     _ => logger?.LogInformation(
                         "Repointed {Config} from '{Old}' to '{New}' — the repository was renamed.",

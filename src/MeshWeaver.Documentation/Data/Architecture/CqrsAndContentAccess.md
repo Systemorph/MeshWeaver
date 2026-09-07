@@ -696,6 +696,20 @@ Two production instances, both silent until the data was gone:
 
 Reach for the untyped `Update(node => …)` only when the lambda does **not** read `Content` — setting `Name`, `State`, a `Requested*` field on a node whose content it never inspects.
 
+`DefaultedContentReadInsideAnUpdateLambdaGuard` holds the defaulting shape at **zero** across `src/`
+and `memex/` — the untyped `.Update(x => …)` lambdas that exist today and every one added tomorrow.
+It has no allow file: the correction is mechanical and preserves behaviour exactly when the record
+*is* readable, so an exemption could only ever mean *"this one may keep destroying records"*.
+
+Where the write is **not** a `stream.Update` — a durable compare-and-set on a storage adapter, or a
+pure decision function feeding one — the same rule applies without the primitive: read `null` when
+`Content is null`, and REFUSE loudly when the content is present and unreadable. Refuse by writing
+nothing and **logging what was withheld**, not by throwing, wherever a throw would strand a lock or
+a claim the caller still has to hand back (`BuildNodeType.ReadLockStateOrRefuse` and
+`BuildNodeType.ApplyGrant` are the two worked examples: the first guards the durable claim LOCK a
+compare-and-set commits against, the second the mirror publication whose refusal
+`HandBackAStoodDownGrant` reads in order to release that lock).
+
 Under the hood the handle diffs `current` vs `update(current)` and ships an RFC 7396 JSON-merge patch (`PatchDataChangeRequest` on the stream protocol) to the owning hub, which merges it against its authoritative state on its single-threaded action block. That plumbing is **internal** — application code never posts `PatchDataChangeRequest`/`PatchDataRequest` itself.
 
 Never go through a query + merge in memory + a full-node write. The index read is stale; the merge loses concurrent writes; the full-node replace overwrites anything you didn't explicitly read. Let the owning hub apply the patch on its authoritative state.
