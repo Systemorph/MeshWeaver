@@ -135,25 +135,29 @@ internal static class NodeTypeContractHandler
                             // bytes for THIS framework are not available), so the recorded state
                             // is never branded a source error and the operator gets both
                             // identities in one line.
-                            if (!string.Equals(
-                                    release.FrameworkVersion,
-                                    NodeTypeCompilationHelpers.FrameworkVersion,
-                                    StringComparison.Ordinal))
+                            // 🚨 The identity lives on the release's ARTIFACT links, never on
+                            // NodeTypeRelease.FrameworkVersion — that is the assembly VERSION string
+                            // ("3.0.0.0", documented as never gating adoption), and comparing it to the
+                            // identity hash refused EVERY pin from 3.0.0-ci.7939 on (#1696's producer/
+                            // gate disagreement, one door over). A release predating artifact links is
+                            // admitted UNVERIFIED, like a legacy bundle — an absence is not a verdict.
+                            if (NodeTypeBuildIdentity.PinnedReleaseRefusal(
+                                    release, NodeTypeCompilationHelpers.FrameworkVersion,
+                                    ReleaseArchitecture.Live) is { } pinnedRefusal)
                             {
                                 logger?.LogError(
-                                    "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} was built "
-                                    + "against framework {ReleaseFramework} and this process is {LiveFramework} — "
-                                    + "refusing to adopt it. {Recovery}",
-                                    hubPath, requestedReleasePath,
-                                    release.FrameworkVersion, NodeTypeCompilationHelpers.FrameworkVersion,
-                                    NodeTypeBuildIdentity.RecoveryVerb);
+                                    "GetCompilationPathRequest at {HubPath}: {Refusal}", hubPath, pinnedRefusal);
                                 return Observable.Return(new ResolvedResponse(Fail(
                                     null,
-                                    $"Pinned release '{requestedReleasePath}' for '{hubPath}' was built against "
-                                    + $"framework '{release.FrameworkVersion}' and this process runs "
-                                    + $"'{NodeTypeCompilationHelpers.FrameworkVersion}'."), false,
-                                    Unavailable: true));
+                                    $"Pinned release '{requestedReleasePath}' for '{hubPath}': {pinnedRefusal}"),
+                                    false, Unavailable: true));
                             }
+                            if (NodeTypeBuildIdentity.IsPinnedReleaseUnverified(release))
+                                logger?.LogWarning(
+                                    "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} predates "
+                                    + "artifact links and states no framework identity — adopting it UNVERIFIED "
+                                    + "(this process is {LiveFramework}). Re-release to record the identity.",
+                                    hubPath, requestedReleasePath, NodeTypeCompilationHelpers.FrameworkVersion);
                             // Use the persisted integer version the IAssemblyStore.Put
                             // used, not a parse of the display Version string.
                             var releaseVersion = release.AssemblyStoreVersion ?? 0;
