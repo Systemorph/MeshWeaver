@@ -67,6 +67,11 @@ name: Node repo platform-ref bump (reusable)
 # path that swallows its own failure re-creates, one level up, exactly the silence it was added to
 # end.
 #
+# 🚨 A caller that bumps the `uses:` sha WITHOUT adding `issues: write` does not get a quieter lane:
+# GitHub refuses the whole run with `startup_failure` before a single job is created. Measured
+# deliberately on MeshWeaver.Plugins run 34137399515 — zero jobs, zero check runs. Loud, which is
+# correct, but it means the caller's grant and its `uses:` sha move in ONE commit.
+#
 # Caller contract:
 #
 #   name: Bump the platform pin
@@ -362,8 +367,8 @@ jobs:
     timeout-minutes: 5
     # REPLACES the caller's map for this job: no checkout, no push, no pull request here — the
     # alert only reads and writes issues. `issues: write` must be granted by the CALLER (a called
-    # workflow can only narrow what it was given); without it this job fails, naming the line to add,
-    # which is the correct way for a missing grant to surface.
+    # workflow can only narrow what it was given); without it GitHub refuses the run outright with
+    # `startup_failure` — measured on MeshWeaver.Plugins run 34137399515, zero jobs created.
     permissions:
       issues: write
     steps:

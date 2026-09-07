@@ -109,9 +109,14 @@ on a reusable lane is a silent startup failure for any caller that omits it. Nev
 inherit` — that hands the lane every secret the calling repo owns.
 
 `issues: write` is the third grant and it is not optional: it is what the reporting job below writes
-the alert with. A called workflow can only *narrow* what its caller was given, so the grant has to
-be written here, in the caller's job, and a caller that bumps the `uses:` sha without adding it gets
-a red report job naming the missing line.
+the alert with. A called workflow can only *narrow* what its caller was given, so the grant has to be
+written here, in the caller's job.
+
+🚨 **Omitting it does not degrade to a quieter lane — GitHub refuses the whole run.** Measured
+deliberately on MeshWeaver.Plugins run 34137399515: `conclusion: startup_failure`, **zero jobs and
+zero check runs created**. That is the right failure (a permission a called workflow cannot widen
+must be visible, not silently narrowed), but it means the grant and the `uses:` sha move in **one
+commit**.
 
 ## The lane had never once worked (2026-09-07)
 
