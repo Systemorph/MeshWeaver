@@ -425,4 +425,99 @@ public class BuildGrantPublicationTest
 
         BuildNodeType.ApplyGrant(mirror, Granted(), Options).Should().BeSameAs(mirror);
     }
+
+    // ── the WAKE-UP: a decision the arbiter is never woken to take is not a fix ─────────────────
+
+    /// <summary>
+    /// 🚨 The half the release above cannot supply for itself. <c>ReleaseStoodDownClaim</c> is right
+    /// about the wedged state, and <see cref="TheArbiterReleasesAStoodDownHolder_EvenWithNobodyQueued"/>
+    /// passes whether or not a pass is ever RUN on it — a correct decision procedure and a trigger
+    /// that never delivers it read exactly alike from a unit test. This is the trigger, and the
+    /// state it has to see is the measured one: <c>RequestedClaims</c> EMPTY, because the grant
+    /// consumed the follower's registration on its way in.
+    ///
+    /// <para>The arbiter's own-stream trigger used to ask only "is anyone queued?", so the
+    /// stand-down mark landed on a node it filtered away. On a host WITH a durable store the
+    /// withdraw's flush still published on <c>IStorageAdapter.Changes</c> and the pass ran at once;
+    /// on one without — a monolith test, a dev box, the fail-open <c>GrantOnMirror</c> path, where
+    /// the mirror IS the claim — the only wake-ups left were a re-check some EARLIER trigger
+    /// happened to schedule and the <c>HeartbeatInterval</c> tick two minutes out.</para>
+    /// </summary>
+    [Fact]
+    public void AStandDownMarkWakesTheArbiter_WithNobodyQueued()
+    {
+        BuildNodeType.ArbitrationTrigger(Wedged()).Should().NotBeNull(
+            "the wedged state is exactly what an arbitration pass is owed for, and nothing else is "
+            + "going to wake one — there is nobody queued left to register");
+    }
+
+    /// <summary>
+    /// …and the mark belongs to the KEY, not merely to the filter. It arrives on a node whose other
+    /// trigger fields did NOT move — the grant had already emptied <c>RequestedClaims</c> and set
+    /// <c>ClaimedBy</c> — so a key that omitted it would be swallowed by <c>DistinctUntilChanged</c>:
+    /// the filter would pass and still nothing would fire.
+    /// </summary>
+    [Fact]
+    public void TheStandDownMark_ChangesTheTriggerKey()
+    {
+        var queuedBehindTheWedge = Wedged() with
+        {
+            RequestedClaims = ImmutableDictionary<string, BuildClaimRequest>.Empty
+                .Add("next-image", new BuildClaimRequest("fp-next", T0)),
+        };
+
+        BuildNodeType.ArbitrationTrigger(queuedBehindTheWedge with { StoodDown = null })
+            .Should().NotBe(
+                BuildNodeType.ArbitrationTrigger(queuedBehindTheWedge),
+                "the two differ only in the mark, and they need different arbitration");
+    }
+
+    /// <summary>
+    /// The negative control, and what makes this a trigger rather than a poll: a node with nobody
+    /// queued and nothing to release wakes NOTHING. A key that fired on every emission would be a
+    /// poll wearing a filter's clothes.
+    /// </summary>
+    [Fact]
+    public void AQuietBuildNode_WakesNoArbitrationPass()
+    {
+        BuildNodeType.ArbitrationTrigger(Granted()).Should().BeNull();
+        BuildNodeType.ArbitrationTrigger(new BuildState()).Should().BeNull();
+        BuildNodeType.ArbitrationTrigger(null).Should().BeNull();
+    }
+
+    /// <summary>
+    /// A holder MID-BAKE carrying a mark wakes nothing either — the same line
+    /// <see cref="ARunningBake_IsNeverReleasedByAStandDownMark"/> draws, stated at the trigger so
+    /// the pass is not even run. Waking on a state the pass would decline is how a trigger turns
+    /// into a retry loop.
+    /// </summary>
+    [Fact]
+    public void ARunningBakeCarryingAMark_WakesNoArbitrationPass()
+    {
+        BuildNodeType.ArbitrationTrigger(Wedged() with { Status = BuildStatus.Building })
+            .Should().BeNull();
+    }
+
+    /// <summary>
+    /// The pre-existing trigger is untouched: a pending registration still wakes a pass, and the
+    /// key still tracks BOTH the candidate set and the holder — a candidate joining the queue and
+    /// the holder releasing are each a state the election decides differently.
+    /// </summary>
+    [Fact]
+    public void APendingRegistration_StillWakesTheArbiter_AndTheHolderIsPartOfTheKey()
+    {
+        var queued = new BuildState
+        {
+            ClaimedBy = Winner,
+            Status = BuildStatus.Building,
+            RequestedClaims = ImmutableDictionary<string, BuildClaimRequest>.Empty
+                .Add("next-image", new BuildClaimRequest("fp-next", T0)),
+        };
+
+        BuildNodeType.ArbitrationTrigger(queued).Should().NotBeNull();
+        BuildNodeType.ArbitrationTrigger(queued with { ClaimedBy = null })
+            .Should().NotBe(
+                BuildNodeType.ArbitrationTrigger(queued),
+                "the holder releasing is what makes the queued candidate grantable");
+    }
 }

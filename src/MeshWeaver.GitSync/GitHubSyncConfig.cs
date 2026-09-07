@@ -110,6 +110,15 @@ public record GitHubSyncConfig
     /// would move the horizon past pending uncommitted changes and disarm the protection, so a later
     /// push would prune them (issues #675/#677). "Have we seen the commit?" is
     /// <see cref="LastSyncCommitSha"/>, not this field. Set by the sync operation; not user-editable.
+    ///
+    /// <para>🚨 <b>This is NOT "when did this source last sync", and must never be read — or
+    /// labelled — as if it were</b> (issue #3581). The three suppressions above are deliberate and
+    /// load-bearing, so a source that syncs every day can legitimately carry a horizon months old:
+    /// measured 2026-09-07, <c>Edu/_GitSync</c> read <c>lastSyncedAt</c> 2026-07-11 on memex and
+    /// 2026-08-07 on memex-cloud while both carried a <c>lastSyncCommitSha</c> from that morning.
+    /// Neither field was wrong; the settings tab rendered the pair as ONE event and so reported a
+    /// contradiction. "When did a sync last run here, and what came of it" is
+    /// <see cref="LastSyncAttemptAt"/> + <see cref="LastSyncOutcome"/>.</para>
     /// </summary>
     [Browsable(false)]
     public DateTimeOffset? LastSyncedAt { get; init; }
@@ -124,4 +133,39 @@ public record GitHubSyncConfig
     /// </summary>
     [Browsable(false)]
     public string? LastSyncCommitSha { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>The RECENCY field: when a sync operation last RAN on this source to a verdict.</b>
+    /// Stamped by EVERY conclusion — including the ones that deliberately advance nothing else (a
+    /// fingerprint-matched no-op, a two-way import that preserved server-newer nodes, an import
+    /// that landed nothing). It answers the first question of every "why is this partition
+    /// compiling instead of adopting" investigation, which before issue #3581 could only be
+    /// answered by comparing the node's own <c>lastModified</c> against pair tags in a container
+    /// registry — and <c>lastModified</c> is not that clock either, since
+    /// <c>stream.Update</c> does not re-stamp it.
+    ///
+    /// <para>🚨 Deliberately SEPARATE from <see cref="LastSyncedAt"/>, and the one change that must
+    /// never be made is to fold them together: the horizon would then advance on exactly the
+    /// outcomes that suppress it today, moving past pending uncommitted server changes, disarming
+    /// the two-way protection and letting a later push prune them (issues #675 / #677 / #2229
+    /// item C). One field cannot be both "the last instant we reconciled" and "the last instant we
+    /// tried".</para>
+    ///
+    /// <para>Set by the sync operation; not user-editable. Absent on a source that has never
+    /// synced, and on one whose last sync predates this field.</para>
+    /// </summary>
+    [Browsable(false)]
+    public DateTimeOffset? LastSyncAttemptAt { get; init; }
+
+    /// <summary>
+    /// What the run recorded at <see cref="LastSyncAttemptAt"/>: the importer's own outcome literal
+    /// (<c>Imported</c>, <c>ImportedWithErrors</c>, <c>Skipped</c>, <c>Failed</c>) for an import, or
+    /// <c>Committed</c> for an export. A WIRE value, not display text — the settings tab localizes
+    /// it for the viewer, and nothing branches on it (the baseline decision is
+    /// <c>GitHubSyncService.MayAdvanceBaseline</c>'s, taken off the structured result).
+    ///
+    /// <para>Set by the sync operation; not user-editable.</para>
+    /// </summary>
+    [Browsable(false)]
+    public string? LastSyncOutcome { get; init; }
 }

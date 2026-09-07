@@ -327,6 +327,58 @@ only writer, so undoing its own commit is the only place this can be closed. The
 clause is load-bearing: a holder *mid-bake* has no registration left either, its own grant having
 consumed it.
 
+### …and the mirror image of it: a stand-down DECIDED before the grant and APPLIED after it (#3567)
+
+That refusal closes the interleaving in which the stand-down has **already happened** when the grant
+is published. It cannot close the one in which the stand-down is *decided* first and *applied* last,
+because there the publication was legitimate at the moment it happened — the candidate was still
+registered. What arrives late is the stand-down.
+
+`WithdrawBuildClaim` runs on the **candidate's** hub, which does not own `Admin/Build`. So its
+`stream.Update` lambda is evaluated against *that hub's mirror* and travels to the owner as an RFC
+7396 merge patch of the fields it changed (`MeshNodeStreamHandle.UpdateQueued` →
+`ComputeMergePatchDiff`) — and **a field the lambda leaves unchanged is absent from the patch**,
+which by RFC 7396 leaves the owner's value untouched. Its hand-back half is conditional on exactly
+such a field (`state.ClaimedBy == holder && state.Status is Planning`), so on a mirror the grant has
+not reached yet the patch carries the registration removal and **no `claimedBy` at all**. The
+arbiter, by contrast, writes the node it *owns*, so its lambda is serialised against fresh state.
+**That asymmetry is the bug** — it is the general shape, not a build-protocol quirk:
+[Conditional Writes Across Hubs](../ConditionalWritesAcrossHubs).
+
+| order | outcome |
+|---|---|
+| stand-down decided **and applied** before the grant | `ApplyGrant` refuses, `HandBackAStoodDownGrant` drops the lock. Closed above. |
+| grant applied, **then** stand-down decided | the hand-back half is true → the holder is cleared. Always worked. |
+| **stand-down decided before the grant, applied after it** | patch carries no `claimedBy` → **the holder survives**. #3567. |
+
+A candidate cannot evaluate a condition the owner will apply, so it states a **fact** the owner acts
+on — the `RequestedX`-plus-owner-watcher shape, and `RequestedStatus` is the same idea one field over
+on this record:
+
+- **`BuildState.StoodDown`** — holders that withdrew, keyed by holder id and written
+  **unconditionally** by `BuildNodeType.StandDown`. Its own key makes it merge-safe against every
+  other candidate, and being unconditional makes it true whatever the owner's state turns out to be.
+  It is the half that is always there to be read.
+- **`ReleaseStoodDownClaim`** — the arbiter releases a `Planning` claim whose holder has stood down,
+  and consumes the mark. A **`Building`** holder is never released: a mark from an earlier life of
+  the same id must not pull the lock out from under a running compile.
+- **`ApplyGrant`** also refuses a marked winner — the same refusal stated off the fact rather than
+  off the absence of a registration, which the in-flight patch may not have delivered yet.
+- **`DropLockHeldByStoodDown`** drops the claim LOCK when the mirror released, so the two records
+  agree; the debris lands on either, so fixing one alone just moves the wedge.
+- Marks are **consumed**, never accumulated: on release, on re-registration (`RequestBuildClaim`
+  clears its own key) and otherwise aged out on `ClaimStaleAfter`, the claim's own budget.
+
+🚨 **A decision the arbiter is never woken to take is not a fix.** The mark lands on a node with
+`RequestedClaims` **empty** — the grant consumed the follower's registration on its way in — so the
+own-stream trigger has to ask about more than "is anyone queued?", or the emission carrying the mark
+is filtered away and the release waits for the two-minute stale tick. `ArbitrationTrigger` is that
+predicate, named so it can be tested as the expression the arbiter actually subscribes: it wakes a
+pass for a pending registration **or** a stood-down holder, and the mark is part of the change key,
+not merely of the filter, because it arrives on a node whose other trigger fields did not move.
+(On a host with a durable store the withdraw's flush also publishes on `IStorageAdapter.Changes`,
+which is why this only ever showed up where the mirror *is* the claim.)
+
 There is deliberately **no timer and no bound bolted onto the wait**. A bound would end the wait by
 guessing, and a follower that guesses "the build finished" certifies a share it never probed — a
 silent wrong answer, strictly worse than a hang that announces itself. Both doors are level-triggered
@@ -448,10 +500,16 @@ resting on those two fields rests equally on the passing run. What is measured i
 **`ClaimedBy` stays set, one root emission in 15 s, nothing after.** A reader waiting on such a root
 waits forever.
 
-**The mechanism is open.** Whether the holder cannot act or was never told to is precisely the
-question still live on `MeshWeaver.Plugins#1193` — so this page names the SHAPE, not a cause. The
-permanent diagnostic landed as `MeshWeaver.Plugins#1401` (diagnostic only, no production code) and
-the repro recipe is on #1193; reproduce from those rather than re-deriving.
+**The mechanism is CLOSED (#3567) — the holder was never told to act, and could not have been.** The
+stand-down was decided on the candidate's own mirror and applied as a merge patch that carried no
+`claimedBy`, so a grant the arbiter committed inside that window survived it; the takeover rule then
+defended the live-but-idle holder by design. That is the third interleaving tabulated under
+*"a stand-down decided before the grant and applied after it"* above, and the fix is there too: the
+candidate records `StoodDown` as an unconditional fact and the arbiter releases on it — the general
+shape is [Conditional Writes Across Hubs](../ConditionalWritesAcrossHubs). The permanent diagnostic
+that produced the reading above landed as
+`MeshWeaver.Plugins#1401` (diagnostic only, no production code); the repro recipe is on #1193, which
+closes once that repo's `MW_PLATFORM_REF` carries the fix.
 
 🚨 It reproduced **with #3408 already in the core**, so #3408 does not remove it and #3131 did not
 close it: fourth and fifth are independent, and neither subsumes the other.

@@ -181,7 +181,7 @@ public static class GitHubSyncSettingsTab
 
         // Last-synced status (live — re-renders after each sync via the authoritative cache stream).
         stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
-            .Select(cfg => (UiControl?)Controls.Html(LastSyncedHtml(cfg)))
+            .Select(cfg => (UiControl?)Controls.Html(LastSyncedHtml(cfg, h.ViewerLocale())))
             .StartWith((UiControl?)Controls.Html("<p style=\"color:var(--neutral-foreground-hint);\">…</p>")));
 
         // Editable commit + re-import. Prefill from the Space's saved config once it arrives (same
@@ -557,11 +557,46 @@ public static class GitHubSyncSettingsTab
 
     // ── small helpers ─────────────────────────────────────────────────────────
 
-    private static string LastSyncedHtml(GitHubSyncConfig? cfg) =>
-        cfg?.LastSyncCommitSha is { Length: > 0 } sha
-            ? $"<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Last synced: " +
-              $"{cfg.LastSyncedAt:yyyy-MM-dd HH:mm} UTC — commit <span style=\"font-family:monospace;\">{Esc(sha)}</span></p>"
-            : "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Not synced yet.</p>";
+    /// <summary>
+    /// 🚨 <b>The recency line reads the RECENCY field, never the conflict horizon</b> (issue #3581).
+    /// It used to print <c>LastSyncedAt</c> beside <c>LastSyncCommitSha</c> as if the two named one
+    /// event. They do not: the horizon is deliberately held back by a no-op update, by an import
+    /// that preserved server-newer nodes, and by one that landed nothing (#675 / #677 / #2229
+    /// item C), while the commit advances on the first of those. So a partition syncing every day
+    /// rendered a contradiction — measured 2026-09-07, <c>Edu/_GitSync</c> showed a July (memex) or
+    /// August (memex-cloud) date beside a sha from that morning — and a reader's only recourse was
+    /// to compare node timestamps against pair tags in a container registry.
+    ///
+    /// <para>What is shown now: WHEN a sync last ran, WHAT it concluded, and WHICH commit the mesh
+    /// has reached — three facts, labelled as three facts. A source whose last sync predates the
+    /// recency field carries no <c>LastSyncAttemptAt</c>, so it renders the commit alone rather than
+    /// inventing a date for it.</para>
+    /// </summary>
+    private static string LastSyncedHtml(GitHubSyncConfig? cfg, string? locale)
+    {
+        const string Style = "font-size:0.85rem;color:var(--neutral-foreground-hint);";
+        if (cfg is null || (cfg.LastSyncCommitSha is not { Length: > 0 } && cfg.LastSyncAttemptAt is null))
+            return $"<p style=\"{Style}\">{Esc(LocalizationCatalog.Get("ui.gitSync.neverSynced", locale))}</p>";
+
+        var parts = new[]
+        {
+            cfg.LastSyncAttemptAt is { } at
+                ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.lastRun", locale,
+                    new Dictionary<string, object> { ["when"] = at.UtcDateTime }))
+                : null,
+            cfg.LastSyncOutcome is { Length: > 0 } outcome
+                // An unrecognised outcome falls back to the WIRE literal rather than to a blank, so
+                // a new one reads as itself until it is translated.
+                ? Esc(LocalizationCatalog.GetNamed(
+                    "ui.gitSync.outcome." + outcome, locale, args: null, fallback: outcome))
+                : null,
+            cfg.LastSyncCommitSha is { Length: > 0 } sha
+                ? Esc(LocalizationCatalog.Get("ui.gitSync.atCommit", locale))
+                  + $" <span style=\"font-family:monospace;\">{Esc(sha)}</span>"
+                : null,
+        };
+        return $"<p style=\"{Style}\">{string.Join(" — ", parts.Where(x => x is not null))}</p>";
+    }
 
     private static UiControl Section(string title) =>
         Controls.Html($"<h3 style=\"margin:20px 0 8px 0;font-size:1rem;\">{Esc(title)}</h3>");
