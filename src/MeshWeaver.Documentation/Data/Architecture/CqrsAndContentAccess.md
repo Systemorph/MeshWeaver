@@ -669,19 +669,32 @@ The first emission is the current state; subsequent emissions arrive as the hub 
 
 ---
 
-## Writes — `GetMeshNodeStream(path).Update(...)`
+## Writes — `GetMeshNodeStream(path).Update<TContent>(...)`
 
-Application code writes through the stream handle; the framework turns the lambda into a patch on the owning hub:
+Application code writes through the stream handle; the framework turns the lambda into a patch on the owning hub. **A lambda that reads `Content` names its type** — that is the typed overload, and it is the shape to write:
 
 ```csharp
-workspace.GetMeshNodeStream(targetPath).Update(node =>
-{
-    var content = node.ContentAs<MyContent>(hub.JsonSerializerOptions, logger);
-    if (node.Content is not null && content is null) return node;  // never clobber unreadable content
-    return node with { Content = (content ?? new MyContent()) with { Status = "done" } };
-})
-.Subscribe(_ => { }, ex => logger.LogWarning(ex, "Update failed for {Path}", targetPath));
+workspace.GetMeshNodeStream(targetPath)
+    .Update<MyContent>((node, content) => node with
+    {
+        // `content` is null ONLY when the node carries no content at all.
+        Content = (content ?? new MyContent()) with { Status = "done" },
+    })
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "Update failed for {Path}", targetPath));
 ```
+
+### 🚨 A read may tolerate bad data. A write may not. Do not build one on the other.
+
+`ContentAs<T>` / `As<T>` answer `null` for content they cannot read, because a *read* must stay bad-data tolerant — a settings tab that throws is worse than one that shows a fail-closed default. **That same tolerance destroys data on a write.** `node.Content as T ?? new T()`, or any helper that returns a default for content it could not parse, makes "there is nothing here" and "I could not read what is here" the *same answer* — and the write then persists a default-valued record over every field the caller never touched.
+
+The typed overload removes the choice: `null` means ABSENT and only absent, while content that is present but unreadable **faults the observable** with a `MeshNodeStreamException` naming the path, the runtime type and a JSON excerpt. The write does not happen, the record is left intact, and the caller's `.Subscribe(onNext, onError)` — or its `.Catch` — logs the reason.
+
+Two production instances, both silent until the data was gone:
+
+- `ThreadInput.AppendUserInput` read `node.Content as MeshThread ?? new MeshThread()`; whenever the content arrived as JSON the write reset `Status` to `Idle` and a round the test was trying to prevent got dispatched.
+- The self-update poller's bookkeeping wrote `LastCheckedAt` on `Admin/UpdatePolicy` through a parser that defaulted on failure. One routine check erased the admin's auto-update policy, the latest available tag, every combo verdict and any live availability hold — the policy record that "lost its own policy" ahead of a portal rolling itself onto a withdrawn version line (#3542).
+
+Reach for the untyped `Update(node => …)` only when the lambda does **not** read `Content` — setting `Name`, `State`, a `Requested*` field on a node whose content it never inspects.
 
 Under the hood the handle diffs `current` vs `update(current)` and ships an RFC 7396 JSON-merge patch (`PatchDataChangeRequest` on the stream protocol) to the owning hub, which merges it against its authoritative state on its single-threaded action block. That plumbing is **internal** — application code never posts `PatchDataChangeRequest`/`PatchDataRequest` itself.
 
