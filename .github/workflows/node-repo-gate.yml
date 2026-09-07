@@ -946,7 +946,7 @@ jobs:
             echo "external module composed: $name ($(basename "$b")) — $assets static asset file(s)"
           done
           [ -n "$MODULE_ARGS" ] || { echo "::error::external modules were requested but none were assembled — the artifact pattern matched nothing and no registry bundle was fetched."; exit 1; }
-          echo "external modules: $MODULE_COUNT composed, $ASSET_MODULES of them carrying static web assets, $ASSET_FILES asset file(s) landed under /ext/<module>/wwwroot"
+          echo "external modules: $MODULE_COUNT composed, $ASSET_MODULES of them carrying static web assets, $ASSET_FILES asset file(s) landed module-relative under /ext/<module>/"
           echo "EXT_MODULES_DIR=$EXT" >> "$GITHUB_ENV"
           echo "EXT_MODULE_ARGS=$MODULE_ARGS" >> "$GITHUB_ENV"
       - name: Import + compile + render + run tests for each node repo
