@@ -81,9 +81,17 @@ public static class GitHubSyncConfiguration
         services.AddSingleton<GitHubWebhookProcessor>();
         // Surfaces the per-space GitHub sync sources on the partition administration page
         // (PartitionSyncAdminLayoutArea resolves all IPartitionSyncSourceProvider from DI).
-        services.AddSingleton<IPartitionSyncSourceProvider>(sp => new GitHubPartitionSyncSourceProvider(
+        // ONE provider instance, TWO seams: the administration GUI's rich one and the compile
+        // control plane's one-bit one (IPartitionSourceTracking — whether a partition tracks a
+        // repository at all). Registered as the same object so the two can never answer
+        // differently about a partition.
+        services.AddSingleton(sp => new GitHubPartitionSyncSourceProvider(
             sp.GetRequiredService<GitHubSyncService>(),
             sp.GetRequiredService<IMessageHub>()));
+        services.AddSingleton<IPartitionSyncSourceProvider>(sp =>
+            sp.GetRequiredService<GitHubPartitionSyncSourceProvider>());
+        services.AddSingleton<IPartitionSourceTracking>(sp =>
+            sp.GetRequiredService<GitHubPartitionSyncSourceProvider>());
         // Wiring a _GitSync makes the partition SYSTEM-OWNED — retract any privileged account
         // grant that predates it. See SystemOwnedAccessRetractionHandler for the seven-second
         // window this closes (create the Space, get Admin, wire the sync).

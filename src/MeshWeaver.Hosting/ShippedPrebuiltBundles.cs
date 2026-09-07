@@ -336,6 +336,22 @@ public static class ShippedPrebuiltBundles
         IMessageHub mesh, IReadOnlyCollection<string> typePaths, ILogger? logger,
         string? imageDirectory, string? publishedRoot,
         Action<string>? onCovered)
+        => SeedForTypes(mesh, typePaths, logger, imageDirectory, publishedRoot, onCovered, onMatched: null);
+
+    /// <summary>
+    /// <see cref="SeedForTypes(IMessageHub, IReadOnlyCollection{string}, ILogger, string, string, Action{string})"/>
+    /// with the SECOND witness exposed: <paramref name="onMatched"/> is invoked once for every
+    /// requested path a bundle entry NAMED on this mesh's framework identity — adopted, already
+    /// current, or declined per entry — from the seeder's pool threads (thread-safe, like
+    /// <paramref name="onCovered"/>). A bundle declined WHOLE on framework identity names nothing:
+    /// its entries are another identity's, and "offered" would be a lie the compile gate then acts
+    /// on. Same binary-compatibility shape as the overload above: every argument required, so the
+    /// shipped call sites keep resolving to the signature they were compiled against.
+    /// </summary>
+    public static IObservable<int> SeedForTypes(
+        IMessageHub mesh, IReadOnlyCollection<string> typePaths, ILogger? logger,
+        string? imageDirectory, string? publishedRoot,
+        Action<string>? onCovered, Action<string>? onMatched)
         => Observable.Defer(() =>
         {
             if (typePaths.Count == 0)
@@ -366,7 +382,11 @@ public static class ShippedPrebuiltBundles
                 covered.TryAdd(path, 0);
                 onCovered?.Invoke(path);
             }
-            void WitnessMatched(string path) => matched.TryAdd(path, 0);
+            void WitnessMatched(string path)
+            {
+                matched.TryAdd(path, 0);
+                onMatched?.Invoke(path);
+            }
 
             var seeds = new List<IObservable<SeedTally>>
             {
