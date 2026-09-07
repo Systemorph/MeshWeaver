@@ -689,6 +689,141 @@ containing #3072 (87 and 156 ahead of `17ee6d9fa`), so the #3026 fix reduced the
 it — consistent with this page's standing verdict that MeshWeaver supplies the *workload*, not the
 defect.
 
+### 2026-09-06: sighting #10 — the fault is OUTSIDE `gc_heap`, and a symbolization slip named an impossible frame
+
+`MeshWeaver.Futu-50119.dmp` (MeshWeaver.Plugins run
+[`33923006420`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/33923006420), job
+`101185319665`, `Portal hosts (shard 1)`, runtime `10.0.11`, libcoreclr build-id `989b56df…` — the
+same binary as sightings #8 and #9). Filed as MeshWeaver.Plugins#1347.
+
+This is the first sighting whose faulting frame is **not** in `gc_heap`, and it is worth reading
+carefully, because the first pass at it produced a frame that **cannot exist** and a cause
+(collectible-ALC teardown) that this page has falsified three times.
+
+#### 🚨 The trap: an ELF **file offset** is not a **virtual RVA**, and here they differ by `0x1000`
+
+The first analysis reported `HostCodeHeap::AllocMemory_NoThrow+0xe7` at RVA `0x372887` and concluded
+*"the JIT allocating for a collectible ALC that is already torn down"* — which pointed straight back
+at #2136 and at `AlcLeaseRegistry`. **Every part of that is wrong, and one cheap check falsifies it:**
+
+```
+$ llvm-objdump -d --start-address=0x372860 --stop-address=0x3728a0 libcoreclr.so
+  372881: 49 8b 4e 18      movq  0x18(%r14), %rcx
+  372885: 49 03 4e 28      addq  0x28(%r14), %rcx     ← 0x372887 is INSIDE this 4-byte instruction
+  372889: 48 39 c8         cmpq  %rcx, %rax
+```
+
+**`RIP` always points at an instruction boundary**, so `0x372887` is not a possible faulting address
+at all — and `addq 0x28(%r14),%rcx` could not produce `CR2 = 0x4` in any case. The slip is that in
+this binary a `PT_LOAD` maps file offset `0x371887` at vaddr `0x372887`: **file offset = vaddr −
+`0x1000`**. The symbol table is indexed by *vaddr*; the bytes are found at a *file offset*. Resolve a
+symbol with one and read bytes with the other and you get a confidently-wrong frame that still
+"matches bytes".
+
+Three independent measurements agree on the real address:
+
+1. **`NT_FILE` in the core** gives libcoreclr's load base as `0x7f4434600000` (the mapping whose page
+   offset is `0`, not the executable segment). `RIP = 0x00007f4434973887` ⇒ RVA **`0x373887`**.
+2. The faulting bytes the first analysis itself quoted — `49 8b 07 / 8b 70 04 / 83 c6 f8` — occur at
+   **exactly one** place in the 7 MB binary, vaddr `0x373884`.
+3. `0x373887` is an instruction boundary; `0x372887` is not.
+
+```
+RVA 0x373887 -> LCGMethodResolver::GetCodeInfo(unsigned*, unsigned*, CorInfoOptions*, unsigned*) + 0x1f7
+```
+
+#### The signal and the faulting registers, re-derived
+
+`NT_SIGINFO`: `signo=11  code=1 (SEGV_MAPERR)  addr=0x4`. The `rt_sigframe`'s `sigcontext` (found by
+scanning for `TRAPNO=14`, `ERR=0x4`, `CR2=0x4` and a `RIP` inside libcoreclr's mapping — exactly one
+match in the whole core):
+
+```
+RIP = 0x00007f4434973887   (RVA 0x373887)   CR2 = 0x4   TRAPNO = 14   ERR = 0x4
+RAX = 0x0000000000000000       R15 = 0x00007f3fd1e37188
+RBX = 0x00000000ba41bf48       R13 = RDI = 0x00007f3e78d4c010
+```
+
+#### What the instruction actually does — and why "the JIT allocating code" is the wrong reading
+
+`LCGMethodResolver::GetCodeInfo` does not allocate code. It fetches a dynamic method's **IL** from a
+managed `byte[]` (`src/coreclr/vm/dynamicmethod.cpp`):
+
+```cpp
+U1ARRAYREF dataArray = (U1ARRAYREF) getCodeInfo.Call_RetOBJECTREF(args);
+DWORD codeSize = dataArray->GetNumComponents();   // movl 0x8(%r15), %ebx      -> RBX
+NewArrayHolder<BYTE> code(new BYTE[codeSize]);    // callq _Znam@plt           -> R13
+memcpy(code, dataArray->GetDataPtr(), codeSize);  // movq (%r15),%rax          -> RAX = MethodTable
+                                                  // movl 0x4(%rax),%esi  ← FAULT (MT->m_BaseSize)
+```
+
+So `R15` is the managed `byte[]`, `RAX` is **its MethodTable word**, and the fault is a read of
+`MT->m_BaseSize` at offset `+4` off a **null** MethodTable — hence `CR2 = 0x4` rather than `0x0`.
+**That is this page's invariant exactly**, reached from the application side instead of from inside
+the collector: *an object's MethodTable word reads as exactly zero.*
+
+The object is not merely header-less, it is **not a `byte[]` at all any more**:
+
+```
+0x7f3fd1e37188: 0x0000000000000000   <- R15+0, read as MethodTable  => RAX = 0
+0x7f3fd1e37190: 0x00007f43ba41bf48   <- R15+8, read as Length       => RBX = 0xba41bf48
+```
+
+`RBX` is **3,124,870,984** — the low half of a pointer, read as an IL length. No method has 3 GB of
+IL, and `R15` lies in an **anonymous** mapping (no `NT_FILE` entry), i.e. heap rather than file-backed
+runtime code. The block is a recycled/free-list-shaped run of pointers, and its contents are
+**identical at fault time and at dump time** (`[R15+8]`'s low dword still equals `RBX`), so this is
+not a stale post-hoc read.
+
+#### What the neighbouring memory names — the workload, precisely
+
+24 bytes past the dead array sits a live managed `System.String` (MethodTable, then length `33`, then
+UTF-16):
+
+```
+0x7f3fd1e371d0: 0x00007f43b668dd58     <- String MethodTable
+0x7f3fd1e371d8: 0x21 (=33)             <- length
+0x7f3fd1e371dc: "LastReleaseRequestHandledAtSetter"
+```
+
+`LastReleaseRequestHandledAt` is a property of **`NodeTypeDefinition`**
+(`src/MeshWeaver.Graph.Contract/NodeTypeDefinition.cs`), and core `src/` contains **no**
+`System.Reflection.Emit` or `DynamicMethod` of its own — so the dynamic method being JIT-compiled is a
+**property-setter stub minted by System.Text.Json's reflection-emit member accessor** while
+serializing a mesh node type.
+
+That gives the family a much sharper description than "ALC-heavy assemblies": the provoking workload
+is **LCG / collectible dynamic methods created per serialized type**, and the fault is the JIT
+fetching IL for one whose backing array has already been recycled.
+
+🚨 **Stated as a hypothesis, not a result:** System.Text.Json's `ReflectionEmitCachingMemberAccessor`
+caches these stubs behind a sliding expiration and evicts them on a timer. An eviction that makes a
+`DynamicMethod` collectible *while a JIT compilation of it is still in flight* would produce exactly
+this. **That is the next discriminator, and it is not settled here.**
+
+#### Consequences — two records on this page need correcting
+
+- **`+0x1f7` is not new.** The 2026-08-24 crash (`MeshWeaver.Hosting.Orleans.Test`, `exit=139`) that
+  #2136 was written against is recorded as `LCGMethodResolver::GetCodeInfo+0x1f7` with the **same**
+  instruction — and we now know that instruction reads a managed array's MethodTable word. Its `rax`
+  held UTF-16 text, which under the correct reading means *the array's MethodTable slot held recycled
+  string data*, the same corruption with a different garbage value. It is **not** "JIT-compiling a
+  dynamic method whose collectible-ALC allocator had already been unloaded", because the instruction
+  does no allocation and touches no `LoaderAllocator`. Whether #2136 fixed anything real is a
+  separate question this dump cannot answer; what it settles is that the *frame* was misread.
+- **The scope line "`FutuRe.Test` only" is stale.** `MeshWeaver.GitSync.Test` took the same
+  `exit=139` on Plugins#1191, run `34013024540`, 2026-09-06 — a second suite, and one that also
+  serializes node types heavily. Re-measure the base rate against the LCG workload, not the project.
+
+#### Reproducing this read
+
+Runtime binary: `https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.11/dotnet-runtime-10.0.11-linux-x64.tar.gz`.
+Symbols by build-id, no `dotnet-symbol` needed:
+`https://msdl.microsoft.com/download/symbols/_.debug/elf-buildid-sym-<build-id>/_.debug`.
+The whole read is `struct.unpack` over the ELF core plus one `llvm-objdump` — no container, no DAC.
+🚨 Index symbols by **vaddr** and bytes by **file offset**, and convert between them with the
+`PT_LOAD` table; do not assume they are equal.
+
 ## Reading the result honestly
 
 The trap in this class of bug is confirmation: the stack shows *a* plausible culprit and it is

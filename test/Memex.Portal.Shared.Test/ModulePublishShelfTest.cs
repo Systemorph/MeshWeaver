@@ -79,7 +79,11 @@ public class ModulePublishShelfTest : IDisposable
             [
                 new NuGetPackageWriter.Entry(
                     NuGetPackageWriter.ModuleEntryPathFor("MeshWeaver.Speech.dll"),
-                    () => new MemoryStream("SPEECH"u8.ToArray())),
+                    // 🚨 REAL assembly bytes since #3538: the landing MEASURES the module's link
+                    // requirements against this platform, so a short literal is refused as
+                    // unreadable metadata — correctly, and these tests are about the FLOOR.
+                    () => new MemoryStream(
+                        File.ReadAllBytes(typeof(BundleReader).Assembly.Location))),
             ],
             manifestJson);
         return buffer.ToArray();

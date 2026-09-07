@@ -904,7 +904,7 @@ jobs:
             # `gh issue create` prints the issue URL (it has no --json); the number is its tail.
             url=$(gh issue create --repo "$GITHUB_REPOSITORY" --label ci-failure \
               --title "CD: main \`$SHORT\` has an incomplete image set" \
-              --body "main's HEAD \`$SHORT\` is missing part of its deployment image set in ACR, so every self-updating install stays on the previous image. The CD reconciler will attempt to publish it; this issue collects those attempts. Close it once CD is green again.")
+              --body "main's HEAD \`$SHORT\` is missing part of its deployment image set in ACR, so every self-updating install stays on the previous image. The CD reconciler will attempt to publish it; this issue collects those attempts. It CLOSES ITSELF as soon as a CD run reports a successful heal (#3176) — a later failure files a fresh issue rather than appending here.")
             issue="${url##*/}"
           fi
 
@@ -2514,17 +2514,62 @@ jobs:
       #
       # The condition is now the fact the comment actually asserts: main's HEAD has a complete image
       # set, whoever put it there.
-      - name: Report a successful heal
+      #
+      # 🚨 AND IT CLOSES THE LEDGER, because asking a human to do it produced an IMMORTAL issue
+      # (#3176). The comment used to end "Close this issue if nothing else is outstanding" and then
+      # close nothing, while `alert-on-failure` and `gate` both append to whichever `ci-failure`
+      # issue is OPEN. So the first one ever filed collected every attempt and every heal from then
+      # on: #3176 reached 324 comments spanning four days and a dozen unrelated causes, and its
+      # title — one commit's incomplete image set — had been false for most of its life.
+      #
+      # What that costs is the two things an alert is FOR. Its AGE stops meaning anything (an issue
+      # opened on the 3rd says nothing about a hole opened on the 7th), and so does its EXISTENCE:
+      # an open `ci-failure` issue is the state "delivery is broken", and one that is open
+      # permanently cannot express it. The maintainer's own root-cause comment had to open by
+      # restating the issue's premise, because the premise had expired.
+      #
+      # Closing is the whole fix, and it is not a loss of history: the issue and its comments stay,
+      # searchable, exactly where they were. The next failure files a FRESH issue — `gate` and
+      # `alert-on-failure` both create one when none is open — so from here an issue's title names
+      # its own cause, its age is the outage's age, and closing it also hands the reconciler a fresh
+      # heal budget (the same effect the exhausted-budget comment asks a human for).
+      #
+      # 🚨 THE COMMENT IS FATAL, THE CLOSE IS A WARNING, and that asymmetry is reasoned rather
+      # than convenient — AGENTS.md's test is *what does a failure here hide?*. A lost heal COMMENT
+      # hides the delivery record, so it stays fatal, as it has always been. A failed close hides
+      # NOTHING: the issue simply stays open, which is exactly the behaviour that shipped for
+      # months, and the very next successful heal finds the same open issue and closes it. Making it
+      # fatal would instead red `verify-images`, which `delivery-verdict` and `alert-on-failure`
+      # both read as a broken delivery — an alert about the alerting, on a run that delivered.
+      - name: Report a successful heal, and CLOSE the ledger
+        id: heal
         if: needs.promote.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Through `env:`, never `${{ }}` inside the body: `test-cd-steps.py` EXTRACTS this step
+          # from this file by its `id:` and EXECUTES it against fixtures, and it refuses a body
+          # carrying an expression it would have to rewrite. This step's only prior run was in
+          # production, on a schedule — the same shape that let the release-version recovery fail
+          # nine times out of nine before anyone read it.
+          SHORT_SHA: ${{ needs.gate.outputs.short_sha }}
+          PORTAL_VERSION: ${{ needs.portal-image.outputs.version }}
         run: |
           set -euo pipefail
           issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
             --limit 1 --json number --jq '.[0].number // empty')
-          [ -n "$issue" ] || exit 0
-          gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "✅ **Healed \`${{ needs.gate.outputs.short_sha }}\`** ([run]($RUN_URL)) — main's HEAD now has the complete image set (portal \`${{ needs.portal-image.outputs.version }}\`), verified against ACR. Installs pick it up on the build-completion event, or within one safety-net check interval if that event never reaches them (#2494). Close this issue if nothing else is outstanding."
+          if [ -z "$issue" ]; then
+            echo "No open ci-failure issue — delivery was never recorded as broken, so there is no ledger to close."
+            exit 0
+          fi
+          # printf, not a multi-line string literal: this whole step is a YAML block scalar, so a
+          # body line starting at column 1 would end the block — and indenting it would bury the
+          # text in a markdown code fence. Same reasoning as the ledger writes in `gate`.
+          gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$(printf '%s\n\n%s' \
+            "✅ **Healed \`$SHORT_SHA\`** ([run]($RUN_URL)) — main's HEAD now has the complete image set (portal \`$PORTAL_VERSION\`), verified against ACR. Installs pick it up on the build-completion event, or within one safety-net check interval if that event never reaches them (#2494)." \
+            "**Closing this issue**, because the delivery hole it records is filled. A later failure files a FRESH \`ci-failure\` issue rather than appending here (#3176), so an alert's title names its own cause and its age is the outage's age. Reopening is never needed — and closing also hands the reconciler a fresh heal budget.")"
+          gh issue close "$issue" --repo "$GITHUB_REPOSITORY" \
+            || echo "::warning::could not close ci-failure issue #$issue (the heal comment above is written, so the record is intact; the issue stays open and the next successful heal closes it)"
 
   # ───────────────────────────── FAILURE ALERTING ────────────────────────────
   # A red CD after a green merge is otherwise INVISIBLE (nobody watches the Actions tab), and the
@@ -2541,8 +2586,10 @@ jobs:
   #   release is unarmed), and `verify-images` (a registry MISSING an image, even when every
   #   publish leg reported success).
   # - Idempotent: one open `ci-failure` issue collects repeat failures as comments; a new issue is
-  #   only created when none is open (close the issue once CD is green again). The reconciler
-  #   writes its attempt ledger to the same issue, so the whole story is in one place.
+  #   only created when none is open. The reconciler writes its attempt ledger to the same issue,
+  #   so the whole story of ONE outage is in one place — and `verify-images` CLOSES it on the
+  #   successful heal (#3176), so the next outage gets its own issue instead of inheriting a
+  #   four-day thread whose title stopped being true on day one.
   # ─────────────────────────── DELIVERY VERDICT ───────────────────────────
   # 🚨 The gate for "green, and shipped NOTHING".
   #
@@ -2894,7 +2941,7 @@ jobs:
           * an IMAGE job / promote / verify-images: no complete image set was published. Publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set.
           * preflight / notify-platform-update: the images may be fine, but the release EVENT did not reach the control instance, so no node repo re-bakes against this commit until its own schedule poll (#2235). Read the job's ::error:: line - it names what to provision or what refused the delivery.
 
-          The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. Close this issue once CD is green."
+          The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. This issue CLOSES ITSELF when a CD run reports a successful heal (#3176) - a later failure files a fresh issue rather than appending here, so this one's title and age stay true to its own cause."
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
             --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then

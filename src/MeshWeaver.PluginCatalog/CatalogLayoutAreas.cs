@@ -770,6 +770,18 @@ public static class CatalogLayoutAreas
                 .WithStyle("color: var(--warning-foreground, #9d5d00); font-size: 12px; "
                            + "display: block; margin-top: 6px;"));
 
+        // 🚨 The FOURTH state, and the one that used to be invisible (#3538). A module whose bytes
+        // are linked against a platform this deployment is not running is refused at load: it
+        // contributes nothing, and — crucially — a restart re-runs the same measurement and
+        // refuses again, so the line above would be a promise no restart can keep. Saying it here
+        // is what turns "installed, and the feature simply is not there" into a fact the person
+        // who installed it can read. Localized like every other line on this card: it is
+        // platform-owned chrome, so it follows the VIEWER's language.
+        else if (activation.IsQuarantinedForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}"))
+            card = card.WithView(Controls.Body($"⚠️ {host.Localize("ui.moduleBuiltForNewerPlatform")}")
+                .WithStyle("color: var(--error-foreground, #a4262c); font-size: 12px; "
+                           + "display: block; margin-top: 6px;"));
+
         return card;
     }
 
