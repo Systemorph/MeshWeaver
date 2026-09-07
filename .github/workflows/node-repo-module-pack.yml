@@ -1383,14 +1383,30 @@ jobs:
             exit 1
           fi
           # 🚨 THE FLOOR MUST BE SATISFIABLE BY THE PLATFORM THIS BUNDLE IS BUILT AGAINST (#3554).
-          # Unconditional, and RED when the platform version is unknown: "the floor could not be
-          # checked" must never be indistinguishable from "checked and fine" — that equivalence is
-          # what let 42 packages ship floors no image can ever meet, holding every self-update
-          # candidate on both AKS portals with nothing red anywhere. The script is the platform's
-          # own copy at this lane's pin, and its ordering is pinned to ModulePlatformFloor by
-          # ModulePlatformFloorScriptParityTest, so the gate and the landing gate cannot drift.
+          # Unconditional, and RED when the platform version cannot be read at all: "the floor
+          # could not be checked" must never be indistinguishable from "checked and fine" — that
+          # equivalence is what let 42 packages ship floors no image can ever meet, holding every
+          # self-update candidate on both AKS portals with nothing red anywhere. The script is the
+          # platform's own copy at this lane's pin, and its ordering is pinned to
+          # ModulePlatformFloor by ModulePlatformFloorScriptParityTest, so the gate and the landing
+          # gate cannot drift.
+          platform="${PLATFORM_VERSION:-}"
+          if [ -z "$platform" ]; then
+            # No platform IMAGE is pinned, so THE CHECKOUT IS THE PLATFORM — exactly the reading
+            # the bundle-identity block below takes ("g<sha>", #3308). Its version is the LINE it
+            # declares, which is a WEAKER reading than an image's own MESHWEAVER_PLATFORM_VERSION
+            # (a line satisfies floors that no published build of it does), but it is honest and it
+            # is never a skip: a source lane still cannot declare a floor above its own line.
+            props="$GITHUB_WORKSPACE/meshweaver/Directory.Build.props"
+            platform=$(sed -n 's:.*<PlatformVersion[^>]*>\([^<]*\)</PlatformVersion>.*:\1:p' "$props" | head -1)
+            if [ -z "$platform" ]; then
+              echo "::error::no platform image is pinned AND \$(PlatformVersion) could not be read from $props, so $PACKAGE's declared floor '$floor' cannot be checked against anything. A floor that cannot be checked is precisely the silence #3554 is about — pin platform-image + platform-image-digest on the caller, or restore the property."
+              exit 1
+            fi
+            echo "no platform image pinned — checking the floor against the platform checkout's declared line $platform"
+          fi
           python3 "$GITHUB_WORKSPACE/meshweaver/.github/scripts/check-module-platform-floor.py" \
-            --package "$PACKAGE" --floor "$floor" --platform-version "${PLATFORM_VERSION:-}"
+            --package "$PACKAGE" --floor "$floor" --platform-version "$platform"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "floor=$floor" >> "$GITHUB_OUTPUT"
           echo "packing $MODULE as $PACKAGE@$version, platform floor $floor"

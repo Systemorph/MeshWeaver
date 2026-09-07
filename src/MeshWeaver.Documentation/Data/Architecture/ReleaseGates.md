@@ -545,10 +545,13 @@ the lane already holds the image, so the reading is one `docker image inspect`, 
 
 Two properties make it a gate rather than a comment:
 
-- **It cannot skip.** The step is unconditional, and an unknown platform version is RED — "the floor
-  could not be checked" must never be reported as "checked and fine", which is the same
-  skip-trapdoor shape the repository's CI rules ban for a gate that asks whether its own input
-  exists. A lane that pins no `platform-image-digest` fails naming that input.
+- **It cannot skip.** The step is unconditional. A lane that pins no platform image is not exempted
+  — the checkout IS the platform there (the same reading the bundle-identity block takes, `g<sha>`),
+  so the floor is measured against the LINE that checkout declares, which is a weaker reading than
+  an image's own version but never a skip. Only a platform that can be identified NEITHER way is
+  RED, naming what to pin: "the floor could not be checked" must never be reported as "checked and
+  fine", which is the same skip-trapdoor shape the repository's CI rules ban for a gate that asks
+  whether its own input exists.
 - **It cannot drift from the runtime.** The ordering is written once in `NuGetVersionComparer`,
   mirrored in `.github/scripts/check-module-platform-floor.py`, and pinned by
   `ModulePlatformFloorScriptParityTest`: for every case the script's exit code must equal "the
