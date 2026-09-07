@@ -56,6 +56,16 @@ docker run --rm -v "$OUT/auth":/zap/wrk/:rw -t "$ZAP" \
 The cookie is a live session: it stays in the shell that runs the scan, never in a file under a
 repository, and the session is signed out when the run ends.
 
+🚨 **Neither run is automatable, and there is no CI lane — measured 2026-09-07: no workflow in
+`Systemorph/MeshWeaver` or `MeshWeaver.Plugins` invokes ZAP.** The authenticated run needs a HUMAN:
+the session cookie can only come from a real interactive sign-in (the generic `authenticated-scan`
+skill opens a Playwright-driven Chrome and waits for the person to log in). So an agent can prepare
+a release, but it cannot produce this precondition — plan for an operator step. 🚨 And when the
+operator uses that skill's `zap-auth-scan.sh`, **its invocation is not this one**: it runs
+`zaproxy:stable` rather than the pinned version, and it omits `-j`, so it neither names a scanner
+version for the notes page nor runs the AJAX spider that reaches a signed-in SPA's assets. Capture
+the cookie with the skill if that is convenient, then run the **command above** with it.
+
 ## The verdict
 
 The last line of each run's log (the console output captured above) is the verdict:
@@ -86,6 +96,22 @@ FAIL-NEW: 0	FAIL-INPROG: 0	WARN-NEW: 9	WARN-INPROG: 0	INFO: 0	IGNORE: 0	PASS: 58
 - **Nothing here scans dependencies at rest.** Dependabot covers declared packages; a library
   inlined into a NuGet package's static assets (the Monaco bundle) is visible to neither Dependabot
   nor a source build — only to a scan of what is served.
+- 🚨 **Dropping a `<script>` removes the LOAD, not the ASSET.** Measured on both portals
+  2026-09-07, after MeshWeaver.Plugins#1393 stopped `App.razor` loading BlazorMonaco's `min/vs`
+  tree, a plain `GET` of
+  `/_content/BlazorMonaco/lib/monaco-editor/min/vs/editor.api-CalNCsUg.js` still answers
+  **200 with 3,669,759 bytes**: the package is still referenced for its `jsInterop.js`, so
+  `MapStaticAssets` still publishes every file it ships, and .NET's fingerprint **import map**
+  re-advertises 240 of them in the anonymously served app shell — an 81 KB
+  `<script type="importmap">` on `/`, the retired `editor.api-CalNCsUg.js` among them. **What that
+  does NOT do is put the file back in the scan**, and that half is measured rather than assumed:
+  in the 2026-09-07 anonymous baseline below, ZAP 2.17.0 crawled 1330 URLs and rule 10003 read
+  PASS, so its spider does not turn import-map entries into requests. The residue is a hardening
+  gap — a published file with known advisories that nothing loads — not a live finding; closing it
+  means removing the file from the published output (an MSBuild `StaticWebAsset` exclusion, or
+  dropping the package reference once `jsInterop.js` is no longer needed). Read the general rule
+  the other way round too: **a bundle a page stops loading does not leave the origin**, so an
+  inventory taken from `App.razor` is not an inventory of what is served.
 
 ## Findings by release
 
@@ -100,18 +126,41 @@ The full report of this scan — coverage, attack classes exercised, the delta a
 
 | rule | level | run | instances | disposition |
 |---|---|---|---|---|
-| Vulnerable JS Library [10003] — DOMPurify 3.2.7 inside BlazorMonaco's Monaco bundle | Medium | authenticated | 1 | **Fixed**: MeshWeaver#3378 — the portal builds its own Monaco with DOMPurify 3.4.14 (MeshWeaver.Plugins#1393, `tools/monaco-editor`), guarded by `MonacoBundleGuard`. Re-scan rule 10003 once it rolls. |
+| Vulnerable JS Library [10003] — DOMPurify 3.2.7 inside BlazorMonaco's Monaco bundle | Medium | authenticated | 1 | **Fixed and DELIVERED, re-scan still owed**: MeshWeaver#3378 — the portal builds its own Monaco with DOMPurify 3.4.14 (MeshWeaver.Plugins#1393, `tools/monaco-editor`), guarded by `MonacoBundleGuard`. Delivery measured 2026-09-07 on the served bytes, not on the merge: `GET /_content/MeshWeaver.Blazor/lib/monaco-editor/monaco.js` answers 200 / 4,483,269 bytes / `sha256:8e991296e5e49dca83a02afa00a0eca20128a5c530b9996ce00830e6b039e846` on **both** memex.meshweaver.cloud and memex.systemorph.com — byte-identical to the committed bundle on MeshWeaver.Plugins `main` — carrying `/*! @license DOMPurify 3.4.14` (`versions.json`: monaco-editor 0.56.0, dompurify 3.4.14). Corroborated by an anonymous re-scan on 2026-09-07 that provably reached the bundle (10003 PASS over 1330 URLs, 10096 on `monaco.js`); the issue still closes on the AUTHENTICATED re-scan. Residue: the retired `min/vs` tree is still published, unloaded and unscanned (see *What the scanner cannot see*). |
 | Backup File Disclosure [10095] | Medium | public | 21 | **False positive, measured**: every instance is `/static/NodeTypeIcons/Copy (n) of <icon>.svg`, and that route synthesises an icon for ANY name — a nonsense name answers 200 with a 547-byte SVG of its own, while `bot.svg.bak` is 404 — so no file is disclosed; the rule keys on "a variant of the URL also answers 200". Carried: the fallback icon is the feature. |
 | Proxy Disclosure [40025] | Medium | public | systemic | **False positive, measured**: `TRACE` and `OPTIONS` answer 405 (`allow: GET, POST`) with no `Server`/`Via` header; the "Unknown proxy" is ZAP's inference from the refusal. Carried. |
 | CSP: Failure to Define Directive with No Fallback [10055] | Medium | both | 15 / 10 | **Carried by design** — see the row below; `form-action 'self' https:` is declared on every response measured (`/`, `/login`), so the missing directive the rule names is to be re-read on the next scan. |
 | CSP: script-src unsafe-inline · script-src unsafe-eval · style-src unsafe-inline · Wildcard Directive [10055] | Medium | both | 3 each / 2 each | **Carried by design**: the policy is set and explained in `MemexPortalComposition.cs` (MeshWeaver.Plugins; enforced since #1988 after a Report-Only run over the live pages with zero violations) — `'unsafe-inline'`/`'unsafe-eval'`, `blob:`/`data:` and `https:`/`wss:` are what the Blazor Server circuit, the editor and embedded https content need; per-response nonces and dropping `'unsafe-inline'` are a separate hardening pass. Follow-up: the bundled Monaco (MeshWeaver.Plugins#1393) carries no `eval`/`new Function`, so `'unsafe-eval'` — kept for the editor — can be re-measured. |
 | Cross-Origin-Resource-Policy header missing [90004] · Cross-Origin-Embedder-Policy header missing | Low | both | systemic / 7 | **Accepted**: the portal embeds cross-origin resources by design (sign-in assets from the Microsoft CDNs, fonts, user-embedded media); `COEP: require-corp` would break them, and `CORP: same-site` on the portal's own assets is the intended scope. |
-| Dangerous JS Functions [10110] — `eval(` | Low | both | 1 | **Fixed by MeshWeaver.Plugins#1393**: the `eval(` is in BlazorMonaco's AMD `loader.js`, which the page no longer loads; the bundled Monaco has no `eval` and no `new Function`. |
+| Dangerous JS Functions [10110] — `eval(` | Low | both | 1 | **Fixed by MeshWeaver.Plugins#1393**: the `eval(` is in BlazorMonaco's AMD `loader.js`, which the page no longer loads; the bundled Monaco has no `eval` and no `new Function`. Confirmed on the rolled portal — `PASS: Dangerous JS Functions [10110]` in the 2026-09-07 anonymous baseline, the same run that reached `monaco.js`. |
 | Timestamp Disclosure — Unix [10096] | Low | authenticated | 3 | **False positive**: 1732584193, 1518500249, 1859775393 are 0x67452301, 0x5A827999, 0x6ED9EBA1 — SHA-1 round constants in Monaco's hashing code, not timestamps. The same constants sit in the new bundle and will be flagged again. |
 | Re-examine Cache-control Directives [10015] · Non-Storable Content [10049] · Suspicious Comments [10027] · Modern Web Application [10109] | Informational | authenticated | 5 / 11 / 15 / 5 | informational — no action |
 
 An earlier scan of the same portal on 2026-08-23 had already reported rule 10003 on the Monaco
 bundle; the advisory list had grown by 2026-09-06, which is what turned it into MeshWeaver#3378.
+
+#### 2026-09-07 re-scan of rule 10003 — anonymous, passive, and NOT the acceptance run
+
+After the fix rolled, an **anonymous** `zap-baseline.py -j -m 5` at the same pinned ZAP 2.17.0
+against memex.meshweaver.cloud read
+`FAIL-NEW: 0 · WARN-NEW: 9 · PASS: 58` over **1330 URLs**, with
+**`PASS: Vulnerable JS Library (Powered by Retire.js) [10003]`**.
+
+🚨 **That PASS is not vacuous the way an anonymous PASS on this rule used to be, and the reason is
+worth keeping.** The bullet above says a public run cannot see the signed-in surface — true, and
+until 2026-09-06 it was why only the authenticated run could report 10003: BlazorMonaco's **AMD**
+loader fetched `editor.api` lazily, when an editor was created, which needs a signed-in page. The
+new shell loads `monaco.js` **eagerly on every page**, `/login` included, so the editor bundle is
+now on the anonymous surface. The proof that the run actually retrieved and scanned it is in the
+same report: rule 10096 fires three times on
+`/_content/MeshWeaver.Blazor/lib/monaco-editor/monaco.js` with evidence `1732584193`,
+`1518500249`, `1859775393` — the SHA-1 round constants this page predicted would follow the new
+bundle. Retire.js read that file and passed it.
+
+**It is still not the acceptance measurement.** The release precondition is the AUTHENTICATED
+baseline (it is the run that reaches libraries only a signed-in page loads), and it needs a human
+sign-in. What the anonymous run settles is this one rule against this one bundle; what it cannot
+settle is any library the signed-in portal loads and the anonymous shell does not.
 
 ## See also
 
