@@ -389,6 +389,30 @@ class Registry:
         self._tag_cache[key] = result
         return result
 
+    def read_delete_enabled(self, acr_repo: str, digest: str) -> tuple[bool | None, str]:
+        """The manifest's CURRENT `deleteEnabled`, read back. `None` is INDETERMINATE — the
+        registry did not answer, which is never evidence that a lock took.
+
+        🚨 This exists because the only thing this whole job does is set that one attribute, and
+        until #3438's follow-up the job believed `az`'s EXIT CODE that it had. An exit code is a
+        statement about the request, not about the manifest: a `-o none` write that returns 0
+        without the attribute changing (a subscription-level policy, an API version whose
+        `--delete-enabled` is inert, a proxy that accepted and dropped it) would leave the job
+        reporting `Protected N manifest(s)` over manifests the 03:00 purge can still delete. That is
+        AGENTS.md's "a verification step that cannot fail is not a verification step", applied to
+        the job's own postcondition."""
+        rc, out, err = consistency.az(
+            ["acr", "repository", "show", "--name", self.name,
+             "--image", f"{acr_repo}@{digest}",
+             "--query", "changeableAttributes.deleteEnabled", "-o", "tsv"]
+        )
+        if rc != 0:
+            return None, "INDETERMINATE: " + " ".join(err.split())[:300]
+        answer = out.strip().lower()
+        if answer in ("true", "false"):
+            return answer == "true", ""
+        return None, f"INDETERMINATE: az answered 0 but not a boolean: {out.strip()[:120]!r}"
+
     # -- the one write --------------------------------------------------------------------------
 
     def set_delete_enabled(self, acr_repo: str, digest: str, enabled: bool) -> tuple[bool, str]:
@@ -746,8 +770,24 @@ def apply_locks(plan: Plan, registry: Registry) -> list[str]:
         assert entry.digest is not None
         ok, detail = registry.set_delete_enabled(entry.acr_repo, entry.digest, False)
         if ok:
-            plan.locked_now += 1
-            print(f"locked {entry.acr_repo}@{entry.digest}")
+            # 🚨 THE WRITE'S EXIT CODE IS NOT THE POSTCONDITION. Read the attribute back and require
+            # it to actually be `false`; an INDETERMINATE read (`None`) is not a confirmation
+            # either. Without this the job's central claim — "N manifests are protected" — rested
+            # on `az` having accepted a request, which is the one failure mode that would leave
+            # every lock decoration while the report stayed green.
+            protected, why = registry.read_delete_enabled(entry.acr_repo, entry.digest)
+            if protected is False:
+                plan.locked_now += 1
+                print(f"locked {entry.acr_repo}@{entry.digest}")
+                continue
+            failures.append(
+                f"{entry.acr_repo}@{entry.digest}: the lock WRITE succeeded and the manifest still "
+                + ("reads deleteEnabled=true" if protected is True
+                   else f"cannot be confirmed locked ({why})")
+                + ". It is pinned by "
+                + f"{', '.join(entry.sources[:3])} and the 03:00 purge can still delete it. A write "
+                "that returns 0 without taking is exactly what this read-back exists to catch."
+            )
             continue
         if any(marker in detail.lower() for marker in DENIED_MARKERS):
             # 🚨 STOP ON THE FIRST REFUSAL. Every remaining lock fails the same way for the same
@@ -998,6 +1038,11 @@ class FakeRegistry(Registry):
         self._tags = tags
         self._repo_error = repo_error
         self.writes: list[tuple[str, str, bool]] = []
+        # Whether a write actually MOVES the attribute. Default true (a healthy registry); an arm
+        # sets it false to drive the "exit 0, nothing changed" case the read-back must catch.
+        self.writes_take = True
+        # Set to a message to make the read-back INDETERMINATE — which must not confirm a lock.
+        self.read_back_error: str | None = None
 
     def control_probe(self) -> None:
         return None
@@ -1015,7 +1060,24 @@ class FakeRegistry(Registry):
 
     def set_delete_enabled(self, acr_repo: str, digest: str, enabled: bool):
         self.writes.append((acr_repo, digest, enabled))
+        if not self.writes_take:
+            # The sabotage this fixture exists to express: `az` exits 0 and the attribute does not
+            # move. Nothing about the WRITE distinguishes it from a real one.
+            return True, ""
+        for manifests in self._manifests.values():
+            for manifest in manifests:
+                if manifest.acr_repo == acr_repo and manifest.digest == digest:
+                    manifest.delete_enabled = enabled
         return True, ""
+
+    def read_delete_enabled(self, acr_repo: str, digest: str):
+        if self.read_back_error:
+            return None, self.read_back_error
+        for manifests in self._manifests.values():
+            for manifest in manifests:
+                if manifest.acr_repo == acr_repo and manifest.digest == digest:
+                    return manifest.delete_enabled, ""
+        return None, "INDETERMINATE: not in the fixture inventory"
 
 
 TESTER = "sha256:df19f10afc1f807441b403eb0dfa4b8645d5187b830f77ad080def7fc65b391f"
@@ -1252,6 +1314,39 @@ def self_test() -> int:
     check(registry.writes == [],
           f"ARM 11: report-only wrote to the registry: {registry.writes}")
 
+    # ── ARM 11b: a WRITE THAT RETURNS 0 AND DOES NOT TAKE ⇒ RED, and nothing counted ────────────
+    #
+    # 🚨 The arm the whole job rests on. `az acr repository update` exiting 0 is a statement about
+    # the REQUEST; the postcondition is the manifest's attribute. Before the read-back this case
+    # was indistinguishable from a successful lock — the job printed `locked …`, counted it, and
+    # reported `Protected N manifest(s)` over manifests the 03:00 purge could still delete. Deleting
+    # the read-back must make this arm go red, which is what makes it a real assertion.
+    registry = FakeRegistry(_inventory(), FAKE_TAGS)
+    registry.writes_take = False
+    plan, fails, registry = _drive(axis1, axis2, registry)
+    check(bool(fails),
+          "ARM 11b: a lock write that exits 0 WITHOUT moving deleteEnabled produced no failure — "
+          "the job would report protection it does not have")
+    check(any("still reads deleteEnabled=true" in f for f in fails),
+          f"ARM 11b: the failure does not say the manifest is still unlocked: {fails}")
+    check(plan.locked_now == 0,
+          f"ARM 11b: {plan.locked_now} lock(s) were COUNTED although none took")
+
+    # ── ARM 11c: a read-back that cannot answer is NOT a confirmation ───────────────────────────
+    #
+    # Same rule one step further in: INDETERMINATE is not `false`. A registry that accepts the write
+    # and then refuses to say what the attribute is has not shown the lock took, and reporting it as
+    # protected would be the "not checked reads as clean" failure this job exists to remove.
+    registry = FakeRegistry(_inventory(), FAKE_TAGS)
+    registry.read_back_error = "INDETERMINATE: the registry did not answer"
+    plan, fails, registry = _drive(axis1, axis2, registry)
+    check(bool(fails),
+          "ARM 11c: a lock whose read-back is INDETERMINATE was accepted as protected")
+    check(any("cannot be confirmed locked" in f for f in fails),
+          f"ARM 11c: the failure does not name the unconfirmed read-back: {fails}")
+    check(plan.locked_now == 0,
+          f"ARM 11c: {plan.locked_now} unconfirmed lock(s) were counted as protected")
+
     # ── ARM 12: the two EXISTING extractors still agree about what a pin IS ─────────────────────
     #
     # The property `check-pin-set-consistency.py` was built with — "the two scripts deliberately
@@ -1287,11 +1382,12 @@ def self_test() -> int:
         print(f"::error::self-test: {line}")
     if failures:
         return 1
-    print("self-test: 13 arms — lock requested on both axes and both overlay shapes, idempotent, "
+    print("self-test: 15 arms — lock requested on both axes and both overlay shapes, idempotent, "
           "unreadable repo / truncated tree / zero pins / unclassified / malformed / gone / "
           "unresolved tag / indeterminate / unreadable registry all RED with nothing released, "
-          "release arm off by default and live when enabled, report-only writes nothing, and the "
-          "two existing pin extractors still agree.")
+          "release arm off by default and live when enabled, report-only writes nothing, a lock "
+          "write that exits 0 without taking and one whose read-back cannot answer are both RED "
+          "and counted as protecting NOTHING, and the two existing pin extractors still agree.")
     return 0
 
 
