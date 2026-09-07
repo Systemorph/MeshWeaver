@@ -65,7 +65,16 @@ public class OverviewUnresolvedContentTypeTest(ITestOutputHelper output) : HubTe
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient(d => d);
 
-    private static JsonElement Json(string raw) => JsonDocument.Parse(raw).RootElement.Clone();
+    /// <summary>
+    /// 🚨 <c>using</c>, and <c>Clone()</c> — both load-bearing. <see cref="JsonDocument"/> owns
+    /// pooled memory and is <see cref="IDisposable"/>; the clone is what makes the returned element
+    /// independent of it, so the document can be released immediately (Copilot review).
+    /// </summary>
+    private static JsonElement Json(string raw)
+    {
+        using var document = JsonDocument.Parse(raw);
+        return document.RootElement.Clone();
+    }
 
     /// <summary>A discriminator no declaration in this process claims.</summary>
     private static UiControl UnresolvableContentTypeView(LayoutAreaHost host, RenderingContext ctx)
