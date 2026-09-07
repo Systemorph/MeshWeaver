@@ -86,6 +86,21 @@ FAIL-NEW: 0	FAIL-INPROG: 0	WARN-NEW: 9	WARN-INPROG: 0	INFO: 0	IGNORE: 0	PASS: 58
 - **Nothing here scans dependencies at rest.** Dependabot covers declared packages; a library
   inlined into a NuGet package's static assets (the Monaco bundle) is visible to neither Dependabot
   nor a source build — only to a scan of what is served.
+- 🚨 **The spider does not follow an import map, so "not in the scan" is not "not served".** .NET's
+  fingerprinting emits an 81 KB `<script type="importmap">` on the anonymous shell; ZAP reads it as
+  a script, not as 240 links, and none of the URLs it advertises becomes a request. That was
+  measured rather than assumed (MeshWeaver#3616): a 1330-URL anonymous baseline read
+  `PASS: Vulnerable JS Library [10003]` while the retired BlazorMonaco tree was still answering
+  `200` with 3.6 MB of DOMPurify 3.2.7 behind it. Whatever an asset inventory or a third-party
+  crawler enumerates, this scan does not.
+- 🚨 **Removing the LOAD is not removing the ASSET, and only the second one changes what is
+  served.** MeshWeaver#3378 stopped the page loading BlazorMonaco's bundled Monaco; `MapStaticAssets`
+  went on publishing all 121 files of it, `loader.js` and its `eval(` included, because the package
+  is still referenced for one interop file. A fix phrased as "the page no longer requests it" leaves
+  the bytes reachable to anyone who knows the path. MeshWeaver#3617 dropped the tree from the
+  published output (MeshWeaver.Plugins#1482) with a build-time filter, a post-condition on the
+  static-web-asset manifest, and a `MonacoBundleGuard` arm pinning the premise that made the
+  deletion safe.
 
 ## Findings by release
 
@@ -100,13 +115,13 @@ The full report of this scan — coverage, attack classes exercised, the delta a
 
 | rule | level | run | instances | disposition |
 |---|---|---|---|---|
-| Vulnerable JS Library [10003] — DOMPurify 3.2.7 inside BlazorMonaco's Monaco bundle | Medium | authenticated | 1 | **Fixed**: MeshWeaver#3378 — the portal builds its own Monaco with DOMPurify 3.4.14 (MeshWeaver.Plugins#1393, `tools/monaco-editor`), guarded by `MonacoBundleGuard`. Re-scan rule 10003 once it rolls. |
+| Vulnerable JS Library [10003] — DOMPurify 3.2.7 inside BlazorMonaco's Monaco bundle | Medium | authenticated | 1 | **Fixed**: MeshWeaver#3378 — the portal builds its own Monaco with DOMPurify 3.4.14 (MeshWeaver.Plugins#1393, `tools/monaco-editor`), guarded by `MonacoBundleGuard`; confirmed on served bytes 2026-09-07 (`monaco.js`, 4,483,269 B, `@license DOMPurify 3.4.14`) on both portals. The retired bundle stayed *published* though nothing loaded it, until MeshWeaver#3617 (MeshWeaver.Plugins#1482). |
 | Backup File Disclosure [10095] | Medium | public | 21 | **False positive, measured**: every instance is `/static/NodeTypeIcons/Copy (n) of <icon>.svg`, and that route synthesises an icon for ANY name — a nonsense name answers 200 with a 547-byte SVG of its own, while `bot.svg.bak` is 404 — so no file is disclosed; the rule keys on "a variant of the URL also answers 200". Carried: the fallback icon is the feature. |
 | Proxy Disclosure [40025] | Medium | public | systemic | **False positive, measured**: `TRACE` and `OPTIONS` answer 405 (`allow: GET, POST`) with no `Server`/`Via` header; the "Unknown proxy" is ZAP's inference from the refusal. Carried. |
 | CSP: Failure to Define Directive with No Fallback [10055] | Medium | both | 15 / 10 | **Carried by design** — see the row below; `form-action 'self' https:` is declared on every response measured (`/`, `/login`), so the missing directive the rule names is to be re-read on the next scan. |
 | CSP: script-src unsafe-inline · script-src unsafe-eval · style-src unsafe-inline · Wildcard Directive [10055] | Medium | both | 3 each / 2 each | **Carried by design**: the policy is set and explained in `MemexPortalComposition.cs` (MeshWeaver.Plugins; enforced since #1988 after a Report-Only run over the live pages with zero violations) — `'unsafe-inline'`/`'unsafe-eval'`, `blob:`/`data:` and `https:`/`wss:` are what the Blazor Server circuit, the editor and embedded https content need; per-response nonces and dropping `'unsafe-inline'` are a separate hardening pass. Follow-up: the bundled Monaco (MeshWeaver.Plugins#1393) carries no `eval`/`new Function`, so `'unsafe-eval'` — kept for the editor — can be re-measured. |
 | Cross-Origin-Resource-Policy header missing [90004] · Cross-Origin-Embedder-Policy header missing | Low | both | systemic / 7 | **Accepted**: the portal embeds cross-origin resources by design (sign-in assets from the Microsoft CDNs, fonts, user-embedded media); `COEP: require-corp` would break them, and `CORP: same-site` on the portal's own assets is the intended scope. |
-| Dangerous JS Functions [10110] — `eval(` | Low | both | 1 | **Fixed by MeshWeaver.Plugins#1393**: the `eval(` is in BlazorMonaco's AMD `loader.js`, which the page no longer loads; the bundled Monaco has no `eval` and no `new Function`. |
+| Dangerous JS Functions [10110] — `eval(` | Low | both | 1 | **Fixed by MeshWeaver.Plugins#1393**: the `eval(` is in BlazorMonaco's AMD `loader.js`, which the page no longer loads; the bundled Monaco has no `eval` and no `new Function`. The file itself stayed published until MeshWeaver#3617 (MeshWeaver.Plugins#1482) dropped the tree from the build output. |
 | Timestamp Disclosure — Unix [10096] | Low | authenticated | 3 | **False positive**: 1732584193, 1518500249, 1859775393 are 0x67452301, 0x5A827999, 0x6ED9EBA1 — SHA-1 round constants in Monaco's hashing code, not timestamps. The same constants sit in the new bundle and will be flagged again. |
 | Re-examine Cache-control Directives [10015] · Non-Storable Content [10049] · Suspicious Comments [10027] · Modern Web Application [10109] | Informational | authenticated | 5 / 11 / 15 / 5 | informational — no action |
 
