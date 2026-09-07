@@ -228,6 +228,8 @@ jobs:
           PREFLIGHT: ${{ needs.preflight.result }}
           VERIFY: ${{ needs.verify.result }}
           COUNT: ${{ needs.preflight.outputs.count }}
+          # The trigger's own conclusion, so "no candidate" can be told from "inputs missing".
+          TRIGGER: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || 'dispatch' }}
         run: |
           set -euo pipefail
           echo "preflight=$PREFLIGHT verify=$VERIFY instances=${COUNT:-0}"
@@ -238,8 +240,28 @@ jobs:
             echo "- verify: \`$VERIFY\` over \`${COUNT:-0}\` instance(s)"
           } >>"$GITHUB_STEP_SUMMARY"
 
+          # 🚨 THREE outcomes, not two. `skipped` and `failure` are different facts and used to
+          # share one message — the exact collapse this gate exists to prevent, committed by the
+          # gate itself. Measured 2026-09-07: 17 of the last 30 CD runs were CANCELLED by the
+          # one-pending-slot rule, so the preflight's event condition skipped it and this job red
+          # 6 times out of 6 on main, each time telling the reader to "read the preflight job for
+          # the exact list" of a job that never ran. A gate that cries wolf on routine traffic
+          # trains people to ignore it, and then the real red is invisible too.
+          if [ "$PREFLIGHT" = "skipped" ] && [ "$TRIGGER" != "success" ]; then
+            echo "No candidate: the triggering CD run concluded '$TRIGGER', so it published nothing to verify."
+            {
+              echo
+              echo "**No candidate.** The triggering CD run concluded \`$TRIGGER\`, so there is"
+              echo "nothing to verify. This is not an unverified roll — no roll was produced."
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$PREFLIGHT" = "skipped" ]; then
+            echo "::error::the preflight was SKIPPED although the triggering CD concluded '$TRIGGER'. A candidate exists and nothing checked it — that is the skip-trapdoor this gate exists to refuse (#3544)."
+            exit 1
+          fi
           if [ "$PREFLIGHT" != "success" ]; then
-            echo "::error::the preflight did not pass, so NO instance was verified and every roll in the fleet is still UNVERIFIED (#3544). Read the preflight job for the exact list of inputs to provision."
+            echo "::error::the preflight FAILED, so NO instance was verified and every roll in the fleet is still UNVERIFIED (#3544). Read the preflight job for the exact list of inputs to provision."
             exit 1
           fi
           if [ "$VERIFY" != "success" ]; then
