@@ -568,6 +568,18 @@ where the phrase had only the one. `UntypedContentDegradationReachesTheTraceSink
 half that was missing: it drives the production converter and evaluates the sink's own condition
 against the captured record.
 
+🚨 **The gate has no allow-list, and a test fixture is where the pressure for one comes from.** A
+test that proves a write REFUSES unreadable content has to seed unreadable content, and once these
+records reach the sink such a fixture reds its own shard. The answer is the fixture, not an
+exemption — an exemption here would be a permanently green check wearing a reason, which is the
+state this whole section is about. Model *"present but unreadable as `T`"* the way a running mesh
+actually produces it: **seed a value of a DIFFERENT, REGISTERED type.** The stream cache types it
+happily, so nothing degrades and nothing is recorded, while `ContentAs<T>` / `As<T>` still answers
+`null` — it recovers a foreign runtime type ONLY when the short name matches. That is closer to the
+production case (a same-named record from another collectible assembly, a foreign type) than
+malformed JSON is, so the fixture gets stronger. Malformed JSON with no resolvable `$type` models a
+*different* defect — content nothing can read — which is exactly what the gate exists to report.
+
 **Falsified end to end, exit codes read directly.** Same degradation, same real sink
 (`XUnitFileLogger` → `TestTraceLog.AppendFault`), three runs: with the exception argument reverted
 the trace file was **never created**, and the gate answered `No content-type degradation` with
