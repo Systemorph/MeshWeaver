@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Text.Json;
 using Memex.Portal.Shared.SelfUpdate;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -50,6 +51,33 @@ public static class ReleaseGateEndpoints
     /// </summary>
     public const string SelectRoute = "/api/plugins/roll-target";
 
+    /// <summary>
+    /// 🚨 Route the instance's COMBO is served at (#3544): <c>GET /api/plugins/combo</c> — <i>which
+    /// modules, at which refs, does this instance actually run?</i>
+    ///
+    /// <para>It exists for the same reason as its two siblings and for one caller in particular:
+    /// the combo GATE (<c>ComboVerificationGate</c>) consults a verdict that only an off-cluster
+    /// producer can mint, because producing one needs docker, a materialisation root and repo
+    /// credentials a portal pod does not have. That producer — <c>mw-combo-verify</c> — needs the
+    /// instance's combo as its FIRST input, and until this route existed there was no way to get
+    /// it out of a running portal: <c>InstanceComboReader</c> had no HTTP, MCP or layout surface at
+    /// all, so nothing ever ran the verifier and every roll in the fleet was UNVERIFIED (#3544).</para>
+    ///
+    /// <para>🚨 <b>The bytes are the contract.</b> The body is an <see cref="InstanceCombo"/>
+    /// serialized with <see cref="InstanceComboAssembler.Json"/> — the very options
+    /// <c>mw-combo-verify</c> deserializes with — so the response IS <c>combo.json</c> and no caller
+    /// has to reshape it. There is deliberately no lossy alternative: the nearest existing node
+    /// (<c>Hosting/ModuleInventory</c>) drops <c>readAt</c>, <c>isComplete</c>, <c>caveats</c> and
+    /// the per-module sync detail, and a verdict derived from it would be about something other
+    /// than this instance's real module set.</para>
+    ///
+    /// <para>Auth is the same <c>mwi_</c> instance key, failing CLOSED, for the same reason: a
+    /// combo names every module repository and pinned commit this deployment carries, which is
+    /// deployment inventory rather than public information — strictly narrower than nothing, and
+    /// the same class the two routes above already return.</para>
+    /// </summary>
+    public const string ComboRoute = "/api/plugins/combo";
+
     /// <summary>Maps the instance-key-gated release gate. Call alongside <c>MapPluginBundles</c>.</summary>
     public static IEndpointRouteBuilder MapReleaseGate(this IEndpointRouteBuilder endpoints)
     {
@@ -58,6 +86,8 @@ public static class ReleaseGateEndpoints
             .AllowAnonymous();
         endpoints.MapGet(SelectRoute, (HttpContext http, string? current, CancellationToken ct) =>
                 Selection(http, current, ct))
+            .AllowAnonymous();
+        endpoints.MapGet(ComboRoute, (HttpContext http, CancellationToken ct) => Combo(http, ct))
             .AllowAnonymous();
         return endpoints;
     }
@@ -190,4 +220,51 @@ public static class ReleaseGateEndpoints
                 });
             });
     }
+
+    /// <summary>
+    /// The instance's own combo, authenticated exactly like <see cref="Verdict"/> and
+    /// <see cref="Selection"/>. See <see cref="ComboRoute"/> for why it exists and why the bytes
+    /// are the contract.
+    /// </summary>
+    private static Task<IResult> Combo(HttpContext http, CancellationToken ct)
+    {
+        var authenticator = http.RequestServices
+            .GetRequiredService<InstanceRegistryAuthenticator>();
+
+        var logger = http.RequestServices.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(ReleaseGateEndpoints));
+
+        return authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
+            .SelectMany(outcome => outcome.IsUnavailable
+                ? Observable.Return(InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger))
+                : outcome.Instance is null
+                    ? Observable.Return(Results.Json(
+                        new { error = "A registered instance key is required (Authorization: Bearer mwi_… or Basic)." },
+                        statusCode: StatusCodes.Status401Unauthorized))
+                    : StateCombo(http, logger))
+            .FirstAsync()
+            .ObserveCompletion(
+                ex => logger?.LogWarning(ex,
+                    "Instance combo read faulted after the response had already been sent"),
+                ct)!;
+    }
+
+    private static IObservable<IResult> StateCombo(HttpContext http, ILogger? logger) =>
+        http.RequestServices.GetRequiredService<InstanceComboReader>().Read()
+            .Select(combo =>
+            {
+                // 🚨 Information, and stated rather than swallowed. The reader never faults — an
+                // unreadable source sets IsComplete=false and a caveat — so an incomplete combo
+                // would otherwise leave the portal silent while the verifier folds it into a
+                // NotVerifiable nobody can attribute. THE DENOMINATOR travels with it.
+                if (!combo.IsComplete)
+                    logger?.LogInformation(
+                        "Instance combo served INCOMPLETE: {Modules} module(s), caveats: {Caveats}",
+                        combo.Modules.Count, string.Join(" | ", combo.Caveats));
+
+                // The producer deserializes with these exact options, so this response IS
+                // combo.json. Results.Json would re-serialize with ASP.NET's options instead.
+                return (IResult)Results.Content(
+                    JsonSerializer.Serialize(combo, InstanceComboAssembler.Json), "application/json");
+            });
 }
