@@ -141,6 +141,39 @@ One Postgres query, one indexed `IN (...)` scan, server-side sort by path length
 description:       # Matches nodes with no description
 ```
 
+### Where a selector resolves
+
+A selector — the token before the `:` — is resolved in **three steps, in this order**:
+
+1. **A field of the node itself.** `name`, `nodeType`, `description`, `category`, `icon`, `order`,
+   `lastModified`, `version`, `state`, `id`, `mainNode`.
+2. **`content.X`, or `content.X.Y…`** — an explicit walk into the node's content.
+3. **Anything else → the content field of the same name.** `compilationStatus` is
+   `content.compilationStatus`; `status` is `content.status`.
+
+Step 3 is why `nodeType:User email:alice@acme.com` and
+`nodeType:User content.email:alice@acme.com` are the same query. **Prefer the explicit dotted
+form** in code and in documented procedures: it says where the field lives, and it reaches it on
+every backend and every deployed image — step 3 arrived in the in-memory evaluator late
+([#3511](https://github.com/Systemorph/MeshWeaver/issues/3511)), so a portal running an older
+platform build answers the bare form only on Postgres.
+
+🚨 **Step 1 wins over step 3, and that matters.** A node whose content carries its own `name`,
+`state` or `version` field is still filtered on the NODE's, never the content's — reach the content
+one with `content.name`. The order is not an implementation detail: reversing it would silently
+re-point every live query whose selector names both.
+
+🚨 **A field that exists but is empty does not fall through.** `description:` matches nodes whose
+node-level description is unset; it does not then go looking for a `description` inside the
+content.
+
+> **Two implementations, one rule.** The rule above is executed twice — by `QueryEvaluator` for
+> in-memory, FileSystem and static-node hosts (and for live-query relevance and result merging on
+> every backend), and by `PostgreSqlSqlGenerator` as SQL against the `content` JSONB. They are in
+> different repositories, and they drifted: see
+> [Query Provider Parity](/Doc/Architecture/QueryProviderParity) for what the drift cost, the shared
+> corpus that now pins both, and the selectors on which they still disagree.
+
 ---
 
 ## Reserved Qualifiers
