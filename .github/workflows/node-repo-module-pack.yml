@@ -798,7 +798,7 @@ jobs:
       - name: Restore the tester app (per-digest cache)
         if: inputs.tester-image-digest != ''
         id: tester-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/tester-app
           key: tester-app-${{ inputs.tester-image-digest }}
@@ -948,7 +948,7 @@ jobs:
           key: platform-image-${{ inputs.platform-image-digest }}
       - name: Restore the tester app (per-digest cache)
         if: ${{ inputs.tester-image-digest != '' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/tester-app
           key: tester-app-${{ inputs.tester-image-digest }}
