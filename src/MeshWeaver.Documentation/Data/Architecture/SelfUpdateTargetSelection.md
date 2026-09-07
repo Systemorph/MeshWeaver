@@ -61,7 +61,14 @@ So `VersionSelect` reads it (`BuildOrdinal`) and ranks on it:
 
 Both separators are accepted (`-ci.` on a clean line, `.ci.` on a labelled one) because the retired
 rc images are still in ACR, and the `edge` channel is read the same way — `edge-images.yml` rewrites
-`.ci.` to `.edge.` and keeps the number.
+the `ci` label to `edge` and keeps the number.
+
+🚨 **Only `-ci.` can be MINTED, and that is not a reason to stop READING `.ci.`.** The scheme has
+exactly two shapes — `X.Y.Z-ci.<n>` and clean `X.Y.Z`, with no labelled line, ever
+([Release Process & Versioning §1](/Doc/Architecture/ReleaseProcess)) — but this file is a reader of
+whatever the registry holds, and a retired tag parsed as *carrying no run number* is promoted into
+the promotion-ranked half of the order below: the §1 freeze, rebuilt by a tidy-up.
+`PlatformReleaseOrderTest` pins `3.0.0-rc9.ci.7824` → `7824` for exactly that reason.
 
 ### The one case where the label is still the key
 

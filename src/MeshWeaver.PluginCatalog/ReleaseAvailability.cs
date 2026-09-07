@@ -220,7 +220,8 @@ public static class ReleaseAvailability
 /// framework build identity the image resolves. Both are needed — the version gates module
 /// floors, the identity gates content bakes — and neither substitutes for the other.
 /// </summary>
-/// <param name="Version">The platform version tag, e.g. <c>3.0.0-rc4.ci.4049</c>.</param>
+/// <param name="Version">The platform version tag, e.g. <c>3.0.0-ci.4049</c>, or a clean
+/// <c>3.0.0</c> for a promoted release.</param>
 /// <param name="FrameworkIdentity">The framework build identity (<c>s&lt;hash&gt;</c> /
 /// <c>g&lt;sha&gt;</c>) that release's image resolves, or null when it could not be resolved.</param>
 public sealed record ReleaseTarget(string? Version, string? FrameworkIdentity);

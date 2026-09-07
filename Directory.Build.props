@@ -44,19 +44,28 @@
     <!-- Suppress FluentAssertions license warning for open source project -->
     <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
     <!-- Maintained platform version — the ONE number, set centrally here. It names the NEXT
-         release: the line is 3.0.0, every continuous build is 3.0.0-ci.<run> (_CiSep below), and
-         the release itself is the clean 3.0.0 — not a rebuild, a PROMOTION of a sealed continuous
-         set (release.yml retags the promoted images and copies the release marker when the tag
-         v3.0.0 is pushed; Doc/Architecture/ReleaseProcess). Override at build time with
+         release: the line is 3.0.0, every continuous build is 3.0.0-ci.<run>, and the release
+         itself is the clean 3.0.0 — not a rebuild, a PROMOTION of a sealed continuous set
+         (release.yml retags the promoted images and copies the release marker when the tag v3.0.0
+         is pushed; Doc/Architecture/ReleaseProcess). Override at build time with
          -p:PlatformVersion= only for experiments; CI builds are COMMIT-DETERMINISTIC (issue #1660
          WS3 — see the InformationalVersion note below), and NodeType cache invalidation keys on the
          commit identity, not on a per-build stamp.
 
-         No pre-release label, ever (maintainer, 2026-09-05: "I don't want this rc business any
-         more"): `-ci.N` is the only one, and it is the channel marker, never a version. The
-         release is cut only when every open issue is closed (maintainer, same day); until then
-         main keeps producing 3.0.0-ci.<n> sets, and the day v3.0.0 is tagged release.yml opens the
-         PR that moves this number to 3.1.0.
+         🚨 THE SCHEME HAS EXACTLY TWO SHAPES AND NO OTHERS (maintainer, 2026-09-07: "we will then
+         not introduce the rc line anymore" / "let's just use version numbers -ci for temp then
+         without -ci for final version"):
+
+             X.Y.Z-ci.<n>   every continuous / temporary build
+             X.Y.Z          the release — no pre-release label at all
+
+         So THIS PROPERTY CARRIES NO LABEL, ever — no rc, no preview, no beta, no labelled line —
+         and `-ci.<n>` is the CHANNEL MARKER, never a version. The rule is not prose here:
+         PlatformVersionSchemeGuard (test/MeshWeaver.Documentation.Test) evaluates this property and
+         the composed $(Version) through real MSBuild on every PR and reds if either leaves the two
+         shapes. The release is cut only when every open issue is closed (maintainer, 2026-09-05);
+         until then main keeps producing 3.0.0-ci.<n> sets, and the day v3.0.0 is tagged release.yml
+         opens the PR that moves this number to 3.1.0.
 
          ORDERING, which the self-updater (VersionSelect) relies on. 🚨 It is NOT SemVer any more
          (#3542): candidates are ranked by the SEALED-PUBLICATION LINEAGE — the ci.<n> run number
@@ -219,16 +228,28 @@
        attributes derive from them and must not vary with whether a caller supplied -p:Version=. -->
   <PropertyGroup>
     <!-- Numeric version core: PlatformVersion with any pre-release label stripped (3.0.0 → 3.0.0;
-         a hypothetical 3.0.0-x → 3.0.0). The default carries no label since the rc line closed. -->
+         a hypothetical 3.0.0-x → 3.0.0). $(PlatformVersion) never carries one (two shapes, see
+         above), so the strip is purely defensive against a -p:PlatformVersion= experiment: it keeps
+         AssemblyVersion/FileVersion a valid four-part number whatever a caller supplies. -->
     <_VersionDash>$(PlatformVersion.IndexOf('-'))</_VersionDash>
     <_VersionNumeric Condition="'$(_VersionDash)' == '-1'">$(PlatformVersion)</_VersionNumeric>
     <_VersionNumeric Condition="'$(_VersionDash)' != '-1'">$(PlatformVersion.Substring(0, $(_VersionDash)))</_VersionNumeric>
-    <!-- Pre-release separator for the ci.N suffix: a clean line (3.0.0, the default) starts the
-         pre-release with '-ci.N'; a labelled override (3.0.0-x) appends '.ci.N'. Both are valid
-         SemVer. 🚨 Consumers that parse the build number back out of a version must accept BOTH
-         separators ([.-]ci.<n>): the retired rc line used '.ci.' and its tags are still in ACR. -->
-    <_CiSep Condition="'$(_VersionDash)' == '-1'">-</_CiSep>
-    <_CiSep Condition="'$(_VersionDash)' != '-1'">.</_CiSep>
+    <!-- 🚨 THE ci SEPARATOR IS A LITERAL '-', UNCONDITIONALLY, and there is no property for it.
+         This used to be a `_CiSep` that chose '.' when $(PlatformVersion) carried a label, so a
+         labelled line composed `3.0.0-rc9.ci.<n>` instead of the invalid `3.0.0-rc9-ci.<n>`. That
+         property existed for ONE purpose — supporting a labelled line — and a labelled line is now
+         forbidden (see the PlatformVersion note above; maintainer, 2026-09-07). Keeping the branch
+         would leave the MINTER able to emit the retired shape the moment someone reintroduced a
+         label, which is exactly how the shape comes back quietly.
+
+         🚨 MINTING one shape is NOT the same as READING one. The rc-line images minted with '.ci.'
+         are still addressable in ACR/GHCR and an install can be running one, so every consumer that
+         parses the build number back OUT of a version must keep accepting BOTH separators,
+         `[.-]ci.<n>` — PlatformReleaseOrder.BuildOrdinal, VersionSelect, edge-images.yml, and
+         MeshWeaver.Plugins' check-platform-pins.py. A reader narrowed to '-ci.' reads a retired tag
+         as carrying NO run number, which promotes it into the promotion-ranked half of the self-
+         updater's order: #3542's freeze, rebuilt by a tidy-up. Do not break a reader to simplify a
+         minter. Doc/Architecture/ReleaseProcess §1 states the split. -->
   </PropertyGroup>
   <!-- THE PUBLISHABLE STRING — NuGet package version, Docker image tag, and the
        MESHWEAVER_PLATFORM_VERSION a running portal reports. This group, and only this group, is
@@ -253,7 +274,7 @@
     <_CiBuildNumber Condition="'$(CIRun)' == 'true' and '$(GITHUB_RUN_NUMBER)' == ''">$(_BuildNumber)</_CiBuildNumber>
     <_CiBuildNumber Condition="'$(CIRun)' != 'true'">0</_CiBuildNumber>
     <Version Condition="'$(PublicRelease)' == 'true'">$(PlatformVersion)</Version>
-    <Version Condition="'$(PublicRelease)' != 'true'">$(PlatformVersion)$(_CiSep)ci.$(_CiBuildNumber)</Version>
+    <Version Condition="'$(PublicRelease)' != 'true'">$(PlatformVersion)-ci.$(_CiBuildNumber)</Version>
   </PropertyGroup>
   <!-- 🚨 THE COMPILED VERSION ATTRIBUTES — UNCONDITIONAL, and deliberately so (#3022). These end
        up inside every emitted assembly (and therefore inside its REFERENCE assembly, which is what

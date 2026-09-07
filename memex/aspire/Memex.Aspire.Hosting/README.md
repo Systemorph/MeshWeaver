@@ -13,7 +13,7 @@ var builder = DistributedApplication.CreateBuilder(args);
 builder.AddMemex("memex", o => o
     .WithBackend("Filesystem")
     .WithOrleansClustering("AdoNet")
-    .WithImage(tag: "3.0.0-rc1"));
+    .WithImage(tag: "3.0.0"));   // a release, or a continuous build: "3.0.0-ci.<n>"
 
 builder.Build().Run();
 ```

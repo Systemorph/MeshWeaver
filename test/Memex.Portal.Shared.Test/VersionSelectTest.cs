@@ -65,7 +65,7 @@ public class VersionSelectTest
 
     [Fact]
     public void Any_RequireCiGreenFalse_IncludesEdgeBuilds()
-        // 🚨 edge.70, not edge.7: `edge-images.yml` rewrites `.ci.` to `.edge.` and keeps the same
+        // 🚨 edge.70, not edge.7: `edge-images.yml` rewrites the `ci` label to `edge` and keeps the same
         // run number, so an edge build that is genuinely newer carries a HIGHER one. Pinning
         // "3.1.0-edge.7 beats 3.0.0-ci.51" would be pinning the #3542 defect under another label.
         => Assert.Equal("3.1.0-edge.70",
