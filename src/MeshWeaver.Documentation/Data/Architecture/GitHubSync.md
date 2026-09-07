@@ -173,6 +173,35 @@ regardless — use it to deliberately discard local changes back to the reposito
 > Two-way generalizes this to *every* server-side edit (no explicit claim needed) as long as it
 > post-dates the last sync.
 
+### The three clocks on a sync source — and why they disagree on purpose
+
+A sync source records **three separate facts**, and reading any one of them as the answer to
+another's question is how an investigation goes wrong. They are deliberately independent:
+
+| Field | The question it answers | When it moves |
+|---|---|---|
+| `lastSyncAttemptAt` + `lastSyncOutcome` | *When did a sync last RUN here, and what did it conclude?* | **Every** conclusion — an import, a no-op, one that preserved server-side edits, one that landed nothing. |
+| `lastSyncCommitSha` | *Which repo commit has this Space already got?* | Whenever the mesh genuinely reached that commit — **including** a no-op update, so a repo commit touching no node files does not leave the Space forever "behind". |
+| `lastSyncedAt` | *When were mesh and repo last RECONCILED?* — the two-way **conflict horizon** | Only on an import that really reconciled: **not** on a fingerprint-matched no-op, **not** when server-newer nodes were preserved, **not** when something failed to land. |
+
+The horizon is the one with teeth. Everything newer than it counts as a pending server-side change
+and is protected from overwrite and from the prune, so advancing it past uncommitted work disarms
+exactly the protection two-way exists for — a later push would then delete that work. That is why
+the suppressions are there, and why **the horizon must never be made to track "when did we last
+sync"**.
+
+> 🚨 **A frozen `lastSyncedAt` beside a fresh `lastSyncCommitSha` is not a bug.** Measured on
+> 2026-09-07, `Edu/_GitSync` read a `lastSyncedAt` of 2026-07-11 (memex) and 2026-08-07
+> (memex-cloud) beside a `lastSyncCommitSha` from that same morning. Both were correct: every sync
+> in between had been a no-op at unchanged content, which advances the commit and holds the
+> horizon. What was missing was the third fact — nothing recorded that a sync had run at all, so
+> the only way to date one was to compare node timestamps against image tags in a container
+> registry. `lastSyncAttemptAt` is that fact, and the settings tab now shows the three separately
+> instead of printing the horizon under the words *"Last synced"*.
+
+Note that a node's own `lastModified` is **not** a substitute: `stream.Update` does not re-stamp
+it, so a node can be rewritten without its modification time moving.
+
 ### Git is the source of truth — author in the repo, never only-live
 
 A sync **reconciles**: *Update to latest* and *Re-import* mirror the branch into the Space
