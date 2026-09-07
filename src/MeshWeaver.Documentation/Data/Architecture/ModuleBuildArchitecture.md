@@ -736,11 +736,15 @@ expensive says so rather than merely being slow.
 
 1. Pin the reusable lanes (`node-repo-*.yml`) at a MeshWeaver main SHA — never copy them.
 2. **Scripts are centralized**: the lane fetches the platform's `.github/scripts/compile-check.py`
-   at the pin and runs it against the caller's tree — a repo keeps ONLY its
-   `scripts/compile-check.allow` (policy). Per-repo script copies are retired; three had
-   already drifted apart when this landed. (*"We can ship in hosting"* — the endgame is a
-   `compile-check` verb inside the tester image itself, where the reference set is the
-   container's by construction; the fetched-script stage is the unified interim.)
+   and `.github/scripts/gen-manifests.py` at the pin and runs them against the caller's tree — a
+   repo keeps ONLY its `scripts/compile-check.allow` and `scripts/gen-manifests.config.json`
+   (policy). Per-repo script copies are retired; three compile-check copies had already drifted
+   apart when that landed, and by the time gen-manifests followed on 2026-09-07 its six copies were
+   five vintages, so each of #434, #942/#1023 and #1426 was fixed in one repo and live in the rest
+   ([Module Versioning](/Doc/Architecture/ModuleVersioning) → "One checker, every repo").
+   (*"We can ship in hosting"* — the endgame is a `compile-check` verb inside the tester image
+   itself, where the reference set is the container's by construction; the fetched-script stage is
+   the unified interim.)
 3. Reference this page from the repo's AGENTS.md — the build section defers here.
 4. Repo-specific policy (module lists, always-modules, allow-files, registry consumption)
    stays in the caller; mechanics never do.

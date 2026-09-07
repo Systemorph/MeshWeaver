@@ -764,7 +764,7 @@ is worse than a moving ref, because the divergence is silent. Bump every `uses:`
 
 | Workflow | Job it unifies |
 |---|---|
-| `.github/workflows/node-repo-validate.yml` | JSON/manifest shape gate (`scripts/validate-repos.py`, `gen-manifests.py --check`, main-only `--check-versions`) |
+| `.github/workflows/node-repo-validate.yml` | JSON/manifest shape gate — the caller's `scripts/validate-repos.py`, plus the PLATFORM's `.github/scripts/gen-manifests.py` (`--check`, main-only `--check-versions`) fetched at `platform-ref` like compile-check.py, configured by the caller's `scripts/gen-manifests.config.json` |
 | `.github/workflows/node-repo-compile-check.yml` | the compile gate — every NodeType's resolved Source vs the assemblies of the digest-pinned platform image |
 | `.github/workflows/node-repo-gate.yml` | the tester gate — `mw-plugin-test` over the (optionally affected-narrowed) mount, cross-repo `requires` staged in; since #3022 executed by the tester **as the portal** (`platform-image`, composed gate host, `--app /app`) |
 | `.github/workflows/node-repo-publish-bake.yml` | the main-only bake + publication — `compile --output` then `--seed` over the full repo or (opt-in) the affected closure, staged-module exclusion, OIDC publish via the canonical `publish-bake-bundles.sh`; since #3022 the bake compiles against and is keyed to the **portal** (`platform-image` + `platform-image-digest`, both required-or-explicit exactly like the tester's) |
