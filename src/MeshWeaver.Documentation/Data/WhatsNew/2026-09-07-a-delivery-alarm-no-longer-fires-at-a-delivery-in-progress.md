@@ -12,7 +12,7 @@ Every hour, a check asks one question about the platform: *does the newest code 
 of deployable images?* If it does not, nobody's installation can move forward, and that is worth
 waking someone for. So when the answer is no, the check goes red and says delivery is stuck.
 
-Building that set takes about twenty minutes and sealing it about eighty. For a stretch of every
+Building that set takes about twenty minutes and sealing it about eighty minutes. For a stretch of every
 such build, the honest answer to the question is "no" — not because anything is wrong, but because
 the set is being assembled right then. The hourly check had no way to see that. When a build
 straddled the top of an hour, it read a half-finished set as a broken one and reported a stall.

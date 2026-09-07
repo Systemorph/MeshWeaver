@@ -2700,10 +2700,10 @@ jobs:
               :
             else
               # 🚨 FAIL CLOSED, and say which question went unanswered. An unanswerable probe must
-              # never silence this alarm — that would make the probe a skip-trapdoor, indistinguish-
-              # able from a pass, which is the defect this whole job is an instance of. Same posture
-              # as the unresolved-tip branch further down, and for the same reason: the outcome that
-              # must not be missed is the stuck one.
+              # never silence this alarm — that would make the probe a skip-trapdoor, which GitHub
+              # renders identically to a pass, and that is the defect this whole job is an instance
+              # of. Same posture as the unresolved-tip branch further down, and for the same reason:
+              # the outcome that must not be missed is the stuck one.
               echo "::error::main \`$SHORT\` is GREEN, has an INCOMPLETE image set, and this reconcile published nothing — and the probe that separates 'a publication is in flight' from 'delivery is stuck' FAILED (gh api on actions/runs). Refusing to guess: an unanswered probe must never be read as reassurance. Read the run list for \`$SHORT\` by hand, and chase the API failure — it is the bug, whichever way the delivery turns out."
               exit 1
             fi
