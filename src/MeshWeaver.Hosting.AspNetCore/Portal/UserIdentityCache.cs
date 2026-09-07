@@ -167,6 +167,15 @@ public readonly record struct UserIdentityLookup(MeshNode? Node, string? Unavail
 /// </summary>
 public sealed class UserIdentityCache : IDisposable
 {
+    /// <summary>
+    /// The SAME nodes keyed by their <c>Id</c> — the username, i.e. the partition key — with the
+    /// email each carries. Answers the other direction of the question the email index answers:
+    /// "who owns this id?", which is what stops a first-time sign-in from adopting a local part
+    /// that already belongs to someone else (MeshWeaver#3561).
+    /// </summary>
+    private readonly ConcurrentDictionary<string, (MeshNode Node, string Email)> _byId =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private readonly ConcurrentDictionary<string, MeshNode> _byEmail =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly IDisposable _subscription;
@@ -312,9 +321,13 @@ public sealed class UserIdentityCache : IDisposable
             case QueryChangeType.Initial:
             case QueryChangeType.Reset:
                 _byEmail.Clear();
+                _byId.Clear();
                 foreach (var node in change.Items)
                     if (TryGetEmail(node, out var email))
+                    {
                         _byEmail[email] = node;
+                        if (!string.IsNullOrEmpty(node.Id)) _byId[node.Id] = (node, email);
+                    }
                 // The index is authoritative from here on: a miss now genuinely means "no mesh
                 // User node carries this email". Set LAST, after the snapshot is applied, so a
                 // concurrent reader never sees "hydrated" over a half-built index.
@@ -324,12 +337,18 @@ public sealed class UserIdentityCache : IDisposable
             case QueryChangeType.Updated:
                 foreach (var node in change.Items)
                     if (TryGetEmail(node, out var email))
+                    {
                         _byEmail[email] = node;
+                        if (!string.IsNullOrEmpty(node.Id)) _byId[node.Id] = (node, email);
+                    }
                 break;
             case QueryChangeType.Removed:
                 foreach (var node in change.Items)
+                {
                     if (TryGetEmail(node, out var email))
                         _byEmail.TryRemove(email, out _);
+                    if (!string.IsNullOrEmpty(node.Id)) _byId.TryRemove(node.Id, out _);
+                }
                 break;
         }
     }
@@ -362,6 +381,20 @@ public sealed class UserIdentityCache : IDisposable
             node,
             Volatile.Read(ref _hydrated),
             Volatile.Read(ref _subscriptionFailure));
+    }
+
+    /// <summary>
+    /// The email of the mesh <c>User</c> node whose <c>Id</c> is <paramref name="id"/>, or
+    /// <c>null</c> when no such node is indexed — or when the index has not hydrated, since an
+    /// answer off an empty index would be a guess. The caller compares it with the signing-in
+    /// email: a different owner means the id is TAKEN and must not be adopted as a partition key
+    /// (MeshWeaver#3561 — two accounts whose emails differ only by domain shared one home).
+    /// </summary>
+    public string? OwnerEmailOf(string? id)
+    {
+        if (string.IsNullOrEmpty(id) || !Volatile.Read(ref _hydrated))
+            return null;
+        return _byId.TryGetValue(id, out var owner) ? owner.Email : null;
     }
 
     /// <summary>
