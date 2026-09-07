@@ -829,3 +829,6 @@ whole protocol is [The Merge Queue](/Doc/Architecture/MergeQueue).
 · [Modules](/Doc/Architecture/Modules) · [Deploying Plugin Changes](/Doc/Architecture/DeployingPluginChanges)
 · [The Dependabot Secret Store](/Doc/Architecture/DependabotSecretStore) — a red that names a secret
 you can see provisioned, and why the exemption that would silence it is only safe in core
+· [Duplicate Keys in Workflow YAML](/Doc/Architecture/WorkflowDuplicateKeys) — a workflow can
+parse, pass every shape gate and run with a value the diff does not show; the loader keeps the LAST
+of two identical keys and says nothing
