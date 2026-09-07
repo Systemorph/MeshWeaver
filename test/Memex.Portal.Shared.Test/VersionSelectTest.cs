@@ -99,8 +99,12 @@ public class VersionSelectTest
                 new UpdatePolicyContent { Policy = UpdatePolicyKind.Stable }, Web).Policy);
 
     [Fact]
-    public void ParseContent_Null_DefaultsToContinuous()
-        => Assert.Equal(UpdatePolicyKind.Continuous, UpdatePolicyNodeType.ParseContent(null, Web).Policy);
+    public void ParseContent_Null_FailsClosedToNone()
+        // 🚨 REVERSED by #3542, deliberately. This used to assert Continuous — i.e. content that is
+        // absent or unreadable enabled unattended rolls. That is how memex-cloud rolled onto a
+        // withdrawn 3.1.0-ci line "on a policy record that lost its own policy". A read that
+        // produced nothing must not be the most permissive answer.
+        => Assert.Equal(UpdatePolicyKind.None, UpdatePolicyNodeType.ParseContent(null, Web).Policy);
 
     [Fact]
     public void ParseContent_JsonElement_DeserializesEnumByName()
