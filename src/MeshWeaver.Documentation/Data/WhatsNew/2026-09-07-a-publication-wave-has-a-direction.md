@@ -1,9 +1,12 @@
 ---
-nodeType: WhatsNew
-title: A bundle publication reaches the repositories that depend on it — and never its own publisher
-category: Fix
-date: 2026-09-07
+Name: A bundle publication reaches the repositories that depend on it, never its own publisher
+Category: Fix
+Description: A node repository's publication now wakes only the repositories that declared it as an upstream; the publisher itself is never woken, and the same sealed digest is never dispatched twice.
+Icon: ArrowRouting
+Order: -20260907
 ---
+
+# A bundle publication reaches the repositories that depend on it, never its own publisher
 
 When a node repository seals a bundle publication, its build lane registers the record with the
 control instance, which wakes the repositories that must rebake against it. On 2026-09-07 that wake
