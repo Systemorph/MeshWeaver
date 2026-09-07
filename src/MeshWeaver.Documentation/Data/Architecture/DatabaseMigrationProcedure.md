@@ -132,18 +132,21 @@ day, it can never finish" is a conclusion that has been reached — and been **w
 
 Measured on `memex-cloud` 2026-09-07: Job `memex-migration-28` was described as a backfill that
 "can never finish within its own design" and slated for deletion after 9 h 50 m. Its own log said
-otherwise — `Current DB version: 55` (the schema half had completed 90 s in), 165 partition schemas
-and 74,246 rows embedded, progressing at a steady 200 rows per 81–86 s, and the schema then in
-flight was `vuser`: the loop runs the schemas **alphabetically**, so it was near the end, not
-stalled. It was left to run.
+otherwise — `Current DB version: 55` (the schema half had completed 90 s in), **165 of the 220
+partition schemas** the run had announced, 74,246 rows embedded, and a steady 200 rows per
+81–86 s. It was left to run, and it **finished on its own** ~2 h later: `Database migration
+completed. Version: 55`, Job `Complete 1/1`, duration 10 h, then `ttlSecondsAfterFinished` removed
+it with no manual step. Nothing needed intervention at any point — both portals served HTTP 200
+throughout.
 
-**Read these four before deciding, in this order — they are all in the Job itself:**
+**Read these five before deciding, in this order — they are all in the Job itself:**
 
 | Read | Where | What it settles |
 |---|---|---|
 | `Current DB version: N` | the Job's log | Whether the *schema* duty is already done. If it is, nothing is blocked on this Job: `DbVersionGate` passes and the portal serves. |
 | rows per unit time | two consecutive `N/M…` progress lines and their `--timestamps` | Whether it is moving at all. A flat counter is a stall; a steady one is work. |
-| the schema **name** in flight | the same lines | How far through the loop it is. The order is alphabetical, so the name is a position — a `v…` schema is nearly done, an `a…` one is not. |
+| schemas done **over schemas total** | the `[EmbeddingBackfill] N partition schema(s)` line at the phase start is the denominator; count the `<schema>: N embedded` completion lines for the numerator | The only honest progress figure. 🚨 Treat the numerator as a **lower bound**: a schema with nothing to embed completes without logging a count. |
+| the schema **name** in flight | the same lines | A **relative position only** — the loop is alphabetical, so the name tells you every schema sorting before it is done, and nothing more. 🚨 Do **not** read an ETA off the letter: a late letter does not mean "nearly done" (there may be many `w…`–`z…` schemas) and schemas differ in size by orders of magnitude. Use the count above for how far along it is, and the rate for how fast. |
 | `activeDeadlineSeconds` | `kubectl get job … -o jsonpath='{.spec.activeDeadlineSeconds}'` | Whether Kubernetes will let it finish. **Empty means no deadline** — it runs to completion, and `ttlSecondsAfterFinished` then removes it with no manual cleanup. |
 
 Deleting a reconcile that is progressing costs the un-embedded tail: those rows stay `NULL` and
@@ -155,6 +158,13 @@ loses the remaining work, which nothing re-queues on its own.
 which is the deadlock above), never the elapsed time. And the durable fix for the long tail is not
 a kill: it is the budgeted, batched reconcile — a bounded slice per Job that reports its remainder
 and resumes on the next one — so no single Job has to finish the whole backfill.
+
+🚨 **The budget is not retroactive, so "it should have stopped after ten minutes" is not a reason to
+kill one.** The migration image carries its own budget: `memex-migration-28` ran
+`3.0.0-ci.8009`, which predates both the ten-minute Job budget (MeshWeaver#3630) and the batched
+backfill (MeshWeaver.Plugins#1488). A Job only becomes time-bounded once its environment rolls onto
+a set built after those landed — until then a migration running for hours is behaving exactly as
+its image was built to, and the readings above are the only way to judge it.
 
 ## Related
 
