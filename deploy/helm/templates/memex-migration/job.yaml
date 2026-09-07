@@ -50,6 +50,45 @@ spec:
             {{- $pgHost := .Values.postgres.enabled | ternary "memex-postgres-service" (.Values.config.memex_migration.MEMEX_HOST | default "memex-postgres-service") }}
             {{- $pgPort := .Values.postgres.enabled | ternary "5432" (.Values.config.memex_migration.MEMEX_PORT | default "5432") }}
             - "until nc -z {{ $pgHost }} {{ $pgPort }}; do echo 'waiting for postgres'; sleep 2; done"
+        {{- /* 🚨 REHEARSAL BEFORE EXECUTION (maintainer, 2026-09-07: "we must first test the
+               migration process and only then execute"). The SAME image with the SAME env as the
+               migration container, asked what it would do: MIGRATION_MODE=rehearse reads the
+               current version, counts what every pending rehearsable repair would touch, executes
+               nothing and exits — non-zero when a plan fails to count. An init container that
+               fails never lets the migration container start, so "tested first, then executed"
+               is the pod's own ordering, not a convention. Hand-written repairs (≤ V55) are named
+               as uncountable and run under the budget only. Disable with migration.rehearse: false
+               — an image older than MeshWeaver.Plugins#1489 ignores the mode and would run the
+               whole migration twice, which is why the chart default follows that image. */}}
+        {{- if .Values.migration.rehearse }}
+        - name: "memex-migration-rehearsal"
+          image: "{{ .Values.migration.image }}"
+          imagePullPolicy: "IfNotPresent"
+          env:
+            - name: "MIGRATION_MODE"
+              value: "rehearse"
+            - name: "MIGRATION_BUDGET_MINUTES"
+              value: {{ .Values.migration.budgetMinutes | int | quote }}
+          envFrom:
+            - configMapRef:
+                name: "memex-migration-config"
+            - secretRef:
+                name: "memex-migration-secrets"
+            {{- range $class := (include "memex.keyVaultClasses" . | fromYamlArray) }}
+            - secretRef:
+                name: "{{ $class.syncedSecret }}"
+                optional: true
+            {{- end }}
+          {{- $rehearsalClasses := (include "memex.keyVaultClasses" . | fromYamlArray) }}
+          {{- if $rehearsalClasses }}
+          volumeMounts:
+            {{- range $class := $rehearsalClasses }}
+            - name: "{{ $class.volumeName }}"
+              mountPath: "{{ $class.mountPath }}"
+              readOnly: true
+            {{- end }}
+          {{- end }}
+        {{- end }}
       containers:
         - image: "{{ .Values.migration.image }}"
           name: "memex-migration"
