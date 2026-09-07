@@ -280,12 +280,19 @@ public sealed class GitHubWebhookProcessor
                 repo, branch, headSha, targets.Count);
             var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
             foreach (var t in targets)
-                Observable.Using(
-                        () => accessService.ImpersonateAsSystem(),
+                // 🚨 RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)` — #1790.
+                // Rx disposes a Using's resource on whichever thread the INNER observable
+                // terminates on, so the subscribing thread stays latched as system-security while
+                // the restore lands somewhere else entirely. RunAsSystem opens the scope, composes
+                // AND subscribes the work inside it, and leaves it on the same thread — one
+                // synchronous frame it owns. Ratcheted down here (Copilot review) because this is
+                // the very expression this change rewrites; the file's three remaining sites are
+                // untouched work, still on the inventory.
+                accessService.RunAsSystem(
                         // 🚨 headSha, NOT "latest" — see the remarks. The candidates were selected
                         // against this commit; importing anything else means the selection and the
                         // import disagree about which tree this build proved (#1430).
-                        _ => hub.UpdateToProvenCommitFromGitHub(
+                        () => hub.UpdateToProvenCommitFromGitHub(
                             t.SpacePath, t.UserId, headSha, sourceId: t.SourceId))
                     .Subscribe(
                         activity => logger?.LogInformation(
