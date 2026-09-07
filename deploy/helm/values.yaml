@@ -466,6 +466,15 @@ portal:
   shutdownMarginSeconds: 120
 migration:
   image: "ghcr.io/systemorph/memex-migration:latest"
+  # The migration run's wall-clock BUDGET in minutes — every versioned repair and every always-on
+  # phase together. The runner fails RED, naming the step, when one outlives it
+  # (MIGRATION_BUDGET_MINUTES), and the Job's activeDeadlineSeconds is this plus one minute so
+  # Kubernetes enforces the same number from outside. 🚨 Ten minutes is the default on purpose and
+  # more is an EXPLICIT decision in the deployment's overlay: a migration that needs longer is not
+  # a migration to make room for, it is one to rewrite as bulk work (one set-based statement per
+  # partition, never a request per row). Measured 2026-09-07: a row-at-a-time embedding backfill
+  # held the memex-cloud Job for 4 h 30 min with its deploy reported failed and nothing naming why.
+  budgetMinutes: 10
 
 # ---- Startup probe budget ------------------------------------------------------------------------
 # periodSeconds × failureThreshold is the HARD ceiling on how long a pod may take to serve /health

@@ -85,6 +85,36 @@ public class MigrationWorkloadModelGuard
     }
 
     /// <summary>
+    /// 🚨 The migration has a BUDGET, enforced twice from ONE number (maintainer, 2026-09-07:
+    /// "cap it", "enforce a time limit of 10 min per job", "if they want more than 10, they have to
+    /// configure explicitly"). Measured that day on memex-cloud: the <c>3.0.0-ci.8009</c> Job had
+    /// been running 4 h 30 min — seventy seconds of schema work, then a row-at-a-time embedding
+    /// backfill over 220 partition schemas — with its deploy long since reported failed and nothing
+    /// naming the cause. Inside the process <c>MIGRATION_BUDGET_MINUTES</c> makes the runner fail
+    /// RED naming the step; outside, <c>activeDeadlineSeconds</c> makes Kubernetes kill the Job at
+    /// the same budget. Both derive from <c>migration.budgetMinutes</c>, default 10, so a deployment
+    /// that needs more writes the number into its overlay — never gets it by default.
+    /// </summary>
+    [Fact]
+    public void TheMigration_HasABudget_TenMinutesUnlessConfiguredExplicitly()
+    {
+        var root = FindRepoRoot();
+        var job = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, Job)));
+        var values = File.ReadAllText(Path.Combine(root, "deploy/helm/values.yaml"));
+
+        Assert.True(Regex.IsMatch(job, @"^\s*activeDeadlineSeconds:.*\.Values\.migration\.budgetMinutes", RegexOptions.Multiline),
+            $"{Job} must set activeDeadlineSeconds FROM .Values.migration.budgetMinutes — the Job's outside "
+            + "cap and the process's inside budget are one number, or the two drift and one of them lies.");
+        Assert.True(job.Contains("MIGRATION_BUDGET_MINUTES", StringComparison.Ordinal)
+                    && job.Contains(".Values.migration.budgetMinutes", StringComparison.Ordinal),
+            $"{Job} must pass MIGRATION_BUDGET_MINUTES from .Values.migration.budgetMinutes so the runner "
+            + "fails RED naming the step that outlived the budget, before Kubernetes kills the pod.");
+        var budget = Regex.Match(values, @"^migration:\s*\n(?:.*\n)*?\s+budgetMinutes:\s*(\d+)", RegexOptions.Multiline);
+        Assert.True(budget.Success, "deploy/helm/values.yaml must declare migration.budgetMinutes");
+        Assert.Equal("10", budget.Groups[1].Value);
+    }
+
+    /// <summary>
     /// 🚨 And no command anywhere in the repo may roll the migration as a Deployment. Each of
     /// these was live until #1788: <c>AGENTS.md</c> — the file every agent loads first — carried
     /// both a <c>set image</c> and a <c>rollout restart</c> against
