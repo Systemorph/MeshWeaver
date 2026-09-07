@@ -915,9 +915,16 @@ uninstall_launchd() {
 # manual recovery step.
 # ---------------------------------------------------------------------------
 
-# The two packs a Blazor portal cannot render without. MODULE (assembly) names — what the landing
-# lane writes on disk; the catalog package names are DefaultViews and GraphViews.
-readonly VIEW_PACK_MODULES="MeshWeaver.Blazor.Views MeshWeaver.Blazor.Graph"
+# The packs a Blazor portal cannot render without. MODULE (assembly) names — what the landing
+# lane writes on disk; the catalog package names are DefaultViews, GraphViews and EntityViews.
+#
+# 🚨 EntityViews is here because leaving it out made this check report a portal USABLE that could
+# not draw a single input (MeshWeaver.Plugins#1483). It is not a visualisation pack: EditorView,
+# TextFieldView, NumberFieldView, DateTimeView, RadioGroupView, the comboboxes, checkboxes and
+# switches plus the Editor / EditForm / Property skins all live in it, so without it every quiz
+# option, the Subscribe coupon box and every dialog field render as the control's own ToString().
+# A portal that cannot be typed into is not a portal, and it passed check 3.
+readonly VIEW_PACK_MODULES="MeshWeaver.Blazor.Views MeshWeaver.Blazor.Graph MeshWeaver.Blazor.EntityViews"
 
 # One in-pod probe answering the whole of check 3: for each module, is it resolvable at all — landed
 # under <Modules:Root>/modules/<name>[@<generation>]/<name>.dll, or shipped in the image's own app
@@ -935,6 +942,64 @@ probe_view_packs() {
     if [ -e "$root/modules/activation.d/.pending-restart" ]; then echo "pending-restart=yes"; fi
     exit 0
   ' sh "$VIEW_PACK_MODULES" 2>/dev/null
+}
+
+# 🚨 "Resolvable on disk" is NOT "will render", and reporting the first as the second is how a
+# portal that could not draw a single form still printed `ok view packs present`. Measured on a
+# memex-local install (MeshWeaver.Plugins#1483): the probe above reported MeshWeaver.Blazor.Graph
+# PRESENT while MeshNodePickerControl still rendered as its ToString(). It was not lying about the
+# file — the file was there, in the image's own modules/ folder — it was answering a different
+# question from the one it printed.
+#
+# A pack reaches the RUNNING process only if boot put it in the EFFECTIVE MODULE SET, which is
+# exactly `Modules:Assemblies` union the landed activation sidecar (MemexConfiguration ->
+# ModuleActivationBoot.ComputeEffectiveModuleEntries). Bytes in modules/ that NEITHER names are
+# bytes nothing ever asks for, and no amount of restarting changes that.
+#
+# The portal already says which copy of which module it is about to load — one
+# `[ModuleLoad] <name> <- <path> (source=...)` line per module, at boot, written from the SAME
+# array it then loads ("the line and the load cannot disagree", MeshWeaver#2223). That report IS
+# the activation signal and it is readable from out here, so this asserts it rather than a file's
+# existence.
+#
+# 🚨 It never reports success on no evidence. With no `[ModuleLoad]` line visible at all, the boot
+# report has scrolled out of this container's log — which means this check learned NOTHING, and
+# "learned nothing" is reported as a failure naming its remedy, never as `ok`.
+assert_view_packs_loaded() {
+  local report inert="" m
+  report="$(kubectl -n "$NAMESPACE" logs "deploy/$PORTAL_DEPLOYMENT" 2>/dev/null \
+    | grep -F '[ModuleLoad] ' || true)"
+
+  if [ -z "$report" ]; then
+    warn "the portal's boot module report is NOT in this pod's log, so check 3 could not tell an
+     ACTIVATED view pack from bytes lying unused on disk — it verified nothing, and a check that
+     verified nothing is not a pass.
+     Remedy: restart the portal so the report sits at the top of a fresh log, then re-verify:
+       kubectl -n $NAMESPACE rollout restart deploy/$PORTAL_DEPLOYMENT && memex-local verify"
+    return 1
+  fi
+
+  for m in $VIEW_PACK_MODULES; do
+    printf '%s\n' "$report" | grep -qF "[ModuleLoad] $m " || inert="$inert $m"
+  done
+
+  if [ -n "$inert" ]; then
+    warn "view pack(s) are ON DISK but NOT LOADED:$inert
+     The bytes are there and the running process never asked for them, so every control they draw
+     still renders as its ToString() — the state this check used to call 'present'.
+     A module is loaded only if the image names it under Modules:Assemblies or a registry bundle
+     LANDED it (which writes the activation sidecar entry); a copy in modules/ that neither names
+     is inert, and restarting will not change it.
+     Remedy: read the boot report and see what the portal did load —
+       memex-local logs --no-follow --tail 400 | grep ModuleLoad
+     then rebuild the image from a plugins checkout that declares the pack
+     ('memex-local update --build'), or stop serving from a checkout, which can never land a
+     module BINARY (MeshWeaver#2417):
+       memex-local registry $DEFAULT_REGISTRY_URL --key mwr_..."
+    return 1
+  fi
+
+  ok "view packs loaded: $VIEW_PACK_MODULES"
 }
 
 # Has the boot reconcile FINISHED? `[DefaultInstall] reconciled…` is the line it writes when the
@@ -1137,7 +1202,10 @@ verify_usable() {
     kubectl -n "$NAMESPACE" rollout restart "deploy/$PORTAL_DEPLOYMENT"
     kubectl -n "$NAMESPACE" rollout status "deploy/$PORTAL_DEPLOYMENT" --timeout=300s || \
       warn "the activation restart did not complete — 'memex-local status'"
-    ok "view packs present and activated"
+    # 🚨 The restart is the ACT; the boot report of the pod it started is the EVIDENCE. Declaring
+    # "present and activated" straight off `rollout status` asserted the very thing this check
+    # exists to establish, without ever looking at it.
+    assert_view_packs_loaded || failed=1
   elif [ "$pending" -gt 0 ]; then
     warn "view packs are LANDED but a restart is PENDING — on disk, not in the running process, so
      controls still render as ToString().
@@ -1145,7 +1213,8 @@ verify_usable() {
        kubectl -n $NAMESPACE rollout restart deploy/$PORTAL_DEPLOYMENT"
     failed=1
   else
-    ok "view packs present: $VIEW_PACK_MODULES"
+    # Resolvable on disk was never the claim being printed — see assert_view_packs_loaded.
+    assert_view_packs_loaded || failed=1
   fi
 
   return "$failed"
