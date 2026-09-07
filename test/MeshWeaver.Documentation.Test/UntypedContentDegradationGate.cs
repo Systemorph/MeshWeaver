@@ -84,8 +84,19 @@ public class UntypedContentDegradationGate
     [Fact]
     public void EverySeamAttachesTheMarkerExceptionTheGateKeysOn()
     {
-        var source = Read(EmittingSource);
-        var constructions = source.Split('\n').Count(l => l.Contains("new " + Marker, StringComparison.Ordinal));
+        // 🚨 Count CONSTRUCTIONS in code, not lines that happen to contain a substring (Copilot
+        // review). The first version split on newlines and looked for `"new " + Marker`, which is
+        // wrong in both directions at once: it MISSES a construction the formatter wrapped across
+        // two lines or wrote alias-qualified (`Mesh.MeshNodeContentDegradedException`), and it
+        // COUNTS a prose mention in a comment — and this file's subject is a source file that
+        // explains itself at length, so comments naming the type are the norm here rather than the
+        // exception. Masking first (the same helper every other source ratchet uses) removes the
+        // second failure mode outright; the regex removes the first.
+        var source = SourceScan.MaskCommentsAndStrings(Read(EmittingSource));
+        var constructions = new Regex(
+                @"\bnew\s+(?:[A-Za-z_][\w]*\s*\.\s*)*" + Regex.Escape(Marker) + @"\s*\(",
+                RegexOptions.Compiled)
+            .Matches(source).Count;
 
         Assert.True(
             constructions >= 3,
@@ -96,6 +107,74 @@ public class UntypedContentDegradationGate
             + "`exception is not null && logLevel >= Warning` — so the shard gate that scans that "
             + "directory has nothing to match, and passes having checked nothing. That is exactly "
             + "how this gate spent its first five days (#3625).");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The control arm for the gate's ONLY sanctioned exemption.</b>
+    ///
+    /// <para>The gate has no allow-list, on purpose. But a test whose SUBJECT is a degradation —
+    /// <c>LateContentTypeRegistrationTest</c> asserts that content nothing can resolve stays
+    /// untyped, and that a live reader is re-typed when the type finally registers (#2952) — cannot
+    /// take the gate's prescribed remedy either: seeding a DIFFERENT, REGISTERED type deletes the
+    /// thing it tests. Such a test therefore keeps its own records out of the shared trace file by
+    /// substituting <c>ILogger&lt;MeshNodeStreamCache&gt;</c> for its own mesh.</para>
+    ///
+    /// <para>🚨 <b>That substitution is the exemption, so it must never be silent.</b> Capturing
+    /// degradation records and not asserting them is EXACTLY the permanently-green check this file
+    /// exists to prevent — the gate would pass because nothing reached it, which is
+    /// indistinguishable from passing because nothing degraded. So: any test that substitutes the
+    /// emitter's logger must also assert what it caught.</para>
+    ///
+    /// <para><b>Scope, stated honestly.</b> This sees ONE diversion mechanism — replacing the
+    /// closed <c>ILogger&lt;MeshNodeStreamCache&gt;</c>, which is the only way a full-mesh test can
+    /// keep a degradation record out of <c>TestTraceLog</c>. A future test that invents a different
+    /// route (its own logger provider, a filter rule) is not covered here, and that is a limit to
+    /// re-measure rather than to assume away. The denominator arm below is what stops this guard
+    /// from quietly checking zero files.</para>
+    /// </summary>
+    [Fact]
+    public void ADivertedDegradationIsAssertedWhereItIsDiverted()
+    {
+        const string Diversion = "ILogger<MeshWeaver.Hosting.MeshNodeStreamCache>";
+        const string ShortDiversion = "ILogger<MeshNodeStreamCache>";
+        const string Assertion = "AssertReportedFor(";
+
+        var root = SourceScan.FindRepoRoot();
+        var diverting = SourceScan.SourceFiles(root, ["test"])
+            .Select(path => (Path: path, Text: File.ReadAllText(path)))
+            .Where(f => f.Text.Contains(Diversion, StringComparison.Ordinal)
+                        || f.Text.Contains(ShortDiversion, StringComparison.Ordinal))
+            // This gate's own prose names the type; only a file that USES it counts.
+            .Where(f => !SourceScan.Relative(root, f.Path)
+                .EndsWith("MeshWeaver.Documentation.Test/UntypedContentDegradationGate.cs", StringComparison.Ordinal))
+            .ToArray();
+
+        // 🚨 The DENOMINATOR. "No offender found" and "no file was examined" read identically, and
+        // the second is how a guard spends years enforcing nothing. The sanctioned diversion exists
+        // today; if it is ever removed, delete this guard deliberately rather than leaving it green
+        // over an empty set.
+        Assert.True(
+            diverting.Length > 0,
+            $"No test substitutes {ShortDiversion} any more, so this guard examined ZERO files and "
+            + "passed having checked nothing. Either the sanctioned diversion "
+            + "(LateContentTypeRegistrationTest) was removed — in which case remove this guard in "
+            + "the same change and say so — or the scan is looking at the wrong tree.");
+
+        var silent = diverting
+            .Where(f => !f.Text.Contains(Assertion, StringComparison.Ordinal))
+            .Select(f => SourceScan.Relative(root, f.Path))
+            .ToArray();
+
+        Assert.True(
+            silent.Length == 0,
+            $"These test files divert {ShortDiversion} away from the shared trace file without "
+            + $"asserting what they caught ({Assertion}):\n  {string.Join("\n  ", silent)}\n"
+            + "A degradation record kept out of collected-logs/ and then never asserted is an "
+            + "exemption from check-untyped-content.sh that can never fail — the gate passes "
+            + "because nothing reached it, which is indistinguishable from passing because nothing "
+            + "degraded, and is the exact state #3625 was about. Assert that the record WAS "
+            + "produced, that it names the node you expect, and that it would have satisfied the "
+            + "trace sink's own predicate (exception is not null && level >= Warning).");
     }
 
     [Fact]

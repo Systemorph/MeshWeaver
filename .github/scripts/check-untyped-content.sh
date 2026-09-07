@@ -88,8 +88,24 @@ fi
 # ERRORED reported "no degradation" and passed the gate. That is precisely the silent pass this file
 # exists to prevent, committed inside the file that prevents it. Caught by the repo's own
 # `CI's own shell` gate, which flags a captured command substitution that swallows stderr and status.
+# 🚨 EXCLUDE THE BINARY ARTEFACTS BY NAME — and deliberately NOT with grep's own `-I`.
+#
+# `collected-logs/` is not all text: the workflow copies native mini dumps (`/tmp/coredumps/*.dmp`)
+# and, for a host that died on a SIGNAL, a `symbols-<project>/` directory of `.dll` + `.pdb`. A core
+# dump is a snapshot of the process's memory, so it can contain the marker string simply because the
+# process once formatted it — a match there is not a log record and would be a FALSE RED (and, in
+# the Occurrences list, an unparseable `Binary file … matches` line that the sed path-extraction
+# below cannot reduce).
+#
+# `-I` would also fix that, and it is the wrong instrument: it decides by CONTENT, so a text log
+# that happens to contain one NUL byte becomes invisible to the scan — silently, with the gate
+# reporting "no degradation". That is a pass-by-scanning-nothing, which is the one outcome this file
+# exists to make impossible; a false red is loud and investigable, a false green is not. Excluding
+# by NAME can only ever skip a file whose extension is listed right here, in the open.
+EXCLUDES=(--exclude='*.dmp' --exclude='*.dll' --exclude='*.pdb')
+
 set +e
-matches=$(grep -rl -e "$MARKER" -e "$PHRASE" "$DIR" 2>"$scan_err")
+matches=$(grep -rl "${EXCLUDES[@]}" -e "$MARKER" -e "$PHRASE" "$DIR" 2>"$scan_err")
 scan_rc=$?
 set -e
 
@@ -114,7 +130,7 @@ echo "Occurrences:"
 # Trim to the node path — the whole line carries a serialised payload and drowns the signal.
 # Both record shapes name the node: the log message says "Content for <path> stayed …", the
 # exception says "content for '<path>' (nodeType …)". Reduce either to the path.
-grep -rh -e "$MARKER" -e "$PHRASE" "$DIR" 2>/dev/null \
+grep -rh "${EXCLUDES[@]}" -e "$MARKER" -e "$PHRASE" "$DIR" 2>/dev/null \
   | sed -E -e "s/.*Content for ([^ ]+) stayed.*/  \1/" \
            -e "s/.*content for '([^']*)'.*/  \1/" \
   | sort | uniq -c | sort -rn | head -20

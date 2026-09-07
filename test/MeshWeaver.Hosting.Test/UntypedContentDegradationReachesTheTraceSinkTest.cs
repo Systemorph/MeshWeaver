@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -110,7 +111,13 @@ public class UntypedContentDegradationReachesTheTraceSinkTest
         // condition the warning reports.
         RunSeam(seam, ProbeNode(), logger, new MeshContentTypeRegistry());
 
-        var record = Assert.Single(logger.Records);
+        // 🚨 The POPULATION is "records the sink would write", not "records the logger saw"
+        // (Copilot review). Asserting Single over everything couples this control to any future
+        // Info/Debug line the converter might add — a record the sink drops anyway, so a failure
+        // there would say nothing about reachability. Filtering by the sink's own predicate keeps
+        // the control sharp where it matters: a SECOND warning-with-exception still fails it,
+        // because two records reaching the sink is a real change to what CI sees.
+        var record = Assert.Single(logger.Records.Where(ReachesTheTraceSink));
 
         Assert.True(ReachesTheTraceSink(record),
             "a content degradation must satisfy the trace sink's gate "
@@ -153,7 +160,11 @@ public class UntypedContentDegradationReachesTheTraceSinkTest
 
         RunSeam(seam, ProbeNode(), logger, registry);
 
-        Assert.Empty(logger.Records);
+        // Same population as the positive arm, for the same reason: what must be empty is what the
+        // trace sink would WRITE. (It is in fact empty of everything — the seams log nothing on the
+        // recovered path — but pinning the whole set would make this arm fail for reasons that have
+        // no bearing on the gate.)
+        Assert.Empty(logger.Records.Where(ReachesTheTraceSink));
     }
 
     private sealed record Record(LogLevel Level, string Message, Exception? Exception);
@@ -169,11 +180,22 @@ public class UntypedContentDegradationReachesTheTraceSinkTest
 
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
 
-        public bool IsEnabled(LogLevel logLevel) => true;
+        // 🚨 The sink's own floor, and the recorder HONOURS it (Copilot review). Two notes, because
+        // the obvious reading of this change is wrong: on its own, narrowing IsEnabled would have
+        // changed nothing at all — ILogger.LogWarning(...) and friends call ILogger.Log
+        // unconditionally, so a recorder whose Log records everything never consults IsEnabled. The
+        // brittleness Copilot names is real, but the thing that fixes it is filtering the ASSERTED
+        // population by the sink predicate (above); this pair makes the recorder a faithful logger
+        // rather than a tee, so what it holds is what the sink would consider.
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Warning;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
-            => records.Add(new Record(logLevel, formatter(state, exception), exception));
+        {
+            if (!IsEnabled(logLevel))
+                return;
+            records.Add(new Record(logLevel, formatter(state, exception), exception));
+        }
 
         private sealed class NullScope : IDisposable
         {

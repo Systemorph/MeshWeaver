@@ -609,12 +609,63 @@ MATERIALISATION at the read seam (`node.Content is DeploymentReport`), which is 
 reader does and what the degradation warning is about. **When a diagnostic says a value "reads as
 absent", assert the runtime TYPE, never a tolerant accessor.**
 
-**The open question this leaves** is how a test declares that a degradation is its own SUBJECT. The
-fixture advice above (seed a registered foreign type) covers the case where the test only needs
-"unreadable as `T`" — it fixed `UnreadablePolicyRecordIsNotClobberedTest`, 8 records → 0. It cannot
-cover a test whose assertion IS that nothing can resolve the content. An allow-list is refused for
-the reason this whole section exists; a per-test, per-category suppression declared in that test's
-own source is the candidate, and it is a policy call rather than a repair.
+🚨 **How a test declares that a degradation is its own SUBJECT — answered, and the answer is not an
+allow-list.** The fixture advice above (seed a registered foreign type) covers the case where a test
+only needs *"unreadable as `T`"*; it fixed `UnreadablePolicyRecordIsNotClobberedTest`, 8 records → 0.
+It cannot cover a test whose assertion IS that **nothing can resolve the content**.
+`LateContentTypeRegistrationTest` is that case three times over: #2952 is about a NodeType compiled
+at RUNTIME into a collectible assembly, so *"registered nowhere yet"* is the premise, and seeding a
+resolvable type deletes the subject. Measured on the repaired gate's second working run: that one
+class put **3** records into the shared trace and red shard 4; nothing else in core did.
+
+| candidate | verdict |
+|---|---|
+| An allow-list in the gate | **Refused.** An exemption in the scanner is a permanently green check wearing a reason — and these node paths carry a per-run GUID, so the entry would have to be a *pattern*, i.e. an exemption that widens by itself. |
+| Silencing the emitter's category for that test (a level, an `appsettings`) | **Refused twice over.** AGENTS.md forbids dialling a log level for a CI reason, and a suppression matches *nothing* exactly as happily as it matches its subject. |
+| **Capture the record in the test and ASSERT it** | **Held.** |
+
+**What it is.** The emitter takes its logger from DI, so a test substitutes the CLOSED
+`ILogger<MeshNodeStreamCache>` for its own mesh: a decorator that takes records carrying
+`MeshNodeContentDegradedException` and forwards everything else untouched. That is the same move
+`UntypedContentDegradationReachesTheTraceSinkTest` already makes one test over — the only new thing
+is doing it for a whole mesh instead of a direct call.
+
+**Why it is not a skip-trapdoor**, which is the only question that matters:
+
+1. **Nothing is silenced.** No level is dialled and no category is muted; every other record the
+   cache logs reaches the real logger at its own level.
+2. 🚨 **The diversion IS an assertion.** Each test asserts that the record it declared as its
+   subject *was produced*, that it names the expected node, and that it **satisfies the trace
+   sink's own predicate** (`exception is not null && level >= Warning`). A declaration that matches
+   nothing is therefore a RED — the one property an allow-list can never have. It is also strictly
+   more than these tests asserted before, when the record went to a file nobody read.
+3. **The exemption is exactly one node wide.** The same assertion pins that *everything* captured
+   names the declared path, so an unintended degradation of any other node in that mesh fails the
+   test rather than being swallowed.
+4. `UntypedContentDegradationGate.ADivertedDegradationIsAssertedWhereItIsDiverted` is the control
+   arm: a test that substitutes that logger without asserting what it caught fails the build, and
+   the guard reds if it ever examines **zero** files.
+
+**Falsified, not assumed.** With the `MeshNodeContentDegradedException` argument reverted at the
+`GetStream` seam — the #3625 defect itself — all three tests FAIL on *"the platform must REPORT the
+degradation this test reproduces"*. So the regression is now caught by a **test**, not only by a
+gate that must first see a whole shard's logs. With the fix in place: 3/3 pass, marker count in the
+shared trace **3 → 0**, `check-untyped-content.sh` **exit 1 → exit 0**.
+
+🚨 **What the gate still cannot tell you: TRANSIENT from FINAL.** `MeshNodeStreamCache` warns at the
+instant of a read, and at that instant it cannot know the type will register moments later — which
+is the normal state during portal boot, before the NodeType compiles land, and is exactly the race
+#2952 fixed by re-typing every live reader when the registration arrives. The sibling seam one layer
+down already says so in its own message: `MeshNodeTypeSource` prints **both** causes — *"(a) the
+NodeType's runtime compile has not registered it YET, which is TRANSIENT … (b) no declaration will
+ever claim this discriminator"* — and it passes **no exception**, so it never reaches the trace file
+and reds nothing. One event, two descriptions, opposite CI consequences: the cache's is a shard
+failure, the type source's is invisible. Two of `LateContentTypeRegistrationTest`'s three cases are
+the transient one, and they degrade *and recover* inside a single test. Telling them apart means
+recording a degradation and reporting only the ones never recovered, which needs a window nothing in
+a process naturally closes — a rework rather than a repair, and deliberately left to its own issue.
+Until then read a gate hit as *"content was unreadable at a read"*, and check the node's
+`compilationStatus` before calling it (b).
 
 **The instrument that does answer it** is `MessageTrace`
 (`MeshWeaver.Messaging.Hub/MessageService.cs`): `MESHWEAVER_MSG_TRACE=1` makes every delivery write
