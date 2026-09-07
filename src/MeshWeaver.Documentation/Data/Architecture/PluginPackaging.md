@@ -8,6 +8,8 @@ icon: /static/NodeTypeIcons/box.svg
 
 # Plugin Packaging
 
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** `minMeshVersion` stops being "THE landing gate": it is carried, shown and linted at pack time, and decides nothing at landing, serving or boot. The mechanism described below is what runs until [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) lands; this page is rewritten by that change.
+
 C# stored in mesh nodes compiles **at runtime, in the portal** — see
 [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation). This page is about compiling the same
 source **outside** it: in CI, ahead of time, so the bytes can be shipped rather than recomputed.

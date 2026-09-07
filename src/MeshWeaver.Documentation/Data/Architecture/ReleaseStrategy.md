@@ -15,6 +15,8 @@ Tags:
 
 # Release & Self-Update Strategy
 
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** A hold on the Continuous channel is reserved for a module that measurably cannot load on the target; a package without a usable artifact for the release compiles at boot and is reported, it no longer holds the update. The mechanism described below is what runs until [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) lands; this page is rewritten by that change.
+
 The production model in one picture:
 
 ```

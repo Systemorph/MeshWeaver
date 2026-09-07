@@ -7,6 +7,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Roll Selection
 
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** "The latest platform version shipping all plugins" is re-read as "the newest release on which no installed module is UNLOADABLE": a missing bake is a boot compile (reported), a floor is advisory, and only a measured link failure against the target holds. The mechanism described below is what runs until [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) lands; this page is rewritten by that change.
+
 > **"Whenever a new platform / plugin is published, check for each environment which is the latest
 > platform version shipping all plugins, if different from current version ⇒ update."**
 > — maintainer, 2026-09-06
