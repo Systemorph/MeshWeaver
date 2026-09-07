@@ -549,6 +549,15 @@ jobs:
             # A dependency republished for an identity: bake against THAT image, so this repo's
             # publication lands under the same identity its upstream just sealed. Never the pin
             # and never the tag — either could name a different framework than the upstream's.
+            # 🚨 Our OWN publication is not an upstream. memex routes a publication to the
+            # repositories that declared its source, never the source itself; a wake that names
+            # us as the source is a sender defect (the 2026-09-07 loop: crm woke crm, rebaked the
+            # same digest, registered it, was woken again). Refused RED, never baked: a bake here
+            # would re-register the same bytes and hand the sender its next trigger.
+            if [ -n "${UPSTREAM_SOURCE:-}" ] && [ "$(printf '%s' "$UPSTREAM_SOURCE" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${{ inputs.bake-source }}" | tr '[:upper:]' '[:lower:]')" ]; then
+              echo "::error::woken by our OWN publication (client_payload.source '${UPSTREAM_SOURCE}' is this repo's bake-source) — a source never depends on itself. The control instance's PlatformBuildInboxWatcher must route a publication to its declared dependents only; this run bakes nothing."
+              exit 1
+            fi
             [ -n "${UPSTREAM_IMAGE:-}" ] || { echo "::error::meshweaver-upstream-published payload carries no client_payload.image — cannot know which framework the upstream '${UPSTREAM_SOURCE:-?}' was sealed for."; exit 1; }
             echo "ref=${UPSTREAM_IMAGE}" >> "$GITHUB_OUTPUT"
             echo "woken by upstream '${UPSTREAM_SOURCE:-?}' publishing; baking against its image ${UPSTREAM_IMAGE}"
@@ -1280,6 +1289,7 @@ jobs:
           IDENTITY: ${{ needs.publish-bake.outputs.identity }}
           RELEASED_VERSION: ${{ github.event.client_payload.version }}
           SELF: ${{ inputs.content-repository || github.repository }}
+          UPSTREAMS: ${{ inputs.upstream-sources }}
         run: |
           set -euo pipefail
           missing=()
@@ -1296,10 +1306,18 @@ jobs:
           # which commit, against which tester + portal. `version` is the platform tag the identity
           # was baked for when this run was itself a release-follow — memex carries it into the
           # event so dependents resolve the same set by name.
+          # `upstreams` is the caller's `upstream-sources` — the ONE declaration of "this repo depends
+          # on those sources" (the same list the seed asserts sealed publications for). memex keeps
+          # it on the source's Hosting/Publication record and routes the wave on it: a publication
+          # from X wakes exactly the registered repositories whose upstreams name X, never X itself.
+          # Sent as a JSON array of normalised names; empty for a root (nothing wakes it but the
+          # platform release). Before this field the wave went to EVERY registry source, the
+          # publisher included — the 2026-09-07 self-feeding dispatch storm (Plugins#1484).
+          UPSTREAMS_JSON=$(printf '%s' "${UPSTREAMS:-}" | tr ',;' '  ' | tr -s '[:space:]' '\n' | sed '/^$/d' | tr '[:upper:]' '[:lower:]' | awk '!seen[$0]++' | jq -R . | jq -cs .)
           BODY=$(jq -cn --arg repo "$SELF" --arg s "$SOURCE" --arg sha "$GITHUB_SHA" --arg id "${IDENTITY:-}" \
             --arg i "$IMAGE" --arg d "$digest" --arg pi "$PLATFORM_IMAGE" --arg v "${RELEASED_VERSION:-}" \
-            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            '{event:"bundle-publication", repo:$repo, source:$s, sha:$sha, identity:$id, image:$i, digest:$d, platformImage:$pi, version:$v, run:$run}')
+            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --argjson up "$UPSTREAMS_JSON" \
+            '{event:"bundle-publication", repo:$repo, source:$s, sha:$sha, identity:$id, image:$i, digest:$d, platformImage:$pi, version:$v, run:$run, upstreams:$up}')
           SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
           code=$(curl -sS -o /tmp/resp -w '%{http_code}' --connect-timeout 10 --max-time 60 \
             -X POST "$URL" -H 'Content-Type: application/json' \
