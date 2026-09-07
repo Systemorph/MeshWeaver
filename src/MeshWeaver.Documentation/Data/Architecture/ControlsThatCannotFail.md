@@ -1,7 +1,7 @@
 ---
 Name: Controls That Cannot Fail
 Category: Architecture
-Description: A control whose green is guaranteed by construction is not a control. Eight measured instances — a test, a detector, an identity anchor, a preflight, a watcher, a CD verdict, a git idiom that answers the wrong question, and a generator whose failure mode is a success line — and the one question that catches all eight.
+Description: A control whose green is guaranteed by construction is not a control. Twelve measured instances — a test, a detector, an identity anchor, a preflight, a watcher, a CD verdict, a git idiom that answers the wrong question, a generator whose failure mode is a success line, and a guard handed an input that could not fail — and the one question that catches them all.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/><path d="M12 8v8" opacity="0.25"/></svg>
 ---
 
@@ -47,8 +47,11 @@ instances. The family is larger, and it is worth recognising by shape.
 | **An EXCULPATORY wrong answer** | "it fails on another branch too" ⇒ pre-existing | *not our change* ends the investigation; nobody re-checks a clean bill |
 | **A count over a population whose membership varies** | `grep -c "webhook-url:" ci.yml` → `0` across six repos | a zero means "present and omits it" in five and "the thing does not exist" in the sixth |
 | **A writer whose failure mode is a SUCCESS line** | a generator that skips its work and prints a summary anyway | nothing distinguishes "wrote it" from "declined to" |
+| **An input the OPERATOR supplies** | `--is-ancestor <commit I chose> <candidate>` where the commit chosen is the branch's own tip | the check is sound; the value handed to it cannot make it print anything but PASS |
+| **An observer that becomes the load** | several sessions polling the same PRs until the shared credential 403s | the watch removes the ability to observe; `/rate_limit` still reports a healthy quota |
+| **A remedy written for reads, applied to a write** | "retry the failed call" after a timeout on `gh pr create` | a lost response is not a lost request; the blind retry creates the second one |
 
-## Eleven measured instances
+## Twelve measured instances
 
 The first six were found in a single day, across tests, CI, publication and ops. Instances 7 and 8
 were found **while writing this page** — one by its author, one by the session that supplied instances
@@ -448,6 +451,234 @@ gh api "repos/<owner>/<core>/compare/<suspect>...<that branch's MW_PLATFORM_REF>
 # ahead|identical ⇒ that branch HAS the cause; behind|diverged ⇒ it does not
 ```
 
+### 12. A guard handed an input that could not fail — and the queue property that decided it
+
+A cross-repo change needed a pin moved: `MW_PLATFORM_REF` in a satellite's `ci.yml` had to carry two
+core commits before a dependent pull request could go green. The guard written for it asserted
+ancestry — `git merge-base --is-ancestor <commit> <candidate pin>` — and its dry-run printed:
+
+```
+ancestry: 1fceaef56 reachable from main  -> ok
+```
+
+**That line could not have printed anything else.** The operator supplies the commit, and the value
+supplied was `main`'s own tip — which every candidate pin taken from `main` trivially contains. The
+control was sound; the *input it was handed* made its green free.
+
+🚨 **This is NOT instance 2, and collapsing the two takes the wrong lesson.** Instance 2's detector
+cannot go red at all — remove the production fix and it still passes. This check **can** go red: a
+pull request's head sha is genuinely not an ancestor of `main` before it lands. It could not go red
+**on the value it was given**, and the operator chose the value. The lesson is therefore not "make
+your detector sensitive to its subject"; it is *an input you supply can be one the check cannot fail
+on*.
+
+🚨 **The two-step is the point, and skipping it gets the remedy wrong.** The obvious reading —
+*ancestry is the wrong check here* — is false, and acting on it would have deleted a check that does
+real work. What makes ancestry discriminate is a property of the queue, so it was measured before
+deciding: this queue **merges** rather than squashes.
+
+```
+git rev-list --parents -n1 1fceaef56   ->  1fceaef56 7701561f9 57beea61b   # 2 parents = merge, not squash
+git merge-base --is-ancestor 57beea61b origin/main  ->  yes   # #3562's head, after it landed
+git merge-base --is-ancestor 4f809ca92 origin/main  ->  yes   # #3569's head, after it landed
+```
+
+**Counterfactual, and labelled as one — it did not happen here.** Had the queue **squashed**, no head
+sha would ever become an ancestor, and ancestry-on-head would have been not vacuous but *wrong*:
+refusing forever after a successful merge, while reading exactly like a guard doing its job. This
+queue merges, so that failure is not what occurred; it is what the same check does under a different
+queue setting, and it is the reason the check's soundness is a measurement rather than an assumption.
+
+The check was therefore worth keeping and the input was worth replacing — the opposite of what the
+one-step reading suggests.
+
+**The rule this yields is sharper than "validate your inputs":**
+
+> **An operator-supplied input is safe exactly when its ABSENCE is a refusal.**
+
+🚨 **Absence, not validity — validation would not have caught this.** The supplied sha was forty hex
+characters, a real commit, and reachable; every check a validator would run on it passed. It was
+still guaranteed to succeed. Three fixes, one property, and the defect is the one where absence and a
+wrong value are spelled the same way:
+
+| | absence means | a wrong value means |
+|---|---|---|
+| the original (`--pin <sha>`, operator picks) | PASS | PASS ← **the defect** |
+| remove the input (requirements hardcoded) | *impossible* | *impossible* |
+| caller states it, empty list REFUSED | stop | stop |
+
+**And the fix has its own expiry.** Hardcoding the requirement set (`REQUIRED_PRS="3562 3570"`) is
+correct for one move and wrong for the next: run later, it asserts two long-merged pull requests —
+both trivially merged, both trivially ancestors — and reports PASS having checked nothing about the
+change actually being pinned. That is this same shape reached by a *stale requirement set* rather than
+a chosen input, and it is the shape
+[Transitional Allow Entries](/Doc/Architecture/TransitionalAllowEntries) gives allow-file lines: in
+force only in the change that adds them. A one-shot script is deleted after use, or it grows the
+refusal.
+
+🚨 **Ancestry is also not the property the dependents need.** It answers whether a *commit* is
+reachable; it cannot see a revert landing after it, so a pin can pass ancestry and still not contain
+the change. What the dependent needs is asserted against the pinned **tree**:
+
+```bash
+git show "<candidate pin>:src/MeshWeaver.Messaging.Hub/Localization/strings.en.json" \
+  | grep -q 'onboarding.usernameTaken' || { echo "REFUSE: pin does not carry the keys"; exit 1; }
+```
+
+The cleanest single artefact from this instance is the dry-run where the two halves **disagreed** on
+one candidate, and the content half did the refusing:
+
+```
+PASS    onboarding.usernameTaken in strings.en.json
+PASS    onboarding.usernameTaken in strings.de.json
+FAIL    StoodDown absent from src/MeshWeaver.Graph.Contract/BuildState.cs
+FAIL    ReleaseStoodDownClaim absent from src/MeshWeaver.Graph/Configuration/BuildNodeType.cs
+ancestry: reachable from main -> ok
+```
+
+Ancestry passed and the pin was not safe. Had the guard carried only the ancestry half it would have
+moved the pin that minute, turning one dependent green and leaving the other red on a pin that
+carried half the requirement. Per language and per symbol, separately: a pin carrying
+`strings.en.json` but not `strings.de.json` passes an English-only assertion and then reds
+`LocalizationTest`, and one half of a two-file API change compiles and still fails its test. Both are
+the same half-present pin.
+
+### 12b. The watcher that became the load — found while writing instance 12
+
+The postscript belongs with 12 because it happened *to the two sessions writing it*, an hour after the
+guard above was hardened.
+
+Both sessions had armed watchers on the pull requests they were waiting on. Several other sessions
+were watching the same handful. At **10:06:02 UTC** the aggregate exhausted the shared credential:
+
+```
+403 API rate limit exceeded for user ID 6334612
+request id E5AD:48A5A:E5CFC9B:DE61348:6A9E8C8A
+```
+
+**The mechanism, established afterwards rather than inferred at the time.** One watcher was polling
+7 pull requests × 3 calls every 150 s. The dominant source was a *third* session that had accumulated
+roughly **forty** backgrounded `sleep …; gh api …` waiters — **one new one per turn, without stopping
+the previous one**. Its own statement of the fix is the crisp one:
+
+> **The waiter you replace is the waiter you stop.**
+
+🚨 **The first conclusion was wrong, in the direction that mattered, and the check that appeared to
+support it could not have contradicted it.** The initial reading was a burst of short-lived calls. A
+`pkill` sweep matched nothing, and that was reported as evidence the processes *had already exited*.
+
+They had not. A `sleep …; gh api …` waiter is **invisible to a process match on the caller for nearly
+all of its life** — it is sleeping, not calling. So "no match" meant *none are calling in this
+instant*, which is not *none exist*, and the two render identically. Roughly forty of them did exist,
+and the session that owned them had to stop them itself.
+
+> **Count the waiters, not the calls in flight.**
+
+Recorded as a correction rather than softened, because the page's own investigation producing a fresh
+instance of the page's own shape is the most convincing thing in it.
+
+**The watchers existed to prevent a false red, and produced a false UNKNOWN — for every concurrent
+session, not only their own.** The hardening worked in the narrow sense: the watcher reported the 403
+as `UNKNOWN — this is NOT a red` rather than as a failure. But a control that degrades the system it
+observes has already cost more than the signal is worth, and the remedy is not a better reading of the
+signal:
+
+> **The cheapest way to avoid misreading a signal is to stop generating it.**
+
+Nothing either session was waiting on could be decided faster by asking more often. One had a merged
+pull request, one had a draft that moved only on a human-agreed ping, and the pin move belonged to
+neither's poll loop.
+
+🚨 **And the instrument for "am I rate-limited" is itself in this family.** `gh api /rate_limit` keeps
+reporting `5000/5000 remaining, 0 used` while every call is refused — the primary quota is not the
+signal, and *that pairing is what a secondary limit looks like*. So the check you would reach for to
+confirm the diagnosis reports health. See
+[Reading CI Signals](/Doc/Architecture/ReadingCiSignals) and AGENTS.md's REST-not-GraphQL rule; the
+operational half is: on a refusal **stop for at least five minutes**, do not retry, and do not switch
+to a different query hoping it is cheaper — fast retries EXTEND the window.
+
+This is instance 1's property at fleet scale. There, the probe's own traffic delayed the condition it
+asserted. Here, the watchers' own traffic removed the ability to observe anything at all. In both, the
+act of measuring changed what was measured, and in both the control reported something that was not a
+red.
+
+### 12c. A remedy that is right for reads and wrong for writes — same error text, opposite response
+
+Minutes after 12b, opening the pull request for this very page failed:
+
+```
+Post "https://api.github.com/graphql": net/http: TLS handshake timeout
+```
+
+🚨 **The standing remedy is SAFE here and NOT SUFFICIENT — and the difference is the whole entry.**
+AGENTS.md's rule for a failed GitHub call — *on a refusal STOP for at least five minutes, do not
+retry, do not switch queries* — is correct, hard-won, and its **"do not retry" half is exactly what
+prevents the duplicate**. So this is not a correction to that rule. It is an addition to it: for a
+write, stopping is necessary and leaves you knowing nothing, because you still cannot say whether the
+thing happened. A read can stop and simply be asked again later; a write cannot resume until someone
+establishes which of two states the system is in.
+
+The advice that *does* damage is the ordinary reflex the rule exists to suppress — "just try again" —
+and nothing in the error text distinguishes the case where it is harmless from the case where it is
+not.
+
+> **A timeout on a READ means ask again — the worst case is a wasted call.**
+> **A timeout on a WRITE means find out what happened, then decide.**
+> **The error text is identical.**
+
+A create is a mutation. A transport failure says the **response** was lost; it does not say the
+**request** was. `gh pr create` may have opened the pull request and then failed to tell you. Retry
+blind and you get two — and the duplicate reads to everyone else as carelessness, not as a transport
+fault, so the evidence of what actually happened is destroyed by the act of recovering from it.
+
+**What was done instead, in three calls:**
+
+```bash
+# 1. ONE read that distinguishes the two states — never a blind retry
+gh api "repos/<owner>/<repo>/pulls?head=<owner>:<branch>&state=all" --jq '.[] | "#\(.number) \(.state)"'
+#    -> empty  ⇒ the mutation did NOT land
+
+# 2. only then create it, over REST rather than the endpoint that just failed
+gh api --method POST repos/<owner>/<repo>/pulls --input payload.json
+```
+
+REST here is not a workaround for a limit — it is the endpoint this repository prefers for everything
+GraphQL is not required for, and it happens to avoid the endpoint that had just timed out.
+
+🚨 **And the claim "I did not create a duplicate" is exactly the one not to accept on assertion.** It
+is exculpatory — it closes the file, which instance 11 identifies as the most dangerous direction in
+this family. The other session re-ran the same query independently and got one row. That is the check
+that would have falsified the claim, run by the party that did not make it.
+
+**Generalise it past pull requests.** Every write with a lost response has this shape: a node create,
+a tag push, a `POST` that provisions something, an issue comment. Before any retry of a mutation,
+name the read that distinguishes *landed* from *did not land* — and if no such read exists, that is
+worth knowing before you need it, not after.
+
+🚨 **But the axis is IDEMPOTENCE, not write-ness — and this entry proved it on itself minutes later.**
+Pushing this very section failed with `Could not resolve host: github.com`. That is a *stronger*
+failure than the timeout above (DNS resolution precedes any connection, so the request provably never
+left) — and it would not have mattered either way, because `git push` of a named ref **is
+idempotent**: repeating it converges on the same remote state. `gh pr create` is not; repeating it
+creates a second pull request.
+
+So the rule is not "never retry a write". It is:
+
+> **Never retry a NON-IDEMPOTENT write without the read that says whether it landed.**
+> An idempotent one may simply be repeated.
+
+The distinguishing read was cheap and was run anyway, because "provably never left" is a claim worth
+one command rather than one inference:
+
+```bash
+git rev-parse HEAD                                  # 1ba7eb461…  local
+git ls-remote origin refs/heads/<branch> | cut -f1   # b818b4f75…  remote — the push had NOT landed
+```
+
+Classify the operation *before* choosing the recovery, and note which of the three the error tells you
+about: whether the request was sent, whether it was applied, and whether the operation is safe to
+repeat. Most transport errors answer only the first, and only sometimes.
+
 ## What the whole family has in common
 
 Instances 9, 10 and 11 were found on one day, alongside a watcher reading a `startup_failure` (a
@@ -540,6 +771,21 @@ carries its own control arm is that thesis applied to itself.
    `<sha> <timestamp> <files>`.
 11. **Before calling a failure pre-existing, check which ref the other branch compiles against.** An
    exculpatory wrong answer ends the investigation, so it is the one to distrust most.
+12. **Make absence a refusal wherever an operator supplies an input.** A value you choose can always
+   be one the check cannot fail on, and nothing in the output distinguishes that from a real pass.
+   Remove the input, or require it and refuse the empty value — never accept it and proceed. If you
+   removed it by hardcoding, the hardcoded set is now a transitional artifact: delete it with the
+   change, or it goes stale into the same shape.
+13. **Never retry a NON-IDEMPOTENT write without a read that says whether it landed.** Retry advice —
+   this page's included — is written for reads, where the cost of asking again is a wasted call. A
+   mutation whose response was lost may well have succeeded, and the blind retry produces the
+   duplicate *and* destroys the evidence. Classify first: an idempotent write (`git push` of a named
+   ref, a `PUT` to a fixed path) may simply be repeated; a non-idempotent one (`gh pr create`, a
+   `POST` that mints an id) may not. Then name the distinguishing read; if there is none, learn that
+   before you need it.
+14. **Stop the waiter you replace.** A backgrounded `sleep …; poll` waiter spawned once per turn
+   accumulates silently, and a process match on the caller cannot see it — it is sleeping, not
+   calling, for nearly all of its life. Count the waiters, not the calls in flight.
 
 ## See also
 
@@ -547,4 +793,5 @@ carries its own control arm is that thesis applied to itself.
 - [Reading CI Signals](/Doc/Architecture/ReadingCiSignals) — skipped and absent contexts, and what a green wall does not mean.
 - [Cross-Repo Pair Gate](/Doc/Architecture/CrossRepoPairGate) — a gate that sees two of seven break shapes, and says so.
 - [Orleans Test Routing Pattern](/Doc/Architecture/OrleansTestRoutingPattern) — the pod-hub claim, and why reachability cannot stand in for it.
+- [Transitional Allow Entries](/Doc/Architecture/TransitionalAllowEntries) — in force only in the change that adds them, which is why instance 12's hardcoded set expires.
 - [Writing Tests](/Doc/Architecture/WritingTests) — the golden rules these controls are expressed against.
