@@ -472,7 +472,22 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // arriving at this point is already version-current/ahead and must be applied.
         if (current is not null && valuesEqual && value.ChangeType != ChangeType.Full)
         {
-            logger.LogDebug("[SYNC_STREAM] Skipping SetCurrent for {StreamId} - same value (patch)", StreamId);
+            // 🚨 The frame is NOT emitted, but its VERSION is adopted (#3520). This mirror's
+            // `Current.Version` is the base the loss detector in UpdateStream compares the NEXT
+            // frame's BasedOnVersion against, and the owner chained that next frame onto THIS one —
+            // it was sent, it arrived, it merely changed nothing (a layout area re-rendered with an
+            // identical control, a write that re-set a value). Leaving the version behind turned
+            // every such no-op into a proven "frame loss": the mirror re-asked for a snapshot it
+            // already held, and a render that emits a few equal frames after its Full did that on
+            // every page load — measured 164 of 164 `Frame loss detected` warnings in one Education
+            // run were preceded by exactly this skip of the frame the next patch chained onto, and
+            // not one was a real loss. The adoption is silent: no OnNext, no gate, no consumer sees
+            // a change — only the clock moves, and it moves forward (the monotonicity guard above
+            // already refused anything older).
+            current = current with { Version = value.Version };
+            logger.LogDebug(
+                "[SYNC_STREAM] Skipping SetCurrent for {StreamId} - same value (patch); version adopted → v{Version}",
+                StreamId, value.Version);
             return;
         }
 

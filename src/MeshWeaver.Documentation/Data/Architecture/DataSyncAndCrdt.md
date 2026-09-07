@@ -249,6 +249,20 @@ legitimate version gap cannot false-trigger a resync.
 (`JsonSynchronizationStream.ToDataChanged` → `SynchronizationStream.UpdateStream`;
 test `StreamFrameLossResyncTest`.)
 
+🚨 **The mirror's side of the same rule (#3520): a frame it RECEIVES and skips still moves its
+clock.** The owner cannot skip a patch whose `Updates` are non-empty but whose diff is — a
+`JsonElement` payload written back as it was is a new element to the owner (a struct with no value
+equality) and an identical document to the mirror — so it ships `[]`, and chains the next frame
+onto it. The mirror's value dedup in `SetCurrent` rightly emits nothing for that frame, but until
+#3520 it also left `Current.Version` where it was, so the next frame's `BasedOnVersion` pointed at
+a version the mirror "never applied" and the detector fired on a loss that never happened.
+Measured on an Education gate run: 164 of 164 `Frame loss detected` warnings were preceded by
+exactly that skip of the frame the next patch chained onto — a layout area re-rendered with an
+identical control on every page load. The skip now adopts the frame's version silently (no
+`OnNext`, no consumer wakes) — test `SameValuePatchKeepsTheChainTest`. Corollary for readers of
+the warning: a run whose loss lines all sit right after `Skipping SetCurrent … same value (patch)`
+for the chained-onto version was never losing frames.
+
 🚨 **`[SYNC_STREAM] Frame loss detected …` is a RESYNC counter, not a data-loss
 counter.** Every line is a gap that was *detected and answered*; the mirror converges
 on the Full that follows. A raw count therefore means nothing on its own — the two
