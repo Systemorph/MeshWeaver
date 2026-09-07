@@ -300,12 +300,35 @@ a lock — idle cores and silence are never a hot loop.
 
 Core owns `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json`. MeshWeaver.Plugins
 mirrors them at `clients/react/src/i18n/strings.{en,de}.json`, and its `RN app + web clients` job
-asserts the mirror matches core `main`.
+asserts the mirror matches core — **at a PINNED commit**, recorded in
+`clients/react/src/i18n/catalog-source.json`, not core's `main`.
 
-**So the moment a core catalog change merges, EVERY open Plugins PR goes red on that job,
-regardless of its diff, until the mirror lands.** Measured 2026-08-29: eleven PRs red at once, on
-diffs that could not reach the RN app — a lockfile override, a Store C# change. The guard is
-correct; the gap between the two merges is the problem.
+🚨 **READ THAT LAST CLAUSE BEFORE THE ROUTINE BELOW — this page said "matches core `main`" until
+2026-09-07, and that is the belief #3596 is about.** The pin changes the signal completely, and in
+the direction that hurts: a core catalog change reds **nothing**, anywhere, and the mirror goes
+stale in silence until somebody moves the pin. Measured 2026-09-07 — 1372 keys at the pin against
+1399 on core's `main`, **27 behind**, and value drift over the 1372 shared keys of **exactly zero**.
+That zero is the mechanism: the guard compares values, every shared value matched, both repos green,
+and the React/RN clients rendered a raw key in both languages for 27 strings. `AGENTS.md` records
+the same shape at 70 keys on 2026-09-04, so it recurs.
+
+**What that means for reading a red.** The loud failure below is the *unpinned* behaviour and it
+still describes what you see once the pin MOVES — a mirror sync PR reds every open Plugins PR while
+it lands. What it no longer describes is the steady state: between pin moves there is no red at all,
+so **absence of an i18n red is not evidence the mirror is current**. Check it, do not infer it:
+
+```bash
+gh api repos/Systemorph/MeshWeaver.Plugins/contents/clients/react/src/i18n/catalog-source.json \
+  --jq '.content' | base64 -d | jq '{ref, keys}'
+```
+against `jq 'length' src/MeshWeaver.Messaging.Hub/Localization/strings.en.json` on core `main`.
+Core's `i18n catalog (mirror sync handed over)` gate now refuses a catalog change that does not
+declare the handover, so the debt is at least recorded where it is created — see
+[Localization](/Doc/Architecture/Localization).
+
+**When the pin does move, the old routine applies in full.** Measured 2026-08-29: eleven PRs red at
+once, on diffs that could not reach the RN app — a lockfile override, a Store C# change. The guard
+is correct; the gap between the two merges is the problem.
 
 **The routine — do this every time, not as a fix afterwards:**
 
