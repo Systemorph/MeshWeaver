@@ -674,14 +674,38 @@ The first emission is the current state; subsequent emissions arrive as the hub 
 Application code writes through the stream handle; the framework turns the lambda into a patch on the owning hub:
 
 ```csharp
-workspace.GetMeshNodeStream(targetPath).Update(node =>
-{
-    var content = node.ContentAs<MyContent>(hub.JsonSerializerOptions, logger);
-    if (node.Content is not null && content is null) return node;  // never clobber unreadable content
-    return node with { Content = (content ?? new MyContent()) with { Status = "done" } };
-})
+workspace.GetMeshNodeStream(targetPath).Update<MyContent>((node, content) =>
+    node with { Content = (content ?? new MyContent()) with { Status = "done" } })
 .Subscribe(_ => { }, ex => logger.LogWarning(ex, "Update failed for {Path}", targetPath));
 ```
+
+🚨 **Name the content type — the untyped lambda is where a failed READ becomes a written DEFAULT.**
+A read must stay bad-data tolerant, so `ContentAs<T>` / `As<T>` answer `null` rather than throw. On a
+write that same tolerance destroys the record: `node.ContentAs<T>(opts) ?? new T()` inside
+`Update(node => …)` makes *"there is nothing here"* and *"I could not read what is here"* the same
+answer, and the write then persists a default-valued record over every field the lambda never
+touched. In `Update<TContent>` the `null` means **ABSENT and only absent** — so create-on-absent is
+preserved exactly — while content that is present and unreadable faults the observable with a
+`MeshNodeStreamException` naming the path, the runtime type and a JSON excerpt, **with the write not
+applied**.
+
+All three unreadable shapes happen in a running mesh and none of them throws: untyped JSON whose
+`$type` will not resolve, the as-written `JsonObject` DOM before the materialisation pipeline
+re-types it, and a same-named record from another collectible assembly (every NodeType recompile
+mints one). From the outside all three read as *"the content was empty"*. Two production incidents
+came from exactly this: `Admin/UpdatePolicy` losing its own policy ahead of a portal rolling itself
+onto a withdrawn version line (#3542), and `ThreadInput.AppendUserInput` resetting `Status` to
+`Idle` (the CheckInbox flake). `DefaultedContentReadInsideAnUpdateLambdaGuard` holds the shape at
+**zero** across `src/` and `memex/`, with no allow file — the fix is mechanical and
+behaviour-preserving, so an exemption could only ever mean *"this one may keep destroying
+records"*.
+
+Where the write is **not** a `stream.Update` — a durable compare-and-set on a storage adapter, or a
+pure decision function feeding one — the same rule applies without the primitive: read `null` when
+`Content is null`, and REFUSE loudly when the content is present and unreadable. Refuse by writing
+nothing and logging what was withheld, not by throwing, wherever a throw would strand a lock or a
+claim the caller still has to hand back (`BuildNodeType.ApplyGrant` and `CommitGrant` are the two
+worked examples).
 
 Under the hood the handle diffs `current` vs `update(current)` and ships an RFC 7396 JSON-merge patch (`PatchDataChangeRequest` on the stream protocol) to the owning hub, which merges it against its authoritative state on its single-threaded action block. That plumbing is **internal** — application code never posts `PatchDataChangeRequest`/`PatchDataRequest` itself.
 
