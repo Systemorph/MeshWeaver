@@ -823,7 +823,12 @@ public static class EmitPipeline
             + "killed by the harness wall-clock cap (exit=124 = SIGTERM), which writes none. The "
             + "followable measurement is a SPLIT-ARM re-run with DOTNET_TieredPGO=0 (sharper) or "
             + "DOTNET_TieredCompilation=0 — at ~1% per run one clean arm proves nothing — read "
-            + "together with the dissect= reading below. RESIDUAL: both legs still run on the one "
+            + "together with the flat= and dissect= readings below. 🚨 READ flat= BEFORE acting on "
+            + "this line: flat=EMITS means a top-level, non-generic, member-less class STILL emits "
+            + "in this process, so 'cannot emit' is true of the workload (nested-generic "
+            + "throughout) and not of emit as such, and the mechanism is confined to "
+            + "GetConsolidatedTypeParameters' walk; flat=SAME-FRAME is the opposite and is the "
+            + "one-method reproduction. RESIDUAL: both legs still run on the one "
             + "CLR, so this does not separate a corrupted heap from a miscompiled Roslyn method; "
             + "#613 is the SIGNALLING twin and is where a faulting address actually comes from. "
             + Dissection(dissect)
