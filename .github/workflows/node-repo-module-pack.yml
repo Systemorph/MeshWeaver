@@ -752,6 +752,11 @@ jobs:
       # The framework identity the PLATFORM host resolves for its /app — what every ledger record
       # and bundle is keyed to (the portal adopts, so the portal's identity is the honest one).
       platform-identity: ${{ steps.identity.outputs.identity }}
+      # The platform's own SemVer, read off the image the modules compile against — what `pack`
+      # measures every package's declared minMeshVersion FLOOR against (#3554). Empty only when
+      # the caller pinned no platform image, and `pack` refuses a declared floor in that case
+      # rather than skipping the check.
+      platform-version: ${{ steps.platform-version.outputs.version }}
     steps:
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
@@ -854,6 +859,48 @@ jobs:
             docker rm "$tcid" >/dev/null
             [ -f "$RUNNER_TEMP/tester-app/mw-plugin-test.dll" ] || { echo "::error::the tester image's /app carries no mw-plugin-test.dll — not a tester image"; exit 1; }
           fi
+      # ───────── THE PLATFORM'S OWN VERSION — the denominator of the module FLOOR gate (#3554) ─────────
+      # 🚨 A declared `content.minMeshVersion` was never checked against a platform build that
+      # EXISTS. SemVer §11.4 ranks pre-release identifiers as TEXT, so `ci` < `rc` and
+      # `3.0.0-ci.<n>` sits below `3.0.0-rc8` for EVERY n — 42 packages declared rc-line (and one
+      # clean `3.0.0`) floors, and on 2026-09-07 both AKS portals held every self-update candidate
+      # with a message naming two versions that look like they are in the right order:
+      #     HOLDING 3.0.0-ci.7989 — AI: the module requires platform 3.0.0-rc8 or newer
+      #                              but this deployment runs 3.0.0-ci.7989
+      # The registry could not have rescued it: 1268 tags, 48 `3.0.0-ci.*`, ZERO `rc*`.
+      #
+      # The reading is the image's own MESHWEAVER_PLATFORM_VERSION — the variable the running
+      # portal identifies itself by (MeshWeaver.Mesh.PlatformBuildInfo), i.e. the exact string
+      # ModulePlatformFloor compares at landing time. Taken from the image ALREADY staged for this
+      # run, so it costs one `docker image inspect`, not a registry trip.
+      #
+      # 🚨 FAIL CLOSED. An image that cannot say what version it is fails HERE. That gap has
+      # shipped once (every memex-portal-ai image between 2026-08-25 and 09-01 reported 1.0.0
+      # while tagged 3.0.0-rc9.ci.<n>), and a floor gate reading `1.0.0` would pass every floor
+      # while proving nothing.
+      - name: Read the platform image's own version (the module floor gate's denominator)
+        id: platform-version
+        if: inputs.platform-image-digest != ''
+        env:
+          IMAGE: ${{ inputs.platform-image }}
+          DIGEST: ${{ inputs.platform-image-digest }}
+        run: |
+          set -euo pipefail
+          case "${IMAGE##*/}" in *:*) NOTAG="${IMAGE%:*}" ;; *) NOTAG="$IMAGE" ;; esac
+          img="${NOTAG}@${DIGEST}"
+          if ! docker image inspect "$img" >/dev/null 2>&1; then
+            zstd -dc "$RUNNER_TEMP/platform-image/image.tar.zst" | docker load >/dev/null
+            img="$(cat "$RUNNER_TEMP/platform-image/image-id.txt")"
+          fi
+          version=$(docker image inspect "$img" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+                    | sed -n 's/^MESHWEAVER_PLATFORM_VERSION=//p' | head -1 | tr -d '[:space:]')
+          if [ -z "$version" ]; then
+            echo "::error::the platform image ${IMAGE}@${DIGEST} carries no MESHWEAVER_PLATFORM_VERSION in its config, so no module's declared minMeshVersion floor can be checked against it. That variable is what a running portal identifies itself by, and what ModulePlatformFloor compares at landing time — an image without it also breaks the self-updater. Fix the image (main-cd's 'The published image must identify itself as this run's version' step asserts it), never this check."
+            exit 1
+          fi
+          echo "platform version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       # ───────── THE PLATFORM'S FRAMEWORK IDENTITY — resolved by the PORTAL's own /app (#3022) ─────────
       # The ledger records which framework a bundle was built against, and the honest identity is the
       # one the ADOPTING host resolves: the tester's `framework-identity <dir>` verb, run with the
@@ -1325,6 +1372,7 @@ jobs:
         env:
           PACKAGE: ${{ matrix.entry.package }}
           MODULE: ${{ matrix.entry.module }}
+          PLATFORM_VERSION: ${{ needs.prepare.outputs.platform-version }}
         run: |
           set -euo pipefail
           version=$(jq -er '.version' "$PACKAGE/manifest.lock")
@@ -1334,6 +1382,15 @@ jobs:
             echo "::error::$PACKAGE/index.json declares content.module='$declared' but this entry packs '$MODULE' — the two halves of the mixed package drifted"
             exit 1
           fi
+          # 🚨 THE FLOOR MUST BE SATISFIABLE BY THE PLATFORM THIS BUNDLE IS BUILT AGAINST (#3554).
+          # Unconditional, and RED when the platform version is unknown: "the floor could not be
+          # checked" must never be indistinguishable from "checked and fine" — that equivalence is
+          # what let 42 packages ship floors no image can ever meet, holding every self-update
+          # candidate on both AKS portals with nothing red anywhere. The script is the platform's
+          # own copy at this lane's pin, and its ordering is pinned to ModulePlatformFloor by
+          # ModulePlatformFloorScriptParityTest, so the gate and the landing gate cannot drift.
+          python3 "$GITHUB_WORKSPACE/meshweaver/.github/scripts/check-module-platform-floor.py" \
+            --package "$PACKAGE" --floor "$floor" --platform-version "${PLATFORM_VERSION:-}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "floor=$floor" >> "$GITHUB_OUTPUT"
           echo "packing $MODULE as $PACKAGE@$version, platform floor $floor"

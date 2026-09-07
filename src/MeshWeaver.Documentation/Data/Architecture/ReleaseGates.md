@@ -507,6 +507,67 @@ an ImagePullBackOff. And the namespaces are CROSSED — `memex` serves memex.sys
 `memex-cloud` serves memex.meshweaver.cloud. Verify with the running image before patching, never
 from the name.
 
+## 🚨 A declared floor must be SATISFIABLE, and that is a build-time question
+
+`ModulePlatformFloor.DeclineReason` decides at RUNTIME whether the platform a deployment happens to
+run satisfies a module's declared `content.minMeshVersion`. It answers "not yet" — and it cannot
+distinguish "not yet" from "never", because from inside one process the two look identical. So a
+floor that no published image can ever meet produces a hold that is indistinguishable from a hold
+waiting on the next release, forever, with nothing red anywhere.
+
+**Measured 2026-09-07** (#3554). Both AKS portals ran `3.0.0-ci.7989` and held every self-update
+candidate:
+
+```
+HOLDING 3.0.0-ci.7989 — AI: the module requires platform 3.0.0-rc8 or newer
+                         but this deployment runs 3.0.0-ci.7989
+```
+
+Two versions that read as though they are in the right order. SemVer §11.4 compares pre-release
+identifiers as **text**, so `"ci" < "rc"` and `3.0.0-ci.<n>` is below `3.0.0-rc8` for **every** `n`
+— including `3.0.0-ci.999999999`. 42 packages carried rc-line floors, one carried a clean `3.0.0`
+(which outranks every pre-release of `3.0.0`), and one named `3.0.0-rc14`, a platform that never
+existed. The registry could not have rescued any of them: `memex-portal-ai` held 1268 tags — 798
+`staging-*`, 48 `3.0.0-ci.*`, **zero** `rc*`, **zero** `3.1.0-*`.
+
+### The check, and where it belongs
+
+The `pack` job of `node-repo-module-pack.yml` already reads the floor out of
+`{package}/index.json`. It now also asserts it against the platform the bundle is being **compiled
+against**, read as that image's own `MESHWEAVER_PLATFORM_VERSION` — the string a running portal
+identifies itself by, i.e. the exact value `ModulePlatformFloor` compares at landing time.
+
+That predicate is deliberately stronger than "some tag in the registry satisfies this", and needs no
+registry listing. A bundle records the framework identity it was built against and a consumer only
+adopts a bundle whose identity matches its own platform, so a floor **above** the build platform is
+unsatisfiable by construction: no deployment can both satisfy the floor and accept the bundle. And
+the lane already holds the image, so the reading is one `docker image inspect`, not a network trip.
+
+Two properties make it a gate rather than a comment:
+
+- **It cannot skip.** The step is unconditional, and an unknown platform version is RED — "the floor
+  could not be checked" must never be reported as "checked and fine", which is the same
+  skip-trapdoor shape the repository's CI rules ban for a gate that asks whether its own input
+  exists. A lane that pins no `platform-image-digest` fails naming that input.
+- **It cannot drift from the runtime.** The ordering is written once in `NuGetVersionComparer`,
+  mirrored in `.github/scripts/check-module-platform-floor.py`, and pinned by
+  `ModulePlatformFloorScriptParityTest`: for every case the script's exit code must equal "the
+  runtime found no reason to decline". Two call sites folding the same rule differently either never
+  converge or never fire, and both are silent.
+
+### What it does NOT cover
+
+The **structural** half — refusing a floor that names the retired `rc` line or the unreleased clean
+`3.0.0` at all — is repo-local and static, in `MeshWeaver.Plugins`' own
+`scripts/check-module-floors.py` (Plugins#1447). That one has to stay static on purpose: the Plugins
+validate lane runs on forks and on Dependabot, where reading a registry would need a credential, and
+gating a check on whether a credential is present is exactly the trapdoor above. The two halves are
+complementary: the static one catches a bad floor on the pull request that writes it; this one
+catches any floor the build platform cannot satisfy, whatever its shape.
+
+A satellite adopts this check when it moves its `node-repo-module-pack.yml@<sha>` pin — the lane is
+pinned by SHA, so nothing changes for a repo until it bumps.
+
 ## See also
 
 - [The Release Gate's Denominator](../ReleaseGateDenominator) — why "which packages must be baked" may never be read from the artifact under judgement
