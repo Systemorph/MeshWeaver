@@ -109,7 +109,13 @@ public class TwoSiloCacheUpdateFixture : IAsyncLifetime
     {
         get
         {
-            var primary = Cluster.Primary;
+            // 🚨 TestCluster.Primary is SiloHandle? from Microsoft.Orleans.TestingHost 10.3.1
+            // on (it was non-nullable at 10.1.0). Assert rather than propagate: this property's
+            // contract is to RETURN a hub, so an absent primary is a broken fixture and must say
+            // so here — the same posture as the throw that already guards SiloHost below.
+            var primary = Cluster.Primary
+                ?? throw new InvalidOperationException(
+                    "The test cluster has no primary silo — the fixture never started one.");
             var siloHost = primary.GetType().GetProperty("SiloHost")?.GetValue(primary) as IHost
                 ?? throw new InvalidOperationException("Could not access primary silo host");
             return siloHost.Services.GetRequiredService<IMessageHub>();
