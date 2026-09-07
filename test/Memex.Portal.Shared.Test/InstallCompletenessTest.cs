@@ -364,7 +364,11 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
             .ObserveUnaccountedRoots(
                 persistence: null, Mesh.JsonSerializerOptions, ImmutableHashSet<string>.Empty)
             .ToList()
-            .Timeout(30.Seconds())
+            // TestTimeouts.Convergence, never a literal: a hand-written 30 s is a guess about how
+            // fast a machine is, and it is also the framework's OWN write bound — so a test that
+            // waits exactly that long gives up one second before the framework can explain itself
+            // (TestTimeoutLiteralRatchetGuard).
+            .Timeout(TestTimeouts.Convergence)
             .Await();
 
         verdicts.Should().ContainSingle(
