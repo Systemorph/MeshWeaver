@@ -43,3 +43,20 @@ The entry also records the sting in the tail: removing an input by hard-coding t
 one-shot artifact that expires. Run it against a later change and it asserts requirements that are
 already met, reporting success having checked nothing — the same shape reached by going stale instead
 of by being handed a bad value.
+
+## Two more, from what happened while writing it
+
+The sessions writing the entry then produced two fresh instances of its own subject, an hour apart.
+
+**Watchers armed to prevent a false red exhausted the shared credential and produced a false
+UNKNOWN** — for every concurrent session, not only their own. One session had accumulated around
+forty backgrounded wait-then-poll processes, one per turn, without stopping the previous one. The
+sweep that looked for them found nothing, because such a process is sleeping rather than calling for
+nearly all of its life: *"none are running right now"* and *"none exist"* look the same. Count the
+waiters, not the calls in flight.
+
+**And the standing advice for a failed request turned out to be advice about reads.** Opening the
+pull request for this very page failed on a network timeout. Retrying would have been right for a
+read and wrong for a write: a lost response is not a lost request, so the second attempt can create a
+second copy of whatever the first one already made. The rule the entry adds is that a write is never
+retried without a read that says whether it landed.

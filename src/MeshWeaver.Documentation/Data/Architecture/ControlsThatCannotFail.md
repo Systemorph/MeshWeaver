@@ -49,6 +49,7 @@ instances. The family is larger, and it is worth recognising by shape.
 | **A writer whose failure mode is a SUCCESS line** | a generator that skips its work and prints a summary anyway | nothing distinguishes "wrote it" from "declined to" |
 | **An input the OPERATOR supplies** | `--is-ancestor <commit I chose> <candidate>` where the commit chosen is the branch's own tip | the check is sound; the value handed to it cannot make it print anything but PASS |
 | **An observer that becomes the load** | several sessions polling the same PRs until the shared credential 403s | the watch removes the ability to observe; `/rate_limit` still reports a healthy quota |
+| **A remedy written for reads, applied to a write** | "retry the failed call" after a timeout on `gh pr create` | a lost response is not a lost request; the blind retry creates the second one |
 
 ## Twelve measured instances
 
@@ -562,12 +563,19 @@ the previous one**. Its own statement of the fix is the crisp one:
 
 > **The waiter you replace is the waiter you stop.**
 
-🚨 **The first hypothesis was wrong, and the check that seemed to refute it did not.** The initial
-guess was a burst of short-lived calls; a `pkill` sweep found nothing to kill and was read as
-supporting that. But a `sleep`-then-call waiter is *invisible to a process match on the caller* for
-almost its whole life — it is sleeping, not calling. Absence of a match meant "none are calling right
-now", which is not "none exist", and the two are spelled the same way. Count the waiters, not the
-calls in flight.
+🚨 **The first conclusion was wrong, in the direction that mattered, and the check that appeared to
+support it could not have contradicted it.** The initial reading was a burst of short-lived calls. A
+`pkill` sweep matched nothing, and that was reported as evidence the processes *had already exited*.
+
+They had not. A `sleep …; gh api …` waiter is **invisible to a process match on the caller for nearly
+all of its life** — it is sleeping, not calling. So "no match" meant *none are calling in this
+instant*, which is not *none exist*, and the two render identically. Roughly forty of them did exist,
+and the session that owned them had to stop them itself.
+
+> **Count the waiters, not the calls in flight.**
+
+Recorded as a correction rather than softened, because the page's own investigation producing a fresh
+instance of the page's own shape is the most convincing thing in it.
 
 **The watchers existed to prevent a false red, and produced a false UNKNOWN — for every concurrent
 session, not only their own.** The hardening worked in the narrow sense: the watcher reported the 403
@@ -593,6 +601,53 @@ This is instance 1's property at fleet scale. There, the probe's own traffic del
 asserted. Here, the watchers' own traffic removed the ability to observe anything at all. In both, the
 act of measuring changed what was measured, and in both the control reported something that was not a
 red.
+
+### 12c. A remedy that is right for reads and wrong for writes — same error text, opposite response
+
+Minutes after 12b, opening the pull request for this very page failed:
+
+```
+Post "https://api.github.com/graphql": net/http: TLS handshake timeout
+```
+
+**The standing remedy would have been wrong here, and it is the remedy this repository writes down.**
+AGENTS.md's rule for a failed GitHub call — *on a refusal STOP for at least five minutes, do not
+retry, do not switch queries* — is correct and hard-won. It is also, like almost all retry advice,
+**implicitly about READS**. Applied to a mutation it is not merely unhelpful; the *opposite* advice —
+"just try again" — is the one that does damage, and nothing in the error distinguishes the two cases.
+
+> **A timeout on a READ means ask again — the worst case is a wasted call.**
+> **A timeout on a WRITE means find out what happened, then decide.**
+> **The error text is identical.**
+
+A create is a mutation. A transport failure says the **response** was lost; it does not say the
+**request** was. `gh pr create` may have opened the pull request and then failed to tell you. Retry
+blind and you get two — and the duplicate reads to everyone else as carelessness, not as a transport
+fault, so the evidence of what actually happened is destroyed by the act of recovering from it.
+
+**What was done instead, in three calls:**
+
+```bash
+# 1. ONE read that distinguishes the two states — never a blind retry
+gh api "repos/<owner>/<repo>/pulls?head=<owner>:<branch>&state=all" --jq '.[] | "#\(.number) \(.state)"'
+#    -> empty  ⇒ the mutation did NOT land
+
+# 2. only then create it, over REST rather than the endpoint that just failed
+gh api --method POST repos/<owner>/<repo>/pulls --input payload.json
+```
+
+REST here is not a workaround for a limit — it is the endpoint this repository prefers for everything
+GraphQL is not required for, and it happens to avoid the endpoint that had just timed out.
+
+🚨 **And the claim "I did not create a duplicate" is exactly the one not to accept on assertion.** It
+is exculpatory — it closes the file, which instance 11 identifies as the most dangerous direction in
+this family. The other session re-ran the same query independently and got one row. That is the check
+that would have falsified the claim, run by the party that did not make it.
+
+**Generalise it past pull requests.** Every write with a lost response has this shape: a node create,
+a tag push, a `POST` that provisions something, an issue comment. Before any retry of a mutation,
+name the read that distinguishes *landed* from *did not land* — and if no such read exists, that is
+worth knowing before you need it, not after.
 
 ## What the whole family has in common
 
@@ -691,6 +746,14 @@ carries its own control arm is that thesis applied to itself.
    Remove the input, or require it and refuse the empty value — never accept it and proceed. If you
    removed it by hardcoding, the hardcoded set is now a transitional artifact: delete it with the
    change, or it goes stale into the same shape.
+13. **Never retry a failed WRITE without a read that says whether it landed.** Retry advice — this
+   page's included — is written for reads, where the cost of asking again is a wasted call. A
+   mutation whose response was lost may well have succeeded, and the blind retry produces the
+   duplicate *and* destroys the evidence. Name the distinguishing read first; if there is none, learn
+   that before you need it.
+14. **Stop the waiter you replace.** A backgrounded `sleep …; poll` waiter spawned once per turn
+   accumulates silently, and a process match on the caller cannot see it — it is sleeping, not
+   calling, for nearly all of its life. Count the waiters, not the calls in flight.
 
 ## See also
 
