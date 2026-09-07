@@ -212,6 +212,104 @@ by construction: it can only be seen on main, after the merge, and what you woul
 precisely what is missing. The credential is the only place a pre-merge check can stand, and it is
 causal rather than correlated — with `GITHUB_TOKEN` the trigger is suppressed 100% of the time.
 
+### 🚨 "INCOMPLETE" is a snapshot; "STUCK" is a claim about the future — the third verdict
+
+`delivery-verdict` is the job that makes a green-but-shipped-nothing reconcile loud. It reaches its
+verdict from four `gate` outputs — `reason`, `publish`, `complete`, `green` — and until #3513 it
+concluded **"delivery is stuck"** from `reason=reconcile publish=false complete=false green=true`.
+
+Those four facts describe main at **one instant**. "Stuck" is a claim about what happens **next**,
+and the two come apart in exactly one situation, which happens every day: the image set is
+incomplete *because a publication is halfway through creating it*.
+
+**Measured 2026-09-07, twice inside forty minutes.** The hourly `schedule` reconcile fires at
+`:23`; a `workflow_run` publish takes ~20 min to reach `promote` and ~80 min to seal. When one
+straddles the top of the hour, the reconcile reads the intermediate state as a terminal one:
+
+| run | event | head | outcome |
+|---|---|---|---|
+| 7962 | `workflow_run` | `6577052` | publishing; **sealed 01:38:49Z** |
+| **7963** | `schedule` | `6577052` | **FAILED 01:07:47Z** — "delivery is stuck" |
+| 7964 | `workflow_run` | `93dd889` | publishing; **sealed 02:32:25Z** |
+| **7965** | `schedule` | `93dd889` | **FAILED 01:43:01Z** — same message |
+| 7966 | `schedule` | `93dd889` | success — arrived *after* 7964 finished |
+
+Nothing was wrong either time. 7940 on `62039c9` at 21:24Z is the same shape the evening before.
+
+🚨 **The gate had already worked it out and the verdict could not hear it.** `gate`'s own #3376
+probe found the twin and logged the right answer —
+
+```text
+⏳ An older run of this workflow is still publishing `6577052`:
+   …/actions/runs/34069402974 — deferring, so one commit yields ONE image set
+```
+
+— but `decision false "…"` writes only a **boolean**. The *reason* the gate declined reached the
+step summary and the log and nothing the verdict could read, so the verdict re-derived a diagnosis
+from `publish=false` and got a different one. That is the general defect, not a CD quirk: **a
+consumer that reconstructs a producer's conclusion from a coarse output will eventually reconstruct
+a different one.**
+
+**Why "skip the check while a run is in flight" is the wrong fix.** GitHub paints a skipped job the
+same colour as a passed one, so a skip converts a false red into an invisible hole — and the window
+in which publishes happen *is* the window this alarm exists to watch. Silencing it there deletes
+most of its coverage. The job must **conclude**, not decline to conclude.
+
+**The shape that ships.** `delivery-verdict` asks the question its claim depends on, itself, at
+verdict time, and answers with a third verdict:
+
+```bash
+gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=50" \
+  --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id != $RUN_ID
+                                   and (.status == \"in_progress\" or .status == \"queued\"))]
+        | sort_by(.id) | .[0] // empty
+        | \"\(.id) \(.status) \(.run_started_at) \(.html_url)\""
+```
+
+| finding | verdict |
+|---|---|
+| a run of this workflow is `queued`/`in_progress` on this exact commit | **incomplete because a publication is in flight** — green, naming the run, its status and its start |
+| no such run | **incomplete and nobody is fixing it** — the original red, now carrying the negative finding that makes it a measurement |
+| the probe could not be answered | **red, fail-closed** — an unanswered probe is never reassurance |
+
+Four properties are load-bearing, and each closes a way this could have become a band-aid:
+
+- **It re-reads; it does not relay.** Piping the gate's `⏳` decision through as an output would have
+  been shorter and would have repeated the defect one level along — the gate's reading is *also* a
+  snapshot, taken before any leg ran. The probe is the freshest reading available at the moment the
+  claim is made, and the claim is exactly as narrow as the reading.
+- **It is self-limiting without a timer.** No sleep, no retry, no widened window. Suppression lasts
+  precisely as long as a run is *observably live*, and a run cannot be live indefinitely: every job
+  in this repo carries a literal `timeout-minutes` ≤ 45, so GitHub itself terminates a hung
+  publication, after which the next hourly tick finds nothing in flight and reds. **The bound is
+  GitHub's, enforced by GitHub** — never a number written here to make a red go away.
+- **`.id != $RUN_ID` excludes this run and nothing else.** Dropping it is the catastrophic edit:
+  every reconcile would find *itself* "in flight" and the alarm would be silenced forever, with a
+  green tick — strictly worse than the false red. `gate`'s #3376 probe looks only at **older** runs
+  because it must break a tie between two runs that would otherwise both defer; this step decides
+  nothing and acts on nothing, so **any** live run on the commit — older or newer, push lane or
+  reconcile lane — is a fact that falsifies "nobody is publishing it".
+- **The probe sits inside one branch.** Every other verdict (red main, empty gate output, cancelled
+  tip, the legitimate PR-triggered no-op) is exactly as loud as before, live run or not. "A run is
+  in flight" must never become a universal excuse.
+
+🚨 **The coverage is provably unchanged for the case the job exists to catch**, and "provably" is
+literal: `.github/scripts/test-cd-steps.py` EXTRACTS this step from `main-cd.yml` by its `id: verdict`
+and executes it against fixtures, driving the step's **real `--jq` filter** over a real
+`workflow_runs` payload — a hand-supplied answer would prove nothing about the filter, which is the
+whole discriminator. Both arms are cases: *a green, incomplete main with nothing in flight is still
+RED*, and *run 7963's exact conditions no longer red*. So are the self-exclusion case, the
+other-workflow case, the completed-run case, the fail-closed case, and one case per untouched
+branch. Sabotaging the fix three ways (drop `.id != $RUN_ID`; make the branch exit 0 without
+probing; treat an unanswerable probe as "in flight") reds 7, 16 and 3 cases respectively.
+
+**The recurring shape to carry away.** An instrument that reads a snapshot and reports it as a fact
+is wrong in one direction only — it converts *transient* into *terminal*. The other three instances
+found the same night were a run's `created_at` read as its start time (it is QUEUE time; the 45-min
+cut is per **job**, from that job's own start), a merge time read from a commit's committer date,
+and a status read twenty minutes stale and asserted as current. The cure is never a wait: it is to
+**re-read at the moment of the claim, and to state the claim only as far as the reading reaches.**
+
 ## The standing trap — verify the IMAGE, never the tick
 
 CD's `workflow_run` trigger reacts to a **real push**, and — more exactly — to one that
