@@ -2810,16 +2810,24 @@ public class MeshOperations
             return Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(null);
 
         return hub.GetWorkspace().GetMeshNodeStream(nodeType)
-            .Where(n => n?.Content is NodeTypeDefinition def
-                        && def.CompilationStatus == CompilationStatus.Ok
-                        && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
-                        && !string.IsNullOrEmpty(def.LatestAssemblyPath))
+            // 🚨 ContentAs in the FILTER, not only below it. A NodeType node whose Content
+            // arrived un-materialized — the per-node hub's TypeRegistry lacked the $type, which is
+            // the ordinary shape on a cross-hub sync stream — IS a NodeType node, and
+            // `is NodeTypeDefinition` answers "no" for it. Such a node was filtered out here, so
+            // the stream never emitted, the read hung out its whole 5 s budget, and the schema
+            // then reported no configuration for a type that has one. A ContentAs further down
+            // could never have rescued that: nothing reached it.
+            .Where(n => n.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)
+                        is { CompilationStatus: CompilationStatus.Ok } d
+                        && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
+                        && !string.IsNullOrEmpty(d.LatestAssemblyPath))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .SelectMany(node =>
             {
-                // ContentAs, never a cast: the Where above already accepted this node, but the
-                // value can still arrive as raw JSON on a hub that did not register the type.
+                // Re-read rather than carry the filter's value: the predicate above ran on an
+                // earlier emission of the same stream in principle, and ContentAs is the only
+                // reading of Content this method makes.
                 var def = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
                 if (def is null)
                     return Observable.Return<NodeCompilationResult?>(null);

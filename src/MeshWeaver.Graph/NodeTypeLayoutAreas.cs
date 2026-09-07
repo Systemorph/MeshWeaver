@@ -469,10 +469,18 @@ public static class NodeTypeLayoutAreas
     }
 
     /// <summary>First eight characters of a framework build identity — the same width the
-    /// assembly-store filename tag carries, so a page and a DLL name compare by eye.</summary>
+    /// assembly-store filename tag carries, so a page and a DLL name compare by eye.
+    ///
+    /// <para>🚨 An absent identity renders as an EM DASH, never "(none)". This value is
+    /// substituted into <c>ui.compileForeignFrameworkBody</c>, so an English literal here would
+    /// appear untranslated in the middle of a German sentence — and the house preference is
+    /// exactly this: a language-neutral glyph beats a translated word (AGENTS.md, i18n). The
+    /// English "(none)" that <c>NodeTypeBuildIdentity.Short</c> uses is correct THERE, because
+    /// that one feeds log lines, which stay English by house rule.</para>
+    /// </summary>
     private static string Short(string? identity)
         => string.IsNullOrEmpty(identity)
-            ? "(none)"
+            ? "—"
             : identity[..Math.Min(8, identity.Length)];
 
     /// <summary>

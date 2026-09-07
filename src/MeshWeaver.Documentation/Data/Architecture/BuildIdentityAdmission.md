@@ -170,24 +170,52 @@ repository on the same night.
 | compile-progress overlay | `Ok` ⇒ **redirect** to the page that cannot render, which bounces back | holds, and says why — localized (`ui.compileForeignFramework`) |
 | NodeType overview progress line | ✓ **Compiled**, printing the foreign hash beside the green tick as decoration | ⚠ built for another platform build |
 
-## 🚨 What this does NOT reach, measured
+## 🚨 What this does NOT reach — and a sweep whose two backends disagree
 
-**`search 'nodeType:NodeType compilationStatus:Error'` cannot see this, and on some hosts it cannot
-see anything.** Two findings, both measured while building this change:
+**`search 'nodeType:NodeType compilationStatus:Error'` — AGENTS.md's stated pre-deploy sweep — does
+not see a foreign build, and separately, its selector does not mean the same thing on both query
+backends.** Two findings, kept here because a deploy is gated on this instrument.
 
-1. **The sweep never returns the value.** `MeshOperations`' search envelope projects
-   `Path/Name/NodeType/Version/LastModified` only — `compilationStatus` is a WHERE clause and
-   nothing more. To read the value you must `get` the node or call `get_diagnostics`.
-2. 🚨 **On an in-memory or FileSystem-backed host the filter matches NOTHING.**
-   `QueryEvaluator.GetDirectPropertyValue` resolves a selector by reflection against `MeshNode`,
-   which has no `compilationStatus` property and no `Content` fallback — so the comparison is
-   `null == "Error"`, and the sweep returns `count: 0` for a mesh full of broken types. The
-   translation that makes the sweep work lives in `PostgreSqlSqlGenerator`, which is not in this
-   repository. **A green sweep on a dev Monolith is evidence of nothing.**
+**1. The sweep never returns the value.** `MeshOperations`' search envelope projects
+`Path/Name/NodeType/Version/LastModified` only; `compilationStatus` is a WHERE clause and nothing
+more. To read a type's status you must `get` the node or call `get_diagnostics`. So even where the
+filter works, the sweep answers *which* types are broken, never *what* any type's status is — and
+`Foreign` is invisible to it either way, because `Foreign` is derived by the reader and the filter
+runs in the store.
 
-Both are noted here rather than fixed: changing the query evaluator's selector resolution changes
-every query in the platform, and the projection is what keeps a search result small. The instrument
-that *is* reader-relative is `get_diagnostics`, which now answers `Foreign`.
+**2. 🚨 The two query providers disagree about which selectors exist, and nothing compares
+them** ([#3511](https://github.com/Systemorph/MeshWeaver/issues/3511)). This is the finding; "the
+sweep is broken" would be the wrong summary and was the wrong filing.
+
+| backend | `compilationStatus:Error` | `content.compilationStatus:Error` |
+|---|---|---|
+| in-memory / FileSystem (`QueryEvaluator`) | **matches nothing** — resolves to `null` | reaches the field |
+| Postgres (`PostgreSqlSqlGenerator`, out of repo) | **discriminates** — measured on a live mesh: 5 for `Error`, 195 for `Ok`, disjoint | not measured here |
+
+`QueryEvaluator.GetDirectPropertyValue` resolves a selector by reflection against the object it is
+handed — a `MeshNode` — which has no `compilationStatus` property and no `Content` fallback, so the
+comparison is `null == "Error"`: false for every node, and a mesh full of broken types answers
+`count: 0`. `GetPropertyValue` splits on `.` and walks, so `content.compilationStatus` resolves
+`MeshNode.Content` and then `NodeTypeDefinition.CompilationStatus` case-insensitively, and
+`CompareEqual` compares on `ToString()` so the enum name matches the query's literal.
+`SweepSelectorReachesTheCompileStatusTest` pins all three rows of that — the dotted selector answers
+`Error`, the bare one answers `null`, and a healthy type answers `Ok` rather than everything
+answering `Error`.
+
+**The consequence is not "the sweep lies" but "the sweep means different things in different
+places".** On the portal a deploy is actually gated on, the bare form discriminates. On a dev
+Monolith, a disposable CI mesh, or any FileSystem-backed host, the same query is green by
+construction — which is the CI-gate-that-skips-on-missing-input shape: *it never ran* and *it
+passed* paint the same colour. A rehearsal of the sweep on a local mesh therefore proves nothing
+about the sweep, and that is exactly what makes the disagreement dangerous rather than merely
+untidy.
+
+The evaluator is **pinned rather than changed** here: giving it a `Content` fallback would alter the
+meaning of every selector in every query in the platform, and closing the gap properly means one
+test exercising both providers against the same records — #3511's scope, of which the pin above is
+the first half. What this page fixes is the INSTRUCTION. And the instrument that is genuinely
+reader-relative — the one that answers the question this page is about — is `get_diagnostics`, which
+now answers `Foreign`.
 
 ## What this does not fix
 
