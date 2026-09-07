@@ -583,7 +583,10 @@ transport end to end — there is deliberately no second distribution channel:
    diagnostic, since #3211** — the identity of the anchor assembly the module was compiled against
    (`MeshWeaver.Compiler.dll`, #1707), named with `--graph-dll` or stated with `--framework-mvid`.
    A pack that can supply neither exits 2 rather than writing a bundle whose consumers can never
-   tell a rebuild from a no-op. It is a plain dotnet invocation over
+   tell a rebuild from a no-op. 🚨 Since #3554 the lane also asserts that the declared floor is
+   SATISFIABLE by the platform the bundle is compiled against — a floor above it can never be met
+   by any deployment that would adopt the bundle, and the runtime's hold cannot tell "not yet" from
+   "never" (see [Release Availability Gates](../ReleaseGates)). It is a plain dotnet invocation over
    an output folder, so ANY node repo's CI can drive it — SocialMedia builds its own module
    bundle the same way the platform repo does — and because the gate is the floor, ONE bundle
    serves every compatible platform build: nothing is rebundled per CI build. The closure is an
