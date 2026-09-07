@@ -34,6 +34,21 @@ solution a newcomer starts from; the other is the AppHost-side integration that 
 Neither is loaded into a portal, neither carries a framework assembly, and neither participates in
 the NodeType bake identity.
 
+> ⚠️ **One survivor is currently unlisted, and that is a state to fix rather than a decision.**
+> `MeshWeaver.MemexTemplate` last published `3.0.0-rc7`; every one of its seven versions reads
+> `listed: false`, so a versionless `dotnet new install MeshWeaver.MemexTemplate` cannot resolve it.
+> Two independent causes, both now fixed: an earlier orphan sweep run from THIS repository could
+> not see a project that lives in MeshWeaver.Plugins and therefore derived it as orphaned — which
+> is exactly why the sweep now takes a `keep` list and why both survivors are passed to it — and
+> its pack target never passed the generator the platform checkout it requires, so `dotnet pack`
+> on it could not succeed at all. The id relists the moment a version is published, which the
+> next release tag does. A listing can also be restored from the nuget.org UI, which the workflow
+> deliberately cannot do.
+
+🚨 **Always pass both survivors to the sweep's `keep` input.** The subtraction alone protects only
+what THIS tree packs, and one survivor is in another repository — invisible to the derivation by
+construction. That gap has already cost one wrong unlist.
+
 Everything else was a *library*, and a MeshWeaver library package has had no consumer for months:
 in-mesh source compiles against the platform **image**, module bundles carry their own closures, and
 satellite repositories build inside `mw-plugin-test`
