@@ -42,6 +42,7 @@ WORKFLOW = ".github/workflows/main-cd.yml"
 STEP_ID = "release"
 DECIDE_STEP_ID = "decide"
 VERDICT_STEP_ID = "verdict"
+HEAL_STEP_ID = "heal"
 
 SHORT_SHA = "aaf95af"
 VERSION = "3.0.0-rc8.ci.6360"
@@ -128,7 +129,22 @@ echo "gh $*" >> "$GH_CALLS"
 # discriminator lives in that filter, and its most dangerous defect — dropping `.id != $RUN_ID`,
 # so every reconcile finds ITSELF "in flight" and the alarm is silenced forever — is invisible to
 # any case that hands the step a pre-computed answer.
+#  * `issue list` — "is there an open ci-failure issue?", asked by the `heal` step. A case supplies
+#    the number the real `--jq` would have produced in GH_ISSUE_RESULT (empty = none open).
+#  * `issue close` — the ledger close (#3176). GH_CLOSE_FAIL makes ONLY that call fail, so a case
+#    can drive the "a failed close must not red a run that delivered" arm without also breaking
+#    the comment that has to survive it.
 case "$*" in
+  *"issue list"*) printf '%s' "${GH_ISSUE_RESULT:-}" ;;
+  # Matched explicitly and BEFORE the reads below: a heal comment quotes a run URL, and a body
+  # containing `actions/runs` would otherwise fall into the run-list arm and answer a fixture.
+  *"issue comment"*) ;;
+  *"issue close"*)
+    if [ -n "${GH_CLOSE_FAIL:-}" ]; then
+      echo "gh: HTTP 403 (https://api.github.com/repos/x/y/issues/1)" >&2
+      exit 1
+    fi
+    ;;
   *actions/runs*)
     if [ -n "${GH_RUNS_FAIL:-}" ]; then
       echo "gh: HTTP 502 (https://api.github.com/repos/x/y/actions/runs)" >&2
@@ -186,7 +202,7 @@ def die(msg: str):
 
 # ── running one case ────────────────────────────────────────────────────────────────────────
 def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: bool = False,
-             runs: list[dict] | None = None):
+             runs: list[dict] | None = None, calls_out: list[str] | None = None):
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         binp = tmp / "bin"
@@ -224,6 +240,10 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
         e.pop("GH_RUNS_FAIL", None)
         e.pop("GH_RUNS_FIXTURE", None)
         e.pop("GH_TIP_RESULT", None)
+        # Same discipline as the four above: a knob left over from the caller's environment would
+        # silently change what a case measures.
+        e.pop("GH_ISSUE_RESULT", None)
+        e.pop("GH_CLOSE_FAIL", None)
         e["GH_CALLS"] = str(calls)
         # Belt AND braces: the stub above shadows `gh` on PATH, and these leave a real `gh` — if one
         # is ever reached another way — with no credential to write with.
@@ -241,6 +261,11 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
         e.update(env)
 
         p = subprocess.run(["bash", "-c", body], env=e, capture_output=True, text=True)
+        # What the step ASKED GitHub to do is the subject of the ledger cases: a step that prints
+        # "closing" and calls no `gh issue close` is exactly the defect #3176 records, and it is
+        # invisible in stdout.
+        if calls_out is not None:
+            calls_out.extend(calls.read_text().splitlines())
         # The job summary is part of what a decision step SAYS, so a case asserting on the
         # decision's wording must be able to see it.
         return p.returncode, p.stdout + p.stderr + summary.read_text(), out.read_text()
@@ -505,6 +530,81 @@ def run_verdict_cases(root, case) -> None:
          rc != 0 and "is the TIP" in log, f"rc={rc} log={log}")
 
 
+# ── the HEAL step: the one that told a human to close an issue and then never closed one ─────
+def run_heal_cases(root, case) -> None:
+    """
+    🚨 <b>MeshWeaver#3176 — an alert that cannot be resolved stops being an alert.</b>
+
+    `verify-images` reports a successful heal onto whichever `ci-failure` issue is open, and the
+    comment used to end *"Close this issue if nothing else is outstanding"* — advice, to nobody in
+    particular, from a bot. Nobody ever did. Meanwhile `gate` and `alert-on-failure` both append to
+    whichever `ci-failure` issue is OPEN, so the first one filed absorbed every attempt and every
+    heal from then on: #3176 reached 324 comments over four days and a dozen unrelated causes, and
+    its title had been false since the first day.
+
+    The two properties an alert has — its EXISTENCE means delivery is broken, its AGE is the
+    outage's age — are both destroyed by that. These cases hold the fix to the only standard that
+    matters here: the step must actually CALL `gh issue close`. A step that merely prints the word
+    "closing" is the defect, not the fix, and stdout cannot tell them apart — so every case asserts
+    on the recorded `gh` invocations.
+    """
+    body = extract_step(root, HEAL_STEP_ID)
+
+    # A stub is only evidence about what it stubs, and this needle is the whole subject: if the
+    # step stops closing, these cases must not keep passing while the ledger goes immortal again.
+    for needle, why in (
+        ("gh issue close", "no longer closes the ledger, which IS #3176 — every case below would pass vacuously"),
+        ("gh issue comment", "no longer records the heal, so the delivery record these cases assert is gone"),
+    ):
+        if needle not in body:
+            die(f"step `{HEAL_STEP_ID}` {why} (missing `{needle}`). Update the harness with the step.")
+
+    env = {
+        "SHORT_SHA": "1a2b3c4",
+        "PORTAL_VERSION": "3.0.0-ci.7989",
+        # Deliberately free of `actions/runs`: the stub answers that shape from a fixture, and a
+        # comment body is not a read.
+        "RUN_URL": "https://example.invalid/run/1",
+        "GH_TOKEN": "",
+    }
+
+    # ── ARM 1: THE FIX. An open ledger is commented on AND CLOSED. ────────────────────────
+    calls: list[str] = []
+    rc, log, _ = run_step(body, {**env, "GH_ISSUE_RESULT": "3176"}, None, calls_out=calls)
+    joined = "\n".join(calls)
+    case("a successful heal records itself on the open ci-failure issue",
+         rc == 0 and "gh issue comment 3176" in joined, f"rc={rc} calls={calls} log={log}")
+    case("...and CLOSES it, rather than asking a human to (#3176)",
+         "gh issue close 3176" in joined, f"the ledger was left open: calls={calls} log={log}")
+    case("...and says the next failure gets a FRESH issue, so the advice is not merely dropped",
+         "FRESH" in joined, f"calls={calls}")
+
+    # ── ARM 2: THE COVERAGE THAT MUST NOT BE LOST. No open issue ⇒ touch nothing. ─────────
+    # Without this, "it closes the ledger" would also pass if the step closed something on every
+    # green run — and the number it would close is whatever `--jq` answered, i.e. nothing sane.
+    calls = []
+    rc, log, _ = run_step(body, {**env, "GH_ISSUE_RESULT": ""}, None, calls_out=calls)
+    joined = "\n".join(calls)
+    case("no open ci-failure issue is a silent no-op, not a close of nothing",
+         rc == 0 and "issue close" not in joined and "issue comment" not in joined,
+         f"rc={rc} calls={calls} log={log}")
+
+    # ── ARM 3: a failed CLOSE must not red a run that DELIVERED. ────────────────────
+    # `verify-images` is a delivery leg: `delivery-verdict` refuses a publish whose legs did not all
+    # succeed, and `alert-on-failure` files an issue on any failure. So a 403 on the close would
+    # file an alert about the alerting, on a run that shipped. The heal COMMENT must still be
+    # written — that is the record — and the run must stay green with a warning.
+    calls = []
+    rc, log, _ = run_step(body, {**env, "GH_ISSUE_RESULT": "3176", "GH_CLOSE_FAIL": "1"},
+                          None, calls_out=calls)
+    joined = "\n".join(calls)
+    case("a REFUSED close leaves the run green (it would otherwise alert about the alerting)",
+         rc == 0, f"rc={rc} log={log}")
+    case("...and says so as a warning rather than silently",
+         "::warning::" in log and "close" in log, f"log={log}")
+    case("...and the heal comment is still written, so the delivery record survives",
+         "gh issue comment 3176" in joined, f"calls={calls}")
+
 def main() -> int:
     root = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve()
     try:
@@ -581,11 +681,15 @@ def main() -> int:
     run_verdict_cases(root, case)
 
     print()
+    print(f"── step `{HEAL_STEP_ID}` ──")
+    run_heal_cases(root, case)
+
+    print()
     if failures:
         print(f"::error::{len(failures)} case(s) failed: {', '.join(failures)}")
         return 1
     print(f"all cases passed against {WORKFLOW} steps `{STEP_ID}` + `{DECIDE_STEP_ID}` "
-          f"+ `{VERDICT_STEP_ID}` (extracted, not copied)")
+          f"+ `{VERDICT_STEP_ID}` + `{HEAL_STEP_ID}` (extracted, not copied)")
     return 0
 
 

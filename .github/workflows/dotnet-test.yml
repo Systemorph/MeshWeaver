@@ -372,6 +372,66 @@ jobs:
         fi
         python3 scripts/check-type-forwards.py "${args[@]}"
 
+    # 🚨 THE CONTROL ARM FOR THE GATE ABOVE, and it lives HERE — in the one job that runs on
+    # `merge_group` — for the reason #3508 records rather than for tidiness.
+    #
+    # WHAT IT CHECKS (#3492): the detector above is only as good as the parser that produced its
+    # index, and a parser can go blind while every number it prints stays plausible — a UTF-8 BOM
+    # hid 16 public types and miskeyed 124 more for the gate's entire life, under a floor with
+    # 1 450 types of slack. This step runs the MERGE BASE's own copy of `check-type-forwards.py`
+    # and this diff's copy over the SAME tree, so any difference is attributable to the parser and
+    # to nothing else. A DECREASE is refused; an INCREASE is a fix and passes. It asks nothing
+    # about its own inputs: a detector that cannot run is a FAILURE, never a zero delta. On the
+    # overwhelming majority of pull requests both subject files are byte-identical and it returns
+    # in a second, on a printed SHA-256 proof rather than an assumption.
+    #
+    # 🚨 WHY IT MOVED HERE (#3508). It shipped inside `cross-repo-pair`, which runs on
+    # `pull_request` only. So the pull request it should first have covered — #3503, the one that
+    # night that actually changed the parser — escaped through BOTH exits at once: its own
+    # `pull_request` run executed the workflow file as it stood when the branch was cut, which did
+    # not contain the step; and its `merge_group` run skipped the whole job on that `if:`. A gate
+    # added to main is absent from every pull request already in flight, and the queue is the ONLY
+    # build that sees the change at the moment it lands. That makes `merge_group` coverage the
+    # difference between a gate and a gate-shaped comment. `record-signatures` has no fork or
+    # dependabot clause either, so moving it closes those two exits as well.
+    #
+    # 🚨 THE STRICT/DECLARING SPLIT IS ON THE EVENT, NEVER ON AN INPUT'S PRESENCE — the same shape
+    # the two gates above already use for `--pr`, and the only exemption AGENTS.md sanctions. On
+    # `pull_request` the body is supplied, so an intended decrease declared as
+    # `Parser-delta: <counter> — <reason>` is honoured. A `merge_group` entry genuinely has no
+    # single pull request (its ref can carry several), so the STRICT rule applies there: any
+    # decrease is refused. The two are complementary and every build gets exactly one of them —
+    # there is no path on which neither runs, which is the property #3508 is about. The one thing
+    # to know before declaring a decrease: it will be honoured on the pull request and refused in
+    # the queue, so a genuine parser tightening lands only if it does not shrink a published
+    # counter. Doc/Architecture/CrossRepoPairGate → "A gate added to main".
+    - name: "Prove the parser-delta control is not vacuous (self-test)"
+      run: python3 scripts/check-parser-delta.py --self-test
+    - name: "This diff does not shrink what the surface detector can see"
+      env:
+        EVENT: ${{ github.event_name }}
+        # A pull-request body is attacker-controlled text: it reaches the script through a FILE
+        # written from the environment, never interpolated into a shell command.
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: |
+        set -euo pipefail
+        # Already fetched above; repeated explicitly so the steps can be reordered.
+        git fetch --no-tags --depth=200 origin "${{ github.event_name == 'merge_group' && 'main' || github.base_ref }}"
+        # 🚨 The MERGE BASE, not the base branch tip — the same reasoning as both gates above. The
+        # corpus this control measures over is the merge base's tree, and against the tip a parser
+        # change somebody else landed while this pull request is open would read as this diff's.
+        base=$(git merge-base "origin/${{ github.event_name == 'merge_group' && 'main' || github.base_ref }}" HEAD)
+        echo "Comparing against merge base $base"
+        args=(--base "$base")
+        if [ "$EVENT" = "pull_request" ]; then
+          printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
+          echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes — a declared decrease can be honoured."
+          args+=(--pr-body-file "$RUNNER_TEMP/pr-body.md")
+        else
+          echo "Event is '$EVENT', which carries no single pull request: the STRICT rule applies — any decrease is refused, declared or not."
+        fi
+        python3 scripts/check-parser-delta.py "${args[@]}"
+
   precheck:
     name: "Check for an already-green tree"
     timeout-minutes: 5
@@ -2405,8 +2465,6 @@ jobs:
       run: python3 scripts/check-type-forwards.py --self-test
     - name: "Prove the pair gate is not vacuous (self-test)"
       run: python3 scripts/check-cross-repo-pair.py --self-test
-    - name: "Prove the parser-delta control is not vacuous (self-test)"
-      run: python3 scripts/check-parser-delta.py --self-test
 
     # A pull-request body is attacker-controlled text: it goes to a FILE through the environment,
     # never interpolated into a shell command.
@@ -2439,20 +2497,13 @@ jobs:
           --surface-json "$RUNNER_TEMP/surface.json" \
           --pr-body-file "$RUNNER_TEMP/pr-body.md"
 
-    # 🚨 #3492: the report above is only as good as the parser that produced it, and a parser can
-    # go blind while every number it prints stays plausible — a UTF-8 BOM hid 16 public types and
-    # miskeyed 124 more for the gate's entire life, under a floor with 1 450 types of slack. This
-    # step runs the MERGE BASE's own copy of the detector and this diff's copy over the SAME tree,
-    # so any difference is the parser and nothing else. A DECREASE is refused unless the body
-    # declares it; an INCREASE is a fix and passes. It runs unconditionally and asks nothing about
-    # its own inputs: a detector that cannot run is a failure, never a zero delta.
-    - name: "This diff does not shrink what the surface detector can see"
-      run: |
-        set -euo pipefail
-        base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
-        python3 scripts/check-parser-delta.py \
-          --base "$base" \
-          --pr-body-file "$RUNNER_TEMP/pr-body.md"
+    # 🚨 THE PARSER-DELTA CONTROL THAT GUARDS THE REPORT ABOVE HAS MOVED (#3508). It used to sit
+    # here, and this job runs on `pull_request` ONLY — so a pull request already green when the
+    # control landed was exempt from it on BOTH of its builds: absent from its own `pull_request`
+    # run (that run executes the workflow file as it stood then), and skipped in the queue by this
+    # very `if:`. Measured on #3503 — the one pull request that night that changed the parser. It
+    # now lives in `record-signatures`, which runs on `pull_request` AND `merge_group`, so the queue
+    # build enforces it at the moment the change actually lands.
 
   package-pin-removal:
     name: "Satellite package pins (removal declared)"
@@ -2965,6 +3016,7 @@ jobs:
         echo "::error::A public surface changed in a way that breaks ALREADY-PUBLISHED modules — see the 'Public surface (binary compatibility)' job for the exact types."
         echo "::error::A moved public type needs [assembly: TypeForwardedTo] left behind in its ORIGINAL assembly (a forwarder keeps one type identity; a shim mints a second and reintroduces the is/as trap-door). A forwarder cannot rename, so the type keeps its original name."
         echo "::error::Do NOT satisfy this by rebuilding the consumer: the point is that modules ALREADY shipped bind the old name. If a forwarder is impossible (it would need a reference cycle), the move has to be reverted or the whole set republished atomically — see #2398."
+        echo "::error::The same job also carries the parser-delta control (#3492), so a red here can instead mean this diff makes the public-surface DETECTOR see less of the same tree — every gate built on it would then be guarding a smaller set, silently. That step prints both denominators and names the counter that fell. On a merge_group build the strict rule applies and no declaration is read (#3508)."
         exit 1
 
     # ── …and a red Clients workflow decides it too ──────────────────────────────────────────

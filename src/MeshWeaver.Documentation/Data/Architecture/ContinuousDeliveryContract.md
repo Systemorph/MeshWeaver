@@ -159,7 +159,44 @@ bounded at **3 attempts per commit**, with the `ci-failure` issue as the ledger 
 The slot is consumed when an attempt *starts*, so a run that dies without reporting cannot buy
 infinite retries; a new HEAD resets the budget naturally (the marker carries the SHA); on exhaustion
 it stops, says so **once** (`🛑 Automatic healing STOPPED …`) and labels the issue `cd-unhealed`. A
-successful heal comments `✅ Healed <sha>` on the same issue, so the ledger cannot only grow.
+successful heal comments `✅ Healed <sha>` on the same issue **and CLOSES it**, so the ledger cannot
+only grow — see below.
+
+### 🚨 The ledger must CLOSE itself, or an alert stops being an alert (#3176)
+
+The heal comment used to end *"Close this issue if nothing else is outstanding"* and then close
+nothing. `gate` and `alert-on-failure` both append to whichever `ci-failure` issue is **open**, so
+the first one ever filed absorbed every attempt and every heal from then on. #3176 reached **324
+comments across four days and a dozen unrelated causes**, and its title — one commit's incomplete
+image set — had been false since its first day. The maintainer's own root-cause comment had to open
+by *restating the issue's premise*, because the premise had expired.
+
+That destroys both of the things an alert is for:
+
+| property | what it should mean | what an immortal ledger made it mean |
+|---|---|---|
+| **existence** | delivery is broken right now | nothing — the issue is always open |
+| **age** | how long the outage has lasted | how long ago the *first ever* outage was |
+
+So `verify-images` now closes it on the successful heal. **Nothing is lost:** the issue and every
+comment stay exactly where they were, searchable; the next failure files a **fresh** issue (both
+`gate` and `alert-on-failure` create one when none is open), so an alert's title names its own cause
+and its age is its own outage's age. Closing also hands the reconciler a **fresh heal budget** — the
+same effect the `🛑 Automatic healing STOPPED` comment asks a human for.
+
+🚨 **The comment is fatal, the close is a warning**, and the asymmetry is reasoned rather than
+convenient (AGENTS.md's test is *what does a failure here hide?*). A lost heal **comment** hides the
+delivery record. A failed **close** hides nothing: the issue simply stays open — which is the
+behaviour that shipped for months — and the very next successful heal finds the same open issue and
+closes it, so a transient 403 is self-correcting. Making the close fatal would instead red
+`verify-images`, which both `delivery-verdict` and `alert-on-failure` read as a broken delivery: an
+alert about the alerting, on a run that delivered.
+
+The step carries `id: heal` and takes every value through `env:`, because
+`.github/scripts/test-cd-steps.py` **extracts it from the workflow and executes it** against a
+stubbed `gh`. Its cases assert on the recorded `gh` invocations rather than on stdout — a step that
+prints the word *closing* and calls no `gh issue close` is the defect, not the fix, and the two are
+identical in a log. The harness refuses to run at all if the step stops calling `gh issue close`.
 
 **It cannot publish an untested tree.** The `workflow_run` path still requires
 `event == 'push' && head_branch == 'main'` — that gate is what stops a **fork's** `pull_request` run
