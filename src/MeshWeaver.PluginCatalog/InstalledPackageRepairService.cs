@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
@@ -65,17 +66,18 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                 return Observable.Return(Unit.Default);
             })
             .SelectMany(_ => InstalledRecords(logger))
-            .SelectMany(records => records.Count == 0
-                ? Observable.Return(Unit.Default)
-                : records
-                    .Select(record => Reconcile(record, logger))
-                    .ToObservable()
-                    .Concat()
-                    .DefaultIfEmpty(Unit.Default)
-                    .LastAsync()
-                    .Do(_ => logger?.LogInformation(
-                        "[PackageRepair] reconciled declared access + install hooks for {Count} "
-                        + "installed partition(s)", records.Count)))
+            .SelectMany(records => (records.Count == 0
+                    ? Observable.Return(Unit.Default)
+                    : records
+                        .Select(record => Reconcile(record, logger))
+                        .ToObservable()
+                        .Concat()
+                        .DefaultIfEmpty(Unit.Default)
+                        .LastAsync()
+                        .Do(_ => logger?.LogInformation(
+                            "[PackageRepair] reconciled declared access + install hooks for {Count} "
+                            + "installed partition(s)", records.Count)))
+                .SelectMany(_ => VerifyCompleteness(records, logger)))
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex, "[PackageRepair] repair pass failed"));
@@ -205,6 +207,100 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                         + "(store={Store}, root={Root}, children={Children})",
                         partition, t.store, t.root, t.children);
                 return gone;
+            });
+    }
+
+    /// <summary>
+    /// 🚨 The check that did not exist (MeshWeaver#3485): what each install record DECLARES landed,
+    /// compared against what is actually in the mesh — plus the partition roots no record accounts
+    /// for at all.
+    ///
+    /// <para><b>Why here.</b> This pass is already the one complete inventory of what is installed,
+    /// it already runs once per boot, and it is already fire-and-forget and failure-tolerant. Every
+    /// other instrument the platform had counts what the installer DECIDED to write
+    /// (<c>InstallResult.Written</c>, <c>InstalledNodeCount</c> — which had no reader at all) or
+    /// hashes what the SOURCE serves (<c>ModuleVersion</c>). None of them reads the mesh back, which
+    /// is why a source node lost on 2026-08-26 was still missing, unnamed, eleven days later — and
+    /// was the proximate cause of the #3472 outage.</para>
+    ///
+    /// <para><b>It reports; it does not repair.</b> Healing belongs to the install lane, which now
+    /// refuses to skip an incomplete package (<see cref="CatalogLayoutAreas"/>). A boot pass that
+    /// silently reinstalled on a heuristic would be a worse failure than the one it names — the same
+    /// discipline this service already applies to a dangling record.</para>
+    ///
+    /// <para><b>The denominator is printed</b>, per AGENTS.md: a sweep reporting zero problems must
+    /// say how many things it looked at, so "nothing is wrong" and "nothing was checked" cannot
+    /// read the same. Cost is one batched read per record over a bounded, KNOWN path set, one root
+    /// listing, and one child listing per unaccounted root — never a query (eventually consistent:
+    /// a stale negative would manufacture a shortfall) and never a point read of a path that may
+    /// not exist.</para>
+    /// </summary>
+    private IObservable<Unit> VerifyCompleteness(
+        IReadOnlyList<InstalledRecord> records, ILogger? logger)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var accounted = records
+            .Select(r => r.Partition)
+            .Concat([PackageInstaller.InstalledPartition])
+            .ToImmutableHashSet(StringComparer.Ordinal);
+
+        var perRecord = records.Count == 0
+            ? Observable.Empty<InstallCompletenessVerdict>()
+            : records
+                .Select(record => InstallCompleteness.Observe(
+                    persistence, hub.JsonSerializerOptions,
+                    record.PackageId, record.Partition, record.Manifest))
+                .ToObservable()
+                .Concat();
+
+        return perRecord
+            .Concat(InstallCompleteness.ObserveUnaccountedRoots(
+                persistence, hub.JsonSerializerOptions, accounted))
+            .ToList()
+            .Select(list => (IReadOnlyCollection<InstallCompletenessVerdict>)list.ToImmutableList())
+            .Do(verdicts =>
+            {
+                foreach (var verdict in verdicts.Where(v => v.Kind is InstallCompletenessKind.Incomplete))
+                    logger?.LogError(
+                        "[InstallCompleteness] {Package} → '{Partition}': {Missing} of {Declared} "
+                        + "declared node(s) are ABSENT. Missing: [{Paths}]. The install record says "
+                        + "this package is up to date; the mesh disagrees. Reinstalling it now "
+                        + "repairs it — the up-to-date gate no longer skips an incomplete install "
+                        + "(MeshWeaver#3485).",
+                        verdict.PackageId, verdict.Partition, verdict.Missing.Count,
+                        verdict.Declared, string.Join(", ", verdict.Missing.Take(20)));
+
+                foreach (var verdict in verdicts.Where(v => v.Kind is InstallCompletenessKind.RootWithoutRecord))
+                    logger?.LogError(
+                        "[InstallCompleteness] '{Partition}' is a partition ROOT that no install "
+                        + "record accounts for, with no content and nothing but satellites. That is "
+                        + "what an install leaves when it writes its root placeholder and then "
+                        + "stops — and the portal serves it as an ordinary empty space. Install the "
+                        + "package again, or delete the partition (MeshWeaver#3485).",
+                        verdict.Partition);
+
+                foreach (var verdict in verdicts.Where(v =>
+                             v.Kind is InstallCompletenessKind.NotObserved
+                                 or InstallCompletenessKind.Undeclared))
+                    logger?.LogWarning(
+                        "[InstallCompleteness] {Package} → '{Partition}': NOT VERIFIED ({Kind}) — "
+                        + "{Because}. This is not a clean bill of health; it is an absence of one.",
+                        verdict.PackageId, verdict.Partition, verdict.Kind, verdict.Because);
+
+                var summary = InstallCompleteness.Summarize(verdicts);
+                logger?.LogInformation(
+                    "[InstallCompleteness] {Summary} (records scanned: {Records}; storage adapter: "
+                    + "{Adapter})",
+                    summary, records.Count, persistence is null ? "NONE" : "present");
+            })
+            .Select(_ => Unit.Default)
+            .Catch<Unit, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[InstallCompleteness] the completeness sweep failed — NOTHING was verified "
+                    + "this boot. Absence of a report here is not evidence that the installs are "
+                    + "whole.");
+                return Observable.Return(Unit.Default);
             });
     }
 
