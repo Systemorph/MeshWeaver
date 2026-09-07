@@ -545,6 +545,55 @@ is what turns another repo's green lane red. Full text:
 Dependabot: `secrets` provisioned for Actions are **not** visible to Dependabot-triggered runs —
 provision the pair under *Secrets → Dependabot* too, or a dependabot PR fails preflight.
 
+## 10a. Provisioning, end to end — measured 2026-08-28 standing up MeshWeaver.Crm
+
+Everything in §10 is a NAME; this is where each VALUE comes from, in the order that worked, with
+the three traps that cost a retry. Nothing here needs a second person — Systemorph issues every
+credential itself ([registry-credentials-we-issue](../../../AGENTS.md)).
+
+| Input | Where the value comes from | Trap |
+|---|---|---|
+| `ACR_USERNAME` / `ACR_PASSWORD` | a per-repo ACR **token** on a per-repo **scope map** — the fleet convention is `<short>-ci-pull` on `<short>-ci-pull-scope-map` (`repositories/mw-plugin-test/content/read`): `az acr scope-map create --registry meshweaver -n <short>-ci-pull-scope-map --repository mw-plugin-test content/read metadata/read` then `az acr token create --registry meshweaver -n <short>-ci-pull --scope-map <short>-ci-pull-scope-map` | 🚨 `token create` ECHOES the password in a docker-login hint on stderr. Treat it as burned: `az acr token credential generate … --password1 --query 'passwords[0].value' -o tsv > file 2>/dev/null`, then `gh secret set … < file`. Prove it with `docker login … --password-stdin < file` |
+| `MESHWEAVER_APP_ID` / `_PRIVATE_KEY` | the org GitHub App `meshweaver-cloud`, id **4220566** (`gh api /orgs/Systemorph/installations --jq '.installations[]|select(.app_slug=="meshweaver-cloud")|.app_id'`); PEM = keyvault `meshweaverkeyvault/github-app-privatekey` | verify the pairing before trusting it: mint an RS256 app JWT with the PEM and call `GET https://api.github.com/app` — the answer's `id`/`slug` must be 4220566 / meshweaver-cloud |
+| `AZURE_CLIENT_ID` / `_TENANT_ID` | `az identity show -g memex-aks-rg -n github-actions-bake --query '{clientId:clientId,tenantId:tenantId}'` | — |
+| `AZURE_SUBSCRIPTION_ID` | `az account show --query id` | — |
+| the two OIDC federated credentials | §10's two `az identity federated-credential create` calls; `REPO_ID` = `gh api repos/Systemorph/<Repo> --jq .id`, org id 77832550 | keep BOTH formats |
+| `MW_REGISTRY_URL` / `BAKE_PUBLISH_TARGETS` | the same literal every sibling carries — copy it: `gh api repos/Systemorph/MeshWeaver.Reinsurance/actions/variables --jq '.variables[]|"\(.name)=\(.value)"'` | variables are readable across repos; secrets never are |
+| `MW_REGISTRY_KEY` | mint a 20-minute `mwr_` on the registry (an executable Code node in your home, `execute_script`, calling `RegistrationKeyService.Mint(userId, name, email, description, expiresAt)` from `MeshWeaver.PluginCatalog`; the raw key lands in the activity log a second after `Succeeded`), then ONE pipeline: `curl -X POST https://memex.meshweaver.cloud/api/instances/register -d '{"bootstrapKey":…,"instanceId":"ci-<short>",…}' > file` → `python3 -c "…print(instanceKey,end='')" | gh secret set MW_REGISTRY_KEY --repo …` | registration AUTO-creates `Admin/_PluginGrant/ci-<short>` (`Plugins/*`, by `system-security`) — never create it by hand; delete the mint node afterwards |
+
+**Dependabot store too.** `gh secret set … --app dependabot` for `ACR_*` and `MESHWEAVER_APP_*` — a
+dependabot-triggered run reads the Dependabot store, and preflight fails red on the Actions-only
+pair (the same shape MeshWeaver#2249 documents).
+
+**The rest of the repo, from the CLI, in the order that worked:**
+
+```bash
+gh repo create Systemorph/MeshWeaver.<Name> --private --description "…"
+gh api -X PATCH repos/Systemorph/MeshWeaver.<Name> -f allow_auto_merge=true
+gh api -X PUT repos/Systemorph/MeshWeaver.<Name>/vulnerability-alerts
+gh api -X PUT repos/Systemorph/MeshWeaver.<Name>/automated-security-fixes
+gh api -X PUT repos/Systemorph/MeshWeaver.<Name>/collaborators/<login> -f permission=push   # per maintainer
+# the Copilot ruleset is data — copy a sibling's verbatim:
+rid=$(gh api repos/Systemorph/MeshWeaver.Reinsurance/rulesets --jq '.[0].id')
+gh api repos/Systemorph/MeshWeaver.Reinsurance/rulesets/$rid \
+  --jq '{name,target,enforcement,conditions,rules,bypass_actors}' > ruleset.json
+gh api -X POST repos/Systemorph/MeshWeaver.<Name>/rulesets --input ruleset.json
+```
+
+🚨 **`gen-manifests.py` refuses an EMPTY remote.** It reads the trunk's committed lock as the second
+version witness (`git ls-remote --symref origin HEAD`), so on a repo with no `main` yet it fails
+*"could not resolve which branch 'origin' publishes"* — and `validate-repos.py` fails on the missing
+lock. Push a bootstrap commit (README only — no `ci.yml`, so nothing runs) FIRST, then generate the
+manifest, then push the module. Two commits on a brand-new `main` is the cost; branch protection
+goes on AFTER the first real run has produced the three contexts to require.
+
+🚨 **`Store/Provision.subdirectory` is the PARENT folder, not the package folder.** `SystemInstall.
+EffectiveSubdirectory` appends the package id, so a request with `"subdirectory": "Crm"` for package
+`Crm` syncs `Crm/Crm` and the import refuses an empty snapshot ("No files found under subdirectory
+'Crm/Crm'"). For a repo whose package folder sits at the root, **omit `subdirectory`** (it derives
+`Crm`). Measured on systemorph, 2026-08-28; a retry is `patch` `subdirectory: null` +
+`requestedAction: "Provision"` — the phases reconcile the `_GitSync` they wrote.
+
 ## 11. Make the content reachable — register the repo as a catalog source
 
 A repo nobody reads ships nothing. The registry holds the git credential and re-serves per
@@ -568,6 +617,97 @@ holds per-environment values and its own workflows (Memex: `build`, `helm-releas
 deliberately does **not** bump the portal image pin — the in-pod self-updater chooses the running
 build, and a Dependabot PR would fight the reconciler. See [`/new-deployment`](../new-deployment/SKILL.md).
 
+## 12. Webhooks — one per LIVE portal, or the fleet never sees the repo
+
+**Measured 2026-09-07 (MeshWeaver#3582, #3583).** `MeshWeaver.Crm` was created on 08-28 with
+everything above and **no webhooks**. Nothing checked. Its partition on `memex.systemorph.com` last
+synced on 08-30; ten days later the repo was 54 commits ahead, the portal still held files the repo
+had retired, every prebuilt Crm bundle was refused by the source-fingerprint gate (#2813), and
+opening any Crm page compiled ten-day-old sources on first use — reported as *"why is bake not
+working"*. Every other node repo had two hooks; nobody had noticed the one that had none.
+
+A portal learns about a repo through exactly one channel: a GitHub webhook on the REPO, pointed at
+`https://<portal>/webhooks/github`, signed with THAT portal's `GitHub__Webhook__Secret`. The `push`
+event only logs ("a build is coming"); the **`workflow_run` completed/success on the default branch**
+is what triggers the CI-gated import (`GitHubWebhookProcessor.ProcessWorkflowRun` →
+`UpdateToLatestFromGitHub` at the built commit) and what writes the `BuildCompletion` the
+self-updater and the plugin-update watcher read. No hook ⇒ the partition freezes at its last sync
+while the bundles move on ⇒ fingerprint refusals ⇒ compile-from-source (or, since #3583, a named
+error on a partition the portal does not track).
+
+**One hook per live portal, the portal's own secret, created at the same time as the repo:**
+
+```bash
+# vault object → portal (names only; measured 2026-09-07)
+#   github-webhook-secret            → memex.systemorph.com   (SPC memex-kv → memex-kv-secrets)
+#   memexcloud-GitHub-Webhook-Secret → memex.meshweaver.cloud (SPC memexcloud-portal-ai-secrets)
+# The value goes from the vault into the request body and nowhere else — never into a variable
+# you echo, never onto a command line. scripts/… is deliberately absent: keep it in the scratchpad.
+python3 - Systemorph/MeshWeaver.<Name> memex.systemorph.com github-webhook-secret push,workflow_run <<'PY'
+import json, subprocess, sys, time
+repo, host, obj, events = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4].split(",")
+secret = subprocess.run(["az","keyvault","secret","show","--vault-name","Systemorph","--name",obj,
+                         "--query","value","-o","tsv"], check=True, capture_output=True, text=True).stdout.strip()
+body = {"name":"web","active":True,"events":events,"config":{"url":f"https://{host}/webhooks/github",
+        "content_type":"json","insecure_ssl":"0","secret":secret}}
+hook = json.loads(subprocess.run(["gh","api","-X","POST",f"repos/{repo}/hooks","--input","-"],
+        input=json.dumps(body), check=True, capture_output=True, text=True).stdout)
+subprocess.run(["gh","api","-X","POST",f"repos/{repo}/hooks/{hook['id']}/pings"], check=True, capture_output=True)
+time.sleep(5)
+d = json.loads(subprocess.run(["gh","api",f"repos/{repo}/hooks/{hook['id']}/deliveries?per_page=1"],
+        check=True, capture_output=True, text=True).stdout)[0]
+print(f"hook {hook['id']} -> {host}: ping status={d['status']} code={d['status_code']}")
+PY
+# …and again for memex.meshweaver.cloud with memexcloud-GitHub-Webhook-Secret, events
+# issues,issue_comment,push,workflow_run (the two issue events feed the issue mirror; add them only
+# if the repo takes part in it — Plugins, Education, Reinsurance and SocialMedia do).
+```
+
+**Prove it, do not assume it:** the ping delivery must read `status=OK code=200` from the portal.
+A hook that exists and delivers non-2xx is the same as no hook — a wrong secret answers 401 and
+the repo is exactly as invisible as Crm was. Then, after the first green `main` run, read the
+partition's `_GitSync.lastSyncCommitSha` on each portal: it must equal that run's `head_sha`.
+
+**The denominator is "every live portal", and it moves.** A new portal (a client deployment, a
+second staging) needs a hook on EVERY node repo it syncs, so a new-portal checklist carries this
+section's mirror image. Audit the fleet in one call and read the count, never the tick:
+
+```bash
+gh api "orgs/Systemorph/repos?per_page=100" --jq '.[] | select(.archived==false) | .name' \
+  | while read -r r; do printf '%-28s %s\n' "$r" "$(gh api "repos/Systemorph/$r/hooks" \
+      --jq '[.[] | "\(.config.url | sub("https://";"") | sub("/webhooks/github";""))"] | join(" ")')"; done
+# every node repo (one a portal's GitHubSyncConfig names — `search partitions:all nodeType:GitHubSyncConfig
+# repositoryUrl:*<Name>*` on each portal) must list BOTH hosts. 2026-09-07: Crm listed none.
+```
+
+**And the portal side is not implied by the hook.** The webhook only wakes a sync source that
+already exists: each portal needs a `<Partition>/_GitSync` (a `GitHubSyncConfig` naming the repo,
+branch and subdirectory) for every partition the repo owns — the `Store/Provision` request in §10a
+writes it for a provisioned space; a partition installed any other way (memex's `Feedback`, four of
+the bundle's five files, no `_GitSync`) has none, and since #3583 its module content ERRORS rather
+than compiling from the leftover copy. The Partition Sync administration page adds one; then
+trigger one sync and count the partition's source nodes against the repo.
+
+## 13. The pin-bump lane needs the App's `workflows` permission — or it never opens a PR
+
+`platform-ref-bump.yml` → core's `node-repo-platform-ref-bump.yml` opens the pin-bump PR with a
+token minted for the `meshweaver-cloud` App. The pin lives in `.github/workflows/ci.yml` (the
+`uses: …@<sha>` refs cannot live anywhere else), and GitHub refuses any push touching a workflow
+file from a token without the **`workflows`** permission:
+
+```
+! [remote rejected] chore/platform-ref-… (refusing to allow a GitHub App to create or update
+  workflow `.github/workflows/ci.yml` without `workflows` permission)
+```
+
+Measured on Plugins 2026-09-07 (run 34083504064, Plugins#1464): the lane resolved the right target
+and died at the push, no bot-authored pin PR had EVER existed, and the staleness ratchet went red
+at 130/120 commits behind and blocked every publication until a hand bump (#1463). The permission
+is an org-owner act in the App's settings (UI only), after which the core lane's token mint asks
+for `permission-workflows: write` (core #3580). Until it is granted, every pin move in every node
+repo is a hand move — `sed` the OLD value across `ci.yml`, run `scripts/check-platform-pins.py`,
+and read the digests back from ACR by tag.
+
 ## The checklist
 
 Files and settings:
@@ -589,6 +729,10 @@ Files and settings:
       `manifest.lock` generated by `python3 scripts/gen-manifests.py`.
 - [ ] `ci.yml` copied from SocialMedia; every `uses:` pinned to one SHA; image digest pinned;
       triggers include `merge_group` **and** `schedule`; `cancel-in-progress` off for main pushes.
+- [ ] **Webhooks (§12): one per live portal, that portal's vault secret, ping delivery `code=200`**
+      — `gh api repos/Systemorph/<Repo>/hooks --jq length` equals the number of live portals.
+- [ ] A `<Partition>/_GitSync` on every portal that serves the repo's partitions (§12), and after
+      the first green `main` run its `lastSyncCommitSha` equals that run's `head_sha`.
 - [ ] `preflight` names every input, fails red, fork exemption on the **event**; no gate carries an
       input-shaped `if:` or a `continue-on-error:`.
 - [ ] Secrets/vars provisioned (§10) for **Actions and Dependabot**; two OIDC federated credentials

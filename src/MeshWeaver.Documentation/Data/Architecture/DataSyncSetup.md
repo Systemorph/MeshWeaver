@@ -302,6 +302,22 @@ deployment can **break the sync and make it its own**.
 
 ---
 
+### A repo with no webhook to a portal syncs ONCE, then never again
+
+The portal pulls a partition when the repository's green `main` build arrives as a `workflow_run`
+webhook (`GitHubWebhookProcessor`); a `push` only logs that a build is coming. A repository created
+without a hook to a portal therefore syncs exactly as often as somebody triggers it by hand — and
+nothing measures the gap. `MeshWeaver.Crm` (created 2026-08-28, no hooks) last synced to
+`memex.systemorph.com` on 08-30; by 09-07 the repository was 54 commits ahead, the portal still held
+files the repository had retired, every prebuilt Crm bundle was refused by the source-fingerprint
+gate (the bundle was built from the newer files), and every Crm page compiled the stale copy on
+first use. The fix is a hook per live portal with that portal's own secret, proven by a ping delivery
+that reads `200`; the setup runbook is [/new-repo §12](/Doc/Architecture/DataSyncSetup) —
+`.claude/skills/new-repo/SKILL.md` in the repository. Since MeshWeaver#3583 a module's content in a
+partition the portal does not track at all (no `_GitSync` naming a repository) no longer compiles
+from the leftover copy: it settles at a named error instead
+([NodeType Compilation → A module's content this mesh does not TRACK](../NodeTypeCompilation)).
+
 ## 8. See also
 
 - [GitHubSync.md](/Doc/Architecture/GitHubSync) — the user-facing manual for connecting a
