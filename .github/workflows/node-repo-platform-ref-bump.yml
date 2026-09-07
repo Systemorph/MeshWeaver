@@ -42,6 +42,36 @@ name: Node repo platform-ref bump (reusable)
 # installation → Repository permissions → Workflows: Read and write); nothing in CI can grant it,
 # and nothing in CI can read whether it is granted.
 #
+# 🚨🚨 A LANE THAT FAILS WHERE NOBODY LOOKS IS THE SAME DEFECT AS A GATE THAT CANNOT FAIL (#3568,
+# MeshWeaver.Plugins#1462). Everything above is about the lane being HONESTLY red — no
+# `continue-on-error`, no input-shaped `if:`, an assert that fails naming what to provision. It was
+# all of that, and it still went unnoticed for the whole of its existence, because *honestly red on
+# a schedule* is red in an empty room: a scheduled run is attached to no pull request, no reviewer
+# and no check list. Measured 2026-09-07: MeshWeaver.Plugins had exactly ONE run of this lane ever
+# (34083504064) and it failed; MeshWeaver.SocialMedia the same. Nothing anywhere said so. The pin
+# then drifted to 153 commits past the 120-commit staleness bound, which reddened all 16 open pull
+# requests in the repo on a gate none of their diffs could reach, and starved the registry of a
+# sealed publication until a person hand-moved the pin.
+#
+# So the failure now lands on an artefact a person reads: `report` opens (and keeps current) ONE
+# tracking issue in the CALLING repo, labelled `platform-pin-bump-failure`, and closes it on the
+# next success. That is why the caller must grant `issues: write` alongside the other two — a called
+# workflow cannot widen what its caller was given, so the grant has to be written in the caller's
+# job. It is `${{ github.token }}`'s grant, not the App's: the `meshweaver-cloud` installation holds
+# `contents`/`metadata`/`pull_requests` and nothing else (measured 2026-09-07 via
+# `GET /orgs/Systemorph/installations`), so an App-token issue write would fail for a second missing
+# grant while reporting the first.
+#
+# 🚨 The report job is NOT tolerated-on-failure either, and that is the point rather than an
+# oversight. If it cannot write the issue, the run stays red with the reason named — an alerting
+# path that swallows its own failure re-creates, one level up, exactly the silence it was added to
+# end.
+#
+# 🚨 A caller that bumps the `uses:` sha WITHOUT adding `issues: write` does not get a quieter lane:
+# GitHub refuses the whole run with `startup_failure` before a single job is created. Measured
+# deliberately on MeshWeaver.Plugins run 34137399515 — zero jobs, zero check runs. Loud, which is
+# correct, but it means the caller's grant and its `uses:` sha move in ONE commit.
+#
 # Caller contract:
 #
 #   name: Bump the platform pin
@@ -50,7 +80,7 @@ name: Node repo platform-ref bump (reusable)
 #     workflow_dispatch:
 #   jobs:
 #     bump:
-#       permissions: {contents: write, pull-requests: write}
+#       permissions: {contents: write, pull-requests: write, issues: write}
 #       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-platform-ref-bump.yml@<sha>
 #       with:
 #         workflow-file: .github/workflows/ci.yml
@@ -319,4 +349,97 @@ jobs:
                 "The pin exists so a platform regression lands on the commit that moves it rather than on whoever pushed next — so this is a **PR, not a push**, and the full gate suite runs on it exactly as it would for a hand-written bump." \
                 "" \
                 "If CI is red here, the platform changed under the module: fix it on this branch, do not close and re-bump later. A pin that lags is a gate reporting on a framework nobody runs.")"
+          fi
+
+  # ───────────────────────── the failure has an audience ─────────────────────────
+  #
+  # `if: ${{ !cancelled() }}` and NOT `if: failure()`, because this job has two jobs: it files the
+  # alert when the bump failed AND clears it when the bump worked. A failure-only variant leaves a
+  # stale issue standing after the lane recovers, and a standing alert that is no longer true is how
+  # the next real one gets skimmed past.
+  #
+  # A cancelled run says nothing about the pin — neither open nor close.
+  report:
+    name: A failed bump is visible, not just red in an empty room
+    needs: [bump]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # REPLACES the caller's map for this job: no checkout, no push, no pull request here — the
+    # alert only reads and writes issues. `issues: write` must be granted by the CALLER (a called
+    # workflow can only narrow what it was given); without it GitHub refuses the run outright with
+    # `startup_failure` — measured on MeshWeaver.Plugins run 34137399515, zero jobs created.
+    permissions:
+      issues: write
+    steps:
+      - name: File the tracking issue, or close it because the bump worked
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP_RESULT: ${{ needs.bump.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PIN_KEY: ${{ inputs.pin-key }}
+          WORKFLOW_FILE: ${{ inputs.workflow-file }}
+          UPSTREAM: ${{ inputs.upstream-repo }}
+        run: |
+          set -euo pipefail
+
+          label=platform-pin-bump-failure
+          title="ci: the automated ${PIN_KEY} bump is not moving the pin"
+
+          # A label of ITS OWN, never the repo's general `ci-failure`. Listing by a shared label
+          # would find whatever unrelated alert happens to be open and comment the pin's story onto
+          # it — and, worse, close it on the next success. The label IS the state store, so it has
+          # to name exactly one subject.
+          #
+          # `--force` is update-or-create, so this is idempotent. A transient 5xx here must not
+          # swallow the alert it is decorating, and it cannot hide one either: the `--label` on the
+          # create below fails loudly if the label genuinely does not exist.
+          gh label create "$label" --repo "$GITHUB_REPOSITORY" \
+            --description "The scheduled platform-pin bump lane cannot move the pin" \
+            --color B60205 --force \
+            || echo "::warning::could not ensure the $label label (continuing to file the alert)"
+
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$label" --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+
+          if [ "$BUMP_RESULT" = "success" ]; then
+            if [ -n "$existing" ]; then
+              gh issue close "$existing" --repo "$GITHUB_REPOSITORY" --reason completed \
+                --comment "The bump lane succeeded in [run ${GITHUB_RUN_ID}](${RUN_URL}); the pin is being moved automatically again. Reopened automatically if it stops."
+              echo "::notice::bump succeeded — closed #$existing"
+            else
+              echo "bump succeeded and no alert was open — nothing to do"
+            fi
+            exit 0
+          fi
+
+          # ONE issue, kept current, rather than a comment per night. The lane runs daily, so
+          # appending would produce a year of identical comments and bury the one sentence that
+          # matters; the issue's own age already measures how long the pin has been unmaintained.
+          body=$(printf '%s\n' \
+            "The scheduled lane that keeps \`${PIN_KEY}\` in \`${WORKFLOW_FILE}\` current **failed**, so this repo's platform pin is not being moved by anything." \
+            "" \
+            "| | |" \
+            "|---|---|" \
+            "| latest failed run | [${GITHUB_RUN_ID}](${RUN_URL}) |" \
+            "| pin | \`${PIN_KEY}\` in \`${WORKFLOW_FILE}\` |" \
+            "| tracks | \`${UPSTREAM}@main\` |" \
+            "" \
+            "**What this costs while it is open.** Every pin move is a hand move. The pin drifts against ${UPSTREAM}'s \`main\` at that repo's merge rate, and when it crosses the staleness bound the ratchet reds **every open pull request here at once**, on a gate none of their diffs can reach — and nothing seals, so downstream consumers keep the previous publication." \
+            "" \
+            "**Read the failing step in the linked run.** Two shapes have actually occurred:" \
+            "" \
+            "* *the token mint fails naming a permission* — the \`meshweaver-cloud\` App installation is missing it. The pin lives in a file under \`.github/workflows/\`, so the push needs **Workflows: Read and write**, which is a GitHub App settings change plus an installation approval. Nothing in CI can grant it and nothing in CI can read whether it is granted." \
+            "* *the push is rejected* with \`refusing to allow a GitHub App to create or update workflow … without \\\`workflows\\\` permission\` — same missing grant, on a lane sha that predates the explicit request." \
+            "" \
+            "This issue closes itself on the lane's next success. Do **not** close it after a hand bump: the hand bump clears the drift and leaves the mover dead, which is the state that produced this issue." \
+            "" \
+            "<!-- platform-pin-bump-failure -->")
+
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+            echo "::error::the platform-pin bump failed again — #$existing updated with $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label "$label" --body "$body"
+            echo "::error::the platform-pin bump failed — tracking issue filed"
           fi
