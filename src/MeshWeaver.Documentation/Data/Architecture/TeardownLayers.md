@@ -169,6 +169,52 @@ breaker (`MaxQuiesceRearms`, 20) covers two hubs each holding a deferred request
 past it the callbacks are cancelled as before and the case is logged at **Error** (`[QUIESCE-CUT]`,
 7315). The stall detector treats a Quiescing hub with owed replies as *busy*.
 
+### The intake gate closes at the FIRST instant of disposal, not the third
+
+Teardown lets accepted work FINISH. That is the whole of this page — and it says nothing about
+whether a hub may keep TAKING ON work while it finishes. Until #3506 it did, for a whole phase: the
+`MessageService.ScheduleNotify` gate refused new deliveries only from `DisposeHostedHubs` onward,
+so the entire `Quiescing` drain was wide open. A hub that had logged `[QUIESCE-START]` — and even
+one already past `[QUIESCE-OK]`, having drained everything it owed — kept accepting requests, kept
+running their handlers, kept creating hosted hubs for them, and kept registering response callbacks
+for the sub-requests those handlers issued.
+
+Work taken on there cannot finish. The quiesce budget is the *only* time a hub has left, and it is
+already spent on what it owed at entry; the next phase cancels whatever the new work is waiting for,
+and the requester gets a `HubDisposedBeforeResponseException` after burning its whole bound.
+Measured on three bake runs (2026-09-06), counting the `RECEIVED runLevel=…` stage in the
+request-fate trails `[QUIESCE-TIMEOUT]` prints: **six of nine** pending callbacks at the timeout had
+been taken on by a hub that was already `Quiescing`. Every one ended in `forcibly cancelling` —
+which is the tell of an unfixed root, and this was the root.
+
+🚨 The cure is the DOOR, not the budget. #3261 settled the other option: a bigger `QuiesceTimeout`
+converts a leaked callback into a slower leaked callback, and re-arming (`MaxQuiesceRearms`) exists
+for a different case entirely — a reply owed by a sibling that is itself shutting down and *will*
+answer.
+
+The gate is now two tiers, and the new one is deliberately NARROWER than the old:
+
+| | `Quiescing` (tier 1, #3506) | `DisposeHostedHubs` and beyond (tier 2) |
+|---|---|---|
+| `ShutdownRequest` / `DisposeRequest` | passes | passes |
+| a reply carrying `PostOptions.RequestId` | **passes** — this is what the drain is waiting for | refused |
+| transit to a hosted child | **passes** — the children are alive until the next phase | refused |
+| fire-and-forget nobody awaits | **passes** — no promise to break, and answering it is the storm shape `AnswerPolicy` prevents | refused (silently) |
+| a NEW request addressed to this hub | **refused**, `ErrorType.ShuttingDown` | refused, `ErrorType.ShuttingDown` |
+
+The refusal is the same transient, owner-minted NACK tier 2 already posted — `ShutdownNack.RejectingNow`,
+activation identity and all — so a caller reads "ask again at the fresh activation", never "gone",
+and `ShutdownNack.IsAnsweredByOwner` still identifies the speaker. Because a `Quiescing` hub can
+still post (unlike one past `DisposeHostedHubs`, where `Post` and `ReportFailure` both decline), a
+ROOT hub with no parent to carry the NACK answers the sender itself through `ReportFailure` rather
+than falling back to the historical silent drop.
+
+`MeshWeaver.Messaging.Hub.Test.QuiescingHubRefusesNewWorkTest` pins both halves: a hub held inside
+its drain refuses a new correlated request naming `RunLevel=Quiescing` and never runs its handler,
+while the reply settling a callback registered BEFORE the drain still lands and the drain completes.
+The second half is not decoration — a fix that refused that reply would make every quiesce end in
+the `[QUIESCE-TIMEOUT]` it was built to remove.
+
 ### A refused REPLY is discarded with nobody told
 
 The three shapes above all end with *someone is told*. There is a fourth that did not, and it is an
