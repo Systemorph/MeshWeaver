@@ -83,13 +83,39 @@ case "$fmt" in
 esac
 EOF
 
-# kubectl exec — the in-pod module probe. Everything else is a no-op success.
+# kubectl exec — the in-pod module probe; kubectl logs — the portal's boot module report, which is
+# what tells an ACTIVATED pack from bytes lying on disk. Everything else is a no-op success.
+#
+# 🚨 The report DEFAULTS to "all three packs loaded" so the existing red states keep isolating the
+# one cause each of them is about. FAKE_NO_MODULE_LOAD is a separate flag rather than an empty
+# FAKE_MODULE_LOAD, because an empty value and an unset one are the same thing to the stub — and
+# "the report is absent" is a state a test has to be able to set on purpose.
 cat > "$STUBS/kubectl" <<'EOF'
 #!/usr/bin/env bash
 for a in "$@"; do
   if [ "$a" = "exec" ]; then
     [ -n "${FAKE_EXEC_FAILS:-}" ] && exit 1
-    printf '%s\n' "${FAKE_MODULES:-}"
+    # 🚨 Report ONLY the modules the probe actually asked about — the real in-pod script loops over
+    # the list it is handed as its last argument, so a pack the caller does not name is a pack
+    # nothing looks at. Echoing the whole fixture instead made "a missing <pack> is caught" pass for
+    # a pack that was not in VIEW_PACK_MODULES at all: a control that could not fail.
+    packs=" ${!#} "
+    printf '%s\n' "${FAKE_MODULES:-}" | while IFS= read -r line; do
+      case "$line" in
+        module=*)
+          name="${line#module=}"; name="${name%% *}"
+          case "$packs" in *" $name "*) printf '%s\n' "$line" ;; esac ;;
+        ?*) printf '%s\n' "$line" ;;
+      esac
+    done
+    exit 0
+  fi
+  if [ "$a" = "logs" ]; then
+    [ -n "${FAKE_NO_MODULE_LOAD:-}" ] && exit 0
+    if [ -n "${FAKE_MODULE_LOAD:-}" ]; then printf '%s\n' "$FAKE_MODULE_LOAD"; exit 0; fi
+    for m in MeshWeaver.Blazor.Views MeshWeaver.Blazor.Graph MeshWeaver.Blazor.EntityViews; do
+      printf '[ModuleLoad] %s ← /app/modules/%s/%s.dll (source=appsettings, mvid=…, written=…)\n' "$m" "$m" "$m"
+    done
     exit 0
   fi
 done
@@ -99,8 +125,11 @@ EOF
 chmod +x "$STUBS"/colima "$STUBS"/curl "$STUBS"/kubectl
 export PATH="$STUBS:$PATH"
 
-BOTH_PRESENT='module=MeshWeaver.Blazor.Views present
-module=MeshWeaver.Blazor.Graph present'
+# 🚨 THREE packs, not two: EntityViews joined VIEW_PACK_MODULES because a portal missing it can
+# draw no input control at all, and check 3 was calling that portal usable (Plugins#1483).
+PACKS_PRESENT='module=MeshWeaver.Blazor.Views present
+module=MeshWeaver.Blazor.Graph present
+module=MeshWeaver.Blazor.EntityViews present'
 
 # Run `memex-local verify [$VERIFY_FLAGS]` in a given state, leaving output in OUT and status in RC.
 # 🚨 Not `OUT=$(run_verify …)`: a command substitution is a SUBSHELL, so an RC assigned inside one
@@ -134,13 +163,13 @@ reports() {
 echo "── the verification can FAIL (each red state, with a remedy) ─────"
 
 reports "a 503 portal is not 'reachable'" "HTTP 503" \
-  FAKE_HTTP_ROOT=503 FAKE_HTTP_LOGIN=503 FAKE_MODULES="$BOTH_PRESENT"
+  FAKE_HTTP_ROOT=503 FAKE_HTTP_LOGIN=503 FAKE_MODULES="$PACKS_PRESENT"
 
 reports "no answer at all is reported" "did NOT answer" \
-  FAKE_HTTP_ROOT=000 FAKE_HTTP_LOGIN=000 FAKE_MODULES="$BOTH_PRESENT"
+  FAKE_HTTP_ROOT=000 FAKE_HTTP_LOGIN=000 FAKE_MODULES="$PACKS_PRESENT"
 
 reports "a deleted login page is caught" "NOT ROUTED" \
-  FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=404 FAKE_MODULES="$BOTH_PRESENT"
+  FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=404 FAKE_MODULES="$PACKS_PRESENT"
 
 # 🚨 The single most common red state a developer meets, and the one §14 misnamed. `up` and
 # `update` both restart the launchd port-forward and go STRAIGHT into the verification, so the
@@ -149,9 +178,9 @@ reports "a deleted login page is caught" "NOT ROUTED" \
 # the generic "that is not a serving portal" — which names the INGRESS. The developer is then sent
 # to `memex-local logs` to read a healthy pod, for a socket that is missing on their own Mac.
 reports "a connection failure is 'no answer', not a serving-portal fault" "did NOT answer" \
-  FAKE_CURL_FAILS=1 FAKE_MODULES="$BOTH_PRESENT"
+  FAKE_CURL_FAILS=1 FAKE_MODULES="$PACKS_PRESENT"
 
-run_verify FAKE_CURL_FAILS=1 FAKE_MODULES="$BOTH_PRESENT"
+run_verify FAKE_CURL_FAILS=1 FAKE_MODULES="$PACKS_PRESENT"
 case "$OUT" in
   *000000*) bad "a connection failure reports ONE status, not a doubled one" \
               "reported HTTP 000000 — probe_http concatenated curl's own '000' with its fallback: $OUT" ;;
@@ -216,15 +245,43 @@ reports "both view packs missing is caught" "ToString()" \
   FAKE_MODULES='module=MeshWeaver.Blazor.Views missing
 module=MeshWeaver.Blazor.Graph missing'
 
+# 🚨 The pack whose absence this check could not see (Plugins#1483). EntityViews is every input
+# control in the product — text, number, date, choice, plus the Editor/EditForm/Property skins — so
+# a portal without it can be read and not operated: no quiz can be answered, no coupon redeemed, no
+# dialog field filled in. It was not in VIEW_PACK_MODULES, so this fixture's `missing` line was
+# simply ignored and the run went green.
+reports "a missing EntityViews is caught — a portal nobody can type into is not usable" \
+  "MeshWeaver.Blazor.EntityViews" \
+  FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=200 \
+  FAKE_MODULES='module=MeshWeaver.Blazor.Views present
+module=MeshWeaver.Blazor.Graph present
+module=MeshWeaver.Blazor.EntityViews missing'
+
 reports "landed-but-pending-restart is not green" "restart is PENDING" \
   FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=200 \
-  FAKE_MODULES="$BOTH_PRESENT
+  FAKE_MODULES="$PACKS_PRESENT
 pending-restart=yes"
 
 # 🚨 The check that cannot read its own input must FAIL, never pass quietly. An unreadable pod
 # used to be indistinguishable from a healthy one, which is the skip-trapdoor shape AGENTS.md bans.
 reports "an unreadable pod fails the check, not passes it" "verified NOTHING" \
   FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=200 FAKE_EXEC_FAILS=1
+
+# 🚨 THE STATE THIS CHECK USED TO CALL GREEN (Plugins#1483). The pack resolves on disk — it is in
+# the image's own modules/ folder — and the running process never asked for it, so every control it
+# draws still renders as its ToString(). "Resolvable" and "loaded" are different questions, and the
+# probe was printing the answer to the first under the name of the second. The boot module report
+# is what separates them, and it must be READ, not assumed.
+reports "a pack on disk but NOT in the boot report is not green" "NOT LOADED" \
+  FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=200 FAKE_MODULES="$PACKS_PRESENT" \
+  FAKE_MODULE_LOAD='[ModuleLoad] MeshWeaver.Blazor.Views ← /app/MeshWeaver.Blazor.Views.dll (source=appsettings)
+[ModuleLoad] MeshWeaver.Blazor.Graph ← /data/modules/MeshWeaver.Blazor.Graph@ab/MeshWeaver.Blazor.Graph.dll (source=store)'
+
+# 🚨 And the same rule one level up: with NO boot report visible the check learned nothing about
+# activation, and "learned nothing" is never a pass — the skip-trapdoor shape AGENTS.md bans, in the
+# one place where the evidence is a log that can scroll away.
+reports "no boot report means the check FAILS, never passes" "verified nothing" \
+  FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=200 FAKE_MODULES="$PACKS_PRESENT" FAKE_NO_MODULE_LOAD=1
 
 # 🚨 "Still installing" must read differently from "will never arrive" — and must still not be a
 # success, because the portal cannot render at the moment the command returns. With a wait budget
@@ -239,29 +296,29 @@ VERIFY_FLAGS=""
 
 echo "── …and a green run is reachable (so the above is not vacuous) ───"
 
-run_verify FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=200 FAKE_MODULES="$BOTH_PRESENT"
+run_verify FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=200 FAKE_MODULES="$PACKS_PRESENT"
 if [ "$RC" -ne 0 ]; then
   bad "a healthy portal verifies green" "exited ${RC}: ${OUT}"
-elif case "$OUT" in *"view packs present"*) false ;; *) true ;; esac; then
-  bad "a healthy portal verifies green" "no 'view packs present' line in: ${OUT}"
+elif case "$OUT" in *"view packs loaded"*) false ;; *) true ;; esac; then
+  bad "a healthy portal verifies green" "no 'view packs loaded' line in: ${OUT}"
 else
   ok "a healthy portal verifies green"
 fi
 
 # A 302 to the sign-in page is the NORMAL anonymous response — treating it as red would make the
 # gate fire on every healthy install and get it deleted within a day.
-run_verify FAKE_HTTP_ROOT=302 FAKE_HTTP_LOGIN=200 FAKE_MODULES="$BOTH_PRESENT"
+run_verify FAKE_HTTP_ROOT=302 FAKE_HTTP_LOGIN=200 FAKE_MODULES="$PACKS_PRESENT"
 if [ "$RC" -eq 0 ]; then ok "a 302 to sign-in is healthy, not a failure"
 else bad "a 302 to sign-in is healthy, not a failure" "exited ${RC}: ${OUT}"; fi
 
 echo "── argument handling ─────────────────────────────────────────────"
 
-out="$(env FAKE_MODULES="$BOTH_PRESENT" "$CLI" verify --nope 2>&1)"; rc=$?
+out="$(env FAKE_MODULES="$PACKS_PRESENT" "$CLI" verify --nope 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then bad "an unknown verify flag refuses" "exited 0: $out"
 else case "$out" in *"unknown flag"*) ok "an unknown verify flag refuses" ;;
      *) bad "an unknown verify flag refuses" "refused without saying why: $out" ;; esac; fi
 
-out="$(env FAKE_MODULES="$BOTH_PRESENT" "$CLI" verify --wait forever 2>&1)"; rc=$?
+out="$(env FAKE_MODULES="$PACKS_PRESENT" "$CLI" verify --wait forever 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then bad "--wait must be numeric" "exited 0: $out"
 else case "$out" in *"whole seconds"*) ok "--wait must be numeric" ;;
      *) bad "--wait must be numeric" "refused without saying why: $out" ;; esac; fi
