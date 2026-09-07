@@ -705,6 +705,86 @@ If the same check name appears in every PR's failure list, stop triaging PRs and
 repository. `UNSTABLE` means the required set passed and something non-required did not — it is
 mergeable, and it is the state a hoistable assertion leaves behind.
 
+### 🚨 The third case: the fact is repo-scoped, but the FIX is per-PR
+
+The table above splits facts into "property of the PR" and "property of the repository", and tells
+you that for the second kind you should stop triaging PRs and go fix the repository. That is right
+about where the *cause* lives and wrong about what *clearing* it takes, whenever the assertion is
+written in a workflow file — because **a gate defined in `.github/workflows/*.yml` evaluates the
+version of that file in the pull request's own tree, never `main`'s.** Landing the fix on `main`
+changes nothing for anything already open.
+
+Measured twice on 2026-09-07, on two gates with nothing else in common:
+
+**The platform staleness gate.** Three sessions concurrently held the belief that merging the pin
+pull request would unblock `MeshWeaver.Plugins`. It would not have: 19 open PRs each carried their
+own stale `MW_PLATFORM_REF`, and the gate read each PR's own copy. The remedy was to merge the pin
+branch **into all 19**, then verify per branch. A pin move on `main` unblocks exactly zero open PRs.
+
+**The Dependabot secret preflight — the more dangerous shape.** `MeshWeaver.Crm` added its
+`MW_REGISTRY_KEY` assertion to the preflight on `main` at 12:45Z. Its five open Dependabot PRs carry
+`ci.yml` from before that:
+
+```bash
+gh api "repos/Systemorph/MeshWeaver.Crm/contents/.github/workflows/ci.yml?ref=$(
+  gh api repos/Systemorph/MeshWeaver.Crm/pulls/59 --jq .head.sha)" --jq .content \
+  | base64 -d | grep -c 'MW_REGISTRY_KEY:-'
+# 0   ← on main this reads 1
+```
+
+So `Required CI inputs` **ran and passed, having never asked about that secret**, and the run died
+forty seconds later inside the consuming job with a message that names no secret at all:
+
+```
+##[error]compose-sealed-modules.sh: --registry-url needs --registry-key
+```
+
+A green preflight reads as *"the inputs are present"*. Here it meant *"this tree's preflight asked
+for less"* — and a reader who trusts it concludes the repository is provisioned when it is not.
+This is the concrete form of the rule AGENTS.md already states as **the preflight list is not the
+denominator**: prove a secret exists from the job that consumes it, never from a preflight's colour.
+
+### The discriminator, and the measurement
+
+| question | how to answer it |
+|---|---|
+| is the gate's *verdict* stale? | read the gate's **definition at the PR's head sha**, not at `main` |
+| will merging the fix help the open PRs? | only if you merge it **into** them — test `git merge-base --is-ancestor <fix> origin/<branch>` per branch |
+| did the input actually get provisioned? | read the **consuming** job, not the preflight |
+
+```bash
+# the gate's definition as THIS pull request will run it
+sha=$(gh api repos/Systemorph/<repo>/pulls/<n> --jq .head.sha)      # full 40 chars, always
+gh api "repos/Systemorph/<repo>/contents/.github/workflows/ci.yml?ref=$sha" --jq .content | base64 -d
+```
+
+**The rule.** A workflow-defined gate is versioned with the branch it judges, so its fix propagates
+like code, not like configuration. Before announcing that a gate fix unblocks anything, name the
+branches it reaches — and reach them.
+
+### Reading the wall over REST
+
+The GraphQL query above answers the question, but AGENTS.md reserves GraphQL for what REST cannot
+express, because the **secondary** limit it exhausts takes GitHub access away from every concurrent
+agent while `/rate_limit` still reads full. The same wall over REST, one PR at a time, pacing:
+
+```bash
+gh api "repos/Systemorph/<repo>/pulls?state=open&per_page=100" --jq '.[].number' |
+while read -r n; do
+  sha=$(gh api "repos/Systemorph/<repo>/pulls/$n" --jq .head.sha)   # full sha; an abbreviated
+  sleep 2                                                           # one silently matches NOTHING
+  gh api "repos/Systemorph/<repo>/actions/runs?head_sha=$sha&per_page=100" \
+    --jq --arg n "$n" '.workflow_runs[]|select(.conclusion!="success" and .conclusion!=null)
+                       |"#\($n) \(.name): \(.conclusion)"'
+  sleep 2
+done
+```
+
+🚨 `head_sha=` matches only the **full 40-character** sha. An abbreviated one does not error — it
+returns an empty `workflow_runs` array, which is byte-identical to "this commit has no runs" and
+reads as *"CI never fired"*. That false negative is about the one thing a PR watcher exists to
+detect, so print the sha's length before concluding anything from a zero.
+
 ## 🚨 A lane hand-copied into N repos is N lanes, and N−1 of them are stale
 
 The arm lane is a single file, `.github/workflows/auto-arm.yml` in this repository, and every
