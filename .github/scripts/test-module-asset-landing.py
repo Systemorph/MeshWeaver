@@ -68,7 +68,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# (workflow, job id, step id) — both lanes carry the same landing block and both are executed.
+# (workflow, step id) — extraction is by STEP ID alone, across every job in the file. Both lanes
+# carry the same landing block and both are executed.
 LANES = [
     (".github/workflows/node-repo-gate.yml", "ext-modules"),
     (".github/workflows/node-repo-publish-bake.yml", "ext-modules"),
@@ -326,7 +327,8 @@ def case_lands_assets(lane: str, body: str, tmp: Path) -> None:
     print(f"        denominator: 3 bundle(s) composed, 2 carrying static assets, "
           f"{total_shipped} asset file(s) shipped, {landed} landed byte-identical")
     if landed == total_shipped and len(FAILURES) == before:
-        ok(f"{lane}: {landed}/{total_shipped} shipped assets landed under /ext/<module>/wwwroot")
+        ok(f"{lane}: {landed}/{total_shipped} shipped assets landed module-relative "
+           f"under /ext/<module>/")
 
 
 def case_missing_entry_is_refused(lane: str, body: str, tmp: Path) -> None:

@@ -142,7 +142,8 @@ about it, and runs in `dotnet-test.yml` beside the other workflow-shell gates.
   still lands beside the assets.
 
 The lane's own check is per file and prints a denominator:
-`external modules: 30 composed, 6 of them carrying static web assets, 294 asset file(s) landed`.
+`external modules: 30 composed, 6 of them carrying static web assets, 294 asset file(s) landed
+module-relative under /ext/<module>/`.
 A count that could only ever read zero is not a check — [an uncounted zero has two causes](/Doc/Architecture/NegativeControls)
 and one of them is "we looked in the wrong place".
 
