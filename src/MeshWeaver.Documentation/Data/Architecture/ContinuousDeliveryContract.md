@@ -303,6 +303,25 @@ other-workflow case, the completed-run case, the fail-closed case, and one case 
 branch. Sabotaging the fix three ways (drop `.id != $RUN_ID`; make the branch exit 0 without
 probing; treat an unanswerable probe as "in flight") reds 7, 16 and 3 cases respectively.
 
+**Two corrections to the report, both measured, because the denominator matters.** #3513 lists run
+7940 (`62039c9`, 21:24Z) as a third instance. It is not: its gate read `publish=true`, it *did*
+publish, its migration-image leg failed, and its red came from the "a publishing run must have RUN
+every leg" step. Same for 7946 — a genuine red about a genuinely failed build. The false-red
+population is **7963 and 7965**, and the probe cannot reach either of those reds, because the stuck
+branch requires `publish != true`.
+
+🚨 **And one sibling of this shape is still OPEN, in the same branch.** The reconcile's
+`⏭️ differs from the newest published set only in image-irrelevant paths` decision also produces
+`reason=reconcile publish=false complete=false green=true`, so it too reads as "stuck" — and unlike
+the in-flight case there is nothing live to find, so it stays red on every tick until a relevant
+commit lands. It is now **reachable**: the `--detail` fix made the relevance probe resolve a newest
+published set (`Newest published set: 8ef74ed` in run 7963's gate log, where it used to read
+`<none>` and fail open). It was deliberately NOT folded into this change: whether a tip whose only
+delta is `clients/react-native` or `clients/voice-gateway` counts as *deliverable* is a policy call,
+not a reading of evidence, and the verdict cannot see `relevant` at all — `gate` exposes it as a
+step output, never a job output. Fixing it means adding that output and deciding the policy, in a
+change that says so.
+
 **The recurring shape to carry away.** An instrument that reads a snapshot and reports it as a fact
 is wrong in one direction only — it converts *transient* into *terminal*. The other three instances
 found the same night were a run's `created_at` read as its start time (it is QUEUE time; the 45-min
