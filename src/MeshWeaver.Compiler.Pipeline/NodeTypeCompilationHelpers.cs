@@ -231,6 +231,17 @@ internal static class NodeTypeCompilationHelpers
             }),
                 pendingNode =>
                 {
+                    // Set by the on-demand adoption pass below when a bundle entry for THIS type
+                    // was found on this mesh's framework identity — adopted or not. Read once, in
+                    // DispatchOrPark, to tell "the bake is here and was refused" from "the bake has
+                    // not landed" (MeshWeaver#3583). Written from the seeder's pool threads.
+                    var offered = 0;
+                    void OnOffered(string path)
+                    {
+                        if (string.Equals(path, hubPath, StringComparison.OrdinalIgnoreCase))
+                            Interlocked.Exchange(ref offered, 1);
+                    }
+
                     // 🅿️ PARKED short-circuit. A prior compile of this NodeType reached a
                     // terminal failed state, so we do NOT re-run Roslyn — that is the
                     // containment that turns a broken type from a portal-wide recompile storm
@@ -360,7 +371,7 @@ internal static class NodeTypeCompilationHelpers
 
                     var attempt = new SingleAssignmentDisposable();
                     onDemandAdoptionSubs.Add(attempt);
-                    attempt.Disposable = prebuiltConsumer.SeedForTypes([hubPath])
+                    attempt.Disposable = prebuiltConsumer.SeedForTypes([hubPath], OnOffered)
                         .Take(1)
                         .Timeout(OnDemandAdoptionBudget)
                         .SelectMany(AdoptionLanded)
@@ -494,29 +505,106 @@ internal static class NodeTypeCompilationHelpers
                             return;
                         }
 
-                        logger?.LogDebug(
-                            "Compile watcher: saw Pending for {HubPath} — posting DispatchCompileTrigger to OWN hub (system identity)",
-                            hubPath);
-                        // 🚨 Compilation runs under SYSTEM identity — circumventing
-                        // RLS by design. The access check that gates compilation is
-                        // upstream: the user has to be permitted to flip
-                        // RequestedReleaseAt on the NodeType's MeshNode (checked by
-                        // the owning hub's AccessControl pipeline at submit time).
-                        // Once requested, the compile activity runs as
-                        // system-security so it can read every source file across
-                        // the mesh, write the activity log without per-flag RLS
-                        // probing, and emit the compiled assembly. NOT FromNode —
-                        // compile-as-the-last-editor-of-the-NodeType would deny
-                        // access to source files owned by other users.
-                        using (MeshWeaver.Mesh.Security.AccessContextScope.AsSystem(accessService))
+                        // 🚨 THE UNTRACKED-MODULE GATE (MeshWeaver#3583). A module is delivered as a
+                        // prebuilt bundle; "compile the live source instead" — the fallback every
+                        // route above ends in — is honest only on a mesh whose copy of that source
+                        // TRACKS the module's repository. On a partition nothing syncs, the "live
+                        // source" is whatever an install left behind: memex's Feedback partition held
+                        // four of the bundle's five files and no _GitSync, every Feedback bundle was
+                        // refused on fingerprint, and the portal compiled the leftover copy on every
+                        // roll — old code, reading as current, with no line anywhere saying so. The
+                        // maintainer's rule (2026-09-07): a module whose sources this mesh does not
+                        // sync is never self-baked here — it ERRORS, named.
+                        //
+                        // Two facts decide it, both cheap and both already in hand:
+                        //   • is this a MODULE's content? A bundle entry on this identity named the
+                        //     type (the witness above — adopted, current or DECLINED), or the record
+                        //     carries adoption provenance from an earlier identity (the bake for
+                        //     this one has not landed yet). Authored content — never adopted, never
+                        //     offered — is not a module's and compiles exactly as before.
+                        //   • does the partition TRACK a source? IPartitionSourceTracking, the one-bit
+                        //     seam the sync layer implements; a mesh with no implementation has no
+                        //     notion of tracking (local, CI, the bake host) and compiles as before.
+                        // The park mirrors the RequirePrebuilt one above — deterministic, named, the
+                        // attempt counter at zero — and lifts through the same doors: a source change
+                        // (the sync that was missing) or a release request after the rebake.
+                        // Whether the answer could be read is NOT a verdict: a fault or a timeout
+                        // compiles, as this mesh did before the gate existed.
+                        var pendingDefinition = pendingNode!.ContentAs<NodeTypeDefinition>(
+                            hub.JsonSerializerOptions, logger);
+                        var offeredByBundle = Volatile.Read(ref offered) == 1;
+                        if (pendingDefinition is null || !IsModuleContent(pendingDefinition, offeredByBundle))
                         {
-                            // Fire-and-forget. ActionBlock picks it up and runs
-                            // HandleDispatchCompile on the hub's thread; the
-                            // delivery.AccessContext is stamped with system identity
-                            // so every downstream write inside the activity bypasses
-                            // RLS.
-                            hub.Post(new DispatchCompileTrigger(pendingNode!),
-                                o => o.WithTarget(hub.Address));
+                            Dispatch();
+                            return;
+                        }
+
+                        var tracking = new SingleAssignmentDisposable();
+                        onDemandAdoptionSubs.Add(tracking);
+                        tracking.Disposable = PartitionTracksSources(hub, hubPath)
+                            .Timeout(OnDemandAdoptionBudget)
+                            .Finally(() => onDemandAdoptionSubs.Remove(tracking))
+                            .Subscribe(
+                                tracked =>
+                                {
+                                    if (tracked)
+                                    {
+                                        Dispatch();
+                                        return;
+                                    }
+                                    var reason = PrebuiltAssemblySeeder.UntrackedPartitionParkReason(
+                                        hubPath, offeredByBundle);
+                                    logger?.LogError(
+                                        "Compile watcher: {HubPath} is a module's content in a partition this "
+                                        + "mesh does not track, and no prebuilt build for it landed — PARKING "
+                                        + "with a named refusal instead of compiling (offered by a bundle: "
+                                        + "{Offered}). {Reason}",
+                                        hubPath, offeredByBundle, reason);
+                                    var registry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>()
+                                        ?? parkRegistry;
+                                    registry?.OnCompileFailed(
+                                        hub, hubPath, reason, deterministic: true,
+                                        recipientUserId: null, sources: pendingDefinition.CurrentSourceVersions,
+                                        logger);
+                                    SettleAsError(reason, formedUnderLiveInputs: true);
+                                },
+                                ex =>
+                                {
+                                    logger?.LogWarning(ex,
+                                        "Compile watcher: whether {HubPath}'s partition tracks a source could "
+                                        + "not be read within {Budget}s — compiling, as this mesh did before "
+                                        + "the gate existed (a stranded type is worse than a redundant compile).",
+                                        hubPath, OnDemandAdoptionBudget.TotalSeconds);
+                                    Dispatch();
+                                });
+                        return;
+
+                        void Dispatch()
+                        {
+                            logger?.LogDebug(
+                                "Compile watcher: saw Pending for {HubPath} — posting DispatchCompileTrigger to OWN hub (system identity)",
+                                hubPath);
+                            // 🚨 Compilation runs under SYSTEM identity — circumventing
+                            // RLS by design. The access check that gates compilation is
+                            // upstream: the user has to be permitted to flip
+                            // RequestedReleaseAt on the NodeType's MeshNode (checked by
+                            // the owning hub's AccessControl pipeline at submit time).
+                            // Once requested, the compile activity runs as
+                            // system-security so it can read every source file across
+                            // the mesh, write the activity log without per-flag RLS
+                            // probing, and emit the compiled assembly. NOT FromNode —
+                            // compile-as-the-last-editor-of-the-NodeType would deny
+                            // access to source files owned by other users.
+                            using (MeshWeaver.Mesh.Security.AccessContextScope.AsSystem(accessService))
+                            {
+                                // Fire-and-forget. ActionBlock picks it up and runs
+                                // HandleDispatchCompile on the hub's thread; the
+                                // delivery.AccessContext is stamped with system identity
+                                // so every downstream write inside the activity bypasses
+                                // RLS.
+                                hub.Post(new DispatchCompileTrigger(pendingNode!),
+                                    o => o.WithTarget(hub.Address));
+                            }
                         }
                     }
                 },
@@ -2383,6 +2471,46 @@ internal static class NodeTypeCompilationHelpers
     /// </summary>
     internal static string? ModulesHashOf(IMessageHub hub) =>
         hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash;
+
+    /// <summary>
+    /// Whether a NodeType is a MODULE's content — delivered as a prebuilt bundle rather than
+    /// authored on this mesh (MeshWeaver#3583). True when a bundle entry on this identity named it
+    /// in the pass that just ran (<paramref name="offeredByBundle"/>: adopted, current or declined),
+    /// or when the record carries adoption provenance from an earlier identity
+    /// (<see cref="NodeTypeDefinition.AdoptedSourceFingerprint"/> survives a local compile;
+    /// <see cref="NodeTypeDefinition.BuildProvenance"/> is reset by one, so it only ever ADDS).
+    /// Authored content — never offered, never adopted — is not a module's. Pure.
+    /// </summary>
+    internal static bool IsModuleContent(NodeTypeDefinition def, bool offeredByBundle) =>
+        offeredByBundle
+        || def.AdoptedSourceFingerprint is { Length: > 0 }
+        || def.BuildProvenance is not BuildProvenance.Compiled;
+
+    /// <summary>The partition a NodeType path belongs to — its top-level segment.</summary>
+    internal static string PartitionOf(string nodeTypePath)
+    {
+        var slash = nodeTypePath.IndexOf('/');
+        return slash > 0 ? nodeTypePath[..slash] : nodeTypePath;
+    }
+
+    /// <summary>
+    /// Whether the partition of <paramref name="nodeTypePath"/> tracks a source on this mesh —
+    /// any registered <see cref="IPartitionSourceTracking"/> answering true. ONE emission. A mesh
+    /// with no implementation registered has no notion of tracking (a local mesh, CI's disposable
+    /// meshes, the bake host) and answers true: compiling stays legal there, exactly as it was.
+    /// </summary>
+    internal static IObservable<bool> PartitionTracksSources(IMessageHub hub, string nodeTypePath)
+    {
+        var providers = hub.ServiceProvider.GetServices<IPartitionSourceTracking>().ToArray();
+        if (providers.Length == 0)
+            return Observable.Return(true);
+        var partition = PartitionOf(nodeTypePath);
+        return providers
+            .Select(p => p.IsTracked(partition).Take(1))
+            .CombineLatest()
+            .Select(answers => answers.Any(tracked => tracked))
+            .Take(1);
+    }
 
     /// <summary>
     /// The surface-id resolver over THIS mesh's environment (process surface manifest + the

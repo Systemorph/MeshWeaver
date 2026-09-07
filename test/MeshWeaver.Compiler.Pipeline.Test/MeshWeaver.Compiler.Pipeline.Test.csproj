@@ -17,6 +17,10 @@
     <!-- The pipeline is exercised against a real mesh, so the suite still composes a host
          (AddGraph) exactly as it did inside MeshWeaver.Graph.Test. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <!-- The untracked-module gate asks the sync layer whether a partition tracks a repository
+         (IPartitionSourceTracking); its test registers the REAL GitHub provider and a real
+         _GitSync node rather than a stand-in, so the seam is exercised end to end. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
