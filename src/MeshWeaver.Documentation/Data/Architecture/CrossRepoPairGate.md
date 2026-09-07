@@ -1007,6 +1007,67 @@ this diff changed**, not a whole-tree index, so it publishes no denominator that
 blindness shows up as a missed finding on one file, which a differential over a fixed corpus cannot
 see. Giving it a whole-tree index would be a real change to that gate, not a wrapper around it.
 
+### 🚨 A gate added to `main` reaches NEITHER build of a pull request already green (#3508)
+
+The control above landed correct and non-vacuous, and then **did not run on the one pull request
+that night which actually changed the parser** (#3503). Not because it was wrong — because of
+*where* it was wired. A pull request has two builds, and a gate added afterwards misses both:
+
+1. **Its own `pull_request` run** executes the workflow file **as it stood on the merge ref at the
+   time it ran**. A job or step added to `main` later is simply not in that file. Re-running the
+   run does not help: it re-runs the same file.
+2. **Its `merge_group` run** — the one build that sees the change at the moment it lands — skipped
+   the entire `cross-repo-pair` job, whose `if:` is `pull_request` only, for the perfectly good
+   reason that its *other* input is the pull-request BODY.
+
+Both exits close on the same pull request, so a gate lands and every pull request already green at
+that moment is **permanently exempt from it, silently, and invisibly from the pull request**. On
+#3503 the comparison happened to have been run by hand and written into the body — authorship luck,
+not a property of the system.
+
+Measured on the queue run for #3546 (`gh-readonly-queue/main/pr-3546-…`, run `34093021863`):
+
+| job | on `merge_group` |
+|---|---|
+| `Public surface (binary compatibility)` (`record-signatures`) | `completed/success` |
+| `Cross-repo pair (public surface)` | `completed/**skipped**` |
+
+**The fix is placement, and only exit (2) can be closed.** Exit (1) is structural: a build executes
+the file it was cut from, and nothing changes that. So the parser-delta control moved into
+`record-signatures`, the job that already runs on `pull_request` **and** `merge_group` — and which
+carries no fork or dependabot clause either, so the move closes those two exits as well.
+
+**The strict/declaring split is written on the EVENT**, the only exemption AGENTS.md sanctions, and
+it is the same shape the two gates beside it already use for `--pr`:
+
+| event | form | why |
+|---|---|---|
+| `pull_request` | `--pr-body-file` supplied | the body is where an intended decrease is declared |
+| `merge_group` | **no body — STRICT: any decrease is refused** | a queue entry has no single pull request (its ref can carry several), and nothing should shrink the detector at the moment it lands |
+
+Every build gets exactly one of the two; there is no path on which neither runs, which is the whole
+property #3508 is about. **The one thing to know before declaring a decrease:** it is honoured on
+the pull request and refused in the queue, so a genuine parser tightening lands only if it does not
+shrink a published counter. That is a deliberate trade — the queue is where the change becomes
+`main`, and a declaration read there would have to be attributed across a multi-entry group that
+carries several pull requests' diffs at once.
+
+**How the move was falsified** (a gate that cannot fail is not a gate — the acceptance test the
+issue names is the point of the issue):
+
+| arm | result |
+|---|---|
+| clean tree, `merge_group` | **exit 0** on the byte-identical proof, both SHA-256 digests printed |
+| a planted blindness in the detector's git-tree reader (`MeshWeaver.Layout/` skipped), `merge_group` | **exit 1** — `publicTypesAtBase` `1975 → 1710` (−265), and −1817 / −11 / −46 on the other three |
+| the same plant, `pull_request`, empty body | **exit 1**, identical verdict |
+| the same plant, `pull_request`, body declaring all four counters | **exit 0** — `↓ DECLARED in the pull-request body`, so the declaring arm is not lost |
+
+Each row executed the step's own `run:` block extracted from `dotnet-test.yml`, not a restatement
+of it.
+
+**The sibling shape is #3504**: a repository that hand-rolled a lane opts out of every guard that
+lane grows *later*. Same defect one level up, and invisible from the side that is uncovered.
+
 ## See also
 
 [Repository Dependency Direction](/Doc/Architecture/RepositoryDependencyDirection) ·
