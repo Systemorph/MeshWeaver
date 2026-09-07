@@ -241,7 +241,16 @@ public static class PluginCatalogConfigurationExtensions
             .WithType(typeof(SyncTokenSigningKey), nameof(SyncTokenSigningKey))
             .WithType(typeof(ModuleDiscovery), nameof(ModuleDiscovery))
             .WithType(typeof(DefaultInstallLedger), nameof(DefaultInstallLedger))
-            .WithType(typeof(RegistryReconcileLedger), nameof(RegistryReconcileLedger));
+            .WithType(typeof(RegistryReconcileLedger), nameof(RegistryReconcileLedger))
+            // 🚨 The module-inventory record every instance writes about ITSELF, and it was the one
+            // type on this surface that was never registered (#3625). DeploymentReportService
+            // stamped a hand-written discriminator, "ModuleInventoryContent", that named NO CLR
+            // type at all — so the cure its own comment describes ("content without the
+            // discriminator materialises as NOTHING") did not work: the reading hub could not
+            // resolve the name, the value degraded back to a raw JsonElement, and the node still
+            // materialised as nothing. Registering the real record and stamping nameof() is what
+            // makes Ops/Modules/{deployment} readable as DeploymentReport.
+            .WithType(typeof(DeploymentReport), nameof(DeploymentReport));
 
     private static MeshNode CreatePackageNodeType() => new(PackageInstaller.PackageNodeType)
     {

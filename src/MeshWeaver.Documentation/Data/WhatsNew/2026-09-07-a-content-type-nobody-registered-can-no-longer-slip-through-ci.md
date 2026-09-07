@@ -51,5 +51,17 @@ The check was made to fail and then to pass, on the same real degradation:
 - against a log carrying a real but unrelated fault, the check **passed** — so its success is a
   verdict about the content, not the result of finding an empty folder.
 
+## What it found on its first working run
+
+The check went from never firing to firing, and immediately reported something real: **every
+deployment's own module-inventory record was unreadable.** Each portal writes a record of what it is
+running, and that record was tagged with a type name that nothing in the product defines — so
+whatever read it back got nothing. The tag had been added on purpose, with a note saying it was
+there to stop exactly this; it named a type that did not exist, so it never worked. Nothing could
+see that until now: the record was stored perfectly, and only its *readers* came up empty.
+
+Both halves are fixed — the record's type is registered, and the tag is derived from it rather than
+typed out by hand, so the two cannot drift apart again.
+
 A new test drives the real code path and evaluates the log file's own admission rule against the
 record it produces, so this cannot quietly come undone again.
