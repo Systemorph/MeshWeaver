@@ -26,7 +26,7 @@ gone stale, and those corrections are recorded here rather than silently dropped
 |---|---|---|
 | Factor the compile pipeline out of `MeshWeaver.Graph` | **Implemented** | `src/MeshWeaver.Compiler` and `src/MeshWeaver.Compiler.Pipeline` exist |
 | One shared compile implementation | **Implemented for NodeTypes** | all four consumers funnel into `EmitPipeline`/`GeneratorPipeline`; `NodeSetCompiler` is an orchestrator over them, and `BakeEquivalenceTest` pins the two orchestrators equal |
-| Ship the compiler as a dotnet tool | **Partial — published, unproven** | `MeshWeaver.Compiler.Cli`/`mw-compiler` is packed from `tools/MeshWeaver.PluginTester`; **no CI lane consumes it.** Every lane in both repos runs `mw-plugin-test` |
+| Ship the compiler as a dotnet tool | **Withdrawn 2026-09-07** | `MeshWeaver.Compiler.Cli`/`mw-compiler` was packed from `tools/MeshWeaver.PluginTester` and **no CI lane ever consumed it** — every lane in both repos runs the `mw-plugin-test` image. The opt-in is removed and the package unlisted; the image is the distribution ([NuGet Package Retirement](/Doc/Architecture/NuGetPackageRetirement)) |
 
 🚨 **A correction worth keeping.** `src/MeshWeaver.Cli` is **not** the compiler tool. Its
 `ToolCommandName` is `memex`, it operates the mesh over the REST API, and it contains no Roslyn at

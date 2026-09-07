@@ -2,9 +2,10 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <PackAsTool>true</PackAsTool>
-    <ToolCommandName>meshweaver-plugin-build</ToolCommandName>
-    <Description>Builds a MeshWeaver plugin's in-mesh C# the way the portal compiles it at runtime, so CI type-checks source that no other build can see.</Description>
+    <!-- 🚨 NOT packed as a dotnet tool (2026-09-07 — Doc/Architecture/NuGetPackageRetirement).
+         plugin-build.yml already builds it FROM SOURCE at the pinned platform ref, deliberately:
+         "the tool is versioned in LOCKSTEP with the framework — it encodes how a given version
+         compiles". A published tool would be a second, drifting copy of that answer. -->
   </PropertyGroup>
 
   <ItemGroup>
