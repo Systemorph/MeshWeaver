@@ -276,7 +276,11 @@ public static class ServedModuleBytes
         {
             var reading = PublishedBundleCatalogue.SealedModulesOf(sourceDirectory, logger);
             if (reading.Modules is { Count: > 0 })
-                sources.Add((sourceDirectory, Path.GetFileName(sourceDirectory)!, reading.Modules));
+                // 🚨 #3461: the DIRECTORY carried on the reading, not `sourceDirectory` — the
+                // publication may live in a generation subdirectory the source's pointer names,
+                // and `modules/` hangs off that, not off the source.
+                sources.Add((reading.Directory ?? sourceDirectory,
+                    Path.GetFileName(sourceDirectory)!, reading.Modules));
         }
 
         foreach (var pass in new[] { true, false })
