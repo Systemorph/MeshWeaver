@@ -987,25 +987,37 @@ public static class CatalogLayoutAreas
                 if (record is not null
                     && string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
                 {
-                    logger?.LogInformation(
-                        "Package {Id} content is up to date (module {ModuleVersion}); nothing to sync.",
-                        pkg.Id, pkg.ModuleVersion);
-                    // 🚨 #2417 — WithModule, and the missing wrapper here is half of why a package
-                    // could record as installed with no binary anywhere. This early return is a
-                    // CONTENT verdict: the manifest hash the record was stamped from equals the
-                    // one the source serves, so no node needs to travel. It says nothing whatever
-                    // about the module — and by returning unwrapped (the other two exits below are
-                    // both WithModule'd) it made the content answer stand in for the module
-                    // answer. Once a moduleVersion was stamped, no install and no reconcile would
-                    // ever ask about the binary again, on any deployment.
+                    // 🚨 #3485 — THE HASH COMPARE ABOVE IS A STATEMENT ABOUT THE SOURCE, NOT ABOUT
+                    // THE MESH. `record.ModuleVersion` is a hash of the FILES the source serves,
+                    // stamped by the installer onto a record the installer itself wrote. Nothing in
+                    // it observes what actually landed — so a node lost AFTER the install (a delete,
+                    // an interrupted sync, a partial write) leaves the two hashes equal and this
+                    // early return served a partial install as healthy. That is not hypothetical:
+                    // `memex.systemorph.com` lost `Feedback/Feedback/Source/FeedbackContent` on
+                    // 2026-08-26, a REINSTALL on 2026-09-03 returned InstallResult(0, 0) without
+                    // fetching a file, and eleven days later the gap was the proximate cause of the
+                    // #3472 outage. The remedy an operator reaches for first had already been shown
+                    // not to work, and no instrument anywhere said why.
                     //
-                    // The module lane costs nothing when there is nothing to ask: WithModule is
-                    // the identity for a package declaring no module or a source that serves no
-                    // bundles, and AdoptModule absorbs every failure into a logged zero — its
-                    // presence-aware ModuleUpdateDecision answers SkipUpToDate for the normal
-                    // case, in which nothing travels either.
-                    return WithModule(Observable.Return(new InstallResult(0, 0)));
+                    // So the skip now needs a POSITIVE OBSERVATION that every node the record
+                    // declares is actually in the mesh. The three non-Complete verdicts are kept
+                    // apart on purpose (AGENTS.md — a check that answers a boolean about something
+                    // it had to READ must not spell a failed read like a real negative):
+                    //   • Incomplete   → DO NOT SKIP. The full install heals it (DecideAndWrite
+                    //                    writes whenever `current is null`) and the shortfall is
+                    //                    named at Error. This is the #3485 fix.
+                    //   • Undeclared   → the record carries no file map, so there is nothing to
+                    //   • NotObserved  → compare, or the mesh could not be read. Today's behaviour
+                    //                    is preserved (skip — a full install of every unverifiable
+                    //                    package on every boot would be a new cost nobody asked
+                    //                    for) but it is NOT reported as verified: it says at
+                    //                    Warning that completeness was not checked, and why.
+                    return InstallCompleteness
+                        .Observe(persistence, hub.JsonSerializerOptions, pkg.Id,
+                            PackageInstaller.TargetPartitionOf(pkg.Id, record), record)
+                        .SelectMany(verdict => SkipOrHeal(verdict, pkg, logger, Full, WithModule));
                 }
+
                 if (record?.InstalledFiles is not { Count: > 0 })
                     return Full();
                 return WithModule(IncrementalUpdate(hub, source, sourceRef, pkg, record, logger, authorizingUserId))
@@ -1021,6 +1033,59 @@ public static class CatalogLayoutAreas
                         return Full();
                     });
             });
+    }
+
+    /// <summary>
+    /// The up-to-date exit, once the mesh has actually been looked at (#3485). Kept as its own
+    /// method so the three non-<see cref="InstallCompletenessKind.Complete"/> verdicts each get a
+    /// distinct, greppable line instead of collapsing into one "nothing to sync".
+    /// </summary>
+    private static IObservable<InstallResult> SkipOrHeal(
+        InstallCompletenessVerdict verdict,
+        PackageManifest pkg,
+        ILogger? logger,
+        Func<IObservable<InstallResult>> full,
+        Func<IObservable<InstallResult>, IObservable<InstallResult>> withModule)
+    {
+        if (verdict.Kind is InstallCompletenessKind.Incomplete)
+        {
+            logger?.LogError(
+                "Package {Id} records module {ModuleVersion} as installed, but {Missing} of "
+                + "{Declared} declared node(s) are ABSENT from the mesh: [{Paths}]. The content "
+                + "hash cannot see this — it describes the SOURCE, not what landed — so the install "
+                + "is being REPAIRED rather than skipped (MeshWeaver#3485).",
+                pkg.Id, pkg.ModuleVersion, verdict.Missing.Count, verdict.Declared,
+                string.Join(", ", verdict.Missing.Take(20)));
+            return full();
+        }
+
+        if (verdict.Kind is InstallCompletenessKind.Complete)
+            logger?.LogInformation(
+                "Package {Id} content is up to date (module {ModuleVersion}, {Present}/{Declared} "
+                + "declared node(s) present); nothing to sync.",
+                pkg.Id, pkg.ModuleVersion, verdict.Present, verdict.Declared);
+        else
+            logger?.LogWarning(
+                "Package {Id} content is up to date by module hash ({ModuleVersion}) but its "
+                + "completeness was NOT verified ({Kind}): {Because}. Nothing is being reinstalled "
+                + "— but this install has not been shown to be whole (MeshWeaver#3485).",
+                pkg.Id, pkg.ModuleVersion, verdict.Kind, verdict.Because);
+
+        // 🚨 #2417 — WithModule, and the missing wrapper here is half of why a package
+        // could record as installed with no binary anywhere. This early return is a
+        // CONTENT verdict: the manifest hash the record was stamped from equals the
+        // one the source serves, so no node needs to travel. It says nothing whatever
+        // about the module — and by returning unwrapped (the other two exits are
+        // both WithModule'd) it made the content answer stand in for the module
+        // answer. Once a moduleVersion was stamped, no install and no reconcile would
+        // ever ask about the binary again, on any deployment.
+        //
+        // The module lane costs nothing when there is nothing to ask: WithModule is
+        // the identity for a package declaring no module or a source that serves no
+        // bundles, and AdoptModule absorbs every failure into a logged zero — its
+        // presence-aware ModuleUpdateDecision answers SkipUpToDate for the normal
+        // case, in which nothing travels either.
+        return withModule(Observable.Return(new InstallResult(0, 0)));
     }
 
     // The manifest-diff fast path: fetch only manifest.lock, diff, fetch only the changed files.
