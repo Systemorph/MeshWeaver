@@ -220,7 +220,39 @@ public static class InstallCompleteness
                 .Where(p => !accountedPartitions.Contains(p))
                 .Distinct(StringComparer.Ordinal)
                 .ToImmutableSortedSet(StringComparer.Ordinal))
-            .SelectMany(candidates => candidates.Count == 0
+            .SelectMany(candidates => candidates.Count > MaxUnaccountedRootsToRead
+                // 🚨 REFUSE, LOUDLY — never truncate. Every top-level node is a partition, and on a
+                // portal with many users that set is dominated by user roots this arm cannot be
+                // about. Reading an unbounded number of them in one batch is a cost nobody asked
+                // for at boot; silently reading the first N would be worse, because the roots it
+                // skipped would be spelled exactly like roots that are fine. So it emits ONE
+                // verdict saying the arm did not run and what the number was.
+                ? Observable.Return<InstallCompletenessVerdict>(new(
+                    "*", "*", InstallCompletenessKind.NotObserved, 0, 0,
+                    ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
+                    $"{candidates.Count} top-level partition(s) are unaccounted for, above the "
+                    + $"{MaxUnaccountedRootsToRead} this arm reads in one batch — so the "
+                    + "abandoned-root sweep did NOT run this boot. This is not a clean result; it "
+                    + "is an absent one."))
+                : ObserveCandidateRoots(persistence, options, candidates))
+            .Catch<InstallCompletenessVerdict, Exception>(_ =>
+                Observable.Empty<InstallCompletenessVerdict>());
+    }
+
+    /// <summary>
+    /// The bound on <see cref="ObserveUnaccountedRoots"/>' one batched read. Every top-level node is
+    /// a partition, and a portal's user partitions dominate that set — this arm is about package
+    /// roots, and above this many unaccounted ones it declines and says so rather than paying an
+    /// unbounded read at boot.
+    /// </summary>
+    private const int MaxUnaccountedRootsToRead = 2000;
+
+    private static IObservable<InstallCompletenessVerdict> ObserveCandidateRoots(
+        IStorageAdapter persistence,
+        JsonSerializerOptions options,
+        ImmutableSortedSet<string> candidates)
+    {
+        return (candidates.Count == 0
                 ? Observable.Return(ImmutableList<MeshNode>.Empty)
                 : persistence.ReadMany(candidates, options)
                     .Where(IsAbandonedInstallRoot)
@@ -240,9 +272,7 @@ public static class InstallCompleteness
                             + "leaves when it writes its root placeholder and then stops — the "
                             + "portal serves it as an ordinary empty space (MeshWeaver#3485)")))
                     .ToObservable()
-                    .Concat())
-            .Catch<InstallCompletenessVerdict, Exception>(_ =>
-                Observable.Empty<InstallCompletenessVerdict>());
+                    .Concat());
     }
 
     /// <summary>The denominator, so a zero cannot hide its cause.</summary>

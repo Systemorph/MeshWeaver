@@ -177,6 +177,11 @@ Stated so nobody reads a green sweep as more than it is.
 - **The install's own postcondition.** The installer still does not read back what it wrote before
   stamping the record; the sweep catches it on the next boot instead. Closing that would move the
   check inside the install transaction and is a separate change.
+- **A portal with very many partitions.** Every top-level node is a partition, and on a portal with
+  many users that set is dominated by user roots this arm cannot be about. Above 2 000 unaccounted
+  top-level partitions the abandoned-root arm **declines and says so** — one `NotObserved` line
+  naming the count. It never reads the first N silently: the roots it skipped would then be spelled
+  exactly like roots that are fine, which is the failure this whole page is about.
 
 ## Related
 
