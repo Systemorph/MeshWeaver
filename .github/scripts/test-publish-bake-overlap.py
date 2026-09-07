@@ -483,6 +483,37 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
           r.returncode == 0 and s.sealed() and "already published; skipping" in r.stdout,
           f"rc={r.returncode}, {denominator(s)}")
 
+    # ── ATTRIBUTION: repository.txt records the CONTENT repository, not the LANE. #3583 ────────
+    #
+    # This is the marker SealedSyncGate.BelongsTo reads, and it takes the marker branch whenever the
+    # marker is non-empty — it never falls back to commit attribution. So a `plugins` seal stamped
+    # with core CD's own repository name is not attributable to MeshWeaver.Plugins at all: the
+    # gate's `mine` list comes back empty and it returns Go, inert for the one repository it exists
+    # to hold. The two cases are one variable apart: same lane, same bake; only whose CONTENT it is
+    # differs.
+    print("\nattribution — the repository marker names whose CONTENT was baked (#3583):")
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "1301",
+                  {"BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins"})
+    marker = h.shelf().files().get("repository.txt", "").strip()
+    check("the case is not vacuous — a marker was written at all",
+          r.returncode == 0 and marker != "", f"rc={r.returncode}, repository.txt={marker!r}")
+    if expect_defect:
+        check("PRE-FIX: a bake of another repository's content is stamped with the LANE",
+              marker == "Systemorph/MeshWeaver", f"repository.txt={marker!r}")
+    else:
+        check("a bake of another repository's content records THAT repository",
+              marker == "Systemorph/MeshWeaver.Plugins", f"repository.txt={marker!r}")
+
+    # The control for it: a lane baking its OWN content still records itself, so the fix cannot be
+    # "always write something else".
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "1302")
+    marker = h.shelf().files().get("repository.txt", "").strip()
+    check("a bake of the lane's own content records the lane",
+          r.returncode == 0 and marker == "Systemorph/MeshWeaver",
+          f"rc={r.returncode}, repository.txt={marker!r}")
+
     # ── OVERLAP A: the other lane dies mid-publication, having overwritten part of ours. ───────
     print("\noverlap — the other lane is STILL IN FLIGHT when we seal:")
     h.reset()

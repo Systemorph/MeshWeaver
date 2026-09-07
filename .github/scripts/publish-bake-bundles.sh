@@ -35,6 +35,10 @@
 #                          memex-data PVC, mounted at /data — so the portal reads
 #                          /data/prebuilt-bundles/... when PreWarm__PrebuiltBundleRoot is
 #                          /data/prebuilt-bundles).
+#   BAKE_CONTENT_REPOSITORY  owner/name of the repository the BAKED CONTENT came from — recorded in
+#                          repository.txt so an instance can attribute the seal (see the marker
+#                          below). Defaults to $GITHUB_REPOSITORY, which is the LANE's repository
+#                          and therefore right only when the lane bakes its own content.
 #
 # AUTH: `az login` must already have happened (the CD jobs use OIDC). Data-plane access uses
 # --auth-mode login with --backup-intent, which requires the identity to hold the
@@ -181,9 +185,25 @@ printf '%s\n' "${SOURCE_SHA:-unknown}" > "$SOURCE_MARKER_LOCAL"
 # in core). A local run records nothing rather than a guess; the gate attributes such a seal by
 # commit instead. Listed and uploaded BEFORE architecture.txt, which stays the LAST upload before
 # the postcondition — the overlap harness hooks its second publisher onto that file.
+#
+# 🚨 It is the CONTENT repository, NEVER $GITHUB_REPOSITORY (MeshWeaver#3583). The two differ in
+# exactly the case the marker exists for: core CD's `plugins-bake` bakes MeshWeaver.Plugins content
+# from a run whose $GITHUB_REPOSITORY is Systemorph/MeshWeaver, so the lane's own name stamped a
+# `plugins` seal as the PLATFORM's. SealedSyncGate.BelongsTo takes the marker branch whenever it is
+# non-empty and never falls back to commit attribution, so a Plugins green build then found no seal
+# attributable to Plugins, `mine` was empty, and the gate returned Go — inert for the one repository
+# it was written for, while the satellite's own publish-bake stamped the SAME prefix correctly. The
+# same trap one field over from the content sha, which node-repo-publish-bake.yml already warns
+# about ("The CONTENT commit, not $GITHUB_SHA. They differ exactly when content-repository is set").
+#
+# The fallback to $GITHUB_REPOSITORY is correct ONLY for a lane baking its OWN repository's content
+# — which is every node repo and core's `meshweaver-content` bake. Both live callers now pass the
+# value explicitly, so nothing in the fleet relies on the fallback; it is here for an older
+# workflow copy that has not been re-pinned yet, where the lane's own name is the best available
+# answer and was the whole answer before this variable existed.
 REPO_MARKER="repository.txt"
 REPO_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$REPO_MARKER"
-printf '%s\n' "${GITHUB_REPOSITORY:-}" > "$REPO_MARKER_LOCAL"
+printf '%s\n' "${BAKE_CONTENT_REPOSITORY:-${GITHUB_REPOSITORY:-}}" > "$REPO_MARKER_LOCAL"
 
 ARCH_MARKER="architecture.txt"
 ARCH_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$ARCH_MARKER"
