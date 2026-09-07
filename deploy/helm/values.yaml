@@ -345,7 +345,13 @@ keyVaultSecrets:
 #         - vaultSecret: memex-connectionstring
 #           key: ConnectionStrings__memex
 keyVaultSecretClasses: []
-# ---- Extra env sources for the portal (verbatim EnvFromSource objects) ----
+# ---- Extra env sources for the portal AND the migration Job ----
+# (verbatim EnvFromSource objects)
+# 🚨 BOTH workloads render these, and that parity is the point (#3595):
+# the migration Job rendered none of it until then, so a key delivered this way
+# reached the portal and NOT the backfill — which logged-and-skipped every row
+# and still reported `Database migration completed`. KeyVaultEscapeHatchParityGuard
+# holds the two renders together.
 # ⚠️ LEGACY ESCAPE HATCH — kept for environments whose SecretProviderClass is
 # still hand-made. Declare the secrets under `keyVaultSecrets` above instead;
 # that renders the SecretProviderClass AND the envFrom, so the pod's secret
@@ -358,12 +364,16 @@ keyVaultSecretClasses: []
 #     - secretRef:
 #         name: memexcloud-portal-ai-secrets
 extraEnvFrom: []
-# ---- Extra volumes/mounts for the portal (verbatim Volume/VolumeMount) ----
+# ---- Extra volumes/mounts for the portal AND the migration Job ----
+# (verbatim Volume/VolumeMount)
 # ⚠️ LEGACY ESCAPE HATCH — see extraEnvFrom; `keyVaultSecrets` renders the
 # CSI volume and its mount too. The volume-shaped twin of extraEnvFrom, for
 # resources the chart does not own — typically the secrets-store CSI volume
 # behind a SecretProviderClass: the MOUNT is what makes the CSI driver sync
-# (and keep rotating) the k8s Secret that extraEnvFrom then reads. Example:
+# (and keep rotating) the k8s Secret that extraEnvFrom then reads. 🚨 So a
+# workload that lists the Secret in extraEnvFrom must also carry the volume and
+# its mount, or it free-rides on another pod's mount and reads a value that is
+# stale or absent (#3548 / #3595). Example:
 #   extraVolumes:
 #     - name: kv-ai-secrets
 #       csi:

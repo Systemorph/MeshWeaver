@@ -76,6 +76,30 @@ spec:
                 name: "{{ $class.syncedSecret }}"
                 optional: true
             {{- end }}
+            {{- /* ⚠️ LEGACY ESCAPE HATCH — the SAME env sources the portal Deployment renders
+                   (memex-portal/deployment.yaml), and for the SAME reason the block above exists
+                   (MeshWeaver#3595).
+
+                   The block above covers only the classes the CHART owns. An environment whose
+                   SecretProviderClass is HAND-MADE attaches it by name through `.Values.extraEnvFrom`
+                   instead — the shape values.yaml calls "the memex-cloud AI-keys shape" — and until
+                   this block existed the Job rendered NONE of it. That is a different defect from
+                   #3548, which was STALENESS: for a key delivered this way the Job had no value at
+                   all, so `MeshNodeEmbeddingBackfill` took the not-configured path, logged-and-
+                   skipped every row, and the Job still reported `Database migration completed`.
+                   Same green run, same silent outcome, different mechanism.
+
+                   VERBATIM, and deliberately NOT `optional: true`. The chart-owned entries above
+                   are optional because the chart RENDERS their SecretProviderClass and knows a
+                   first install has no pre-existing rows to backfill. The chart owns nothing here:
+                   the operator declared this source, and the volumes below are what materialise it
+                   before this container starts. Marking it optional would recreate the very defect
+                   this block closes — an absent value read as "not configured", green and silent.
+                   The portal Deployment has identical semantics for the identical entries, so an
+                   env whose Secret is genuinely missing already fails there. */}}
+            {{- range .Values.extraEnvFrom }}
+            - {{ toYaml . | nindent 14 | trim }}
+            {{- end }}
           imagePullPolicy: "IfNotPresent"
           {{- /* 🚨 THE JOB MOUNTS THE SPC ITSELF — this is what makes the values above CURRENT
                  (MeshWeaver#3548).
@@ -109,15 +133,24 @@ spec:
                  name. Rendered only when a class is declared — a namespace with no Key Vault gets
                  the pod spec it had before. */}}
           {{- $keyVaultClasses := (include "memex.keyVaultClasses" . | fromYamlArray) }}
-          {{- if $keyVaultClasses }}
+          {{- if or $keyVaultClasses .Values.extraVolumeMounts }}
           volumeMounts:
             {{- range $class := $keyVaultClasses }}
             - name: "{{ $class.volumeName }}"
               mountPath: "{{ $class.mountPath }}"
               readOnly: true
             {{- end }}
+            {{- /* ⚠️ LEGACY: the mount half of the escape hatch, and the half that carries the
+                   whole freshness argument above for a HAND-MADE SecretProviderClass. The envFrom
+                   entry names the synced Secret; THIS is what makes the CSI driver fetch the vault
+                   objects and write that Secret before any container in this pod starts. Without
+                   it the Job would free-ride on the portal pods' mount — #3548's defect, in
+                   escape-hatch clothing. KeyVaultEscapeHatchParityGuard asserts the pair. */}}
+            {{- range .Values.extraVolumeMounts }}
+            - {{ toYaml . | nindent 14 | trim }}
+            {{- end }}
           {{- end }}
-      {{- if $keyVaultClasses }}
+      {{- if or $keyVaultClasses .Values.extraVolumes }}
       volumes:
         {{- range $class := $keyVaultClasses }}
         - name: "{{ $class.volumeName }}"
@@ -126,5 +159,11 @@ spec:
             readOnly: true
             volumeAttributes:
               secretProviderClass: "{{ $class.name }}"
+        {{- end }}
+        {{- /* ⚠️ LEGACY: the volume half — typically the secrets-store CSI volume behind a
+               hand-made SecretProviderClass. Verbatim Volume objects, mounted by
+               .Values.extraVolumeMounts above. */}}
+        {{- range .Values.extraVolumes }}
+        - {{ toYaml . | nindent 10 | trim }}
         {{- end }}
       {{- end }}
