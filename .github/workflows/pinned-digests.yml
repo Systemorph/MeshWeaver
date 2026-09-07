@@ -67,10 +67,6 @@ jobs:
     # Four emptiness tests, a mint and one API call. The fleet cap is 45
     # (check-workflow-timeouts.py) and nothing here has any business approaching it.
     timeout-minutes: 10
-    # NEGATIVE CONTROL for #3579 — REMOVED BEFORE MERGE. A second `timeout-minutes`, both values
-    # under the cap, so `check-workflow-timeouts.py` reads the LAST one (45) and stays GREEN while
-    # the line above is silently dead. This is the shape nothing in the fleet could see.
-    timeout-minutes: 45
     steps:
       # No `if:` anywhere in this job. It asserts, it does not decide whether to assert.
       - name: Every external input, or a red build naming what to provision
