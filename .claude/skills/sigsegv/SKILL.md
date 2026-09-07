@@ -102,15 +102,23 @@ Both are SIGSEGV. They are different bugs and the dump distinguishes them in one
 | | fault address | reading | verdict |
 |---|---|---|---|
 | **Use-after-unload** | `si_code = SI_KERNEL`, `si_addr = 0`, faulting register holds a **non-canonical** value (e.g. `rax = 0x0074007300200022` — UTF-16 text where a pointer belonged) | a **#GP on a non-canonical pointer**, not a null deref — freed-and-reused memory | **OURS.** Family A below. |
-| **Zeroed MethodTable header** | `si_code = 1` (`SEGV_MAPERR`), `si_addr = 0x0`, `TRAPNO=14`/`ERR=0x4`, `RIP` inside file-backed `libcoreclr` `gc_heap::*`, instruction reading `MT->m_dwFlags` off a register that is `0` (`mov ecx,[rax]` with `RAX = 0`; `mov r9d,[rcx]` with `RCX = 0` — the register allocation varies, the dereference does not) | one 8-byte object header reads as exactly zero while its block stays coherent | **CoreCLR GC.** Not ours. |
+| **Zeroed MethodTable header** | `si_code = 1` (`SEGV_MAPERR`), `TRAPNO=14`/`ERR=0x4`, `RIP` inside file-backed `libcoreclr`, instruction reading a MethodTable field off a register that is `0` — `si_addr` is the FIELD OFFSET, so `0x0` for `MT->m_dwFlags` (`mov ecx,[rax]`, `RAX = 0`) and **`0x4` for `MT->m_BaseSize`** (`mov 0x4(%rax),%esi`, sighting #10). The register allocation and the frame both vary; the dereference does not | one 8-byte object header reads as exactly zero while its block stays coherent | **CoreCLR / upstream.** Not ours. |
 
-The second one is the FutuRe family — **nine sightings, and the collectible-ALC hypothesis has been
+🚨 **`si_addr = 0x0` is NOT part of the fingerprint** — it is only the offset of whichever MethodTable
+field the faulting code happened to read. Sighting #10 faults at `si_addr = 0x4` and is the same bug.
+Match on *"a MethodTable word that is exactly zero"*, never on the literal address.
+
+The second one is the FutuRe family — **ten sightings, and the collectible-ALC hypothesis has been
 falsified three separate ways** (RIP is in file-backed runtime code; a freed `LoaderAllocator` yields
 a non-null *unmapped* pointer, never `0x0`; a free-list item has no ALC at all). Do not keep paying
 that hypothesis forward, and **do not "fix" it by disabling concurrent GC** — that was tried
 (#1274), changed nothing measurable, and was removed. Read the instruction + registers, not the
 function name: the frame moved across `background_sweep` → `plan_phase` → `find_first_object` →
-`background_mark_simple1` (2026-09-03) while the fault did not. Measured base rate on Plugins CI over
+`background_mark_simple1` (2026-09-03) while the fault did not. 🚨 **And sighting #10 (2026-09-06)
+left `gc_heap` entirely** — `LCGMethodResolver::GetCodeInfo+0x1f7`, `si_addr = 0x4` because the null
+MethodTable is read at offset `+4` — so a `gc_heap` frame is a *symptom* of the family, never its
+definition. The portable fingerprint is **a MethodTable word that reads exactly zero**, whoever
+dereferences it. Measured base rate on Plugins CI over
 1,197 runs: **0.74 %**, `MeshWeaver.FutuRe.Test` only, `main` included. Full table:
 DebuggingNativeCrashes.md.
 
@@ -125,8 +133,16 @@ later segfaults *in whatever test is running*. Pinned by
 Every dynamic NodeType recompile mints a collectible `AssemblyLoadContext`. Unload one while a
 thread can still enter its code and you get a genuine native fault. **The canonical crash of this
 codebase**, CI run `32713409169`: a dedicated thread faulted on its **first managed call**, taking
-the prestub into `UnsafeJitFunction` and dying in `LCGMethodResolver::GetCodeInfo` — JIT-compiling a
-dynamic method whose allocator was already gone.
+the prestub into `UnsafeJitFunction` and dying in `LCGMethodResolver::GetCodeInfo`.
+
+🚨 **That last frame is now known to have been misread, and the correction matters more than the
+story.** Measured 2026-09-06 against the `10.0.11` symbols (DebuggingNativeCrashes.md, sighting #10):
+`LCGMethodResolver::GetCodeInfo+0x1f7` allocates nothing and touches no `LoaderAllocator` — it is
+`memcpy(code, dataArray->GetDataPtr(), codeSize)`, reading the **MethodTable word of a managed
+`byte[]`** that holds a dynamic method's IL. A fault there says *that array's header is garbage*, not
+*an ALC was unloaded*. So do **not** reach for `AlcLeaseRegistry` on this frame; read `si_code` /
+`si_addr` and the object at the base register first. The defect the `✅` below fixes is real and the
+shape is worth knowing — but this frame is not the evidence for it.
 
 **The cause was a timer race in a `Task`-returning override** — async *and* an unsubscribed disposal
 signal, in one defect:
