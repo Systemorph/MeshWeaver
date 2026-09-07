@@ -52,6 +52,12 @@ For every workflow YAML under `.github/workflows/` and every composite-action `a
     GitHub's YAML-1.2 parser keeps them apart — a disagreement between the gate's view and the
     runner's view is exactly the hazard this file exists to remove).
 
+The second arm compares with Python's own `==`, deliberately: it asks what `safe_load` would MERGE,
+and a dict merges `True` with `1` and `1` with `1.0` exactly as `==` does. The first arm covers the
+mirror image — GitHub coerces every mapping key to a string, so `'1':` and `1:` are one key to the
+runner while `safe_load` keeps them apart. Between them the two arms cover a collision in EITHER
+parser, which is what "the gates and the runner see the same file" requires.
+
 Both arms are reported with BOTH line numbers, so the shadowed value can be found by reading.
 
 ANCHORS, ALIASES AND MERGE KEYS — a deliberate decision
@@ -123,20 +129,23 @@ def action_files(root: Path) -> list[Path]:
     return sorted(out)
 
 
-def _resolved(node: yaml.Node):
+def _resolved(node: yaml.Node) -> tuple[bool, object]:
     """The key as `yaml.safe_load` would see it — the view every OTHER guard in the fleet holds.
 
-    Returns a hashable value, or a sentinel string for anything that cannot be constructed safely.
+    Returns (resolvable, value). A non-scalar key is not resolvable: workflows do not use them, and
+    saying so explicitly keeps two of them from comparing equal through a shared sentinel.
     """
     if not isinstance(node, yaml.ScalarNode):
-        return None
+        return False, None
     if node.tag == STR_TAG:
-        return node.value
+        return True, node.value
     try:
         value = yaml.constructor.SafeConstructor().construct_object(node)
     except Exception:
-        return node.value
-    return value if isinstance(value, (str, int, float, bool, type(None))) else node.value
+        return True, node.value
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return True, value
+    return True, node.value
 
 
 def _as_written(node: yaml.Node) -> str:
@@ -168,23 +177,20 @@ def scan_node(node: yaml.Node, rel: Path, path: str, seen_nodes: set[int], viola
     if not isinstance(node, yaml.MappingNode):
         return
 
-    # (as-written, resolved, line, is_merge) for every key already written in THIS mapping.
-    prior: list[tuple[str, object, int, bool]] = []
+    # (as-written, resolvable, resolved, line, is_merge) for every key already written in THIS mapping.
+    prior: list[tuple[str, bool, object, int, bool]] = []
     for key_node, value_node in node.value:
         written = _as_written(key_node)
-        resolved = _resolved(key_node)
+        resolvable, resolved = _resolved(key_node)
         line = key_node.start_mark.line + 1
         is_merge = getattr(key_node, "tag", None) == MERGE_TAG
         where = path or "<document root>"
-        for prev_written, prev_resolved, prev_line, prev_merge in prior:
+        for prev_written, prev_resolvable, prev_resolved, prev_line, prev_merge in prior:
             same_text = prev_written == written
-            same_value = (
-                not same_text
-                and resolved is not None
-                and prev_resolved is not None
-                and type(resolved) is type(prev_resolved)
-                and resolved == prev_resolved
-            )
+            # Deliberately Python's own `==`, not a type-matched comparison: this arm asks what
+            # `yaml.safe_load` would MERGE, and a dict merges `True` with `1` and `1` with `1.0`
+            # exactly as `==` does. Matching types here would let those two shapes through.
+            same_value = not same_text and resolvable and prev_resolvable and prev_resolved == resolved
             if not (same_text or same_value):
                 continue
             if same_text and is_merge and prev_merge:
@@ -211,7 +217,7 @@ def scan_node(node: yaml.Node, rel: Path, path: str, seen_nodes: set[int], viola
                     f"the fleet then holds a different view of this file than the runner does (#3579)"
                 )
             break  # one verdict per key; the first collision already names the shadowed line
-        prior.append((written, resolved, line, is_merge))
+        prior.append((written, resolvable, resolved, line, is_merge))
         scan_node(value_node, rel, _child_path(path, written), seen_nodes, violations)
 
 
@@ -297,6 +303,19 @@ def self_test() -> int:
         # OTHER guard in the fleet, all of which read this file through safe_load.
         ("resolve-collision-yes-true",
          "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    env:\n      yes: 1\n      true: 2\n    steps: [{run: echo}]\n", True),
+        # A dict merges `True` with `1` and `1` with `1.0`; so does this arm, by using the same `==`.
+        ("resolve-collision-true-one",
+         "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    env:\n      true: 1\n      1: 2\n    steps: [{run: echo}]\n", True),
+        ("resolve-collision-int-float",
+         "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    env:\n      1: a\n      1.0: b\n    steps: [{run: echo}]\n", True),
+        # A quoted and an unquoted scalar with the same TEXT is the `on:` / `"on":` shape again:
+        # safe_load keeps them apart (str vs int) while GitHub coerces every mapping key to a
+        # string and merges them. The as-written arm fires, which is the direction that matters.
+        ("quoted-and-plain-same-text-fires",
+         "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    env:\n      '1': x\n      1: y\n    steps: [{run: echo}]\n", True),
+        # Genuinely different keys must stay silent — the arm is not simply \"any two scalars\".
+        ("distinct-scalars-silent",
+         "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    env:\n      A: 1\n      B: 2\n      '3': x\n      4: y\n    steps: [{run: echo}]\n", False),
         # Anchors and aliases are legitimate YAML and must not red.
         ("anchor-alias-silent",
          "on: push\nx-base: &base\n  runs-on: ubuntu-latest\n  timeout-minutes: 5\njobs:\n  a:\n    <<: *base\n    steps: [{run: echo}]\n  b:\n    <<: *base\n    steps: [{run: echo}]\n", False),

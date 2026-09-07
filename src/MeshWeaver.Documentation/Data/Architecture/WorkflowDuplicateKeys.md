@@ -26,8 +26,8 @@ The diff looks like it moved a pin. The job kept the old one.
 
 ## The near-miss that opened the class
 
-Measured **2026-09-07**, in the satellite wave adopting
-[#3560's](/Doc/Architecture/ModuleBuildArchitecture) `centralized-gen-manifests` input. Each
+Measured **2026-09-07**, in the satellite wave adopting the `centralized-gen-manifests` input that
+made [gen-manifests.py the platform's canonical checker](../ModuleBuildArchitecture) (#3560). Each
 caller's `validate:` job needed a `with:` block. The patcher located the job's end with
 `s.index("\n  ", i)` — a pattern that also matches `"\n    with:"`, because that string starts with
 a newline and two spaces. So it cut the block after `uses:` and **appended a second `with:`**, in
@@ -74,6 +74,12 @@ the same when
   YAML-1.2 parser keeps them apart. A disagreement between what the gates see and what the runner
   sees is exactly the hazard this file exists to remove, so it is reported rather than tolerated.
 
+The second arm compares with **Python's own `==`**, deliberately: it asks what `safe_load` would
+*merge*, and a dict merges `True` with `1` and `1` with `1.0` exactly as `==` does. The first arm
+covers the mirror image — GitHub coerces every mapping key to a string, so `'1':` and `1:` are one
+key to the runner while `safe_load` keeps them apart. Between them the two arms catch a collision in
+**either** parser, which is what *"the gates and the runner see the same file"* actually requires.
+
 Composite actions are scanned **when present** and are never required to exist: a repo with no
 composite action is not a repo with a missing gate. A repo with no *workflows* directory, on the
 other hand, fails — [nothing to gate is a failure, not a pass](../ReadingCiSignals).
@@ -108,8 +114,10 @@ composite action using them is not redded by surprise.
 
 ## Where it runs
 
-**Core, on itself** — `dotnet-test.yml`, in the workflow-gates job, immediately after the
-45-minute-cap guard: `--self-test`, then `--root .`.
+**Core, on itself** — `dotnet-test.yml`, in the `workflow-shell` job (*"CI's own shell"*),
+immediately after the 45-minute-cap guard: `--self-test`, then `--root .`. That job is a `needs:`
+of `collect-results` — `Consolidate test results`, the repository's **only** required status check —
+so the gate can actually block a merge rather than being decorative.
 
 **Every satellite, centrally** — `node-repo-validate.yml` fetches it from this repository at the
 caller's `platform-ref`, self-tests it, and runs it against the **caller's** tree. That is the same
@@ -122,6 +130,19 @@ five vintages, and each fix landed in one repo while the other five kept the bug
 The fetch carries no trapdoor: `platform-ref` empty is red, a fetch that fails is red naming the
 ref, and a body whose first 400 bytes do not name the script is red. There is no fallback to a local
 copy and no `continue-on-error` — [a gate never tests its own inputs](../ReadingCiSignals).
+
+🚨 **The denominator: five satellites, not six.** MeshWeaver.Crm, .Education, .Manufacturing,
+.Reinsurance and .SocialMedia call `node-repo-validate.yml` and therefore get this guard.
+**MeshWeaver.Plugins does not call that lane at all** — it calls `node-repo-module-pack.yml`,
+`node-repo-gate.yml`, `node-repo-publish-bake.yml`, `node-repo-platform-ref-bump.yml` and
+`auto-arm.yml` — so its seven workflow files are ungated here. That is **not a gap this guard
+introduces**: measured 2026-09-07, Plugins runs *none* of the three central workflow guards
+(`check-workflow-timeouts.py`, `check-pr-secret-preflight.py`, and now this one) for exactly the
+same reason, and it is already tracked as #3504 (*"a hand-rolled lane opts out of every guard the
+lane grows later"*) — this guard is the third instance of exactly that. Wiring the triplet into a
+lane Plugins does call is one change for all three; adding this one guard to a different lane would
+be a deviation, and a deviating repo is behind, not different. (#3504's other half has since closed
+itself: MeshWeaver.Manufacturing adopted the lane and now runs all three.)
 
 ## The self-test is the licence to believe the verdict
 
