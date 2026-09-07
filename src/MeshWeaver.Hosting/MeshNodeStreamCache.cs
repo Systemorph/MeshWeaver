@@ -2251,7 +2251,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         && !isOverwrite
         && attempt < maxRetries;
 
-    private static MeshNode ConvertContentJsonElementToTyped(
+    // internal, not private: UntypedContentDegradationReachesTheTraceSinkTest drives THIS method —
+    // the production emitter — rather than a copy of it, so the reachability control cannot pass
+    // against a shape the product no longer has (#3625).
+    internal static MeshNode ConvertContentJsonElementToTyped(
         MeshNode node, JsonSerializerOptions options, ILogger logger,
         MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry)
     {
@@ -2279,7 +2282,18 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 if (recovered is not null)
                     return node with { Content = recovered };
 
+                // 🚨 The EXCEPTION ARGUMENT is load-bearing and is not decoration (#3625). A CI
+                // shard's authoritative sink takes a record if and only if
+                // `exception is not null && logLevel >= Warning` (XUnitFileLogger.Log →
+                // TestTraceLog.AppendFault), so without one this warning could reach
+                // collected-logs/_meshweaver-test-trace.log by construction NEVER — and the shard
+                // gate that greps that directory (check-untyped-content.sh) therefore had no way
+                // to fire at all. The job log is not an equivalent sink: it carries only the output
+                // of tests that FAILED, and a degradation is overwhelmingly logged under a test
+                // that passes. Reaching the sink is a property of the CALL, not of the wording.
                 logger.LogWarning(
+                    new MeshNodeContentDegradedException(
+                        "MeshNodeStreamCache.GetStream", node.Path, node.NodeType, TruncateRaw(je)),
                     "MeshNodeStreamCache.GetStream: Content for {Path} stayed an untyped JsonElement after "
                     + "deserialization (TypeRegistry lacks the $type discriminator) — downstream "
                     + "'Content is X'/'as X' consumers will fail (renders empty, reactive waits time out). "
@@ -2677,7 +2691,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         => System.Reactive.Linq.Observable.Select(raw, items =>
             (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, options, logger, registry)).ToArray());
 
-    private static MeshNode DeserializeContent(
+    // internal for the same reason as ConvertContentJsonElementToTyped above (#3625).
+    internal static MeshNode DeserializeContent(
         MeshNode node, JsonSerializerOptions options, ILogger logger,
         MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry)
     {
@@ -2713,7 +2728,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 if (recovered is not null)
                     return node with { Content = recovered };
 
+                // 🚨 Carries the exception for the same reason the GetStream seam does — see there.
+                // A record with no exception object cannot reach the trace log, which is the only
+                // sink the untyped-content shard gate scans (#3625).
                 logger.LogWarning(
+                    new MeshNodeContentDegradedException(
+                        "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, TruncateRawText(rawText)),
                     "MeshNodeStreamCache.GetQuery: Content for {Path} stayed an untyped JsonElement after "
                     + "deserialization (TypeRegistry lacks the $type discriminator) — downstream "
                     + "'Content is X'/'as X' consumers will fail (renders empty). Raw: {RawJson}",
@@ -2728,7 +2748,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // cross-hub GetQuery boundary that left Content an untyped JsonElement with NO
             // trace. Keep returning the node (a read must not fault the whole query) but make
             // the fault VISIBLE — this is the secretly-errors-as-a-timeout class.
-            logger.LogWarning(ex,
+            // 🚨 Wrapped in the degradation marker so this seam reaches the SAME gate key as the two
+            // silent seams (#3625). It already carried an exception and so already reached the trace
+            // sink — but its wording is "stays", not "stayed", so the phrase-grep the gate ran could
+            // never match it either. Keying the gate on the exception TYPE rather than on prose is
+            // what closes that third blind spot; `ex` rides along as the inner exception, so the
+            // deserialization stack is still in the record.
+            logger.LogWarning(
+                new MeshNodeContentDegradedException(
+                    "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, TruncateRawText(rawText), ex),
                 "MeshNodeStreamCache.GetQuery: FAILED to deserialize Content for {Path} — content stays an "
                 + "untyped JsonElement; downstream 'Content is X' will fail (renders empty). Raw: {RawJson}",
                 node.Path, TruncateRawText(rawText));

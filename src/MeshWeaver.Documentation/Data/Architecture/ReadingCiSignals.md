@@ -542,6 +542,39 @@ trx sink is closed too. Measured on the #3413 occurrence (run `34034828870`, sha
 host. So a layout area that renders nothing is silent in **every** sink, which is what made #1081
 cost four sessions and what leaves #3413 open.
 
+🚨 **The blind spot's THIRD instance disarmed a GATE, which is a strictly worse outcome than losing
+one explanation.** `MeshNodeStreamCache` logs `Content for {Path} stayed an untyped JsonElement`
+from both read seams, and `check-untyped-content.sh` reds a shard that finds that phrase in
+`collected-logs/`. Both warnings passed **no exception**, so neither could reach
+`_meshweaver-test-trace.log`; the only other route into that directory (`*/bin/*/test-logs/*.log`)
+is opt-in via `MESHWEAVER_TEST_FILE_LOGS`, which `node-repo-module-pack.yml` sets and
+`dotnet-test.yml` does not. Measured on a run that really did degrade content: **817** trace records
+naming the test class, **0** occurrences of the phrase it emitted. The gate was therefore
+permanently green having matched nothing — indistinguishable from a gate that passed, which is the
+one reading AGENTS.md singles out as forbidden.
+
+Its control test did not catch it because it asked the wrong question: it pinned that the source
+still *emits* the phrase and that the script still *greps* it — both true throughout — and never
+whether the record could **reach the directory the script scans**. *A guard whose subject moved and
+whose roots did not passes having checked nothing.*
+
+Two things changed. The warnings now carry `MeshNodeContentDegradedException`, an exception object
+constructed and never thrown whose whole job is to satisfy the sink's predicate; and the gate keys
+on that **type name** first, with the prose phrase kept only as a second net. A message is a
+*description* of an event, the type is the event's *identity*, bound by the compiler at every
+construction site — so the coupling now has two independent bindings (a rename is a repo-wide
+compile change, **and** `UntypedContentDegradationGate` pins the script's key to `nameof(...)`)
+where the phrase had only the one. `UntypedContentDegradationReachesTheTraceSinkTest` supplies the
+half that was missing: it drives the production converter and evaluates the sink's own condition
+against the captured record.
+
+**Falsified end to end, exit codes read directly.** Same degradation, same real sink
+(`XUnitFileLogger` → `TestTraceLog.AppendFault`), three runs: with the exception argument reverted
+the trace file was **never created**, and the gate answered `No content-type degradation` with
+**exit 0** — the defect, reproduced; with the fix the record landed in the trace and the gate exited
+**1** naming `Space/ARenderedEmptyPage` twice; and against a trace carrying a real, unrelated
+`[FAULT]` record the gate exited **0**, so the pass is a verdict rather than an empty scan.
+
 **The instrument that does answer it** is `MessageTrace`
 (`MeshWeaver.Messaging.Hub/MessageService.cs`): `MESHWEAVER_MSG_TRACE=1` makes every delivery write
 a `ROUTED` / `DEFERRED gates=[…]` / `GATE_FAILED` / `DROPPED_GATE_STUCK` line to

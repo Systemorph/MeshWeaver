@@ -28,8 +28,44 @@
 # Prod content types are covered by ContentTypeRegistrationSweep (static definitions, swept at boot)
 # and by WithContentType running on instance-hub activation (dynamic types). This gate covers what
 # neither does: catching a NEW gap the moment a test run first exhibits it.
+#
+# 🚨 WHY THIS GATE COULD NOT FIRE FOR ITS FIRST FIVE DAYS (MeshWeaver#3625), AND WHAT KEYS IT NOW.
+#
+# The scan was correct and its input could not arrive. Both producers logged the degradation as a
+# Warning with NO exception object, and the only sink that feeds `collected-logs/` takes a record
+# IF AND ONLY IF `exception is not null && logLevel >= Warning`
+# (XUnitFileLogger.Log / LoggingBuilderExtensions.Log -> TestTraceLog.AppendFault). So the phrase
+# below could reach the scanned directory by construction NEVER. Measured on a run that really did
+# degrade content: 817 trace records naming the test class, ZERO occurrences of the phrase it
+# emitted. A gate whose input cannot arrive is indistinguishable from a gate that passes — the exact
+# thing AGENTS.md forbids, committed inside a gate written to prevent it.
+#
+# Two things changed, and the second is the one that stops it recurring:
+#
+#   1. The degradation warnings now carry `MeshNodeContentDegradedException` — an exception object
+#      that is constructed and never thrown, whose whole job is to satisfy the sink's predicate.
+#      Reaching a sink is a property of the CALL, not of the level or the wording.
+#
+#   2. 🚨 The gate keys on that TYPE NAME first, and on the prose phrase only as a second net.
+#      A message is a DESCRIPTION of the event; the type is the event's IDENTITY, bound by the
+#      compiler at every construction site. That gives the coupling two independent bindings
+#      instead of one — a rename is a compile-wide change, AND UntypedContentDegradationGate pins
+#      this script's MARKER to nameof(MeshNodeContentDegradedException). The phrase is kept because
+#      it costs nothing and catches a third seam whose wording ("stays", not "stayed") the phrase
+#      grep never matched anyway.
+#
+# The reachability half — that a degradation record actually satisfies the sink predicate — is
+# asserted by UntypedContentDegradationReachesTheTraceSinkTest, which drives the PRODUCTION emitter
+# and evaluates the sink's own condition against the captured record. Modelled on
+# EmitDeadAttributionReachesTheTraceSinkTest, which exists for the same trap one diagnostic over.
 set -euo pipefail
 
+# The event's IDENTITY. Primary key: compiler-bound, and pinned to this string by
+# UntypedContentDegradationGate via nameof(...).
+MARKER='MeshNodeContentDegradedException'
+# The event's DESCRIPTION. Secondary net, kept deliberately: a per-test file log
+# (MESHWEAVER_TEST_FILE_LOGS, on in node-repo-module-pack.yml) carries the formatted message with
+# no exception attached at all.
 PHRASE='stayed an untyped JsonElement'
 DIR="${1:?usage: check-untyped-content.sh <collected-logs-dir>}"
 scan_err="$(mktemp)"
@@ -53,7 +89,7 @@ fi
 # exists to prevent, committed inside the file that prevents it. Caught by the repo's own
 # `CI's own shell` gate, which flags a captured command substitution that swallows stderr and status.
 set +e
-matches=$(grep -rl "$PHRASE" "$DIR" 2>"$scan_err")
+matches=$(grep -rl -e "$MARKER" -e "$PHRASE" "$DIR" 2>"$scan_err")
 scan_rc=$?
 set -e
 
@@ -76,8 +112,11 @@ echo "empty, a reactive wait never completes. It is caught here or not at all."
 echo ""
 echo "Occurrences:"
 # Trim to the node path — the whole line carries a serialised payload and drowns the signal.
-grep -rh "$PHRASE" "$DIR" 2>/dev/null \
-  | sed -E 's/.*Content for ([^ ]+) stayed.*/  \1/' \
+# Both record shapes name the node: the log message says "Content for <path> stayed …", the
+# exception says "content for '<path>' (nodeType …)". Reduce either to the path.
+grep -rh -e "$MARKER" -e "$PHRASE" "$DIR" 2>/dev/null \
+  | sed -E -e "s/.*Content for ([^ ]+) stayed.*/  \1/" \
+           -e "s/.*content for '([^']*)'.*/  \1/" \
   | sort | uniq -c | sort -rn | head -20
 echo ""
 echo "Files: $(printf '%s' "$matches" | tr '\n' ' ')"
