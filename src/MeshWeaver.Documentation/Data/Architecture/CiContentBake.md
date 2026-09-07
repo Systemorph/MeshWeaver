@@ -741,10 +741,20 @@ does not run it. Measured against every satellite's `main`, 2026-09-07:
 |---|---|:---:|---|
 | MeshWeaver.Reinsurance | `1b5350d54` | ✅ | **0 violations** |
 | MeshWeaver.Manufacturing | `1b5350d54` | ✅ | 0 (adopted 2026-09-07, #3504) |
-| MeshWeaver.Plugins | `c7fef7a2d` | ✅ | 0 (adopted 2026-09-07, #3504) |
+| MeshWeaver.Plugins | *(none — `main` calls no validate lane)* | — | 🚨 **UNMEASURED: the guard does not run here.** Adoption is Plugins#1453, open. Its first execution named **3** (`MESHWEAVER_APP_ID`, `MESHWEAVER_APP_PRIVATE_KEY`, `REGISTRY_PUBLISH_TOKEN`) — all now reasoned allow entries on that branch, where the lane reads 0 |
 | MeshWeaver.Crm | `0a2b9017d` → `c7fef7a2d` | ❌ → ✅ | **4** — incl. `MW_REGISTRY_KEY` → 0 (adopted 2026-09-07 12:30Z, `9228b8be`) |
 | MeshWeaver.SocialMedia | `0a2b9017d` → `c7fef7a2d` | ❌ → ✅ | **4** — incl. `MW_REGISTRY_KEY` → 0 (adopted 2026-09-07 12:30Z, `9dea3668`) |
 | MeshWeaver.Education | `8ffbe4762` → `c7fef7a2d` | ❌ → ✅ | **4** → 0 (adopted 2026-09-07, Education#283) |
+
+🚨 **The Plugins row is the reason this table says `main` and means it.** An earlier revision read
+*"0 (adopted 2026-09-07, #3504)"* — anticipating a merge that has not happened. Measured
+2026-09-07 against `Systemorph/MeshWeaver.Plugins` `origin/main`: **no workflow calls
+`node-repo-validate.yml` and nothing invokes `check-pr-secret-preflight.py`**, so the cell recorded
+a verdict no run has produced. In the largest satellite of the fleet, that is the exact failure the
+section above describes — a repo that looks identical to one the guard passes. A column headed
+*"verdict on its `main`"* must never be filled in from a pull request; an unadopted repo has **no
+verdict**, which is a different thing from zero. The adoption is blocked on that repo's own
+platform-pin move (Plugins#1463), not on the change.
 
 **Reinsurance is the control**, and it is what makes the table evidence rather than an assertion:
 it is the only pre-existing caller whose pin carried the guard from the start, and it was the only
