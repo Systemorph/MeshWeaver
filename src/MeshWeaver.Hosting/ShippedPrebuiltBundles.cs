@@ -68,6 +68,112 @@ public static class ShippedPrebuiltBundles
     /// </summary>
     public const string CompletionSentinelFileName = "_complete";
 
+    /// <summary>
+    /// 🚨 The publication POINTER of a source directory (must match the <c>POINTER</c> in
+    /// <c>.github/scripts/publish-bake-bundles.sh</c>): one line naming the SUBDIRECTORY that
+    /// holds the publication which currently applies.
+    ///
+    /// <para><b>Why a pointer at all (#3461).</b> In the flat layout a publisher replaces a
+    /// publication IN PLACE — it deletes <see cref="CompletionSentinelFileName"/>, uploads over
+    /// the live files, and re-seals. Two publishers interleaved on one prefix therefore both
+    /// unseal, both upload, and the last to seal writes a sentinel over a directory holding SOME
+    /// OF EACH one's bytes: one seal, one generation, self-consistent to every consumer and wrong.
+    /// The byte-level postcondition in the publisher REFUSES to seal that, which turns a silent
+    /// mix into a loud refusal — but it is a postcondition, not mutual exclusion, and it leaves
+    /// the interval between its last verification read and the seal.</para>
+    ///
+    /// <para><b>What the pointer changes.</b> Each publication is written into its OWN directory,
+    /// named by the publisher's run-unique publication token, so two publishers never write the
+    /// same bytes and a mix becomes UNREPRESENTABLE rather than merely detectable. Publishing then
+    /// ends with one small write that moves this pointer, and a reader sees either the previous
+    /// generation — intact, sealed, still on the shelf — or the new one.</para>
+    ///
+    /// <para>🚨 <b>Absent means the FLAT layout, and that is the fail-safe direction.</b> A source
+    /// directory with no pointer IS its own publication directory, which is exactly today's
+    /// behaviour and stays legal for as long as any pinned reader needs it. The migration order,
+    /// the retention rule, and what each phase does and does not close are in
+    /// <c>Doc/Architecture/SealedPublicationGenerations</c>.</para>
+    /// </summary>
+    public const string PublicationPointerFileName = "_current";
+
+    /// <summary>
+    /// The directory that actually holds <paramref name="sourceDirectory"/>'s publication: the
+    /// generation its <see cref="PublicationPointerFileName"/> names, or the source directory
+    /// itself when there is no usable pointer.
+    ///
+    /// <para>🚨 <b>Every read of a published source directory goes through this, and every path
+    /// composed under it is composed under the RESULT.</b> A caller that resolves the pointer and
+    /// then composes against the source directory reads the flat layout's bytes while believing it
+    /// read the pointed-to generation — silently, because during the migration both paths exist.
+    /// That is why <c>PublishedBundleCatalogue.SealedPublicationOf</c> and
+    /// <c>PublishedBundleCatalogue.SealedModulesOf</c> HAND BACK the directory they read rather
+    /// than leaving each caller to resolve it a second time.</para>
+    ///
+    /// <para>🚨 <b>It never fails; it falls back.</b> A pointer that is absent, empty, unreadable,
+    /// not a single path segment, or that names a directory which is not there resolves to the
+    /// source directory. While the flat copy still exists that is the previous behaviour exactly;
+    /// once it does not, the source directory carries no sentinel and the existing readers already
+    /// answer "being republished right now" and back off — the same self-healing shape, never a
+    /// mix. A pointer is a NAME, so anything carrying a directory separator, a root, or a
+    /// <c>.</c>/<c>..</c> segment is refused outright: a publication pointer must never be able to
+    /// address bytes outside its own source directory.</para>
+    /// </summary>
+    /// <param name="sourceDirectory">A <c>&lt;root&gt;/&lt;identity&gt;/&lt;source&gt;</c> directory.</param>
+    /// <param name="logger">Diagnostics. A REFUSED pointer is a warning — it means a publisher
+    /// wrote something this reader will not follow, which is worth seeing.</param>
+    public static string PublicationDirectoryOf(string sourceDirectory, ILogger? logger = null)
+    {
+        var pointer = Path.Combine(sourceDirectory, PublicationPointerFileName);
+        string? named;
+        try
+        {
+            if (!File.Exists(pointer))
+                return sourceDirectory;
+            named = File.ReadAllLines(pointer)
+                .Select(l => l.Trim())
+                .FirstOrDefault(l => l.Length > 0);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A pointer being replaced right now reads short, or not at all. That is the ONE
+            // window this layout has, it is a single small write rather than a whole publication,
+            // and it degrades to the generation that applied a moment ago — never to a mix.
+            logger?.LogInformation(ex,
+                "ShippedPrebuiltBundles: {Pointer} could not be read — reading {SourceDirectory} "
+                + "as its own publication directory; a pointer being replaced reads this way, and "
+                + "the next read resolves it", pointer, sourceDirectory);
+            return sourceDirectory;
+        }
+
+        if (string.IsNullOrEmpty(named))
+            return sourceDirectory;
+
+        if (named is "." or ".."
+            || named != Path.GetFileName(named)
+            || Path.IsPathRooted(named)
+            || named.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
+        {
+            logger?.LogWarning(
+                "ShippedPrebuiltBundles: {Pointer} names '{Named}', which is not a single "
+                + "directory name — a publication pointer may only address a subdirectory of its "
+                + "own source directory. Reading {SourceDirectory} as its own publication "
+                + "directory instead", pointer, named, sourceDirectory);
+            return sourceDirectory;
+        }
+
+        var generation = Path.Combine(sourceDirectory, named);
+        if (!Directory.Exists(generation))
+        {
+            logger?.LogWarning(
+                "ShippedPrebuiltBundles: {Pointer} names generation '{Named}', which is not on "
+                + "disk — reading {SourceDirectory} as its own publication directory instead. A "
+                + "generation the pointer names must outlive the pointer",
+                pointer, named, sourceDirectory);
+            return sourceDirectory;
+        }
+        return generation;
+    }
+
     /// <summary>The conventional location — <c>prebuilt/</c> beside the app binaries, which is
     /// where the publish lays <c>$(PrebuiltBakeDir)</c> bundles into the image.</summary>
     public static string DefaultDirectory => Path.Combine(AppContext.BaseDirectory, "prebuilt");
@@ -153,10 +259,16 @@ public static class ShippedPrebuiltBundles
     private static List<string> CompletePublishedBundlesOf(string identityDirectory, ILogger? logger)
     {
         var bundles = new List<string>();
-        foreach (var sourceDir in Directory
+        foreach (var source in Directory
                      .EnumerateDirectories(identityDirectory)
                      .OrderBy(d => d, StringComparer.Ordinal))
         {
+            // 🚨 #3461: the publication may live in a GENERATION subdirectory this source's
+            // pointer names, and every path below is composed under the resolved directory — not
+            // under `source`. Resolving and then composing against the source directory would
+            // read the flat layout's bytes while reporting the generation's, which during the
+            // migration is a silent wrong answer rather than a missing one.
+            var sourceDir = PublicationDirectoryOf(source, logger);
             var sentinel = Path.Combine(sourceDir, CompletionSentinelFileName);
             if (!File.Exists(sentinel))
             {
