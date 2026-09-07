@@ -105,9 +105,10 @@ public static class MeshNodeBindingExtensions
     /// (<c>path:{x}</c>, no <c>scope:</c> qualifier ⇒ <c>QueryScope.Exact</c>) whose contract for an
     /// absent path is "zero rows, no error" — empty-on-absent, no routing NotFound, no breaker
     /// window; the same instrument <c>ActivityRunner</c>, <c>MarkdownViewLogic</c> and
-    /// <c>TrackActivity</c> already gate on. It is LIVE (a snapshot per emission, not a one-shot),
-    /// so a node created or deleted later flips the gate and the binding follows without a
-    /// re-render — no <c>.Take(1)</c> anywhere on the value path. And it runs
+    /// <c>TrackActivity</c> already gate on. It is LIVE — an authoritative <c>Initial</c> frame and
+    /// then deltas, folded into one boolean (see <see cref="Exists"/>), never a one-shot — so a node
+    /// created or deleted later flips the gate and the binding follows without a re-render, and
+    /// there is no <c>.Take(1)</c> anywhere on the value path. And it runs
     /// <see cref="MeshQueryRequest.AsSystem"/>: the gate decides only EXISTENCE, the CONTENT read
     /// below is still row-level-security-gated by the owner exactly as before, and a query filtered
     /// by an identity that failed to resolve would answer "absent" for a node the viewer can see —
@@ -115,13 +116,15 @@ public static class MeshNodeBindingExtensions
     /// and the reason <see cref="MeshQueryRequest.UserId"/> documents it as its own worst
     /// defect.</para>
     ///
-    /// <para>🚨 <b>Bounded on the FIRST value only</b> (<see cref="ReadBudget"/>, 10 s), and the
-    /// budget sits on the CONTENT leg — the read of a node the gate has already proven exists —
-    /// never on the gate. Putting it outside would let the immediate "absent ⇒ null" emission
-    /// satisfy the budget and silence the case it exists for: the owning hub unreachable / still
-    /// starting, so the hydrating <c>SubscribeRequest</c> burns the hub's whole 60 s
-    /// <c>RequestTimeout</c> before the fault reaches the view (Systemorph/MeshWeaver#1748 —
-    /// <c>"No response received in hub cache/… → target Posts/RobertHaircuts"</c>).</para>
+    /// <para>🚨 <b>Bounded on the FIRST value only</b> (<see cref="ReadBudget"/>, 10 s), and EACH LEG
+    /// carries its own — one budget spanning both would be worse than none. Wrapped around the
+    /// composed binding, the immediate "absent ⇒ null" emission satisfies it instantly and silences
+    /// the case it exists for: the owning hub unreachable / still starting, so the hydrating
+    /// <c>SubscribeRequest</c> burns the hub's whole 60 s <c>RequestTimeout</c> before the fault
+    /// reaches the view (Systemorph/MeshWeaver#1748 — <c>"No response received in hub cache/… →
+    /// target Posts/RobertHaircuts"</c>). So the content leg is bounded where it is opened, and the
+    /// gate is bounded separately in <see cref="Exists"/> — a gate that never answers is that same
+    /// spinning control with nothing logged, one level up.</para>
     ///
     /// <para><b>It degrades rather than errors, deliberately.</b> An error would tear the
     /// subscription down, and a hub that is merely slow — a cold NodeType compile legitimately
