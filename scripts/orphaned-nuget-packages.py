@@ -232,6 +232,30 @@ def self_test() -> int:
         if "MeshWeaver.Chained" in found:
             failures.append("an importing props file did not carry the inherited false through")
 
+    # 🚨 A quota refusal and a real failure must never read the same. On 2026-09-07 they did:
+    # 398 rate-limit 403s were counted as 398 failures, so a temporary wall that a re-run clears
+    # was reported identically to a broken retirement. These pin the discrimination on the exact
+    # strings nuget.org returned that day.
+    quota_said = (
+        "warn : Deleting MeshWeaver.Hosting.Orleans 2.0.3 from the "
+        "'https://www.nuget.org/api/v2/package'. | DELETE "
+        "https://www.nuget.org/api/v2/package/MeshWeaver.Hosting.Orleans/2.0.3 | Forbidden "
+        "https://www.nuget.org/api/v2/package/MeshWeaver.Hosting.Orleans/2.0.3 149ms "
+        "(retry after: 145s) | error: Response status code does not indicate success: "
+        "403 (Quota Exceeded).")
+    if quota_retry_after(quota_said) != 145:
+        failures.append("a quota 403 did not yield nuget.org's own retry-after (expected 145s)")
+    if quota_retry_after(quota_said.replace("(retry after: 145s) ", "")) != 160:
+        failures.append("a quota 403 without a retry hint did not fall back to the measured window")
+    if quota_retry_after("error: Response status code does not indicate success: 401 "
+                         "(The specified API key is invalid).") is not None:
+        failures.append("a 401 was misread as a quota refusal — an invalid key would then be "
+                        "waited on for ever instead of failing")
+    if quota_retry_after("error: Response status code does not indicate success: 404 (Not Found).") is not None:
+        failures.append("a 404 was misread as a quota refusal")
+    if quota_retry_after("") is not None:
+        failures.append("empty tool output was misread as a quota refusal")
+
     for failure in failures:
         print(f"FAIL: {failure}")
     print("self-test: " + ("PASSED" if not failures else f"{len(failures)} FAILURE(S)"))
@@ -260,6 +284,37 @@ def is_listed(package_id: str, version: str) -> bool | None:
         return None
 
 
+QUOTA_403 = re.compile(r"403\s*\(Quota Exceeded\)", re.I)
+RETRY_AFTER = re.compile(r"retry after:\s*(\d+)\s*s", re.I)
+
+
+def quota_retry_after(said: str) -> int | None:
+    """Seconds nuget.org asked us to wait, or None when this was not a quota refusal.
+
+    🚨 The DISCRIMINATION is the point. A quota 403 is resumable — the work is still to do and
+    the budget refills. Every other non-zero exit is a real failure about that one version. The
+    2026-09-07 run could not tell them apart, so 398 rate-limit refusals were counted as 398
+    failures and the log made a temporary wall look like a broken retirement.
+
+    nuget.org states the wait in the client's own message ("retry after: 160s"). When it does not,
+    fall back to the measured window: the block lasted ~2.5 minutes and the server's own hints
+    were 140-160s.
+    """
+    if not QUOTA_403.search(said):
+        return None
+    hinted = RETRY_AFTER.search(said)
+    return int(hinted.group(1)) if hinted else 160
+
+
+def run_delete(package_id: str, version: str, api_key: str) -> subprocess.CompletedProcess[str]:
+    """One unlist call. Split out so the quota path can retry the SAME version verbatim."""
+    return subprocess.run(
+        ["dotnet", "nuget", "delete", package_id, version,
+         "--source", "https://api.nuget.org/v3/index.json",
+         "--api-key", api_key, "--non-interactive"],
+        capture_output=True, text=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -276,6 +331,13 @@ def main() -> int:
                         help="seconds between verification attempts")
     parser.add_argument("--self-test", action="store_true",
                         help="run the packable() regression checks and exit")
+    parser.add_argument("--time-budget", type=int, default=1800,
+                        help="seconds to spend issuing unlist calls before stopping cleanly "
+                             "(default 1800). The job is capped at 45 minutes; stopping short of "
+                             "that leaves room to verify and to REPORT what remains, which a "
+                             "killed job cannot do.")
+    parser.add_argument("--max-wait", type=int, default=300,
+                        help="cap on a single honoured retry-after (default 300s)")
     args = parser.parse_args()
 
     if args.self_test:
@@ -311,28 +373,105 @@ def main() -> int:
     # resolving by exact version; the package simply stops appearing in search and in
     # latest-version resolution. That is the reversible, standard deprecation path, and it
     # is why this is safe to automate at all.
-    called: list[tuple[str, str]] = []
-    failed = 0
+    #
+    # 🚨 nuget.org RATE-LIMITS this endpoint, and the retirement is bigger than one window.
+    # Measured 2026-09-07 over 760 versions: ~309 deletes landed in the first two minutes, then
+    # every call for the next 2.5 minutes returned `403 (Quota Exceeded)` with the server's own
+    # `retry after: ~160s`, then the budget refilled and calls succeeded again. The run made 362
+    # and burned 398 round trips discovering the same 403 over and over.
+    #
+    # Three things follow, and they are what this loop does:
+    #   1. SKIP what is already unlisted. Deleting an unlisted version is a no-op that still
+    #      costs a quota slot, so a resumed run would spend its whole budget re-doing finished
+    #      work. This is what makes the job completable in a few runs instead of never.
+    #   2. HONOUR the server's retry hint instead of hammering. Waiting the time nuget.org names
+    #      is using the API correctly, not a workaround; hammering keeps the quota pinned and
+    #      teaches the log nothing.
+    #   3. STOP, and say precisely what remains. A quota wall is a RESUMABLE outcome, not a
+    #      failure to swallow and not a success to claim. The verdict names the remainder so the
+    #      next run is a re-run of this same command, nothing else.
+    remaining: list[tuple[str, str]] = []
     for package_id in orphans:
         for version in versions(package_id):
-            result = subprocess.run(
-                ["dotnet", "nuget", "delete", package_id, version,
-                 "--source", "https://api.nuget.org/v3/index.json",
-                 "--api-key", args.api_key, "--non-interactive"],
-                capture_output=True, text=True)
-            # ALWAYS echo what the tool said. A silent success is how a no-op passes for a write.
-            said = " | ".join(
-                line.strip()
-                for line in ((result.stdout or "") + (result.stderr or "")).splitlines()
-                if line.strip())
-            if result.returncode != 0:
-                failed += 1
-                print(f"  CALL FAILED: {package_id} {version} (exit {result.returncode}) — {said}")
-            else:
-                called.append((package_id, version))
-                print(f"  called delete: {package_id} {version} — {said or '(no output)'}")
+            # None (unreadable) falls through to the delete: erring toward doing the work is
+            # right here, because a redundant delete is a no-op while a skipped one is a package
+            # left listed.
+            if is_listed(package_id, version) is False:
+                continue
+            remaining.append((package_id, version))
+
+    already = sum(len(versions(p)) for p in orphans) - len(remaining)
+    if already:
+        print(f"\nalready unlisted, skipping : {already} version(s)")
+    print(f"to unlist now              : {len(remaining)} version(s)\n")
+
+    called: list[tuple[str, str]] = []
+    failed = 0
+    quota_wall: tuple[str, str] | None = None
+    deadline = time.monotonic() + args.time_budget
+
+    for index, (package_id, version) in enumerate(remaining):
+        if time.monotonic() > deadline:
+            quota_wall = (package_id, version)
+            print(f"\n  TIME BUDGET REACHED after {index} call(s) — stopping cleanly so the "
+                  f"job cannot be killed mid-write.")
+            break
+
+        result = run_delete(package_id, version, args.api_key)
+        said = " | ".join(
+            line.strip()
+            for line in ((result.stdout or "") + (result.stderr or "")).splitlines()
+            if line.strip())
+
+        if result.returncode == 0:
+            called.append((package_id, version))
+            print(f"  called delete: {package_id} {version} — {said or '(no output)'}")
+            continue
+
+        wait = quota_retry_after(said)
+        if wait is None:
+            failed += 1
+            print(f"  CALL FAILED: {package_id} {version} (exit {result.returncode}) — {said}")
+            continue
+
+        # A quota 403. Wait exactly as long as nuget.org asked, then try this same version once
+        # more. A second 403 means the window is not merely tight, so stop rather than spend the
+        # rest of the job proving it.
+        wait = min(wait, args.max_wait)
+        print(f"  quota exhausted at {package_id} {version} — nuget.org asks for {wait}s; waiting")
+        time.sleep(wait)
+        result = run_delete(package_id, version, args.api_key)
+        said = " | ".join(
+            line.strip()
+            for line in ((result.stdout or "") + (result.stderr or "")).splitlines()
+            if line.strip())
+        if result.returncode == 0:
+            called.append((package_id, version))
+            print(f"  called delete: {package_id} {version} — {said or '(no output)'} (after wait)")
+            continue
+        if quota_retry_after(said) is not None:
+            quota_wall = (package_id, version)
+            print(f"  STILL rate-limited after waiting — stopping here rather than hammering.")
+            break
+        failed += 1
+        print(f"  CALL FAILED: {package_id} {version} (exit {result.returncode}) — {said}")
+
+    if quota_wall is not None:
+        stopped = remaining[len(called) + failed:]
+        print(f"\n::warning::RESUMABLE — stopped at {quota_wall[0]} {quota_wall[1]}. "
+              f"{len(called)} version(s) unlisted this run, {len(stopped)} still listed.")
+        print("nuget.org rate-limits this endpoint; the budget refills. Re-run this SAME command "
+              "— already-unlisted versions are skipped, so the next run spends its whole budget "
+              "on what is left. Remaining, by package:")
+        by_package: dict[str, int] = {}
+        for identifier, _ in stopped:
+            by_package[identifier] = by_package.get(identifier, 0) + 1
+        for identifier, count in sorted(by_package.items()):
+            print(f"  {identifier}  ({count} version(s))")
 
     if not called:
+        if quota_wall is not None:
+            return 2
         return 1 if failed else 0
 
     # 🚨 VERIFY, then report. nuget.org rebuilds its registration blobs asynchronously, so a
@@ -344,6 +483,11 @@ def main() -> int:
         still = [(p, v) for p, v in pending if is_listed(p, v) is True]
         if not still:
             print(f"  VERIFIED on attempt {attempt}: every version now reads as unlisted")
+            # 🚨 A verified batch is not a finished job. Exit 2 when a quota wall left work
+            # behind, so "all of it is retired" and "as much as one window allows" can never
+            # read the same to a caller.
+            if quota_wall is not None:
+                return 2
             return 1 if failed else 0
         pending = still
         if attempt < args.verify_attempts:

@@ -241,6 +241,41 @@ dotnet tools (`MeshWeaver.Cli`, `MeshWeaver.Compiler.Cli`, `MeshWeaver.Thumbnail
 `MeshWeaver.Reactive.Assertions`, whose only out-of-repo consumer references it by **project**
 against `$(MeshWeaverRoot)`.
 
+### 🚦 nuget.org rate-limits the unlist endpoint, so this takes several runs
+
+**The retirement is applied in batches, not in one pass.** Measured on the first apply run
+(2026-09-07, 760 versions across the 43 ids):
+
+| Elapsed | Deletes accepted | Refused `403 (Quota Exceeded)` |
+|---|---|---|
+| minute 1 | 98 | 0 |
+| minute 2 | 141 | 0 |
+| minute 3 | 70 | 73 |
+| minute 4 | 0 | 158 |
+| minute 5 | 0 | 155 |
+| minute 6 | 31 | 12 |
+| minute 8 | 22 | 0 |
+
+So roughly **300 deletes land, then the endpoint blocks for ~2.5 minutes, then the budget
+refills** — and the server names the wait itself (`retry after: 145-160s`). That first run
+unlisted **362 versions, verified**, and spent 398 round trips rediscovering the same 403.
+
+Three consequences are built into `orphaned-nuget-packages.py` rather than remembered:
+
+1. **Already-unlisted versions are skipped before any delete is called.** Deleting an unlisted
+   version is a no-op that still costs a quota slot, so without this a resumed run spends its
+   entire budget redoing finished work. This is what makes the job completable at all.
+2. **The server's retry hint is honoured, once, then the run stops.** Waiting the time nuget.org
+   names is using the API correctly; hammering keeps the quota pinned and teaches the log nothing.
+3. **A quota wall exits `2` — RESUMABLE — and names exactly what remains.** It is neither a
+   success nor a failure, and the workflow summary says so in those words. 🚨 Re-running the same
+   dispatch is the whole recovery procedure; there is nothing to edit between runs.
+
+> 🚨 **Read the end state from the registration blobs, never from search.** nuget.org's search
+> index lags the blobs by a wide margin — mid-retirement it reported 25 listed `MeshWeaver.*` ids
+> while the per-version `listed` flags told a different and more advanced story. `is_listed()` in
+> the script reads the blob, which is the same source the verification step trusts.
+
 > 🚨 **`Memex.Merlin.*` belongs to a different company.** It surfaces in a nuget.org search for
 > "MeshWeaver" because the search is full-text. The sweep only ever considers ids that are exactly
 > `MeshWeaver` or begin `MeshWeaver.`, and that filter is the reason — do not relax it.
