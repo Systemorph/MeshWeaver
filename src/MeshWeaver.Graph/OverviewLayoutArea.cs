@@ -6,6 +6,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -32,7 +33,33 @@ public static class OverviewLayoutArea
             return Controls.Stack;
 
         if (instance is JsonElement je)
-            instance = JsonSerializer.Deserialize<object>(je.GetRawText(), host.Hub.JsonSerializerOptions)!;
+        {
+            // A JSON `null`/absent element carries no properties to render. Treat it exactly like a
+            // null Content — it is the SAME state, spelled in JSON — rather than announcing an
+            // unresolvable type for content that has none.
+            if (je.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+                return Controls.Stack;
+
+            // 🚨 Ask the MESH-WIDE registry FIRST, keyed on the node's OWN NodeType — the EXACT
+            // route, and the one this seam is uniquely placed to take because it holds the node.
+            // JsonSerializer.Deserialize<object> alone is NOT enough: ObjectPolymorphicConverter
+            // asks this hub's frozen ITypeRegistry and then only the NAME route
+            // (IMeshContentTypeRegistry.TryRecover), which must REFUSE a discriminator two packages
+            // both claim (#1299). TryRecoverForNodeType answers the question that always has one
+            // right answer, and falls back to the name route itself — so this is strictly more
+            // recovery, never less.
+            var contentTypeRegistry = host.Hub.ServiceProvider.GetService<IMeshContentTypeRegistry>();
+            instance = contentTypeRegistry?.TryRecoverForNodeType(node.NodeType, je, host.Hub.JsonSerializerOptions)
+                       ?? JsonSerializer.Deserialize<object>(je.GetRawText(), host.Hub.JsonSerializerOptions);
+
+            // 🚨 Still JSON ⇒ the discriminator resolves NOWHERE in this process, and the old code
+            // silently fell through to `typeof(JsonElement)` and built the property form over
+            // JsonElement's OWN members (ValueKind, …) — a form the viewer cannot tell apart from
+            // the real one, with no exception and nothing to grep (#3558). Say what happened
+            // instead: that is the whole difference between a wrong page and a diagnosable one.
+            if (instance is null or JsonElement)
+                return UnresolvableContentType(host, node, je);
+        }
 
         var contentType = instance.GetType();
 
@@ -83,6 +110,49 @@ public static class OverviewLayoutArea
         // walking through nested property-overview stacks.
 
         return container;
+    }
+
+    /// <summary>
+    /// The honest state for content whose <c>$type</c> resolves nowhere in this process: name the
+    /// discriminator and say which of the two indistinguishable causes the viewer is looking at.
+    ///
+    /// <para>🚨 The wording must NOT assert corruption. For an in-mesh NodeType — <c>Source/*.cs</c>
+    /// compiled by Roslyn at RUNTIME — the same state is printed while the compile is still in
+    /// flight, and it ENDS: <c>MeshNodeStreamHandle</c>'s typed read boundary waits on
+    /// <see cref="IMeshContentTypeRegistry.Registrations"/> and re-emits the node typed the moment a
+    /// registration makes it resolvable, which re-renders this area. Reading the line as "this row is
+    /// broken" is what sent the #2952 investigation after the data for weeks, so it names both causes
+    /// and says which observation separates them.</para>
+    /// </summary>
+    private static UiControl UnresolvableContentType(LayoutAreaHost host, MeshNode node, JsonElement content)
+    {
+        var discriminator = content.ValueKind == JsonValueKind.Object
+                            && content.TryGetProperty("$type", out var typeProp)
+                            && typeProp.ValueKind == JsonValueKind.String
+            ? typeProp.GetString()
+            : null;
+
+        // Not a per-emission flood: this branch is reached only on the already-degraded path, and a
+        // node whose type registers late leaves it for good on the very next emission.
+        host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>()?.LogWarning(
+            "OverviewLayoutArea: content discriminator '$type': '{TypeName}' on {Path} (NodeType "
+            + "'{NodeType}') resolves on neither the NodeType route nor the name route — the property "
+            + "overview renders the unresolved-type notice instead of a form. Either the NodeType's "
+            + "runtime compile has not registered it YET (transient — the view re-renders when it "
+            + "does), or no declaration will ever claim this discriminator.",
+            discriminator ?? "(absent)", node.Path, node.NodeType ?? "(none)");
+
+        // Two genuinely different states, and conflating them misleads. NO discriminator means the
+        // content is free-form JSON — legal by design (ContentDiscriminatorValidator: "content
+        // WITHOUT a $type stays legal"), permanent, and nothing to wait for. An UNRESOLVABLE one
+        // means a type was named and is not known here — which may still resolve.
+        return string.IsNullOrEmpty(discriminator)
+            ? Controls.Markdown(
+                $"**{host.Localize("overview.untypedContent")}**\n\n"
+                + host.Localize("overview.untypedContentHint"))
+            : Controls.Markdown(
+                $"⚠️ **{host.Localize("overview.unresolvedType", discriminator)}**\n\n"
+                + host.Localize("overview.unresolvedTypeHint"));
     }
 
     /// <summary>
