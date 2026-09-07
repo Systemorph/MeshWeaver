@@ -4498,6 +4498,28 @@ public static class MeshExtensions
     private static readonly TimeSpan NodeOpForwardTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>
+    /// Total deadline for the upsert's inner <c>CreateNodeRequest</c> — the CREATE leg's answer to
+    /// "the owner went away and the response is never coming" (#3510).
+    ///
+    /// <para>🚨 STRICTLY ABOVE <see cref="LatePatchResponseRegistry.WriteVerdictBound"/>, on that
+    /// property's own instruction: <i>"Anything waiting on a write must bound itself STRICTLY ABOVE
+    /// this, so the framework's terminal wins and names the cause."</i> Bounding AT it would fire
+    /// this refusal one moment before the framework could say <c>OwnerUnreachable</c> — #2819's trap,
+    /// where the failure carrying the explanation is never the one anybody reads. The same +5 s
+    /// margin <c>TestTimeouts</c> derives for the same reason.</para>
+    ///
+    /// <para>🚨 This is NOT a widened bound: the leg had NO terminal guarantee at all. When
+    /// <c>PackageInstaller.SettleRetypedRoot</c> recycles the package root it just retyped — which it
+    /// does on EVERY plugin package install — the inner create's response never arrives, so neither
+    /// the onNext nor the onError arm ever runs and the caller waits out its entire budget in
+    /// silence. Making the leg total converts an unbounded hang into a named refusal; it does not
+    /// buy headroom, and it does not remove the need for the owner-side disposal NACK the UPDATE
+    /// leg gets from <c>RegisterOwnerDisposingNack</c>, which is the remaining half of #3510.</para>
+    /// </summary>
+    internal static TimeSpan InnerCreateVerdictBound =>
+        LatePatchResponseRegistry.WriteVerdictBound + TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Single-verb upsert handler for <see cref="CreateOrUpdateNodeRequest"/>.
     /// Two strict paths, both honoring "the per-node hub is the sole owner of
     /// its state — direct writes to persistence are illegal":
@@ -4664,6 +4686,8 @@ public static class MeshExtensions
 
         void DispatchInnerCreate()
         {
+            // Claimed by whichever arm answers first, so the three terminal states cannot double-post.
+            var innerAnswered = false;
             var inner = new CreateNodeRequest(node) { CreatedBy = requestedBy };
             // 🚨 PRE-REGISTERING Observe(request, options) — never Post-then-Observe(delivery) (#981).
             //
@@ -4701,9 +4725,14 @@ public static class MeshExtensions
                     var withTarget = o.WithTarget(hub.Address);
                     return inboundCtx is not null ? withTarget.WithAccessContext(inboundCtx) : withTarget;
                 })
+                // 🚨 Take(1) BEFORE Timeout, so the deadline is TOTAL rather than Rx's
+                // inter-emission one — the exact trap #3550 removed from the release wave.
+                .Take(1)
+                .Timeout(InnerCreateVerdictBound)
                 .Subscribe(
                     d =>
                     {
+                        innerAnswered = true;
                         if (d.Message is CreateNodeResponse cr && cr.Success && cr.Node is not null)
                             PostOk(cr.Node, isCreate: true, $"Created node at '{node.Path}'",
                                 "activity.node.created");
@@ -4738,9 +4767,46 @@ public static class MeshExtensions
                     },
                     ex =>
                     {
+                        innerAnswered = true;
+                        if (ex is TimeoutException)
+                        {
+                            hub.NoteRequestStage(request.Id, "UPSERT_CREATE_NO_VERDICT");
+                            logger.LogWarning(
+                                "[CreateOrUpdate] the inner CreateNode for {Path} produced no response "
+                                + "within {Bound} — answering the caller with a refusal rather than "
+                                + "leaving it to wait out its budget. The usual cause is the owner being "
+                                + "recycled under its own install (PackageInstaller.SettleRetypedRoot "
+                                + "retypes then recycles the package root on every plugin install), in "
+                                + "which case the create was NOT applied and is safe to retry against "
+                                + "the fresh activation (#3510).",
+                                node.Path, InnerCreateVerdictBound);
+                            PostFail(
+                                $"The create for '{node.Path}' produced no response within "
+                                + $"{InnerCreateVerdictBound.TotalSeconds:0}s. It was NOT applied; retry "
+                                + "against the fresh activation.",
+                                NodeUpsertRejectionReason.Unknown);
+                            return;
+                        }
                         logger.LogWarning(ex,
                             "[CreateOrUpdate] inner CreateNode faulted for {Path}", node.Path);
                         PostFail($"Inner CreateNode faulted: {ex.Message}",
+                            NodeUpsertRejectionReason.Unknown);
+                    },
+                    () =>
+                    {
+                        // The third terminal state, for the same reason the READ leg above has one
+                        // (#2454): a two-arm Subscribe says NOTHING when the source completes empty,
+                        // and the handler has already returned Processed() by then.
+                        if (innerAnswered)
+                            return;
+                        hub.NoteRequestStage(request.Id, "UPSERT_CREATE_COMPLETED_EMPTY");
+                        logger.LogWarning(
+                            "[CreateOrUpdate] the inner CreateNode for {Path} COMPLETED without a "
+                            + "response and without a fault. Answering the caller with a refusal "
+                            + "(#3510).", node.Path);
+                        PostFail(
+                            $"The create for '{node.Path}' completed without producing a response. It "
+                            + "was NOT applied; retry against the fresh activation.",
                             NodeUpsertRejectionReason.Unknown);
                     });
         }
