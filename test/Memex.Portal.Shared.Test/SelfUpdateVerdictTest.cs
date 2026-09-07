@@ -58,6 +58,7 @@ public class SelfUpdateVerdictTest
             SelfUpdateVerdict.NoOutcome(),
             SelfUpdateVerdict.ComboBlocked("3.0.1", "'Widget' does not compile against it"),
             SelfUpdateVerdict.MigrationFailed("3.0.1", MigrationRunOutcome.TimedOut),
+            SelfUpdateVerdict.InstalledTagWithdrawn("3.1.0-ci.7841", "it is not in the registry"),
         ];
 
         Assert.Equal(
@@ -128,6 +129,64 @@ public class SelfUpdateVerdictTest
         Assert.Contains("UNVERIFIED", qualified.Message, StringComparison.Ordinal);
         Assert.Contains("no combo verification has been recorded", qualified.Message,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 A strand is not a "nothing newer" (#3543). The verdict has to name the version that stopped
+    /// resolving, say what is wrong in a word an operator can search for, and name the move — because
+    /// nothing in the process can make this one better on its own: no publication is ever "newer"
+    /// than a tag that already outranks everything left in the registry.
+    /// </summary>
+    [Fact]
+    public void InstalledTagWithdrawn_NamesTheVersion_AndTheOperatorsMove()
+    {
+        var verdict = SelfUpdateVerdict.InstalledTagWithdrawn(
+            "3.1.0-ci.7841", "the installed 3.1.0-ci.7841 is NOT among the 500 platform tag(s)");
+
+        Assert.Equal(SelfUpdateOutcome.InstalledTagWithdrawn, verdict.Outcome);
+        Assert.Contains("STRANDED on 3.1.0-ci.7841", verdict.Message, StringComparison.Ordinal);
+        Assert.Contains("kubectl set image", verdict.Message, StringComparison.Ordinal);
+        Assert.Equal("3.1.0-ci.7841", verdict.UnresolvedInstalledTag);
+        Assert.False(verdict.FoundNewerRelease,
+            "a strand is the opposite of 'a release was waiting' — reporting it as one would fire the "
+            + "dead-event-channel warning at an install whose event channel is fine");
+    }
+
+    /// <summary>
+    /// 🚨 A recovery roll goes BACKWARDS in lineage, on purpose, and must say so on the verdict — not
+    /// only in a log line, whose level a deployment may never have set. It qualifies what the check
+    /// did without erasing it, exactly as <c>Unverified</c> does, and carries the version that stopped
+    /// resolving so the Updates tab can render the state too.
+    /// </summary>
+    [Fact]
+    public void Recovering_QualifiesTheRoll_AndCarriesTheWithdrawnVersion()
+    {
+        var applied = SelfUpdateVerdict.Applied("3.0.0-ci.7977", "3.1.0-ci.7841", null);
+
+        var qualified = applied.Recovering(
+            "3.1.0-ci.7841", "the installed 3.1.0-ci.7841 is NOT among the 500 platform tag(s)");
+
+        Assert.Equal(SelfUpdateOutcome.Applied, qualified.Outcome);
+        Assert.Equal("3.0.0-ci.7977", qualified.Tag);
+        Assert.Contains("applied update 3.0.0-ci.7977", qualified.Message, StringComparison.Ordinal);
+        Assert.Contains("RECOVERY", qualified.Message, StringComparison.Ordinal);
+        Assert.Equal("3.1.0-ci.7841", qualified.UnresolvedInstalledTag);
+    }
+
+    /// <summary>
+    /// 🚨 The third state has to be SAID. "Nothing newer" over a listing that could not answer whether
+    /// the installed tag still exists is a claim with no evidence behind half of it — the same defect
+    /// #2553 removed one level up, and the reason that sentence is qualified rather than reused.
+    /// </summary>
+    [Fact]
+    public void InstalledTagUnchecked_SaysTheQuestionWasNotAnswered()
+    {
+        var verdict = SelfUpdateVerdict.NoNewerRelease(0, "3.0.0-ci.7977")
+            .InstalledTagUnchecked("the registry listing carried no platform version tags at all");
+
+        Assert.Equal(SelfUpdateOutcome.NoNewerRelease, verdict.Outcome);
+        Assert.Contains("NOT established", verdict.Message, StringComparison.Ordinal);
+        Assert.Null(verdict.UnresolvedInstalledTag);
     }
 
     /// <summary>The structural backstop names itself as a defect in the service, not as a state of

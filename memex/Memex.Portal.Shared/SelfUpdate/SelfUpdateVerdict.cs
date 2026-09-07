@@ -78,6 +78,21 @@ public enum SelfUpdateOutcome
     /// that still answers 200). Appended, never inserted.
     /// </summary>
     MigrationFailed,
+
+    /// <summary>
+    /// 🚨 The tag this install RUNS no longer resolves in the registry, and there is nothing eligible
+    /// to recover to. The install is STRANDED: its workloads name an image that has been untagged, so
+    /// no new pod can start, and no future publication can rescue it by being "newer" — see
+    /// <see cref="VersionSelect.InstalledTagResolution.Withdrawn"/>.
+    ///
+    /// <para>Distinct from <see cref="NoNewerRelease"/>, and that distinction is the whole of #3543:
+    /// the two printed the SAME sentence, so an install that could never move again looked exactly
+    /// like a healthy up-to-date one. Both AKS portals sat here on 2026-09-07 and had to be moved off
+    /// by an operator <c>kubectl set image</c>.</para>
+    ///
+    /// <para>🚨 Appended, never inserted: the members before it keep their ordinals.</para>
+    /// </summary>
+    InstalledTagWithdrawn,
 }
 
 /// <summary>
@@ -107,6 +122,17 @@ public enum SelfUpdateOutcome
 public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message, string? Tag = null)
 {
     /// <summary>
+    /// 🚨 The tag this install RUNS, when the check established that it no longer resolves in the
+    /// registry; <c>null</c> on every other outcome (#3543).
+    ///
+    /// <para>It rides the verdict so <c>RecordCheck</c> can stamp it on <c>Admin/UpdatePolicy</c> in
+    /// the write it already makes every tick — and so it is CLEARED, unconditionally, by the first
+    /// check that finds the tag again. A strand that has healed must disappear from the admin tab
+    /// rather than linger as a stale scare; that is the same rule the availability hold follows.</para>
+    /// </summary>
+    public string? UnresolvedInstalledTag { get; init; }
+
+    /// <summary>
     /// True when the check established that a newer release EXISTS — whatever then happened to it.
     ///
     /// <para>This is the discriminator the dead-event-channel report needs. "The safety net woke us
@@ -124,10 +150,55 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
         SelfUpdateOutcome.UpdatesDisabled,
         "updates are disabled on this install (Admin/UpdatePolicy = None); the registry was not listed.");
 
-    /// <summary>The registry was listed and holds nothing newer.</summary>
+    /// <summary>The registry was listed, holds nothing newer, AND still holds the installed tag —
+    /// i.e. this install is genuinely up to date. 🚨 The second half of that is not decoration: until
+    /// #3543 this sentence was also printed by an install whose own tag had been withdrawn, which is
+    /// the opposite state and unrecoverable by construction.</summary>
     public static SelfUpdateVerdict NoNewerRelease(int tagsListed, string installed) => new(
         SelfUpdateOutcome.NoNewerRelease,
         $"no newer release: {tagsListed} tag(s) listed, none newer than the installed {installed}.");
+
+    /// <summary>
+    /// 🚨 The installed tag does not resolve in the registry and nothing eligible is left to recover
+    /// to — the terminal strand. Says what an operator has to do, because nothing in the process can
+    /// do it: no publication can rescue an install whose tag outranks everything remaining.
+    /// </summary>
+    public static SelfUpdateVerdict InstalledTagWithdrawn(string installed, string explanation) => new(
+        SelfUpdateOutcome.InstalledTagWithdrawn,
+        $"STRANDED on {installed}: {explanation}. There is no eligible release to recover to, so this "
+        + "install cannot move itself — an operator has to point the workloads at a published tag "
+        + "(kubectl set image), or the withdrawn tag has to be restored in the registry.")
+    {
+        UnresolvedInstalledTag = installed,
+    };
+
+    /// <summary>
+    /// 🚨 Qualifies a verdict reached on the RECOVERY path: nothing was newer, but the installed tag
+    /// no longer resolves, so the check chose the best AVAILABLE release instead of reporting "up to
+    /// date". The roll may go BACKWARDS in lineage, and that is the point — an image that exists beats
+    /// one that does not.
+    ///
+    /// <para>Rides the verdict rather than only a log line for the reason
+    /// <see cref="UpdatePolicyContent.LastCheckVerdict"/> exists at all, and carries
+    /// <see cref="UnresolvedInstalledTag"/> so the Updates tab can say so too.</para>
+    /// </summary>
+    public SelfUpdateVerdict Recovering(string installed, string explanation) => this with
+    {
+        Message = $"{Message} RECOVERY — {explanation}; nothing is newer than a withdrawn tag by "
+            + "construction, so the best AVAILABLE release was chosen instead of reporting 'up to date'.",
+        UnresolvedInstalledTag = installed,
+    };
+
+    /// <summary>
+    /// 🚨 Qualifies "nothing newer" when whether the installed tag still resolves could NOT be
+    /// established — the third state (<see cref="VersionSelect.InstalledTagResolution.Indeterminate"/>).
+    /// Saying so is the point: a failed read reported as a clean negative is how an install ends up
+    /// trusting a verdict nobody measured.
+    /// </summary>
+    public SelfUpdateVerdict InstalledTagUnchecked(string explanation) => this with
+    {
+        Message = $"{Message} Whether the installed tag still resolves was NOT established: {explanation}.",
+    };
 
     /// <summary>A newer release exists and the availability gate refused it.</summary>
     public static SelfUpdateVerdict Held(string tag, string? reason) => new(

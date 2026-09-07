@@ -259,7 +259,13 @@ public class SelfUpdateHostedService : IHostedService
                     + "joint of it fails silently, so check them rather than this service.",
                     trigger, verdict.Message);
             else if (verdict.Outcome is SelfUpdateOutcome.NoOutcome
-                     or SelfUpdateOutcome.CheckFailed)
+                     or SelfUpdateOutcome.CheckFailed
+                     // 🚨 An install whose own tag no longer resolves cannot start a new pod, and
+                     // #3543's complaint is precisely that it said so in the same voice as a healthy
+                     // one. Both the terminal strand and the recovery roll carry
+                     // UnresolvedInstalledTag, so the level follows the FACT rather than the outcome.
+                     or SelfUpdateOutcome.InstalledTagWithdrawn
+                     || verdict.UnresolvedInstalledTag is not null)
                 _logger?.LogWarning("[SelfUpdate] check ({Trigger}): {Verdict}", trigger, verdict.Message);
             else
                 _logger?.LogInformation("[SelfUpdate] check ({Trigger}): {Verdict}", trigger, verdict.Message);
@@ -488,20 +494,24 @@ public class SelfUpdateHostedService : IHostedService
             // never backwards (IsNewer), still never into a boot storm (unsealed candidates are
             // SKIPPED, not forced) — but a not-yet-baked head no longer blocks the releases behind
             // it, and an instance always advances to the best release that can actually serve.
-            .Select(tags => (
-                Listed: tags.Count,
-                Candidates: VersionSelect
-                    .PickTargets(tags, policy.Policy, policy.RequireCiGreen)
-                    .Where(tag => VersionSelect.IsNewer(tag, ShippedReleaseSeed.InstalledPlatformVersion))
-                    .ToArray()))
-            .SelectMany(listing => listing.Candidates.Length == 0
+            //
+            // 🚨 And the selection asks a SECOND question of the same listing (#3543): does the tag
+            // this install RUNS still resolve in it? "Nothing is newer" is the honest verdict only
+            // when it does. When it does not, the install is stranded on an image no pod can start
+            // from, and nothing can ever be newer than a tag that already outranks everything left —
+            // so the eligible list becomes a RECOVERY set and the best available release is taken,
+            // backwards if need be. Both AKS portals sat in that state on 2026-09-07 printing the
+            // up-to-date sentence, and an operator had to move them by hand.
+            .Select(tags => VersionSelect.SelectCandidates(
+                tags, ShippedReleaseSeed.InstalledPlatformVersion, policy.Policy, policy.RequireCiGreen))
+            .SelectMany(selection => selection.Candidates.Length == 0
                 // 🚨 "We asked and the answer was no" — the OTHER formerly-silent exit, and the one
                 // that made a stalled install unfalsifiable from outside. This is the normal, happy
                 // outcome of most checks, and it has to be SAID: it is the only thing that
-                // distinguishes a healthy up-to-date install from one whose checker is dead.
-                ? Observable.Return(SelfUpdateVerdict.NoNewerRelease(
-                    listing.Listed, ShippedReleaseSeed.InstalledPlatformVersion))
-                : FirstRollable(policy, listing.Candidates)
+                // distinguishes a healthy up-to-date install from one whose checker is dead. Which
+                // of the three "nothing to roll to" states this is, is NothingToRoll's job.
+                ? Observable.Return(NothingToRoll(selection))
+                : FirstRollable(policy, [.. selection.Candidates])
                     .SelectMany(target => RecordAvailable(target!)
                         // 🚨 BOOKKEEPING, NOT A GATE (#1020). RecordAvailable writes two cosmetic fields
                         // (LatestAvailableTag / CheckedAt) that drive the admin tab; the ROLL-FORWARD does not
@@ -526,7 +536,41 @@ public class SelfUpdateHostedService : IHostedService
                         // and the Select below is unreachable by construction.
                         .IgnoreElements()
                         .Select(_ => SelfUpdateVerdict.NoOutcome())
-                        .Concat(GateThenApply(policy, target!))));
+                        .Concat(GateThenApply(policy, target!)))
+                    // A roll taken on the recovery path says so — on the verdict, not only in a log
+                    // line, because that is the field the Updates tab and the next session read.
+                    .Select(verdict => selection.IsRecovery
+                        ? verdict.Recovering(
+                            ShippedReleaseSeed.InstalledPlatformVersion, selection.Installed.Explanation)
+                        : verdict));
+    }
+
+    /// <summary>
+    /// 🚨 <b>Nothing is newer — which of the THREE states is that?</b> (#3543)
+    ///
+    /// <list type="bullet">
+    /// <item>The installed tag is still published ⇒ genuinely up to date. The normal, happy
+    /// outcome.</item>
+    /// <item>The installed tag is GONE from a populated listing ⇒ STRANDED, and here with nothing
+    /// eligible left to recover to. An operator has to act, so the verdict says so instead of
+    /// printing the up-to-date sentence.</item>
+    /// <item>The listing could not answer ⇒ neither. Collapsing a failed read into a real negative is
+    /// how an install ends up trusting a verdict nobody measured, so the "no newer release" sentence
+    /// carries the reason it could not be checked rather than implying it was.</item>
+    /// </list>
+    /// </summary>
+    private static SelfUpdateVerdict NothingToRoll(VersionSelect.RollCandidates selection)
+    {
+        var installed = ShippedReleaseSeed.InstalledPlatformVersion;
+        return selection.Installed.Resolution switch
+        {
+            VersionSelect.InstalledTagResolution.Withdrawn =>
+                SelfUpdateVerdict.InstalledTagWithdrawn(installed, selection.Installed.Explanation),
+            VersionSelect.InstalledTagResolution.Indeterminate =>
+                SelfUpdateVerdict.NoNewerRelease(selection.Listed, installed)
+                    .InstalledTagUnchecked(selection.Installed.Explanation),
+            _ => SelfUpdateVerdict.NoNewerRelease(selection.Listed, installed),
+        };
     }
 
     /// <summary>
@@ -1065,6 +1109,10 @@ public class SelfUpdateHostedService : IHostedService
                             LastCheckedAt = DateTimeOffset.UtcNow,
                             LastCheckVerdict = verdict.Message,
                             LastCheckTrigger = trigger.ToString(),
+                            // 🚨 Written on EVERY check, so it CLEARS itself the moment the tag
+                            // resolves again — the same unconditional-clearing rule the availability
+                            // hold follows. A healed strand that lingered would be a stale scare.
+                            UnresolvedInstalledTag = verdict.UnresolvedInstalledTag,
                         },
                     };
                 })

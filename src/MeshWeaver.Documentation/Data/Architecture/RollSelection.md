@@ -84,7 +84,9 @@ and it could therefore never be *selected*. Enumerating the markers loses no can
 could have chosen, and it lets an environment answer for itself without listing a container registry
 it may not be able to reach.
 
-Ordering stays with the caller: `VersionSelect` owns the SemVer rules, the tag-shape filters
+Ordering stays with the caller: `VersionSelect` owns the ordering rules — the sealed-publication
+lineage rather than the version string, see
+[Self-Update Target Selection](/Doc/Architecture/SelfUpdateTargetSelection) — the tag-shape filters
 (a bare git sha parses as `6943991.0.0` and sorts above every real release) and the update policy.
 `RollSelection` reads "newer" off the candidate list's **order**, so `MeshWeaver.PluginCatalog` holds
 no second opinion about which release is newer.
