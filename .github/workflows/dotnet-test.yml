@@ -1968,6 +1968,23 @@ jobs:
     - name: "Every job is capped at 45 minutes"
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
 
+    # 🚨 `yaml.safe_load` accepts a DUPLICATE MAPPING KEY silently and keeps the LAST one — and
+    # every guard in this fleet, the one directly above included, reads workflows through it. So a
+    # file with a second `with:` parses, every shape check passes, the job runs, and it uses a value
+    # the diff never shows. Measured 2026-09-07 (#3579): a patcher adopting #3560's
+    # `centralized-gen-manifests` input appended a SECOND `with:` to the `validate:` job in
+    # MeshWeaver.Education and MeshWeaver.Crm; the `uses:` sha had moved to the new lane and the
+    # effective `platform-ref` was still the old one, so the lane would have fetched its central
+    # guard scripts — and the canonical gen-manifests.py — at the OLD ref. Nothing detected it; it
+    # was caught by reading the rendered block. `check-pin-set-consistency.py` models only the
+    # subset whose EFFECT is a pin mismatch, only where that gate is a required context, and only
+    # after a full run. This one is the general form, at the first job, with no credential.
+    # Self-test first — an unproven gate is no gate.
+    - name: "No workflow mapping writes a key twice — the gate can fail (self-test)"
+      run: python3 .github/scripts/check-workflow-yaml-keys.py --self-test
+    - name: "No workflow mapping writes a key twice"
+      run: python3 .github/scripts/check-workflow-yaml-keys.py --root .
+
     # 🚨 combo-verify.yml fires on `workflow_run` / `workflow_dispatch`, NEVER on `pull_request`, so
     # nothing else on this PR opens it — the same blind spot #2642 cost 33 hours on. Its `preflight`
     # is the only thing between "no per-instance credential was provisioned" and a lane that

@@ -293,3 +293,6 @@ would then demand it move *with* the platform set — the same mistake, with a r
 - [Module Build Architecture](../ModuleBuildArchitecture) — one build shape, every repo
 - [Keeping the Platform Source Pin Current](../PlatformRefBumpLane) — the mover for the source ref
 - [Reading CI Signals](../ReadingCiSignals) — an absent required context counts as satisfied
+- [Duplicate Keys in Workflow YAML](../WorkflowDuplicateKeys) — the other way a pin moves in
+  the diff and not in the job: a second `with:` the loader accepts silently, which this gate sees
+  only when its effect happens to be a pin mismatch
