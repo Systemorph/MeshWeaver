@@ -2103,6 +2103,17 @@ jobs:
     - name: "Execute publish-bake-bundles.sh with two publishers on one prefix"
       run: python3 .github/scripts/test-publish-bake-overlap.py
 
+    # The gate and publish-bake lanes compose every external module into /ext/<Name>/ for the
+    # tester container, and until #3514 they copied `meshweaver/modules/` alone — leaving a module
+    # that LOADS and then 404s every static asset it ships (`meshweaver/moduleassets/`), announced
+    # in one LogDebug line. Latent here (the bake is mesh-free, the gate runs no browser) and fine
+    # in production, so nothing could catch it: MeshWeaver.Education, which copied the block into a
+    # browser-driven mesh e2e, rendered a bare Code card where the workbench belongs for three days.
+    # This EXTRACTS both lanes' step by `id:` and executes it against real bundle shapes, reading
+    # the verdict off the landed bytes — with two arms that mutate the real step and must go RED.
+    - name: "Execute the lanes' external-module landing against real bundle shapes"
+      run: python3 .github/scripts/test-module-asset-landing.py
+
     # carry-forward-bundles.sh is the other half of that publication and had NO CI execution at
     # all: it runs only inside a node repo's publish lane, so the first execution of an edit was a
     # production publish. Its self-test covers the shrink refusals it has always owed and the

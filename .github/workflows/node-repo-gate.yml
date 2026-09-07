@@ -843,7 +843,11 @@ jobs:
       # once, while bumping their pins past #2276: 17 packages failed to install in one run.
       # Every failure below is RED and NAMED, because a gate that quietly ran without a module it
       # needed is worse than one that did not run at all.
+      # `id:` is load-bearing: test-module-asset-landing.py EXTRACTS this step's shell by id and
+      # executes it against synthetic bundles. A copy of the block in the harness would pass while
+      # the real thing rots, so the harness fails RED if this id disappears.
       - name: "External modules: assemble what the gate must compose"
+        id: ext-modules
         if: inputs.module-artifacts != '' || inputs.registry-modules != ''
         env:
           REGISTRY_MODULES: ${{ inputs.registry-modules }}
@@ -894,6 +898,9 @@ jobs:
           fi
           shopt -s nullglob
           MODULE_ARGS=""
+          MODULE_COUNT=0
+          ASSET_MODULES=0
+          ASSET_FILES=0
           for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do
             u="${RUNNER_TEMP:-/tmp}/unpack-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
             unzip -o -q "$b" -d "$u"
@@ -907,10 +914,39 @@ jobs:
             test -f "$u/meshweaver/modules/$name.dll" || { echo "::error::$(basename "$b"): meshweaver/modules/$name.dll is missing from the bundle"; exit 1; }
             mkdir -p "$EXT/$name"
             cp -R "$u"/meshweaver/modules/. "$EXT/$name/"
+            # 🚨 A module bundle carries its STATIC WEB ASSETS separately from the flat closure,
+            # under `meshweaver/moduleassets/` (NuGetPackageWriter.ModuleAssetFolder), and they keep
+            # their MODULE-RELATIVE path — `wwwroot/x.js`, `wwwroot/_content/<Dep>/y.css`. That is
+            # the shape ModuleLandingService writes verbatim beside the entry assembly, and it is
+            # the shape MeshModuleStaticAssetExtensions then serves at `_content/<Name>/…` off
+            # `<module folder>/wwwroot`. Copying only `meshweaver/modules/` therefore lands a module
+            # that LOADS PERFECTLY and 404s every asset it ships, saying so in ONE Debug line —
+            # which is why it survived: MeshWeaver.Education's mesh e2e rendered a bare Code node
+            # card where the workbench belongs for three days after MeshWeaver.Plugins#1268 moved
+            # the collaboration views into MeshWeaver.Markdown.Collaboration (MeshWeaver#3514).
+            assets=0
+            if [ -d "$u/meshweaver/moduleassets" ]; then
+              cp -R "$u"/meshweaver/moduleassets/. "$EXT/$name/"
+              # Fail CLOSED, per file, against a DENOMINATOR: what the bundle ships is the
+              # expectation, what the module folder holds is the measurement. A landing that copied
+              # nothing must go RED here rather than report a green zero — an uncounted zero is
+              # exactly what let the gap above ride for three days.
+              ( cd "$u/meshweaver/moduleassets" && find . -type f ) | sed 's|^\./||' > "${u}.shipped-assets"
+              assets=$(wc -l < "${u}.shipped-assets" | tr -d ' ')
+              missing=0
+              while IFS= read -r rel; do
+                [ -f "$EXT/$name/$rel" ] || { echo "::error::$name: shipped static asset '$rel' did not land at /ext/$name/$rel"; missing=$((missing + 1)); }
+              done < "${u}.shipped-assets"
+              [ "$missing" -eq 0 ] || { echo "::error::$(basename "$b"): $missing of $assets shipped static asset(s) are missing from /ext/$name — a browser rendering against this mesh would 404 them"; exit 1; }
+              [ "$assets" -eq 0 ] || ASSET_MODULES=$((ASSET_MODULES + 1))
+            fi
+            ASSET_FILES=$((ASSET_FILES + assets))
+            MODULE_COUNT=$((MODULE_COUNT + 1))
             MODULE_ARGS="$MODULE_ARGS --module /ext/$name/$name.dll"
-            echo "external module composed: $name ($(basename "$b"))"
+            echo "external module composed: $name ($(basename "$b")) — $assets static asset file(s)"
           done
           [ -n "$MODULE_ARGS" ] || { echo "::error::external modules were requested but none were assembled — the artifact pattern matched nothing and no registry bundle was fetched."; exit 1; }
+          echo "external modules: $MODULE_COUNT composed, $ASSET_MODULES of them carrying static web assets, $ASSET_FILES asset file(s) landed under /ext/<module>/wwwroot"
           echo "EXT_MODULES_DIR=$EXT" >> "$GITHUB_ENV"
           echo "EXT_MODULE_ARGS=$MODULE_ARGS" >> "$GITHUB_ENV"
       - name: Import + compile + render + run tests for each node repo
