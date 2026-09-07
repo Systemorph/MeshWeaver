@@ -143,7 +143,9 @@ public sealed class GitHubSyncService
                         // node content (stream.Update read-modify-write) — never a full-content write,
                         // so a concurrent repo-field edit in the GUI editor is not clobbered.
                         return repoClient.Push(request).SelectMany(result =>
-                            RecordLastSync(spacePath, result.CommitSha, sourceId).Select(_ => result));
+                            RecordSyncResult(spacePath, CommittedOutcome, result.CommitSha,
+                                    advanceHorizon: true, sourceId)
+                                .Select(_ => result));
                     }));
             });
         });
@@ -379,7 +381,7 @@ public sealed class GitHubSyncService
                 logger?.LogInformation("Re-importing {Space} at {Ref} (twoWay={TwoWay}, force={Force})",
                     spacePath, commitish, config.TwoWay, force);
                 // Baseline for the git-diff scope: the last SUCCESSFULLY-synced commit. `force` ignores
-                // it (deliberate full overwrite/prune). Because RecordLastSync only advances on a clean
+                // it (deliberate full overwrite/prune). Because RecordSyncResult only advances the baseline on a clean
                 // success (below), this base always names a commit the mesh REALLY reached — so the diff
                 // is cumulative and self-heals a previously-failed push (its files are still in the diff
                 // until an import actually lands them).
@@ -428,11 +430,31 @@ public sealed class GitHubSyncService
                     // canonical case: a repo shipping an instance of a type it introduces — the
                     // instance is refused "NodeType 'X' is not registered" on the first pass, and
                     // the retry that would land it once the type node exists never ran.
-                    .SelectMany(x => !MayAdvanceBaseline(x.Result)
-                        ? Observable.Return(x.Result)
-                        : string.Equals(x.Result.Outcome, "Skipped", StringComparison.OrdinalIgnoreCase)
-                            ? RecordSeenCommit(spacePath, x.CommitSha, sourceId).Select(_ => x.Result)
-                            : RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
+                    // 🚨 EVERY conclusion records WHEN it happened and WHAT it was (issue #3581) —
+                    // including the two branches that deliberately advance nothing else. Before this,
+                    // an import that preserved server-newer nodes or landed nothing wrote to the
+                    // config node at all, so a source could sync every day and leave no trace of it:
+                    // measured on both AKS portals, `Edu/_GitSync` carried a `lastSyncedAt` from
+                    // July/August beside a `lastSyncCommitSha` from that morning, and the only way to
+                    // date the sync was to compare the node's own `lastModified` against pair tags in
+                    // ACR. The recency fields are pure observability — nothing branches on them —
+                    // which is exactly why they can be stamped where the horizon must not be.
+                    .SelectMany(x =>
+                    {
+                        var mayAdvance = MayAdvanceBaseline(x.Result);
+                        var skipped = string.Equals(x.Result.Outcome, "Skipped",
+                            StringComparison.OrdinalIgnoreCase);
+                        return RecordSyncResult(spacePath, x.Result.Outcome,
+                                // A commit whose nodes did not all land is NOT "seen": advancing
+                                // here is the #2229 item C hole, and the guard stays where it was.
+                                seenCommitSha: mayAdvance ? x.CommitSha : null,
+                                // The conflict horizon moves only on a RECONCILING import — never on
+                                // a fingerprint-matched no-op (#677), never on one that preserved
+                                // server-newer nodes (#675).
+                                advanceHorizon: mayAdvance && !skipped,
+                                sourceId)
+                            .Select(_ => x.Result);
+                    });
             });
         });
     }
@@ -461,7 +483,7 @@ public sealed class GitHubSyncService
     /// </list>
     ///
     /// <para>A "Skipped" (fingerprint-matched no-op) outcome is NOT judged here — it is allowed
-    /// through to <c>RecordSeenCommit</c>, which advances the SEEN commit only and deliberately
+    /// through to <c>RecordSyncResult</c> with <c>advanceHorizon: false</c>, which advances the SEEN commit only and deliberately
     /// leaves the conflict horizon alone.</para>
     /// </summary>
     /// <param name="result">The import outcome to judge.</param>
@@ -889,37 +911,57 @@ public sealed class GitHubSyncService
             WriteConfig(spacePath, ctx, update(current ?? new GitHubSyncConfig()), sourceId));
     }
 
+    /// <summary>The <see cref="GitHubSyncConfig.LastSyncOutcome"/> an EXPORT records. Imports record
+    /// the importer's own outcome literal; the export path has no such tally, so it states its own.
+    /// A wire value, never display text — the settings tab localizes it for the viewer.</summary>
+    internal const string CommittedOutcome = "Committed";
+
     /// <summary>
-    /// Records the last-sync result by MERGING only <see cref="GitHubSyncConfig.LastSyncedAt"/> /
-    /// <see cref="GitHubSyncConfig.LastSyncCommitSha"/> atop the latest node content via
-    /// <c>GetMeshNodeStream(path).Update</c> (read-modify-write). Touching only those two fields
-    /// means a concurrent GUI edit of the repository fields is never clobbered.
+    /// 🚨 <b>The ONE write path for every last-sync field</b> (issue #3581). Merges the recency pair
+    /// — <see cref="GitHubSyncConfig.LastSyncAttemptAt"/> (always <c>now</c>) and
+    /// <see cref="GitHubSyncConfig.LastSyncOutcome"/> — plus, when the caller says the outcome earns
+    /// them, <see cref="GitHubSyncConfig.LastSyncCommitSha"/> and the
+    /// <see cref="GitHubSyncConfig.LastSyncedAt"/> conflict horizon, atop the latest node content via
+    /// <c>GetMeshNodeStream(path).Update</c> (read-modify-write). Touching only these fields means a
+    /// concurrent GUI edit of the repository fields is never clobbered, and re-writing an unchanged
+    /// value costs nothing: the write travels as an RFC 7396 merge patch of what actually changed.
+    ///
+    /// <para>🚨 <b>The three clocks are separate ON PURPOSE and must stay so.</b> Folding the horizon
+    /// into the recency stamp is the one change that must never be made — it would advance the
+    /// horizon on exactly the outcomes that suppress it (a fingerprint-matched no-op, an import that
+    /// preserved server-newer nodes, one that landed nothing), moving it past pending uncommitted
+    /// server changes, disarming the two-way protection and letting a later push prune them
+    /// (#675 / #677 / #2229 item C). What #3581 asked for was one write PATH; what it must never
+    /// become is one FIELD. This is that path: the decision is stated once here instead of being
+    /// re-derived at each call site.</para>
     /// </summary>
-    private IObservable<MeshNode> RecordLastSync(string spacePath, string commitSha, string? sourceId = null)
+    /// <param name="spacePath">The Space whose sync source is being recorded.</param>
+    /// <param name="outcome">The importer's outcome literal, or <see cref="CommittedOutcome"/>.</param>
+    /// <param name="seenCommitSha">The commit the mesh has genuinely reached, or <c>null</c> to keep
+    /// the recorded one — a partial or failed import must not move the diff base past nodes that
+    /// never landed.</param>
+    /// <param name="advanceHorizon">Whether this outcome RECONCILED mesh and repo.</param>
+    /// <param name="sourceId">The sync source (null = the primary).</param>
+    private IObservable<MeshNode> RecordSyncResult(
+        string spacePath, string outcome, string? seenCommitSha, bool advanceHorizon,
+        string? sourceId = null)
     {
         var now = DateTimeOffset.UtcNow;
         return hub.GetWorkspace().GetMeshNodeStream(ConfigPath(spacePath, sourceId)).Update(node =>
         {
             var cur = Extract<GitHubSyncConfig>(node) ?? new GitHubSyncConfig();
-            return node with { Content = cur with { LastSyncedAt = now, LastSyncCommitSha = commitSha } };
+            return node with
+            {
+                Content = cur with
+                {
+                    LastSyncAttemptAt = now,
+                    LastSyncOutcome = outcome,
+                    LastSyncCommitSha = seenCommitSha ?? cur.LastSyncCommitSha,
+                    LastSyncedAt = advanceHorizon ? now : cur.LastSyncedAt,
+                },
+            };
         });
     }
-
-    /// <summary>
-    /// Records that this source has SEEN <paramref name="commitSha"/> WITHOUT having reconciled any
-    /// node against the live partition (a no-op update at an unchanged content fingerprint): merges
-    /// ONLY <see cref="GitHubSyncConfig.LastSyncCommitSha"/> — the up-to-date display and the
-    /// git-diff base — and leaves <see cref="GitHubSyncConfig.LastSyncedAt"/> (the two-way conflict
-    /// horizon) untouched, so pending uncommitted server changes stay protected (issue #677: a no-op
-    /// "Update to latest" that advanced the horizon disarmed the protection and let a later push
-    /// prune a server-side addition). Same read-modify-write shape as <see cref="RecordLastSync"/>.
-    /// </summary>
-    private IObservable<MeshNode> RecordSeenCommit(string spacePath, string commitSha, string? sourceId = null) =>
-        hub.GetWorkspace().GetMeshNodeStream(ConfigPath(spacePath, sourceId)).Update(node =>
-        {
-            var cur = Extract<GitHubSyncConfig>(node) ?? new GitHubSyncConfig();
-            return node with { Content = cur with { LastSyncCommitSha = commitSha } };
-        });
 
     /// <summary>Writes the FULL config (no read) — used by <see cref="SaveConfig"/> (a programmatic
     /// / test API). The GUI does NOT use this: it edits the node through the standard
