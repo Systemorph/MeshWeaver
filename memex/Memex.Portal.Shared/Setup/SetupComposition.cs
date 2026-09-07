@@ -280,7 +280,12 @@ public static class SetupComposition
             Storage = new InstanceStorageSelection
             {
                 Type = storageOption!.Type,
-                ConnectionString = Blank(answers.ConnectionString),
+                // 🚨 Encrypted, because a connection string carries a password. It sits in the same
+                // file as the sign-in secrets and provider keys, and leaving this one readable while
+                // protecting those was an inconsistency, not a decision — see the projection.
+                ConnectionString = Blank(answers.ConnectionString) is { } cs
+                    ? Protect(cs, protector, storageOption.DisplayName, strings, problems)
+                    : null,
                 BasePath = Blank(answers.BasePath),
             },
             BootModules = answers.BootModules,

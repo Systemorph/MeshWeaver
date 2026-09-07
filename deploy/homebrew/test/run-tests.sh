@@ -405,6 +405,24 @@ if grep -q 'instanceId: "my-box"$' "$rfile" 2>/dev/null \
    && grep -q '^pluginCatalog:$' "$rfile" 2>/dev/null && grep -q '^secrets:$' "$rfile" 2>/dev/null; then
   ok "the file carries pluginCatalog.{registryUrl,instanceId} and the bootstrap-key secret"
 else bad "the file carries pluginCatalog.{registryUrl,instanceId} and the bootstrap-key secret" "$(cat "$rfile" 2>/dev/null)"; fi
+# 🚨 WITHOUT --id the file must carry NO instanceId, because the portal's first-run wizard asks for
+# the name and mints the guid it registers under. An id here is deployment configuration, which
+# OUTRANKS the instance manifest — so a defaulted <user>-<host> would let the wizard ask, register a
+# guid, and then be silently overridden by a value the operator never chose. Ids are claimed
+# globally and never re-issued, so guessing one is a permanent claim made on their behalf.
+reg https://memex.example.test
+if [ "$RC" -eq 0 ] && [ -f "$rfile" ]; then ok "registry <url> with no --id still writes the file"
+else bad "registry <url> with no --id still writes the file" "exited ${RC}: ${OUT}"; fi
+if grep -q 'instanceId:' "$rfile" 2>/dev/null; then
+  bad "no --id leaves the instance id to the wizard" "the file pre-claims an id: $(cat "$rfile" 2>/dev/null)"
+else ok "no --id leaves the instance id to the wizard"; fi
+if grep -q 'registryUrl: "https://memex.example.test"$' "$rfile" 2>/dev/null; then
+  ok "…and still records the registry the wizard should default to"
+else bad "…and still records the registry the wizard should default to" "$(cat "$rfile" 2>/dev/null)"; fi
+
+# Restore the pinned-id file for the mode/status assertions that follow.
+reg https://memex.example.test/ --key mwr_abcdefghijklmnop --id my-box
+
 case "$(ls -l "$rfile" 2>/dev/null | cut -c1-10)" in
   -rw-------) ok "the registry file is 0600 (it holds a secret)" ;;
   *) bad "the registry file is 0600 (it holds a secret)" "$(ls -l "$rfile" 2>/dev/null)" ;;
