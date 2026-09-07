@@ -1968,6 +1968,17 @@ jobs:
     - name: "Every job is capped at 45 minutes"
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
 
+    # 🚨 combo-verify.yml fires on `workflow_run` / `workflow_dispatch`, NEVER on `pull_request`, so
+    # nothing else on this PR opens it — the same blind spot #2642 cost 33 hours on. Its `preflight`
+    # is the only thing between "no per-instance credential was provisioned" and a lane that
+    # verifies nothing, and the shortfall that matters most is an EMPTY instance list: an empty
+    # matrix skips the verify job, and GitHub paints a skipped job the same colour as a passed one.
+    # This EXECUTES the preflight's real `run:` text over five input scenarios. Self-test first.
+    - name: "The combo-verify preflight can fail (self-test)"
+      run: python3 .github/scripts/check-combo-verify-preflight.py --self-test
+    - name: "The combo-verify preflight fails naming what to provision"
+      run: python3 .github/scripts/check-combo-verify-preflight.py --root .
+
     # 🚨 A Dependabot run resolves `secrets.X` against a SECOND, SEPARATE store (Settings → Secrets
     # and variables → **Dependabot**), which is a PARTIAL mirror of the Actions one — and there is no
     # Dependabot *variables* store, so only `secrets.` is doubled. #3399 (a recurrence of #2249) had
