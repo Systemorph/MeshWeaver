@@ -876,15 +876,61 @@ public class MessageService : IMessageService
     /// </summary>
     internal long TurnsCompleted => Interlocked.Read(ref turnsCompleted);
 
+    // Turns the pump has DEQUEUED since this service was built, counted in DrainOne at the moment
+    // the turn leaves mainQueue.
+    //
+    // 🚨 This is NOT turnsCompleted with a different name, and the gap between them is the whole
+    // point (#3593). turnsCompleted is incremented in RunHandler's Finally, so it counts HANDLER
+    // completions and is blind to every turn that never reached a handler — a turn still inside
+    // NotifyAsync's pre-handler stages, and, crucially, a turn that was never dequeued at all.
+    // A pump whose scheduled drain never runs therefore leaves BOTH counters frozen and looks
+    // exactly like a pump wedged inside a handler; only this counter separates them, because it
+    // moves the instant work is taken off the queue rather than when work finishes.
+    private long turnsDequeued;
+
+    // How many DrainOne bodies are executing RIGHT NOW. Normally 0 (idle) or 1 (a turn is being
+    // pumped); transiently 2 while an async turn's terminal schedules the next drain before the
+    // previous body has unwound.
+    //
+    // 🚨 This replaces a hard-coded literal 0 that the snapshot reported as `exec` for the whole
+    // life of the turn loop — a leftover from the TPL-Dataflow era, when there was an
+    // executionBlock whose count it named. Read as evidence it said "no drain is running", which
+    // it never measured; #3593 was diagnosed against it 47 times in one shutdown. A field that
+    // cannot fail is not a measurement.
+    private int drainsInFlight;
+
     /// <summary>
-    /// Snapshot counts of the dataflow buffers — used by
-    /// <see cref="MessageHub.GetDisposalDiagnostics"/> when a test-base dispose
-    /// timeout fires so the failure message tells you which queue is still
-    /// draining (or backlogged because a handler keeps re-posting). Includes the
-    /// type name of the currently-executing handler when the action block is
-    /// wedged so the diagnostic identifies the offending message.
+    /// Number of turns the pump has taken off its queue so far. Monotonic. Read by the hub's
+    /// disposal stall detector: a latched drain flag with this counter frozen means nothing has
+    /// been handed to the pipeline at all, which is a stall in THIS hub's turn scheduling rather
+    /// than below it.
     /// </summary>
-    internal (int Buffer, int Deferred, int Execution, int OpenGates, bool DeliveryCompleted,
+    internal long TurnsDequeued => Interlocked.Read(ref turnsDequeued);
+
+    /// <summary>
+    /// Number of <c>DrainOne</c> bodies executing at this instant — a real count, not a constant.
+    /// Zero with the drain flag latched means the scheduled drain has not started running.
+    /// </summary>
+    internal int DrainsInFlight => Volatile.Read(ref drainsInFlight);
+
+    /// <summary>
+    /// Snapshot of the turn loop — used by <see cref="MessageHub.GetDisposalDiagnostics"/> when a
+    /// test-base dispose timeout fires, and by the disposal stall detector, so the failure message
+    /// tells you which queue is still draining (or backlogged because a handler keeps re-posting).
+    /// Includes the type name of the currently-executing handler when the action block is wedged so
+    /// the diagnostic identifies the offending message.
+    ///
+    /// <para>🚨 <b>Every field here is a MEASUREMENT, and two of them stopped being one.</b>
+    /// <c>Execution</c> used to be the literal <c>0</c> — a leftover from the TPL-Dataflow pump,
+    /// printed as <c>exec=0</c> and read by every subsequent reader as "no drain is running". It is
+    /// now <see cref="DrainsInFlight"/>, which counts drain bodies that are actually executing.
+    /// <c>DeliveryCompleted</c> was <c>!draining</c> printed as <c>deliveryActionCompleted</c>, so
+    /// the printed name asserted the OPPOSITE of the datum: <c>deliveryActionCompleted=False</c>
+    /// meant a drain was latched IN FLIGHT. It is now the <c>Draining</c> field and prints as
+    /// <c>draining</c>. Both misreadings are recorded in
+    /// <c>Doc/Architecture/DisposalStallVerdicts</c> (#3593).</para>
+    /// </summary>
+    internal (int Buffer, int Deferred, int DrainsInFlight, int OpenGates, bool Draining,
               string? CurrentMessage, long CurrentMessageElapsedMs)
         GetQueueSnapshot()
     {
@@ -896,8 +942,8 @@ public class MessageService : IMessageService
             if (startedTicks > 0)
                 elapsed = (long)((Stopwatch.GetTimestamp() - startedTicks) * 1000.0 / Stopwatch.Frequency);
         }
-        return (mainQueue.Count, deferredQueue.Count, 0, gates.Count,
-            !draining, current, elapsed);
+        return (mainQueue.Count, deferredQueue.Count, Volatile.Read(ref drainsInFlight), gates.Count,
+            draining, current, elapsed);
     }
 
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
@@ -1098,7 +1144,23 @@ public class MessageService : IMessageService
         Task.Factory.StartNew(DrainOne, CancellationToken.None,
             TaskCreationOptions.DenyChildAttach, turnScheduler);
 
+    // Counts THIS body as executing for as long as it runs, so the disposal snapshot can tell a
+    // drain that is running from a drain that was merely scheduled (#3593). The inner loop keeps
+    // every one of its early returns; the counter is released in the finally regardless.
     private void DrainOne()
+    {
+        Interlocked.Increment(ref drainsInFlight);
+        try
+        {
+            DrainLoop();
+        }
+        finally
+        {
+            Interlocked.Decrement(ref drainsInFlight);
+        }
+    }
+
+    private void DrainLoop()
     {
         while (true)
         {
@@ -1112,6 +1174,11 @@ public class MessageService : IMessageService
                 }
                 turn = mainQueue.Dequeue();
             }
+            // The DEQUEUE stamp. Incremented here rather than at handler completion so a turn that
+            // never reaches a handler still moves it — that gap is what makes a pump that never
+            // started indistinguishable from one wedged in a handler when only turnsCompleted is
+            // read (#3593).
+            Interlocked.Increment(ref turnsDequeued);
 
             // Trampoline. A synchronous turn (Observable.Return chains — the norm)
             // completes inline during Subscribe, so we loop to the next turn on THIS
