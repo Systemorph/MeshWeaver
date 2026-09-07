@@ -107,10 +107,23 @@ public static class PresentationLayoutArea
 
         // The ONE mutation API: the owning user hub serialises every writer, so two marks made from
         // two tabs cannot clobber each other, and the update lambda touches only HiddenPaths.
+        //
+        // 🚨 The TYPED overload, and on this node it is the difference between a preference and an
+        // ACCOUNT (#3623). `node.ContentAs<User>(options) ?? new User()` answered the same value —
+        // an empty User — for "this node has no content yet" and for "the content is present and
+        // this build cannot read it", and the second is a real state in a running mesh (untyped
+        // JSON whose $type will not resolve, the as-written JsonObject DOM, a same-named record
+        // from another collectible assembly). The write then persisted that empty record over the
+        // viewer's OWN user node: every field this lambda never touches — display name, email,
+        // locale, every setting — replaced by defaults, silently, on a hide/show click. Here `null`
+        // means ABSENT and only absent; unreadable content faults the observable and the write does
+        // NOT happen, which the onError arm below reports.
         host.Hub.GetMeshNodeStream(viewerId!)
-            .Update(node =>
+            .Update<User>((node, content) =>
             {
-                var user = node.ContentAs<User>(options) ?? new User();
+                // Absent stays create-on-write: a user node that genuinely carries no content yet
+                // is not an error, and the mark is the first thing written to it.
+                var user = content ?? new User();
                 var marks = PresentationPreference.ApplyMark(user.HiddenPaths, hubPath, hide);
                 return ReferenceEquals(marks, user.HiddenPaths)
                     ? node

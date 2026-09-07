@@ -686,14 +686,34 @@ register release and publish event"*) is three sentences:**
    into the same inbox (`register-publication`, its last job). Nothing runs after that call, and no
    pipeline sends a `repository_dispatch` to another repository.
 2. **memex REGISTERS the release** as a durable node — `Hosting/PlatformBuilds/<version>` for a
-   platform build, `Hosting/Publications/<identity>/<source>` for a bundle publication — the source
-   of truth for "what is published for which identity" (what the self-update availability check reads).
-3. **memex PUBLISHES the event** from that registration: `FrameworkReleaseBroadcaster` sends
-   `meshweaver-framework-released` (platform) or `meshweaver-upstream-published` (bundle publication,
-   `client_payload.version` = the identity) to the subscribed repositories — the repositories the
-   control instance's `Hosting/Deployment` records name as registry sources. The subscribers' CI
-   receives it, resolves both images from the version, builds and publishes for that identity — and
-   ends by calling memex (1).
+   platform build, and for a bundle publication `Hosting/PlatformBuilds/<source>` (NodeType
+   `Hosting/Publication`: the source, its repository, the sealed identity + digest and the
+   **upstreams the record declares** — the lane's `upstream-sources`, sent as `upstreams`). That
+   record is the source of truth for "what is published for which identity" and for "who depends on
+   whom".
+3. **memex PUBLISHES the event** from that registration, and **the two events have DIFFERENT
+   audiences.** A platform release concerns every registry source, so `meshweaver-framework-released`
+   goes to every repository the control instance's `Hosting/Deployment` records name as a registry
+   source. A bundle publication concerns only what depends on it, so `meshweaver-upstream-published`
+   goes to the **registered repositories whose declared upstreams name the publishing source — never
+   the publisher itself, never a repository that does not depend on it** (the graph is directed:
+   Reinsurance depends on Crm, never the reverse, and nothing depends on itself), and a re-registration
+   of an identity + digest already on record is the same sealed bytes, **not an event**. The
+   subscribers' CI receives it, resolves both images from the payload, builds and publishes for that
+   identity — and ends by calling memex (1).
+
+   🚨 **Why the audience is a rule and not a list (2026-09-07, MeshWeaver.Plugins#1484).** Until that
+   day a publication was fanned out to the RELEASE audience. Crm published → memex woke Crm and
+   Reinsurance → both rebaked unchanged inputs, sealed the same digest and registered it again →
+   memex woke both again: one crm digest broadcast 8–10 times, a run on each satellite every 3–5 s,
+   100+ runs per satellite in an hour, the App's API limit exhausted, the organisation's Actions
+   queue backed up behind it. A loop like that has no terminating condition, so the fix is not a
+   throttle but the two pure rules above (`DependentsOf`, `IsRepeat`, pinned by `DeploymentTests`),
+   plus a refusal on the receiving side: the lane reds a wake whose `client_payload.source` is its own
+   `bake-source` instead of baking (a bake would re-register the same bytes and hand the sender its
+   next trigger). A repository that has registered no declaration is woken by nobody's publication
+   and rebakes on its schedule poll — the warning on memex names `upstream-sources` as the input that
+   joins the wave.
 
 ```
  pipeline (core CD | a node repo's publish-bake)        memex (control instance)              subscriber CI
@@ -701,9 +721,13 @@ register release and publish event"*) is three sentences:**
  promote / seal ✅                                       WebhookInbox Hosting/PlatformBuilds
    └─ ONE signed POST ──(platform-build |──────────────▶│ verify HMAC
       bundle-publication)… and FINISH                    ├─ REGISTER  Hosting/PlatformBuilds/<version>
-                                                         │            Hosting/Publications/<identity>/<source>
-                                                         ├─ subscribers = Hosting/Deployment records'
-                                                         │              pluginRepos[].isRegistrySource
+                                                         │            Hosting/PlatformBuilds/<source>  (Hosting/Publication:
+                                                         │              repo, identity, digest, declared upstreams)
+                                                         ├─ audience: platform-build     → every registry source
+                                                         │            (Deployment records' pluginRepos[].isRegistrySource)
+                                                         │            bundle-publication → registered repos whose
+                                                         │            upstreams name <source>; never <source> itself;
+                                                         │            same identity+digest again = no event
                                                          └─ PUBLISH   repository_dispatch ─────────────▶ on: repository_dispatch:
                                                             meshweaver-framework-released |               types: [meshweaver-framework-released,
                                                             meshweaver-upstream-published                        meshweaver-upstream-published]
@@ -721,8 +745,9 @@ under `.github/workflows` — there is no ledger — and
 wires the platform half (broadcast + system identity + subscribers from the records) and is
 observed firing before core withdraws its dispatcher (MeshWeaver#3185, this change); a Plugins
 follow-up makes the watcher REGISTER the nodes named in (2) and handle `event: bundle-publication`
-(register + `meshweaver-upstream-published`, dependency-scoped through the registry's package
-`requires` graph so a publication cannot wake its own upstream); each node repository passes
+(register + `meshweaver-upstream-published` — LANDED as MeshWeaver.Plugins#1484's fix: dependency-scoped
+through the DECLARED upstreams the record carries, not the package `requires` graph, so a publication
+cannot wake its publisher or a non-dependent); each node repository passes
 `webhook-url` / `webhook-secret` to the lane when it moves its pin (the lane is RED, naming them,
 until it does — a sealed publication memex was not told about is silent drift). Once Plugins receives
 the platform event and publishes its own bundles on it, core CD's `plugins-bake` job is a SECOND

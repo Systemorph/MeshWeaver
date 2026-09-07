@@ -203,15 +203,14 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
     /// the operator's patch targets, so a genuine base/live conflict is possible on either side.</summary>
     private Task ToggleStormWriter(UpdatePolicyKind value)
     {
-        var jsonOptions = Mesh.JsonSerializerOptions;
         return Observable.Create<MeshNode>(observer =>
             {
                 using (Access.ImpersonateAsSystem())
                     return Mesh.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
-                        .Update(node =>
+                        // The TYPED write, as every production writer on this node is (#3542).
+                        .Update<UpdatePolicyContent>((node, cur) => node with
                         {
-                            var cur = UpdatePolicyNodeType.ParseContent(node.Content, jsonOptions);
-                            return node with { Content = cur with { Policy = value } };
+                            Content = (cur ?? new UpdatePolicyContent()) with { Policy = value },
                         })
                         .Subscribe(observer);
             })
@@ -224,18 +223,20 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
     /// the poller's bookkeeping fields, preserves Policy.</summary>
     private Task RecordAvailable(string tag)
     {
-        var jsonOptions = Mesh.JsonSerializerOptions;
         return Observable.Create<MeshNode>(observer =>
             {
                 using (Access.ImpersonateAsSystem())
                     return Mesh.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
-                        .Update(node =>
+                        // 🚨 Mirrors SelfUpdateHostedService.RecordAvailable EXACTLY, which since
+                        // #3542 is the TYPED write — a mirror that drifts back to
+                        // `ParseContent` + the untyped overload stops testing the production shape.
+                        .Update<UpdatePolicyContent>((node, cur) => node with
                         {
-                            var cur = UpdatePolicyNodeType.ParseContent(node.Content, jsonOptions);
-                            return node with
+                            Content = (cur ?? new UpdatePolicyContent()) with
                             {
-                                Content = cur with { LatestAvailableTag = tag, CheckedAt = DateTimeOffset.UtcNow },
-                            };
+                                LatestAvailableTag = tag,
+                                CheckedAt = DateTimeOffset.UtcNow,
+                            },
                         })
                         .Subscribe(observer);
             })

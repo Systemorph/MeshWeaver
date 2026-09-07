@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
@@ -8,6 +9,7 @@ using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -519,5 +521,196 @@ public class BuildGrantPublicationTest
             .Should().NotBe(
                 BuildNodeType.ArbitrationTrigger(queued),
                 "the holder releasing is what makes the queued candidate grantable");
+    }
+
+    // ── a mirror this build cannot READ ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A mirror whose content is PRESENT and cannot be materialised as <c>BuildState</c> — the
+    /// third of the three shapes <c>.ContentAs&lt;T&gt;</c> exists for, modelled as JSON whose
+    /// <c>RequestedClaims</c> is a string where a map belongs.
+    ///
+    /// <para>This is a PURE decision test: nothing here goes through <c>MeshNodeStreamCache</c>, so
+    /// no degradation is logged and the untyped-content shard gate is not involved. A test that
+    /// drove a real mesh would need the other fixture shape — a value of a different REGISTERED
+    /// type — for exactly that reason; see <c>Doc/Architecture/ReadingCiSignals</c>.</para>
+    /// </summary>
+    private static MeshNode UnreadableMirror() =>
+        new("Build", "Admin")
+        {
+            NodeType = BuildNodeType.NodeType,
+            Content = JsonSerializer.Deserialize<JsonElement>(
+                """{"RequestedClaims":"written-by-a-shape-this-build-cannot-read"}"""),
+        };
+
+    /// <summary>
+    /// 🚨 The fixture is only a fixture if it is genuinely unreadable. Asserted first, because every
+    /// arm below is vacuous the moment this stops being true — a JSON shape the record happens to
+    /// tolerate would make them all pass against the very defect they exist to refuse.
+    /// </summary>
+    [Fact]
+    public void TheUnreadableFixture_IsActuallyUnreadable()
+    {
+        var mirror = UnreadableMirror();
+
+        mirror.Content.Should().NotBeNull("PRESENT is half the point — absent content is a different fact");
+        mirror.ContentAs<BuildState>(Options).Should().BeNull(
+            "'present and this build cannot read it' is the state under test; if the record "
+            + "tolerates this JSON the arms below assert nothing at all");
+    }
+
+    /// <summary>
+    /// 🚨 <b>#3623 — the write that WAS reachable.</b> <c>ApplyGrant</c> read the mirror through
+    /// <c>ContentAs&lt;BuildState&gt;(options) ?? new BuildState()</c>, so an unreadable mirror
+    /// became an EMPTY one. With a holder in the grant the candidate guard then happened to refuse —
+    /// the right outcome for the wrong reason, and silently. With NO holder every guard falls
+    /// through and the method WRITES that empty record onto the Build node: registrations, holder,
+    /// status and stand-down marks all replaced by defaults, in one merge patch, with nothing said.
+    ///
+    /// <para>This arm is the discriminating one: it fails against the pre-#3623 implementation and
+    /// passes after it.</para>
+    /// </summary>
+    [Fact]
+    public void AGrantWithNoHolder_NeverOverwritesAMirrorThisBuildCannotRead()
+    {
+        var mirror = UnreadableMirror();
+
+        BuildNodeType.ApplyGrant(mirror, Granted() with { ClaimedBy = null }, Options)
+            .Should().BeSameAs(mirror,
+                "a failed READ must never become a written DEFAULT — the same node returned is the "
+                + "only outcome that leaves the record intact");
+    }
+
+    /// <summary>
+    /// The ordinary holder-carrying grant is refused too, and now for the stated reason rather than
+    /// by accident of an empty candidate map. The refusal is what
+    /// <c>HandBackAStoodDownGrant</c> reads, so the lock the pass took is released rather than
+    /// stranded — which is why this path refuses instead of throwing.
+    /// </summary>
+    [Fact]
+    public void AGrantIsNotPublished_OverAMirrorThisBuildCannotRead()
+    {
+        var mirror = UnreadableMirror();
+
+        BuildNodeType.ApplyGrant(mirror, Granted(), Options).Should().BeSameAs(mirror);
+    }
+
+    /// <summary>
+    /// 🚨 And it SAYS so. A refusal nobody can see is the shape that made #3623 invisible in the
+    /// first place: the write simply did not happen, nothing was logged, and the loss surfaced
+    /// later as a field that "went missing". The record names the node and the holder it withheld.
+    /// </summary>
+    [Fact]
+    public void TheRefusalIsRecorded_NamingTheNodeAndTheHolder()
+    {
+        var logger = new RecordingLogger();
+
+        BuildNodeType.ApplyGrant(UnreadableMirror(), Granted(), Options, logger);
+
+        var record = Assert.Single(logger.Records);
+        record.Level.Should().Be(LogLevel.Error);
+        record.Message.Should().Contain("REFUSING to publish the grant");
+        record.Message.Should().Contain("Admin/Build");
+        record.Message.Should().Contain(Winner);
+    }
+
+    /// <summary>
+    /// 🚨 Non-vacuity for all four arms above. A readable mirror still publishes — otherwise
+    /// "the grant was refused" would be satisfied by an <c>ApplyGrant</c> that never grants
+    /// anything, and the whole arbitration would be dead with every test green.
+    /// </summary>
+    [Fact]
+    public void AReadableMirror_StillPublishesAndLogsNothing()
+    {
+        var logger = new RecordingLogger();
+        var mirror = Mirror(new BuildState
+        {
+            RequestedClaims = ImmutableDictionary<string, BuildClaimRequest>.Empty
+                .Add(Winner, new BuildClaimRequest("fp", T0)),
+        });
+
+        var published = BuildNodeType.ApplyGrant(mirror, Granted(), Options, logger)
+            .ContentAs<BuildState>(Options)!;
+
+        published.ClaimedBy.Should().Be(Winner);
+        logger.Records.Should().BeEmpty("a healthy publication is not a fault");
+    }
+
+    // ── the DURABLE half: the claim lock the compare-and-set commits against ────────────────────
+
+    /// <summary>
+    /// 🚨 #3623 on the row that matters most. <c>CommitGrant</c> read the LOCK through
+    /// <c>held?.ContentAs&lt;BuildState&gt;(options) ?? new BuildState()</c>, which answered the same
+    /// empty state for "there is no lock row yet" — correct, that is the INSERT case at
+    /// <c>expectedVersion 0</c> — and for "the row is there and this build cannot read it". On the
+    /// second reading the pass decides in a world where nobody holds the build, and then COMMITS
+    /// it: the compare-and-set diffs against the REAL row's version, so it succeeds. The live
+    /// holder is evicted from the one witness every cluster's arbiter reads.
+    /// </summary>
+    [Fact]
+    public void AnUnreadableLockRow_RefusesTheWholePass()
+    {
+        var logger = new RecordingLogger();
+        var lockRow = new MeshNode("_Claim", "Admin/Build")
+        {
+            NodeType = BuildNodeType.NodeType,
+            Content = JsonSerializer.Deserialize<JsonElement>(
+                """{"RequestedClaims":"written-by-a-shape-this-build-cannot-read"}"""),
+        };
+        lockRow.ContentAs<BuildState>(Options).Should().BeNull("the fixture must actually be unreadable");
+
+        BuildNodeType.ReadLockStateOrRefuse(lockRow, Options, "Admin/Build/_Claim", logger)
+            .Should().BeNull("refusing the pass is the only outcome that leaves the lock row intact");
+
+        var record = Assert.Single(logger.Records);
+        record.Level.Should().Be(LogLevel.Error);
+        record.Message.Should().Contain("REFUSING to arbitrate");
+        record.Message.Should().Contain("Admin/Build/_Claim");
+    }
+
+    /// <summary>
+    /// 🚨 Non-vacuity, both halves. An ABSENT row is the insert case and must still yield a fresh
+    /// state — refusing it would mean no build is ever claimed on a cluster that has not run one —
+    /// and a READABLE row must come back as itself, holder and all.
+    /// </summary>
+    [Fact]
+    public void AnAbsentLockRowInserts_AndAReadableOneIsReturnedUnchanged()
+    {
+        var logger = new RecordingLogger();
+
+        BuildNodeType.ReadLockStateOrRefuse(null, Options, "Admin/Build/_Claim", logger)
+            .Should().NotBeNull("no lock row yet IS the insert case — expectedVersion 0");
+
+        var readable = BuildNodeType.ReadLockStateOrRefuse(
+            Lock(Granted()), Options, "Admin/Build/_Claim", logger);
+
+        readable.Should().NotBeNull();
+        readable!.ClaimedBy.Should().Be(Winner);
+        logger.Records.Should().BeEmpty("neither of these is a fault");
+    }
+
+    private sealed record LogRecord(LogLevel Level, string Message);
+
+    /// <summary>Captures level and formatted message — enough to assert that the refusal is
+    /// visible and names what it withheld.</summary>
+    private sealed class RecordingLogger : ILogger
+    {
+        private readonly List<LogRecord> records = [];
+
+        public IReadOnlyList<LogRecord> Records => records;
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => records.Add(new LogRecord(logLevel, formatter(state, exception)));
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
     }
 }
