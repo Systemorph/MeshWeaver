@@ -174,8 +174,9 @@ public static class BuildNodeType
     /// <summary>
     /// The claim arbiter — runs on each Build node's OWN hub.
     ///
-    /// <para>Two triggers, one decision procedure: every own-stream emission (a candidate
-    /// registered, a holder released) and a slow periodic tick (a dead holder emits nothing — the
+    /// <para>Two triggers, one decision procedure: every own-stream emission that
+    /// <see cref="ArbitrationTrigger"/> calls actionable (a candidate registered, a holder
+    /// released, a holder STOOD DOWN) and a slow periodic tick (a dead holder emits nothing — the
     /// stale steal can only come from a timer). Both funnel into <see cref="ArbitrateDurably"/>,
     /// which re-reads the durable row and does nothing when there is nothing to do, so redundant
     /// triggers write nothing.</para>
@@ -211,12 +212,10 @@ public static class BuildNodeType
         var onEmission = ActivityControlPlaneExtensions.SubscribeHubWatcher(
             hub,
             () => workspace.GetMeshNodeStream()
-                .Select(node => node?.ContentAs<BuildState>(hub.JsonSerializerOptions))
-                .Where(state => state?.RequestedClaims is { Count: > 0 })
-                .Select(state => string.Join(
-                    "|",
-                    state!.RequestedClaims!.Keys.OrderBy(k => k, StringComparer.Ordinal)
-                        .Append(state.ClaimedBy ?? string.Empty)))
+                .Select(node => ArbitrationTrigger(
+                    node?.ContentAs<BuildState>(hub.JsonSerializerOptions)))
+                .Where(key => key is not null)
+                .Select(key => key!)
                 .DistinctUntilChanged()
                 // A registration inside the settle window arbitrates to "not yet" (#1424), and no
                 // further emission is coming if nobody else registers — so every trigger also
@@ -261,6 +260,57 @@ public static class BuildNodeType
 
         return new System.Reactive.Disposables.CompositeDisposable(
             onEmission, onDurableChange, staleTick);
+    }
+
+    /// <summary>
+    /// The arbiter's MIRROR trigger, as a pure function of the state: <c>null</c> when a pass would
+    /// have nothing to decide, otherwise a key that CHANGES whenever the decision would. Named so a
+    /// test drives the same expression <see cref="InstallClaimArbiter"/> subscribes, rather than a
+    /// re-spelling of it that is free to drift.
+    ///
+    /// <para>Two states are actionable, and the second is the one #1193 added. <b>A pending
+    /// registration</b> may be grantable. <b>A holder that has STOOD DOWN</b>
+    /// (<see cref="StoodDownHolder"/>) must be released before anyone can be granted at all — and
+    /// it is actionable with <see cref="BuildState.RequestedClaims"/> EMPTY, which is precisely the
+    /// measured shape (<c>ClaimedBy=&lt;the follower&gt;, Status=Planning, RequestedClaims=[]</c>).
+    /// A trigger gated on a pending registration alone cannot see it: the grant consumed the
+    /// follower's registration on its way in, so the stand-down mark lands on a node with nothing
+    /// queued and the emission is filtered away.</para>
+    ///
+    /// <para>🚨 <b>Why that mattered even with <see cref="ReleaseStoodDownClaim"/> in place.</b> The
+    /// release would then have waited for whatever woke the arbiter next: on a host WITH a durable
+    /// store the withdraw's flush publishes on <see cref="IStorageAdapter.Changes"/> and the pass
+    /// runs at once, but on a host without one (a monolith test, a dev box — the fail-open
+    /// <c>GrantOnMirror</c> path) the only remaining wake-ups are the re-check some EARLIER
+    /// trigger happened to schedule and the <see cref="HeartbeatInterval"/> tick. A decision
+    /// procedure that is right and a trigger that never delivers it read exactly alike from the
+    /// unit test — <c>TheArbiterReleasesAStoodDownHolder_EvenWithNobodyQueued</c> passes either
+    /// way — so the trigger says the same thing the pass does, here, once.</para>
+    ///
+    /// <para>The stand-down holder is part of the KEY, not merely the filter: the mark arrives on a
+    /// node whose other trigger fields did not move (the grant had already emptied
+    /// <see cref="BuildState.RequestedClaims"/> and set <see cref="BuildState.ClaimedBy"/>), so a
+    /// key that omitted it would be swallowed by <c>DistinctUntilChanged</c> — the filter would
+    /// pass and nothing would fire.</para>
+    /// </summary>
+    /// <param name="state">The Build node's state as this hub's mirror currently holds it.</param>
+    /// <returns>The trigger key, or <c>null</c> when this state warrants no pass.</returns>
+    internal static string? ArbitrationTrigger(BuildState? state)
+    {
+        var pending = state?.RequestedClaims;
+        var stoodDown = StoodDownHolder(state);
+        if (pending is not { Count: > 0 } && stoodDown is null)
+            return null;
+
+        var candidates = pending is null
+            ? Enumerable.Empty<string>()
+            : pending.Keys.OrderBy(k => k, StringComparer.Ordinal);
+
+        return string.Join(
+            "|",
+            candidates
+                .Append(state!.ClaimedBy ?? string.Empty)
+                .Append(stoodDown ?? string.Empty));
     }
 
     /// <summary>
@@ -334,7 +384,10 @@ public static class BuildNodeType
                 // The candidate could not clear it itself (see ReleaseStoodDownClaim), so it is
                 // owed here. The release publishes on the mirror's change feed, which is this
                 // arbiter's own trigger, so the next candidate is elected immediately rather than
-                // at the slow tick — level-triggered, no timer, no retry.
+                // at the slow tick — level-triggered, no timer, no retry. The mark's ARRIVAL is a
+                // trigger on the same feed for the same reason (see ArbitrationTrigger): it lands
+                // on a node with nothing queued, so a trigger that asked only about pending
+                // registrations would have left this pass waiting for the stale tick.
                 if (StoodDownHolder(state) is { } stoodDown)
                     return workspace.GetMeshNodeStream()
                         .Update(node => ReleaseStoodDownClaim(node, options, DateTime.UtcNow))
