@@ -83,6 +83,56 @@ remember it cannot see a name present with an EMPTY value, which the in-run asse
 
 Full reference: [DependabotSecretStore.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DependabotSecretStore.md).
 
+### 🚨 A SCHEDULED lane's honest red is red in an EMPTY ROOM — same defect, other end
+
+The skip-trapdoor above is *"the gate could not fail"*. This is its twin: **the gate failed
+correctly and nobody was told**, and from outside the two are indistinguishable, because both
+produce silence.
+
+Measured 2026-09-07 on `node-repo-platform-ref-bump.yml`. That lane had **every** property this page
+demands — a minted App token, an assert that fails RED naming what to provision, no
+`continue-on-error` anywhere, and a header arguing (correctly) that tolerating a failure there would
+be worse than none. It had also **never once succeeded**: total runs in its entire history,
+MeshWeaver.Plugins **1** (run 34083504064), MeshWeaver.SocialMedia **1**, both failed at the push
+because the `meshweaver-cloud` installation holds `contents`/`metadata`/`pull_requests` and nothing
+else (`GET /orgs/Systemorph/installations` — the *installation's* granted set is what an installation
+token is minted from, and the authoritative read). A scheduled run hangs off no pull request, no
+reviewer and no check list, so it went red daily into nothing.
+
+What the silence cost, in one morning: the pin froze at 04:32Z, drifted 120 → 153, and at 08:23Z the
+staleness ratchet reddened **all 16 open pull requests** in the repo at once on a gate none of their
+diffs could reach; nothing sealed, so a corrected course quiz never reached its learners and the
+session chasing *that* was three repositories away from the cause.
+
+**So a lane that runs on `schedule:` (or `workflow_dispatch`, or any trigger with no pull request
+attached) must route its failure onto an artefact that outlives the run** — here, one tracking issue
+in the calling repo, labelled for that subject alone. Three properties, each with an
+attractive-looking removal, each now guarded:
+
+- **branch on the job's RESULT, not `if: failure()`** — a failure-only reporter never clears a stale
+  alert, and an alert that is no longer true is how the next real one gets skimmed past;
+- **write an issue, not a log line** — the log line goes into the same empty room the red went into;
+- **no `continue-on-error` and no input-shaped `if:` on the reporter** — an alerting path that
+  swallows its own failure re-creates the silence one level up.
+
+Two mechanics worth knowing before you add one. A **label of its own**, never the repo's shared
+`ci-failure`: listing by a shared label finds whatever unrelated alert is open, comments this
+subject's story onto it, and then *closes* it on the next success. And in a reusable workflow the
+reporter's `issues: write` must be granted by the **caller** — a called workflow can only narrow what
+it was given, and omitting it does not degrade quietly: the run ends in **`startup_failure` with zero
+jobs created** (measured, run 34137399515). Loud, which is right, but it means the caller's grant and
+its `uses:` sha move in one commit.
+
+🚨 **The tempting alternative — "page earlier" — is the wrong instrument.** Lowering the staleness
+bound so it warns before it breaches fires on every open pull request for a condition none of their
+diffs caused: the breach's own harm, more often. A gate that fires constantly gets bypassed. The
+approach signal already existed and *was* the daily lane; what was missing is an **observer of the
+mover**. Note also that the breach red teaches the wrong lesson while the mover is dead — *"the pin
+is stale, move it"* → hand bump → mover still dead → recurrence.
+
+Full reference:
+[PlatformRefBumpLane.md](../../../src/MeshWeaver.Documentation/Data/Architecture/PlatformRefBumpLane.md).
+
 **Legitimate `continue-on-error` (do not "fix" these):** the `Publish Test Results` reporter (the
 TRX summarize step is the real gate; a GitHub-API 429 must not fail the run) and the green-marker
 push/prune (losing a marker costs a redundant run, never correctness). The test is *what does a
@@ -329,6 +379,9 @@ Full reference:
 - [ ] No `continue-on-error` on a gate's input step; no `if:` asking whether a secret/variable is
       set. Fork-PR exemption expressed once, on the event.
 - [ ] Missing external inputs fail a `preflight` job RED, naming what to provision.
+- [ ] A lane on `schedule:`/`workflow_dispatch` routes its failure to a durable artefact (an
+      issue on its own label, cleared on success) — an honest red nobody reads is the same defect as
+      a gate that cannot fail.
 - [ ] Adding a `secrets.X` to a pull-request job? A preflight in the same repo asserts it
       (`check-pr-secret-preflight.py` reds otherwise), and `vars.` vs `secrets.` is the right
       namespace — only `secrets.` has a second store.
