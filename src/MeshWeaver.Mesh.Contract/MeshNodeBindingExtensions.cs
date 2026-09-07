@@ -3,7 +3,9 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Data;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh;
@@ -69,18 +71,60 @@ public static class MeshNodeBindingExtensions
     /// <c>ConversionToValue</c>) deserializes it exactly as it would a <c>/data</c> value. Stays
     /// subscribed for the component lifetime — no <c>.Take(1)</c>.
     ///
-    /// <para>🚨 <b>Bounded on the FIRST value only</b> (<see cref="ReadBudget"/>, 10 s). Two ways
-    /// this binding could previously produce a control that spins forever with nothing logged, both
-    /// seen in production:</para>
+    /// <para>🚨 <b>THE BOUND NODE MAY NOT EXIST, AND THAT IS A FIRST-CLASS STATE — NOT A FAULT</b>
+    /// (Systemorph/MeshWeaver#3517). Two live shapes reach here, and neither is a call-site
+    /// mistake that could be designed away:</para>
     /// <list type="bullet">
-    ///   <item>the owning hub is unreachable / still starting, so the stream's hydrating
-    ///     <c>SubscribeRequest</c> burns the hub's whole 60 s <c>RequestTimeout</c> before the fault
-    ///     even reaches the view (Systemorph/MeshWeaver#1748 —
-    ///     <c>"No response received in hub cache/… → target Posts/RobertHaircuts"</c>);</item>
-    ///   <item>the node is genuinely ABSENT, in which case the <c>Where(node is not null)</c> below
-    ///     filters every emission and this observable never emits or errors AT ALL — no timeout, no
-    ///     log, a control that waits for the life of the circuit.</item>
+    ///   <item><b>Deleted while the page was open.</b> The "Share ⇒ as email" form creates its
+    ///     draft node up front (<c>EmailDraftNodeType.EnsureExists</c>) — the create-before-bind
+    ///     discipline, already applied — and the user then deleted the document's whole
+    ///     <c>_Draft</c> subtree with the tab still showing the form. No amount of call-site care
+    ///     prevents that: any bound node can be deleted from under a live view.</item>
+    ///   <item><b>Not written yet, deliberately.</b> A course quiz binds the learner's
+    ///     <c>{user}/_Answers/…</c> node, which is created by the FIRST answer. Creating it on
+    ///     render — so the binding always has a target — would write a node for every learner who
+    ///     merely looked at the page.</item>
     /// </list>
+    ///
+    /// <para>So the read is composed the way <c>Doc/Architecture/CqrsAndContentAccess</c> →
+    /// "An OPTIONAL node" requires: <b>a query answers WHETHER the node is there, the owner's
+    /// stream answers WHAT it says.</b> A bare point read of an absent path is a framework defect,
+    /// not merely a slow one — routing answers an authoritative <c>NotFound</c> that TERMINATES the
+    /// stream, and that NotFound opens <c>MeshNodeStreamCache</c>'s storm-breaker window on the
+    /// path, which fast-fails WRITES to it as well. #3517 is what that looks like from outside: 473
+    /// <c>fail:</c> lines over four days on all five pods, 3–5 per render pass, from two unrelated
+    /// spaces, because the view re-attempted the point read on every render and the breaker handed
+    /// back the same cached exception each time.</para>
+    ///
+    /// <para>🚨 <b>A <c>catch</c> here would have been worse than the noise.</b> Swallowing the
+    /// <c>DeliveryFailureException</c> hides the fault AND leaves the breaker open on the path — so
+    /// the read goes on suppressing the write the form is about to make. The gate is the fix
+    /// because it means the NotFound is never MINTED.</para>
+    ///
+    /// <para><b>The gate's shape, and why each part is the way it is:</b> an EXACT-path query
+    /// (<c>path:{x}</c>, no <c>scope:</c> qualifier ⇒ <c>QueryScope.Exact</c>) whose contract for an
+    /// absent path is "zero rows, no error" — empty-on-absent, no routing NotFound, no breaker
+    /// window; the same instrument <c>ActivityRunner</c>, <c>MarkdownViewLogic</c> and
+    /// <c>TrackActivity</c> already gate on. It is LIVE — an authoritative <c>Initial</c> frame and
+    /// then deltas, folded into one boolean (see <see cref="Exists"/>), never a one-shot — so a node
+    /// created or deleted later flips the gate and the binding follows without a re-render, and
+    /// there is no <c>.Take(1)</c> anywhere on the value path. And it runs
+    /// <see cref="MeshQueryRequest.AsSystem"/>: the gate decides only EXISTENCE, the CONTENT read
+    /// below is still row-level-security-gated by the owner exactly as before, and a query filtered
+    /// by an identity that failed to resolve would answer "absent" for a node the viewer can see —
+    /// an empty control indistinguishable from a real absence, which is the failure this repo bans
+    /// and the reason <see cref="MeshQueryRequest.UserId"/> documents it as its own worst
+    /// defect.</para>
+    ///
+    /// <para>🚨 <b>Bounded on the FIRST value only</b> (<see cref="ReadBudget"/>, 10 s), and EACH LEG
+    /// carries its own — one budget spanning both would be worse than none. Wrapped around the
+    /// composed binding, the immediate "absent ⇒ null" emission satisfies it instantly and silences
+    /// the case it exists for: the owning hub unreachable / still starting, so the hydrating
+    /// <c>SubscribeRequest</c> burns the hub's whole 60 s <c>RequestTimeout</c> before the fault
+    /// reaches the view (Systemorph/MeshWeaver#1748 — <c>"No response received in hub cache/… →
+    /// target Posts/RobertHaircuts"</c>). So the content leg is bounded where it is opened, and the
+    /// gate is bounded separately in <see cref="Exists"/> — a gate that never answers is that same
+    /// spinning control with nothing logged, one level up.</para>
     ///
     /// <para><b>It degrades rather than errors, deliberately.</b> An error would tear the
     /// subscription down, and a hub that is merely slow — a cold NodeType compile legitimately
@@ -107,12 +151,135 @@ public static class MeshNodeBindingExtensions
         TimeSpan? firstValueBudget = null,
         IScheduler? scheduler = null)
     {
-        var options = hub.JsonSerializerOptions;
         var pointer = Combine(subPath, reference.Pointer);
+        var content = Observable.Defer(() =>
+            FieldStream(hub, nodePath, bindContent, pointer, firstValueBudget, scheduler));
+
+        // No query surface on this hub (a minimal fixture, a client with no IMeshService) ⇒ the
+        // gate cannot be asked, so the read stays exactly what it was. Degrading to the PREVIOUS
+        // behaviour is the only honest fallback: refusing to bind would break every such host, and
+        // pretending "absent" would blank every control on it.
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return content;
+
+        var announcedAbsent = 0;
+        return Exists(meshService, hub, nodePath, firstValueBudget, scheduler)
+            .Select(exists => exists
+                ? content
+                : Observable.Defer(() =>
+                {
+                    if (Interlocked.Exchange(ref announcedAbsent, 1) == 0)
+                        ReadBudget.Logger(hub)?.LogDebug(
+                            "MeshNodeBinding: '{Field}' is bound to {Path}, which does not exist — "
+                            + "drawing the control empty and watching for it to appear. This is the "
+                            + "OPTIONAL-node state, not a fault; the point read that would have "
+                            + "NotFound-stormed the path was never issued (#3517).",
+                            pointer, nodePath);
+                    return Observable.Return<object?>(null);
+                }))
+            .Switch()
+            // Outside the Switch: an existence flip that re-opens the content leg must not re-fire
+            // the setter with the value the control already shows.
+            .DistinctUntilChanged(JsonElementValueComparer.Instance);
+    }
+
+    /// <summary>
+    /// LIVE existence of the node at <paramref name="nodePath"/> — <c>true</c> while the index
+    /// carries a row for exactly that path, <c>false</c> while it does not.
+    ///
+    /// <para>The index TRAILS the durable store, which is what makes it sound as a gate in this
+    /// direction: "the index has seen it" implies "the store has it", so the point read opened on
+    /// a <c>true</c> can never be early. The lag that makes a query useless for CONTENT is exactly
+    /// what makes it safe for EXISTENCE.</para>
+    ///
+    /// <para>🚨 <c>StringComparison.Ordinal</c>, never <c>OrdinalIgnoreCase</c>: mesh paths are
+    /// case-SENSITIVE, and a case-insensitive match would let a DIFFERENT node satisfy the gate —
+    /// re-minting the very NotFound the gate exists to prevent.</para>
+    ///
+    /// <para>🚨 <b>The CHANGE-STREAM surface (<c>Query&lt;T&gt;</c>), never the unified snapshot
+    /// surface (<c>Query(request)</c>)</b>, and the difference is not a preference. The snapshot
+    /// surface seeds every provider with <c>.StartWith(empty)</c> before <c>CombineLatest</c> so a
+    /// fast provider need not wait for a slow one — its own comment calls the result "the brief
+    /// leading all-empty frame". A gate built on it therefore answers <b>false FIRST, always</b>,
+    /// including for a node that plainly exists: every binding in the portal would emit a spurious
+    /// <c>null</c> and log the "does not exist" line below. <c>Query&lt;T&gt;</c> instead merges the
+    /// providers' <c>Initial</c> frames into one authoritative full set and forwards the deltas
+    /// after it, so the gate's first answer is a real one. (Found in review of #3536.)</para>
+    ///
+    /// <para><b>Deliberately NOT cached per path, and this was considered rather than overlooked.</b>
+    /// A form with N node-bound controls opens N of these gates on the same path where one would do,
+    /// and the obvious dedupe — a per-path <c>ConcurrentDictionary&lt;string, IObservable&lt;bool&gt;&gt;</c>
+    /// holding a shared <c>Replay(1)</c> — is the shape this repo bans by name: a replayed subject
+    /// LATCHES <c>OnError</c>, so one transient query fault would be replayed to every future binding
+    /// on that path for the process's life (#1369). Trading a bounded, self-healing cost for an
+    /// unbounded latched fault is the wrong direction, and the CONTENT leg behind the gate is already
+    /// shared per path by <c>IMeshNodeStreamCache</c>. If this ever measures as a real cost, the fix
+    /// is a mesh-scoped instance cache with fault-evicting semantics — not a bare dictionary.</para>
+    ///
+    /// <para>🚨 <b>The gate carries its own budget, because a gate that never answers is a control
+    /// that spins forever with nothing logged</b> — the exact failure class <see cref="ReadBudget"/>
+    /// exists to remove, reintroduced one level up if only the CONTENT leg were bounded. A query
+    /// engine that produces no first frame degrades to <c>false</c>: the control draws empty (the
+    /// same, safe direction as a real absence — and notably NOT "assume it is there", which would
+    /// open the point read this whole gate exists to withhold), the degradation is LOGGED naming the
+    /// node and the budget, and the subscription stays live so a late answer still switches the
+    /// binding onto the owner's stream.</para>
+    /// </summary>
+    private static IObservable<bool> Exists(
+        IMeshService meshService, IMessageHub hub, string nodePath,
+        TimeSpan? budget, IScheduler? scheduler)
+        => meshService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}").AsSystem())
+            .Scan(false, (present, change) => FoldPresence(present, change, nodePath))
+            .DegradeIfNoFirstEmission(
+                fallback: false,
+                onDegraded: failure => ReadBudget.Logger(hub)?.LogWarning(
+                    "MeshNodeBinding: the existence gate for {Path} produced no answer — drawing the "
+                    + "control empty and staying subscribed. {Reason}",
+                    nodePath, failure.Message),
+                reader: hub,
+                target: nodePath,
+                what: "node existence",
+                budget: budget,
+                scheduler: scheduler)
+            .DistinctUntilChanged();
+
+    /// <summary>
+    /// Folds one <see cref="QueryResultChange{T}"/> into "is the node at <paramref name="nodePath"/>
+    /// there?". <c>Initial</c> and <c>Reset</c> carry the FULL matching set and so are authoritative
+    /// in both directions; the deltas carry only what changed, so a frame that does not mention this
+    /// path says nothing about it and must leave the answer alone.
+    ///
+    /// <para>No <c>select:</c> projection is asked for upstream, deliberately:
+    /// <see cref="MeshNode.Path"/> is COMPUTED from <c>Namespace</c> + <c>Id</c>, so a projection
+    /// omitting either input yields an empty path and every comparison here would silently miss.</para>
+    /// </summary>
+    private static bool FoldPresence(bool present, QueryResultChange<MeshNode> change, string nodePath)
+    {
+        var names = change.Items.Any(n =>
+            string.Equals(n.Path, nodePath, StringComparison.Ordinal));
+        return change.ChangeType switch
+        {
+            QueryChangeType.Initial or QueryChangeType.Reset => names,
+            QueryChangeType.Removed => names ? false : present,
+            _ => names || present,
+        };
+    }
+
+    /// <summary>
+    /// The CONTENT leg: the owner's authoritative live stream for a node the gate has proven
+    /// exists, projected onto the bound field and bounded on its first emission. Stays subscribed
+    /// for the component lifetime — no <c>.Take(1)</c>, so later writes to the node keep arriving.
+    /// </summary>
+    private static IObservable<object?> FieldStream(
+        IMessageHub hub, string nodePath, bool bindContent, string pointer,
+        TimeSpan? firstValueBudget, IScheduler? scheduler)
+    {
+        var options = hub.JsonSerializerOptions;
         return hub.GetMeshNodeStream(nodePath)
             .Where(node => node is not null)
             .Select(node => (object?)EvaluateField(BindingRoot(node, bindContent, options), pointer))
-            .DistinctUntilChanged(JsonElementValueComparer.Instance)
             .DegradeIfNoFirstEmission(
                 fallback: null,
                 onDegraded: failure => ReadBudget.Logger(hub)?.LogWarning(
