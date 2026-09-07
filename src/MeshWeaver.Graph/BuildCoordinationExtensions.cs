@@ -83,10 +83,22 @@ public static class BuildCoordinationExtensions
     {
         var identity = hub.ServiceProvider.GetService<IClusterMembership>()?.LocalIdentity;
         return hub.EnsureBuildNode(path)
-            .SelectMany(_ => hub.GetWorkspace().GetMeshNodeStream(path).Update(curr =>
+            // 🚨 The TYPED overload (#3623). `ContentAs<BuildState>(…) ?? new BuildState()` gave the
+            // same empty state for "the node has no content yet" and for "the content is present
+            // and this build cannot read it" — and a registration written on the second reading
+            // publishes that empty state, dropping every OTHER candidate's registration, the live
+            // ClaimedBy/Status and every StoodDown mark. The build is then locked to a holder the
+            // record no longer names, which HolderStillHoldsIt defends by design (#1355). Here
+            // `null` means ABSENT and only absent; unreadable content faults the observable and the
+            // registration is refused rather than published over the real one.
+            //
+            // The former `if (curr is null) return curr!;` guard is gone because it was already
+            // dead: MeshNodeStreamExtensions.UpdateQueued runs EnsureTypedContent(node, …) — which
+            // dereferences node.Content — before it invokes any update lambda, so a null node
+            // cannot reach here through either the own or the cached write path.
+            .SelectMany(_ => hub.GetWorkspace().GetMeshNodeStream(path).Update<BuildState>((curr, content) =>
             {
-                if (curr is null) return curr!;
-                var state = curr.ContentAs<BuildState>(hub.JsonSerializerOptions) ?? new BuildState();
+                var state = content ?? new BuildState();
                 if (state.ClaimedBy == holder) return curr;
                 if (state.RequestedClaims?.ContainsKey(holder) == true) return curr;
                 return curr with

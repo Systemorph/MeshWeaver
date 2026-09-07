@@ -291,13 +291,21 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
             // inherited the script runner's AccessContext; the activity log is infrastructure
             // observability, not a user write.
             using (_accessService?.ImpersonateAsSystem())
-                stream.Update(node =>
+                stream.Update<ActivityLog>((node, content) =>
                     {
-                        // ContentAs, never `is ActivityLog`: a degraded JsonElement (a hub whose
-                        // TypeRegistry lacks the discriminator) would make a type test null, the
-                        // lambda would no-op, and the run's output would never surface.
-                        var current = node.ContentAs<ActivityLog>(options, _diagnostics)
-                                      ?? new ActivityLog("ScriptExecution");
+                        // 🚨 The TYPED overload, and on this node it is what makes the comment above
+                        // TRUE (#3623). `ContentAs<ActivityLog>(…) ?? new ActivityLog("…")` answered
+                        // the same fresh record for "this activity has no content yet" and for "the
+                        // content is present and this build cannot read it" — and on the second
+                        // reading the write below persisted that fresh record, so exactly the fields
+                        // this lambda does NOT set were the ones destroyed: the Id, HubPath, Start
+                        // and User the dispatcher stamped at creation, and any RequestedStatus a
+                        // concurrent control-plane writer had set. A cancel in flight would have
+                        // been erased by the next 100 ms log flush.
+                        //
+                        // Here `null` means ABSENT and only absent; unreadable content faults the
+                        // observable and the snapshot is NOT written, which the onError arm reports.
+                        var current = content ?? new ActivityLog("ScriptExecution");
                         return node with
                         {
                             Content = current with
@@ -316,9 +324,29 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
                     })
                     .Subscribe(
                         _ => { },
-                        ex => _diagnostics?.LogDebug(ex,
-                            "ActivityLogLogger: publishing the log snapshot for {Path} failed",
-                            activityLogPath),
+                        // 🚨 A REFUSED write is not an ordinary publish failure and must not share
+                        // its level (#3623). Everything else here is Debug on purpose — a snapshot
+                        // that loses a race with teardown is expected and worthless to report at
+                        // volume — but a Deserialization refusal says the activity record on disk
+                        // cannot be read by this build, which is a data fault that will recur on
+                        // every flush of every run against that node and which nobody can act on
+                        // without seeing it. This is a NEW branch for a NEW condition, not the
+                        // verbosity of the existing one being dialled.
+                        ex =>
+                        {
+                            if (ex is MeshNodeStreamException { Error.Code: MeshNodeErrorCode.Deserialization })
+                                _diagnostics?.LogWarning(ex,
+                                    "ActivityLogLogger: REFUSED to publish the log snapshot for {Path} "
+                                    + "— the activity record is present and could not be read as "
+                                    + "ActivityLog. NOTHING was written: a default-valued record would "
+                                    + "have erased the Id, HubPath, Start and User the dispatcher "
+                                    + "stamped, plus any RequestedStatus a cancel had just set.",
+                                    activityLogPath);
+                            else
+                                _diagnostics?.LogDebug(ex,
+                                    "ActivityLogLogger: publishing the log snapshot for {Path} failed",
+                                    activityLogPath);
+                        },
                         // 🚨 #3117 — the highest-volume terminal _Activity writer in the platform
                         // (every kernel run, script, markdown execution and test run) bypasses
                         // ActivityLogAppender.Append, so it never fired the release that retires the
