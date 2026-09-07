@@ -249,6 +249,11 @@ write_registry_file() {
   memex_portal:
     PluginCatalog__BootstrapKey: \"$key\""
   fi
+  # The id line only exists when one was PINNED. Absent, the portal's first-run wizard asks for a
+  # name and mints the guid it registers under — see Doc/Architecture/FirstRunSetup.
+  local instance_id_line=""
+  [ -n "$id" ] && instance_id_line="  instanceId: \"$id\"
+"
   # Subshell: the umask must not leak into the rest of this process (the overlay, the cert files
   # and every later write keep their own modes).
   ( umask 077; cat > "$REGISTRY_FILE" ) <<YAML
@@ -262,8 +267,7 @@ write_registry_file() {
 # (Admin ▸ Instance grants) — see Doc/Architecture/PluginRegistry.
 pluginCatalog:
   registryUrl: "$url"
-  instanceId: "$id"
-  homeUrl: "https://${HOSTNAME_LOCAL}"
+${instance_id_line}  homeUrl: "https://${HOSTNAME_LOCAL}"
 ${secrets}
 YAML
   chmod 600 "$REGISTRY_FILE"
@@ -337,9 +341,15 @@ cmd_registry() {
         ""|mwr_*) ;;
         *) die "registry: '--key' must be a REGISTRATION key (mwr_…); an instance key (mwi_) or a personal token (mw_) cannot register an install — or pass no key at all for an open (free-tier) registration" ;;
       esac
-      [ -n "$id" ] || id="$(default_instance_id)"
-      case "$id" in
-        *[!a-z0-9-]*|"") die "registry: --id must be lower-case letters, digits and dashes (got '$id')" ;;
+      # 🚨 NOT defaulted any more. An id is claimed GLOBALLY on the registry and never re-issued,
+      # so guessing one from <user>-<host> is a permanent claim made on the operator's behalf — and
+      # it OUTRANKS the id the first-run wizard mints (deployment config beats the instance
+      # manifest), so the wizard would ask, register a guid, and then be silently overridden.
+      # Unstated means "the wizard asks"; `--id` stays the way to pin one deliberately.
+      # An EMPTY id is now the ordinary case — it means "the wizard asks" — so only a STATED one is
+      # validated. Keeping "" in the refusal list is what made the no---id path die here.
+      case "${id:-ok}" in
+        *[!a-z0-9-]*) die "registry: --id must be lower-case letters, digits and dashes (got '$id')" ;;
       esac
       write_registry_file "${url%/}" "$key" "$id"
       if [ -n "$key" ]; then
@@ -2075,6 +2085,12 @@ cmd_setup() {
   ok "First-run setup is waiting."
   echo "  URL:   ${url}?token=${token}"
   echo "  Token: ${token}"
+  echo
+  info "The wizard asks in two steps:"
+  info "  1. a NAME for this instance. Its id is a guid the portal mints and registers for you —"
+  info "     ids are claimed permanently, so it does not ask you to invent one."
+  info "  2. everything else, chosen from what your plan grants: plugins, database, sign-in,"
+  info "     model keys, modules. Then it restarts configured."
   echo
   info "SQLite is pre-selected and needs nothing else running — it lands at"
   info "  Data Source=/data/memex.db   (on the same PVC that survives 'memex-local update')."

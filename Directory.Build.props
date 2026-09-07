@@ -58,19 +58,23 @@
          main keeps producing 3.0.0-ci.<n> sets, and the day v3.0.0 is tagged release.yml opens the
          PR that moves this number to 3.1.0.
 
-         ORDERING, which the self-updater (VersionSelect, SemVer2 via NuGetVersion) relies on:
+         ORDERING, which the self-updater (VersionSelect) relies on. 🚨 It is NOT SemVer any more
+         (#3542): candidates are ranked by the SEALED-PUBLICATION LINEAGE — the ci.<n> run number
+         defined below — and the version string decides only where BOTH sides lack one, i.e. between
+         official releases (a release is a PROMOTION and carries no run number of its own).
 
-             3.0.0-ci.7900  <  3.0.0-preview1  <  3.0.0-rc9.ci.7818  <  3.0.0-rc13  <  3.0.0  <  3.1.0-ci.1
+             SemVer would say:  3.0.0-ci.7900 < 3.0.0-preview1 < 3.0.0-rc9.ci.7818 < 3.0.0-rc13 < 3.0.0 < 3.1.0-ci.1
+             Lineage says:      7818 < 7900 < … , whatever line each one is LABELLED with.
 
-         🚨 Read that carefully: a 3.0.0-ci.<n> build sorts BELOW every 3.0.0-rc* image that is
-         already in the registry (SemVer §11.4 compares pre-release identifiers as text, and "ci"
-         < "preview1" < "rc"). So until the clean 3.0.0 exists, a Continuous install already on an
-         rc build sees nothing newer and stays put — never rolls back, never rolls forward. The
-         clean 3.0.0 outranks every rc, so the release is what moves the fleet; after it, 3.1.0-ci.<n>
-         outranks 3.0.0 and continuous rolling resumes. That is the price of releasing the number
-         the rc line was named for, and it is paid once. (Two 3.1.0-ci sets, 7832 and 7835, were
-         published while this file briefly read 3.1.0 on 2026-09-05; an install that took one of
-         them will not take the clean 3.0.0 — it waits for the first 3.1.0-ci build after the bump.)
+         🚨 Why it had to change, twice over. SemVer §11.4 compares pre-release identifiers as TEXT
+         ("ci" < "preview1" < "rc"), so every 3.0.0-rc* image still in ACR outranked every clean-line
+         build — and worse, a MISLABELLED line outranked everything for ever. Both happened: ten sets
+         published as 3.1.0-ci.7832…7841 while this file briefly read 3.1.0 on 2026-09-05, and on
+         2026-09-07 BOTH AKS portals rolled themselves onto 3.1.0-ci.7841 (three days behind) and then
+         could not leave, because nothing is ever newer than the highest-sorting tag. Ranking by the
+         run number makes such a slip harmless while its tags are still in the registry.
+         Doc/Architecture/SelfUpdateTargetSelection has the whole rule, including why an official
+         release is still compared by version.
 
          The rc line, kept because the release marker and bake identity notes elsewhere cite these
          versions: rc3 2026-08-16 · rc4 never tagged (its packages would have shipped the fourteen

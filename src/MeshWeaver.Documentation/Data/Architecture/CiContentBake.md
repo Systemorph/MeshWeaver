@@ -710,20 +710,61 @@ which is the part that must never drift.
 ## Node repos run the same lane — as reusable workflows
 
 Every satellite content repo (MeshWeaver.Plugins, MeshWeaver.Education, MeshWeaver.Reinsurance,
-MeshWeaver.SocialMedia) bakes and publishes its own content through the SAME contract, and since
-#1707 the jobs live HERE, as reusable `workflow_call` workflows the satellites call instead of
-vendoring. Adoption is **per job and still in progress**: the target is that every repo calls
-`node-repo-publish-bake` (the lane whose script contract must not drift), while a repo whose
-variant of a gate carries repo-specific machinery (Plugins' Tests-area ratchet, Education's
-course checks) keeps that job vendored until the machinery generalizes. As of 2026-08-17
-**MeshWeaver.SocialMedia and MeshWeaver.Plugins are merged and green end-to-end including
-publish-bake** (SocialMedia calls the full set, Plugins calls publish-bake only);
-MeshWeaver.Reinsurance and MeshWeaver.Education are in flight; MeshWeaver.Manufacturing is
-deliberately deferred.
+MeshWeaver.SocialMedia, MeshWeaver.Crm, MeshWeaver.Manufacturing) bakes and publishes its own
+content through the SAME contract, and since #1707 the jobs live HERE, as reusable `workflow_call`
+workflows the satellites call instead of vendoring. Adoption is **per job**: the target is that
+every repo calls `node-repo-publish-bake` (the lane whose script contract must not drift), while a
+repo whose variant of a gate carries repo-specific machinery (Plugins' Tests-area ratchet,
+Education's course checks) keeps that job vendored until the machinery generalizes.
+
+## 🚨 `node-repo-validate` is not one lane among several — it is where the FLEET-WIDE guards run
+
+The other lanes do a repo's own work. `node-repo-validate` also carries the checks that apply to
+every repository, and that makes a hand-rolled copy of it a different kind of mistake:
+
+> **The guards live INSIDE the shared lane. A hand-rolled copy therefore opts out of every guard
+> that lane grows LATER — silently, retroactively, and invisibly from the repo that made the copy.**
+
+`check-workflow-timeouts.py` (the 45-minute cap) and `check-pr-secret-preflight.py` (every
+PR-reachable `secrets.NAME` is asserted by a preflight) are both invoked *inside* it. Neither
+existed when the older copies were made, so nobody chose to skip them — the copy chose, months of
+commits later. **A repo that forked a lane before a guard was written looks identical to one that
+passes it.**
+
+### Calling the lane is NECESSARY and NOT SUFFICIENT — the PIN must carry the guard
+
+🚨 This is the second half of the same trap, and it is the one an adoption table cannot see. The
+lane is pinned by a 40-character sha; a caller whose pin PREDATES a guard calls the lane and still
+does not run it. Measured against every satellite's `main`, 2026-09-07:
+
+| repo | `node-repo-validate` pin | secret guard in that pin | `check-pr-secret-preflight` verdict on its `main` |
+|---|---|:---:|---|
+| MeshWeaver.Reinsurance | `1b5350d54` | ✅ | **0 violations** |
+| MeshWeaver.Manufacturing | `1b5350d54` | ✅ | 0 (adopted 2026-09-07, #3504) |
+| MeshWeaver.Plugins | `c7fef7a2d` | ✅ | 0 (adopted 2026-09-07, #3504) |
+| MeshWeaver.Crm | `0a2b9017d` | ❌ | **4** — incl. `MW_REGISTRY_KEY` |
+| MeshWeaver.SocialMedia | `0a2b9017d` | ❌ | **4** — incl. `MW_REGISTRY_KEY` |
+| MeshWeaver.Education | `8ffbe4762` | ❌ | **4** |
+
+**Reinsurance is the control**, and it is what makes the table evidence rather than an assertion:
+it is the only pre-existing caller whose pin carries the guard, and it is the only pre-existing
+caller at zero. Everything else in the column is a repository that *calls the lane* and is *not
+checked by it*.
+
+🚨 And `MW_REGISTRY_KEY` in that column is not a hypothetical: an absent `MW_REGISTRY_KEY`
+consumed by a PR-reachable job no preflight asserts is exactly Reinsurance#128 —
+`compose-sealed-modules.sh: --registry-url needs --registry-key`, a message that names no secret at
+all, one job after a GREEN preflight. The three repos above are one Dependabot pull request away
+from the same log.
+
+**So a lane pin is not only a reproducibility knob.** The staleness reporter in each caller's
+preflight ("Shared CI logic pinned to `<sha>` — cut N days ago") exists for this: a pin nobody bumps
+is worse than a moving ref, because the divergence is silent. Bump every `uses:` and its paired
+`platform-ref` in ONE commit.
 
 | Workflow | Job it unifies |
 |---|---|
-| `.github/workflows/node-repo-validate.yml` | JSON/manifest shape gate (`scripts/validate-repos.py`, `gen-manifests.py --check`, main-only `--check-versions`) |
+| `.github/workflows/node-repo-validate.yml` | JSON/manifest shape gate — the caller's `scripts/validate-repos.py`, plus the PLATFORM's `.github/scripts/gen-manifests.py` (`--check`, main-only `--check-versions`) fetched at `platform-ref` like compile-check.py, configured by the caller's `scripts/gen-manifests.config.json` |
 | `.github/workflows/node-repo-compile-check.yml` | the compile gate — every NodeType's resolved Source vs the assemblies of the digest-pinned platform image |
 | `.github/workflows/node-repo-gate.yml` | the tester gate — `mw-plugin-test` over the (optionally affected-narrowed) mount, cross-repo `requires` staged in; since #3022 executed by the tester **as the portal** (`platform-image`, composed gate host, `--app /app`) |
 | `.github/workflows/node-repo-publish-bake.yml` | the main-only bake + publication — `compile --output` then `--seed` over the full repo or (opt-in) the affected closure, staged-module exclusion, OIDC publish via the canonical `publish-bake-bundles.sh`; since #3022 the bake compiles against and is keyed to the **portal** (`platform-image` + `platform-image-digest`, both required-or-explicit exactly like the tester's) |

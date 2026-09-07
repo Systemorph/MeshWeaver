@@ -326,11 +326,27 @@ public static class BuildNodeType
             .Take(1)
             .SelectMany(mirror =>
             {
+                var state = mirror.ContentAs<BuildState>(options);
+
+                // 🚨 BOOKKEEPING BEFORE DECISION (#1193). A claim whose holder has stood down is
+                // not a claim — it names a process whose driver has already completed — and until
+                // it is released the build is free for nobody, however many candidates are queued.
+                // The candidate could not clear it itself (see ReleaseStoodDownClaim), so it is
+                // owed here. The release publishes on the mirror's change feed, which is this
+                // arbiter's own trigger, so the next candidate is elected immediately rather than
+                // at the slow tick — level-triggered, no timer, no retry.
+                if (StoodDownHolder(state) is { } stoodDown)
+                    return workspace.GetMeshNodeStream()
+                        .Update(node => ReleaseStoodDownClaim(node, options, DateTime.UtcNow))
+                        .Take(1)
+                        .SelectMany(_ => DropLockHeldByStoodDown(
+                            storage, options, logger, claimPath, stoodDown));
+
                 // Candidates come from THIS hub's mirror: a registration written milliseconds ago
                 // has not reached storage yet, and a cluster can only ever grant one of its own
                 // candidates anyway. Checked BEFORE the lock is read, so the periodic tick on a
                 // quiet build node costs nothing at all — no storage round-trip, no write.
-                var pending = mirror.ContentAs<BuildState>(options)?.RequestedClaims;
+                var pending = state?.RequestedClaims;
                 if (pending is not { Count: > 0 })
                     return Observable.Return(Unit.Default);
 
@@ -349,8 +365,11 @@ public static class BuildNodeType
     private static IObservable<Unit> GrantOnMirror(
         IWorkspace workspace, System.Text.Json.JsonSerializerOptions options,
         IClusterMembership? membership, DateTime now)
+        // Release-then-arbitrate, composed inside ONE lambda so the freed build is granted to the
+        // next candidate in the same serialised write rather than on a later tick. Both halves are
+        // no-ops when there is nothing to do, so a quiet node still costs nothing (#1193).
         => workspace.GetMeshNodeStream()
-            .Update(node => Arbitrate(node, options, now, membership))
+            .Update(node => ArbitrateOnMirror(node, options, now, membership))
             .Select(_ => Unit.Default);
 
     private static IObservable<Unit> CommitGrant(
@@ -491,6 +510,39 @@ public static class BuildNodeType
     }
 
     /// <summary>
+    /// Drops the claim LOCK after the mirror released a stood-down holder, so the two records agree
+    /// (#1193). The mirror's projection and the durable lock are written by different passes, and
+    /// the doc on <see cref="HandBackAStoodDownGrant"/> records that the debris can land on either;
+    /// releasing one and leaving the other would simply move the wedge from the host that decides
+    /// on the mirror to the one that decides on the lock.
+    ///
+    /// <para>Level-triggered on real state, exactly as <see cref="HandBackAStoodDownGrant"/>: the
+    /// lock is deleted only while it still names the holder we just released, so a pass that lost a
+    /// later race removes nothing.</para>
+    /// </summary>
+    private static IObservable<Unit> DropLockHeldByStoodDown(
+        IStorageAdapter storage,
+        System.Text.Json.JsonSerializerOptions options,
+        ILogger? logger,
+        string claimPath,
+        string holder)
+    {
+        logger?.LogInformation(
+            "Build claim {ClaimPath}: {Holder} STOOD DOWN after the grant had already been "
+            + "committed, so the build was locked to a process that is no longer listening. "
+            + "Releasing it — the next candidate elects freely.",
+            claimPath, holder);
+
+        return storage.Read(claimPath, options)
+            .Take(1)
+            .SelectMany(held =>
+                held is not null
+                && held.ContentAs<BuildState>(options)?.ClaimedBy == holder
+                    ? storage.DeleteIfExists(claimPath).Take(1).Select(_ => Unit.Default)
+                    : Observable.Return(Unit.Default));
+    }
+
+    /// <summary>
     /// A fresh, unheld claim lock — the node the compare-and-set INSERTS when nobody holds the
     /// build (<c>expectedVersion 0</c>).
     /// </summary>
@@ -533,6 +585,16 @@ public static class BuildNodeType
             && state.RequestedClaims?.ContainsKey(winner) != true)
             return node;
 
+        // …and the same refusal stated the OTHER way round, off the fact the candidate wrote
+        // rather than off the absence of its registration. The test above cannot see a stand-down
+        // whose registration removal has not arrived yet — the two halves of WithdrawBuildClaim's
+        // patch land together, but a grant decided from a mirror read BEFORE that patch is still
+        // in flight when it does. StoodDown is unconditional, so it is the half that is always
+        // there to be read. (#1193)
+        if (granted.ClaimedBy is { } stoodDownWinner
+            && state.StoodDown?.ContainsKey(stoodDownWinner) == true)
+            return node;
+
         return node with
         {
             Content = state with
@@ -550,6 +612,148 @@ public static class BuildNodeType
             }
         };
     }
+
+    /// <summary>
+    /// A candidate STANDING DOWN, as a pure decision over the state it can see — the candidate's
+    /// half of #1193, extracted so the patch it actually ships can be driven from a test.
+    ///
+    /// <para>Three things happen, and only the third is unconditional: the registration is removed
+    /// if it is still ours, a claim GRANTED but not started is handed straight back, and the
+    /// stand-down is RECORDED. The first two are conditional on state this caller reads off its own
+    /// mirror; the third is true whatever the owner's state turns out to be, which is exactly why
+    /// it is the one the arbiter can rely on. See <see cref="ReleaseStoodDownClaim"/> for what goes
+    /// wrong when only the conditionals exist.</para>
+    /// </summary>
+    /// <param name="node">The Build node as read inside the update lambda.</param>
+    /// <param name="holder">The candidate standing down.</param>
+    /// <param name="options">Serializer options for content recovery.</param>
+    /// <param name="now">The instant recorded on the stand-down mark.</param>
+    /// <returns>The node with the stand-down applied, or the node unchanged when it already is.</returns>
+    public static MeshNode StandDown(
+        MeshNode node, string holder, System.Text.Json.JsonSerializerOptions options, DateTime now)
+    {
+        var state = node?.ContentAs<BuildState>(options);
+        if (node is null || state is null) return node!;
+
+        var registered = state.RequestedClaims?.ContainsKey(holder) == true;
+        // Only a claim we were GRANTED but never started on is ours to hand back. A holder that is
+        // Building is mid-bake and must not clear its own claim from here.
+        var grantedNotStarted = state.ClaimedBy == holder && state.Status is BuildStatus.Planning;
+        var alreadyMarked = state.StoodDown?.ContainsKey(holder) == true;
+        if (!registered && !grantedNotStarted && alreadyMarked) return node;
+
+        return node with
+        {
+            Content = state with
+            {
+                RequestedClaims = registered
+                    ? state.RequestedClaims!.Remove(holder)
+                    : state.RequestedClaims,
+                ClaimedBy = grantedNotStarted ? null : state.ClaimedBy,
+                ClaimedByIdentity = grantedNotStarted ? null : state.ClaimedByIdentity,
+                ClaimedAt = grantedNotStarted ? null : state.ClaimedAt,
+                HeartbeatAt = grantedNotStarted ? null : state.HeartbeatAt,
+                StoodDown = (state.StoodDown ?? ImmutableDictionary<string, DateTime>.Empty)
+                    .SetItem(holder, now),
+            }
+        };
+    }
+
+    /// <summary>
+    /// One arbitration pass on the MIRROR — release what is owed, then decide. The composition
+    /// <c>GrantOnMirror</c> runs, named so a test drives the same expression the host does rather
+    /// than a re-spelling of it that could drift.
+    /// </summary>
+    /// <param name="node">The Build node as read inside the update lambda.</param>
+    /// <param name="options">Serializer options for content recovery.</param>
+    /// <param name="now">The decision instant.</param>
+    /// <param name="membership">Cluster membership, or <c>null</c> where this host is in no cluster.</param>
+    /// <returns>The node after the pass — unchanged when there was nothing to release and nothing to grant.</returns>
+    public static MeshNode ArbitrateOnMirror(
+        MeshNode node, System.Text.Json.JsonSerializerOptions options, DateTime now,
+        IClusterMembership? membership = null)
+        => Arbitrate(ReleaseStoodDownClaim(node, options, now), options, now, membership);
+
+    /// <summary>
+    /// Releases a claim whose holder has STOOD DOWN, and prunes stand-down marks that have aged
+    /// out. Pure over its inputs; returns the same node when there is nothing to do, so a caller
+    /// may run it on every pass for free (<c>Update</c> no-ops on an unchanged node).
+    ///
+    /// <para>🚨 <b>This is the arbiter's half of Systemorph/MeshWeaver.Plugins#1193, and it exists
+    /// because a candidate cannot do it itself.</b> <c>WithdrawBuildClaim</c> runs on the
+    /// candidate's MIRROR and reaches the owner as a merge patch of the fields its lambda changed.
+    /// On a mirror the grant has not landed on, its <c>grantedNotStarted</c> test is false, so the
+    /// patch carries no <c>claimedBy</c> — and a grant the arbiter committed in between survives
+    /// the stand-down. The measured residue is
+    /// <c>ClaimedBy=&lt;the follower&gt;, Status=Planning, RequestedClaims=[]</c>: a build locked
+    /// to a process whose driver has already completed, which <see cref="HolderStillHoldsIt"/>
+    /// then defends BY DESIGN because that process really is alive (#1355). No builder, no bake,
+    /// no ready pod.</para>
+    ///
+    /// <para>#3131 closed the mirror-image case — the grant PUBLISHED after the stand-down, refused
+    /// at <see cref="ApplyGrant"/> and handed back by <see cref="HandBackAStoodDownGrant"/>. It
+    /// could not close this one, because here the publication was legitimate at the moment it
+    /// happened: the candidate was still registered. Only something that reads the state AFTERWARDS
+    /// can see the two facts together, and the arbiter is the one writer that always does — it
+    /// writes the Build node it OWNS, so its lambda is serialised against fresh state.</para>
+    ///
+    /// <para><b>Only a Planning claim is released.</b> A holder at
+    /// <see cref="BuildStatus.Building"/> is mid-bake; a stand-down mark from an earlier life of
+    /// the same id must never pull the lock out from under it — the same distinction
+    /// <c>WithdrawBuildClaim</c> draws for the identical reason.</para>
+    /// </summary>
+    /// <param name="node">The Build node as read inside the update lambda.</param>
+    /// <param name="options">Serializer options for content recovery.</param>
+    /// <param name="now">The decision instant — marks older than <see cref="ClaimStaleAfter"/> are pruned.</param>
+    /// <returns>The node with the claim released and the mark consumed, or the node unchanged.</returns>
+    public static MeshNode ReleaseStoodDownClaim(
+        MeshNode node, System.Text.Json.JsonSerializerOptions options, DateTime now)
+    {
+        if (node is null) return node!;
+        var state = node.ContentAs<BuildState>(options);
+        if (state?.StoodDown is not { Count: > 0 } marks)
+            return node;
+
+        var release = state.ClaimedBy is { } holder
+            && marks.ContainsKey(holder)
+            && state.Status is BuildStatus.Planning;
+
+        // Consumed on release; otherwise aged out on the claim's own budget, so a mark for a
+        // candidate that was never granted anything cannot accumulate on the durable row.
+        var kept = marks;
+        if (release)
+            kept = kept.Remove(state.ClaimedBy!);
+        foreach (var (mark, at) in marks)
+            if (now - at > ClaimStaleAfter)
+                kept = kept.Remove(mark);
+
+        if (!release && ReferenceEquals(kept, marks))
+            return node;
+
+        return node with
+        {
+            Content = state with
+            {
+                ClaimedBy = release ? null : state.ClaimedBy,
+                ClaimedByIdentity = release ? null : state.ClaimedByIdentity,
+                ClaimedAt = release ? null : state.ClaimedAt,
+                HeartbeatAt = release ? null : state.HeartbeatAt,
+                StoodDown = kept.IsEmpty ? null : kept,
+            }
+        };
+    }
+
+    /// <summary>
+    /// The holder whose claim <see cref="ReleaseStoodDownClaim"/> would release, or <c>null</c>
+    /// when there is nothing to release. Lets the durable path decide whether a write (and a lock
+    /// read) is owed at all, without taking one on every quiet tick.
+    /// </summary>
+    internal static string? StoodDownHolder(BuildState? state) =>
+        state?.ClaimedBy is { } holder
+        && state.StoodDown?.ContainsKey(holder) == true
+        && state.Status is BuildStatus.Planning
+            ? holder
+            : null;
 
     /// <summary>
     /// The single decision procedure, pure over its inputs. Grants the earliest pending claim when

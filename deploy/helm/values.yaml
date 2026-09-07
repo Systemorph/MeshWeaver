@@ -269,7 +269,11 @@ replicas:
 #
 # 🚨 A declared object that does NOT exist in the vault fails the whole mount:
 # the pod stays ContainerCreating and the rollout stalls while the OLD pod
-# keeps serving. Create the vault secret BEFORE declaring it here.
+# keeps serving. Create the vault secret BEFORE declaring it here. Since
+# MeshWeaver#3548 the run-once migration Job mounts these classes too — it
+# CONSUMES their values, so it must be the one that fetches them — which means
+# a missing vault object stalls the migration as well, loudly, instead of
+# letting it run green against whatever the last mount left behind.
 #
 # 🚨 A new or changed vault value needs the pod to RESTART (the driver reads
 # the vault at pod start) — see Doc/Architecture/DeploymentAKS → "KeyVault CSI

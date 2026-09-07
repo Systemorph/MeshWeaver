@@ -91,6 +91,8 @@ FAIL-NEW: 0	FAIL-INPROG: 0	WARN-NEW: 9	WARN-INPROG: 0	INFO: 0	IGNORE: 0	PASS: 58
 
 ### 3.0.0 — scanned 2026-09-06 against memex.meshweaver.cloud, ZAP 2.17.0
 
+The full report of this scan — coverage, attack classes exercised, the delta against 23 August, live header verification, CORS posture and limitations — is [OWASP ZAP Scan — 3.0.0 (6 September 2026)](/Doc/Architecture/SecurityScan_3_0_0). The table below carries the CURRENT disposition of each rule, which may be newer than the report's.
+
 | run | verdict | endpoints |
 |---|---|---|
 | public, active | `FAIL-NEW: 0 · WARN-NEW: 5 · PASS: 136` | 296 |

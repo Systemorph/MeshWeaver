@@ -309,7 +309,11 @@ public static class PluginBundleEndpoints
             return GenerationMoved(held, reading.Generation!);
         if (!reading.Bundles.Contains(bundle, StringComparer.OrdinalIgnoreCase))
             return NoSuchBundle();
-        var path = Path.Combine(directory, bundle);
+        // 🚨 #3461: the bytes come from the directory the READING resolved — the generation this
+        // source's `_current` names, or the source directory in the flat layout. Composing under
+        // `directory` here would serve the flat publication's bytes under the generation this
+        // response's ETag pins, which is precisely the mix the generation exists to prevent.
+        var path = Path.Combine(reading.Directory ?? directory, bundle);
         return Results.File(path, "application/zip", fileDownloadName: bundle);
     }
 
@@ -363,7 +367,8 @@ public static class PluginBundleEndpoints
         var reading = PublishedBundleCatalogue.SealedModulesOf(directory, Log(http));
         if (reading.Modules is null || !reading.Modules.Contains(bundle, StringComparer.OrdinalIgnoreCase))
             return NoSuchBundle();
-        var path = Path.Combine(directory, PublishedBundleCatalogue.ModulesDirectoryName, bundle);
+        var path = Path.Combine(
+            reading.Directory ?? directory, PublishedBundleCatalogue.ModulesDirectoryName, bundle);
         return Results.File(path, "application/zip", fileDownloadName: bundle);
     }
 

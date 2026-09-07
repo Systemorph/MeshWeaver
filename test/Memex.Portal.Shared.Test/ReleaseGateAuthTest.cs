@@ -122,4 +122,38 @@ public class ReleaseGateAuthTest
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
+
+    // ── the COMBO route (#3544) ─────────────────────────────────────────────────────────────────
+    // The strictest of the three, and the one most worth pinning: its body names every module
+    // REPOSITORY and every pinned COMMIT this deployment carries. Same auth, same fail-closed
+    // order, same 401-not-404 discipline.
+
+    [Fact]
+    public async Task TheComboRouteRejectsAnUnauthenticatedCaller()
+    {
+        using var response = await Get(ReleaseGateEndpoints.ComboRoute, authorization: null);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task TheComboRouteRejectsAnUnparseableBearer()
+    {
+        using var response = await Get(ReleaseGateEndpoints.ComboRoute, "Bearer not-an-instance-key");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task TheComboRouteAuthenticatesBeforeItReadsTheInstanceCombo()
+    {
+        // InstanceComboReader is NOT registered here, so a 500 would mean the handler resolved it
+        // before authenticating — i.e. an unauthenticated caller could make the portal walk three
+        // mesh-wide queries. The reader is touched only inside the authenticated branch.
+        var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes("user:nope"));
+
+        using var response = await Get(ReleaseGateEndpoints.ComboRoute, "Basic " + basic);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
 }

@@ -75,6 +75,79 @@ So `ComboVerificationGate` has two modes, and they are the same code path:
 assembly policy — as one optional service, so the gate is identical whether it produced the verdict
 or read one somebody else landed.
 
+## Who actually produces one: `combo-verify.yml`
+
+For most of this page's life the answer was **nobody**, and that made every sentence above
+describe a mechanism that never ran. Measured 2026-09-07 (issue #3544):
+
+- zero references to `mw-combo-verify` anywhere under `.github/` in this repo or MeshWeaver.Plugins;
+- `RecordVerification` called from exactly one place, the in-process producer path;
+- no production `IComboGateRunner` registered anywhere — the only implementation in either repo was
+  a test fake, so `ResolveRunner()` returned null on every portal;
+- `Admin/UpdatePolicy.comboVerifications` was `[]` on memex-cloud, and both portals said so in their
+  own words: *"no combo-gate runner is registered on this host, so it produces no verdicts of its
+  own — they are landed here by mw-combo-verify."*
+
+So every self-update rolled `UNVERIFIED`, said so in the log, and **applied the update anyway**. The
+gate built to prevent a `MissingMethodException`-at-boot roll was never once consulted with data.
+
+`.github/workflows/combo-verify.yml` is the producer. It runs off the CD workflow's completion, and
+per instance it does exactly the three steps
+[Candidate Release Protocol](/Doc/Architecture/CandidateReleaseProtocol) describes:
+
+1. **Ask the instance what it would roll to** — `GET /api/plugins/roll-target`. The candidate is
+   asked OF the instance rather than derived in CI, because "the newest tag" is not the question the
+   gate answers: `ReleaseAvailabilityService` already walks the completeness rule and names the
+   release this environment would actually take. Re-deriving it would be a second rule.
+2. **Ask the instance what it runs** — `GET /api/plugins/combo`, added by #3544 beside its two
+   `mwi_`-gated siblings. Its body is an `InstanceCombo` serialized with
+   `InstanceComboAssembler.Json`, i.e. it **is** `combo.json`, byte-for-byte what `mw-combo-verify`
+   deserializes. Before it existed, `InstanceComboReader` had no HTTP, MCP or layout surface at all
+   and the producer's first input was simply unobtainable from a running portal.
+3. **Verify, then LAND the verdict** — `mw-combo-verify combo.json <acr>/memex-portal-ai:<candidate>`,
+   then a read-merge-write onto `Admin/UpdatePolicy` through `/api/mesh/get` + `/api/mesh/patch`.
+
+🚨 **The verdict is landed BEFORE the job's exit code is decided.** A Red that never reaches the
+instance is worse than no verdict at all — the instance's own gate would then clear a candidate that
+run had already proved it cannot serve.
+
+🚨 **An RFC 7396 merge patch replaces an array wholesale**, so the whole list is sent and the merge
+rule is not reinvented in CI: upsert by `candidateTag` (case-insensitive), newest first, capped at
+`MaxRecordedVerifications` = 8 — the rule `UpdatePolicyNodeType.RecordVerification` applies
+in-process.
+
+🚨 **Green is the only pass.** A `Red` fails the job (delivery promoted a candidate a live instance
+must refuse) and a `NotVerifiable` fails it too — that outcome means *nothing was checked*, which is
+"the gate never ran" wearing the colour of "the gate passed".
+
+### Why it is its own workflow, and why its preflight is red until provisioned
+
+The lane needs two credentials per instance that nothing in CI holds today: an `mwi_`
+instance-registry key (reads `roll-target` and `combo`) and an `mw_` API token of a **global admin**
+on that instance (lands the verdict; the token authenticates as its owner and carries no scope of
+its own). The declaration of *which* instances to verify does not exist in this repo either.
+
+A gate must never test its own inputs, so none of that is expressed as `continue-on-error` or
+`if: secrets.X != ''`. A `preflight` job asserts every input and fails **RED naming what to
+provision**; `verify` `needs:` it and carries no input condition at all. Because a `needs:` failure
+*skips* `verify`, and GitHub paints a skipped job the same colour as a passed one, a third job —
+`verdict` — runs `if: always()` and fails explicitly on anything that is not a success, and prints
+the instance count so a zero cannot read as a pass.
+
+It lives in its own workflow rather than inside `main-cd.yml` for one reason: that red is correct
+and will persist until an operator provisions the credentials, and a red inside the workflow that
+publishes the fleet's images would be read as "delivery failed".
+
+`check-combo-verify.py` runs on every platform PR — because `combo-verify.yml` itself never fires on
+one — and opens both halves of the lane's shell. It executes the preflight's real `run:` text over
+five scenarios, including the empty-instance-list case whose empty matrix would otherwise skip
+`verify` into a green; and it executes the lander's real verdict-merge `jq` over both node shapes
+`/api/mesh/get` can return. That second half guards a data-loss path rather than a wrong answer: the
+merge re-sends the WHOLE list, so reading the `{node, compilationError}` wrapper as if it were the
+bare node yields null, null merges as an empty list, and the landing would replace up to eight
+recorded verdicts with one. Both halves carry a `--self-test` that substitutes the defect and
+requires the guard to catch it.
+
 ## The three verdicts, and the fourth state
 
 `ComboVerification` is explicit that Green, Red and NotVerifiable are never conflated. The roll-side

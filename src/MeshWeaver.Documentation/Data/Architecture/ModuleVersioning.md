@@ -57,15 +57,18 @@ one forever** — and the repo, CI and the registry all look green. This is
 
 A **mixed package** declares `content.module` and ships an assembly built from `src/`.
 
-`gen-manifests.py` enumerates packages with `plugin_dirs()`, which skips a fixed set:
+`gen-manifests.py` enumerates packages with `plugin_dirs()`, which skips the set the repo declares
+in `scripts/gen-manifests.config.json` (see "One checker, every repo" below):
 
-```python
-SKIP = {"src", "test", "scripts", "tools", "e2e", "app", "clients", "meshweaver", ...}
+```json
+{"skip": ["src", "test", "scripts", "tools", "e2e", "app", "clients", "meshweaver", "…"],
+ "hashModuleSources": true}
 ```
 
 That skip is deliberate and correct for *enumeration* — `src/` is not a package, and skipping it is
 what keeps this gate independent of step order and of `validate-repos.py`. **Do not "fix" this by
-deleting `"src"` from `SKIP`.** That changes what `moduleVersion` means for every package.
+deleting `"src"` from the skip list.** That changes what `moduleVersion` means for every package.
+The narrower, correct switch is `hashModuleSources`.
 
 The defect was narrower: for a mixed package, the module's own source under `src/` was **never hashed
 into `moduleVersion`** — so a change confined to `src/` moved **no version, by construction**, and was
@@ -185,13 +188,57 @@ compiles *every module whose key has no usable Published record* — the Plugins
 from content rather than from a version or a commit, which is what makes it immune to the riding
 blind spot above. Callers opt in with `ledger: required`.
 
+## One checker, every repo
+
+`gen-manifests.py` is the **platform's**, at `.github/scripts/gen-manifests.py`. `node-repo-validate.yml`
+fetches it at the caller's pinned `platform-ref` and runs it against the caller's tree, exactly as the
+compile-check lane runs `.github/scripts/compile-check.py` (AGENTS.md → *"never hand-roll a node repo's
+CI"*; [Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) → *"scripts are centralized —
+the lane fetches the platform's copy at the pin; repos keep only allow-files"*).
+
+It was vendored per repo until 2026-09-07, and by then the six copies were five different vintages —
+MeshWeaver.Plugins 1157 lines, Crm 646, Education 646, Reinsurance 644, SocialMedia 643, Manufacturing
+305. Each fix landed in whichever copy hit the bug and the other five kept it: `#434` (a release has two
+witnesses), `#942`/`#1023` (`--resolve`), and `#1426` — the trunk baseline resolved against the remote's
+**live tip**, which reds every intermediate commit of a merge-queue group on `main`, because the tree
+under test is compared against locks committed *after* it. Manufacturing's copy never grew the trunk
+witness at all, so it also had no `--resolve` and no self-test.
+
+**What stays in the caller** is one allow-file, `scripts/gen-manifests.config.json`:
+
+| key | |
+|---|---|
+| `skip` | **required** — the top-level directories that are NOT packages. Per-repo by construction (a scratch directory in one repo is a shipping package in another), and it must equal `validate-repos.py`'s `SKIP`, which each repo's `check-skip-sets.py` asserts. There is no default: a guessed skip list either demands a `manifest.lock` for `scripts/` or silently stops versioning a real module. |
+| `hashModuleSources` | optional, default **false** — the #878 fix (hash a mixed package's `src/` project, and the siblings riding its bundle, into its `moduleVersion`). It needs the caller's `scripts/project-closure.py` to expose `graph_of` / `module_owned` / `riding_siblings`, and asking for it without one is an **error**, never a quiet fall-back to the smaller hash. Default false because turning it on **moves every mixed package's version** — a release event, not a script upgrade. |
+
+Both settings are *declared*, never inferred from whether a file happens to exist: a capability that
+degrades silently on a missing input is the skip-trapdoor shape AGENTS.md forbids, and here it would
+change what a published version means without saying so.
+
+Adoption is one commit per repo — add the config, drop the vendored copy, point `validate-repos.py`
+and `check-skip-sets.py` at the platform copy, and pass `centralized-gen-manifests: true` to the lane.
+Before merging one, prove it moves nothing:
+
+```bash
+MW_REPO_ROOT=$PWD python3 <platform>/.github/scripts/gen-manifests.py --check
+MW_REPO_ROOT=$PWD python3 <platform>/.github/scripts/gen-manifests.py --check-versions
+```
+
+Both must be green **on the tree as committed** — the canonical has to reproduce every lock the
+vendored copy wrote, or the swap republishes modules that did not change. Measured that way on
+2026-09-07 across all six repos: identical verdicts everywhere, and Manufacturing gained the trunk
+witness (`verified against their tags` → `verified against the published tags and the trunk`).
+
 ## Before you open the PR
 
 ```bash
-python3 scripts/gen-manifests.py           # after ANY change to a package folder OR to a src/
-                                           # project a package bundles — both move the lock
-python3 scripts/gen-manifests.py --check   # what CI runs on your branch
+python3 scripts/platform-script.py gen-manifests.py         # after ANY change to a package folder
+                                           # OR to a src/ project a package bundles — both move the lock
+python3 scripts/platform-script.py gen-manifests.py --check # what CI runs on your branch
 ```
+
+`platform-script.py` resolves the platform's copy at the sha this repo's lanes are pinned to, so a
+local verdict is CI's verdict. A repo that has not adopted yet still runs `python3 scripts/gen-manifests.py`.
 
 `--check` is a **PR** gate and is entirely local: it asserts your lock describes *your* tree.
 `--check-versions` is **main-only** — a branch is never asked to win a race against the trunk.

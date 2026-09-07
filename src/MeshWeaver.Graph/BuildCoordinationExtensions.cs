@@ -97,6 +97,11 @@ public static class BuildCoordinationExtensions
                             ?? ImmutableDictionary<string, BuildClaimRequest>.Empty)
                             .SetItem(holder, new BuildClaimRequest(
                                 frameworkVersion, DateTime.UtcNow, identity, priority)),
+                        // Registering again is the opposite of standing down, and clearing our OWN
+                        // key here is what keeps BuildState.StoodDown from outliving its purpose:
+                        // a holder id that is a candidate again must never be refused a grant by a
+                        // mark left from a previous build.
+                        StoodDown = state.StoodDown?.Remove(holder),
                     }
                 };
             }));
@@ -431,32 +436,12 @@ public static class BuildCoordinationExtensions
     /// <returns>Cold observable emitting the node after the write.</returns>
     public static IObservable<MeshNode> WithdrawBuildClaim(
         this IMessageHub hub, string holder, string path = BuildNodeType.RootPath)
+        // 🚨 The DECISION lives in BuildNodeType.StandDown, next to ApplyGrant and Arbitrate, so
+        // the three writers of a claim are one readable set — and so a test can drive the REAL
+        // merge patch this ships (ComputeMergePatchDiff) rather than a hand-rolled stand-in. The
+        // patch is why the record half exists: see StandDown and ReleaseStoodDownClaim (#1193).
         => hub.GetWorkspace().GetMeshNodeStream(path).Update(curr =>
-            {
-                var state = curr?.ContentAs<BuildState>(hub.JsonSerializerOptions);
-                if (curr is null || state is null) return curr!;
-
-                var registered = state.RequestedClaims?.ContainsKey(holder) == true;
-                // Only a claim we were GRANTED but never started on is ours to hand back. A holder
-                // that is Building is mid-bake and must not clear its own claim from here.
-                var grantedNotStarted =
-                    state.ClaimedBy == holder && state.Status is BuildStatus.Planning;
-                if (!registered && !grantedNotStarted) return curr;
-
-                return curr with
-                {
-                    Content = state with
-                    {
-                        RequestedClaims = registered
-                            ? state.RequestedClaims!.Remove(holder)
-                            : state.RequestedClaims,
-                        ClaimedBy = grantedNotStarted ? null : state.ClaimedBy,
-                        ClaimedByIdentity = grantedNotStarted ? null : state.ClaimedByIdentity,
-                        ClaimedAt = grantedNotStarted ? null : state.ClaimedAt,
-                        HeartbeatAt = grantedNotStarted ? null : state.HeartbeatAt,
-                    }
-                };
-            })
+                BuildNodeType.StandDown(curr!, holder, hub.JsonSerializerOptions, DateTime.UtcNow))
             .SelectMany(node => hub.ReleaseBuildClaim(holder, path).Select(_ => node));
 
     private static MeshNode NewBuildNode(string path, BuildState? initial)
