@@ -2698,6 +2698,91 @@ jobs:
           --surface-json "$RUNNER_TEMP/surface.json" \
           --pr-body-file "$RUNNER_TEMP/pr-body.md"
 
+  i18n-mirror-sync:
+    name: "i18n catalog (mirror sync handed over)"
+    # 🚨 THE GAP THIS CLOSES (#3596, and it is a RECURRENCE — AGENTS.md already records
+    # "measured 2026-09-04: pin 70 keys behind, both repos green").
+    #
+    # A key added to src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json has a SECOND
+    # home in MeshWeaver.Plugins (clients/react/src/i18n/). That repo's drift guard does run and it
+    # compares VALUES — but against a PINNED core commit recorded in
+    # clients/react/src/i18n/catalog-source.json, NOT against core's main. So every shared key still
+    # matches the pin exactly, the guard passes, and the mirror is silently stale. The React/RN
+    # clients then render a raw key or an English fallback for every one of those strings, in both
+    # languages, with nothing red in either repository.
+    #
+    # MEASURED 2026-09-07: 1372 keys at the pin (bbcb22f25, committed 09-06T05:43Z) against 1399 on
+    # main — 27 behind, and value drift over the 1372 shared keys ZERO, which is precisely why every
+    # guard was green. It was 18 behind when #3596 was filed three hours earlier.
+    #
+    # 🚨 WHY A DECLARATION AND NOT A CHECK OF THE MIRROR. The obvious gate — "is the pin an ancestor
+    # of core's newest catalog-touching commit?" — cannot live here, for two independent reasons:
+    #   * it would have to READ MeshWeaver.Plugins, and a gate on core's own pull requests whose
+    #     verdict depends on a sibling's moving HEAD makes the SAME diff go red or green with no
+    #     change of its own (PlatformNeverDependsOnPluginsGuard states the rule; the same reasoning
+    #     is why `package-pin-removal` next door is a declaration rather than a restore);
+    #   * the verdict would be one this pull request CANNOT ACT ON. The sync runs in the other
+    #     repository and its pull-request lane may be closed — it was, on the day #3596 was filed.
+    #     A gate that reds a core pull request for a debt only a sibling can discharge teaches
+    #     people to route around it.
+    # So, exactly like `interface-addition`, the ordering is INVERTED (the core half lands FIRST)
+    # and the gate asks for a STATEMENT, not a merged counterpart.
+    #
+    # 🚨 NO SKIP-TRAPDOOR:
+    #   * the self-test runs FIRST and fails this job — an unproven gate is no gate;
+    #   * no path filter — a pull request that touches nothing else would otherwise "pass" by not
+    #     running, and the catalog is exactly what such a pull request edits;
+    #   * no `continue-on-error:` and no `if:` asking whether a secret is set — this gate needs NO
+    #     credential at all, which is why it also runs on FORK pull requests. The one exemption is
+    #     on the EVENT: `merge_group` carries no pull-request body, and a pull request cannot reach
+    #     the queue without this job green, since it is a `needs:` of the required check;
+    #   * a CONTROL ARM on the denominator: the catalogs hold 1399 keys each, and a reader that
+    #     located the files but stopped parsing them would report "nothing was added" on every pull
+    #     request forever. Below 500 keys at the merge base the gate fails instead;
+    #   * an UNDECIDABLE read (the catalog missing at the merge base, a shallow fetch, unparseable
+    #     JSON) exits RED naming why — "couldn't tell" and "nothing changed" are never one colour.
+    #
+    # Base rate, measured over the 60 most recent first-parent merges on main (2026-09-07): EIGHT
+    # change the catalog, all eight by adding keys, none by changing a value. All eight left the
+    # mirror stale — they ARE the 27-key debt. The cost is one line in the pull-request body.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        # The detector compares HEAD against the merge base, so the base commit must be present.
+        fetch-depth: 0
+
+    - name: "Prove the mirror-sync gate is not vacuous (self-test)"
+      run: python3 scripts/check-i18n-mirror-sync.py --self-test
+
+    # A pull-request body is attacker-controlled text: it goes to a FILE through the environment,
+    # never interpolated into a shell command.
+    - name: Capture the pull-request body
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: |
+        set -euo pipefail
+        printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
+        echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
+
+    - name: "Every catalog change hands the mirror sync over"
+      run: |
+        set -euo pipefail
+        git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
+        # 🚨 The MERGE BASE, not the base branch tip — the same reasoning as every other diff gate
+        # here. Against the tip, a key somebody else added on main while this pull request is open
+        # reads as THIS pull request adding it, and the gate would demand a handover for a change
+        # it did not make.
+        base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+        echo "Comparing the localization catalogs against merge base $base"
+        python3 scripts/check-i18n-mirror-sync.py \
+          --base "$base" \
+          --pr-body-file "$RUNNER_TEMP/pr-body.md"
+
   collect-results:
     name: "Consolidate test results"
     # plugin-gate is a NEEDS so this required check cannot go green while the plugins are
@@ -2738,7 +2823,14 @@ jobs:
     # circular block on the release critical path and a satellite's main dark for hours). Nothing
     # on the causing pull request goes red, so a gate that could not fail the required check would
     # be a notification rather than a gate.
-    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition]
+    # i18n-mirror-sync is a NEEDS on the same principle, applied to the one cross-repo coupling
+    # where BOTH repositories stay green while the product is wrong: a key added here has a second
+    # home in MeshWeaver.Plugins, whose drift guard compares against a PINNED core commit rather
+    # than core's main, so the mirror goes stale in silence and the React/RN clients render raw keys
+    # (#3596 — 27 keys behind on 2026-09-07 with zero value drift, and a recurrence of the 70-key
+    # case AGENTS.md already records). A gate that could not fail the required check would be a
+    # notification, and a notification is exactly what this coupling already had.
+    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -3117,6 +3209,21 @@ jobs:
         echo "::error::The 'Interface additions (implementers declared)' gate concluded '${{ needs.interface-addition.result }}' — see that job, which names every member this diff adds that an outside implementer would have to write."
         echo "::error::A FORWARDER RESCUES A CALLER, IT CANNOT RESCUE AN IMPLEMENTER. Adding a member to a public interface (or an abstract member to a public abstract class) with no default implementation is CS0535/CS0534 in every implementer outside this repo — and a dependent that PINS the platform does not find out until somebody moves the pin. #3446 did exactly this and produced a circular block on the release critical path (#3465)."
         echo "::error::Fix it EITHER by giving the member a default implementation — which keeps every implementer compiling and silences the gate — OR by declaring it in the PR BODY: 'Implementers: IFoo.Bar — what you checked and what you found'. Note the ordering is INVERTED from 'Pairs-with:': the core half lands FIRST here, so the gate wants the coupling predicted, not a merged counterpart. Rationale: Doc/Architecture/CrossRepoPairGate."
+        exit 1
+
+    # ── …and an UNHANDED-OVER i18n CATALOG CHANGE decides it too (#3596) ────────────────────
+    # `!= 'success'` rather than `== 'failure'`, for the same reason as every gate above: a job that
+    # was skipped or cancelled produced no verdict, and no verdict must never read as passed. The
+    # event predicate is kept IDENTICAL to the gate's own `if:` so the two can never disagree —
+    # `pull_request` because this gate's second input is the pull-request BODY, which a merge_group
+    # event does not carry. No fork/dependabot clause: this gate needs no credential, so it runs
+    # there too.
+    - name: Fail if a catalog change did not hand the mirror sync over
+      if: github.event_name == 'pull_request' && needs.i18n-mirror-sync.result != 'success'
+      run: |
+        echo "::error::The 'i18n catalog (mirror sync handed over)' gate concluded '${{ needs.i18n-mirror-sync.result }}' — see that job, which names every catalog key this diff adds or re-words."
+        echo "::error::A localization key has a SECOND home in MeshWeaver.Plugins (clients/react/src/i18n/). Its drift guard compares VALUES, but against a PINNED core commit rather than core's main — so adding a key here reds NOTHING anywhere and the mirror goes silently stale, leaving the React/RN clients rendering a raw key in both languages. Measured 2026-09-07: 27 keys behind, zero value drift, every guard green."
+        echo "::error::Declare the handover in the PR BODY as 'Mirror-sync: <statement>' — naming the sync (npm run sync:i18n -- --ref <merged core sha>), the issue or pull request it is tracked on, or 'none — <reason>'. The sync runs in the OTHER repository and cannot be done from here, which is why the gate asks for the handover and not the result. Rationale: Doc/Architecture/Localization."
         exit 1
 
     - name: Fail if the clients gate failed

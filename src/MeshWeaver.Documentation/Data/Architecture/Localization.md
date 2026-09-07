@@ -262,6 +262,55 @@ So a core PR that adds keys hands the sync over explicitly. The mirror moves by
 `npm run sync:i18n -- --ref <the merged core sha>`, which rewrites both catalogs, the `ref` and the
 recorded key counts together.
 
+#### The handover is now a gate — `i18n catalog (mirror sync handed over)`
+
+Asking for the handover in prose was not enough, and the recurrence measured it. On
+**2026-09-07** the pin sat at **1,372** keys against **1,399** on core's `main` — **27 behind**,
+across at least eight merged pull requests, with **value drift over the 1,372 shared keys of
+exactly ZERO**. That zero is the whole mechanism: the mirror's guard compares values, every shared
+value matched, so both repositories were green while the React and RN clients rendered a raw key —
+in both languages — for 27 strings. It had been 18 behind three hours earlier, so the debt was
+growing faster than anyone was reading it.
+
+`scripts/check-i18n-mirror-sync.py` now refuses a pull request that changes the catalog without a
+handover in its body:
+
+```
+Mirror-sync: <statement>
+```
+
+The statement must name a real discharge path — the sync itself
+(`npm run sync:i18n -- --ref <merged core sha>`), the issue or pull request the handover is tracked
+on, or an explicit `none — <reason>`. That is what stops `Mirror-sync: yes` from counting as an
+answer. It fires on a key **added** and on a **value changed** on a shared key, because both leave
+the mirror stale and both are invisible to the mirror's own guard until the pin moves; a key
+**removed** does not fire, since a mirror holding a key core no longer uses renders nothing wrong.
+
+**Why a declaration and not a check of the mirror.** The gate a reader expects — *is the pin an
+ancestor of core's newest catalog-touching commit?* — cannot live on core's pull-request path, for
+two independent reasons. It would have to read MeshWeaver.Plugins, and a gate on core's own pull
+requests whose verdict depends on a sibling's moving HEAD makes the same diff go red or green with
+no change of its own — the rule
+[Repository dependency direction](/Doc/Architecture/RepositoryDependencyDirection) states and
+`package-pin-removal` already follows. And the verdict would be one the pull request **cannot act
+on**: the sync runs in the other repository, whose pull-request lane may be closed — it was, the day
+this was filed. A gate that reds a core change for a debt only a sibling can discharge is one people
+learn to route around.
+
+So, exactly like `Implementers:`, the ordering is **inverted** — the core half lands first — and the
+gate asks for a statement rather than a merged counterpart. It reads no sibling repository, needs no
+credential, and therefore runs on fork pull requests too.
+
+**What it costs.** Measured over the 60 most recent first-parent merges on `main`: eight change the
+catalog, all eight by adding keys, none by changing a value. So it meets roughly one merge in eight
+— and all eight of those left the mirror stale, which is precisely the 27-key debt. The price is one
+line in the pull-request body.
+
+**What it still cannot do.** It cannot make the sync happen, and it does not claim to: the mirror
+moves only in MeshWeaver.Plugins. What it removes is the *silence* — the state in which the debt is
+created by a green pull request, in a repository that cannot discharge it, with no record anywhere
+that it was created at all.
+
 ## Language resolution
 
 `Locales.Resolve` falls back in three steps: exact match → primary subtag → English. So `de-CH`,
