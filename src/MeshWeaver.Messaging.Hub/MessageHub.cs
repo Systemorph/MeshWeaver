@@ -1230,7 +1230,7 @@ public sealed class MessageHub : IMessageHub
     {
         var snapshot = (messageService is MessageService ms)
             ? ms.GetQueueSnapshot()
-            : (Buffer: -1, Deferred: -1, Execution: -1, OpenGates: -1, DeliveryCompleted: false,
+            : (Buffer: -1, Deferred: -1, DrainsInFlight: -1, OpenGates: -1, Draining: false,
                CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
 
         // The discriminator. A hub that was IDLE while waiting genuinely heard nothing: the silence
@@ -1243,7 +1243,8 @@ public sealed class MessageHub : IMessageHub
 
         var state =
             $"This hub: RunLevel={RunLevel} Queue(buffer={snapshot.Buffer},deferred={snapshot.Deferred}," +
-            $"openGates={snapshot.OpenGates},deliveryActionCompleted={snapshot.DeliveryCompleted})" +
+            $"openGates={snapshot.OpenGates},drainsInFlight={snapshot.DrainsInFlight}," +
+            $"draining={snapshot.Draining})" +
             (snapshot.CurrentMessage is not null
                 ? $" Executing({snapshot.CurrentMessage}, {snapshot.CurrentMessageElapsedMs}ms)"
                 : string.Empty);
@@ -1797,7 +1798,7 @@ public sealed class MessageHub : IMessageHub
     /// The STALL budget of the disposal watchdog: how long the subtree may make no
     /// <see cref="RunLevel"/> progress before the watchdog looks at what is holding the
     /// teardown. It is not a duration cap and it forces nothing — see
-    /// <see cref="OnDisposalStall"/> for the five verdicts it can reach.
+    /// <see cref="OnDisposalStall"/> for the verdicts it can reach.
     /// </summary>
     internal static readonly TimeSpan DisposalWatchdogTimeout = TimeSpan.FromSeconds(8);
     // Stall-detector state (see OnDisposalStall). `stallTurnsSeen` is the pump's completed-turn
@@ -1805,6 +1806,13 @@ public sealed class MessageHub : IMessageHub
     // already been handed its cancellation, so the next stall verdict on the same turn is the
     // Error that names a handler ignoring cancellation, not a second cancel.
     private long stallTurnsSeen = -1;
+    // The pump's DEQUEUE count at the last stall verdict, and the one it carried when Dispose() was
+    // called. Two baselines because they answer two different questions and the verdict quotes
+    // both: "nothing was dequeued in the last budget" is the predicate, "nothing has been dequeued
+    // at all since Dispose()" is the stronger fact when it holds. Neither is derivable from
+    // `stallTurnsSeen`, which counts HANDLER completions (#3593).
+    private long stallDequeuedSeen = -1;
+    private long disposalDequeuedBaseline = -1;
     private bool wedgedTurnCancelled;
     // Event ids for the stall verdicts: the red-log triage keys an incident on the log SITE and
     // deliberately ignores prose, so each verdict shape files as ONE issue however many hubs
@@ -1814,6 +1822,8 @@ public sealed class MessageHub : IMessageHub
     internal static readonly EventId DisposalStalledBelowThisHub = new(7313, nameof(DisposalStalledBelowThisHub));
     internal static readonly EventId DisposalShutDownPhaseBlocked = new(7314, nameof(DisposalShutDownPhaseBlocked));
     internal static readonly EventId DisposalQuiesceWaitCutOff = new(7315, nameof(DisposalQuiesceWaitCutOff));
+    internal static readonly EventId DisposalPumpNeverDequeued = new(7316, nameof(DisposalPumpNeverDequeued));
+    internal static readonly EventId DisposalStalledUnclassified = new(7317, nameof(DisposalStalledUnclassified));
     private readonly Stopwatch disposalStopwatch = new();
 
     private bool DisposalSignalled => Volatile.Read(ref disposalSignalled) != 0;
@@ -1912,6 +1922,12 @@ public sealed class MessageHub : IMessageHub
         // began. Its first verdict compares against THIS, so a pump that drained 500 accepted turns
         // in the first budget reads as busy rather than as a wedge with no history.
         stallTurnsSeen = (messageService as MessageService)?.TurnsCompleted ?? -1;
+        // The DEQUEUE baseline, taken in the same breath. The completed-turn baseline above cannot
+        // see a pump that never took anything off its queue — both counters read the same frozen
+        // value then, and the detector attributed the stall to a child that had not been asked to
+        // do anything yet (#3593, 47 hubs in one shutdown).
+        stallDequeuedSeen = disposalDequeuedBaseline =
+            (messageService as MessageService)?.TurnsDequeued ?? -1;
 
         // 🚨 The in-flight turn is NOT cancelled here. Work this hub accepted before teardown began
         // runs to completion — a merge that is half-way through, a handler awaiting pooled I/O.
@@ -1963,7 +1979,7 @@ public sealed class MessageHub : IMessageHub
         // teardown now SAYS SO, names the turn, cancels it once (cooperatively), and stays
         // Pending: the outer bounds — the test base's dispose deadline, the host's teardown
         // budget — report a hang with these diagnostics attached instead of a lie about
-        // completion. See OnDisposalStall for the five verdicts.
+        // completion. See OnDisposalStall for the verdicts, one of which is an explicit unknown.
         watchdogSubscription = DisposalProgress
             .StartWith($"{Address} Dispose() called")
             .Select(reason => Observable.Timer(DisposalWatchdogTimeout, DisposalWatchdogTimeout).Select(_ => reason))
@@ -1975,7 +1991,8 @@ public sealed class MessageHub : IMessageHub
             // would therefore hold Switch's gate while taking a child's `locker`, while that
             // child holds its `locker` and wants Switch's gate — a lock-order inversion that
             // wedges the child's action block on its own ShutdownRequest (measured: the child
-            // sitting at Executing(ShutdownRequest, 8000ms) with deliveryActionCompleted=False).
+            // sitting at Executing(ShutdownRequest, 8000ms) with the drain latched — printed at the
+            // time as deliveryActionCompleted=False, which is `draining=True` in today's snapshot).
             .ObserveOn(System.Reactive.Concurrency.DefaultScheduler.Instance)
             .Subscribe(
                 OnDisposalStall,
@@ -1999,9 +2016,23 @@ public sealed class MessageHub : IMessageHub
     /// proceeds. One that does not is reported at Error on every following budget, with the
     /// message type and its age, as the defect it is. Nothing is torn down around it.</para>
     ///
-    /// <para><b>No turn, no progress</b> means the stall is below this hub — a hosted hub that is
-    /// itself wedged, or a join still waiting on one. The recursive diagnostics say which; that
-    /// child's own detector carries the turn-level verdict.</para>
+    /// <para><b>No turn, no progress, and the pump has not turned</b> is THIS hub's own stall: the
+    /// drain flag is latched and nothing has come off the queue for a whole budget, so the queued
+    /// work — the ShutdownRequest included — was never handed to the pipeline at all. Nothing below
+    /// has been asked to do anything, so the verdict names the pump and the scheduler that owes it
+    /// a turn.</para>
+    ///
+    /// <para><b>No turn, no progress, but the pump HAS turned</b> means the stall is below this hub
+    /// — a hosted hub that is itself wedged, or a join still waiting on one. The recursive
+    /// diagnostics say which; that child's own detector carries the turn-level verdict. 🚨 This
+    /// verdict is only reachable when there IS something below: hosted hubs, or a teardown that has
+    /// reached the child-disposal phase / holds the hosted-hub join. It used to be the unguarded
+    /// fallback, so it asserted a cause the snapshot could not support — on 2026-09-06 it sent 47
+    /// readers to children of hubs still at <c>RunLevel=Started</c>, which have no children in
+    /// flight by construction (#3593).</para>
+    ///
+    /// <para><b>Anything else</b> is reported as an explicit UNKNOWN naming what was and was not
+    /// observed. A verdict that guesses is worse than one that says it cannot tell.</para>
     /// </summary>
     /// <param name="lastProgress">The last progress signal seen before the stall.</param>
     private void OnDisposalStall(string lastProgress)
@@ -2011,12 +2042,14 @@ public sealed class MessageHub : IMessageHub
 
         var pump = messageService as MessageService;
         var turns = pump?.TurnsCompleted ?? -1;
+        var dequeued = pump?.TurnsDequeued ?? -1;
         var snapshot = pump?.GetQueueSnapshot();
 
         if (pump is not null && turns != stallTurnsSeen)
         {
             var completed = turns - stallTurnsSeen;
             stallTurnsSeen = turns;
+            stallDequeuedSeen = dequeued;
             // Turns are completing: the pump is busy, not wedged. A new turn means the previous
             // one returned, so a cancellation issued for it is spent — start the next one clean.
             wedgedTurnCancelled = false;
@@ -2028,6 +2061,10 @@ public sealed class MessageHub : IMessageHub
             return;
         }
         stallTurnsSeen = turns;
+        // Captured BEFORE the baseline moves: did anything at all come off the queue in the budget
+        // just ended? Every branch below is downstream of this reading, so it is taken once.
+        var nothingDequeuedThisBudget = pump is not null && dequeued == stallDequeuedSeen;
+        stallDequeuedSeen = dequeued;
 
         if (snapshot?.CurrentMessage is { } young
             && snapshot.Value.CurrentMessageElapsedMs < DisposalWatchdogTimeout.TotalMilliseconds)
@@ -2108,12 +2145,76 @@ public sealed class MessageHub : IMessageHub
             }
         }
 
-        logger.LogError(DisposalStalledBelowThisHub,
+        // THE PUMP VERDICT. Queue non-empty, the drain flag latched, no turn dequeued for a whole
+        // budget, and nothing on the block. Work is queued and a drain IS nominally in flight, yet
+        // the queue has not moved — so the ShutdownRequest that Dispose() posted was never handed
+        // to the pipeline, and nothing below this hub has been asked to do anything. Naming a child
+        // here is a category error, which is precisely what the unguarded fallback below used to do
+        // (#3593: 47 sync/* hubs, all at RunLevel=Started with queue depth 1).
+        //
+        // What the two counters in the line discriminate:
+        //   drainsInFlight=0 → the scheduled drain never ran. The turn scheduler owes this hub a
+        //                      thread and has not delivered one (a starved pool, a scheduler whose
+        //                      queue is not being serviced, work parked on one thread's local LIFO
+        //                      queue reachable only by stealing).
+        //   drainsInFlight>0 → a drain body IS running and is blocked BEFORE the dequeue — i.e. in
+        //                      the turn gate itself, or in whatever the body does ahead of taking
+        //                      work off the queue.
+        if (snapshot is { } pumpView && pump is not null
+            && pumpView.Draining && pumpView.Buffer > 0 && nothingDequeuedThisBudget)
+        {
+            logger.LogError(DisposalPumpNeverDequeued,
+                "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
+                + "(last progress: {LastProgress}). RunLevel={RunLevel}, queue depth {Depth}. "
+                + "THE PUMP IS NOT TURNING: the drain flag is latched (a drain is scheduled on this "
+                + "hub's TaskScheduler), drainsInFlight={DrainsInFlight}, and NO turn was dequeued in "
+                + "that window ({Dequeued} dequeued in total since Dispose()). The queued work — the "
+                + "ShutdownRequest included — has therefore never been handed to a handler, so this "
+                + "stall is in THIS hub's turn scheduling and NOT in a hosted hub or a join. "
+                + "drainsInFlight=0 means the scheduled drain never ran: look at the TaskScheduler "
+                + "that owes this hub a thread. drainsInFlight>0 means a drain body is running and is "
+                + "blocked before the dequeue. Disposal is NOT forced.\n{Diagnostics}",
+                Address, DisposalWatchdogTimeout, lastProgress, RunLevel, pumpView.Buffer,
+                pumpView.DrainsInFlight, dequeued - disposalDequeuedBaseline, DescribeWedge());
+            return;
+        }
+
+        // 🚨 GUARDED. "The stall is below this hub" is only sayable when there IS something below:
+        // hosted hubs still in the collection, or a teardown that has reached the child-disposal
+        // phase (where the collection may already be empty while its join is outstanding).
+        var hosted = hostedHubs.Hubs.ToArray();
+        var somethingBelow = hosted.Length > 0
+                             || hostedHubsDisposalSubscription is not null
+                             || RunLevel >= MessageHubRunLevel.DisposeHostedHubs;
+        if (somethingBelow)
+        {
+            logger.LogError(DisposalStalledBelowThisHub,
+                "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
+                + "(last progress: {LastProgress}). RunLevel={RunLevel}, queue depth {Depth}. No turn is "
+                + "executing on this hub and its pump has dequeued {Dequeued} turn(s) since Dispose(), "
+                + "and it has {Hosted} hosted hub(s) below it, so the stall is in a hosted hub or a join "
+                + "it is waiting on — the diagnostics below name it. Disposal is NOT forced.\n{Diagnostics}",
+                Address, DisposalWatchdogTimeout, lastProgress, RunLevel, snapshot?.Buffer ?? -1,
+                dequeued - disposalDequeuedBaseline, hosted.Length, DescribeWedge());
+            return;
+        }
+
+        // An explicit UNKNOWN. Nothing is on the block, the pump is not latched-and-frozen, and
+        // there is nothing below — so none of the named causes fits, and the honest report is the
+        // measurement plus the statement that it does not identify a cause. A fallback that picks
+        // the nearest bucket teaches every reader to trust a verdict it did not earn.
+        logger.LogError(DisposalStalledUnclassified,
             "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
-            + "(last progress: {LastProgress}). RunLevel={RunLevel}, queue depth {Depth}. No turn is "
-            + "executing on this hub, so the stall is in a hosted hub or a join it is waiting on — the "
-            + "diagnostics below name it. Disposal is NOT forced.\n{Diagnostics}",
-            Address, DisposalWatchdogTimeout, lastProgress, RunLevel, snapshot?.Buffer ?? -1, DescribeWedge());
+            + "(last progress: {LastProgress}). RunLevel={RunLevel}, queue depth {Depth}, "
+            + "drainsInFlight={DrainsInFlight}, draining={Draining}, {Dequeued} turn(s) dequeued since "
+            + "Dispose(). No turn is on the block, the pump is not holding queued work, and this hub "
+            + "has no hosted hubs and no outstanding child-disposal join — so THIS VERDICT DOES NOT "
+            + "NAME A CAUSE. What is still outstanding is in the diagnostics below (pending callbacks "
+            + "are the usual one: a reply owed from outside this mesh). Disposal is NOT "
+            + "forced.\n{Diagnostics}",
+            Address, DisposalWatchdogTimeout, lastProgress, RunLevel, snapshot?.Buffer ?? -1,
+            snapshot?.DrainsInFlight ?? -1, snapshot?.Draining ?? false,
+            dequeued - disposalDequeuedBaseline, DescribeWedge());
     }
 
     /// <summary>
@@ -2258,7 +2359,7 @@ public sealed class MessageHub : IMessageHub
     {
         var snapshot = (messageService is MessageService ms)
             ? ms.GetQueueSnapshot()
-            : (Buffer: -1, Deferred: -1, Execution: -1, OpenGates: -1, DeliveryCompleted: false,
+            : (Buffer: -1, Deferred: -1, DrainsInFlight: -1, OpenGates: -1, Draining: false,
                CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
         var pending = SnapshotPendingCallbacks();
         var sb = new System.Text.StringBuilder();
@@ -2266,7 +2367,7 @@ public sealed class MessageHub : IMessageHub
           .Append(" RunLevel=").Append(RunLevel)
           .Append(" Queue(buffer=").Append(snapshot.Buffer)
           .Append(",deferred=").Append(snapshot.Deferred)
-          .Append(",exec=").Append(snapshot.Execution)
+          .Append(",drainsInFlight=").Append(snapshot.DrainsInFlight)
           .Append(')');
         if (snapshot.CurrentMessage != null)
             sb.Append(" Executing(").Append(snapshot.CurrentMessage)
@@ -2345,7 +2446,7 @@ public sealed class MessageHub : IMessageHub
         var indent = new string(' ', depth * 2);
         var snapshot = (messageService is MessageService ms)
             ? ms.GetQueueSnapshot()
-            : (Buffer: -1, Deferred: -1, Execution: -1, OpenGates: -1, DeliveryCompleted: false,
+            : (Buffer: -1, Deferred: -1, DrainsInFlight: -1, OpenGates: -1, Draining: false,
                CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
         sb.Append(indent)
           .Append("Hub ").Append(Address)
@@ -2355,9 +2456,9 @@ public sealed class MessageHub : IMessageHub
               : DisposalSignalled ? "Completed" : "Pending")
           .Append(" Queue(buffer=").Append(snapshot.Buffer)
           .Append(",deferred=").Append(snapshot.Deferred)
-          .Append(",exec=").Append(snapshot.Execution)
+          .Append(",drainsInFlight=").Append(snapshot.DrainsInFlight)
           .Append(",openGates=").Append(snapshot.OpenGates)
-          .Append(",deliveryActionCompleted=").Append(snapshot.DeliveryCompleted)
+          .Append(",draining=").Append(snapshot.Draining)
           .Append(')');
         if (snapshot.CurrentMessage != null)
         {
