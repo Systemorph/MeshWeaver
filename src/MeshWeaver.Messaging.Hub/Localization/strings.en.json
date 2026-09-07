@@ -87,6 +87,7 @@
   "error.notFound": "Not found",
   "error.validationFailed": "Validation failed",
   "error.ownerUnreachable": "Owner unreachable",
+  "error.userActionNotRun": "Your last action (“{0}”) did not run — the view it was sent from had already closed. Nothing was changed; please try again.",
   "error.deserializationFailed": "Content could not be deserialized",
   "error.concurrentUpdate": "Concurrent update conflict",
   "error.nodeOperationFailed": "MeshNode operation failed",
