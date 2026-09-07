@@ -266,8 +266,61 @@ public static class NodeMenuItemsExtensions
             // and can HIDE any of these. A divider decided from a partial view is wrong in both
             // directions, so the aggregator derives them from the final list instead
             // (WithSectionDividers).
-            return (IReadOnlyCollection<NodeMenuItemDefinition>)items.ToImmutable();
+            //
+            // 🚨 Last: drop the entries whose RENDERER is not on this mesh. Most of the areas above
+            // are rendered by the OPTIONAL MeshWeaver.Graph.Views module, not by the platform —
+            // see WithoutUnrenderableAreas.
+            return (IReadOnlyCollection<NodeMenuItemDefinition>)
+                WithoutUnrenderableAreas(host.LayoutDefinition, menuPath, items.ToImmutable());
         });
+
+    /// <summary>
+    /// Removes the entries that point at an area THIS hub has no renderer for — the node menu must
+    /// never offer an operation the mesh cannot perform (issue #3604).
+    ///
+    /// <para>Why this is needed at all: the platform assembles the node menu, but most of the
+    /// RENDERERS it links to are not the platform's. Delete, Copy, Move, Versions, Pin, Import,
+    /// StopSync, Access control and Groups all render from <c>MeshWeaver.Graph.Views</c>, which is
+    /// shipped as the optional <c>DefaultViews</c> PACKAGE. On a mesh that does not carry it, every
+    /// one of those entries was still offered and every click landed on the layout engine's
+    /// diagnostic page — <c>"Area not found — No renderer is registered for area `Delete`"</c>. The
+    /// item is the platform's to emit, so the check is the platform's to make.</para>
+    ///
+    /// <para>🚨 Deliberately narrow. An entry is dropped ONLY when it is an ordinary navigation
+    /// (never an <see cref="NodeMenuItemDefinition.IsAction"/> command — Recycle runs in place and
+    /// lands on the node's own page — and never a submenu parent), its area is a real area name
+    /// (not <c>_separator</c> / <c>_group:</c>), and its <see cref="NodeMenuItemDefinition.Href"/>
+    /// is EXACTLY this node's URL for that area. An entry linking anywhere else — Cast's
+    /// <c>/RemoteControl/Start/Cast?target=…</c>, a plugin front door, a search URL — names an area
+    /// this hub's layout definition was never asked about, so it is left alone.</para>
+    ///
+    /// <para>🚨 FAILS OPEN — see <see cref="MeshNodeLayoutAreas.CanRenderArea"/>, which owns that
+    /// rule and the Overview probe behind it. "The definition is empty / not the one that serves
+    /// this node" must never collapse into "this area has no renderer": that direction silently
+    /// deletes Delete, Copy and Move from every portal at once.</para>
+    /// </summary>
+    /// <param name="layout">The layout definition of the hub the menu is being rendered on.</param>
+    /// <param name="menuPath">The node path the menu belongs to — the href prefix entries must match.</param>
+    /// <param name="items">The assembled entries.</param>
+    /// <returns>The entries whose target this hub can actually render.</returns>
+    internal static ImmutableList<NodeMenuItemDefinition> WithoutUnrenderableAreas(
+        LayoutDefinition? layout, string menuPath, ImmutableList<NodeMenuItemDefinition> items)
+        => items.RemoveAll(item => TargetsUnrenderableArea(layout, menuPath, item));
+
+    /// <summary>
+    /// True when <paramref name="item"/> is a plain navigation to <paramref name="menuPath"/>'s own
+    /// area page and no renderer on <paramref name="layout"/> serves that area. See
+    /// <see cref="WithoutUnrenderableAreas"/> for every condition and why each is there.
+    /// </summary>
+    private static bool TargetsUnrenderableArea(
+        LayoutDefinition? layout, string menuPath, NodeMenuItemDefinition item)
+        => !item.IsAction
+           && !item.IsSubmenuParent
+           && item.Area is { Length: > 0 }
+           && item.Area[0] != '_'
+           && string.Equals(item.Href, MeshNodeLayoutAreas.BuildUrl(menuPath, item.Area),
+               StringComparison.Ordinal)
+           && !MeshNodeLayoutAreas.CanRenderArea(layout, item.Area);
 
     /// <summary>
     /// Default provider for the "Mesh" menu — mesh-level operations.
