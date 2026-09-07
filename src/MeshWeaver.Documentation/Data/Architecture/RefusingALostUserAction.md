@@ -1,0 +1,152 @@
+---
+Name: Refusing a Lost User Action
+Category: Architecture
+Description: A click whose stream is gone used to be dropped with a warning that reads like routine data-sync churn, while the action it would have run was perfectly capable of outliving the circuit. Why "deliver it anyway" is not implementable as stated, what a visible refusal is instead, and the one line that separates a person's action from a data frame.
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11.5 4.5 7 6 5.5 9 8.5 15 2.5l1.5 1.5z"/><path d="M3 13a9 9 0 1 0 9-9"/><line x1="12" y1="12" x2="12" y2="12.01"/></svg>
+---
+
+# Refusing a Lost User Action
+
+**A person clicked a button. The framework accepted the click, threw it away, and wrote one Warning
+five seconds later that reads exactly like routine stream churn. Nothing retried, nothing surfaced,
+and the next thing that looked for the result saw an absence indistinguishable from "you never
+clicked."**
+
+That is issue #3566, and it is the reason `IUserAction` exists.
+
+## What was measured
+
+MeshWeaver.Education run
+[34042620439](https://github.com/Systemorph/MeshWeaver.Education/actions/runs/34042620439), job
+`101512796719` — the Store **Install** button.
+
+```
+15:44:38.03  Click … click action done                                (no error)
+15:44:38.06  Navigate to "/Store"                                     ← 20 ms later
+15:44:38.205 Circuit connection DOWN … disposing per-circuit portal hub
+15:44:38.41  ClickedEvent arrives at e2e-admin/Packages — sync/{id} already gone
+15:44:43.41  warn: Dropping ClickedEvent for stream JRGdthy… : no synchronization hub
+             found on this hub or any parent — the target stream is gone
+```
+
+`InstallPackage` was never invoked. Attempt 1 installed nothing, and nothing was red.
+
+Two facts make this more than "the circuit was gone, so of course":
+
+- **The action does not need the circuit, and the framework already knows that.**
+  `InstallPackage` ends in `RunAsSystem(...).Subscribe(...)` — fire-and-forget. In the very same run
+  the retry's install ran to completion **850 ms after its own circuit closed**.
+- **It is not decided by how fast you navigate.** The retry had a *tighter* window (4 ms
+  click→navigate, circuit closed 90 ms after the click) and it won. What differed was load: the
+  failing attempt's card locator took 2 939 ms to settle versus 905 ms. The outcome turns on server
+  load at the moment of the click — rare in testing, reachable in production.
+
+The denominator: `Dropping ClickedEvent` appears **exactly once** in that run — that click — and
+**zero** times in run 34080328179, where the same install succeeded.
+
+## The scope call, and why it went the way it did
+
+The issue names two coherent answers and picks neither. Both were examined; the first turns out not
+to be implementable as written.
+
+### "Deliver it anyway" — measured, and false as stated
+
+> *routing the event to the target hub without requiring a live sync hub would make the click land*
+
+It would not. Three things have to be true for a `ClickedEvent` to run, and the disposal takes all
+three away at once:
+
+1. The **handler** is `LayoutAreaHost.OnClick`, registered on the per-stream `sync/{id}` sub-hub —
+   it is the only `ClickedEvent` registration in the framework. The owner hub itself
+   (`e2e-admin/Packages`) has none, so an event routed there would be `Ignored`, not run.
+2. The **action** is `control.ClickAction`, a closure held in the `EntityStore` snapshot of the
+   `LayoutAreaHost` that was just disposed with the stream.
+3. The handler's own filter is `Stream.ClientId.Equals(delivery.Message.StreamId)` — it is scoped to
+   the departed subscriber by construction.
+
+Making the click land therefore means **re-materialising a layout area for a subscriber that no
+longer exists**: re-running the view function against state that has since moved, under an
+`AccessContext` nobody is holding. That is a different design with its own answer to "whose identity
+runs this", not a routing tweak. It is deliberately **not** what this change does.
+
+### "Refuse it visibly" — what shipped
+
+The drop stays a drop. What ends is its silence, on both of the audiences that exist:
+
+| audience | before | after |
+|---|---|---|
+| the person, when anything of theirs is still attached | nothing | a `DeliveryFailure` to the sender, which a live portal hub raises as the standard error modal (`PortalErrorReporting` → `PortalErrorSink`) |
+| the operator | one `Warning` worded as stream churn | one `Error` naming the action, the area and the stream, and saying the action did not run and never will |
+
+🚨 **In the #3566 timeline itself the circuit was already gone, so the modal reaches nobody — and
+that is honest, not a gap.** The person had navigated away; there is no live surface to write to,
+and inventing one (a cross-session notification for a lost click) would be a feature, not a fix. The
+other two ways into the same code path — a **released read stream** and a **reaped sync hub** on a
+client that is still there — *do* have a live sender, and those are exactly the cases where somebody
+is looking at a page that silently did nothing.
+
+## The one line that separates the two classes
+
+```csharp
+public interface IUserAction
+{
+    string ActionArea { get; }
+}
+```
+
+`ClickedEvent`, `BlurEvent` and `CloseDialogEvent` implement it. Nothing else does, and nothing about
+routing or handling changes — it exists **only** so that `DataExtensions.RefuseStreamMessage` can ask
+one question:
+
+- **A data frame** (`DataChangedEvent` & co) whose stream is gone is **dropped**, exactly as before.
+  The only party that wanted it is the subscriber that has gone away, and its view went with it.
+  NACKing every one would be pure teardown noise — the reason the framework
+  [deliberately never did](/Doc/Architecture/ErrorPropagationAndWedges).
+- **A user action** whose stream is gone is **refused**.
+
+That asymmetry is the whole design. It is also what makes the change measurable: the regression test
+asserts the refusal *and* asserts that a data frame on an identically-gone stream still produces
+nothing (`DroppedUserActionIsRefusedTest`).
+
+### Why `ErrorType.Rejected`
+
+Not `NotFound` — `PortalErrorReporting` swallows a routing `NotFound` as benign churn, and would
+swallow this with it. Not `ShuttingDown` — that is the transient "the address may come back, ride it
+out" verdict, and this address is not coming back for this stream. `Rejected` is what it is: the
+framework explicitly declined to run the action.
+
+### Why the log line is `Error`
+
+Log levels are a production cost model, not a debug dial, so a level is only ever raised with the
+trade stated. Here it is: a lost user action is **work the platform accepted and threw away**, and it
+is rare by construction — once in run 34042620439, zero times in the green run. Neither of the two
+volume complaints applies: `StreamEndedEvent` (the "we get tons of this" case, maintainer
+2026-09-01) stays at `Debug`, and data-sync frames stay at `Warning`. Only the user-action class
+rises.
+
+### The sentence a person reads
+
+`error.userActionNotRun`, resolved from the catalog against the **acting user's**
+`AccessContext.Locale` — the one carried by the delivery being refused — never an ambient culture,
+which on Blazor Server is the container's and identical for every simultaneous viewer. See
+[Localization](/Doc/Architecture/Localization).
+
+## What this deliberately does not fix
+
+- **The ordering that loses the click in the first place.** The per-circuit portal hub released its
+  stream while an inbound user action it had already accepted was still in flight to the owner. Its
+  disposal lives in the Blazor portal (MeshWeaver.Plugins), not here, so draining accepted user
+  actions before releasing subscriptions is a cross-repo change with its own design.
+- **Any retry, resubscribe or widened grace.** The issue rules all three out and so does this: an
+  event that is genuinely undeliverable is not made deliverable by polling for a stream that is gone,
+  and moving the 5-second grace only moves the cliff.
+- **The harness half.** A Store install click with no outcome check and no wait — unlike its sibling
+  `install()` helper, which retries in rounds — stays in MeshWeaver.Education#275.
+
+## Related
+
+- [Error Propagation & Wedges](../ErrorPropagationAndWedges) — why fire-and-forget traffic is not
+  NACKed during teardown, which is the rule this change makes one exception to and states.
+- [Stream Liveness and the Hub Reference](../StreamLivenessAndTheHubReference) — how a stream and its
+  sub-hub come apart, which is the state this page starts from.
+- [Localization](../Localization) — the catalog and the explicit-locale rule.

@@ -138,6 +138,35 @@ public abstract record StreamMessage(string StreamId) : IDiagnosticKeyed
     /// </summary>
     string IDiagnosticKeyed.DiagnosticKey => StreamId;
 }
+
+/// <summary>
+/// A <see cref="StreamMessage"/> that carries a <b>person's action</b> — a click, a dialog
+/// dismissal, a field losing focus — rather than data-synchronisation traffic.
+///
+/// <para>🚨 <b>The distinction exists because the two classes must be discarded differently</b>
+/// (issue #3566). Every stream message whose <c>sync/{id}</c> sub-hub is gone is dropped once the
+/// registration grace elapses. For a data frame that is benign: the only party that wanted it is
+/// the subscriber that has just gone away, and its view went with it. For a user action it is not.
+/// The ACTION does not depend on the stream — a <c>WithClickAction</c> body routinely ends in a
+/// fire-and-forget subscribe and outlives the circuit that triggered it — so the drop throws away
+/// work a person asked for and believes has happened. Measured on MeshWeaver.Education run
+/// 34042620439: a Store <i>Install</i> click, a navigation 20 ms later, the circuit disposed at
+/// +175 ms, the event dropped 5 s after that, <c>InstallPackage</c> never invoked, and the only
+/// record a Warning on the server that reads like routine stream churn.</para>
+///
+/// <para>Implementing this interface changes nothing about how a message is routed or handled. It
+/// marks the message as one whose loss is REFUSED VISIBLY rather than logged as churn — see
+/// <c>DataExtensions.RefuseStreamMessage</c>.</para>
+/// </summary>
+public interface IUserAction
+{
+    /// <summary>
+    /// What the person acted ON — the layout-area key for a click, a blur or a dialog. Named in the
+    /// refusal so "your action did not run" can say WHICH action.
+    /// </summary>
+    string ActionArea { get; }
+}
+
 /// <summary>
 /// Base type for stream messages that carry a versioned JSON change.
 /// </summary>

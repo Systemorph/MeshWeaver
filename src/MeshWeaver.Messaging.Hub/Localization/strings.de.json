@@ -87,6 +87,7 @@
   "error.notFound": "Nicht gefunden",
   "error.validationFailed": "Validierung fehlgeschlagen",
   "error.ownerUnreachable": "Besitzer nicht erreichbar",
+  "error.userActionNotRun": "Ihre letzte Aktion („{0}“) wurde nicht ausgeführt – die Ansicht, aus der sie gesendet wurde, war bereits geschlossen. Es wurde nichts geändert; bitte versuchen Sie es erneut.",
   "error.deserializationFailed": "Inhalt konnte nicht gelesen werden",
   "error.concurrentUpdate": "Konflikt durch gleichzeitige Änderung",
   "error.nodeOperationFailed": "Node-Operation fehlgeschlagen",

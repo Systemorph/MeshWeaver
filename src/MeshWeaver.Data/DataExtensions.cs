@@ -356,7 +356,7 @@ public static class DataExtensions
         // register, so drop straight away.
         if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
         {
-            LogStreamMessageDrop(hub, request, streamMessage, message, heldFor: TimeSpan.Zero);
+            RefuseStreamMessage(hub, request, streamMessage, message, heldFor: TimeSpan.Zero);
             return Observable.Return(request.Ignored());
         }
 
@@ -388,7 +388,7 @@ public static class DataExtensions
             .ToArray();
         if (hubAddedSignals.Length == 0)
         {
-            LogStreamMessageDrop(hub, request, streamMessage, message, heldFor: TimeSpan.Zero);
+            RefuseStreamMessage(hub, request, streamMessage, message, heldFor: TimeSpan.Zero);
             return;
         }
 
@@ -437,7 +437,7 @@ public static class DataExtensions
                     // the run" for two unrelated suites when both had ended theirs at ~0.1 s. A
                     // diagnostic that misdates its own subject is worse than none.
                     if (System.Threading.Interlocked.Exchange(ref delivered, 1) == 0)
-                        LogStreamMessageDrop(hub, request, streamMessage, message, grace);
+                        RefuseStreamMessage(hub, request, streamMessage, message, grace);
                     sub.Dispose();
                 });
 
@@ -449,10 +449,130 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// One Warning per genuinely-dropped stream message (a disposed circuit's stream, a released read
-    /// stream, a reaped/never-created sync hub). Data-sync traffic vanishing without a trace is
-    /// unfindable in production (agentic-pensions#12 asked for exactly this signal) — the drop stays
-    /// intentional but never silent.
+    /// The ONE exit for a genuinely-undeliverable stream message (a disposed circuit's stream, a
+    /// released read stream, a reaped/never-created sync hub) — and the seam where the two classes
+    /// of stream message part company (issue #3566).
+    ///
+    /// <para><b>Data-sync traffic</b> (<c>DataChangedEvent</c> &amp; co) is DROPPED, exactly as
+    /// before: the only party that wanted the frame is the subscriber that has gone away, and its
+    /// view went with it. One Warning so the loss is findable (agentic-pensions#12 asked for that
+    /// signal); nothing else.</para>
+    ///
+    /// <para><b>An <see cref="IUserAction"/></b> — a click, a blur, a dialog dismissal — is
+    /// <b>REFUSED</b> instead: the action a person asked for will not happen, and the framework says
+    /// so out loud rather than letting the absence pass for "you never clicked". See
+    /// <see cref="RefuseUserAction"/> for what "out loud" means and why this is a refusal rather
+    /// than a delivery.</para>
+    /// </summary>
+    private static void RefuseStreamMessage(
+        IMessageHub hub, IMessageDelivery request, StreamMessage streamMessage, object message,
+        TimeSpan heldFor)
+    {
+        if (message is IUserAction userAction)
+            RefuseUserAction(hub, request, streamMessage, userAction, heldFor);
+        else
+            LogStreamMessageDrop(hub, request, streamMessage, message, heldFor);
+    }
+
+    /// <summary>
+    /// Refuses a lost user action VISIBLY — the whole point of issue #3566.
+    ///
+    /// <para>🚨 <b>Why a refusal and not a delivery.</b> The issue offers two coherent answers,
+    /// "deliver it anyway" and "refuse it visibly", and this is the second. The first was measured
+    /// and is not implementable as stated: the <c>ClickAction</c> the event would invoke is a
+    /// closure held in the DISPOSED <c>LayoutAreaHost</c>'s <c>EntityStore</c> snapshot, and the
+    /// only <c>ClickedEvent</c> registration in the framework is
+    /// <c>LayoutAreaHost.OnClick</c> on the per-stream <c>sync/{id}</c> sub-hub. Routing the event
+    /// to the owner hub "without requiring a live sync hub" therefore reaches no handler at all —
+    /// it would be <c>Ignored</c>, not run. Making it run means re-materialising a layout area for
+    /// a subscriber that no longer exists, under whose <c>AccessContext</c> is an open question;
+    /// that is a different design, not this fix. What IS in scope is that the loss stops being
+    /// indistinguishable from success.</para>
+    ///
+    /// <para><b>Two audiences, both served.</b>
+    /// <list type="number">
+    ///   <item><b>The person</b>, when anything of theirs is still attached: a
+    ///     <see cref="DeliveryFailure"/> is posted back to the sender, which on a live portal hub
+    ///     is picked up by <c>PortalErrorReporting</c> and raised as the standard error modal. In
+    ///     the #3566 timeline the circuit was already gone so this reaches nobody — but the other
+    ///     two ways into this method (a released read stream, a reaped sync hub on a client that is
+    ///     still there) have a live sender, and those are the cases where a person is looking at a
+    ///     page that silently did nothing. <c>ErrorType.Rejected</c>, deliberately: it is neither a
+    ///     routing <c>NotFound</c> (which <c>PortalErrorReporting</c> swallows as benign churn) nor
+    ///     a transient <c>ShuttingDown</c> the caller should retry into.</item>
+    ///   <item><b>The operator</b>: one <c>Error</c> line naming the action, the area and the
+    ///     stream. 🚨 The LEVEL is a deliberate, costed choice, not debug volume. A lost user
+    ///     action is not stream churn — it is work the platform accepted and threw away — and it is
+    ///     rare by construction: <c>Dropping ClickedEvent</c> appears exactly ONCE in
+    ///     MeshWeaver.Education run 34042620439 and ZERO times in the green run 34080328179. The
+    ///     "we get tons of this" volume complaint (maintainer, 2026-09-01) was about
+    ///     <c>StreamEndedEvent</c>, which stays at Debug, and data-sync frames stay at Warning.</item>
+    /// </list></para>
+    ///
+    /// <para>The sentence the person reads is localized off the ACTING USER's
+    /// <c>AccessContext.Locale</c> — the one carried by the delivery being refused — never an
+    /// ambient culture, which on Blazor Server is the container's and identical for every viewer.</para>
+    /// </summary>
+    private static void RefuseUserAction(
+        IMessageHub hub, IMessageDelivery request, StreamMessage streamMessage,
+        IUserAction userAction, TimeSpan heldFor)
+    {
+        try
+        {
+            var age = DescribeHold(heldFor);
+            hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(DataExtensions).FullName!)
+                .LogError(
+                    "REFUSING {MessageType} on area {Area} for stream {StreamId} on hub {Address}: "
+                    + "the target stream is gone (disposed circuit, released read stream, or "
+                    + "never-created sync hub), so the action the user asked for did NOT run and "
+                    + "never will. Sender: {Sender}.{Age}",
+                    request.Message.GetType().Name, userAction.ActionArea, streamMessage.StreamId,
+                    hub.Address, request.Sender, age);
+
+            // Tell whoever is still attached. A hub already past DisposeHostedHubs declines its own
+            // posts, and a NACK addressed to ourselves is noise, so both are excluded — this is
+            // about a sender that can still hear it.
+            if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                return;
+            if (request.Sender is null || request.Sender.Equals(hub.Address))
+                return;
+            hub.Post(
+                new DeliveryFailure(request)
+                {
+                    ErrorType = ErrorType.Rejected,
+                    Message = LocalizationCatalog.Get(
+                        "error.userActionNotRun", request.AccessContext?.Locale, userAction.ActionArea)
+                },
+                o => o.ResponseFor(request));
+        }
+        catch (ObjectDisposedException)
+        {
+            // Same reason the drop diagnostic swallows this one: refusals routinely fire while the
+            // hub is tearing down, and reporting the loss must never itself become a fault.
+        }
+    }
+
+    /// <summary>
+    /// 🚨 The AGE of what is being reported, always stated — see the Timeout arm's note. Zero means
+    /// "dropped on arrival"; anything else is how long this line lagged the event it describes.
+    /// Invariant, never the ambient culture: a decimal comma in a machine-read log line is a
+    /// needless divergence between hosts (and CurrentCulture formatting is banned outright).
+    /// </summary>
+    private static string DescribeHold(TimeSpan heldFor)
+        => heldFor > TimeSpan.Zero
+            ? " This line is written "
+              + heldFor.TotalSeconds.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)
+              + "s AFTER the message arrived (the sync-hub registration grace) — the stream "
+              + "ended then, not now."
+            : string.Empty;
+
+    /// <summary>
+    /// One Warning per genuinely-dropped DATA-SYNC stream message (a disposed circuit's stream, a
+    /// released read stream, a reaped/never-created sync hub). Data-sync traffic vanishing without a
+    /// trace is unfindable in production (agentic-pensions#12 asked for exactly this signal) — the
+    /// drop stays intentional but never silent. A user action never reaches here; it is refused by
+    /// <see cref="RefuseUserAction"/>.
     /// </summary>
     private static void LogStreamMessageDrop(
         IMessageHub hub, IMessageDelivery request, StreamMessage streamMessage, object message,
@@ -460,17 +580,7 @@ public static class DataExtensions
     {
         try
         {
-            // 🚨 The AGE of what is being reported, always stated — see the Timeout arm's note.
-            // Zero means "dropped on arrival"; anything else is how long this line lagged the
-            // event it describes.
-            // Invariant, never the ambient culture: a decimal comma in a machine-read log line is
-            // a needless divergence between hosts (and CurrentCulture formatting is banned outright).
-            var age = heldFor > TimeSpan.Zero
-                ? " This line is written "
-                  + heldFor.TotalSeconds.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)
-                  + "s AFTER the message arrived (the sync-hub registration grace) — the stream "
-                  + "ended then, not now."
-                : string.Empty;
+            var age = DescribeHold(heldFor);
             var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
                 ?.CreateLogger(typeof(DataExtensions).FullName!);
             // 🚨 Level is TYPED, deliberately. A StreamEndedEvent to a subscriber whose stream is

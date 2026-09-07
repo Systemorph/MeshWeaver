@@ -9,12 +9,15 @@ namespace MeshWeaver.Layout;
 /// </summary>
 /// <param name="Area">The area that was clicked.</param>
 /// <param name="StreamId">The identifier of the stream that owns this event.</param>
-public record ClickedEvent(string Area, string StreamId) : StreamMessage(StreamId)
+public record ClickedEvent(string Area, string StreamId) : StreamMessage(StreamId), IUserAction
 {
     /// <summary>
     /// Gets or initializes the payload associated with the clicked event.
     /// </summary>
     public object? Payload { get; init; }
+
+    /// <inheritdoc />
+    string IUserAction.ActionArea => Area;
 }
 
 /// <summary>
@@ -22,12 +25,15 @@ public record ClickedEvent(string Area, string StreamId) : StreamMessage(StreamI
 /// </summary>
 /// <param name="Area">The area that lost focus.</param>
 /// <param name="StreamId">The stream identifier.</param>
-public record BlurEvent(string Area, string StreamId) : StreamMessage(StreamId)
+public record BlurEvent(string Area, string StreamId) : StreamMessage(StreamId), IUserAction
 {
     /// <summary>
     /// Gets or initializes the payload associated with the blur event.
     /// </summary>
     public object? Payload { get; init; }
+
+    /// <inheritdoc />
+    string IUserAction.ActionArea => Area;
 }
 
 /// <summary>
@@ -36,12 +42,16 @@ public record BlurEvent(string Area, string StreamId) : StreamMessage(StreamId)
 /// <param name="Area">The area where the dialog was displayed.</param>
 /// <param name="StreamId">The stream identifier.</param>
 /// <param name="State">The state indicating how the dialog was closed (OK, Cancel, etc.)</param>
-public record CloseDialogEvent(string Area, string StreamId, DialogCloseState State) : StreamMessage(StreamId)
+public record CloseDialogEvent(string Area, string StreamId, DialogCloseState State)
+    : StreamMessage(StreamId), IUserAction
 {
     /// <summary>
     /// Gets or initializes the payload associated with the close dialog event.
     /// </summary>
     public object? Payload { get; init; }
+
+    /// <inheritdoc />
+    string IUserAction.ActionArea => Area;
 }
 
 /// <summary>
