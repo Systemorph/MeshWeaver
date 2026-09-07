@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -25,10 +26,47 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// </summary>
 public record UpdatePolicyContent
 {
-    /// <summary>The update strategy. Defaults to <see cref="UpdatePolicyKind.Continuous"/>.</summary>
+    /// <summary>
+    /// The update strategy. A NEWLY constructed record defaults to
+    /// <see cref="UpdatePolicyKind.Continuous"/> — but an ABSENT value on a persisted record reads as
+    /// <see cref="UpdatePolicyKind.None"/>, not as Continuous (#3542).
+    ///
+    /// <para>Those two are different questions and used to have the same answer. Because
+    /// <c>None</c> is now the enum's zero value, an explicit <c>Continuous</c> is non-default and is
+    /// therefore always written out, so "the admin chose Continuous" is distinguishable from "this
+    /// record lost its policy" — and the latter fails closed instead of enabling an unattended roll.</para>
+    /// </summary>
+    /// <summary>
+    /// The update strategy AS DECLARED on the record — <c>null</c> when the record carries no
+    /// <c>policy</c> field at all. Read <see cref="Policy"/> instead; this exists so that "absent"
+    /// and "explicitly chosen" stay different facts on the wire.
+    /// </summary>
     [Description("Update strategy")]
     [Translation("de", "Update-Strategie")]
-    public UpdatePolicyKind Policy { get; init; } = UpdatePolicyKind.Continuous;
+    [JsonPropertyName("policy")]
+    public UpdatePolicyKind? DeclaredPolicy { get; init; }
+
+    /// <summary>
+    /// The strategy this install actually follows. An ABSENT declaration reads as
+    /// <see cref="UpdatePolicyKind.None"/> — never as "enabled" (#3542).
+    ///
+    /// <para>🚨 Why a nullable backing field rather than reordering the enum, which was the obvious
+    /// repair and is WRONG: the hub serializer sets <c>DefaultIgnoreCondition = WhenWritingDefault</c>,
+    /// so whichever member is zero is dropped on write. Putting <c>None</c> at zero would have made an
+    /// explicit <c>None</c> unwritable — measured, it broke the MCP patch that turns auto-update OFF,
+    /// which is the safety-critical direction. A nullable field has <c>null</c> as its default, so
+    /// EVERY named member survives the round trip and only genuine absence is dropped.</para>
+    ///
+    /// <para>The consequence that matters: an install whose record lost its policy under its own
+    /// bookkeeping writes no longer rolls itself. That is how memex-cloud reached a withdrawn
+    /// <c>3.1.0-ci</c> line "on a policy record that lost its own policy".</para>
+    /// </summary>
+    [JsonIgnore]
+    public UpdatePolicyKind Policy
+    {
+        get => DeclaredPolicy ?? UpdatePolicyKind.None;
+        init => DeclaredPolicy = value;
+    }
 
     /// <summary>
     /// When <c>true</c> (default) the install only rolls to builds that PASSED CI ("green").
