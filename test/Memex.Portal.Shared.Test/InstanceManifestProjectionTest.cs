@@ -322,9 +322,9 @@ public class InstanceManifestProjectionTest
     public void NoIdentityAtAll_ProjectsNoPluginCatalogKeys()
         // The ordinary state of every deployment configured through appsettings — it must stay
         // byte-identical, and in particular must not have an empty registry token invented for it.
-        => Assert.False(
-            InstanceManifestProjection.ToConfiguration(Complete(), Protector)
-                .Keys.Any(k => k.StartsWith("PluginCatalog:", StringComparison.OrdinalIgnoreCase)));
+        => Assert.DoesNotContain(
+            InstanceManifestProjection.ToConfiguration(Complete(), Protector).Keys,
+            k => k.StartsWith("PluginCatalog:", StringComparison.OrdinalIgnoreCase));
 
     private static InstanceManifest Complete() => new()
     {
