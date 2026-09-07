@@ -376,6 +376,101 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     ? pendingSelfWrite
                     : node);
 
+    /// <summary>
+    /// 🚨 The base a re-attempt spawned by a <b>"the patch NEVER applied"</b> NACK is allowed to
+    /// diff against — issue #3477, and the last fail-open exit of this write path.
+    ///
+    /// <para><b>The defect.</b> An <see cref="MeshNodeErrorCode.OwnerDisposing"/> /
+    /// <see cref="MeshNodeErrorCode.OwnerNotReady"/> NACK re-enqueues the caller's lambda with
+    /// <c>refusedBaseVersion = 0</c>, so <see cref="RebaseSource"/> reduces to
+    /// <c>mirror.Take(1)</c> — the re-attempt diffs against THIS hub's mirror as it stands. The
+    /// re-enqueue's own reasoning for that is <i>"the re-attempt re-runs the caller's update
+    /// FUNCTION against whatever the fresh activation serves — pre-merge state, so the patch is
+    /// recomputed and lands; or, if the commit did survive, an identical value, so the re-diff is
+    /// an empty no-op"</i>. The premise does not hold, because <b>the mirror is not the fresh
+    /// activation</b>: on the owner the ECHO PRECEDES THE DURABLE FLUSH
+    /// (<c>DataExtensions</c>: <c>PATCH_MERGE_STAMPED → PATCH_ECHO_SEEN →
+    /// IPostCommitFlush.Flush</c>), and <see cref="MeshNodeErrorCode.OwnerDisposing"/> is
+    /// precisely the code <c>ClassifyPatchException</c> now answers for a teardown fault raised on
+    /// that flush leg. So the interleaving that produces the NACK is the one that has ALREADY put
+    /// the write into this hub's mirror while leaving storage untouched.</para>
+    ///
+    /// <para><b>What that cost.</b> The re-attempt reads the mirror, finds its own value already
+    /// there, computes an EMPTY patch, posts nothing, and completes the caller as a SUCCESS
+    /// carrying the marker it never persisted. Every log line on that path is
+    /// <c>LogDebug</c>, so the write is lost in silence — measured as #3477: after
+    /// <c>LATE_NACK_REENQUEUE … code=OwnerDisposing attempt=1</c>, nothing landed and nothing was
+    /// logged for 45 s. It is the same fail-open <see cref="RequireBaseState"/> closed for a base
+    /// read that ends empty ("reporting 'saved' for a write nobody attempted") — reached through
+    /// the one exit that was still deciding from the mirror.</para>
+    ///
+    /// <para><b>The rule.</b> When the owner has just stated the write never applied, a mirror
+    /// base that ALREADY carries that write is self-contradictory: it can only be an echo of state
+    /// the owner does not have. The mirror cannot tell that phantom apart from a merge that
+    /// committed AND flushed (where the empty no-op is correct and the write really is durable) —
+    /// <b>only the owner can</b>. So ask it: one authoritative
+    /// <see cref="MeshNodeStreamExtensions.GetMeshNode"/> read, which is routed to the OWNER (and
+    /// whose paced re-probe stands aside for a still-shutting-down activation), and diff against
+    /// that. Owner has it ⇒ the no-op is real and the caller's success is earned; owner does not
+    /// ⇒ the diff is non-empty and the write lands.</para>
+    ///
+    /// <para><b>What it does not change.</b> A first attempt, a CONFLICT re-attempt, and any
+    /// "never applied" re-attempt whose mirror base yields a REAL diff all take
+    /// <paramref name="mirrorBase"/> untouched — no extra read, no extra bound, no extra failure
+    /// mode. The authoritative read is paid only in the ambiguous case, which is the case that was
+    /// losing the write.</para>
+    ///
+    /// <para><paramref name="baseAlreadyCarriesTheWrite"/> runs the caller's lambda against the
+    /// candidate base and discards the result; the lambda is a pure state transform by contract
+    /// (the re-enqueue machinery already re-runs it once per attempt), so evaluating it a second
+    /// time on the SAME base cannot change what is written.</para>
+    ///
+    /// <para>Static, with both bases as seams, so the rule is asserted deterministically — no hub,
+    /// no cluster, no wall clock.</para>
+    /// </summary>
+    /// <param name="ownerSaidNeverApplied"><c>true</c> only for a re-attempt spawned by
+    /// <see cref="MeshNodeErrorCode.OwnerDisposing"/> / <see cref="MeshNodeErrorCode.OwnerNotReady"/>
+    /// — the codes whose contract is that the patch reached no merge the owner kept.</param>
+    /// <param name="mirrorBase">The composed mirror read every other write uses.</param>
+    /// <param name="authoritativeBase">A read served by the OWNER, subscribed only when the mirror
+    /// base turns out to be a phantom.</param>
+    /// <param name="baseAlreadyCarriesTheWrite">Whether the caller's lambda is a no-op against the
+    /// candidate base — i.e. whether the base already contains the write the owner just refused.</param>
+    /// <param name="path">The node being written, for the refusal message.</param>
+    /// <param name="onPhantomBase">Called when the mirror base is discarded for the authoritative
+    /// one, so the swap is nameable in a log rather than invisible.</param>
+    internal static IObservable<MeshNode> ReattemptBaseSource(
+        bool ownerSaidNeverApplied,
+        IObservable<MeshNode> mirrorBase,
+        IObservable<MeshNode?> authoritativeBase,
+        Func<MeshNode, bool> baseAlreadyCarriesTheWrite,
+        string path,
+        Action? onPhantomBase = null)
+        => !ownerSaidNeverApplied
+            ? mirrorBase
+            : mirrorBase.SelectMany(node =>
+            {
+                if (!baseAlreadyCarriesTheWrite(node))
+                    return Observable.Return(node);
+                onPhantomBase?.Invoke();
+                // 🚨 TOTALITY, the same rule RequireBaseState applies to the mirror read (#3001),
+                // restated for the read that REPLACES a phantom: "no node" and "ended without
+                // emitting" both settle NOTHING downstream — no OnNext, no OnError, no patch, not
+                // even the outer verdict deadline, because that is armed inside the response wait a
+                // write with no base never reaches. And falling back to the phantom is the one
+                // thing this read exists to refuse. So both raise.
+                return authoritativeBase
+                    .DefaultIfEmpty(null)
+                    .SelectMany(owned => owned is not null
+                        ? Observable.Return(owned)
+                        : Observable.Throw<MeshNode>(new MeshNodeStreamException(new MeshNodeError(
+                            MeshNodeErrorCode.OwnerUnreachable, path,
+                            "Update aborted: the owner NACKed this write as never applied while this "
+                            + "hub's mirror still showed it — the echo of a merge whose durable flush "
+                            + "died with the activation — so the base was re-read from the owner, and "
+                            + "that read produced no state. The write did NOT land; re-issue it."))));
+            });
+
     internal MeshNodeStreamHandle(IWorkspace workspace, string? path = null,
         IMeshNodeStreamCache? cache = null, bool bypassCache = false)
     {
@@ -1599,10 +1694,17 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// remove. Minted once at the caller's entry and passed UNCHANGED into every re-attempt, so one
     /// <c>grep corr=&lt;id&gt;</c> yields the whole chain across attempts.
     /// </param>
+    /// <param name="ownerSaidNeverApplied">
+    /// 🚨 #3477: set by the <see cref="MeshNodeErrorCode.OwnerDisposing"/> /
+    /// <see cref="MeshNodeErrorCode.OwnerNotReady"/> re-enqueues — the codes whose contract is that
+    /// the patch reached no merge the owner kept. It makes this attempt refuse a mirror base that
+    /// already carries the write the owner just refused, and re-read from the OWNER instead. See
+    /// <see cref="ReattemptBaseSource"/> for why the mirror cannot answer that question.
+    /// </param>
     private IObservable<MeshNode> UpdateRemote(
         Func<MeshNode, MeshNode> update, int attempt = 0, long refusedBaseVersion = 0,
         MeshNode? pendingSelfWrite = null, Action<MeshNode?>? onLocalState = null,
-        string? correlationId = null)
+        string? correlationId = null, bool ownerSaidNeverApplied = false)
         => Observable.Create<MeshNode>(observer =>
         {
             // Minted here on the FIRST attempt only; a re-enqueue passes the parent's through.
@@ -1658,20 +1760,47 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // yet, the mirror is behind THIS mirror's own last write — diffing against it ships a
             // base the writer itself superseded, which the owner refuses as a conflict that never
             // happened (#2305 / #2291). See PatchBaseSource.
-            var initialSub = PatchBaseSource(
-                    RebaseSource(
-                        // 🚨 BOUNDED AFTER the null-filter — see BaseStateSource (#2543). The bound
-                        // used to sit upstream of it, where Rx's inter-emission timer was reset by
-                        // every emission the filter then dropped, so it could not fire at all.
-                        BaseStateSource(remoteStream),
-                        refusedBaseVersion,
-                        staleVersion => diagLogger?.LogWarning(
-                            "[UpdateRemote] STALE_MIRROR hub={Hub} target={Path} attempt={Attempt} — the "
-                            + "owner refused this write as stale at version {Version}, but this hub's "
-                            + "mirror did not advance past it within {Bound}; rebuilding the patch "
-                            + "against the state it has. The re-attempt may be refused again",
-                            _workspace.Hub.Address, _path, attempt, staleVersion, ConflictRebaseBound)),
-                    pendingSelfWrite)
+            //
+            // 🚨 …and when the OWNER has just said this write NEVER APPLIED, a mirror that already
+            // carries it is a PHANTOM — the echo of a merge that died before its durable flush.
+            // Diffing against it produces an empty patch, posts nothing, and completes the caller
+            // as a success for a write that is nowhere: #3477. Only the owner can tell that apart
+            // from a merge that did survive, so that one case re-reads from the owner. See
+            // ReattemptBaseSource.
+            var initialSub = ReattemptBaseSource(
+                    ownerSaidNeverApplied,
+                    PatchBaseSource(
+                        RebaseSource(
+                            // 🚨 BOUNDED AFTER the null-filter — see BaseStateSource (#2543). The bound
+                            // used to sit upstream of it, where Rx's inter-emission timer was reset by
+                            // every emission the filter then dropped, so it could not fire at all.
+                            BaseStateSource(remoteStream),
+                            refusedBaseVersion,
+                            staleVersion => diagLogger?.LogWarning(
+                                "[UpdateRemote] STALE_MIRROR hub={Hub} target={Path} attempt={Attempt} — the "
+                                + "owner refused this write as stale at version {Version}, but this hub's "
+                                + "mirror did not advance past it within {Bound}; rebuilding the patch "
+                                + "against the state it has. The re-attempt may be refused again",
+                                _workspace.Hub.Address, _path, attempt, staleVersion, ConflictRebaseBound)),
+                        pendingSelfWrite),
+                    // Deferred: composed on every "never applied" re-attempt, subscribed only on the
+                    // one that finds a phantom. Routed to the OWNER, whose paced re-probe stands
+                    // aside for a still-shutting-down activation, so what answers is the fresh one.
+                    Observable.Defer(() => MeshNodeStreamExtensions
+                        .GetMeshNode(_workspace.Hub, _path!)),
+                    baseAlreadyCarriesTheWrite: node =>
+                    {
+                        var candidate = update(node);
+                        return ReferenceEquals(candidate, node) || Equals(candidate, node);
+                    },
+                    path: _path!,
+                    onPhantomBase: () => diagLogger?.LogWarning(
+                        "[UpdateRemote] PHANTOM_BASE hub={Hub} target={Path} attempt={Attempt} corr={Corr} — "
+                        + "the owner NACKed this write as NEVER APPLIED, yet this hub's mirror already "
+                        + "carries it: the echo of a merge whose durable flush died with the activation. "
+                        + "Diffing against it would post nothing and report success for a write that is "
+                        + "nowhere (#3477). Re-reading the base from the owner instead",
+                        _workspace.Hub.Address, _path, attempt, corr))
                 // Says which base this write actually built on — the one question worth asking when a
                 // cross-hub write's field comes back refused. SELF_REBASE means the mirror had not
                 // caught up and we diffed against our own predecessor's result instead.
@@ -2025,6 +2154,17 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     // the outcome the caller asked for. Only Conflict needs the
                                     // version, because only Conflict is the owner saying it is
                                     // provably PAST the base we diffed against.
+                                    //
+                                    // 🚨🚨 …and "whatever the fresh activation serves" was NOT what
+                                    // this re-attempt read — it read THIS HUB'S MIRROR, which the
+                                    // dying activation had already echoed the merge into before its
+                                    // durable flush faulted. The re-diff then came out EMPTY and the
+                                    // caller was completed as a SUCCESS for a write that never
+                                    // reached storage, in silence: #3477. `ownerSaidNeverApplied`
+                                    // below is what makes the sentence above true — a phantom mirror
+                                    // base is discarded for an authoritative owner read, which is the
+                                    // only party that can tell a surviving commit from a lost one.
+                                    // See ReattemptBaseSource.
                                     var lateRebaseFrom = lateErr.Code == MeshNodeErrorCode.Conflict
                                         ? current.Version
                                         : 0;
@@ -2054,7 +2194,15 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                     onLocalState: onLocalState is null
                                                         ? null
                                                         : _ => onLocalState(null),
-                                                    correlationId: corr)
+                                                    correlationId: corr,
+                                                    // 🚨 #3477: OwnerDisposing / OwnerNotReady mean
+                                                    // "no merge the owner kept", so a mirror base
+                                                    // that already carries this write is a phantom
+                                                    // and must not be diffed against. Conflict is
+                                                    // the opposite claim and keeps the mirror.
+                                                    ownerSaidNeverApplied: lateErr.Code
+                                                        is MeshNodeErrorCode.OwnerDisposing
+                                                        or MeshNodeErrorCode.OwnerNotReady)
                                                 .Do(_ => { }, ex2 => diagLogger?.LogWarning(ex2,
                                                     "[UpdateRemote] LATE_NACK_REENQUEUE failed hub={Hub} target={Path} attempt={Attempt} corr={Corr}",
                                                     _workspace.Hub.Address, _path, attempt + 1, corr)),
@@ -2211,7 +2359,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                 // a patch whose merge DID land in the dying
                                                 // activation. Passing 0 is still right there — see
                                                 // the same 🚨 on the LATE arm above for why the
-                                                // conclusion survives the changed premise.
+                                                // conclusion survives the changed premise — but the
+                                                // BASE that 0 selects is not: the mirror may already
+                                                // carry that un-flushed merge, and diffing against it
+                                                // posts nothing (#3477). `ownerSaidNeverApplied`
+                                                // below is the guard; see ReattemptBaseSource.
                                                 var rebaseFrom = err.Code == MeshNodeErrorCode.Conflict
                                                     ? current.Version
                                                     : 0;
@@ -2238,7 +2390,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                             onLocalState: onLocalState is null
                                                                 ? null
                                                                 : _ => onLocalState(null),
-                                                            correlationId: corr),
+                                                            correlationId: corr,
+                                                            // 🚨 #3477 — same rule as the LATE arm.
+                                                            ownerSaidNeverApplied: err.Code
+                                                                is MeshNodeErrorCode.OwnerDisposing
+                                                                or MeshNodeErrorCode.OwnerNotReady),
                                                         attachToCaller: true);
                                                 }
                                                 return;

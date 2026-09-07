@@ -12,7 +12,9 @@ today, and ends with what is **not** closed. This page is that remainder: the la
 what each reader must do, and the order the migration has to land in.
 
 It is a design plus a landed first phase, not a finished migration. Every section says which phase
-it belongs to, and ["Where this stands"](#where-this-stands) says exactly what is live.
+it belongs to, and ["Where this stands"](#where-this-stands) says exactly what is live. The order the
+phases have to land in is a property of **who publishes and what they pin**, which is measured
+below rather than assumed.
 
 ## The defect this removes
 
@@ -89,7 +91,8 @@ So the trade is: **~90 seconds in which a mix can be sealed** becomes **the dura
 file write in which a reader may be told to come back**. The failure *mode* changes, not only its
 size — from "a sealed mix nobody can detect" to "read it again". Where the backend offers an atomic
 rename (Azure Files' `Rename File`, present in the REST API since 2021-04-10 though not exposed by
-every `az storage file` build), phase 3 should publish the pointer that way and remove even that.
+every `az storage file` build), the writer phase should publish the pointer that way and remove even
+that.
 
 ## The reader contract
 
@@ -133,75 +136,132 @@ have resolved the previous generation seconds ago.
   generation a reader still holds re-creates a torn read — which is the state this layout exists to
   make impossible.
 
+## Who actually publishes — measured, 2026-09-07
+
+The migration order is decided by this table, so it is a measurement rather than a recollection.
+Every row was read off the producing repository's own `ci.yml` (or `main-cd.yml`) on 2026-09-07.
+
+| producer | prefix (`bake-source`) | which `publish-bake-bundles.sh` it runs (`platform-ref`) | behind core `main` |
+|---|---|---|---|
+| core CD `plugins-bake` (`main-cd.yml`) | `plugins` | **this run's own core commit** (`needs.gate.outputs.sha`) | 0 — it IS the tip |
+| MeshWeaver.Plugins `ci.yml` | `plugins` | `aa40758329216d57dcefc2d8e8a52101efd5f225` | 231 commits |
+| MeshWeaver.Reinsurance | `reinsurance` | `1b5350d547473a5e2ca81e793e774cc962acfeb3` | 284 commits |
+| MeshWeaver.SocialMedia | `socialmedia` | `1b5350d5…` | 284 commits |
+| MeshWeaver.Manufacturing | `manufacturing` | `1b5350d5…` | 284 commits |
+| MeshWeaver.Education | — | — (it calls no `node-repo-publish-bake`) | — |
+
+Three things follow, and each of them changes the plan:
+
+1. 🚨 **`plugins` is the ONLY prefix with two producers.** Every other prefix has exactly one, and
+   Education publishes no bake at all. The coordination this migration needs is therefore **one
+   pair** — core CD and MeshWeaver.Plugins — not five repositories. Everything else flips on its own
+   schedule, one repository at a time, with nobody to coordinate with.
+2. 🚨 **Core CD has no pin to move.** It checks the platform out at its own gate sha, so the day the
+   writer merges, core CD runs it. If the writer were unconditional, the `plugins` prefix would
+   become a new-writer/old-writer pair that same day, against a MeshWeaver.Plugins 231 commits
+   behind — exactly the half-migration this page exists to prevent. **That is what makes the
+   selector below mandatory rather than tidy.**
+3. **Nothing is near the tip.** The nearest producing pin is 231 commits back and none of the four
+   carries phase 1. A plan that assumes a pin will "have moved by then" is assuming something that
+   has not happened in a month.
+
+### 🚨 The correction: "past phase 1" is not a satisfiable precondition
+
+This page used to say phase 2 was *"every producing repo's publish-bake pin moves past phase 1"*.
+Measured against what phase 1 actually changed (`a4109d422`), that instruction is a **no-op**: it
+touched `src/` — the portal image's readers — plus documentation and one comment block in the
+publish script. It changed nothing a pinned lane executes. A producer whose `platform-ref` moves past
+it runs byte-identical behaviour, so the condition can be satisfied by the whole fleet without
+bringing the migration one step closer.
+
+What a producer must be past is **the writer commit itself** — and a writer that is on by default
+cannot be got past, because it takes effect the moment a pin reaches it. Hence the selector, and
+hence the order below.
+
 ## The migration, in order
 
-The order is forced by **who reads what, and who pins whom**.
+### Phase 1 — readers tolerate the pointer *(landed, `a4109d422`)*
 
-The critical fact is that the HTTP consumers do **not** read the layout at all — the registry
-resolves it for them. So a satellite's pinned copy of `compose-sealed-modules.sh` or
-`node-repo-gate.yml`, however old, needs no change as long as it goes through `--registry-url`.
-Only the Azure-**direct** path reads the share itself.
-
-| reader | reaches the layout | pinned by |
-|---|---|---|
-| `ShippedPrebuiltBundles.SeedPublishedRoot` (portal boot) | directly, on the mounted share | the portal IMAGE — rolls continuously, pins nothing |
-| `PublishedBundleCatalogue` + the registry's prebuilt routes | directly, server-side | the portal IMAGE |
-| `compose-sealed-modules.sh`, `node-repo-gate.yml` (registry path), `memex build plugin` | over HTTP — **the server resolves** | nothing to change |
-| `bake-scope.sh`, `carry-forward-bundles.sh`, the gate's `--storage-target` fallback | directly, `az storage file` | each caller's `platform-ref` — **the same pin as the writer** |
-
-🚨 **The Azure-direct readers and the writer travel together.** `node-repo-publish-bake.yml` fetches
-`bake-scope.sh`, `carry-forward-bundles.sh` and `publish-bake-bundles.sh` from the platform at ONE
-`platform-ref`, so a satellite gets all three or none. They therefore do **not** need to land ahead
-of the writer — they land *with* it, in one commit, and no pin can carry half of it.
-
-That leaves exactly one thing that must land first, and it is the one with the longest lead: the
-**portal image**.
-
-### Phase 1 — readers tolerate the pointer *(landed)*
-
-`PublicationDirectoryOf` plus every read routed through it: the boot seeder, `PublishedBundleCatalogue`,
-`ServedModuleBytes`, and the registry's four prebuilt routes. Behaviour on a share with no pointer
-is unchanged, byte for byte.
+`PublicationDirectoryOf` plus every read routed through it: the boot seeder,
+`PublishedBundleCatalogue`, `ServedModuleBytes`, and the registry's four prebuilt routes. Behaviour
+on a share with no pointer is unchanged, byte for byte.
 
 Nothing writes a pointer yet, so this changes nothing observable — which is why it ships with a
 suite that *builds the generation layout by hand* and asserts the readers serve it, including the
 arm that catches the compose-under-the-source-directory mistake.
 
-### Phase 2 — every producing repo's publish-bake pin moves past phase 1
+### Phase 2 — the writer LEARNS the layout, selected per caller, defaulting to flat *(open — the next PR)*
 
-The producers are core CD's own `plugins-bake` and each satellite's `publish-bake`. Phase 3 cannot
-start while any of them still runs the flat writer, and the reason is specific:
+`publish-bake-bundles.sh` gains generation publishing behind an explicit selector: a
+`publication-layout` input on `node-repo-publish-bake.yml`, carried into the script as an environment
+variable, valued `flat` (the default) or `generation`. `bake-scope.sh` and `carry-forward-bundles.sh`
+resolve the pointer in the SAME commit, because `node-repo-publish-bake.yml` fetches all three at one
+`platform-ref` and no pin can carry half of them.
 
-🚨 **A new writer and an old writer on one prefix is the one genuinely broken intermediate state.**
-The new one writes a generation and moves the pointer; the old one replaces the flat copy in place
-and never touches `_current`. A pointer-following reader then keeps serving the generation and never
-sees the old writer's newer publication at all — a *stale* serve, silent, and worse than the mix,
-because nothing anywhere is red. **This is the half-migration to avoid**, and the guard against it is
-ordering, not code.
+At `flat` the script must behave **byte-identically to today**, and that is provable rather than
+asserted: `test-publish-bake-overlap.py` runs the real script, and its three control cases (a settled
+publish, a republish of new content, an already-published skip) are the regression suite for the flat
+path. The new mode earns its own cases — two interleaved publishers each seal their OWN directory,
+neither directory holds a byte of the other, and `_current` names exactly one of them.
 
-### Phase 3 — the writer publishes a generation and swaps the pointer
+At `generation` the writer uploads into `<source>/<publication token>/`, verifies there (the #3496
+postcondition still applies, now over a directory nobody else writes), seals it, **also writes the
+flat copy** so a portal image that predates phase 1 keeps working, and moves `_current` last.
 
-`publish-bake-bundles.sh` uploads into `<source>/<publication token>/`, verifies (the #3496
-postcondition still applies, now over a directory nobody else writes), seals, and moves `_current`
-last. It **also** writes the flat copy for one release, so a portal image that predates phase 1 —
-one that is deployed but has not rolled — keeps working. `bake-scope.sh` and
-`carry-forward-bundles.sh` resolve the pointer in the same commit, and the carry-forward must read
-the generation the *listing* came from, which is the shell analogue of the reader's `If-Match`.
+Every read that decides *what is already published* — the architecture marker, the sentinel, the
+source-commit marker, the module index — resolves the pointer first and reads inside the resolved
+directory, or the writer and the readers disagree about which publication is live. The resolution
+rules are the reader's, unchanged: an absent, blank, unreadable, escaping or dangling pointer means
+the source directory. `carry-forward-bundles.sh` must read the generation the *listing* came from,
+which is the shell analogue of the reader's `If-Match`.
 
-### Phase 4 — drop the flat copy
+🚨 **Any new marker file is LISTED and UPLOADED before `architecture.txt`.** That file is the LAST
+upload before the postcondition, and the overlap harness hooks its second publisher onto it — a
+marker written after it silently stops the harness detecting overlaps while every case still reads
+green. (`repository.txt` was added under this rule and says so in place.)
+
+### Phase 3 — every producer's pin reaches phase 2 *(open)*
+
+Only now is the condition both satisfiable and meaningful: a producer past phase 2 *can* write
+generations and is still writing flat. Core CD needs no pin move. The four satellites move theirs the
+way they always do.
+
+### Phase 4 — flip, one prefix at a time *(open)*
+
+Set `publication-layout: generation` on every producer of one prefix, **in one change set where a
+prefix has more than one producer**. That is `plugins` and nothing else: core CD's `plugins-bake` and
+MeshWeaver.Plugins' `publish-bake`, flipped together, platform half first. The single-producer
+prefixes each flip in their own repository's PR.
+
+🚨 **The residual window is a pin bump inside one lane.** Even a single-producer prefix has a moment
+where a run started before the flip is still in flight while a run after it writes a generation. The
+loser leaves the pointer naming a stale generation until that lane publishes again — which happens on
+its next merge, so it is self-healing and bounded by one publication rather than permanent. Worth
+knowing before reading such a serve as a defect.
+
+### Phase 5 — drop the flat copy *(open)*
 
 Once no deployed portal predates phase 1. From here the mix is unrepresentable and the republish
 window is gone; what remains is the sub-second pointer write described above, and an atomic rename
 removes even that.
 
+🚨 **Until then the flat copy is still replaced IN PLACE, so it still races.** Phase 4 removes the
+window for readers that follow the pointer; the compatibility copy the writer keeps making for
+pre-phase-1 images is unsealed, rewritten and re-sealed exactly as today, and can still be sealed as
+a mix. The #3496 postcondition is what covers it, and it covers it only as a postcondition. A report
+that says "the window is closed" at phase 4 is describing the pointer-following readers only.
+
 ## Where this stands
 
-- **Phase 1 is landed** — the readers resolve the pointer, and the fallback is the previous
-  behaviour exactly.
-- **Phases 2–4 are open**, tracked on
-  [#3461](https://github.com/Systemorph/MeshWeaver/issues/3461). Until phase 3 ships, **the window
+- **Phase 1 is landed** (`a4109d422`) — the readers resolve the pointer, and the fallback is the
+  previous behaviour exactly.
+- **Phases 2–5 are open**, tracked on
+  [#3461](https://github.com/Systemorph/MeshWeaver/issues/3461). Until the writer flips, **the window
   is shrunk, not closed**: the publisher's postcondition still carries the whole load, and the
   interval between its last verification read and the seal is still live.
+- **The next change is phase 2, and it is one PR in this repository** — the selector, the writer
+  behind it, the two Azure-direct readers, and the harness cases. It changes nothing anywhere until a
+  caller opts in, which is the property that lets it land at all.
 - The reds the postcondition produces are the correct number and must not be loosened away — see
   [Sealed Publication Reads](../SealedPublicationReads) → "What is NOT closed".
 
