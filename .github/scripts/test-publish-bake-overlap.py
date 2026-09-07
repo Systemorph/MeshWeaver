@@ -97,8 +97,8 @@ SHOW_QUERY = "[[metadata.digest || '-', metadata.publication || '-']]"
 
 BUNDLES = ["Chess.zip", "Edu.zip", "Store.zip"]
 MODULES = ["MeshWeaver.AI.module.nupkg", "MeshWeaver.Maps.module.nupkg"]
-# bundles + modules + modules/_index + source-commit.txt + architecture.txt
-EXPECTED_FILES = len(BUNDLES) + len(MODULES) + 3
+# bundles + modules + modules/_index + source-commit.txt + architecture.txt + repository.txt
+EXPECTED_FILES = len(BUNDLES) + len(MODULES) + 4
 
 
 # ────────────────────────────── the stub `az` ──────────────────────────────
@@ -666,7 +666,7 @@ def main() -> int:
 
     print(f"publish-bake overlap harness — executing {args.script}")
     print(f"  identity {IDENTITY}, source '{SOURCE}', {EXPECTED_FILES} file(s) per publication "
-          f"({len(BUNDLES)} bundle(s), {len(MODULES)} module(s), 3 marker/index file(s))")
+          f"({len(BUNDLES)} bundle(s), {len(MODULES)} module(s), 4 marker/index file(s))")
     with tempfile.TemporaryDirectory(prefix="publish-bake-overlap-") as tmp:
         run_cases(args.script, Path(tmp), args.expect_defect)
 

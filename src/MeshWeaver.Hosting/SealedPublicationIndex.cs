@@ -33,8 +33,11 @@ public sealed record SealedSource(
 /// sealed directory always carries them. The repository marker is newer than the commit marker;
 /// a seal without it is attributed by commit instead (see <c>SealedSyncGate</c>).</para>
 ///
-/// <para>Pure over the file system and never throws: an unreadable root reads as "nothing sealed",
-/// which callers treat as "no evidence" — never as permission.</para>
+/// <para>Pure over the file system and never throws: an unreadable or absent root reads as
+/// "nothing sealed for this identity". That is a statement about THIS reading, not a verdict —
+/// the gate that consumes it (<c>SealedSyncGate</c>) treats "no seal attributable to the
+/// repository" as "this gate does not apply" and keeps today's behaviour; only a seal that IS
+/// attributable and is at another commit, or torn, holds a source.</para>
 /// </summary>
 public static class SealedPublicationIndex
 {
