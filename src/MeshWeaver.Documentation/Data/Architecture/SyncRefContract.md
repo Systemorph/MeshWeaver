@@ -76,6 +76,15 @@ Two consumers read the same fact — "repo X built green at sha Y". The package 
 at Y. The GitSync path recorded Y, filtered on Y, and then fetched the branch. Making them agree is
 the fix; there was never a reason for them to differ.
 
+### Why a sha is fetchable at all
+
+The contract only works because the transport can serve one. `GitProtocolRepoClient.Fetch` runs
+`init` + `fetch --depth 1 origin <commitish>` + `checkout FETCH_HEAD`, and git's `upload-pack`
+**serves refs and FULL SHAs**. A `workflow_run` payload's `head_sha` is a full 40-hex sha, so it goes
+over the wire like a branch name would. The one commitish the protocol cannot serve is an
+ABBREVIATED sha, and that case already has a REST fallback in the same method. Nothing new was needed
+here — the "re-import at a chosen commit" flow has always taken this path.
+
 ## No fallback — the third state is a refusal, not a default
 
 `UpdateToProvenCommitFromGitHub` **throws** when it is handed an empty commit. That is deliberate and
