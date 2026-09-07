@@ -277,6 +277,22 @@ Operational facts about the in-pod updater (learned the hard way — each cost a
   pod's mount populates the synced k8s Secret, but that pod's `envFrom` snapshot predates it; the
   second restart reads the populated Secret. Verify with `printenv <key> | md5sum` in the NEWEST
   pod (sort by `creationTimestamp`).
+- **🚨 A workload that READS a synced Secret must MOUNT the class that feeds it.** The driver
+  fetches and rotates *for the pods that mount the SecretProviderClass volume*. A pod that only
+  lists the synced Secret in `envFrom` is a **free rider**: it reads whatever some other pod's
+  mount last wrote, and `envFrom` is resolved once, at container start. The migration Job was
+  exactly that until #3548 — it mounted nothing and starts the instant `helm upgrade` applies, i.e.
+  before the portal pods that own the rotation have rolled. So on the `memex` release of
+  2026-09-07, the deploy that repointed `Embedding__ApiKey` from the Azure object to the OpenRouter
+  one ran the embedding backfill with the PREVIOUS key: **1,260 × HTTP 401,
+  `1274 upserted (0 embedded)`, and `Database migration completed`** — a green Job that
+  authenticated with a stale credential and embedded nothing, while a portal pod started minutes
+  later held the same key name and got 200s. The cure is structural, not a retry: a CSI mount is
+  set up before ANY container in the pod starts and fetches from the vault at that moment, so a
+  mounting pod's `envFrom` resolves against a freshly written Secret by construction. The chart now
+  renders the volume + volumeMount for the Job from the same `memex.keyVaultClasses` block that
+  renders its `envFrom`, and `KeyVaultCsiFreshnessGuard` fails any pod-bearing template that reads
+  a class without mounting it.
 - **🚨 Namespace ↔ instance mapping**: this cluster hosts several instances whose Deployments all
   share names (`memex-portal-deployment`): namespace `memex` = the systemorph.com company portal,
   `memex-cloud` = **memex.meshweaver.cloud** (SPC `<database>-portal-ai-secrets`, KeyVault

@@ -67,10 +67,64 @@ spec:
                    pod has started yet, and a missing non-optional secretRef would keep the Job
                    from starting at all. Skipping is safe there and only there: a first install has
                    no pre-existing rows to backfill, and the run still says so out loud via
-                   `[EmbeddingBackfill] … skipped` plus EmbeddingCapabilityReporter. */}}
+                   `[EmbeddingBackfill] … skipped` plus EmbeddingCapabilityReporter.
+
+                   🚨 The envFrom alone gives the Job a value, not a CURRENT value — which is why
+                   the volumeMounts below are not optional decoration. See their comment. */}}
             {{- range $class := (include "memex.keyVaultClasses" . | fromYamlArray) }}
             - secretRef:
                 name: "{{ $class.syncedSecret }}"
                 optional: true
             {{- end }}
           imagePullPolicy: "IfNotPresent"
+          {{- /* 🚨 THE JOB MOUNTS THE SPC ITSELF — this is what makes the values above CURRENT
+                 (MeshWeaver#3548).
+
+                 The synced Secret the envFrom reads is materialised and rotated by the CSI driver
+                 FOR THE PODS THAT MOUNT THE SecretProviderClass VOLUME. Until this block existed
+                 that was the portal pods and nobody else: the Job mounted nothing, started the
+                 instant `helm upgrade` applied, and `envFrom` is resolved once at container start.
+                 So on any deploy that CHANGES an SPC mapping, the Job read the value from BEFORE
+                 the change — and the backfill logs-and-skips per row rather than failing.
+
+                 Measured on the `memex` release 2026-09-07, job memex-migration-33, the deploy that
+                 repointed `Embedding__ApiKey` from the Azure object to the OpenRouter one:
+                     [DocBackfill] 1274 documentation pages found (embeddings ON)
+                     EmbeddingRequestException: … HTTP 401 (Unauthorized) — the bearer was
+                       rejected …                                              × 1260
+                     [DocBackfill] done: 1274 upserted (0 embedded), 0 unchanged, 1274 total
+                     Database migration completed.
+                 1,260 refusals and a GREEN Job. A portal pod that started minutes later held the
+                 SAME key name and got 200s, so the vault was right and the Job's copy was stale.
+
+                 A CSI mount is set up before ANY container in the pod starts, and NodePublishVolume
+                 fetches the objects from the vault at that moment — so the driver refreshes the
+                 synced Secret before the kubelet resolves this container's envFrom. The Job then
+                 gets the current objects BY CONSTRUCTION, independent of the portal pods' rotation
+                 poll. That is the whole point: not a retry, not a second `helm upgrade`, an
+                 ordering that cannot be lost.
+
+                 Same volumeName/mountPath as the portal, from the one `memex.keyVaultClasses`
+                 block, so the class, the volume, the mount and the envFrom can never disagree on a
+                 name. Rendered only when a class is declared — a namespace with no Key Vault gets
+                 the pod spec it had before. */}}
+          {{- $keyVaultClasses := (include "memex.keyVaultClasses" . | fromYamlArray) }}
+          {{- if $keyVaultClasses }}
+          volumeMounts:
+            {{- range $class := $keyVaultClasses }}
+            - name: "{{ $class.volumeName }}"
+              mountPath: "{{ $class.mountPath }}"
+              readOnly: true
+            {{- end }}
+          {{- end }}
+      {{- if $keyVaultClasses }}
+      volumes:
+        {{- range $class := $keyVaultClasses }}
+        - name: "{{ $class.volumeName }}"
+          csi:
+            driver: "secrets-store.csi.k8s.io"
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: "{{ $class.name }}"
+        {{- end }}
+      {{- end }}
