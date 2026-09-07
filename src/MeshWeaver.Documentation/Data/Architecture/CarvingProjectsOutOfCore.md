@@ -43,13 +43,20 @@ until the build supports Y" has been said about projects the build was never goi
 
 ### What a source move costs, exactly once
 
-**Its NuGet package stops being published.** Core's release lane runs `dotnet pack` solution-wide
-with no `IsPackable=false`, so every `src/` project ships to nuget.org on a version tag; the plugins
-repo is private and delivers bundles, not packages. This is visible in the published versions: every
-wave-1 project — `MeshWeaver.Hosting.PostgreSql`, `.Hosting.Grpc`, `.InstanceSync`,
-`.Speech.Contract`, `.Social` — is frozen at **3.0.0-rc7**, the release in which it moved, while
-everything still in core is at **rc9**. That is the accepted, deliberate consequence of a move, not
-an accident to be repaired.
+🚨 **Nothing, since NuGet publication was retired.** It used to cost the project its package: core's
+release lane ran `dotnet pack` solution-wide with no `IsPackable=false`, so every `src/` project
+shipped to nuget.org on a version tag, while the private plugins repo delivered bundles and no
+packages. That is still visible in the published versions — every wave-1 project
+(`MeshWeaver.Hosting.PostgreSql`, `.Hosting.Grpc`, `.InstanceSync`, `.Speech.Contract`, `.Social`) is
+frozen at `3.0.0-rc7`, the release in which it moved, while everything still in core stopped at
+`rc9`.
+
+Both the lane and the rc line it ran on are gone
+([Release Process & Versioning §5](/Doc/Architecture/ReleaseProcess)): nothing in the fleet restores a
+MeshWeaver package, in-mesh source compiles against the platform *image*, module bundles carry their
+own closures, and satellites build inside `mw-plugin-test`. The packages on nuget.org stay listed as
+history. So do not price a source move against a delivery channel that no longer exists — the
+version numbers above are an artefact of when each project left, not a cost anyone still pays.
 
 ## What the container build lane did and did not unblock
 

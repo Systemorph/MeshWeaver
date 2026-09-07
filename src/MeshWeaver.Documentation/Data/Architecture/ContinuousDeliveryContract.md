@@ -601,12 +601,15 @@ this contract closes:
 2. the `promote` job — identity tags in phase A, pointers in phase B (never after phase C);
 3. `check-image-set.sh` — otherwise nothing ever asserts it shipped.
 
-One known, deliberate wart: `memex-portal-next` hand-writes `3.0.0-ci.<n>` while every .NET leg
-computes `3.0.0-rc1.ci.<n>`, so its version tag has never matched its siblings'. Nothing selects it
-(the self-updater reads `memex-portal-ai` only; deployments pin portal-next explicitly), and changing
-a published tag shape would break whatever is pinned today. It is documented at the line that
-produces it rather than silently "fixed". This is also why `check-image-set.sh` identifies the set by
-**short SHA** and not by version tag: the SHA is the one identity all four images share.
+`check-image-set.sh` identifies the set by **short SHA** and not by version tag, because the SHA is
+the one identity all four images share: the version tag is per-RUN.
+
+> This paragraph used to record a "known, deliberate wart" — `memex-portal-next` hand-writing
+> `3.0.0-ci.<n>` while every .NET leg computed `3.0.0-rc1.ci.<n>`. **Both halves of it are gone.**
+> The rc line is retired, so every leg mints the one continuous shape
+> ([Release Process & Versioning §1](/Doc/Architecture/ReleaseProcess)), and portal-next is no longer
+> built by this lane at all. Kept as a note only so a reader who remembers the wart knows it was
+> resolved rather than overlooked.
 
 ## After the promote — the bake publication and the dependent-repo dispatch
 

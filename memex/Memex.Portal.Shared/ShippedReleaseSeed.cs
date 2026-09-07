@@ -76,7 +76,7 @@ public static class ShippedReleaseSeed
     public const string PlatformVersionNodePath = $"{AdminPartition}/{PlatformVersionId}";
 
     /// <summary>
-    /// The installed platform version. The FULL run-numbered version (<c>3.0.0-rc3.ci.N</c>) is no
+    /// The installed platform version. The FULL run-numbered version (<c>3.0.0-ci.N</c>) is no
     /// longer compiled into any assembly — CI builds are commit-deterministic so the bake identity
     /// holds across CI jobs (#1660 WS3) — so this reads the
     /// <see cref="MeshWeaver.Mesh.PlatformBuildInfo.PlatformVersionEnvironmentVariable"/> the

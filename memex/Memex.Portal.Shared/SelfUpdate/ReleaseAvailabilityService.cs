@@ -471,8 +471,9 @@ public class ReleaseAvailabilityService(
     /// A module's floor, but only when the RUNNING platform already satisfies it — otherwise null.
     ///
     /// <para>🚨 The same regression rule the content half uses, for the same reason. SemVer puts
-    /// <c>3.0.0-rc4.ci.4049</c> BELOW <c>3.0.0</c>, so a module declaring <c>minMeshVersion:
-    /// 3.0.0</c> is below floor on every <c>-rc</c> platform — including the one prod runs. Judged
+    /// any pre-release BELOW its own release — <c>3.0.0-ci.7977</c> is below <c>3.0.0</c> — so a
+    /// module declaring <c>minMeshVersion: 3.0.0</c> is below floor on every continuous build,
+    /// which is what every portal in the fleet runs (#3554). Judged
     /// absolutely it would hold that environment on every release forever; judged as a regression
     /// it holds only a roll that would newly break a module that works today. Since self-update
     /// rolls strictly forward (<c>VersionSelect.IsNewer</c> has already passed), a floor met today

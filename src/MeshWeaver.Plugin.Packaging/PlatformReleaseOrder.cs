@@ -46,8 +46,8 @@ public static class PlatformReleaseOrder
     /// <summary>
     /// The pre-release identifiers that mark a delivery CHANNEL and are FOLLOWED by the publishing
     /// run number: <c>3.0.0-ci.7977</c>, the retired <c>3.0.0-rc9.ci.7824</c>, and the unverified
-    /// <c>3.0.0-edge.7977</c> (<c>edge-images.yml</c> rewrites <c>.ci.</c> to <c>.edge.</c> and keeps
-    /// the same number).
+    /// <c>3.0.0-edge.7977</c> (<c>edge-images.yml</c> rewrites the <c>ci</c> label to <c>edge</c>
+    /// and keeps the same number).
     /// </summary>
     private static readonly string[] ChannelLabels = ["ci", "edge"];
 

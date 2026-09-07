@@ -53,6 +53,12 @@ a reviewer enforce (c)+(d). The checklist is in `.github/pull_request_template.m
 
 ## 2. Versions: current-build vs official
 
+**Two shapes, and no others: `X.Y.Z-ci.<n>` for every continuous build, clean `X.Y.Z` for the
+release.** No `rc`, no `preview`, no `beta`, no labelled line, ever — the scheme, the mint-versus-read
+split and the ordering consequences are stated once, authoritatively, in
+[Release Process & Versioning §1](/Doc/Architecture/ReleaseProcess); this page describes what the two
+channels *do* with them.
+
 The one number is `PlatformVersion` in `Directory.Build.props` — **today `3.0.0`**, the *next*
 release. Every build derives its version from it ([details](/Doc/Architecture/ReleaseProcess)):
 
@@ -73,9 +79,10 @@ release. Every build derives its version from it ([details](/Doc/Architecture/Re
 > continuous build able to reach it. Full reference:
 > [Self-Update Target Selection](/Doc/Architecture/SelfUpdateTargetSelection).
 >
-> **No pre-release label on the core, and no rc line.** The rc labels were retired on 2026-09-05
-> (SemVer compares them as text, so `rc13` sorted below `rc2`). The bump to `3.1.0` still happens the
-> day `3.0.0` is tagged — the lane opens that pull request. See
+> **No pre-release label on the core beyond `-ci.<n>`, and no rc line** — retired 2026-09-05, settled
+> 2026-09-07. `-ci.<n>` is a channel marker, never a version; the release is a promotion of a sealed
+> continuous set, not a rebuild; and nothing else may ever be minted. The bump to `3.1.0` still
+> happens the day `3.0.0` is tagged — the lane opens that pull request. Full rule:
 > [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) §1.
 
 ### Cutting an official release and starting the next line

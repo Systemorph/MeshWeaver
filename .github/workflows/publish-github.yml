@@ -1,11 +1,19 @@
 name: Publish to GitHub Packages
 
+# 🚨 RETIRED BY POLICY, kept only because nothing has decided to delete it: NuGet/package
+# publication stopped with the rc line — in-mesh source compiles against the platform IMAGE, module
+# bundles carry their own closures, and satellites build inside `mw-plugin-test`
+# (Doc/Architecture/ReleaseProcess §5). Nothing in the fleet restores a MeshWeaver package, and
+# `release.yml` publishes none.
+#
+# The `-rc*` / `-preview*` tag globs are GONE because those lines can never be minted again: the
+# version scheme has exactly two shapes, `X.Y.Z-ci.<n>` and clean `X.Y.Z`
+# (Doc/Architecture/ReleaseProcess §1, maintainer 2026-09-07). A trigger for a shape nothing can
+# produce is a lane that reads as live and is not.
 on:
   push:
     tags:
       - 'github-*.*.*'
-      - 'github-*.*.*-preview*'
-      - 'github-*.*.*-rc*'
 
 permissions:
   contents: read

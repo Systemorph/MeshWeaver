@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Release Process & Versioning"
-Abstract: "How MeshWeaver is versioned and released: one central PlatformVersion in Directory.Build.props naming the NEXT release, continuous builds as <version>-ci.<n>, and a release that is a PROMOTION of a sealed continuous set — never a rebuild. No rc line, no NuGet. The same version is the data-sync content-version."
+Abstract: "The authoritative version scheme: exactly two shapes, X.Y.Z-ci.<n> for every continuous build and clean X.Y.Z for the release — no rc, no preview, no labelled line, ever. One central PlatformVersion in Directory.Build.props naming the NEXT release, a release that is a PROMOTION of a sealed continuous set rather than a rebuild, what may be minted versus what must still be read, and the SemVer ordering that #3554 turned into 42 unsatisfiable module floors."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#3949ab'/><path d='M12 4c3 1.5 4.5 4.5 4.5 8l-2 2h-5l-2-2C7.5 8.5 9 5.5 12 4z' fill='white'/><circle cx='12' cy='10' r='1.5' fill='#3949ab'/><path d='M9.5 16l-1.5 3 3-1.5M14.5 16l1.5 3-3-1.5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>"
 Thumbnail: "images/DataMesh.svg"
 Authors:
@@ -20,15 +20,22 @@ One number, two channels, one set of bytes. The whole scheme lives in
 
 ---
 
-## 1. The one number — `PlatformVersion`
+## 1. The version scheme — exactly two shapes
+
+**A MeshWeaver version has exactly TWO shapes. There are no others, and there will be no others.**
+
+| shape | what it is | minted by |
+|---|---|---|
+| **`X.Y.Z-ci.<n>`** | every continuous and temporary build — each green merge to `main`, each local `dotnet build` | `Directory.Build.props`, on every build |
+| **`X.Y.Z`** | the release — no pre-release label at all | `release.yml`, by **retagging** one of the builds above |
+
+> Maintainer, 2026-09-07: *"we will then not introduce the rc line anymore"* · *"let's just use
+> version numbers `-ci` for temp then without `-ci` for final version"* · *"write this in docs"*.
 
 ```xml
-<!-- Directory.Build.props -->
+<!-- Directory.Build.props — the ONE maintained number, naming the NEXT release -->
 <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0</PlatformVersion>
 ```
-
-The single maintained version names the **next release**. Every continuous build derives its
-version from it by appending the CI run number as the one and only pre-release identifier:
 
 | Build | Version | Where it comes from |
 |---|---|---|
@@ -36,47 +43,103 @@ version from it by appending the CI run number as the one and only pre-release i
 | local | `3.0.0-ci.0` | any `dotnet build` on a developer machine |
 | release | `3.0.0` | `release.yml`, on the annotated tag `v3.0.0` — a **promotion** of one of the continuous builds above |
 
-SemVer 2 orders the *strings* like this — which is still what nuget.org and every package consumer
-sees:
+Three rules, not three observations:
+
+- 🚨 **`-ci.<n>` is a CHANNEL MARKER, never a version.** The version is `X.Y.Z`, the line
+  `PlatformVersion` names — always the *next* release. `<n>` says only *which publication of that
+  line* this is: `$(GITHUB_RUN_NUMBER)`, monotonic per workflow, `0` locally. It reaches
+  `$(Version)` — the image tag, the package version and `MESHWEAVER_PLATFORM_VERSION` — and no
+  compiled attribute (§2). Two builds of one line differ only in `<n>`, and `<n>` compares
+  numerically.
+- 🚨 **The release is a PROMOTION of a sealed continuous set, never a rebuild.** `X.Y.Z` names bytes
+  that already shipped as `X.Y.Z-ci.<n>` and passed promote, bake and seal; `release.yml` retags that
+  manifest and compiles nothing (§3). So there is nothing left for a "candidate" label to mark — the
+  candidates *are* the continuous builds, and the one that becomes the release is chosen by tagging
+  it. That is what makes the rc line unnecessary rather than merely unwanted: up to `rc13` a tag
+  REBUILT, which made every "release candidate" a candidate for a set that did not exist yet.
+- 🚨 **No other pre-release label may ever be MINTED** — no `rc`, no `preview`, no `beta`, no
+  labelled line, no `.ci.` separator variant. `PlatformVersion` carries no label, so the composed
+  `$(Version)` is one of the two shapes by construction. Prose is not enforcement:
+  `PlatformVersionSchemeGuard` (`test/MeshWeaver.Documentation.Test`) evaluates both through real
+  MSBuild on every PR and reds when either stops being true.
+
+### Minting is one shape; READING still has to accept the retired ones
+
+Retiring a label stops it being *produced*. It does not remove it from the registry, and those are
+separate obligations:
+
+| | shapes | where |
+|---|---|---|
+| **MINT** | `X.Y.Z-ci.<n>` and `X.Y.Z`, nothing else | `Directory.Build.props` composes `$(Version)`; `release.yml` retags |
+| **READ** | additionally `X.Y.Z-<label>.ci.<n>` — the retired rc line used the `.ci.` separator — and any historical `rc*` tag | `PlatformReleaseOrder.BuildOrdinal`, `VersionSelect`, `edge-images.yml`, and MeshWeaver.Plugins' `check-platform-pins.py` |
+
+🚨 **Do not narrow a reader to match the minter.** Those images are still addressable (manifests
+kept, reachable via `staging-*`), an install can be sitting on one right now, and a reader that stops
+parsing `[.-]ci.<n>` reads such a tag as *carrying no run number* — which promotes it into the
+promotion-ranked half of the order. That is the #3542 freeze, rebuilt by a tidy-up. The minter is
+where the shape is decided; the reader is where history is survived.
+
+### What retiring `rc` fixes in the ORDERING — and the half it does not
+
+SemVer 2 orders the *strings* like this, and that is still what every package consumer sees:
 
 ```
 3.0.0-ci.7900  <  3.0.0-preview1  <  3.0.0-rc9.ci.7818  <  3.0.0-rc13  <  3.0.0  <  3.1.0-ci.1
 ```
 
-🚨 **The self-updater does NOT order candidates that way** (#3542). It ranks them by `<n>` — the
-sealed-publication lineage — and uses the version string only between tags that carry no `<n>` at
-all (the promoted releases). See
-[Self-Update Target Selection](/Doc/Architecture/SelfUpdateTargetSelection) for why, and for the two
-different keys the *ordering* and the *is-this-newer* questions use.
+🚨 §11.4 compares pre-release identifiers as **TEXT**, so `"ci" < "rc"` and `3.0.0-ci.<n>` ranks
+below `3.0.0-rc8` **for every n**. Measured 2026-09-07 (#3554): **42 packages** declared rc-line or
+clean-`3.0.0` floors, every self-update candidate was held on both AKS portals with a message naming
+two versions that look like they are in the right order —
 
-Four consequences, all load-bearing:
+```
+HOLDING 3.0.0-ci.7989 — AI: the module requires platform 3.0.0-rc8 or newer
+                         but this deployment runs 3.0.0-ci.7989
+```
 
-- **`<n>` is the GitHub Actions run number**, monotonic per workflow, so a later build always ranks
-  higher — whatever line it is LABELLED with. 🔴 This is now the self-updater's whole ordering key,
-  so do not replace it with anything that can reset (the old seconds-since-midnight number made a
-  morning build sort below the previous evening's).
+— and the registry held **1268 tags: 48 `3.0.0-ci.*`, ZERO `rc*`, ZERO `3.1.0-*`**. The floor named a
+platform that did not exist and could not be built, silently; it also reddened every open pull
+request in MeshWeaver.Plugins. **Retiring the rc line removes that trap by construction** — with one
+pre-release identifier in the whole scheme there is no label left to sort against — and
+`.github/scripts/check-module-platform-floor.py` now refuses, at build time, any floor the platform
+the bundle is built against cannot satisfy.
+
+🚨 **It removes only that half.** A clean `X.Y.Z` genuinely outranks its own `X.Y.Z-ci.<n>`
+pre-releases. That is SemVer working correctly, it is load-bearing, and it must keep working:
+
+- a **Stable** install running `3.0.0-ci.7977` reaches the clean `3.0.0` *because* the release
+  outranks the pre-release
+  ([Self-Update Target Selection](/Doc/Architecture/SelfUpdateTargetSelection) §2);
+- a **floor** of `3.0.0` must give the OPPOSITE answer for the same two strings — it has to be
+  *satisfied* by `3.0.0-ci.7977`, or a package declaring the current line is un-landable while the
+  whole fleet runs that line (measured: the last column of that page's §4 table).
+
+Same two strings, opposite required answers — so the shareable part is the **key**
+(`PlatformReleaseOrder.BuildOrdinal`), never the predicate. Do not read *"there is no rc line any
+more"* as *"pre-release ordering is no longer a hazard"*.
+
+Two consequences of the same ordering, both load-bearing:
+
 - **A Stable install takes the clean release and nothing before it.** `Stable` selects
   `!IsPrerelease`; the only clean tags are the promoted ones.
-- **The number must move the day a release is tagged.** `3.0.0-ci.7950` sorts *below* `3.0.0`, so
-  a continuous build stamped with an already-released number would stop every Continuous install
-  from rolling forward. `release.yml` opens the pull request that moves the line to `3.1.0` itself;
-  rc6 shipped with the props still reading rc6 and rc10–rc13 were tagged with them on rc9, which is
-  why that bump is no longer a human step.
-- 🚨 **A mislabelled line used to win for ever, and that is what the lineage key removes.** SemVer
-  §11.4 compares pre-release identifiers as text (`ci` < `preview1` < `rc`), so every `3.0.0-rc*`
-  image in the registry outranked every clean-line build — and ten sets published as
-  `3.1.0-ci.7832…7841` during the hours on 2026-09-05 when the props briefly read `3.1.0` outranked
-  everything, full stop. On 2026-09-07 both AKS portals rolled themselves onto `3.1.0-ci.7841`,
-  three days behind, and could not leave: nothing is ever newer than the highest-sorting tag.
-  Ranking by `<n>` makes such a slip lose while its tags are still in the registry, and an install
-  already on one roll forward again on the next check.
+- **The number must move the day a release is tagged.** `3.0.0-ci.7950` sorts *below* `3.0.0`, so a
+  continuous build stamped with an already-released number would stop every Continuous install from
+  rolling forward. `release.yml` opens the pull request that moves the line to `3.1.0` itself; rc6
+  shipped with the props still reading rc6, and rc10–rc13 were tagged with them on rc9, which is why
+  that bump is no longer a human step.
 
-> 🚨 **There is no rc line and there will be none** (maintainer, 2026-09-05). `3.0.0-rc1` …
-> `3.0.0-rc13` were tagged and rebuilt on tagging, which made each "candidate" a candidate of
-> nothing (§4), and SemVer sorted `rc13` below `rc2`, so nuget.org listed `rc9` as the newest
-> pre-release for the whole run. The clean line has neither problem: the build number is the only
-> pre-release identifier, and it compares numerically. The release is cut **only when every open
-> issue is closed** (maintainer, same day); until then main keeps producing `3.0.0-ci.<n>` sets.
+🚨 **The self-updater does not order candidates by the version string at all** (#3542). It ranks by
+`<n>` — the sealed-publication lineage — and uses the version string only between tags that carry no
+`<n>` (the promotions). `<n>` must therefore never be replaced by anything that can reset: the old
+seconds-since-midnight build number made a morning build sort below the previous evening's. See
+[Self-Update Target Selection](/Doc/Architecture/SelfUpdateTargetSelection) for the two different
+keys the *ordering* and the *is-this-newer* questions use.
+
+> 🚨 **There is no rc line and there will be none** (maintainer, 2026-09-05; restated and settled
+> 2026-09-07). `3.0.0-rc1` … `3.0.0-rc13` were tagged and rebuilt on tagging, which made each
+> "candidate" a candidate of nothing (§4), and SemVer sorted `rc13` below `rc2`, so nuget.org listed
+> `rc9` as the newest pre-release for the whole run. The release is cut **only when every open issue
+> is closed** (maintainer, same day); until then main keeps producing `3.0.0-ci.<n>` sets.
 
 It is also the **data-sync content-version**: a continuous build syncs its docs and seed nodes
 from the commit stamped into its assemblies, a release from the tag `v$(PlatformVersion)` that
@@ -112,8 +175,11 @@ the *compiled attributes* is what makes a promotion possible at all:
   boot.
 - **The `-ci.<n>` suffix** uses `$(GITHUB_RUN_NUMBER)` when present, `0` locally. It reaches
   ONLY `$(Version)` — the image tag and `MESHWEAVER_PLATFORM_VERSION` — never a compiled
-  attribute. 🚨 Anything that parses the build number back out of a version must accept both
-  separators, `[.-]ci.<n>`: the retired rc line used `.ci.` and its tags are still in ACR.
+  attribute. The separator is a literal `-`, unconditionally: `PlatformVersion` carries no label
+  (§1), so there is no second case left to branch on. 🚨 Anything that *parses* the build number
+  back out of a version must still accept both separators, `[.-]ci.<n>` — the retired rc line
+  minted `.ci.` and those images are still addressable. Minting one shape and reading two is the
+  split §1 sets out; do not collapse it in either direction.
 - **`InformationalVersion`** is the bare `$(PlatformVersion)` under `CIRun=true` (the SDK appends
   `+<commit-sha>`); locally it equals `$(Version)`. NodeType ABI identity is
   `NodeTypeCompilationHelpers.FrameworkVersion` (`FrameworkBuildIdentity`): hosts that ship a
