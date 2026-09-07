@@ -154,14 +154,6 @@ jobs:
           # opens a pull request nothing runs on.
           permission-contents: write
           permission-pull-requests: write
-          # 🚨 The pin lives in .github/workflows/ci.yml and always will (the `uses: …@<sha>` refs
-          # cannot live anywhere else), and GitHub refuses a push that touches a workflow file from
-          # a token without `workflows`. Measured on Plugins 2026-09-07 (run 34083504064): the lane
-          # resolved the right target and died at the push — "refusing to allow a GitHub App to
-          # create or update workflow .github/workflows/ci.yml without workflows permission" — and
-          # no bot-authored pin PR had ever existed. Asking for it HERE moves the failure to this
-          # step, named, until the App is granted the permission (an org-owner act, Plugins#1464).
-          permission-workflows: write
           # 🚨 THIS LANE'S ENTIRE DIFF IS A WORKFLOW FILE, so `contents: write` alone cannot push it
           # (#3568). `workflow-file` defaults to `.github/workflows/ci.yml` — the pin lives in the
           # workflow's own `env:` — and GitHub refuses an App push that touches

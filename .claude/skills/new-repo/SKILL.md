@@ -702,11 +702,21 @@ file from a token without the **`workflows`** permission:
 
 Measured on Plugins 2026-09-07 (run 34083504064, Plugins#1464): the lane resolved the right target
 and died at the push, no bot-authored pin PR had EVER existed, and the staleness ratchet went red
-at 130/120 commits behind and blocked every publication until a hand bump (#1463). The permission
-is an org-owner act in the App's settings (UI only), after which the core lane's token mint asks
-for `permission-workflows: write` (core #3580). Until it is granted, every pin move in every node
-repo is a hand move — `sed` the OLD value across `ci.yml`, run `scripts/check-platform-pins.py`,
-and read the digests back from ACR by tag.
+at 130/120 commits behind and blocked every publication until a hand bump (#1463). Two halves:
+
+- **the lane** (core #3568/#3573, same morning): the token mint now asks for
+  `permission-workflows: write`, so a missing grant fails at the mint step, named;
+- **the App** — measured straight from GitHub with an App JWT (`GET /app`,
+  `GET /app/installations`): `meshweaver-cloud` (4220566) holds `contents:write, emails:write,
+  metadata:read, pull_requests:write` and **no `workflows` at all**, on the App and on the
+  Systemorph installation. That is an org-owner act in the App's settings (UI only — App
+  permissions are not settable through the API): Permissions → Workflows: Read and write, then
+  approve on the org installation.
+
+Until the grant lands every pin move in every node repo is a hand move — `sed` the OLD value
+across `ci.yml`, run `scripts/check-platform-pins.py`, and read the digests back from ACR by tag.
+To re-measure without printing the PEM: vault `meshweaverkeyvault/github-app-privatekey` →
+`openssl dgst -sha256 -sign` → RS256 JWT → `curl -H "Authorization: Bearer …" /app`.
 
 ## The checklist
 
