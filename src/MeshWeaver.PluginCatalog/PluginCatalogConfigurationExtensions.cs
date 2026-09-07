@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Graph;
@@ -176,7 +177,17 @@ public static class PluginCatalogConfigurationExtensions
                 // can resolve it from hub.ServiceProvider — the Store's install step is the
                 // surface where the missing last step is actually met.
                 .AddSingleton(sp => new PendingModuleActivations(
-                    ModuleRoot.Resolve(sp.GetService<IConfiguration>())))
+                    ModuleRoot.Resolve(sp.GetService<IConfiguration>()))
+                {
+                    // 🚨 #3538 — the modules MeshBuilder.InstallAssemblies refused: its link probe
+                    // declined them, or their registration threw. Without this set they read as
+                    // PENDING, and every surface promises a restart that re-runs the same
+                    // measurement and refuses again.
+                    QuarantinedModules = sp.GetServices<IncompatibleModule>()
+                        .Select(m => m.Name)
+                        .Where(n => !string.IsNullOrWhiteSpace(n))
+                        .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+                })
                 // The COUNT that proves the distribution lane works (#1782 gap 4). Adoption's only
                 // evidence used to be a log line, and the most important miss — "the registry does
                 // not advertise this package for my lane" — had no line at all. With lazy

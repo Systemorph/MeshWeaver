@@ -1,4 +1,5 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+﻿using System.Collections.Immutable;
+using System.IdentityModel.Tokens.Jwt;
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Email;
@@ -78,7 +79,17 @@ public static class MemexConfiguration
         // nothing and cannot differ: the reader is a stateless file reader that starts nothing and
         // writes nothing, and the registration is this same one-liner over the same resolved
         // module root.
-        var report = new PendingModuleActivations(app.Configuration).Read();
+        var report = new PendingModuleActivations(app.Configuration)
+        {
+            // 🚨 #3538 — the modules InstallAssemblies REFUSED (link probe declined, or the
+            // registration threw). GetServices, never GetRequiredService: an absent registration
+            // means "nothing was refused", and a diagnostic that throws is worse than the silence
+            // it replaces — the same rule the construction above follows.
+            QuarantinedModules = app.Services.GetServices<IncompatibleModule>()
+                .Select(m => m.Name)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+        }.Read();
 
         if (report.IsUndetermined)
         {
@@ -95,6 +106,15 @@ public static class MemexConfiguration
                 + "absent (a 404 with no error) until the package is re-installed: {Detail}",
                 report.Unresolvable.Count,
                 ModuleActivationStatus.DescribeUnresolvable(report.Unresolvable));
+
+        if (report.HasQuarantined)
+            logger.LogError(
+                "🚨 {Count} activated module(s) were REFUSED against this platform build and are "
+                + "contributing nothing — their bytes are linked against a platform this "
+                + "deployment is not running, so no restart loads them; the platform update that "
+                + "satisfies them is itself that restart (#3538): {Detail}",
+                report.Quarantined.Count,
+                ModuleActivationReport.DescribeQuarantined(report.Quarantined));
 
         if (report.HasPending)
             logger.LogWarning(

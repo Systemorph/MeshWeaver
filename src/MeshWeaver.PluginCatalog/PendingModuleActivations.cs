@@ -48,6 +48,39 @@ public sealed record ModuleActivationReport(
     /// </summary>
     public ImmutableList<PendingModuleActivation> Deferred { get; init; } = [];
 
+    /// <summary>
+    /// 🚨 The modules this process REFUSED TO LOAD because their bytes are linked against a
+    /// platform it is not running (#3538) — a FOURTH state, and again not folded into
+    /// <see cref="Pending"/> for the same reason as the other two: a restart re-runs the same
+    /// measurement and reaches the same verdict, so "restart required" would be a prompt no
+    /// restart can clear.
+    ///
+    /// <para>The remedy is different again, and it is the only one of the four that is not the
+    /// operator's: this module becomes loadable when the PLATFORM updates, and the platform update
+    /// is itself a restart. Until then the module contributes nothing and says so — which is the
+    /// whole point, because the alternative that shipped was contributing a
+    /// <c>TypeLoadException</c> to every render that touched it.</para>
+    ///
+    /// <para>An init-only property rather than a positional parameter — replacing a public
+    /// record's constructor signature is what <see cref="MissingMethodException"/>-aborts a host
+    /// compiled against the previous platform.</para>
+    /// </summary>
+    public ImmutableList<PendingModuleActivation> Quarantined { get; init; } = [];
+
+    /// <summary>True when the state is KNOWN and a module was refused as unloadable against this
+    /// platform build.</summary>
+    public bool HasQuarantined => !IsUndetermined && !Quarantined.IsEmpty;
+
+    /// <summary>
+    /// Whether the install record at <paramref name="packagePath"/> landed a module this process
+    /// refused to load (#3538) — the per-PACKAGE question a package card asks so it can say
+    /// "built for a newer platform" instead of a bare "installed" or, worse, a "restart required"
+    /// that no restart clears.
+    /// </summary>
+    /// <param name="packagePath">The install record's mesh path. Blank matches nothing.</param>
+    public bool IsQuarantinedForPackage(string? packagePath) =>
+        !IsUndetermined && ModuleActivationStatus.IsPendingForPackage(Quarantined, packagePath);
+
     /// <summary>One line naming which module set the mesh is on and whether a replica has booted
     /// onto it yet (<see cref="ModuleSetStore.Describe"/>), or null on a deployment with no set
     /// records. The mesh-level half of the report; <see cref="Pending"/> is the per-pod half.</summary>
@@ -96,7 +129,33 @@ public sealed record ModuleActivationReport(
                 ? ModuleActivationStatus.DescribeUnresolvable(Unresolvable)
                     + (HasPending ? "; " + ModuleActivationStatus.Describe(Pending) : string.Empty)
                 : ModuleActivationStatus.Describe(Pending))
-              + (HasDeferred ? "; " + DescribeDeferred(Deferred) : string.Empty);
+              + (HasDeferred ? "; " + DescribeDeferred(Deferred) : string.Empty)
+              + (HasQuarantined ? "; " + DescribeQuarantined(Quarantined) : string.Empty);
+
+    /// <summary>
+    /// One human-readable line naming the modules this process refused to load because their bytes
+    /// need a platform it is not running (#3538) — kept apart from every other line because the
+    /// remedy is apart from every other remedy: the PLATFORM has to move.
+    /// </summary>
+    /// <param name="quarantined">The refused modules.</param>
+    /// <param name="maxNamed">How many are named before the line truncates.</param>
+    public static string DescribeQuarantined(
+        IReadOnlyCollection<PendingModuleActivation> quarantined, int maxNamed = 10)
+    {
+        ArgumentNullException.ThrowIfNull(quarantined);
+        if (quarantined.Count == 0)
+            return "no module was refused against this platform build";
+        var names = quarantined
+            .Select(p => p.Name)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return $"{names.Length} module(s) were REFUSED against this platform build — their bytes "
+            + "are linked against a platform this deployment is not running, so they contribute "
+            + "nothing and no restart changes that; the platform update that satisfies them is "
+            + "itself the restart that loads them: "
+            + string.Join(", ", names.Take(maxNamed))
+            + (names.Length > maxNamed ? $" (+{names.Length - maxNamed} more)" : string.Empty);
+    }
 
     /// <summary>
     /// One human-readable line naming the modules a landing wave landed but never proposed
@@ -144,6 +203,20 @@ public sealed class PendingModuleActivations(string moduleRoot)
 
     /// <summary>The deployment root whose <c>modules/</c> sidecar is read.</summary>
     public string ModuleRootPath { get; } = moduleRoot;
+
+    /// <summary>
+    /// The simple names of modules this process REFUSED to load (#3538) — production passes the
+    /// registered <see cref="Mesh.IncompatibleModule"/> set, which is what
+    /// <c>MeshBuilder.InstallAssemblies</c> recorded for every module its link probe declined and
+    /// every module whose registration threw.
+    ///
+    /// <para>🚨 Without it such a module reads as PENDING — its assembly is genuinely not loaded —
+    /// and the surface promises a restart that re-runs the same measurement and refuses again.
+    /// An init-only property, not a constructor parameter: replacing the constructor signature is
+    /// a binary break for a host compiled against the previous platform.</para>
+    /// </summary>
+    public IReadOnlySet<string> QuarantinedModules { get; init; } =
+        ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The current report. Recomputed per call — the state changes underneath a running process
@@ -238,16 +311,31 @@ public sealed class PendingModuleActivations(string moduleRoot)
             // actually load rather than the one on paper.
             LandedDllExists);
 
+        var notYetLoaded = ModuleActivationStatus.NotYetLoaded(
+            onMeshSet, loadedAssemblyNames, loadedModuleGenerations,
+            ModulePlatformFloor.DeclineReason, LandedDllExists);
+
+        // 🚨 #3538 — a module this process REFUSED to load is not pending, it is quarantined. Its
+        // assembly is genuinely absent from the loaded set, so the pending derivation above finds
+        // it and would promise a restart; a restart re-runs the same measurement on the same bytes
+        // and refuses again. Same false-promise rule as a held entry and a missing DLL, one state
+        // further on — and the only one whose remedy is a PLATFORM update rather than an operator
+        // action.
+        ImmutableList<PendingModuleActivation> quarantined = QuarantinedModules.Count == 0
+            ? []
+            : [.. notYetLoaded.Where(p => QuarantinedModules.Contains(p.Name))];
+
         return new ModuleActivationReport(
-            ModuleActivationStatus.NotYetLoaded(
-                onMeshSet, loadedAssemblyNames, loadedModuleGenerations,
-                ModulePlatformFloor.DeclineReason, LandedDllExists),
+            quarantined.IsEmpty
+                ? notYetLoaded
+                : [.. notYetLoaded.Where(p => !QuarantinedModules.Contains(p.Name))],
             UndeterminedReason: null,
             ModuleActivationStatus.Unresolvable(
                 onMeshSet, loadedAssemblyNames, loadedModuleGenerations,
                 ModulePlatformFloor.DeclineReason, LandedDllExists))
         {
             Deferred = deferred.ToImmutable(),
+            Quarantined = quarantined,
             MeshModuleSet = ModuleSetStore.Describe(sets)
                 + (setNotes.Count > 0 ? " — " + string.Join("; ", setNotes) : string.Empty),
         };

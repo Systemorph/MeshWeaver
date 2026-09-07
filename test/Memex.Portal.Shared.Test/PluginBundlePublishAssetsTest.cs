@@ -161,7 +161,11 @@ public class PluginBundlePublishAssetsTest : IDisposable
     /// </summary>
     private static byte[] BuildBundle(bool withAssets)
     {
-        var assembly = Encoding.UTF8.GetBytes("not-a-real-assembly-but-real-bytes");
+        // 🚨 A REAL managed assembly since #3538: the landing measures the module's link
+        // requirements against this platform's surface, and bytes that are not an assembly at all
+        // are refused as INDETERMINATE — the fail-closed third state. This test is about static
+        // assets riding along, so it hands the landing something it can actually read.
+        var assembly = File.ReadAllBytes(typeof(BundleReader).Assembly.Location);
         var entries = new List<NuGetPackageWriter.Entry>
         {
             new(NuGetPackageWriter.ModuleEntryPathFor(Module + ".dll"),

@@ -344,9 +344,20 @@ public class ModuleSetConvergenceTest : IDisposable
 
     /// <summary>Lands one module through the REAL landing service — a fresh generation plus the
     /// activation entry, exactly as an auto-update or an install does.</summary>
+    /// <remarks>
+    /// 🚨 REAL assembly bytes, not a three-byte MZ stand-in. Since #3538 the landing MEASURES the
+    /// module's link requirements against this platform's surface, so bytes that are not a managed
+    /// assembly are refused — correctly, and this test is about generations, not about that gate.
+    /// Any assembly whose references this process carries works; the packaging assembly is the
+    /// same one <c>ServedModuleBytesTest</c> uses for the same reason.
+    /// </remarks>
     private async Task Land(string name) =>
-        await landing.LandModule(name, [(name + ".dll", [0x4D, 0x5A, 0x90])])
+        await landing.LandModule(name, [(name + ".dll", RealAssemblyBytes)])
             .Timeout(TestTimeouts.Convergence).Await();
+
+    /// <summary>A real, loadable managed assembly's bytes — see <see cref="Land"/>.</summary>
+    private static byte[] RealAssemblyBytes =>
+        File.ReadAllBytes(typeof(MeshWeaver.Plugin.Packaging.BundleReader).Assembly.Location);
 
     /// <summary>Closes a landing wave — the coordination step that moves the mesh's set.</summary>
     private async Task<ModuleSet?> ProposeWave() =>

@@ -580,6 +580,7 @@
   "ui.removeInstallRecord": "Remove install record",
   "ui.requiresGlobalAdmin": "Requires Global Admin",
   "ui.restartRequiredToActivate": "Restart required to finish activating this package",
+  "ui.moduleBuiltForNewerPlatform": "Not running here: this version was built for a newer platform. It activates when this installation updates.",
   "ui.orphanedInstallRecords": "Orphaned install records",
   "ui.requestAccess": "Request Access",
   "ui.resetToDefault": "Reset to default",
