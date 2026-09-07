@@ -207,8 +207,13 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                     .Where(e => prefix.Length == 0 || e.Path.StartsWith(prefix, StringComparison.Ordinal))
                     .Where(e => pathFilter(prefix.Length == 0 ? e.Path : e.Path[prefix.Length..]))
                     .ToArray();
+                // 🚨 The tree read's completeness travels with the snapshot (issue #3589). An empty
+                // file list from a TRUNCATED tree is the dangerous case: it looks exactly like "the
+                // repository carries nothing", and a FullReplace import reads that as "everything
+                // here was deleted". The flag is what stops that inference downstream.
                 if (blobs.Length == 0)
-                    return Observable.Return(new RepoSnapshot(head.CommitSha!, Array.Empty<RepoFile>()));
+                    return Observable.Return(new RepoSnapshot(head.CommitSha!, Array.Empty<RepoFile>())
+                        { ListingIsComplete = head.ListingIsComplete });
 
                 return blobs
                     .Select(e => Http.InvokeObservable(ct => client.Git.Blob.Get(owner, repo, e.Sha))
@@ -217,7 +222,8 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                             blob)))
                     .Merge(8)
                     .ToList()
-                    .Select(list => new RepoSnapshot(head.CommitSha!, (IReadOnlyList<RepoFile>)list));
+                    .Select(list => new RepoSnapshot(head.CommitSha!, (IReadOnlyList<RepoFile>)list)
+                        { ListingIsComplete = head.ListingIsComplete });
             });
     }
 
@@ -606,7 +612,17 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             : Http.InvokeObservable(ct => client.Git.Reference.Get(owner, repo, $"heads/{commitish}"))
                 .Select(reference => reference.Object.Sha);
 
-    internal sealed record HeadInfo(string? CommitSha, bool RefExists, IReadOnlyList<(string Path, string Sha)> ExistingBlobs);
+    internal sealed record HeadInfo(string? CommitSha, bool RefExists, IReadOnlyList<(string Path, string Sha)> ExistingBlobs)
+    {
+        /// <summary>
+        /// Whether <see cref="ExistingBlobs"/> is the WHOLE tree at <see cref="CommitSha"/>. False
+        /// when GitHub truncated the recursive-tree response (issue #3589) — the call still returns
+        /// HTTP 200, so nothing else distinguishes a partial tree from a small repository. A
+        /// head with no commit at all is complete (it genuinely carries zero blobs), which is why
+        /// the default is <c>true</c> and only <see cref="TreeOf"/> ever sets it false.
+        /// </summary>
+        public bool ListingIsComplete { get; init; } = true;
+    }
 
     /// <summary>
     /// The missing-branch base policy: a new branch on a NON-empty repo builds on the DEFAULT
@@ -732,14 +748,35 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                 .SelectMany(reference => Http.InvokeObservable(ct => client.Git.Commit.Get(owner, repo, reference.Object.Sha))
                     .SelectMany(commit => TreeOf(client, owner, repo, commit)));
 
+    /// <summary>
+    /// The commit's recursive blob list — and, crucially, whether that list is the WHOLE tree.
+    ///
+    /// <para>🚨 <b>GitHub answers HTTP 200 with a PARTIAL list</b> when a recursive tree exceeds its
+    /// response cap; the only signal is <c>truncated: true</c> in the body (issue #3589). Before this
+    /// was read, a truncated tree flowed on as "the repository contains exactly these files", and a
+    /// <c>FullReplace</c> import then deleted every mesh node whose file GitHub had simply not
+    /// returned. The completeness verdict is carried rather than the failure thrown, because the
+    /// blobs that WERE returned are still valid to upsert — it is only the "everything else was
+    /// deleted" INFERENCE that has to be withheld. The identical read already exists next door for
+    /// the compare endpoint (<see cref="CompareFileCap"/> → null → full import).</para>
+    /// </summary>
     private IObservable<HeadInfo> TreeOf(IObservableGitHubClient client, string owner, string repo, Commit commit)
         => Http.InvokeObservable(ct => client.Git.Tree.GetRecursive(owner, repo, commit.Tree.Sha))
-            .Select(tree => new HeadInfo(
-                commit.Sha, true,
-                tree.Tree
-                    .Where(i => string.Equals(i.Type.StringValue, "blob", StringComparison.OrdinalIgnoreCase))
-                    .Select(i => (i.Path, i.Sha))
-                    .ToArray()));
+            .Select(tree =>
+            {
+                if (tree.Truncated)
+                    logger?.LogWarning(
+                        "[GitSync] {Owner}/{Repo}@{Sha}: GitHub TRUNCATED the recursive tree — the blob list is "
+                        + "PARTIAL. Treating the listing as incomplete so no import can read an omitted file as "
+                        + "a deletion.", owner, repo, commit.Sha);
+                return new HeadInfo(
+                    commit.Sha, true,
+                    tree.Tree
+                        .Where(i => string.Equals(i.Type.StringValue, "blob", StringComparison.OrdinalIgnoreCase))
+                        .Select(i => (i.Path, i.Sha))
+                        .ToArray())
+                { ListingIsComplete = !tree.Truncated };
+            });
 
     /// <summary>A 7–40 char all-hex token is treated as a commit SHA; anything else as a branch name.</summary>
     private static bool IsSha(string s) =>
