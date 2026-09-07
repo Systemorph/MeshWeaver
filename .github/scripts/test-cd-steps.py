@@ -41,6 +41,7 @@ from pathlib import Path
 WORKFLOW = ".github/workflows/main-cd.yml"
 STEP_ID = "release"
 DECIDE_STEP_ID = "decide"
+VERDICT_STEP_ID = "verdict"
 
 SHORT_SHA = "aaf95af"
 VERSION = "3.0.0-rc8.ci.6360"
@@ -113,12 +114,42 @@ def fixture(tagged: bool) -> list[dict]:
 # will still be there after someone edits the other.
 GH_STUB = """#!/usr/bin/env bash
 echo "gh $*" >> "$GH_CALLS"
-# The ONE read the decide step makes through gh: "is an older run of this workflow on this sha
-# still running?" (MeshWeaver#3376). A case supplies the answer the real `--jq` would have
-# produced (the older run's URL, or nothing) in GH_RUNS_RESULT; every other invocation stays
-# silent, exactly as before.
+# Two reads are modelled, because two steps make them:
+#  * `actions/runs?head_sha=…` — "is a run of this workflow live on this sha?", asked by `decide`
+#    (older runs only, MeshWeaver#3376) and by `verdict` (any live run, MeshWeaver#3513). A case
+#    supplies the answer the real `--jq` would have produced in GH_RUNS_RESULT.
+#  * `commits/main` — main's tip, which `verdict` uses to tell "superseded" from "stuck".
+# GH_RUNS_FAIL makes ONLY the first one fail, so a case can drive the fail-closed arm without
+# also breaking the tip resolution. Every other invocation stays silent and succeeds, exactly as
+# before — the safety property (this stub can mutate nothing) is unchanged.
+#
+# 🚨 GH_RUNS_FIXTURE runs the step's OWN `--jq` program, with real jq, over a real
+# `workflow_runs` payload. That is deliberately stronger than answering GH_RUNS_RESULT: the whole
+# discriminator lives in that filter, and its most dangerous defect — dropping `.id != $RUN_ID`,
+# so every reconcile finds ITSELF "in flight" and the alarm is silenced forever — is invisible to
+# any case that hands the step a pre-computed answer.
 case "$*" in
-  *actions/runs*) printf '%s' "${GH_RUNS_RESULT:-}" ;;
+  *actions/runs*)
+    if [ -n "${GH_RUNS_FAIL:-}" ]; then
+      echo "gh: HTTP 502 (https://api.github.com/repos/x/y/actions/runs)" >&2
+      exit 1
+    fi
+    if [ -n "${GH_RUNS_FIXTURE:-}" ]; then
+      prog=""
+      while [ $# -gt 0 ]; do
+        [ "$1" = "--jq" ] && prog="$2"
+        shift
+      done
+      if [ -z "$prog" ]; then
+        echo "stub gh: an actions/runs call with no --jq — the harness models the filter, not the payload" >&2
+        exit 97
+      fi
+      jq -r "$prog" < "$GH_RUNS_FIXTURE"
+      exit 0
+    fi
+    printf '%s' "${GH_RUNS_RESULT:-}"
+    ;;
+  *commits/main*) printf '%s' "${GH_TIP_RESULT:-}" ;;
 esac
 exit 0
 """
@@ -154,7 +185,8 @@ def die(msg: str):
 
 
 # ── running one case ────────────────────────────────────────────────────────────────────────
-def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: bool = False):
+def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: bool = False,
+             runs: list[dict] | None = None):
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         binp = tmp / "bin"
@@ -187,7 +219,11 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
         e.setdefault("SHA", "abc1234000000000000000000000000000000000")
         e.setdefault("RUN_ID", "1000")
         e.setdefault("WORKFLOW_NAME", "Continuous Delivery (main)")
+        e.setdefault("REPO", "Systemorph/MeshWeaver")
         e.pop("GH_RUNS_RESULT", None)
+        e.pop("GH_RUNS_FAIL", None)
+        e.pop("GH_RUNS_FIXTURE", None)
+        e.pop("GH_TIP_RESULT", None)
         e["GH_CALLS"] = str(calls)
         # Belt AND braces: the stub above shadows `gh` on PATH, and these leave a real `gh` — if one
         # is ever reached another way — with no credential to write with.
@@ -198,6 +234,10 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
             e["AZ_FAIL"] = "1"
         else:
             e.pop("AZ_FAIL", None)
+        if runs is not None:
+            rf = tmp / "runs.json"
+            rf.write_text(json.dumps({"workflow_runs": runs}))
+            e["GH_RUNS_FIXTURE"] = str(rf)
         e.update(env)
 
         p = subprocess.run(["bash", "-c", body], env=e, capture_output=True, text=True)
@@ -294,6 +334,177 @@ def run_decide_cases(root, case) -> None:
          rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
 
 
+# ── the VERDICT step: the one that told main it was broken when it was not ───────────────────
+# The runs the cases below replay, verbatim from the API on 2026-09-07. 7962/7964 are the
+# `workflow_run` twins that were mid-publish; 7963/7965 are the scheduled reconciles that accused
+# them of a stuck delivery.
+CD = "Continuous Delivery (main)"
+SHA_7962 = "6577052de389ff15ad3c94c78cb132e17d542590"
+SHA_7964 = "93dd88941" + "0" * 31
+
+
+def wf_run(rid: int, status: str, started: str, name: str = CD) -> dict:
+    return {
+        "id": rid,
+        "name": name,
+        "status": status,
+        "run_started_at": started,
+        "html_url": f"https://github.com/Systemorph/MeshWeaver/actions/runs/{rid}",
+    }
+
+
+def run_verdict_cases(root, case) -> None:
+    """
+    🚨 <b>MeshWeaver#3513 — the hourly reconcile red on its own twin's in-flight publish.</b>
+
+    `delivery-verdict` used to conclude "delivery is stuck" from four gate outputs that describe
+    main at ONE INSTANT (`reason=reconcile publish=false complete=false green=true`). That triple
+    is also what a reconcile looks like while its `workflow_run` twin is halfway through creating
+    the image set — so on 2026-09-07 runs 7963 and 7965 each failed main's CD with an accusation
+    that was false forty minutes before the same commits sealed.
+
+    The step now asks its own question before making the claim, and these cases are the two arms
+    that make the answer worth anything: it must STILL go red when nothing is publishing (the
+    coverage that must not be lost), and it must NOT go red on the 7963/7965 shape. Every case
+    drives the step's REAL `--jq` filter over a real `workflow_runs` payload, because the filter
+    IS the discriminator — an answer handed to it would prove nothing about it.
+    """
+    body = extract_step(root, VERDICT_STEP_ID)
+
+    # A stub is only evidence about what it stubs. If the step stops probing the run list, or stops
+    # being able to say "stuck" at all, every case below would pass having tested nothing.
+    for needle, why in (
+        ("actions/runs", "no longer probes the run list, so the in-flight arm tests nothing"),
+        ("Delivery is stuck", "no longer carries the stuck accusation, so the red arm tests nothing"),
+    ):
+        if needle not in body:
+            die(f"step `{VERDICT_STEP_ID}` {why} (missing `{needle}`). Update the harness with the step.")
+
+    # The 7963 shape, exactly: a scheduled reconcile, main green, image set incomplete, published
+    # nothing. Everything below varies ONLY what the run list answers.
+    shape = {
+        "REASON": "reconcile", "PUBLISH": "false", "COMPLETE": "false", "GREEN": "true",
+        "CONCLUSION": "completed/success", "SHA": SHA_7962, "SHORT": "6577052",
+        "GATE_RESULT": "success", "UPSTREAM_EVENT": "", "UPSTREAM_BRANCH": "",
+        "GITHUB_EVENT_NAME": "schedule", "RUN_ID": "34071948741", "GH_TOKEN": "",
+    }
+    me = wf_run(34071948741, "in_progress", "2026-09-07T01:06:58Z")          # run 7963 itself
+    twin = wf_run(34069402974, "in_progress", "2026-09-07T00:18:33Z")        # run 7962, mid-publish
+    done = wf_run(34067890019, "completed", "2026-09-06T23:48:02Z")
+    other = wf_run(34069999999, "in_progress", "2026-09-07T01:00:00Z", name="MeshWeaver Build and Test")
+
+    # ── ARM 1: THE COVERAGE THAT MUST NOT BE LOST ────────────────────────────────────────────
+    # A genuinely incomplete set with NO publish in flight. This is the state the job exists for,
+    # and it is the arm that would silently disappear if the fix had been "skip while busy".
+    rc, log, outputs = run_step(body, shape, None, runs=[me, done])
+    case("a green, incomplete main with NOTHING in flight is still RED",
+         rc != 0 and "Delivery is stuck" in log, f"rc={rc} log={log}")
+    case("...and the red now carries the negative finding that makes it a measurement",
+         "NO run of this workflow is queued or in progress" in log, f"log={log}")
+    case("...and it claims no deferral",
+         "deferred_to=" not in outputs, f"out={outputs!r}")
+
+    # 🚨 THE SELF-EXCLUSION CASE. The reconcile is ITSELF `in_progress` in the very list it reads.
+    # Drop `.id != $RUN_ID` from the filter and this alarm is disabled forever, in every state,
+    # with a green tick — strictly worse than the false red it was fixed for. ARM 1 above already
+    # contains `me`; this asserts the point on a list where the self run is the ONLY candidate.
+    rc, log, outputs = run_step(body, shape, None, runs=[me])
+    case("a reconcile does NOT count ITSELF as the publication in flight",
+         rc != 0 and "Delivery is stuck" in log, f"rc={rc} log={log}")
+
+    # A live run of a DIFFERENT workflow on the same commit is not a publication either — a
+    # re-run of Build-and-Test must never silence CD's delivery alarm.
+    rc, log, outputs = run_step(body, shape, None, runs=[me, other])
+    case("a live run of ANOTHER workflow on the same sha does not count",
+         rc != 0 and "Delivery is stuck" in log, f"rc={rc} log={log}")
+
+    # A run that has FINISHED is not in flight. Without the status filter, every commit that ever
+    # had a CD run would read as "publishing".
+    rc, log, outputs = run_step(body, shape, None, runs=[me, done, wf_run(34068000000, "completed", "x")])
+    case("a COMPLETED run on the same sha does not count as in flight",
+         rc != 0 and "Delivery is stuck" in log, f"rc={rc} log={log}")
+
+    # ── ARM 2: THE 7963 / 7965 SHAPE ─────────────────────────────────────────────────────────
+    rc, log, outputs = run_step(body, shape, None, runs=[me, twin, done])
+    case("run 7963's exact conditions no longer red — its twin 7962 was mid-publish",
+         rc == 0, f"rc={rc} log={log}")
+    case("...and the step does not accuse delivery of being stuck",
+         "Delivery is stuck" not in log, f"log={log}")
+    case("...and it names the run, its status, and since when — not a bare 'skipping'",
+         all(s in log for s in ("34069402974", "in_progress", "2026-09-07T00:18:33Z")), f"log={log}")
+    case("...and it states its own falsification condition, so nobody reads it as a disabled alarm",
+         "suppressed ONLY while" in log and "goes RED" in log, f"log={log}")
+    case("...and it hands the run id to the summary step as a POSITIVE finding",
+         "deferred_to=34069402974" in outputs and "deferred_status=in_progress" in outputs,
+         f"out={outputs!r}")
+
+    # Run 7965, the second false red of the night, on the other commit.
+    twin_7964 = wf_run(34072269844, "in_progress", "2026-09-07T01:12:30Z")
+    me_7965 = wf_run(34073867519, "in_progress", "2026-09-07T01:42:12Z")
+    rc, log, outputs = run_step(body,
+                                {**shape, "SHA": SHA_7964, "SHORT": "93dd889", "RUN_ID": "34073867519"},
+                                None, runs=[me_7965, twin_7964])
+    case("run 7965's exact conditions no longer red either — twin 7964 was mid-publish",
+         rc == 0 and "34072269844" in log and "Delivery is stuck" not in log, f"rc={rc} log={log}")
+
+    # A run WAITING for a runner is not stuck delivery either, and the message must say which of
+    # the two it saw rather than flattening them into one word.
+    rc, log, outputs = run_step(body, shape, None,
+                                runs=[me, wf_run(34069402974, "queued", "2026-09-07T01:05:00Z")])
+    case("a QUEUED run counts as a live publication, and is reported as queued",
+         rc == 0 and "queued" in log, f"rc={rc} log={log}")
+
+    # A NEWER live run counts too. The gate's #3376 probe looks only at OLDER runs because it has
+    # to break a deferral tie; this step decides nothing, so any live run falsifies "nobody is
+    # publishing it". Encoded as a case so a future edit cannot quietly narrow it back.
+    rc, log, outputs = run_step(body, shape, None,
+                                runs=[me, wf_run(34079999999, "in_progress", "2026-09-07T01:07:30Z")])
+    case("a NEWER live run on this sha falsifies 'stuck' just as an older one does",
+         rc == 0 and "34079999999" in log, f"rc={rc} log={log}")
+
+    # ── ARM 3: THE PROBE MUST NOT BECOME A SKIP-TRAPDOOR ─────────────────────────────────────
+    # An unanswerable probe is not reassurance. If this ever passes, the fix has reintroduced the
+    # exact defect AGENTS.md names: a gate that cannot run looking like a gate that passed.
+    rc, log, outputs = run_step(body, {**shape, "GH_RUNS_FAIL": "1"}, None, runs=[me, twin])
+    case("a FAILING probe fails the step — it never silences the alarm",
+         rc != 0, f"rc={rc} log={log}")
+    case("...and it names the probe as what went unanswered, not the delivery",
+         "probe" in log and "FAILED" in log, f"log={log}")
+    case("...and it claims no deferral it could not observe",
+         "deferred_to=" not in outputs, f"out={outputs!r}")
+
+    # ── THE PROBE IS NOT A BLANKET SILENCER ──────────────────────────────────────────────────
+    # It sits inside ONE branch. Every other verdict must be exactly as loud as before, even with
+    # a publication live on the commit — otherwise "a run is in flight" becomes a universal excuse.
+    rc, log, outputs = run_step(body, {**shape, "REASON": "push", "GREEN": "false",
+                                       "CONCLUSION": "completed/failure"}, None, runs=[me, twin])
+    case("a push path on a RED main is still red, live run or not",
+         rc != 0 and "settled RED" in log, f"rc={rc} log={log}")
+    rc, log, outputs = run_step(body, {**shape, "REASON": "", "GATE_RESULT": "failure"},
+                                None, runs=[me, twin])
+    case("an EMPTY gate verdict is still red, live run or not",
+         rc != 0 and "NO verdict" in log, f"rc={rc} log={log}")
+    rc, log, outputs = run_step(body, {**shape, "REASON": "", "GATE_RESULT": "skipped",
+                                       "GITHUB_EVENT_NAME": "workflow_run",
+                                       "UPSTREAM_EVENT": "pull_request", "UPSTREAM_BRANCH": "feat/x"},
+                                None, runs=[me, twin])
+    case("a PR-triggered workflow_run is still the legitimate no-op it always was",
+         rc == 0 and "not applicable" in log, f"rc={rc} log={log}")
+
+    # The superseded-burst branch still resolves the tip through the API this step also uses for
+    # the probe — proof the two reads did not get crossed when REPO moved into `env:`.
+    rc, log, outputs = run_step(body, {**shape, "REASON": "push", "GREEN": "false",
+                                       "CONCLUSION": "completed/cancelled",
+                                       "GH_TIP_RESULT": "f" * 40}, None, runs=[me])
+    case("a cancelled, superseded push is still a green no-op",
+         rc == 0 and "superseded" in log, f"rc={rc} log={log}")
+    rc, log, outputs = run_step(body, {**shape, "REASON": "push", "GREEN": "false",
+                                       "CONCLUSION": "completed/cancelled",
+                                       "GH_TIP_RESULT": SHA_7962}, None, runs=[me])
+    case("a cancelled TIP is still red",
+         rc != 0 and "is the TIP" in log, f"rc={rc} log={log}")
+
+
 def main() -> int:
     root = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve()
     try:
@@ -301,6 +512,11 @@ def main() -> int:
         import yaml  # noqa: F401
     except ImportError as exc:
         die(f"this harness cannot run — {exc}. pip install jmespath pyyaml.")
+    # The verdict cases run the step's OWN `--jq` filter through real jq. Without it every one of
+    # them would fail on the stub's exit 127 rather than on the logic — say so plainly instead.
+    if subprocess.run(["bash", "-c", "command -v jq"], capture_output=True).returncode != 0:
+        die("this harness cannot run — `jq` is not on PATH, and the verdict cases execute the "
+            "step's real --jq filter over a workflow_runs fixture. Install jq.")
 
     body = extract_step(root, STEP_ID)
     # A stub is only evidence about the call it stubs. If the step stopped making that call, the
@@ -361,10 +577,15 @@ def main() -> int:
     run_decide_cases(root, case)
 
     print()
+    print(f"── step `{VERDICT_STEP_ID}` ──")
+    run_verdict_cases(root, case)
+
+    print()
     if failures:
         print(f"::error::{len(failures)} case(s) failed: {', '.join(failures)}")
         return 1
-    print(f"all cases passed against {WORKFLOW} steps `{STEP_ID}` + `{DECIDE_STEP_ID}` (extracted, not copied)")
+    print(f"all cases passed against {WORKFLOW} steps `{STEP_ID}` + `{DECIDE_STEP_ID}` "
+          f"+ `{VERDICT_STEP_ID}` (extracted, not copied)")
     return 0
 
 

@@ -791,6 +791,24 @@ nothing. The two together are what makes off-branch triggers destructive.
 Guarded by `WorkflowRunTriggerBranchFilterGuard`, which carries a control arm: if its block matcher
 ever stops recognising `workflow_run:`, it fails rather than passing having examined nothing.
 
+### The other direction: a CD red on main that means nothing
+
+The section above is delivery stopping behind green ticks. The inverse cost the same evening: the
+hourly `main-cd` reconcile fired **"main `<sha>` is GREEN and has an INCOMPLETE image set, and this
+reconcile published nothing — delivery is stuck"** twice inside forty minutes (runs 7963 and 7965,
+2026-09-07), on two commits that both sealed shortly afterwards. The set was incomplete because the
+reconcile's own `workflow_run` twin was **mid-publish** — a scheduled job reasoning about a state
+its sibling was halfway through creating, and reporting the intermediate as a defect.
+
+**A red that means nothing is expensive in the same way a green that means nothing is**: it is
+mixed in with reds that mean everything, and people were reading CD conclusions to decide a release
+that night. `delivery-verdict` now probes the run list before making the claim and reaches a **third
+verdict** — *incomplete because a publication is in flight* — distinct from *incomplete and nobody
+is fixing it*; only the second is a defect, and it is still red. Before treating any CD red on main
+as an incident, read whether the run named one. Mechanism, and why "skip while a run is in flight"
+would have been the wrong fix:
+[Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract).
+
 ## 🚨 A queue ejection is not a red on the PR — read the steward's comment, not the PR's checks
 
 With the merge queue on, a pull request's own checks can be entirely green while the PR is *not

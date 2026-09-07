@@ -2569,8 +2569,17 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Job-level permissions REPLACE the workflow-level map, so every one this job needs is here:
+    #   contents — `commits/main`, the tip resolution that tells "superseded" from "stuck"
+    #   actions  — `actions/runs?head_sha=…`, the live-publication probe that tells "a publish is
+    #              in flight" from "nobody is publishing" (MeshWeaver#3513)
+    # It checks out nothing and pushes nothing, so id-token and packages are deliberately absent.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: A green, incomplete main must never end a reconcile unpublished
+        id: verdict
         env:
           REASON: ${{ needs.gate.outputs.reason }}
           PUBLISH: ${{ needs.gate.outputs.publish }}
@@ -2586,6 +2595,15 @@ jobs:
           GATE_RESULT: ${{ needs.gate.result }}
           UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
           UPSTREAM_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # 🚨 Passed through `env:` rather than written as `${{ github.repository }}` inside the
+          # body, and that is load-bearing rather than stylistic: `test-cd-steps.py` EXTRACTS this
+          # step from this file by its `id:` and executes it against fixtures, and it REFUSES a
+          # body carrying a `${{ }}` expression it would have to rewrite. A step it cannot execute
+          # is a step whose only first run is in production, on a schedule — which is how the two
+          # false reds below reached main's CD history in the first place.
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          WORKFLOW_NAME: ${{ github.workflow }}
         run: |
           set -euo pipefail
           echo "gate=$GATE_RESULT reason=$REASON publish=$PUBLISH complete=$COMPLETE green=$GREEN sha=$SHORT"
@@ -2621,7 +2639,84 @@ jobs:
 
           if [ "$REASON" = "reconcile" ] && [ "$PUBLISH" != "true" ] \
              && [ "$COMPLETE" = "false" ] && [ "$GREEN" = "true" ]; then
-            echo "::error::main \`$SHORT\` is GREEN and has an INCOMPLETE image set, and this reconcile published nothing. Delivery is stuck: every self-updating install stays on the previous image. This job exists because that state is otherwise INVISIBLE — the run reports success and every image job simply reads as skipped."
+            # 🚨 "INCOMPLETE" IS A SNAPSHOT. "STUCK" IS A CLAIM ABOUT THE FUTURE. (MeshWeaver#3513)
+            #
+            # The four gate outputs above describe main at ONE INSTANT: green, no complete image
+            # set, this tick published nothing. From that alone the step used to conclude "delivery
+            # is stuck", which is a claim about what will happen NEXT — and it is false whenever the
+            # set is incomplete *because a publication is halfway through creating it*.
+            #
+            # Measured 2026-09-07, twice in forty minutes. Run 7963 (schedule, 01:07Z) and run 7965
+            # (schedule, 01:42Z) each fired this error. Neither delivery was stuck: their own
+            # `workflow_run` twins — 7962 on `6577052` and 7964 on `93dd889` — were mid-publish,
+            # between `Build + push` and `Promote`, and both sealed (01:38:49Z and 02:32:25Z). The
+            # gate had ALREADY worked this out correctly and said so in its log:
+            #
+            #     ⏳ An older run of this workflow is still publishing `6577052`:
+            #        …/actions/runs/34069402974 — deferring, so one commit yields ONE image set
+            #
+            # …but `decision false "…"` writes only a BOOLEAN. The reason the gate declined never
+            # reached this step, so this step re-derived a diagnosis from `publish=false` and got a
+            # different one. It recurs on every hour whose top a publish straddles (7940 on
+            # `62039c9` at 21:24Z is the same shape), and it costs the one thing a CD history must
+            # have: a red that always means something.
+            #
+            # 🚨 THE FIX IS NOT TO SKIP THE CHECK WHEN A RUN IS IN FLIGHT. GitHub paints a skipped
+            # job exactly like a passed one, and the window in which publishes happen IS the window
+            # this alarm exists to watch — silencing it there would delete most of its coverage.
+            # So the step CONCLUDES instead of declining to conclude, and it does so on a THIRD
+            # verdict, from evidence it gathers ITSELF, at verdict time:
+            #
+            #   • a run of this workflow is `queued`/`in_progress` on this exact commit
+            #        ⇒ INCOMPLETE BECAUSE A PUBLICATION IS IN FLIGHT — not a defect. Green, named.
+            #   • no such run
+            #        ⇒ INCOMPLETE AND NOBODY IS FIXING IT — the original red, unchanged, now
+            #          carrying the negative finding that makes it a measurement.
+            #   • the probe could not be answered
+            #        ⇒ RED, fail-closed. See below.
+            #
+            # It re-reads rather than trusting a relayed gate output ON PURPOSE. The gate's reading
+            # is itself a snapshot, taken before every leg ran; a verdict resting on it would be the
+            # same instrument-reads-a-snapshot-as-a-fact defect one level along. This probe is the
+            # freshest reading available at the moment the claim is made, and the claim it supports
+            # is exactly as narrow as the reading.
+            #
+            # 🚨 AND IT IS SELF-LIMITING WITHOUT A TIMER — no sleep, no retry, no widened window.
+            # Suppression lasts precisely as long as a run is observably live, and a run cannot be
+            # live indefinitely: every job in this repo carries a literal `timeout-minutes` ≤ 45,
+            # so GitHub itself terminates a hung publication, after which the next hourly tick finds
+            # nothing in flight and reds. The bound is GitHub's, enforced by GitHub — never a number
+            # written here to make a red go away.
+            #
+            # `.id != $RUN_ID` excludes this run and NOTHING ELSE. The gate's own #3376 probe looks
+            # only at OLDER runs because it must break a tie between two runs that would both defer;
+            # this step decides nothing and acts on nothing, so any live run on this commit — older
+            # or newer, push lane or reconcile lane — is a fact that falsifies "nobody is publishing
+            # it", and all of them count.
+            if LIVE=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=50" \
+                        --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id != $RUN_ID and (.status == \"in_progress\" or .status == \"queued\"))]
+                              | sort_by(.id) | .[0] // empty
+                              | \"\(.id) \(.status) \(.run_started_at) \(.html_url)\""); then
+              :
+            else
+              # 🚨 FAIL CLOSED, and say which question went unanswered. An unanswerable probe must
+              # never silence this alarm — that would make the probe a skip-trapdoor, which GitHub
+              # renders identically to a pass, and that is the defect this whole job is an instance
+              # of. Same posture as the unresolved-tip branch further down, and for the same reason:
+              # the outcome that must not be missed is the stuck one.
+              echo "::error::main \`$SHORT\` is GREEN, has an INCOMPLETE image set, and this reconcile published nothing — and the probe that separates 'a publication is in flight' from 'delivery is stuck' FAILED (gh api on actions/runs). Refusing to guess: an unanswered probe must never be read as reassurance. Read the run list for \`$SHORT\` by hand, and chase the API failure — it is the bug, whichever way the delivery turns out."
+              exit 1
+            fi
+            if [ -n "$LIVE" ]; then
+              read -r LIVE_ID LIVE_STATUS LIVE_SINCE LIVE_URL <<< "$LIVE"
+              echo "deferred_to=$LIVE_ID" >> "$GITHUB_OUTPUT"
+              echo "deferred_status=$LIVE_STATUS" >> "$GITHUB_OUTPUT"
+              echo "deferred_since=$LIVE_SINCE" >> "$GITHUB_OUTPUT"
+              echo "⏳ main \`$SHORT\` has an INCOMPLETE image set and this reconcile published nothing — because run $LIVE_ID is \`$LIVE_STATUS\` on this exact commit since $LIVE_SINCE ($LIVE_URL). That is a publication in progress, not a stuck delivery, and deferring to it is what keeps one commit to ONE image set (MeshWeaver#3376)."
+              echo "   This verdict is suppressed ONLY while a run is observably live on \`$SHORT\`. If that run does not complete the set, the next hourly reconcile finds nothing in flight and this job goes RED — no timer, no retry, nothing to un-stick by hand."
+              exit 0
+            fi
+            echo "::error::main \`$SHORT\` is GREEN and has an INCOMPLETE image set, this reconcile published nothing, and NO run of this workflow is queued or in progress on \`$SHORT\` — so nobody is publishing it. Delivery is stuck: every self-updating install stays on the previous image. This job exists because that state is otherwise INVISIBLE — the run reports success and every image job simply reads as skipped."
             exit 1
           fi
 
@@ -2654,7 +2749,7 @@ jobs:
           # hole and it must stay loud. So the discriminator is tip-ness, not colour.
           if [ "$REASON" = "push" ] && [ "$PUBLISH" != "true" ] && [ "$GREEN" != "true" ] \
              && [ "${CONCLUSION#*/}" = "cancelled" ]; then
-            TIP=$(gh api "repos/${{ github.repository }}/commits/main" --jq '.sha' || echo "")
+            TIP=$(gh api "repos/$REPO/commits/main" --jq '.sha' || echo "")
             if [ -z "$TIP" ]; then
               # \U0001f6a8 Say what is true, not what is convenient. Tip-ness was NOT established, so
               # claiming it (either way) would be the same sin this step exists to correct: a
@@ -2728,6 +2823,11 @@ jobs:
           SHORT: ${{ needs.gate.outputs.short_sha }}
           GATE_RESULT: ${{ needs.gate.result }}
           PROMOTE_RESULT: ${{ needs.promote.result }}
+          # The third verdict (MeshWeaver#3513). Empty unless the step above found a live
+          # publication on this commit — so this is a POSITIVE finding, never a default.
+          DEFERRED_TO: ${{ steps.verdict.outputs.deferred_to }}
+          DEFERRED_STATUS: ${{ steps.verdict.outputs.deferred_status }}
+          DEFERRED_SINCE: ${{ steps.verdict.outputs.deferred_since }}
         run: |
           # 🚨 NO-OP is keyed on the gate having been SKIPPED — never on an empty reason. An empty
           # reason is ALSO what a gate that errored, was cancelled, or produced no outputs looks
@@ -2735,6 +2835,12 @@ jobs:
           # broken run with the one label that says nothing was due. (Caught in review.)
           if [ "$GATE_RESULT" = "skipped" ]; then
             echo "### ⚪ NO-OP — the gate did not run: not a push to main, so no delivery was due" >> "$GITHUB_STEP_SUMMARY"
+          # 🚨 Ahead of the generic "NO PUBLISH", because those are two different facts and the
+          # summary is where a human decides whether to care. `🕐 NO PUBLISH … (reason: reconcile)`
+          # on a commit whose image set is incomplete reads as the stuck state; naming the run that
+          # IS publishing it is the whole content of MeshWeaver#3513's third verdict.
+          elif [ -n "$DEFERRED_TO" ]; then
+            echo "### ⏳ DEFERRED for \`${SHORT}\` — run [${DEFERRED_TO}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${DEFERRED_TO}) is \`${DEFERRED_STATUS}\` on this commit since ${DEFERRED_SINCE}. The image set is incomplete because that publication is still creating it — a correct no-op, not a stuck delivery (#3513)." >> "$GITHUB_STEP_SUMMARY"
           elif [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; then
             echo "### ✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
           elif [ "$PUBLISH" = "true" ]; then
