@@ -10,6 +10,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -1048,7 +1049,12 @@ public static class CatalogLayoutAreas
                     //                    Warning that completeness was not checked, and why.
                     return InstallCompleteness
                         .Observe(persistence, hub.JsonSerializerOptions, pkg.Id,
-                            PackageInstaller.TargetPartitionOf(pkg.Id, record), record)
+                            PackageInstaller.TargetPartitionOf(pkg.Id, record), record,
+                            // The INSTALL's own parser registry — the declared population must be
+                            // the files this install would write, never a superset (#3659).
+                            new FileFormatParserRegistry(
+                                hub.JsonSerializerOptions,
+                                hub.ServiceProvider.GetServices<IFileFormatParser>()))
                         .SelectMany(verdict => SkipOrHeal(verdict, pkg, logger, Full, WithModule));
                 }
 
@@ -1085,19 +1091,20 @@ public static class CatalogLayoutAreas
         {
             logger?.LogError(
                 "Package {Id} records module {ModuleVersion} as installed, but {Missing} of "
-                + "{Declared} declared node(s) are ABSENT from the mesh: [{Paths}]. The content "
-                + "hash cannot see this — it describes the SOURCE, not what landed — so the install "
-                + "is being REPAIRED rather than skipped (MeshWeaver#3485).",
+                + "{Declared} declared node(s) are ABSENT from the mesh: [{Paths}]. Counted over: "
+                + "{Population}. The content hash cannot see this — it describes the SOURCE, not "
+                + "what landed — so the install is being REPAIRED rather than skipped "
+                + "(MeshWeaver#3485).",
                 pkg.Id, pkg.ModuleVersion, verdict.Missing.Count, verdict.Declared,
-                string.Join(", ", verdict.Missing.Take(20)));
+                string.Join(", ", verdict.Missing.Take(20)), verdict.Population);
             return full();
         }
 
         if (verdict.Kind is InstallCompletenessKind.Complete)
             logger?.LogInformation(
                 "Package {Id} content is up to date (module {ModuleVersion}, {Present}/{Declared} "
-                + "declared node(s) present); nothing to sync.",
-                pkg.Id, pkg.ModuleVersion, verdict.Present, verdict.Declared);
+                + "declared node(s) present; counted over: {Population}); nothing to sync.",
+                pkg.Id, pkg.ModuleVersion, verdict.Present, verdict.Declared, verdict.Population);
         else
             logger?.LogWarning(
                 "Package {Id} content is up to date by module hash ({ModuleVersion}) but its "
@@ -1150,14 +1157,19 @@ public static class CatalogLayoutAreas
                     throw new InvalidOperationException(
                         $"Package '{pkg.Id}' changed shared Source/Test files; full install required.");
 
+                // The install's OWN parser registry — the file→node rule is DI-dependent (#3659),
+                // so a file whose extension no parser claims is not a node here either and must
+                // neither be fetched as one nor pruned as one.
+                var parsers = new FileFormatParserRegistry(
+                    hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
                 var changedNodePaths = delta.AddedOrChangedFiles
-                    .Select(PackageInstaller.NodePathForFile)
+                    .Select(f => PackageInstaller.NodePathForFile(f, parsers))
                     .Where(p => p is not null).Select(p => p!)
                     .ToHashSet(StringComparer.Ordinal);
                 // Removed FILES prune their nodes — unless the node is still fed by a changed file
                 // (the `X.json` → `X/index.json` layout move maps both to node X).
                 var removedNodePaths = delta.RemovedFiles
-                    .Select(PackageInstaller.NodePathForFile)
+                    .Select(f => PackageInstaller.NodePathForFile(f, parsers))
                     .Where(p => p is not null && !changedNodePaths.Contains(p))
                     .Select(p => p!)
                     .ToHashSet(StringComparer.Ordinal);

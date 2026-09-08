@@ -73,6 +73,34 @@ public class FileFormatParserRegistry
     }
 
     /// <summary>
+    /// Whether ANY registered parser claims <paramref name="extension"/> — the content-free half
+    /// of "is this file a node", and the only half a caller holding a PATH but no bytes can ask.
+    ///
+    /// <para>🚨 <b>Why this is a public question (#3659).</b> Two places decide whether a package
+    /// file becomes a mesh node: the installer, which parses (this registry), and the
+    /// install-completeness sweep, which only has the record's path→hash map. Until this existed
+    /// the sweep asked a DIFFERENT question — the by-design exclusions alone — so every file whose
+    /// extension no parser claims (<c>.tsx</c>, <c>.png</c>, <c>.py</c>, an extension-less
+    /// <c>LICENSE</c>) counted as a node the install owed the mesh and was reported ABSENT at
+    /// Error on every boot, forever. Measured on <c>MeshWeaver.Plugins</c>' package folders,
+    /// 2026-09-08: 617 <c>.cs</c>, 275 <c>.json</c> and 248 <c>.md</c> files a parser claims,
+    /// against 200+ (<c>.ts</c>, <c>.tsx</c>, <c>.py</c>, <c>.png</c>, <c>.mjs</c>, <c>.js</c>,
+    /// <c>.html</c>, <c>.gitignore</c>, <c>.mp4</c>, <c>.jpg</c>, four extension-less) it does
+    /// not.</para>
+    ///
+    /// <para>It answers about the EXTENSION only. A file whose extension is claimed can still fail
+    /// to become a node on its CONTENT — a <c>.json</c> object carrying no <c>$type</c>/<c>id</c>/
+    /// <c>nodeType</c>, a file no parser can read — and no path-only caller can see that. Callers
+    /// that hold the bytes must still use <see cref="TryParse"/>.</para>
+    /// </summary>
+    /// <param name="extension">File extension including the dot (e.g. <c>".md"</c>); null, empty
+    /// or unclaimed all answer false.</param>
+    public bool ClaimsExtension(string? extension) =>
+        !string.IsNullOrEmpty(extension)
+        && _parsersByExtension.TryGetValue(extension, out var list)
+        && list.Count > 0;
+
+    /// <summary>
     /// Gets all parsers for the given file extension in priority order.
     /// </summary>
     /// <param name="extension">File extension including the dot (e.g., ".md").</param>

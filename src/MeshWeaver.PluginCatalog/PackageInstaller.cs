@@ -3136,8 +3136,11 @@ public static class PackageInstaller
 
                 var currentNodePaths = nodes.Select(n => n.Path)
                     .ToImmutableHashSet(StringComparer.Ordinal);
+                // The install's OWN parser registry — the file→node rule is DI-dependent (#3659).
+                var parsers = new FileFormatParserRegistry(
+                    options, hub.ServiceProvider.GetServices<IFileFormatParser>());
                 var removedNodePaths = moduleManifest.DiffFrom(previousFiles).RemovedFiles
-                    .Select(NodePathForFile)
+                    .Select(f => NodePathForFile(f, parsers))
                     .Where(p => p is not null && !currentNodePaths.Contains(p))
                     .Select(p => p!)
                     .ToImmutableHashSet(StringComparer.Ordinal);
@@ -3464,12 +3467,20 @@ public static class PackageInstaller
             .Where(n => n is not null).Select(n => n!)
             .ToArray();
 
+        // 🚨 The line states the POPULATION, not just the shortfall (#3659). "3 of 200 skipped"
+        // read very differently once 150 of the 200 were never node candidates — and the sweep on
+        // the other side counted a DIFFERENT 200, which is the defect this whole change is about.
+        // Both denominators are printed so a wrong one is visible rather than silent.
+        var candidates = files.Count(f => NodePathForFile(f.RelativePath, parsers) is not null);
         if (unparsed.Count > 0)
             logger?.LogWarning(
-                "Package '{Package}': {Skipped} of {Candidates} candidate files had no parser and "
-                + "were skipped; {Installed} nodes installed. First skipped: {Sample}.",
-                packageId, unparsed.Count, files.Count(f => !IsNotANodeFile(f.RelativePath)),
-                nodes.Length, string.Join(", ", unparsed.Take(5)));
+                "Package '{Package}': {Skipped} of {Candidates} node candidate file(s) could not "
+                + "be read and were skipped; {Installed} node(s) installed. Population: {Files} "
+                + "file(s) in the package, {NonNode} of them not node files (README, the manifest "
+                + "sidecar, content/** assets, or an extension no parser claims). First skipped: "
+                + "{Sample}.",
+                packageId, unparsed.Count, candidates, nodes.Length, files.Count,
+                files.Count - candidates, string.Join(", ", unparsed.Take(5)));
 
         return nodes;
     }
@@ -3501,13 +3512,23 @@ public static class PackageInstaller
         FileFormatParserRegistry parsers, PackageFile file, ILogger? logger,
         JsonSerializerOptions? options = null, List<string>? unparsed = null)
     {
-        if (IsNotANodeFile(file.RelativePath))
+        // 🚨 ONE predicate, shared with the install-completeness sweep (#3659). A file is a node
+        // CANDIDATE when it is not a by-design non-node file AND some registered parser claims its
+        // extension. Anything else is not a skip and is not counted as one — and, decisively, the
+        // sweep now counts the SAME population instead of a larger one derived by a second
+        // implementation of half this rule.
+        if (NodePathForFile(file.RelativePath, parsers) is null)
             return null;
         var ext = System.IO.Path.GetExtension(file.RelativePath);
         var parsed = parsers.TryParse(ext, file.RelativePath, file.Content, file.RelativePath);
         if (parsed is null)
         {
-            logger?.LogWarning("No parser for node-repo file {Path}; skipped.", file.RelativePath);
+            // A CLAIMED extension whose CONTENT could not be read — the #1767 population, and the
+            // only one of the two that means damage. "No parser for X" used to say this as well,
+            // so a real loss and an ordinary carry-along asset read identically.
+            logger?.LogWarning(
+                "Node-repo file {Path} has a parser for '{Extension}' but could not be read as a "
+                + "node; skipped.", file.RelativePath, ext);
             unparsed?.Add(file.RelativePath);
             return null;
         }
@@ -3694,16 +3715,66 @@ public static class PackageInstaller
         || ModuleManifest.IsManifestPath(relativePath);
 
     /// <summary>
-    /// The canonical node path a node-repo file maps to, or null for the non-node files a package
-    /// ships (README, the manifest sidecar, <c>content/**</c> assets). Used to derive prune targets
-    /// from a manifest diff's removed files — a removed content asset must never delete its owning
-    /// node.
+    /// The BUILT-IN parser set — <c>.md</c>, <c>.cs</c>, <c>.json</c> — as a registry, for the
+    /// convenience overload below. <c>static readonly</c> is the sanctioned shape here: a
+    /// <see cref="FileFormatParserRegistry"/> builds its lookup once in its constructor and is
+    /// never written at runtime, so this is an immutable constant lookup, not process-wide state.
     /// </summary>
-    public static string? NodePathForFile(string relativePath)
+    internal static readonly FileFormatParserRegistry BuiltInParsers =
+        new(new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+    /// <summary>
+    /// <see cref="NodePathForFile(string, FileFormatParserRegistry)"/> against the BUILT-IN parser
+    /// set alone (<c>.md</c>, <c>.cs</c>, <c>.json</c>).
+    ///
+    /// <para>🚨 <b>A caller that has a hub must pass that hub's registry instead.</b> Which
+    /// extensions become nodes is DI-dependent — a module contributes parsers — and this overload
+    /// cannot see them, so on a host with a contributed parser it answers "not a node" for a file
+    /// that IS one. It exists because it is public API a dependent repo already calls
+    /// (<c>MeshWeaver.Plugins</c>' <c>ModuleManifestTest</c>), and removing it would red that
+    /// repo's build at its next platform-pin move while its adaptation cannot compile until that
+    /// same pin moves. Every caller INSIDE the install and completeness paths passes a real
+    /// registry; this overload is a compiling convenience, never the rule.</para>
+    /// </summary>
+    /// <param name="relativePath">The file's repo-relative path.</param>
+    public static string? NodePathForFile(string relativePath) =>
+        NodePathForFile(relativePath, BuiltInParsers);
+
+    /// <summary>
+    /// The canonical node path a node-repo file maps to, or null when the file is not a node
+    /// candidate at all.
+    ///
+    /// <para>🚨 <b>TWO reasons for null, and #3659 is what happened when only the first was
+    /// asked.</b> A file is not a node candidate when it is a non-node file BY DESIGN
+    /// (<see cref="IsNotANodeFile"/> — the README, the manifest sidecar, a <c>content/**</c>
+    /// asset) <b>or</b> when NO REGISTERED PARSER CLAIMS ITS EXTENSION, which is how a package's
+    /// ordinary carry-along files (<c>.tsx</c>, <c>.png</c>, <c>.py</c>, an extension-less
+    /// <c>LICENSE</c>) are silently skipped by the install. Until #3659 this method asked only the
+    /// first question while <c>ParseCanonical</c> asked both, so the two disagreed about the very
+    /// population the install-completeness sweep counts: <c>Chess</c> ships
+    /// <c>Chess/gui/rn/chess.tsx</c>, which no install ever writes, and the sweep reported
+    /// <c>Chess/gui/rn/chess</c> ABSENT at Error on every pod boot forever — and drove a FULL
+    /// reinstall of the package that could never make the count reach zero.</para>
+    ///
+    /// <para>🚨 It answers about the PATH. A file whose extension IS claimed can still fail to
+    /// become a node on its CONTENT (a <c>.json</c> object carrying no
+    /// <c>$type</c>/<c>id</c>/<c>nodeType</c>; a file no parser can read). Only a caller holding
+    /// the bytes can see that, which is why <c>ParseCanonical</c> still runs
+    /// <see cref="FileFormatParserRegistry.TryParse"/> after this and reports the difference under
+    /// its own name. Measured 2026-09-08 over every package folder in
+    /// <c>MeshWeaver.Plugins</c>: that residual is EMPTY — every <c>.json</c> inside a package
+    /// carries a node key — so the extension question covers the whole live population; the
+    /// residual is stated because it is reachable, not because it is occupied.</para>
+    /// </summary>
+    /// <param name="relativePath">The file's repo-relative path.</param>
+    /// <param name="parsers">The parser registry the INSTALL would use — required, because the
+    /// claimed extensions are DI-dependent (a module contributes parsers) and a hard-coded list
+    /// here would be a fourth copy of a rule that drifts the moment one is added.</param>
+    public static string? NodePathForFile(string relativePath, FileFormatParserRegistry parsers)
     {
-        if (string.Equals(relativePath, "README.md", StringComparison.OrdinalIgnoreCase)
-            || ModuleManifest.IsManifestPath(relativePath)
-            || ContentAssetMapper.IsContentPath(relativePath))
+        ArgumentNullException.ThrowIfNull(parsers);
+        if (IsNotANodeFile(relativePath)
+            || !parsers.ClaimsExtension(System.IO.Path.GetExtension(relativePath)))
             return null;
         var (id, ns) = NodeFileMapper.FromRelativePath(relativePath);
         return string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
