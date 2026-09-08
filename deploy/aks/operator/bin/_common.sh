@@ -67,11 +67,20 @@ hosting::dry() { [ "${HOSTING_DRY_RUN:-false}" = "true" ]; }
 
 # Run a command, or narrate it when rehearsing. Use for every MUTATION.
 hosting::do() {
+  # 🚨 The narration goes to STDERR, never stdout. `hosting::do` wraps MUTATIONS, and a mutation can
+  # sit in a pipe whose consumer reads the command's output as data — hosting-deploy's
+  #   hosting::do kubectl create namespace … --dry-run=client -o yaml | kubectl apply -f -
+  # is one. Measured 2026-09-08 on memex (Deployments/memex-reconcile-20260908-ci8118): the
+  # `  + kubectl create namespace …` line went down the pipe as line 1 of the manifest, `apiVersion:
+  # v1` became line 2, and kubectl answered "yaml: line 2: mapping values are not allowed in this
+  # context" — the Reconcile stopped at step 1/3 before helm ran, and every Provision would have
+  # stopped at the same line. The job log (what the mesh's OperatorOutput parser reads) carries both
+  # streams, so nothing an operator reads changes; only the data channel is clean.
   if hosting::dry; then
-    printf '  DRY-RUN would run: %s\n' "$*"
+    printf '  DRY-RUN would run: %s\n' "$*" >&2
     return 0
   fi
-  printf '  + %s\n' "$*"
+  printf '  + %s\n' "$*" >&2
   "$@"
 }
 
