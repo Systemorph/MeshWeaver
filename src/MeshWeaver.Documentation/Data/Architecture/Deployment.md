@@ -11,13 +11,14 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 
 | Route | Target | How | Doc |
 |---|---|---|---|
-| **AKS** | Shared cluster `<aks-cluster>` — the `memex` portal namespace | Build images → `az aks command invoke` `kubectl set image` + rollout | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
+| **AKS** | Shared cluster `<aks-cluster>` — every `Deployments/<name>` record (memex, memex-cloud, …) | A `Roll` `Hosting/InstanceAction` on the control instance (the record's image pin); the operator runs build images → `kubectl set image` + rollout. Direct `az aks command invoke` is break-glass | [OperatingFromThePortal.md](/Doc/Architecture/OperatingFromThePortal) · [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
 | **Azure Container Apps** | .NET Aspire `test` / `prod` modes (ACA, Sweden Central) | `tools/deploy.sh prod\|test` (wraps `aspire deploy` + migration-exit + db-version gate) | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
 
 **Which doc do I need?**
 
 | Scenario | Read |
 |---|---|
+| **Operate an instance without cluster access** — roll, restart, suspend, audit, reconcile as `Hosting/InstanceAction`s; which reads the API does not answer yet; how to read every `kubectl` recipe in this tree | [OperatingFromThePortal.md](/Doc/Architecture/OperatingFromThePortal) |
 | See every **running instance** — who it's for, its infra, database, and version — and how to create or delete one | [Instances.md](/Doc/Architecture/Instances) |
 | Know **what each instance actually runs** — platform build, commit, framework identity, update policy and every module's pinned coordinate, reported by the instance itself, hourly | [DeploymentInventory.md](/Doc/Architecture/DeploymentInventory) |
 | **Database backups** & disaster recovery — managed PITR, geo-redundancy, restore | [DatabaseBackups.md](/Doc/Architecture/DatabaseBackups) |

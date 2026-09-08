@@ -349,6 +349,10 @@ stored.
 
 ## Deploying
 
+> The log watcher is cluster infrastructure in the `monitoring` namespace, described by no
+> `Deployments/<name>` record — so its deploy is a cluster operation with no action kind yet. It
+> is break-glass by construction; write it up as such ([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)).
+
 ```bash
 # 1. One shared secret, both sides.
 TOKEN=$(openssl rand -hex 32)
