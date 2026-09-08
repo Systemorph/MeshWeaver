@@ -140,6 +140,12 @@ public static class FrameworkBuildIdentity
         // moved to MeshWeaver.Mesh.Contract, which both remaining consumers already reference.
         "MeshWeaver.Data",
         "MeshWeaver.Data.Contract",
+        // The Deployment record (DeploymentContent, its fluent builder, the portal-config
+        // derivation): the ONE input the in-mesh Hosting module renders Helm from, the Aspire
+        // adapter derives a run from, and the portal binds at boot. In the closure through
+        // MeshWeaver.PluginCatalog so the Hosting sources compile against it — a dependency-free
+        // assembly that changes only when the record's shape does.
+        "MeshWeaver.Deployment.Contract",
         "MeshWeaver.Domain",
         "MeshWeaver.GitSync",
         "MeshWeaver.Graph",

@@ -25,6 +25,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The Deployment record lives in a zero-dependency contract; referencing it here puts it in the
+         portal's application closure, which is what lets the in-mesh Hosting module compile against
+         it (PlatformShippedAssemblies: ApplicationClosure). -->
+    <ProjectReference Include="..\MeshWeaver.Deployment.Contract\MeshWeaver.Deployment.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />

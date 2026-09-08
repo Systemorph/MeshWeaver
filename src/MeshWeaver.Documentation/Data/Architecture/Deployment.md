@@ -14,10 +14,13 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 | **AKS** | Shared cluster `<aks-cluster>` — every `Deployments/<name>` record (memex, memex-cloud, …) | A `Roll` `Hosting/InstanceAction` on the control instance (the record's image pin); the operator runs build images → `kubectl set image` + rollout. Direct `az aks command invoke` is break-glass | [OperatingFromThePortal.md](/Doc/Architecture/OperatingFromThePortal) · [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
 | **Azure Container Apps** | .NET Aspire `test` / `prod` modes (ACA, Sweden Central) | `tools/deploy.sh prod\|test` (wraps `aspire deploy` + migration-exit + db-version gate) | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
 
+🚨 **The Deployment record is the ONE input; Aspire and Helm render from it; the image receives it as configuration (`Deployment:Record`); Aspire emits a record, never a chart.** An instance is a `DeploymentContent` record (`Deployments/<name>` on the control instance), built fluently (`builder.AddMemex("memex").WithImage(…).WithPluginRepo(…)…`) or by hand, and every route reads that record — nothing is configured twice. Maintainer, 2026-09-08; [ConfiguringAnInstanceFromAspire.md](/Doc/Architecture/ConfiguringAnInstanceFromAspire) carries the fluent surface and the parity table.
+
 **Which doc do I need?**
 
 | Scenario | Read |
 |---|---|
+| **Declare an instance ONCE** — the Deployment record, the fluent builder, how Aspire and Helm render from it and how the image receives it (`Deployment:Record`); the parity table method → field → Helm value → config key | [ConfiguringAnInstanceFromAspire.md](/Doc/Architecture/ConfiguringAnInstanceFromAspire) |
 | **Operate an instance without cluster access** — roll, restart, suspend, audit, reconcile as `Hosting/InstanceAction`s; which reads the API does not answer yet; how to read every `kubectl` recipe in this tree | [OperatingFromThePortal.md](/Doc/Architecture/OperatingFromThePortal) |
 | See every **running instance** — who it's for, its infra, database, and version — and how to create or delete one | [Instances.md](/Doc/Architecture/Instances) |
 | Know **what each instance actually runs** — platform build, commit, framework identity, update policy and every module's pinned coordinate, reported by the instance itself, hourly | [DeploymentInventory.md](/Doc/Architecture/DeploymentInventory) |
@@ -166,7 +169,7 @@ dotnet user-secrets set "Parameters:azure-foundry-key" "<your-key>"
 ```
 memex/aspire/
 ├── Memex.AppHost/                  # Aspire orchestrator — defines all resources
-├── Memex.Aspire.Hosting/           # Shared Aspire hosting extensions
+├── Memex.Aspire.Hosting/           # The Aspire adapter (builder.AddMemex) — derives everything from the Deployment record
 ├── Memex.Portal.Distributed/       # Portal with co-hosted Orleans silo
 ├── Memex.Portal.ServiceDefaults/   # Shared service defaults (health, telemetry)
 └── Memex.Database.Migration/       # Database migration project (runs MigrationRegistry.All)
