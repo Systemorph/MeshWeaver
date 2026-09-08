@@ -149,4 +149,76 @@ public class PlatformReleaseOrderTest
         Assert.Equal(0, PlatformReleaseOrder.Compare("3.0.0-ci.51", "3.0.0-ci.51+build.638123456789"));
         Assert.True(PlatformReleaseOrder.IsNewer("3.0.0-ci.52", "3.0.0-ci.51+build.638123456789"));
     }
+
+    // ───────── the total order every RANKING caller shares ─────────
+
+    /// <summary>
+    /// 🚨 <b><see cref="PlatformReleaseOrder.Newest"/> over the incident's own set.</b> Four
+    /// callers rank platform builds — the self-updater's tag listing, the release-marker index, the
+    /// bundle-adoption sweep and the retention plan — and every one of them reads a version string
+    /// a publication was LABELLED with. Ordered descending, the two mislabelled members must both
+    /// sink below the later sealed runs, and the promotion (no run number of its own) sits in the
+    /// band behind them.
+    /// </summary>
+    [Fact]
+    public void TheTotalOrder_RanksTheRunNumberFirst_AndTheLabelNever()
+    {
+        string[] published =
+        [
+            "3.0.0",              // a promotion — no run number of its own
+            "3.1.0-ci.7841",      // the withdrawn 2026-09-05 slip line
+            "3.0.0-ci.8130",      // the newest sealed set
+            "3.0.0-rc9.ci.7824",  // the retired rc line, 2026-09-04
+            "3.0.0-ci.8059",
+        ];
+
+        Assert.Equal(
+            ["3.0.0-ci.8130", "3.0.0-ci.8059", "3.1.0-ci.7841", "3.0.0-rc9.ci.7824", "3.0.0"],
+            published.OrderByDescending(v => v, PlatformReleaseOrder.Newest));
+    }
+
+    /// <summary>
+    /// 🚨 <b>Why the ordering is not <see cref="PlatformReleaseOrder.Compare"/>.</b> Pairwise, the
+    /// three members form a CYCLE — slip beats promotion beats sealed beats slip — and a sort handed
+    /// a cycle answers arbitrarily, which is how a "fixed" ordering keeps picking the wrong build.
+    /// Banding by <see cref="PlatformReleaseOrder.BuildOrdinal"/> is what removes it, and this test
+    /// exercises the cycle in every input order so a stable-sort accident cannot hide a regression.
+    /// </summary>
+    [Fact]
+    public void TheTotalOrder_IsTransitive_WhereThePairwiseComparisonIsNot()
+    {
+        // The cycle, measured on the pairwise predicate.
+        Assert.True(PlatformReleaseOrder.IsNewer("3.1.0-ci.7841", "3.0.0"));
+        Assert.True(PlatformReleaseOrder.IsNewer("3.0.0", "3.0.0-ci.8130"));
+        Assert.True(PlatformReleaseOrder.IsNewer("3.0.0-ci.8130", "3.1.0-ci.7841"));
+
+        // The order over the same three is one answer, whatever order they arrive in.
+        string[] cycle = ["3.1.0-ci.7841", "3.0.0", "3.0.0-ci.8130"];
+        foreach (var permutation in Permutations(cycle))
+            Assert.Equal(
+                ["3.0.0-ci.8130", "3.1.0-ci.7841", "3.0.0"],
+                permutation.OrderByDescending(v => v, PlatformReleaseOrder.Newest));
+    }
+
+    /// <summary>
+    /// The one key a promotion band shares is the version string, and a deliberately cut release
+    /// makes it a trustworthy one — so promotions order among themselves by SemVer, and an
+    /// uncomparable string (an unstamped build's <c>unknown</c>) sinks to the bottom rather than
+    /// throwing or being read as newest.
+    /// </summary>
+    [Fact]
+    public void TheTotalOrder_OrdersPromotionsBySemVer_AndSinksWhatItCannotRead()
+    {
+        Assert.Equal(
+            ["3.0.1", "3.0.0", "3.0.0-rc8", "unknown"],
+            new[] { "3.0.0-rc8", "unknown", "3.0.1", "3.0.0" }
+                .OrderByDescending(v => v, PlatformReleaseOrder.Newest));
+    }
+
+    private static IEnumerable<string[]> Permutations(string[] items) =>
+        items.Length <= 1
+            ? [items]
+            : items.SelectMany(
+                (head, i) => Permutations([.. items.Take(i), .. items.Skip(i + 1)])
+                    .Select(rest => (string[])[head, .. rest]));
 }

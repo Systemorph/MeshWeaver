@@ -303,7 +303,10 @@ public static class ShippedPrebuiltBundles
             .Where(kv => PrebuiltAdoptionPolicy
                 .Decide(context.Strictness, new PrebuiltAdoptionPolicy.Candidate(kv.Key, kv.Value, null), context.Live)
                 .Adopts)
-            .OrderByDescending(kv => kv.Value, Plugin.Packaging.NuGetVersionComparer.Instance)
+            // 🚨 Newest by SEALED-PUBLICATION LINEAGE, never by the version LABEL the marker is named
+            // with (#3542) — the shared total order, so this sweep and the self-updater can never
+            // disagree about which publication is the newest one.
+            .OrderByDescending(kv => kv.Value, Plugin.Packaging.PlatformReleaseOrder.Newest)
             .ToList();
         var taken = new HashSet<string>(sealedHere, StringComparer.OrdinalIgnoreCase);
         var bundles = new List<string>();

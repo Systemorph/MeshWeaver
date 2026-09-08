@@ -58,8 +58,16 @@ public static class SealedPublicationIndex
 
     /// <summary>
     /// The REVERSE of the release markers: framework identity → the newest platform version
-    /// published under it (SemVer order via <see cref="Plugin.Packaging.NuGetVersionComparer"/>,
-    /// so <c>ci.900</c> never sorts above <c>ci.3758</c>). This is how a bundle sealed for another
+    /// published under it — <b>newest by SEALED-PUBLICATION LINEAGE</b>
+    /// (<see cref="Plugin.Packaging.PlatformReleaseOrder.Newest"/>), the same total order the
+    /// self-updater ranks registry tags with. 🚨 Not SemVer: a marker's file NAME is the version
+    /// LABEL that publication carried, and a label can be wrong or retired — <c>3.1.0-ci.7841</c>
+    /// (the withdrawn 2026-09-05 slip) and <c>3.0.0-rc9.ci.7824</c> (the retired rc line, where
+    /// SemVer §11.4 puts the text <c>rc9</c> above <c>ci</c>) both sort ABOVE the later, sealed
+    /// <c>3.0.0-ci.8130</c>, so a SemVer reading would place an identity on a stale line and hand
+    /// <see cref="ShippedPrebuiltBundles"/> a three-day-old publication as "newest" (#3542). The run
+    /// number the marker's own name carries is the only key the machine produced. This is how a
+    /// bundle sealed for another
     /// identity is placed on a platform LINE: its manifest names the identity, the marker names
     /// the version, and <see cref="PrebuiltAdoptionPolicy"/> compares lines. An identity no
     /// marker names is absent — the policy then declines it under <c>Family</c> strictness, as a
@@ -83,7 +91,7 @@ public static class SealedPublicationIndex
                 if (string.IsNullOrEmpty(identity) || string.IsNullOrEmpty(version))
                     continue;
                 if (!byIdentity.TryGetValue(identity, out var known)
-                    || Plugin.Packaging.NuGetVersionComparer.Instance.Compare(version, known) > 0)
+                    || Plugin.Packaging.PlatformReleaseOrder.Newest.Compare(version, known) > 0)
                     byIdentity[identity] = version;
             }
         }
