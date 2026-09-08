@@ -309,7 +309,7 @@ step below is a web action by the current owner, so this section is the checklis
 | `MeshWeaver.MemexTemplate` and every retired id — fully unlisted, ownership unchanged | still `rbuergi`'s; an owner can re-list any version |
 | `verified: false` on the survivor | the **`MeshWeaver.*` ID prefix is not reserved** — anyone can publish a new `MeshWeaver.X` |
 | nuget.org profile `Systemorph` exists | the organisation account to transfer to is there |
-| `publish-packages.yml` pushes with `secrets.NUGET_PAT` | the key is the owner's, not the organisation's |
+| `publish-packages.yml` and `unlist-orphaned-packages.yml` authenticate by **Trusted Publishing** — GitHub OIDC exchanged by `NuGet/login` for a short-lived key, under a nuget.org policy per workflow file — with the policy owner in `vars.NUGET_TRUSTED_USER` | no stored NuGet secret; the policy today is the owner's, not the organisation's |
 
 The transfer, in the order that keeps publishing working throughout:
 
@@ -319,9 +319,11 @@ The transfer, in the order that keeps publishing working throughout:
    `Systemorph`; the organisation accepts the invitation.
 2. **Reserve the `MeshWeaver.*` ID prefix for `Systemorph`** (nuget.org's ID-prefix reservation
    request). Until then the `verified` badge stays off and the prefix is open.
-3. **Rotate `secrets.NUGET_PAT`** to an API key minted under the `Systemorph` organisation, scoped
-   to push `MeshWeaver.*`. The lane's preflight names that secret and goes red naming it if absent,
-   so a missing rotation is loud, not silent.
+3. **Move the Trusted Publishing policies to the organisation** — one per workflow file
+   (`publish-packages.yml`, `unlist-orphaned-packages.yml`; repository `Systemorph/MeshWeaver`;
+   environment blank, since neither job declares one) — and set `vars.NUGET_TRUSTED_USER` to
+   `Systemorph`. The publish preflight *performs* the exchange, so a policy that does not match goes
+   red there, named. Then delete `secrets.NUGET_PAT`: nothing reads it any more.
 4. **Remove `rbuergi` as owner** only after step 3 has published once from the organisation's key.
 
 ---

@@ -66,7 +66,7 @@ name: Publish the surviving NuGet packages
 # is no `continue-on-error` and no `if: secrets.X != ''`. Every job carries a literal timeout ≤ 45.
 #
 # 🚨 nuget.org has no App-token equivalent — an API key is the only credential it accepts — so
-# `secrets.NUGET_PAT` stays, exactly as unlist-orphaned-packages.yml uses it. The App token replaces
+# nuget.org is reached by Trusted Publishing (GitHub OIDC via NuGet/login — no stored NuGet secret), exactly as unlist-orphaned-packages.yml does. The App token replaces
 # the stored GitHub PAT, which is the one this repository could actually stop storing.
 
 on:
@@ -97,23 +97,37 @@ jobs:
     name: Publish inputs are provisioned
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      id-token: write       # the OIDC exchange below
+      contents: read
     steps:
-      - name: Every secret this lane consumes exists
+      - name: Every input this lane consumes exists
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_PAT }}
+          NUGET_TRUSTED_USER: ${{ vars.NUGET_TRUSTED_USER }}
         run: |
           set -euo pipefail
           # Only what this lane actually consumes. The App credential that would read
           # MeshWeaver.Plugins for the template belongs here the day the template's step does —
           # asserting an input nothing uses teaches a reader the wrong thing about what runs.
+          #
+          # 🔐 nuget.org is reached by TRUSTED PUBLISHING (GitHub OIDC → NuGet/login → a short-lived
+          # key), not a stored key: the policy on nuget.org names this repository and THIS workflow
+          # file, and `vars.NUGET_TRUSTED_USER` is the nuget.org account that owns that policy.
+          # There is nothing to rotate and nothing to leak. The exchange is PERFORMED below, so a
+          # policy that does not match this file fails here, named, rather than at the push.
           missing=()
-          [ -n "${NUGET_API_KEY:-}" ] || missing+=("secrets.NUGET_PAT — the nuget.org API key with push rights for the MeshWeaver prefix (Settings → Secrets → Actions)")
+          [ -n "${NUGET_TRUSTED_USER:-}" ] || missing+=("vars.NUGET_TRUSTED_USER — the nuget.org account (user or organisation) that owns the Trusted Publishing policy for publish-packages.yml (Settings → Secrets and variables → Actions → Variables)")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::the surviving packages cannot be published — provision:"
             for m in "${missing[@]}"; do echo "  • $m"; done
             exit 1
           fi
           echo "every publish input is present"
+
+      - name: The Trusted Publishing policy matches this workflow (OIDC exchange)
+        uses: NuGet/login@v1.2.0
+        with:
+          user: ${{ vars.NUGET_TRUSTED_USER }}
 
       - name: A dispatch must name the version
         if: github.event_name == 'workflow_dispatch' && inputs.version == ''
@@ -126,6 +140,9 @@ jobs:
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      id-token: write       # NuGet/login — the short-lived push key
+      contents: read
     steps:
       - name: Checkout MeshWeaver (the platform, and the Aspire adapter)
         uses: actions/checkout@v7
@@ -191,10 +208,17 @@ jobs:
           [ "$count" -eq 1 ] || { echo "::error::expected exactly 1 package, found $count — a project has regained packability; see Directory.Build.props"; exit 1; }
           echo "1 package at $V"
 
+      - name: Log in to nuget.org (Trusted Publishing — a short-lived key, nothing stored)
+        if: ${{ !inputs.dry-run }}
+        id: nuget_login
+        uses: NuGet/login@v1.2.0
+        with:
+          user: ${{ vars.NUGET_TRUSTED_USER }}
+
       - name: Push to nuget.org
         if: ${{ !inputs.dry-run }}
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_PAT }}
+          NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
         run: |
           set -euo pipefail
           dotnet nuget push "$RUNNER_TEMP/nupkgs/*.nupkg" \
