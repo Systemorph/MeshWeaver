@@ -134,6 +134,28 @@
         "namespace": "memex"
       },
       "spec": {}
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "memex-data",
+        "namespace": "memex",
+        "annotations": {
+          "helm.sh/resource-policy": "keep"
+        }
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteMany"
+        ],
+        "storageClassName": "azurefile-memex",
+        "resources": {
+          "requests": {
+            "storage": "16Gi"
+          }
+        }
+      }
     }
   ]
 }

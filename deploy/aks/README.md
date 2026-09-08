@@ -635,6 +635,12 @@ Retain` keeps the share + its keys/content if a PVC is accidentally deleted.
 StorageClass; the CSI driver **creates a share per PVC automatically**. Nothing
 else to do — this is what Step 4 applies.
 
+**Growing a share later is NOT a `kubectl patch`.** Capacity is `volumes[].size` on
+the instance's `Hosting/Deployment` record; the hosting operator's
+`hosting-pv-resize` (`operator/bin/`) grows the claim to it as a step of the
+`Provision` / `Reconcile` action — grow-only, read back from the claim's status,
+refusing a class without `allowVolumeExpansion`. Azure Files expands online.
+
 ### Option B — static PV binding to pre-created named shares
 
 If you'd rather pre-create named shares in one account (to size/quota/firewall/

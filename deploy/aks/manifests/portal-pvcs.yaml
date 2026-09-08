@@ -41,8 +41,10 @@ spec:
       storage: 16Gi
 ---
 # /mnt/content — the content collection (Storage__BasePath). Uploaded files, media,
-# per-node-hub content subdirectories. Sized for real user content; expand as needed
-# (allowVolumeExpansion is on in the StorageClass).
+# per-node-hub content subdirectories. Sized for real user content; to expand it later
+# raise `volumes[].size` on the Hosting/Deployment record and run Reconcile — the
+# operator's hosting-pv-resize grows the claim (allowVolumeExpansion is on in the
+# StorageClass). The sizes in this file are what a NEW namespace starts with.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
